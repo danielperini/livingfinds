@@ -11,6 +11,8 @@ export default function Settings() {
   const [health, setHealth] = useState(null);
   const [xanoConnected, setXanoConnected] = useState(isXanoAuthenticated());
   const [showXanoLogin, setShowXanoLogin] = useState(false);
+  const [spapiTest, setSpapiTest] = useState(null);
+  const [spapiLoading, setSpapiLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -38,6 +40,19 @@ export default function Settings() {
       }
     }).catch(console.error);
   }, []);
+
+  const testSPAPI = async () => {
+    setSpapiLoading(true);
+    setSpapiTest(null);
+    try {
+      const data = await xanoDebug.testSPAPI();
+      setSpapiTest({ ok: true, data });
+    } catch (err) {
+      setSpapiTest({ ok: false, message: err.message });
+    } finally {
+      setSpapiLoading(false);
+    }
+  };
 
   const testHealth = async () => {
     setHealthLoading(true);
@@ -156,6 +171,33 @@ export default function Settings() {
           <p className="text-xs text-slate-500">Clica em "Testar Conexão" para verificar o estado das credenciais Amazon.</p>
         )}
       </div>
+
+      {/* SP-API Direct Test (via Xano) */}
+      {xanoConnected && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Teste SP-API via Xano</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Valida a conexão real ao Amazon Selling Partner API.</p>
+            </div>
+            <button
+              onClick={testSPAPI}
+              disabled={spapiLoading}
+              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-sm text-slate-300 hover:text-white rounded-lg transition-colors"
+            >
+              {spapiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+              Testar SP-API
+            </button>
+          </div>
+          {spapiTest && (
+            <div className={`p-3 rounded-lg border text-xs ${spapiTest.ok ? 'bg-emerald-400/5 border-emerald-400/20 text-emerald-400' : 'bg-red-500/5 border-red-500/20 text-red-400'}`}>
+              {spapiTest.ok
+                ? <pre className="whitespace-pre-wrap text-emerald-300">{JSON.stringify(spapiTest.data, null, 2)}</pre>
+                : <span>Erro: {spapiTest.message}</span>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Account Settings */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
