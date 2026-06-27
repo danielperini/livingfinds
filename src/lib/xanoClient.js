@@ -152,3 +152,9 @@ export const xanoAmazonAuth = {
 export const xanoLogs = {
   getSyncLogs: () => xanoFetch('/logs'),
 };
+
+// ─── DEBUG / DIAGNOSTICS ─────────────────────────────────────────────────────
+
+export const xanoDebug = {
+  testSPAPI: () => xanoFetch('/debug/spapi-test'),
+};

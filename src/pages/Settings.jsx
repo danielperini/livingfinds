@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoAuth, setXanoToken, clearXanoToken, isXanoAuthenticated } from '@/lib/xanoClient';
+import { xanoAuth, xanoDebug, setXanoToken, clearXanoToken, isXanoAuthenticated } from '@/lib/xanoClient';
 import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, LogOut, LogIn } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import XanoLogin from '@/pages/XanoLogin';
