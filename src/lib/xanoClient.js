@@ -1,7 +1,6 @@
-// Xano API client for Living Finds API
+// Xano API client — único gateway para dados Amazon
 // Base URL: https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api
-// Auth: Bearer token (Xano authToken) stored in localStorage
-// Never expose API key or tokens in frontend code
+// Auth: Bearer token (authToken) em localStorage
 
 const XANO_BASE = 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
 
@@ -29,14 +28,11 @@ async function xanoFetch(path, options = {}) {
     ...options.headers,
   };
 
-  const res = await fetch(`${XANO_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  const res = await fetch(`${XANO_BASE}${path}`, { ...options, headers });
 
   if (res.status === 401) {
     clearXanoToken();
-    throw { code: 'unauthorized', message: 'Sessão expirada. Por favor inicia sessão novamente.', status: 401 };
+    throw { code: 'unauthorized', message: 'Sessão expirada. Inicia sessão novamente.', status: 401 };
   }
 
   const text = await res.text();
@@ -49,14 +45,11 @@ async function xanoFetch(path, options = {}) {
   return data;
 }
 
-// ─── AUTH ────────────────────────────────────────────────────────────────────
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
 
 export const xanoAuth = {
   login: (email, password) =>
-    xanoFetch('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
+    xanoFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
 
   signup: (name, email, password) =>
     fetch('https://x8ki-letl-twmt.n7.xano.io/api:4BJNriiP/auth/signup', {
@@ -66,46 +59,77 @@ export const xanoAuth = {
     }).then(r => r.json()),
 
   me: () => xanoFetch('/auth/me'),
-
   refresh: () => xanoFetch('/auth/refresh', { method: 'POST' }),
 };
 
-// ─── DASHBOARD ───────────────────────────────────────────────────────────────
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
 export const xanoDashboard = {
+  // KPI cards — GET /base44/dashboard_cards
+  // Retorna: [{ label, value, unit, change_percent, trend, inverse_trend }]
+  getCards: () => xanoFetch('/base44/dashboard_cards'),
+
+  // Métricas diárias — GET /amazon/metrics/daily_summary?start_date=&end_date=
+  // Retorna: [{ date, spend, sales, ads_sales, cost, acos, tacos, clicks, impressions }]
+  getDailyMetrics: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return xanoFetch(`/amazon/metrics/daily_summary${qs ? '?' + qs : ''}`);
+  },
+
+  // Sumário agregado (fallback)
   getSummary: () => xanoFetch('/amazon/dashboard'),
-  getDailyMetrics: () => xanoFetch('/amazon/metrics/daily_summary'),
-  getRawMetrics: () => xanoFetch('/amazon/metrics/raw'),
 };
 
-// ─── CAMPAIGNS ───────────────────────────────────────────────────────────────
+// ─── CAMPANHAS ────────────────────────────────────────────────────────────────
 
 export const xanoCampaigns = {
-  list: () => xanoFetch('/campaigns'),
+  // Lista campanhas — GET /amazon/campaigns
+  list: () => xanoFetch('/amazon/campaigns'),
+
   get: (id) => xanoFetch(`/campaigns/${id}`),
-  update: (id, data) => xanoFetch(`/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  // Pausar/ativar campanha — PATCH /campaigns/{id}
+  toggleState: (id, state) =>
+    xanoFetch(`/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify({ state }) }),
+
+  // Alterar budget — PATCH /campaigns/{id}
+  updateBudget: (id, daily_budget) =>
+    xanoFetch(`/campaigns/${id}`, { method: 'PATCH', body: JSON.stringify({ daily_budget }) }),
+
   archive: (id) => xanoFetch(`/campaigns/${id}`, { method: 'DELETE' }),
   analyze: () => xanoFetch('/amazon/analysis/campaigns'),
-  createFromSearchTerm: (data) => xanoFetch('/campaigns/create-from-search-term', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// ─── KEYWORDS ────────────────────────────────────────────────────────────────
+// ─── KEYWORDS ─────────────────────────────────────────────────────────────────
 
 export const xanoKeywords = {
   list: () => xanoFetch('/amazon/keywords'),
   analyze: () => xanoFetch('/amazon/keywords/analysis'),
-  analyzeDetailed: () => xanoFetch('/amazon/analysis/keywords'),
-  getRecommendations: (data) => xanoFetch('/amazon/keywords/recommendations', { method: 'POST', body: JSON.stringify(data) }),
+  getRecommendations: (data) =>
+    xanoFetch('/amazon/keywords/recommendations', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// ─── PRODUCTS ────────────────────────────────────────────────────────────────
+// ─── PRODUCTS ─────────────────────────────────────────────────────────────────
 
 export const xanoProducts = {
   list: () => xanoFetch('/amazon/products'),
   performance: () => xanoFetch('/amazon/products/performance/list'),
 };
 
-// ─── ADS AGENT (Decisions / Memory / Rules) ──────────────────────────────────
+// ─── DECISÕES / AGENTE ────────────────────────────────────────────────────────
+
+export const xanoDecisions = {
+  // Lista decisões pendentes — GET /ads-agent/decisions
+  list: () => xanoFetch('/ads-agent/decisions'),
+
+  // Aprovar decisão — POST /decisions/approve
+  approve: (decision_id) =>
+    xanoFetch('/decisions/approve', { method: 'POST', body: JSON.stringify({ decision_id }) }),
+
+  // Rejeitar decisão — POST /decisions/reject
+  reject: (decision_id) =>
+    xanoFetch('/decisions/reject', { method: 'POST', body: JSON.stringify({ decision_id }) }),
+};
 
 export const xanoAdsAgent = {
   getDecisions: () => xanoFetch('/ads-agent/decisions'),
@@ -113,47 +137,53 @@ export const xanoAdsAgent = {
   getRules: () => xanoFetch('/ads-agent/rules'),
 };
 
-// ─── AI ──────────────────────────────────────────────────────────────────────
-
-export const xanoAI = {
-  analyzeReports: (data) => xanoFetch('/ai/analyze-reports', { method: 'POST', body: JSON.stringify(data) }),
-};
-
-// ─── BIDS ────────────────────────────────────────────────────────────────────
+// ─── BIDS ─────────────────────────────────────────────────────────────────────
 
 export const xanoBids = {
+  // Aplicar bids — POST /bids/apply
+  // body: { bids: [{ keyword_id, bid }] }
   apply: (data) => xanoFetch('/bids/apply', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// ─── SYNC ────────────────────────────────────────────────────────────────────
+// ─── SYNC ─────────────────────────────────────────────────────────────────────
 
 export const xanoSync = {
-  history30d: (data) => xanoFetch('/amazon/sync/history_30d', { method: 'POST', body: JSON.stringify(data) }),
-  monthly: (data) => xanoFetch('/amazon/sync/monthly', { method: 'POST', body: JSON.stringify(data) }),
+  // Sincronização completa — POST /sync/full-daily
+  fullDaily: (data = {}) =>
+    xanoFetch('/sync/full-daily', { method: 'POST', body: JSON.stringify(data) }),
+
+  history30d: (data) =>
+    xanoFetch('/amazon/sync/history_30d', { method: 'POST', body: JSON.stringify(data) }),
+
+  monthly: (data) =>
+    xanoFetch('/amazon/sync/monthly', { method: 'POST', body: JSON.stringify(data) }),
 };
 
-// ─── AMAZON ACCOUNTS ────────────────────────────────────────────────────────
+// ─── AMAZON ACCOUNTS ──────────────────────────────────────────────────────────
 
 export const xanoAmazonAccounts = {
   get: (id) => xanoFetch(`/amazon-accounts/${id}`),
-  update: (id, data) => xanoFetch(`/amazon-accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  update: (id, data) =>
+    xanoFetch(`/amazon-accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
-// ─── AMAZON AUTH (OAuth flows) ───────────────────────────────────────────────
+// ─── AMAZON AUTH (OAuth) ──────────────────────────────────────────────────────
 
 export const xanoAmazonAuth = {
-  startAds: (data) => xanoFetch('/amazon/auth/ads/start', { method: 'POST', body: JSON.stringify(data) }),
-  startSPAPI: (data) => xanoFetch('/amazon/auth/spapi/start', { method: 'POST', body: JSON.stringify(data) }),
+  startAds: (data) =>
+    xanoFetch('/amazon/auth/ads/start', { method: 'POST', body: JSON.stringify(data) }),
+  startSPAPI: (data) =>
+    xanoFetch('/amazon/auth/spapi/start', { method: 'POST', body: JSON.stringify(data) }),
   getProfiles: () => xanoFetch('/amazon/ads/profiles'),
 };
 
-// ─── LOGS ────────────────────────────────────────────────────────────────────
+// ─── LOGS ─────────────────────────────────────────────────────────────────────
 
 export const xanoLogs = {
   getSyncLogs: () => xanoFetch('/logs'),
 };
 
-// ─── DEBUG / DIAGNOSTICS ─────────────────────────────────────────────────────
+// ─── DEBUG ────────────────────────────────────────────────────────────────────
 
 export const xanoDebug = {
   testSPAPI: () => xanoFetch('/debug/spapi-test'),

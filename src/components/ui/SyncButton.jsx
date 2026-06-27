@@ -1,24 +1,30 @@
 import { useState } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { xanoSync, isXanoAuthenticated } from '@/lib/xanoClient';
 
 export default function SyncButton({ amazonAccountId, onSuccess }) {
-  const [state, setState] = useState('idle'); // idle | loading | success | error
+  const [state, setState] = useState('idle');
   const [error, setError] = useState(null);
+  const xanoConnected = isXanoAuthenticated();
 
   const handleSync = async () => {
     if (!amazonAccountId) return;
     setState('loading');
     setError(null);
     try {
-      const res = await base44.functions.invoke('syncAll', { amazon_account_id: amazonAccountId });
-      if (res.data?.ok) {
-        setState('success');
-        onSuccess?.();
-        setTimeout(() => setState('idle'), 3000);
+      if (xanoConnected) {
+        // Xano é o gateway — ele chama a Amazon diretamente
+        await xanoSync.fullDaily({ amazon_account_id: amazonAccountId });
+        // Regista o run localmente
+        await base44.functions.invoke('syncAll', { amazon_account_id: amazonAccountId }).catch(() => {});
       } else {
-        throw new Error(res.data?.message || 'Sync failed');
+        const res = await base44.functions.invoke('syncAll', { amazon_account_id: amazonAccountId });
+        if (!res.data?.ok) throw new Error(res.data?.message || 'Sync failed');
       }
+      setState('success');
+      onSuccess?.();
+      setTimeout(() => setState('idle'), 3000);
     } catch (err) {
       setState('error');
       setError(err.message || 'Sync error');
@@ -27,9 +33,9 @@ export default function SyncButton({ amazonAccountId, onSuccess }) {
   };
 
   const config = {
-    idle: { label: 'Sync All', icon: RefreshCw, cls: 'bg-cyan hover:bg-cyan/90 text-white' },
+    idle: { label: xanoConnected ? 'Sync via Xano' : 'Sync All', icon: RefreshCw, cls: 'bg-cyan hover:bg-cyan/90 text-white' },
     loading: { label: 'Sincronizando...', icon: RefreshCw, cls: 'bg-cyan/70 text-white cursor-not-allowed' },
-    success: { label: 'Concluído', icon: CheckCircle, cls: 'bg-emerald-600 text-white' },
+    success: { label: 'Concluído!', icon: CheckCircle, cls: 'bg-emerald-600 text-white' },
     error: { label: error || 'Erro', icon: AlertCircle, cls: 'bg-red-600 text-white' },
   };
 

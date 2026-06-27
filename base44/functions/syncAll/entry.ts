@@ -1,3 +1,4 @@
+// syncAll — delega a sincronização completa ao Xano (único gateway Amazon)
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 Deno.serve(async (req) => {
@@ -10,27 +11,37 @@ Deno.serve(async (req) => {
     const { amazon_account_id } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
-    const mode = Deno.env.get('OPERATION_MODE') || 'mock';
+    const xanoBase = Deno.env.get('XANO_BASE_URL') || 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
 
-    const results = {};
+    // Chamar o endpoint de sync do Xano — ele é quem fala com a Amazon
+    const syncRes = await fetch(`${xanoBase}/sync/full-daily`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amazon_account_id }),
+    });
 
-    // Invoke individual sync functions
-    const syncAds = await base44.functions.invoke('syncAds', { amazon_account_id });
-    results.ads = syncAds;
+    const syncData = await syncRes.json().catch(() => ({}));
 
-    // Update account last_sync_at
+    // Actualizar timestamp na entidade local
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id });
     if (accounts.length > 0) {
       await base44.asServiceRole.entities.AmazonAccount.update(accounts[0].id, {
         last_sync_at: new Date().toISOString(),
-        status: 'connected',
+        status: syncRes.ok ? 'connected' : 'error',
       });
     }
 
-    // Run learner after sync
-    await base44.functions.invoke('runLearnerCycle', { amazon_account_id }).catch(() => {});
+    // Registar evento de sync
+    await base44.asServiceRole.entities.SyncRun.create({
+      amazon_account_id,
+      operation: 'xano_full_sync',
+      status: syncRes.ok ? 'success' : 'error',
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      error_message: syncRes.ok ? null : (syncData.message || `HTTP ${syncRes.status}`),
+    });
 
-    return Response.json({ ok: true, mode, results });
+    return Response.json({ ok: syncRes.ok, xano: syncData });
   } catch (error) {
     return Response.json({ ok: false, message: error.message || 'syncAll failed' }, { status: 500 });
   }

@@ -1,23 +1,60 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoDashboard, xanoCampaigns, xanoAdsAgent, isXanoAuthenticated } from '@/lib/xanoClient';
+import { xanoDashboard, xanoCampaigns, isXanoAuthenticated } from '@/lib/xanoClient';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { AlertTriangle, BarChart2, Wifi, WifiOff, Loader2, ExternalLink } from 'lucide-react';
-import MetricCard from '@/components/ui/MetricCard';
-import SyncButton from '@/components/ui/SyncButton';
+import { AlertTriangle, BarChart2, Wifi, WifiOff, Loader2, ExternalLink, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import SyncButton from '@/components/ui/SyncButton';
 import { Link } from 'react-router-dom';
+
+// KPI Card com suporte a change_percent e inverse_trend
+function KPICard({ card, loading }) {
+  if (loading) {
+    return (
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 animate-pulse">
+        <div className="h-3 w-24 bg-surface-3 rounded mb-3" />
+        <div className="h-7 w-32 bg-surface-3 rounded mb-2" />
+        <div className="h-3 w-16 bg-surface-3 rounded" />
+      </div>
+    );
+  }
+
+  const pct = card.change_percent ?? 0;
+  const isPositive = pct > 0;
+  const isNegative = pct < 0;
+  // inverse_trend: menor é melhor (ex: ACoS). Verde quando desce.
+  const colorClass = card.inverse_trend
+    ? (isNegative ? 'text-emerald-400' : isPositive ? 'text-red-400' : 'text-slate-400')
+    : (isPositive ? 'text-emerald-400' : isNegative ? 'text-red-400' : 'text-slate-400');
+
+  const TrendIcon = pct > 0 ? TrendingUp : pct < 0 ? TrendingDown : Minus;
+
+  return (
+    <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+      <p className="text-xs font-medium text-slate-400 mb-2">{card.label}</p>
+      <p className="text-2xl font-bold text-white mb-1">
+        {card.unit === 'BRL' ? 'R$ ' : card.unit === '%' ? '' : ''}{card.value}
+        {card.unit === '%' ? '%' : ''}
+      </p>
+      {pct !== 0 && (
+        <div className={`flex items-center gap-1 text-xs font-semibold ${colorClass}`}>
+          <TrendIcon className="w-3 h-3" />
+          {pct > 0 ? '+' : ''}{pct.toFixed(1)}% vs período anterior
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [account, setAccount] = useState(null);
-  const [summary, setSummary] = useState(null);
+  const [kpiCards, setKpiCards] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [dailyMetrics, setDailyMetrics] = useState([]);
   const [syncRuns, setSyncRuns] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [healthStatus, setHealthStatus] = useState(null);
   const xanoConnected = isXanoAuthenticated();
 
   const loadData = useCallback(async () => {
@@ -26,7 +63,6 @@ export default function Dashboard() {
       const me = await base44.auth.me();
       setUser(me);
 
-      // Load Base44 entities
       const [accounts, runs, decs] = await Promise.all([
         base44.entities.AmazonAccount.filter({ user_id: me.id }),
         base44.entities.SyncRun.list('-created_date', 10),
@@ -36,31 +72,31 @@ export default function Dashboard() {
       setSyncRuns(runs);
       setDecisions(decs);
 
-      // Load Xano real data if connected
       if (xanoConnected) {
-        const [xSummary, xCampaigns, xMetrics] = await Promise.allSettled([
-          xanoDashboard.getSummary(),
+        const [xCards, xCampaigns, xMetrics] = await Promise.allSettled([
+          xanoDashboard.getCards(),
           xanoCampaigns.list(),
           xanoDashboard.getDailyMetrics(),
         ]);
-        if (xSummary.status === 'fulfilled') setSummary(xSummary.value);
+
+        if (xCards.status === 'fulfilled') {
+          const cards = Array.isArray(xCards.value) ? xCards.value : (xCards.value?.cards || []);
+          setKpiCards(cards);
+        }
+
         if (xCampaigns.status === 'fulfilled') {
           const list = Array.isArray(xCampaigns.value) ? xCampaigns.value : (xCampaigns.value?.campaigns || []);
           setCampaigns(list);
         }
+
         if (xMetrics.status === 'fulfilled') {
           const metrics = Array.isArray(xMetrics.value) ? xMetrics.value : (xMetrics.value?.metrics || []);
           setDailyMetrics(metrics.slice(-14));
         }
       } else {
-        // Fallback to Base44 entities
         const c = await base44.entities.Campaign.list('-synced_at', 100);
         setCampaigns(c);
       }
-
-      // Health check
-      const health = await base44.functions.invoke('testAuthHealth', {});
-      setHealthStatus(health.data);
     } catch (err) {
       console.error('Dashboard load error:', err);
     } finally {
@@ -70,17 +106,24 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Compute aggregates from Xano summary or fallback campaigns
-  const totalSpend = summary?.total_spend ?? campaigns.reduce((s, c) => s + (c.spend || 0), 0);
-  const totalSales = summary?.total_sales ?? campaigns.reduce((s, c) => s + (c.sales || 0), 0);
-  const totalClicks = summary?.total_clicks ?? campaigns.reduce((s, c) => s + (c.clicks || 0), 0);
-  const totalImpressions = summary?.total_impressions ?? campaigns.reduce((s, c) => s + (c.impressions || 0), 0);
-  const avgAcos = summary?.acos ?? (totalSales > 0 ? (totalSpend / totalSales) * 100 : 0);
-  const avgRoas = summary?.roas ?? (totalSpend > 0 ? totalSales / totalSpend : 0);
+  // Fallback KPIs calculados das campanhas quando não há cards do Xano
+  const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
+  const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
+  const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
+  const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
 
-  // Chart data: prefer Xano daily metrics, fallback campaigns
+  const fallbackCards = [
+    { label: 'Total Spend', value: totalSpend.toFixed(2), unit: 'BRL', change_percent: 0, trend: 'neutral' },
+    { label: 'Total Sales', value: totalSales.toFixed(2), unit: 'BRL', change_percent: 0, trend: 'neutral' },
+    { label: 'ACoS Médio', value: avgAcos.toFixed(1), unit: '%', change_percent: 0, trend: 'neutral', inverse_trend: true },
+    { label: 'ROAS Médio', value: avgRoas.toFixed(2), unit: '', change_percent: 0, trend: 'neutral' },
+  ];
+
+  const displayCards = kpiCards.length > 0 ? kpiCards : fallbackCards;
+
+  // Gráfico — preferir métricas diárias do Xano
   const chartData = dailyMetrics.length > 0
-    ? dailyMetrics.map(m => ({ name: m.date?.slice(5) || '', spend: m.spend || 0, sales: m.sales || 0 }))
+    ? dailyMetrics.map(m => ({ name: m.date?.slice(5) || '', spend: m.cost || m.spend || 0, sales: m.ads_sales || m.sales || 0 }))
     : campaigns.slice(0, 10).map((c, i) => ({ name: c.name?.slice(0, 10) || `C${i + 1}`, spend: c.spend || 0, sales: c.sales || 0 }));
 
   const hour = new Date().getHours();
@@ -100,17 +143,10 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Xano connection status */}
           <div className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border ${xanoConnected ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-amber-400 bg-amber-400/10 border-amber-400/20'}`}>
             {xanoConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
             {xanoConnected ? 'Xano conectado' : 'Xano desconectado'}
           </div>
-          {healthStatus && (
-            <div className={`flex items-center gap-1.5 text-xs ${healthStatus.services?.ads?.ok ? 'text-emerald-400' : 'text-slate-500'}`}>
-              {healthStatus.services?.ads?.ok ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-              <span>Amazon Ads</span>
-            </div>
-          )}
           <SyncButton amazonAccountId={account?.id} onSuccess={loadData} />
         </div>
       </div>
@@ -121,8 +157,8 @@ export default function Dashboard() {
           <div className="flex items-center gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
             <div>
-              <p className="text-sm font-semibold text-amber-300">Backend Xano não autenticado</p>
-              <p className="text-xs text-amber-400/70 mt-0.5">Liga o backend para ver dados reais de campanhas, métricas e decisões.</p>
+              <p className="text-sm font-semibold text-amber-300">Xano não autenticado</p>
+              <p className="text-xs text-amber-400/70 mt-0.5">Liga o Xano nas Configurações para ver dados reais da Amazon.</p>
             </div>
           </div>
           <Link to="/settings" className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap">
@@ -133,22 +169,15 @@ export default function Dashboard() {
       {!account && !loading && (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex items-center gap-3">
           <AlertTriangle className="w-5 h-5 text-slate-500 flex-shrink-0" />
-          <p className="text-sm text-slate-400">Conta Amazon ainda não configurada. <Link to="/settings" className="text-cyan hover:underline">Configurar →</Link></p>
+          <p className="text-sm text-slate-400">Conta Amazon não configurada. <Link to="/settings" className="text-cyan hover:underline">Configurar →</Link></p>
         </div>
       )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard label="Total Spend" value={totalSpend} prefix="$" loading={loading} glowColor="cyan" />
-        <MetricCard label="Total Sales" value={totalSales} prefix="$" loading={loading} glowColor="green" />
-        <MetricCard label="ACOS Médio" value={avgAcos} suffix="%" loading={loading} glowColor={avgAcos > 40 ? 'red' : 'green'} />
-        <MetricCard label="ROAS Médio" value={avgRoas} suffix="x" loading={loading} glowColor={avgRoas > 2 ? 'green' : 'amber'} />
-      </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard label="Impressões" value={totalImpressions} loading={loading} glowColor="cyan" />
-        <MetricCard label="Cliques" value={totalClicks} loading={loading} glowColor="cyan" />
-        <MetricCard label="Campanhas Ativas" value={campaigns.filter(c => c.state === 'enabled').length} loading={loading} glowColor="green" />
-        <MetricCard label="Recomendações" value={decisions.length} loading={loading} glowColor={decisions.length > 0 ? 'amber' : 'cyan'} />
+        {displayCards.slice(0, 4).map((card, i) => (
+          <KPICard key={i} card={card} loading={loading} />
+        ))}
       </div>
 
       {/* Chart + Activity */}
@@ -177,18 +206,17 @@ export default function Dashboard() {
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} labelStyle={{ color: '#94a3b8' }} />
-                <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend ($)" />
-                <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Sales ($)" />
+                <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend (R$)" />
+                <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Sales (R$)" />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
             <div className="h-48 flex items-center justify-center">
-              <p className="text-sm text-slate-500">Sem dados — executa uma sincronização ou liga o Xano</p>
+              <p className="text-sm text-slate-500">Sem dados — liga o Xano ou executa um Sync</p>
             </div>
           )}
         </div>
 
-        {/* Activity */}
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <h2 className="text-sm font-semibold text-slate-300 mb-4">Atividade Recente</h2>
           <div className="space-y-3">
@@ -218,14 +246,14 @@ export default function Dashboard() {
           <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
         ) : campaigns.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-sm text-slate-400">Sem campanhas. Liga o Xano ou executa um Sync.</p>
+            <p className="text-sm text-slate-400">Sem campanhas. {xanoConnected ? 'Executa um Sync.' : 'Liga o Xano primeiro.'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['Campanha', 'Estado', 'Orçamento/dia', 'Spend', 'Sales', 'ACOS', 'ROAS', 'Cliques'].map(h => (
+                  {['Campanha', 'Estado', 'Orçamento/dia', 'Spend', 'Sales', 'ACoS', 'ROAS', 'Cliques'].map(h => (
                     <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -238,9 +266,9 @@ export default function Dashboard() {
                       <p className="text-xs text-slate-500">{c.campaign_type || c.campaignType}</p>
                     </td>
                     <td className="px-5 py-3"><StatusBadge status={c.state} /></td>
-                    <td className="px-5 py-3 text-slate-300">${(c.daily_budget || c.dailyBudget || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-slate-300">R$ {(c.daily_budget || c.dailyBudget || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-slate-300">R$ {(c.spend || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-emerald-400">R$ {(c.sales || 0).toFixed(2)}</td>
                     <td className="px-5 py-3">
                       <span className={`font-semibold ${(c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400'}`}>
                         {(c.acos || 0).toFixed(1)}%
