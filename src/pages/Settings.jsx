@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save } from 'lucide-react';
+import { xanoAuth, setXanoToken, clearXanoToken, isXanoAuthenticated } from '@/lib/xanoClient';
+import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, LogOut, LogIn } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import XanoLogin from '@/pages/XanoLogin';
 
 export default function Settings() {
   const [user, setUser] = useState(null);
   const [account, setAccount] = useState(null);
   const [health, setHealth] = useState(null);
+  const [xanoConnected, setXanoConnected] = useState(isXanoAuthenticated());
+  const [showXanoLogin, setShowXanoLogin] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -188,6 +192,40 @@ export default function Settings() {
             {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
           </button>
         </div>
+      </div>
+
+      {/* Xano Backend Connection */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Backend Xano</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Liga o backend Living Finds para dados reais de campanhas, métricas e agente AI.</p>
+          </div>
+          {xanoConnected ? (
+            <button
+              onClick={() => { clearXanoToken(); setXanoConnected(false); }}
+              className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 text-xs font-semibold rounded-lg transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" /> Desligar
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowXanoLogin(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors"
+            >
+              <LogIn className="w-3.5 h-3.5" /> Ligar Xano
+            </button>
+          )}
+        </div>
+        <div className={`flex items-center gap-2 text-xs ${xanoConnected ? 'text-emerald-400' : 'text-slate-500'}`}>
+          {xanoConnected ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
+          {xanoConnected ? 'Conectado — dados reais activos' : 'Desconectado — app usa dados locais'}
+        </div>
+        {showXanoLogin && !xanoConnected && (
+          <div className="mt-4 border-t border-surface-2 pt-4">
+            <XanoLogin onSuccess={() => { setXanoConnected(true); setShowXanoLogin(false); }} />
+          </div>
+        )}
       </div>
 
       {/* Credentials info */}

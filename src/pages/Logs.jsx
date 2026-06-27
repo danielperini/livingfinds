@@ -1,20 +1,36 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Activity, Loader2, RefreshCw, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { xanoLogs, isXanoAuthenticated } from '@/lib/xanoClient';
+import { Activity, Loader2, RefreshCw, CheckCircle, XCircle, Clock, Wifi } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Logs() {
   const [runs, setRuns] = useState([]);
+  const [xanoLogs_, setXanoLogs] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('syncs');
+  const xanoConnected = isXanoAuthenticated();
 
-  const load = () => {
+  const load = async () => {
     setLoading(true);
-    Promise.all([
-      base44.entities.SyncRun.list('-created_date', 50),
-      base44.entities.LearningEvent.list('-created_date', 50),
-    ]).then(([r, e]) => { setRuns(r); setEvents(e); }).catch(console.error).finally(() => setLoading(false));
+    try {
+      const [r, e] = await Promise.all([
+        base44.entities.SyncRun.list('-created_date', 50),
+        base44.entities.LearningEvent.list('-created_date', 50),
+      ]);
+      setRuns(r);
+      setEvents(e);
+      if (xanoConnected) {
+        const xl = await xanoLogs.getSyncLogs().catch(() => []);
+        const list = Array.isArray(xl) ? xl : (xl?.logs || []);
+        setXanoLogs(list);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -34,9 +50,10 @@ export default function Logs() {
         </button>
       </div>
 
-      <div className="flex border-b border-surface-2">
+      <div className="flex border-b border-surface-2 overflow-x-auto">
         {[
           { id: 'syncs', label: `Sincronizações (${runs.length})` },
+          ...(xanoConnected && xanoLogs_.length > 0 ? [{ id: 'xano', label: `Xano Logs (${xanoLogs_.length})` }] : []),
           { id: 'events', label: `Eventos (${events.length})` },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -92,6 +109,22 @@ export default function Logs() {
             </table>
           </div>
         )
+      ) : tab === 'xano' ? (
+        <div className="space-y-2">
+          {xanoLogs_.map((log, i) => (
+            <div key={i} className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex items-start gap-4">
+              <div className="w-2 h-2 rounded-full bg-emerald-400 mt-2 flex-shrink-0" />
+              <div className="flex-1 text-xs">
+                <div className="flex items-center gap-3 mb-1">
+                  <span className="font-semibold text-slate-300">{log.operation || log.type || log.event || `Log ${i + 1}`}</span>
+                  {log.created_at && <span className="text-slate-600">{new Date(log.created_at).toLocaleString('pt-BR')}</span>}
+                  {log.status && <StatusBadge status={log.status} size="xs" />}
+                </div>
+                <p className="text-slate-500">{log.message || log.details || JSON.stringify(log).slice(0, 200)}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-2">
           {events.map(ev => (
