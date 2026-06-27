@@ -1,0 +1,44 @@
+{
+  "name": "SalesDaily",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "units_ordered": {
+      "type": "number",
+      "default": 0
+    },
+    "ordered_product_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "sessions": {
+      "type": "number",
+      "default": 0
+    },
+    "page_views": {
+      "type": "number",
+      "default": 0
+    },
+    "buy_box_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date"
+  ]
+}

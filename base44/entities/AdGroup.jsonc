@@ -1,0 +1,58 @@
+{
+  "name": "AdGroup",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ]
+    },
+    "default_bid": {
+      "type": "number"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "ad_group_id"
+  ]
+}

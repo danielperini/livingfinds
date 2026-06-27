@@ -1,0 +1,84 @@
+{
+  "name": "Decision",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "decision_type": {
+      "type": "string",
+      "enum": [
+        "bid_adjust",
+        "budget_change",
+        "pause_campaign",
+        "enable_campaign",
+        "add_keyword",
+        "negate_keyword",
+        "pause_ad_group",
+        "enable_ad_group"
+      ]
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "entity_name": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "number"
+    },
+    "proposed_value": {
+      "type": "number"
+    },
+    "change_pct": {
+      "type": "number"
+    },
+    "confidence": {
+      "type": "number"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "executed",
+        "failed"
+      ],
+      "default": "pending"
+    },
+    "reviewed_by": {
+      "type": "string"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "decision_type",
+    "status"
+  ]
+}

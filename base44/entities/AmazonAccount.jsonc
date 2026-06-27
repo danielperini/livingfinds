@@ -1,0 +1,53 @@
+{
+  "name": "AmazonAccount",
+  "type": "object",
+  "properties": {
+    "user_id": {
+      "type": "string"
+    },
+    "seller_name": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "ads_profile_id": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "connected",
+        "pending",
+        "error",
+        "disconnected"
+      ],
+      "default": "pending"
+    },
+    "ai_auto_optimization": {
+      "type": "boolean",
+      "default": false
+    },
+    "max_daily_budget_limit": {
+      "type": "number",
+      "default": 1000
+    },
+    "max_bid_change_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "last_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "user_id"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "name": "Product",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "price": {
+      "type": "number"
+    },
+    "fba_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "reserved_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "inbound_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "total_revenue_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_sold_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "is_transition": {
+      "type": "boolean",
+      "default": false
+    },
+    "launch_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "image_url": {
+      "type": "string"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin"
+  ]
+}
