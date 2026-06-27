@@ -44,6 +44,10 @@ export default function Settings() {
     try {
       const res = await base44.functions.invoke('testAuthHealth', {});
       setHealth(res.data);
+      if (res.data?.mode) {
+        localStorage.setItem('lf_operation_mode', res.data.mode);
+        window.dispatchEvent(new Event('lf_mode_change'));
+      }
     } catch (err) {
       setHealth({ ok: false, message: err.message });
     } finally {
