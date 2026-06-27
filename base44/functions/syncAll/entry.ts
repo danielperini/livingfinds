@@ -14,10 +14,11 @@ Deno.serve(async (req) => {
     const xanoBase = Deno.env.get('XANO_BASE_URL') || 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
 
     // Chamar o endpoint de sync do Xano — ele é quem fala com a Amazon
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const syncRes = await fetch(`${xanoBase}/sync/full-daily`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amazon_account_id }),
+      body: JSON.stringify({ amazon_account_id, date: today }),
     });
 
     const syncData = await syncRes.json().catch(() => ({}));
