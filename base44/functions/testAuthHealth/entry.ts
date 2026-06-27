@@ -14,7 +14,7 @@ async function testService(service) {
   const refreshToken = isAds ? Deno.env.get('ADS_REFRESH_TOKEN') : Deno.env.get('SP_REFRESH_TOKEN');
 
   if (!clientId || !clientSecret || !refreshToken) {
-    return { ok: false, service, status: 'missing_credentials', error_code: 'missing_credentials', message: `Credentials not configured for ${service}` };
+    return { ok: null, service, status: 'not_configured', message: `Credenciais não configuradas para ${service}` };
   }
 
   const params = new URLSearchParams({

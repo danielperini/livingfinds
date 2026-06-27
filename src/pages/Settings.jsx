@@ -141,14 +141,14 @@ export default function Settings() {
             </div>
             {health.services && Object.entries(health.services).map(([service, status]) => (
               <div key={service} className="flex items-center gap-3 p-3 bg-surface-2 rounded-lg">
-                {status.ok ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-red-400" />}
+                {status.ok === true ? <Wifi className="w-4 h-4 text-emerald-400" /> : status.ok === null ? <WifiOff className="w-4 h-4 text-slate-500" /> : <WifiOff className="w-4 h-4 text-red-400" />}
                 <div className="flex-1">
                   <p className="text-xs font-semibold text-slate-300">{service.toUpperCase()} API</p>
                   <p className="text-xs text-slate-500">
-                    {status.ok ? `Estado: ${status.status} • Expira em: ${status.expires_in}s` : `Erro: ${status.message || status.error_code}`}
+                    {status.ok === true ? `Estado: ${status.status} • Expira em: ${status.expires_in}s` : status.message}
                   </p>
                 </div>
-                <StatusBadge status={status.ok ? 'connected' : 'error'} size="xs" />
+                <StatusBadge status={status.ok === true ? 'connected' : status.ok === null ? 'pending' : 'error'} size="xs" />
               </div>
             ))}
           </div>
