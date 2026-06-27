@@ -82,6 +82,39 @@ export default function Settings() {
         <h1 className="text-lg font-bold text-white">Configurações</h1>
       </div>
 
+      {/* Operation Mode Panel */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Modo de Operação</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Controla se a app usa dados reais da Amazon ou simulados.</p>
+          </div>
+          {health?.mode && (
+            <span className={`text-xs font-bold px-3 py-1 rounded-full border ${
+              health.mode === 'real' ? 'bg-emerald-400/10 text-emerald-400 border-emerald-400/20' :
+              health.mode === 'hybrid' ? 'bg-cyan/10 text-cyan border-cyan/20' :
+              'bg-amber-400/10 text-amber-400 border-amber-400/20'
+            }`}>{health.mode.toUpperCase()}</span>
+          )}
+        </div>
+        <div className="grid grid-cols-3 gap-2 mt-3">
+          {[
+            { key: 'mock', label: 'MOCK', desc: 'Sem chamadas reais. Dados simulados.', color: 'text-amber-400 border-amber-400/20 bg-amber-400/5' },
+            { key: 'hybrid', label: 'HYBRID', desc: 'Lê dados reais, escreve em mock.', color: 'text-cyan border-cyan/20 bg-cyan/5' },
+            { key: 'real', label: 'REAL', desc: 'Todas as operações na Amazon API.', color: 'text-emerald-400 border-emerald-400/20 bg-emerald-400/5' },
+          ].map(m => (
+            <div key={m.key} className={`p-3 rounded-lg border ${health?.mode === m.key ? m.color : 'border-surface-3 bg-surface-2'}`}>
+              <p className={`text-xs font-bold ${health?.mode === m.key ? '' : 'text-slate-400'}`}>{m.label}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{m.desc}</p>
+              {health?.mode === m.key && <span className="text-xs font-semibold text-emerald-400">● Ativo</span>}
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500 mt-3">
+          Para alterar: <strong className="text-slate-300">Dashboard → Settings → Environment Variables</strong> → <code className="text-cyan/70 bg-surface-2 px-1 rounded">OPERATION_MODE</code> = <code className="text-cyan/70 bg-surface-2 px-1 rounded">mock</code> | <code className="text-cyan/70 bg-surface-2 px-1 rounded">hybrid</code> | <code className="text-cyan/70 bg-surface-2 px-1 rounded">real</code>
+        </p>
+      </div>
+
       {/* Auth Health Check */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
