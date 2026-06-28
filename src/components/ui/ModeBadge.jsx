@@ -1,13 +1,4 @@
-import { useState, useEffect } from 'react';
-
-export default function ModeBadge({ className = '' }) {
-  const [mode, setMode] = useState(() => localStorage.getItem('lf_operation_mode') || 'mock');
-
-  useEffect(() => {
-    const handler = () => setMode(localStorage.getItem('lf_operation_mode') || 'mock');
-    window.addEventListener('lf_mode_change', handler);
-    return () => window.removeEventListener('lf_mode_change', handler);
-  }, []);
+export default function ModeBadge({ mode = 'real', className = '' }) {
 
   const config = {
     mock: { label: 'MOCK', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Brain, Package, Rocket,
@@ -21,7 +21,16 @@ const navItems = [
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [accountMode, setAccountMode] = useState('mock');
   const location = useLocation();
+
+  useEffect(() => {
+    base44.auth.me().then(me => {
+      return base44.entities.AmazonAccount.filter({ user_id: me.id });
+    }).then(accounts => {
+      if (accounts.length > 0) setAccountMode(accounts[0].mode || 'mock');
+    }).catch(() => {});
+  }, []);
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
@@ -92,7 +101,7 @@ export default function AppLayout() {
         {/* Bottom: mode badge */}
         {!collapsed && (
           <div className="p-4 border-t border-surface-2">
-            <ModeBadge />
+            <ModeBadge mode={accountMode} />
           </div>
         )}
       </aside>
@@ -109,7 +118,7 @@ export default function AppLayout() {
           </button>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
-            <ModeBadge className="hidden sm:flex" />
+            <ModeBadge mode={accountMode} className="hidden sm:flex" />
             <button className="relative p-2 text-slate-400 hover:text-slate-200 transition-colors">
               <Bell className="w-4 h-4" />
             </button>
