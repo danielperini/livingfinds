@@ -4,6 +4,7 @@ import { xanoRequest, toArray } from '@/lib/useXano';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import MetricsSyncButton from '@/components/MetricsSyncButton';
 import { Link } from 'react-router-dom';
 
 function KPICard({ card, loading }) {
@@ -188,6 +189,7 @@ export default function Dashboard() {
         <div className="flex flex-wrap gap-3">
           <SyncActionButton label="Histórico 30d" path="/amazon/sync/history_30d" onDone={loadData} />
           <SyncActionButton label="Sync Mensal" path="/amazon/sync/monthly" onDone={loadData} />
+          <MetricsSyncButton onDone={loadData} />
         </div>
       </div>
 
