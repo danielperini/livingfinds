@@ -18,7 +18,7 @@ Deno.serve(async (req) => {
     const { method = 'GET', path, body, params } = await req.json();
     if (!path) return Response.json({ error: 'path is required' }, { status: 400 });
 
-    const xanoBase = Deno.env.get('XANO_BASE_URL') || 'https://x8ki-letl-twmt.n7.xano.io/api:workspace:4BJNriiP';
+    const xanoBase = Deno.env.get('XANO_BASE_URL') || 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
     const xanoKey = Deno.env.get('XANO_API_KEY') || '';
 
     if (!xanoKey) {
