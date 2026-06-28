@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { xanoRequest } from '@/lib/useXano';
 import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink } from 'lucide-react';
+import SyncPanel from '@/components/SyncPanel';
 
 export default function Settings() {
   const [user, setUser] = useState(null);
@@ -214,6 +215,11 @@ export default function Settings() {
           {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
         </button>
       </div>
+
+      {/* Sync Panel */}
+      {account && (
+        <SyncPanel amazonAccountId={account.id} onDone={() => {}} />
+      )}
 
       {/* Arquitetura info */}
       <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-6">
