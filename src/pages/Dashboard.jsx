@@ -106,30 +106,51 @@ export default function Dashboard() {
       setAccount(accounts[0] || null);
       setDecisions(decs);
 
-      const [xDash, xCamps, xMetrics, xLogsRes] = await Promise.allSettled([
-        xanoRequest('GET', '/amazon/dashboard'),
-        xanoRequest('GET', '/campaigns'),
+      const today = new Date().toISOString().slice(0, 10);
+      const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+
+      const [xProds, xMetrics] = await Promise.allSettled([
+        xanoRequest('GET', '/amazon/products'),
         xanoRequest('GET', '/amazon/metrics/daily_summary'),
-        xanoRequest('GET', '/logs'),
       ]);
 
-      if (xDash.status === 'fulfilled' && xDash.value) {
-        const d = xDash.value;
+      // Calcular KPIs a partir de produtos (dashboard endpoint com bug no Xano)
+      if (xProds.status === 'fulfilled') {
+        const prods = toArray(xProds.value, 'products');
+        setCampaigns(prods); // usar produtos como fallback de listagem
+        const totalRevenue = prods.reduce((s, p) => s + (p.total_revenue_30d || 0), 0);
+        const totalSpend = prods.reduce((s, p) => s + (p.total_spend_30d || 0), 0);
         setKpiCards([
-          { label: 'Receita (Ads)', value: (d.total_sales ?? d.revenue ?? 0).toFixed(2), unit: 'BRL' },
-          { label: 'Ad Spend', value: (d.total_spend ?? d.ad_spend ?? 0).toFixed(2), unit: 'BRL' },
-          { label: 'ACoS', value: (d.acos ?? 0).toFixed(1), unit: '%', inverse_trend: true },
-          { label: 'ROAS', value: (d.roas ?? 0).toFixed(2), unit: 'x' },
-          { label: 'TACoS', value: (d.tacos ?? 0).toFixed(1), unit: '%', inverse_trend: true },
-          { label: 'Cliques', value: (d.clicks ?? 0).toLocaleString(), unit: '' },
-          { label: 'Impressões', value: (d.impressions ?? 0).toLocaleString(), unit: '' },
-          { label: 'Pedidos', value: (d.orders ?? 0).toLocaleString(), unit: '' },
+          { label: 'Receita 30d', value: totalRevenue.toFixed(2), unit: 'BRL' },
+          { label: 'Produtos Ativos', value: prods.filter(p => p.status === 'active').length.toString(), unit: '' },
+          { label: 'Stock Total', value: prods.reduce((s, p) => s + (p.stock || 0), 0).toString(), unit: '' },
+          { label: 'Sem Stock', value: prods.filter(p => (p.stock || 0) === 0).length.toString(), unit: '' },
         ]);
       }
 
-      if (xCamps.status === 'fulfilled') setCampaigns(toArray(xCamps.value, 'campaigns'));
-      if (xMetrics.status === 'fulfilled') setDailyMetrics(toArray(xMetrics.value, 'metrics').slice(-14));
-      if (xLogsRes.status === 'fulfilled') setXanoLogs(toArray(xLogsRes.value, 'logs').slice(0, 6));
+      if (xMetrics.status === 'fulfilled') {
+        const metrics = toArray(xMetrics.value, 'metrics');
+        setDailyMetrics(metrics.slice(-14));
+        // Calcular KPIs de métricas se disponível
+        if (metrics.length > 0) {
+          const totalSpend = metrics.reduce((s, m) => s + (m.spend || m.cost || 0), 0);
+          const totalSales = metrics.reduce((s, m) => s + (m.sales || m.ads_sales || 0), 0);
+          const totalClicks = metrics.reduce((s, m) => s + (m.clicks || 0), 0);
+          const totalImpressions = metrics.reduce((s, m) => s + (m.impressions || 0), 0);
+          const totalOrders = metrics.reduce((s, m) => s + (m.orders || 0), 0);
+          const acos = totalSales > 0 ? (totalSpend / totalSales * 100) : 0;
+          const roas = totalSpend > 0 ? (totalSales / totalSpend) : 0;
+          setKpiCards([
+            { label: 'Ad Spend', value: totalSpend.toFixed(2), unit: 'BRL' },
+            { label: 'Sales', value: totalSales.toFixed(2), unit: 'BRL' },
+            { label: 'ACoS', value: acos.toFixed(1), unit: '%', inverse_trend: true },
+            { label: 'ROAS', value: roas.toFixed(2), unit: 'x' },
+            { label: 'Cliques', value: totalClicks.toLocaleString(), unit: '' },
+            { label: 'Impressões', value: totalImpressions.toLocaleString(), unit: '' },
+            { label: 'Pedidos', value: totalOrders.toLocaleString(), unit: '' },
+          ]);
+        }
+      }
 
     } catch (err) {
       setError(err.message);
@@ -173,10 +194,8 @@ export default function Dashboard() {
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
         <p className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Sincronização</p>
         <div className="flex flex-wrap gap-3">
-          <SyncActionButton label="Sync Ads" path="/sync/ads" onDone={loadData} />
-          <SyncActionButton label="Sync Produtos" path="/sync/products" onDone={loadData} />
-          <SyncActionButton label="Sync Vendas" path="/sync/sales" onDone={loadData} />
-          <SyncActionButton label="Sync Completo" path="/amazon/sync_all" onDone={loadData} />
+          <SyncActionButton label="Histórico 30d" path="/amazon/sync/history_30d" onDone={loadData} />
+          <SyncActionButton label="Sync Mensal" path="/amazon/sync/monthly" onDone={loadData} />
         </div>
       </div>
 
@@ -246,47 +265,38 @@ export default function Dashboard() {
       {/* Campaign table */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-2">
-          <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
-          <span className="text-xs text-slate-500">{campaigns.length} campanhas</span>
+          <h2 className="text-sm font-semibold text-slate-300">Produtos</h2>
+          <span className="text-xs text-slate-500">{campaigns.length} produtos</span>
         </div>
         {loading ? (
           <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
         ) : campaigns.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-sm text-slate-400">Sem campanhas. Execute um Sync.</p>
+            <p className="text-sm text-slate-400">Sem produtos. Execute um Sync.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['Campanha', 'Estado', 'Orç/dia', 'Spend', 'Sales', 'ACoS', 'ROAS', 'Cliques'].map(h => (
+                  {['ASIN', 'Título', 'SKU', 'Preço', 'Stock', 'Status'].map(h => (
                     <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {campaigns.slice(0, 25).map((c, i) => (
-                  <tr key={c.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
+                {campaigns.slice(0, 25).map((p, i) => (
+                  <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
+                    <td className="px-5 py-3 font-mono text-xs text-cyan">{p.asin || '—'}</td>
+                    <td className="px-5 py-3 text-white truncate max-w-xs">{p.title || p.name || '—'}</td>
+                    <td className="px-5 py-3 text-slate-400 font-mono text-xs">{p.sku || '—'}</td>
+                    <td className="px-5 py-3 text-slate-300">${(p.price || 0).toFixed(2)}</td>
                     <td className="px-5 py-3">
-                      <p className="font-medium text-white truncate max-w-xs">{c.name || '—'}</p>
-                      <p className="text-xs text-slate-500">{c.campaign_type || c.campaignType}</p>
-                    </td>
-                    <td className="px-5 py-3"><StatusBadge status={c.state} /></td>
-                    <td className="px-5 py-3 text-slate-300">R${(c.daily_budget || c.dailyBudget || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-slate-300">R${(c.spend || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-emerald-400">R${(c.sales || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3">
-                      <span className={`font-semibold ${(c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                        {(c.acos || 0).toFixed(1)}%
+                      <span className={`font-semibold ${(p.stock || 0) === 0 ? 'text-red-400' : (p.stock || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
+                        {p.stock || 0}
                       </span>
                     </td>
-                    <td className="px-5 py-3">
-                      <span className={`font-semibold ${(c.roas || 0) > 3 ? 'text-emerald-400' : (c.roas || 0) > 1.5 ? 'text-amber-400' : 'text-red-400'}`}>
-                        {(c.roas || 0).toFixed(2)}x
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-slate-300">{(c.clicks || 0).toLocaleString()}</td>
+                    <td className="px-5 py-3"><StatusBadge status={p.status || 'active'} /></td>
                   </tr>
                 ))}
               </tbody>
