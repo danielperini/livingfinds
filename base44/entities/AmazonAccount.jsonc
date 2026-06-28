@@ -44,15 +44,7 @@
       "format": "date-time"
     },
     "error_message": {
-      "type": " string"
-    },
-    "mode": {
-      "type": "string",
-      "enum": [
-        "mock",
-        "real"
-      ],
-      "default": "mock"
+      "type": "string"
     }
   },
   "required": [
