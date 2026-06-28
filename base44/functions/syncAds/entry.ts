@@ -29,25 +29,38 @@ async function getAdsToken() {
 }
 
 function getAdsBaseUrl() {
-  const r = Deno.env.get('ADS_REGION') || 'NA';
-  return { NA: 'https://advertising-api.amazon.com', EU: 'https://advertising-api-eu.amazon.com', FE: 'https://advertising-api-fe.amazon.com' }[r] || 'https://advertising-api.amazon.com';
+  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase().trim();
+  // Normalizar regiões alternativas
+  if (r.includes('NORTE') || r.includes('BRASIL') || r.includes('NA') || r.includes('US') || r.includes('BR')) {
+    return 'https://advertising-api.amazon.com';
+  }
+  if (r.includes('EU') || r.includes('EUROP')) return 'https://advertising-api-eu.amazon.com';
+  if (r.includes('FE') || r.includes('JAPAN') || r.includes('ASIA')) return 'https://advertising-api-fe.amazon.com';
+  return 'https://advertising-api.amazon.com';
 }
 
-async function adsGet(path) {
+async function adsCall(method, path, body) {
   const token = await getAdsToken();
-  const res = await fetch(`${getAdsBaseUrl()}${path}`, {
+  const opts = {
+    method: method || 'GET',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': Deno.env.get('ADS_PROFILE_ID'),
-      'Accept': 'application/json',
+      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+      'Content-Type': 'application/vnd.spCampaign.v3+json',
+      'Accept': 'application/vnd.spCampaign.v3+json',
     },
-  });
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${getAdsBaseUrl()}${path}`, opts);
   const text = await res.text();
-  const data = text ? JSON.parse(text) : [];
-  if (!res.ok) throw { code: `ads_${res.status}`, message: data.details || 'API error', status: res.status };
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!res.ok) throw { code: `ads_${res.status}`, message: JSON.stringify(data), status: res.status };
   return data;
 }
+
+async function adsGet(path) { return adsCall('GET', path); }
 
 Deno.serve(async (req) => {
   const startTime = Date.now();
@@ -82,8 +95,8 @@ Deno.serve(async (req) => {
     }
 
     // Fetch campaigns
-    const campaigns = await adsGet('/sp/campaigns?stateFilter=enabled,paused,archived&count=100');
-    const campaignList = Array.isArray(campaigns) ? campaigns : [];
+    const campaignsData = await adsCall('POST', '/sp/campaigns/list', { maxResults: 100 });
+    const campaignList = campaignsData?.campaigns || (Array.isArray(campaignsData) ? campaignsData : []);
 
     let upserted = 0;
     for (const c of campaignList) {
@@ -92,13 +105,13 @@ Deno.serve(async (req) => {
         amazon_account_id: amazonAccountId,
         campaign_id: String(c.campaignId),
         name: c.name,
-        campaign_type: c.campaignType,
+        campaign_type: 'SP',
         targeting_type: c.targetingType,
-        state: c.state,
-        daily_budget: c.dailyBudget,
+        state: (c.state || '').toLowerCase(),
+        daily_budget: c.budget?.budget || c.dailyBudget,
         start_date: c.startDate,
         end_date: c.endDate,
-        bidding_strategy: c.bidding?.strategy,
+        bidding_strategy: c.dynamicBidding?.strategy || c.bidding?.strategy,
         synced_at: new Date().toISOString(),
       };
       if (existing.length > 0) {
