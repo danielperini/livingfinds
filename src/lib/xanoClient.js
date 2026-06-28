@@ -117,18 +117,19 @@ export const xanoDashboard = {
 };
 
 // ─── CAMPANHAS ────────────────────────────────────────────────────────────────
-// GET    /amazon/campaigns        ?state &account_id &search
-// GET    /campaigns               ?page &per_page &status
+// GET    /campaigns               ?page &per_page &status  (endpoint funcional)
 // POST   /campaigns               { profile_id, name, campaign_type, daily_budget, status }
 // PATCH  /campaigns/{id}          { state?, daily_budget?, x_api_key }
 // DELETE /campaigns/{id}          { profile_id }
 // GET    /amazon/analysis/campaigns ?start_date &end_date &user_id &account_id &x_api_key
 // POST   /campaigns/create-from-search-term { search_term_id, new_campaign_name, initial_bid }
+// NOTE: /amazon/campaigns está com bug no Xano — usar /campaigns
 
 export const xanoCampaigns = {
   list: (params = {}) => {
+    // /amazon/campaigns tem bug (account_id não suportado) — usar /campaigns
     const qs = new URLSearchParams(params).toString();
-    return xanoFetch(`/amazon/campaigns${qs ? '?' + qs : ''}`);
+    return xanoFetch(`/campaigns${qs ? '?' + qs : ''}`);
   },
   listAll: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
