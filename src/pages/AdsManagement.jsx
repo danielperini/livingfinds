@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
-import { xanoCampaigns, xanoKeywords, xanoBids, isXanoAuthenticated } from '@/lib/xanoClient';
+import { xanoRequest, toArray } from '@/lib/useXano';
 import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import EmptyState from '@/components/ui/EmptyState';
@@ -15,63 +14,47 @@ export default function AdsManagement() {
   const [pendingBids, setPendingBids] = useState({});
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
-  const [budgetEdit, setBudgetEdit] = useState(null); // { campaignId, value }
-  const [budgetSaving, setBudgetSaving] = useState(false);
   const [toggling, setToggling] = useState(null);
-  const xanoConnected = isXanoAuthenticated();
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      setError(null);
       try {
-        if (xanoConnected) {
-          const data = await xanoCampaigns.list();
-          setCampaigns(Array.isArray(data) ? data : (data?.campaigns || []));
-        } else {
-          setCampaigns(await base44.entities.Campaign.list('-spend', 200));
-        }
+        const data = await xanoRequest('GET', '/amazon/analysis/campaigns');
+        setCampaigns(toArray(data, 'campaigns'));
       } catch (err) {
-        console.error(err);
+        setError(err.message);
       } finally {
         setLoading(false);
       }
     };
     load();
-  }, [xanoConnected]);
+  }, []);
 
   const selectCampaign = async (campaign) => {
     setSelectedCampaign(campaign);
     setPendingBids({});
-    setBudgetEdit(null);
     setKwLoading(true);
     try {
-      if (xanoConnected) {
-        const kwData = await xanoKeywords.list();
-        const all = Array.isArray(kwData) ? kwData : (kwData?.keywords || []);
-        const campaignId = campaign.campaign_id || campaign.campaignId || campaign.id;
-        setKeywords(all.filter(k => (k.campaign_id || k.campaignId) === campaignId));
-      } else {
-        const campaignId = campaign.campaign_id || campaign.campaignId;
-        setKeywords(await base44.entities.Keyword.filter({ campaign_id: campaignId }));
-      }
+      const campaignId = campaign.campaign_id || campaign.campaignId || campaign.id;
+      const kwData = await xanoRequest('GET', '/amazon/keywords', null, { campaign_id: campaignId });
+      setKeywords(toArray(kwData, 'keywords'));
     } catch (err) {
-      console.error(err);
+      setKeywords([]);
     } finally {
       setKwLoading(false);
     }
   };
 
-  // Toggle pausar/ativar campanha via Xano
   const toggleCampaignState = async (campaign) => {
-    if (!xanoConnected) return;
     const id = campaign.campaign_id || campaign.id;
     const newState = campaign.state === 'enabled' ? 'paused' : 'enabled';
     setToggling(id);
     try {
-      await xanoCampaigns.toggleState(id, newState);
-      setCampaigns(prev => prev.map(c =>
-        (c.campaign_id || c.id) === id ? { ...c, state: newState } : c
-      ));
+      await xanoRequest('PATCH', `/campaigns/${id}`, { state: newState });
+      setCampaigns(prev => prev.map(c => (c.campaign_id || c.id) === id ? { ...c, state: newState } : c));
       if (selectedCampaign && (selectedCampaign.campaign_id || selectedCampaign.id) === id) {
         setSelectedCampaign(prev => ({ ...prev, state: newState }));
       }
@@ -82,64 +65,20 @@ export default function AdsManagement() {
     }
   };
 
-  // Salvar budget via Xano
-  const saveBudget = async () => {
-    if (!budgetEdit || !xanoConnected) return;
-    setBudgetSaving(true);
-    try {
-      await xanoCampaigns.updateBudget(budgetEdit.campaignId, parseFloat(budgetEdit.value));
-      setCampaigns(prev => prev.map(c =>
-        (c.campaign_id || c.id) === budgetEdit.campaignId
-          ? { ...c, daily_budget: parseFloat(budgetEdit.value) }
-          : c
-      ));
-      if (selectedCampaign && (selectedCampaign.campaign_id || selectedCampaign.id) === budgetEdit.campaignId) {
-        setSelectedCampaign(prev => ({ ...prev, daily_budget: parseFloat(budgetEdit.value) }));
-      }
-      setBudgetEdit(null);
-    } catch (err) {
-      alert(`Erro ao salvar budget: ${err.message}`);
-    } finally {
-      setBudgetSaving(false);
-    }
-  };
-
-  // Aplicar bids via Xano
+  // Aplicar bids: apenas se aprovado manualmente (pendingBids já são a aprovação do utilizador)
   const applyBids = async () => {
     if (Object.keys(pendingBids).length === 0) return;
     setSaveState('loading');
     setSaveError(null);
     try {
-      if (xanoConnected) {
-        const bids = Object.entries(pendingBids).map(([keyword_id, bid]) => ({ keyword_id, bid }));
-        await xanoBids.apply({ bids });
-      } else {
-        // Sem Xano: criar decisões para aprovação
-        for (const [keywordId, newBid] of Object.entries(pendingBids)) {
-          const kw = keywords.find(k => (k.keyword_id || k.id) === keywordId);
-          if (!kw) continue;
-          await base44.entities.Decision.create({
-            amazon_account_id: kw.amazon_account_id,
-            decision_type: 'bid_adjust',
-            entity_type: 'keyword',
-            entity_id: keywordId,
-            entity_name: `${kw.keyword_text || kw.keywordText} (${kw.match_type || kw.matchType})`,
-            rationale: 'Ajuste manual de bid',
-            current_value: kw.bid,
-            proposed_value: newBid,
-            change_pct: kw.bid > 0 ? ((newBid - kw.bid) / kw.bid) * 100 : 0,
-            confidence: 1.0,
-            priority: 'medium',
-            status: 'pending',
-          });
-        }
-      }
+      const updates = Object.entries(pendingBids).map(([keyword_id, bid]) => ({ keyword_id, bid }));
+      await xanoRequest('POST', '/bids/apply', { updates });
       setSaveState('success');
       setPendingBids({});
       setTimeout(() => setSaveState('idle'), 3000);
     } catch (err) {
       setSaveState('error');
-      setSaveError(err.message || 'Erro ao guardar');
+      setSaveError(err.message || 'Erro ao aplicar bids');
       setTimeout(() => setSaveState('idle'), 4000);
     }
   };
@@ -149,12 +88,12 @@ export default function AdsManagement() {
 
   return (
     <div className="flex h-full">
-      {/* Sidebar de campanhas */}
+      {/* Sidebar */}
       <div className="w-72 flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
         <div className="p-4 border-b border-surface-2">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-white">Campanhas</h2>
-            {xanoConnected && <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">Xano Live</span>}
+            <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">Xano Live</span>
           </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
@@ -169,8 +108,10 @@ export default function AdsManagement() {
         <div className="flex-1 overflow-y-auto scrollbar-thin">
           {loading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
+          ) : error ? (
+            <p className="text-xs text-red-400 text-center py-8 px-4">{error}</p>
           ) : filtered.length === 0 ? (
-            <p className="text-xs text-slate-500 text-center py-8 px-4">Sem campanhas. {xanoConnected ? 'Executa um Sync.' : 'Liga o Xano.'}</p>
+            <p className="text-xs text-slate-500 text-center py-8 px-4">Sem campanhas. Execute um Sync.</p>
           ) : (
             filtered.map((campaign, i) => {
               const cId = campaign.campaign_id || campaign.id;
@@ -187,16 +128,14 @@ export default function AdsManagement() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-medium text-white truncate flex-1">{campaign.name}</p>
-                    {xanoConnected && (
-                      <button
-                        onClick={e => { e.stopPropagation(); toggleCampaignState(campaign); }}
-                        disabled={isToggling}
-                        className="flex-shrink-0 p-1 rounded hover:bg-surface-3 text-slate-400 hover:text-white transition-colors"
-                        title={campaign.state === 'enabled' ? 'Pausar' : 'Ativar'}
-                      >
-                        {isToggling ? <Loader2 className="w-3 h-3 animate-spin" /> : campaign.state === 'enabled' ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                      </button>
-                    )}
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleCampaignState(campaign); }}
+                      disabled={isToggling}
+                      className="flex-shrink-0 p-1 rounded hover:bg-surface-3 text-slate-400 hover:text-white transition-colors"
+                      title={campaign.state === 'enabled' ? 'Pausar' : 'Ativar'}
+                    >
+                      {isToggling ? <Loader2 className="w-3 h-3 animate-spin" /> : campaign.state === 'enabled' ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 mt-1">
                     <StatusBadge status={campaign.state} size="xs" />
@@ -204,6 +143,9 @@ export default function AdsManagement() {
                     <span className={`text-xs font-semibold ${(campaign.acos || 0) > 40 ? 'text-red-400' : 'text-emerald-400'}`}>
                       {(campaign.acos || 0).toFixed(0)}%
                     </span>
+                    {campaign.recommendation && (
+                      <span className="text-xs text-cyan truncate">{campaign.recommendation}</span>
+                    )}
                   </div>
                 </div>
               );
@@ -224,36 +166,21 @@ export default function AdsManagement() {
                   <h2 className="text-base font-bold text-white">{selectedCampaign.name}</h2>
                   <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <StatusBadge status={selectedCampaign.state} />
-                    {/* Budget inline edit */}
-                    {xanoConnected ? (
-                      budgetEdit?.campaignId === (selectedCampaign.campaign_id || selectedCampaign.id) ? (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400">Orç:</span>
-                          <input
-                            type="number"
-                            value={budgetEdit.value}
-                            onChange={e => setBudgetEdit(prev => ({ ...prev, value: e.target.value }))}
-                            className="w-24 px-2 py-1 bg-surface-3 border border-cyan/40 rounded text-xs text-white focus:outline-none"
-                          />
-                          <button onClick={saveBudget} disabled={budgetSaving} className="text-xs text-emerald-400 hover:text-emerald-300">
-                            {budgetSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Salvar'}
-                          </button>
-                          <button onClick={() => setBudgetEdit(null)} className="text-xs text-slate-500 hover:text-slate-300">✕</button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setBudgetEdit({ campaignId: selectedCampaign.campaign_id || selectedCampaign.id, value: selectedCampaign.daily_budget || 0 })}
-                          className="text-xs text-slate-400 hover:text-cyan underline"
-                        >
-                          Orç: R${(selectedCampaign.daily_budget || selectedCampaign.dailyBudget || 0).toFixed(2)}
-                        </button>
-                      )
-                    ) : (
-                      <span className="text-xs text-slate-400">Orç: R${(selectedCampaign.daily_budget || selectedCampaign.dailyBudget || 0).toFixed(2)}</span>
-                    )}
+                    <span className="text-xs text-slate-400">Orç: R${(selectedCampaign.daily_budget || 0).toFixed(2)}</span>
                     <span className="text-xs text-slate-400">ACoS: <span className={`font-semibold ${(selectedCampaign.acos || 0) > 40 ? 'text-red-400' : 'text-emerald-400'}`}>{(selectedCampaign.acos || 0).toFixed(1)}%</span></span>
                     <span className="text-xs text-slate-400">ROAS: <span className="font-semibold text-cyan">{(selectedCampaign.roas || 0).toFixed(2)}x</span></span>
+                    <span className="text-xs text-slate-400">CPC: <span className="text-white">R${(selectedCampaign.cpc || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">CTR: <span className="text-white">{(selectedCampaign.ctr || 0).toFixed(2)}%</span></span>
+                    <span className="text-xs text-slate-400">Pedidos: <span className="text-white">{selectedCampaign.orders || 0}</span></span>
+                    {selectedCampaign.risk && (
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${selectedCampaign.risk === 'high' ? 'bg-red-400/10 text-red-400' : selectedCampaign.risk === 'medium' ? 'bg-amber-400/10 text-amber-400' : 'bg-emerald-400/10 text-emerald-400'}`}>
+                        Risco: {selectedCampaign.risk}
+                      </span>
+                    )}
                   </div>
+                  {selectedCampaign.recommendation && (
+                    <p className="text-xs text-cyan mt-2">💡 {selectedCampaign.recommendation}</p>
+                  )}
                 </div>
                 {hasPending && (
                   <button
@@ -297,7 +224,7 @@ export default function AdsManagement() {
                       const kwId = kw.keyword_id || kw.id;
                       const changed = kwId in pendingBids;
                       return (
-                        <tr key={kwId || i} className={`border-b border-surface-2/50 transition-colors duration-150 ${changed ? 'bg-cyan/5 border-l-2 border-l-cyan' : 'hover:bg-surface-2'}`}>
+                        <tr key={kwId || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5 border-l-2 border-l-cyan' : 'hover:bg-surface-2'}`}>
                           <td className="px-4 py-3 font-medium text-white">{kw.keyword_text || kw.keywordText}</td>
                           <td className="px-4 py-3"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || kw.matchType}</span></td>
                           <td className="px-4 py-3"><StatusBadge status={kw.state} size="xs" /></td>

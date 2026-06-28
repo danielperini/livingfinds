@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { isXanoAuthenticated } from '@/lib/xanoClient';
+// SyncButton agora usa xanoProxy via base44.functions — sem chamada direta ao Xano
 
 export default function SyncButton({ amazonAccountId, onSuccess }) {
   const [state, setState] = useState('idle');

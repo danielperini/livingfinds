@@ -1,13 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoDashboard, xanoCampaigns, isXanoAuthenticated } from '@/lib/xanoClient';
+import { xanoRequest, toArray } from '@/lib/useXano';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { AlertTriangle, BarChart2, Wifi, WifiOff, Loader2, ExternalLink, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
-import SyncButton from '@/components/ui/SyncButton';
 import { Link } from 'react-router-dom';
 
-// KPI Card com suporte a change_percent e inverse_trend
 function KPICard({ card, loading }) {
   if (loading) {
     return (
@@ -18,28 +16,66 @@ function KPICard({ card, loading }) {
       </div>
     );
   }
-
   const pct = card.change_percent ?? 0;
-  const isPositive = pct > 0;
-  const isNegative = pct < 0;
-  // inverse_trend: menor é melhor (ex: ACoS). Verde quando desce.
   const colorClass = card.inverse_trend
-    ? (isNegative ? 'text-emerald-400' : isPositive ? 'text-red-400' : 'text-slate-400')
-    : (isPositive ? 'text-emerald-400' : isNegative ? 'text-red-400' : 'text-slate-400');
-
+    ? (pct < 0 ? 'text-emerald-400' : pct > 0 ? 'text-red-400' : 'text-slate-400')
+    : (pct > 0 ? 'text-emerald-400' : pct < 0 ? 'text-red-400' : 'text-slate-400');
   const TrendIcon = pct > 0 ? TrendingUp : pct < 0 ? TrendingDown : Minus;
-
   return (
     <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
       <p className="text-xs font-medium text-slate-400 mb-2">{card.label}</p>
       <p className="text-2xl font-bold text-white mb-1">
-        {card.unit === 'BRL' ? 'R$ ' : card.unit === '%' ? '' : ''}{card.value}
-        {card.unit === '%' ? '%' : ''}
+        {card.unit === 'BRL' || card.unit === 'R$' ? 'R$ ' : ''}{card.value}{card.unit === '%' ? '%' : ''}
       </p>
       {pct !== 0 && (
         <div className={`flex items-center gap-1 text-xs font-semibold ${colorClass}`}>
           <TrendIcon className="w-3 h-3" />
-          {pct > 0 ? '+' : ''}{pct.toFixed(1)}% vs período anterior
+          {pct > 0 ? '+' : ''}{Number(pct).toFixed(1)}% vs período anterior
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SyncActionButton({ label, path, onDone }) {
+  const [state, setState] = useState('idle');
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    setState('loading');
+    setResult(null);
+    try {
+      const data = await xanoRequest('POST', path);
+      setState('success');
+      setResult(data);
+      onDone?.();
+      setTimeout(() => setState('idle'), 4000);
+    } catch (err) {
+      setState('error');
+      setResult({ error: err.message });
+      setTimeout(() => setState('idle'), 5000);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        onClick={run}
+        disabled={state === 'loading'}
+        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
+          state === 'success' ? 'bg-emerald-600/20 border border-emerald-600/30 text-emerald-400' :
+          state === 'error' ? 'bg-red-600/20 border border-red-600/30 text-red-400' :
+          'bg-surface-2 border border-surface-3 text-slate-300 hover:text-white'
+        } disabled:opacity-60`}
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
+        {state === 'loading' ? 'Executando...' : state === 'success' ? 'Concluído!' : state === 'error' ? 'Erro' : label}
+      </button>
+      {result && state !== 'idle' && (
+        <div className={`text-xs px-2 py-1 rounded ${state === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+          {state === 'success'
+            ? `✓ ${result.records_imported ?? result.records_read ?? ''} importados${result.errors_count ? ` · ${result.errors_count} erros` : ''}`
+            : result.error}
         </div>
       )}
     </div>
@@ -52,79 +88,61 @@ export default function Dashboard() {
   const [kpiCards, setKpiCards] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [dailyMetrics, setDailyMetrics] = useState([]);
-  const [syncRuns, setSyncRuns] = useState([]);
+  const [xanoLogs, setXanoLogs] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const xanoConnected = isXanoAuthenticated();
+  const [error, setError] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const me = await base44.auth.me();
       setUser(me);
-
-      const [accounts, runs, decs] = await Promise.all([
+      const [accounts, decs] = await Promise.all([
         base44.entities.AmazonAccount.filter({ user_id: me.id }),
-        base44.entities.SyncRun.list('-created_date', 10),
         base44.entities.Decision.filter({ status: 'pending' }),
       ]);
       setAccount(accounts[0] || null);
-      setSyncRuns(runs);
       setDecisions(decs);
 
-      if (xanoConnected) {
-        const [xCards, xCampaigns, xMetrics] = await Promise.allSettled([
-          xanoDashboard.getCards(),
-          xanoCampaigns.list(),
-          xanoDashboard.getDailyMetrics(),
+      const [xDash, xCamps, xMetrics, xLogsRes] = await Promise.allSettled([
+        xanoRequest('GET', '/amazon/dashboard'),
+        xanoRequest('GET', '/campaigns'),
+        xanoRequest('GET', '/amazon/metrics/daily_summary'),
+        xanoRequest('GET', '/logs'),
+      ]);
+
+      if (xDash.status === 'fulfilled' && xDash.value) {
+        const d = xDash.value;
+        setKpiCards([
+          { label: 'Receita (Ads)', value: (d.total_sales ?? d.revenue ?? 0).toFixed(2), unit: 'BRL' },
+          { label: 'Ad Spend', value: (d.total_spend ?? d.ad_spend ?? 0).toFixed(2), unit: 'BRL' },
+          { label: 'ACoS', value: (d.acos ?? 0).toFixed(1), unit: '%', inverse_trend: true },
+          { label: 'ROAS', value: (d.roas ?? 0).toFixed(2), unit: 'x' },
+          { label: 'TACoS', value: (d.tacos ?? 0).toFixed(1), unit: '%', inverse_trend: true },
+          { label: 'Cliques', value: (d.clicks ?? 0).toLocaleString(), unit: '' },
+          { label: 'Impressões', value: (d.impressions ?? 0).toLocaleString(), unit: '' },
+          { label: 'Pedidos', value: (d.orders ?? 0).toLocaleString(), unit: '' },
         ]);
-
-        if (xCards.status === 'fulfilled') {
-          const cards = Array.isArray(xCards.value) ? xCards.value : (xCards.value?.cards || []);
-          setKpiCards(cards);
-        }
-
-        if (xCampaigns.status === 'fulfilled') {
-          const list = Array.isArray(xCampaigns.value) ? xCampaigns.value : (xCampaigns.value?.campaigns || []);
-          setCampaigns(list);
-        }
-
-        if (xMetrics.status === 'fulfilled') {
-          const metrics = Array.isArray(xMetrics.value) ? xMetrics.value : (xMetrics.value?.metrics || []);
-          setDailyMetrics(metrics.slice(-14));
-        }
-      } else {
-        const c = await base44.entities.Campaign.list('-synced_at', 100);
-        setCampaigns(c);
       }
+
+      if (xCamps.status === 'fulfilled') setCampaigns(toArray(xCamps.value, 'campaigns'));
+      if (xMetrics.status === 'fulfilled') setDailyMetrics(toArray(xMetrics.value, 'metrics').slice(-14));
+      if (xLogsRes.status === 'fulfilled') setXanoLogs(toArray(xLogsRes.value, 'logs').slice(0, 6));
+
     } catch (err) {
-      console.error('Dashboard load error:', err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [xanoConnected]);
+  }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Fallback KPIs calculados das campanhas quando não há cards do Xano
-  const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
-  const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
-  const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
-  const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
-
-  const fallbackCards = [
-    { label: 'Total Spend', value: totalSpend.toFixed(2), unit: 'BRL', change_percent: 0, trend: 'neutral' },
-    { label: 'Total Sales', value: totalSales.toFixed(2), unit: 'BRL', change_percent: 0, trend: 'neutral' },
-    { label: 'ACoS Médio', value: avgAcos.toFixed(1), unit: '%', change_percent: 0, trend: 'neutral', inverse_trend: true },
-    { label: 'ROAS Médio', value: avgRoas.toFixed(2), unit: '', change_percent: 0, trend: 'neutral' },
-  ];
-
-  const displayCards = kpiCards.length > 0 ? kpiCards : fallbackCards;
-
-  // Gráfico — preferir métricas diárias do Xano
   const chartData = dailyMetrics.length > 0
-    ? dailyMetrics.map(m => ({ name: m.date?.slice(5) || '', spend: m.cost || m.spend || 0, sales: m.ads_sales || m.sales || 0 }))
-    : campaigns.slice(0, 10).map((c, i) => ({ name: c.name?.slice(0, 10) || `C${i + 1}`, spend: c.spend || 0, sales: c.sales || 0 }));
+    ? dailyMetrics.map(m => ({ name: m.date?.slice(5) || '', spend: m.spend || m.cost || 0, sales: m.sales || m.ads_sales || 0 }))
+    : [];
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
@@ -132,59 +150,48 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-sm text-slate-400 mt-0.5">
-            {decisions.length > 0
-              ? `${decisions.length} recomendação${decisions.length !== 1 ? 'ões' : ''} pendente${decisions.length !== 1 ? 's' : ''} no Learner.`
-              : 'Sem recomendações pendentes.'}
+            {decisions.length > 0 ? `${decisions.length} recomendações pendentes no Learner.` : 'Sem recomendações pendentes.'}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border ${xanoConnected ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-amber-400 bg-amber-400/10 border-amber-400/20'}`}>
-            {xanoConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-            {xanoConnected ? 'Xano conectado' : 'Xano desconectado'}
-          </div>
-          <SyncButton amazonAccountId={account?.id} onSuccess={loadData} />
-        </div>
+        <button onClick={loadData} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+        </button>
       </div>
 
-      {/* Banners */}
-      {!xanoConnected && (
-        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-semibold text-amber-300">Xano não autenticado</p>
-              <p className="text-xs text-amber-400/70 mt-0.5">Liga o Xano nas Configurações para ver dados reais da Amazon.</p>
-            </div>
-          </div>
-          <Link to="/settings" className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-300 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap">
-            <ExternalLink className="w-3.5 h-3.5" /> Configurar
-          </Link>
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <p className="text-sm text-red-400">{error}</p>
         </div>
       )}
-      {!account && !loading && (
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-slate-500 flex-shrink-0" />
-          <p className="text-sm text-slate-400">Conta Amazon não configurada. <Link to="/settings" className="text-cyan hover:underline">Configurar →</Link></p>
+
+      {/* Sync buttons */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+        <p className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Sincronização</p>
+        <div className="flex flex-wrap gap-3">
+          <SyncActionButton label="Sync Ads" path="/sync/ads" onDone={loadData} />
+          <SyncActionButton label="Sync Produtos" path="/sync/products" onDone={loadData} />
+          <SyncActionButton label="Sync Vendas" path="/sync/sales" onDone={loadData} />
+          <SyncActionButton label="Sync Completo" path="/amazon/sync_all" onDone={loadData} />
         </div>
-      )}
+      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {displayCards.slice(0, 4).map((card, i) => (
-          <KPICard key={i} card={card} loading={loading} />
+        {(kpiCards.length > 0 ? kpiCards : Array(8).fill(null)).slice(0, 8).map((card, i) => (
+          <KPICard key={i} card={card || {}} loading={loading || !card} />
         ))}
       </div>
 
-      {/* Chart + Activity */}
+      {/* Chart + Logs */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-300">Spend vs Sales</h2>
+            <h2 className="text-sm font-semibold text-slate-300">Spend vs Sales (últimos 14 dias)</h2>
             <BarChart2 className="w-4 h-4 text-slate-500" />
           </div>
           {loading ? (
@@ -205,30 +212,30 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
                 <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} labelStyle={{ color: '#94a3b8' }} />
+                <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} />
                 <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend (R$)" />
                 <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Sales (R$)" />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
             <div className="h-48 flex items-center justify-center">
-              <p className="text-sm text-slate-500">Sem dados — liga o Xano ou executa um Sync</p>
+              <p className="text-sm text-slate-500">Sem dados de métricas. Execute um Sync.</p>
             </div>
           )}
         </div>
 
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-slate-300 mb-4">Atividade Recente</h2>
+          <h2 className="text-sm font-semibold text-slate-300 mb-4">Logs Recentes</h2>
           <div className="space-y-3">
-            {syncRuns.length === 0 && !loading && (
-              <p className="text-sm text-slate-500 text-center py-4">Sem atividade recente</p>
+            {xanoLogs.length === 0 && !loading && (
+              <p className="text-sm text-slate-500 text-center py-4">Sem logs recentes</p>
             )}
-            {syncRuns.slice(0, 6).map(run => (
-              <div key={run.id} className="flex items-start gap-3">
-                <StatusBadge status={run.status} size="xs" />
+            {xanoLogs.map((log, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <StatusBadge status={log.status || 'pending'} size="xs" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-slate-300 truncate">{run.operation}</p>
-                  <p className="text-xs text-slate-500">{run.records_upserted || 0} registos • {run.duration_ms ? `${(run.duration_ms / 1000).toFixed(1)}s` : '—'}</p>
+                  <p className="text-xs font-medium text-slate-300 truncate">{log.operation || log.type || log.event || `Log ${i + 1}`}</p>
+                  <p className="text-xs text-slate-500">{log.message || log.details || '—'}</p>
                 </div>
               </div>
             ))}
@@ -246,29 +253,29 @@ export default function Dashboard() {
           <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
         ) : campaigns.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-sm text-slate-400">Sem campanhas. {xanoConnected ? 'Executa um Sync.' : 'Liga o Xano primeiro.'}</p>
+            <p className="text-sm text-slate-400">Sem campanhas. Execute um Sync.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['Campanha', 'Estado', 'Orçamento/dia', 'Spend', 'Sales', 'ACoS', 'ROAS', 'Cliques'].map(h => (
+                  {['Campanha', 'Estado', 'Orç/dia', 'Spend', 'Sales', 'ACoS', 'ROAS', 'Cliques'].map(h => (
                     <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {campaigns.slice(0, 25).map((c, i) => (
-                  <tr key={c.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors duration-150">
+                  <tr key={c.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
                     <td className="px-5 py-3">
                       <p className="font-medium text-white truncate max-w-xs">{c.name || '—'}</p>
                       <p className="text-xs text-slate-500">{c.campaign_type || c.campaignType}</p>
                     </td>
                     <td className="px-5 py-3"><StatusBadge status={c.state} /></td>
-                    <td className="px-5 py-3 text-slate-300">R$ {(c.daily_budget || c.dailyBudget || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-slate-300">R$ {(c.spend || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-emerald-400">R$ {(c.sales || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-slate-300">R${(c.daily_budget || c.dailyBudget || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-slate-300">R${(c.spend || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-emerald-400">R${(c.sales || 0).toFixed(2)}</td>
                     <td className="px-5 py-3">
                       <span className={`font-semibold ${(c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400'}`}>
                         {(c.acos || 0).toFixed(1)}%

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoProducts, isXanoAuthenticated } from '@/lib/xanoClient';
-import { Package, Search, TrendingUp, TrendingDown, Loader2, AlertTriangle, Wifi } from 'lucide-react';
+import { xanoRequest, toArray } from '@/lib/useXano';
+import { Package, Search, TrendingUp, Loader2, AlertTriangle } from 'lucide-react';
 import MetricCard from '@/components/ui/MetricCard';
 import EmptyState from '@/components/ui/EmptyState';
 
@@ -11,33 +11,16 @@ export default function InventorySales() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('products');
-  const xanoConnected = isXanoAuthenticated();
-
   useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
-        if (xanoConnected) {
-          const [xProds, xPerf] = await Promise.allSettled([
-            xanoProducts.list(),
-            xanoProducts.performance(),
-          ]);
-          if (xProds.status === 'fulfilled') {
-            const list = Array.isArray(xProds.value) ? xProds.value : (xProds.value?.products || []);
-            setProducts(list);
-          }
-          if (xPerf.status === 'fulfilled') {
-            const list = Array.isArray(xPerf.value) ? xPerf.value : (xPerf.value?.products || []);
-            setSales(list);
-          }
-        } else {
-          const [prods, s] = await Promise.all([
-            base44.entities.Product.list('-total_revenue_30d', 200),
-            base44.entities.SalesDaily.list('-date', 100),
-          ]);
-          setProducts(prods);
-          setSales(s);
-        }
+        const [xProds, xPerf] = await Promise.allSettled([
+          xanoRequest('GET', '/amazon/products'),
+          xanoRequest('GET', '/amazon/products/performance/list'),
+        ]);
+        if (xProds.status === 'fulfilled') setProducts(toArray(xProds.value, 'products'));
+        if (xPerf.status === 'fulfilled') setSales(toArray(xPerf.value, 'products'));
       } catch (err) {
         console.error(err);
       } finally {
@@ -45,7 +28,7 @@ export default function InventorySales() {
       }
     };
     load();
-  }, [xanoConnected]);
+  }, []);
 
   const filtered = products.filter(p =>
     p.asin?.toLowerCase().includes(search.toLowerCase()) ||
@@ -63,8 +46,8 @@ export default function InventorySales() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-white">Estoque & Vendas</h1>
-          <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${xanoConnected ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' : 'text-slate-500 bg-surface-2 border-surface-3'}`}>
-            <Wifi className="w-3 h-3" /> {xanoConnected ? 'Xano' : 'Local'}
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border text-emerald-400 bg-emerald-400/10 border-emerald-400/20">
+            Xano Live
           </span>
         </div>
         <div className="flex border-b border-surface-2">

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoDecisions, xanoAdsAgent, isXanoAuthenticated } from '@/lib/xanoClient';
-import { Brain, CheckCircle, XCircle, Play, Loader2, TrendingUp, TrendingDown, Zap, ChevronDown, ChevronUp } from 'lucide-react';
+import { xanoRequest, toArray } from '@/lib/useXano';
+import { Brain, CheckCircle, XCircle, Play, Square, Loader2, TrendingUp, TrendingDown, Zap, ChevronDown, ChevronUp, RefreshCw, AlertCircle } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import EmptyState from '@/components/ui/EmptyState';
 
@@ -16,95 +16,76 @@ const DECISION_LABELS = {
 
 export default function LearnerEngine() {
   const [decisions, setDecisions] = useState([]);
-  const [xanoMemory, setXanoMemory] = useState([]);
-  const [xanoRules, setXanoRules] = useState([]);
   const [history, setHistory] = useState([]);
-  const [events, setEvents] = useState([]);
+  const [learningStatus, setLearningStatus] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [learningAction, setLearningAction] = useState(null);
   const [actionStates, setActionStates] = useState({});
   const [expanded, setExpanded] = useState({});
   const [tab, setTab] = useState('pending');
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
-  const xanoConnected = isXanoAuthenticated();
+  const [error, setError] = useState(null);
 
   const loadData = async () => {
     setLoading(true);
+    setError(null);
     try {
-      if (xanoConnected) {
-        // Xano é a fonte primária de decisões
-        const [xDecs, xMem, xRules] = await Promise.allSettled([
-          xanoDecisions.list(),
-          xanoAdsAgent.getMemory(),
-          xanoAdsAgent.getRules(),
-        ]);
-
-        if (xDecs.status === 'fulfilled') {
-          const list = Array.isArray(xDecs.value) ? xDecs.value : (xDecs.value?.decisions || []);
-          setDecisions(list);
-        }
-        if (xMem.status === 'fulfilled') {
-          setXanoMemory(Array.isArray(xMem.value) ? xMem.value : (xMem.value?.memory || []));
-        }
-        if (xRules.status === 'fulfilled') {
-          setXanoRules(Array.isArray(xRules.value) ? xRules.value : (xRules.value?.rules || []));
-        }
-      }
-
-      // Base44: histórico local e eventos de aprendizagem
-      const [done, evts] = await Promise.all([
+      const [xDecs, xStatus, localHistory] = await Promise.allSettled([
+        xanoRequest('GET', '/ads-agent/decisions'),
+        xanoRequest('GET', '/learning/status'),
         base44.entities.Decision.list('-created_date', 30),
-        base44.entities.LearningEvent.list('-created_date', 20),
       ]);
-      setHistory(done.filter(d => d.status !== 'pending'));
-      setEvents(evts);
+      if (xDecs.status === 'fulfilled') setDecisions(toArray(xDecs.value, 'decisions'));
+      if (xStatus.status === 'fulfilled') setLearningStatus(xStatus.value);
+      if (localHistory.status === 'fulfilled') setHistory(localHistory.value.filter(d => d.status !== 'pending'));
     } catch (err) {
-      console.error(err);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { loadData(); }, [xanoConnected]);
+  useEffect(() => { loadData(); }, []);
 
-  const runLearner = async () => {
-    const accounts = await base44.entities.AmazonAccount.list();
-    if (accounts.length === 0) return alert('Nenhuma conta Amazon configurada.');
-    setRunning(true);
+  const generateRecommendations = async () => {
+    setGenerating(true);
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     try {
-      await base44.functions.invoke('runLearnerCycle', { amazon_account_id: accounts[0].id });
+      await xanoRequest('POST', '/recommendations/generate', { since_date: since });
       await loadData();
     } catch (err) {
       alert(`Erro: ${err.message}`);
     } finally {
-      setRunning(false);
+      setGenerating(false);
+    }
+  };
+
+  const toggleLearning = async () => {
+    const isActive = learningStatus?.active || learningStatus?.status === 'active';
+    setLearningAction('loading');
+    try {
+      await xanoRequest('POST', isActive ? '/learning/stop' : '/learning/start');
+      const updated = await xanoRequest('GET', '/learning/status');
+      setLearningStatus(updated);
+    } catch (err) {
+      alert(`Erro: ${err.message}`);
+    } finally {
+      setLearningAction(null);
     }
   };
 
   const handleDecision = async (decisionId, action) => {
     setActionStates(prev => ({ ...prev, [decisionId]: 'loading' }));
     try {
-      if (xanoConnected) {
-        // Chamar Xano diretamente
-        if (action === 'approve') {
-          await xanoDecisions.approve(decisionId);
-        } else {
-          await xanoDecisions.reject(decisionId);
-        }
-        // Também actualizar entidade local via backend
-        await base44.functions.invoke('approveDecision', { decision_id: decisionId, action }).catch(() => {});
+      if (action === 'approve') {
+        await xanoRequest('POST', '/decisions/approve', { decision_id: decisionId });
       } else {
-        if (action === 'approve') {
-          const res = await base44.functions.invoke('approveDecision', { decision_id: decisionId });
-          if (!res.data?.ok) throw new Error(res.data?.message || 'Erro ao aprovar');
-        } else {
-          await base44.entities.Decision.update(decisionId, { status: 'rejected', reviewed_at: new Date().toISOString() });
-        }
+        await xanoRequest('POST', '/decisions/reject', { decision_id: decisionId });
       }
-
       setActionStates(prev => ({ ...prev, [decisionId]: action === 'approve' ? 'approved' : 'rejected' }));
-      setTimeout(async () => {
+      setTimeout(() => {
         setDecisions(prev => prev.filter(d => (d.id || d.decision_id) !== decisionId));
         setActionStates(prev => { const n = { ...prev }; delete n[decisionId]; return n; });
       }, 600);
@@ -117,42 +98,33 @@ export default function LearnerEngine() {
   const bulkApprove = async () => {
     if (selectedIds.size === 0) return;
     setBulkApproving(true);
-    try {
-      for (const id of selectedIds) {
-        await handleDecision(id, 'approve');
-      }
-      setSelectedIds(new Set());
-    } catch (err) {
-      alert(`Erro: ${err.message}`);
-    } finally {
-      setBulkApproving(false);
-    }
+    for (const id of selectedIds) await handleDecision(id, 'approve');
+    setSelectedIds(new Set());
+    setBulkApproving(false);
   };
 
   const toggleSelect = (id) => {
     setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   };
 
+  const isLearningActive = learningStatus?.active || learningStatus?.status === 'active';
+
   const tabs = [
     { id: 'pending', label: `Pendentes (${decisions.length})` },
     { id: 'history', label: `Histórico (${history.length})` },
-    ...(xanoConnected ? [
-      { id: 'memory', label: `Memória (${xanoMemory.length})` },
-      { id: 'rules', label: `Regras (${xanoRules.length})` },
-    ] : []),
-    { id: 'events', label: `Eventos (${events.length})` },
+    { id: 'learning', label: 'Learning' },
   ];
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
             <Brain className="w-5 h-5 text-cyan" />
           </div>
           <div>
             <h1 className="text-lg font-bold text-white">Learner Engine</h1>
-            <p className="text-xs text-slate-400">{decisions.length} recomendações pendentes{xanoConnected ? ' · via Xano' : ''}</p>
+            <p className="text-xs text-slate-400">{decisions.length} recomendações pendentes · via Xano</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -163,13 +135,23 @@ export default function LearnerEngine() {
               Aprovar {selectedIds.size}
             </button>
           )}
-          <button onClick={runLearner} disabled={running}
-            className="flex items-center gap-2 px-4 py-2 bg-surface-2 hover:bg-surface-3 border border-surface-3 text-white text-sm font-semibold rounded-lg transition-colors">
-            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 text-cyan" />}
-            {running ? 'Analisando...' : 'Executar Ciclo'}
+          <button onClick={generateRecommendations} disabled={generating}
+            className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            {generating ? 'Gerando...' : 'Gerar Recomendações'}
+          </button>
+          <button onClick={loadData} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
+            <RefreshCw className="w-4 h-4" />
           </button>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
 
       <div className="flex border-b border-surface-2 overflow-x-auto">
         {tabs.map(t => (
@@ -184,7 +166,9 @@ export default function LearnerEngine() {
         <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
       ) : tab === 'pending' ? (
         decisions.length === 0 ? (
-          <EmptyState icon={Brain} title="Sem recomendações pendentes" description="Executa um ciclo ou aguarda o Xano gerar novas recomendações." action={{ label: 'Executar Ciclo', onClick: runLearner }} />
+          <EmptyState icon={Brain} title="Sem recomendações pendentes"
+            description="Clique em 'Gerar Recomendações' para que o Xano analise e gere sugestões."
+            action={{ label: 'Gerar Recomendações', onClick: generateRecommendations }} />
         ) : (
           <div className="space-y-3">
             {decisions.map(dec => {
@@ -194,7 +178,7 @@ export default function LearnerEngine() {
               const proposedVal = dec.recommended_value ?? dec.proposed_value ?? dec.recommended_bid;
               const changePct = dec.change_percent ?? dec.change_pct ?? (currentVal && proposedVal ? ((proposedVal - currentVal) / currentVal) * 100 : 0);
               return (
-                <div key={decId} className={`bg-surface-1 border rounded-xl overflow-hidden transition-all duration-300 ${state === 'approved' || state === 'rejected' ? 'opacity-50 scale-98' : 'border-surface-2'}`}>
+                <div key={decId} className={`bg-surface-1 border rounded-xl overflow-hidden transition-all duration-300 ${state === 'approved' || state === 'rejected' ? 'opacity-50' : 'border-surface-2'}`}>
                   <div className="p-5">
                     <div className="flex items-start gap-4">
                       <input type="checkbox" checked={selectedIds.has(decId)} onChange={() => toggleSelect(decId)} className="mt-1 w-4 h-4 accent-cyan" />
@@ -207,7 +191,8 @@ export default function LearnerEngine() {
                             {DECISION_LABELS[dec.decision_type || dec.type] || dec.decision_type || dec.type || 'Recomendação'}
                           </span>
                           {dec.priority && <StatusBadge status={dec.priority} size="xs" />}
-                          {dec.confidence && <span className="text-xs text-slate-500">{(dec.confidence * 100).toFixed(0)}% confiança</span>}
+                          {dec.confidence != null && <span className="text-xs text-slate-500">{(Number(dec.confidence) * 100).toFixed(0)}% confiança</span>}
+                          {dec.risk && <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${dec.risk === 'high' ? 'bg-red-400/10 text-red-400' : dec.risk === 'medium' ? 'bg-amber-400/10 text-amber-400' : 'bg-emerald-400/10 text-emerald-400'}`}>Risco: {dec.risk}</span>}
                         </div>
                         <p className="text-xs text-slate-400 mb-2">{dec.entity_name || dec.keyword || dec.campaign_name || dec.context}</p>
                         {currentVal != null && proposedVal != null && (
@@ -249,42 +234,49 @@ export default function LearnerEngine() {
             })}
           </div>
         )
-      ) : tab === 'memory' ? (
-        xanoMemory.length === 0 ? <EmptyState icon={Brain} title="Memória vazia" description="O agente não tem dados de memória registados." /> : (
-          <div className="space-y-2">
-            {xanoMemory.map((m, i) => (
-              <div key={i} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-                <p className="text-xs font-semibold text-slate-300 mb-1">{m.fact || m.key || `Registo ${i + 1}`}</p>
-                <p className="text-xs text-slate-500">{m.value || m.content || JSON.stringify(m).slice(0, 200)}</p>
-              </div>
-            ))}
-          </div>
-        )
-      ) : tab === 'rules' ? (
-        xanoRules.length === 0 ? <EmptyState icon={Brain} title="Sem regras" description="Nenhuma regra configurada no Xano." /> : (
-          <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-surface-2">{['Regra', 'Condição', 'Ação', 'Estado'].map(h => <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
-              <tbody>
-                {xanoRules.map((r, i) => (
-                  <tr key={i} className="border-b border-surface-2/50 hover:bg-surface-2">
-                    <td className="px-5 py-3 text-slate-300">{r.name || r.rule_name || `Regra ${i + 1}`}</td>
-                    <td className="px-5 py-3 text-slate-400 text-xs">{r.condition || r.trigger || '—'}</td>
-                    <td className="px-5 py-3 text-slate-400 text-xs">{r.action || '—'}</td>
-                    <td className="px-5 py-3">{r.status ? <StatusBadge status={r.status} size="xs" /> : '—'}</td>
-                  </tr>
+      ) : tab === 'learning' ? (
+        <div className="space-y-4">
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-white">Status do Learning Engine</h2>
+              <button onClick={toggleLearning} disabled={learningAction === 'loading'}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${isLearningActive ? 'bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20' : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'}`}>
+                {learningAction === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : isLearningActive ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                {learningAction === 'loading' ? 'Aguarde...' : isLearningActive ? 'Parar' : 'Iniciar'}
+              </button>
+            </div>
+            {learningStatus ? (
+              <div className="grid grid-cols-2 gap-4">
+                {[
+                  { label: 'Estado', value: isLearningActive ? 'Ativo' : 'Inativo', color: isLearningActive ? 'text-emerald-400' : 'text-slate-400' },
+                  { label: 'Observações', value: learningStatus.observations_count ?? learningStatus.total_observations ?? '—' },
+                  { label: 'Último snapshot', value: learningStatus.last_snapshot ? new Date(learningStatus.last_snapshot).toLocaleString('pt-BR') : '—' },
+                  { label: 'Última análise', value: learningStatus.last_analysis ? new Date(learningStatus.last_analysis).toLocaleString('pt-BR') : '—' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="bg-surface-2 rounded-lg p-3">
+                    <p className="text-xs text-slate-500 mb-1">{label}</p>
+                    <p className={`text-sm font-semibold ${color || 'text-white'}`}>{String(value)}</p>
+                  </div>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">Sem dados de status do learning.</p>
+            )}
           </div>
-        )
-      ) : tab === 'history' ? (
+        </div>
+      ) : (
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
-            <thead><tr className="border-b border-surface-2">{['Tipo', 'Entidade', 'Valor', 'Alteração', 'Estado', 'Data'].map(h => <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
+            <thead>
+              <tr className="border-b border-surface-2">
+                {['Tipo', 'Entidade', 'Valor', 'Alteração', 'Estado', 'Data'].map(h => (
+                  <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>
+                ))}
+              </tr>
+            </thead>
             <tbody>
               {history.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">Sem histórico</td></tr>
+                <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-500">Sem histórico local</td></tr>
               ) : history.map(d => (
                 <tr key={d.id} className="border-b border-surface-2/50 hover:bg-surface-2">
                   <td className="px-5 py-3 text-xs text-slate-300">{DECISION_LABELS[d.decision_type] || d.decision_type}</td>
@@ -297,23 +289,6 @@ export default function LearnerEngine() {
               ))}
             </tbody>
           </table>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {events.length === 0
-            ? <EmptyState icon={Brain} title="Sem eventos" description="Sem eventos de aprendizagem registados." />
-            : events.map(ev => (
-              <div key={ev.id} className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex items-start gap-3">
-                <div className="w-7 h-7 rounded-lg bg-cyan/10 flex items-center justify-center flex-shrink-0"><Brain className="w-3.5 h-3.5 text-cyan" /></div>
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs font-semibold text-slate-300">{ev.event_type}</span>
-                    <span className="text-xs text-slate-600">{new Date(ev.created_date).toLocaleString('pt-BR')}</span>
-                  </div>
-                  <p className="text-xs text-slate-400">{ev.observation}</p>
-                </div>
-              </div>
-            ))}
         </div>
       )}
     </div>
