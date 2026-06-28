@@ -40,6 +40,8 @@ Deno.serve(async (req) => {
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': xanoKey,
+        'x-api-key': xanoKey,
+        'Authorization': `Bearer ${xanoKey}`,
       },
     };
 
