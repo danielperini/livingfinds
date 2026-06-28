@@ -1,84 +1,93 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoRequest, toArray } from '@/lib/useXano';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
-import MetricsSyncButton from '@/components/MetricsSyncButton';
 import { Link } from 'react-router-dom';
 
-function KPICard({ card, loading }) {
-  if (loading) {
-    return (
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 animate-pulse">
-        <div className="h-3 w-24 bg-surface-3 rounded mb-3" />
-        <div className="h-7 w-32 bg-surface-3 rounded mb-2" />
-        <div className="h-3 w-16 bg-surface-3 rounded" />
-      </div>
-    );
-  }
-  const pct = card.change_percent ?? 0;
-  const colorClass = card.inverse_trend
-    ? (pct < 0 ? 'text-emerald-400' : pct > 0 ? 'text-red-400' : 'text-slate-400')
-    : (pct > 0 ? 'text-emerald-400' : pct < 0 ? 'text-red-400' : 'text-slate-400');
-  const TrendIcon = pct > 0 ? TrendingUp : pct < 0 ? TrendingDown : Minus;
+function KPICard({ label, value, unit, sub, inverse, loading }) {
+  if (loading) return (
+    <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 animate-pulse">
+      <div className="h-3 w-24 bg-surface-3 rounded mb-3" />
+      <div className="h-7 w-32 bg-surface-3 rounded mb-2" />
+      <div className="h-3 w-16 bg-surface-3 rounded" />
+    </div>
+  );
   return (
     <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-      <p className="text-xs font-medium text-slate-400 mb-2">{card.label}</p>
-      <p className="text-2xl font-bold text-white mb-1">
-        {card.unit === 'BRL' || card.unit === 'R$' ? 'R$ ' : ''}{card.value}{card.unit === '%' ? '%' : ''}
-      </p>
-      {pct !== 0 && (
-        <div className={`flex items-center gap-1 text-xs font-semibold ${colorClass}`}>
-          <TrendIcon className="w-3 h-3" />
-          {pct > 0 ? '+' : ''}{Number(pct).toFixed(1)}% vs período anterior
-        </div>
-      )}
+      <p className="text-xs font-medium text-slate-400 mb-2">{label}</p>
+      <p className="text-2xl font-bold text-white mb-1">{value}</p>
+      {sub && <p className="text-xs text-slate-500">{sub}</p>}
     </div>
   );
 }
 
-function SyncActionButton({ label, path, onDone }) {
+function ReportSyncWidget({ amazonAccountId, onDone }) {
   const [state, setState] = useState('idle');
-  const [result, setResult] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [reportIds, setReportIds] = useState(null);
+  const pollRef = { current: null };
 
-  const run = async () => {
-    setState('loading');
-    setResult(null);
+  const request = async () => {
+    setState('requesting');
+    setMsg('');
     try {
-      const data = await xanoRequest('POST', path);
-      setState('success');
-      setResult(data);
-      onDone?.();
-      setTimeout(() => setState('idle'), 4000);
-    } catch (err) {
+      const res = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
+      const d = res.data;
+      if (!d?.ok) throw new Error(d?.error || 'Falhou');
+      setReportIds(d.reportIds);
+      setState('polling');
+      setMsg(`${Object.keys(d.reportIds).length} relatórios solicitados. A aguardar processamento (5-15 min)...`);
+      // polling automático a cada 2 min
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries++;
+        try {
+          const dlRes = await base44.functions.invoke('downloadAdsReport', {
+            amazon_account_id: amazonAccountId,
+            report_ids: d.reportIds,
+          });
+          const dd = dlRes.data;
+          if (dd?.ready) {
+            clearInterval(poll);
+            setState('done');
+            setMsg(`✓ Campanhas: ${dd.campaigns?.upserted || 0} · Produtos: ${dd.products?.upserted || 0} · ${dd.decisions_created || 0} decisões IA geradas`);
+            onDone?.();
+          } else if (tries >= 10) {
+            clearInterval(poll);
+            setState('timeout');
+            setMsg('Relatórios ainda a processar. A automação diária irá tentar novamente amanhã.');
+          } else {
+            const pending = Object.keys(dd?.pending || {});
+            setMsg(`A processar: ${pending.join(', ')} (tentativa ${tries}/10)...`);
+          }
+        } catch (e) {
+          clearInterval(poll);
+          setState('error');
+          setMsg(e.message);
+        }
+      }, 2 * 60 * 1000);
+    } catch (e) {
       setState('error');
-      setResult({ error: err.message });
-      setTimeout(() => setState('idle'), 5000);
+      setMsg(e.message);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 8000);
     }
   };
 
+  const isLoading = state === 'requesting' || state === 'polling';
+  const color = state === 'done' ? 'border-emerald-400/30 text-emerald-400 bg-emerald-400/5'
+    : state === 'error' ? 'border-red-400/30 text-red-400 bg-red-400/5'
+    : state === 'timeout' ? 'border-amber-400/30 text-amber-400 bg-amber-400/5'
+    : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
+
   return (
-    <div className="flex flex-col gap-1">
-      <button
-        onClick={run}
-        disabled={state === 'loading'}
-        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${
-          state === 'success' ? 'bg-emerald-600/20 border border-emerald-600/30 text-emerald-400' :
-          state === 'error' ? 'bg-red-600/20 border border-red-600/30 text-red-400' :
-          'bg-surface-2 border border-surface-3 text-slate-300 hover:text-white'
-        } disabled:opacity-60`}
-      >
-        <RefreshCw className={`w-3.5 h-3.5 ${state === 'loading' ? 'animate-spin' : ''}`} />
-        {state === 'loading' ? 'Executando...' : state === 'success' ? 'Concluído!' : state === 'error' ? 'Erro' : label}
+    <div className="flex flex-col gap-2">
+      <button onClick={request} disabled={isLoading}
+        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition-all disabled:opacity-60 ${color}`}>
+        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+        {state === 'requesting' ? 'Solicitando...' : state === 'polling' ? 'A aguardar relatórios...' : state === 'done' ? 'Concluído!' : 'Sync Completo 30d + IA'}
       </button>
-      {result && state !== 'idle' && (
-        <div className={`text-xs px-2 py-1 rounded ${state === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-          {state === 'success'
-            ? `✓ ${result.records_imported ?? result.records_read ?? ''} importados${result.errors_count ? ` · ${result.errors_count} erros` : ''}`
-            : result.error}
-        </div>
-      )}
+      {msg && <p className="text-xs text-slate-400 max-w-xs">{msg}</p>}
     </div>
   );
 }
@@ -86,11 +95,11 @@ function SyncActionButton({ label, path, onDone }) {
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [account, setAccount] = useState(null);
-  const [kpiCards, setKpiCards] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
-  const [dailyMetrics, setDailyMetrics] = useState([]);
-  const [xanoLogs, setXanoLogs] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [metricsDaily, setMetricsDaily] = useState([]);
   const [decisions, setDecisions] = useState([]);
+  const [syncRuns, setSyncRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -100,51 +109,25 @@ export default function Dashboard() {
     try {
       const me = await base44.auth.me();
       setUser(me);
-      const [accounts, decs] = await Promise.all([
-        base44.entities.AmazonAccount.filter({ user_id: me.id }),
-        base44.entities.Decision.filter({ status: 'pending' }),
+      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      const acc = accounts[0] || null;
+      setAccount(acc);
+      if (!acc) { setLoading(false); return; }
+
+      const aid = acc.id;
+      const [cams, prods, metrics, decs, runs] = await Promise.all([
+        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 50),
+        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_revenue_30d', 30),
+        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 90),
+        base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
+        base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
       ]);
-      setAccount(accounts[0] || null);
+
+      setCampaigns(cams);
+      setProducts(prods);
+      setMetricsDaily(metrics);
       setDecisions(decs);
-
-      const today = new Date().toISOString().slice(0, 10);
-      const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-
-      const [xDashboard, xProds, xMetrics] = await Promise.allSettled([
-        xanoRequest('GET', '/amazon/dashboard'),
-        xanoRequest('GET', '/amazon/products'),
-        xanoRequest('GET', '/amazon/metrics/daily_summary'),
-      ]);
-
-      // KPIs do dashboard
-      if (xDashboard.status === 'fulfilled') {
-        const d = xDashboard.value?.data || xDashboard.value || {};
-        const acos = d.acos || (d.spend > 0 && d.revenue > 0 ? (d.spend / d.revenue * 100) : 0);
-        const roas = d.roas || (d.spend > 0 ? (d.revenue / d.spend) : 0);
-        setKpiCards([
-          { label: 'Receita', value: Number(d.revenue || 0).toFixed(2), unit: 'BRL' },
-          { label: 'Ad Spend', value: Number(d.spend || 0).toFixed(2), unit: 'BRL' },
-          { label: 'ACoS', value: Number(acos).toFixed(1), unit: '%', inverse_trend: true },
-          { label: 'ROAS', value: Number(roas).toFixed(2), unit: 'x' },
-          { label: 'Cliques', value: Number(d.clicks || 0).toLocaleString(), unit: '' },
-          { label: 'Impressões', value: Number(d.impressions || 0).toLocaleString(), unit: '' },
-          { label: 'Pedidos', value: Number(d.orders || 0).toLocaleString(), unit: '' },
-          { label: 'TaCoS', value: Number(d.tacos || 0).toFixed(1), unit: '%', inverse_trend: true },
-        ]);
-      }
-
-      // Produtos para a tabela
-      if (xProds.status === 'fulfilled') {
-        const prods = toArray(xProds.value, 'data');
-        setCampaigns(prods);
-      }
-
-      // Métricas diárias para o gráfico
-      if (xMetrics.status === 'fulfilled') {
-        const metrics = toArray(xMetrics.value, 'data');
-        setDailyMetrics(metrics.slice(-14));
-      }
-
+      setSyncRuns(runs);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -154,26 +137,56 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const chartData = dailyMetrics.length > 0
-    ? dailyMetrics.map(m => ({ name: m.date?.slice(5) || '', spend: m.spend || m.cost || 0, sales: m.sales || m.ads_sales || 0 }))
-    : [];
+  // Calcular KPIs agregados das campanhas
+  const kpis = campaigns.reduce((acc, c) => ({
+    spend: acc.spend + (c.spend || 0),
+    sales: acc.sales + (c.sales || 0),
+    clicks: acc.clicks + (c.clicks || 0),
+    impressions: acc.impressions + (c.impressions || 0),
+    orders: acc.orders + (c.orders || 0),
+  }), { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
+
+  const acos = kpis.sales > 0 ? (kpis.spend / kpis.sales * 100) : 0;
+  const roas = kpis.spend > 0 ? (kpis.sales / kpis.spend) : 0;
+  const ctr = kpis.impressions > 0 ? (kpis.clicks / kpis.impressions * 100) : 0;
+  const cpc = kpis.clicks > 0 ? (kpis.spend / kpis.clicks) : 0;
+
+  // Agrupar métricas por data para o gráfico
+  const chartData = Object.values(
+    metricsDaily.reduce((acc, m) => {
+      if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', spend: 0, sales: 0, orders: 0 };
+      acc[m.date].spend += m.spend || 0;
+      acc[m.date].sales += m.sales || 0;
+      acc[m.date].orders += m.orders || 0;
+      return acc;
+    }, {})
+  ).sort((a, b) => a.name.localeCompare(b.name)).slice(-30);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
+  const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : null;
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-sm text-slate-400 mt-0.5">
-            {decisions.length > 0 ? `${decisions.length} recomendações pendentes no Learner.` : 'Sem recomendações pendentes.'}
+            {decisions.length > 0
+              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> recomendações IA pendentes · </>
+              : 'Sem recomendações pendentes · '}
+            {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
           </p>
         </div>
-        <button onClick={loadData} disabled={loading} className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Atualizar
-        </button>
+        <div className="flex items-center gap-2">
+          {account && <ReportSyncWidget amazonAccountId={account.id} onDone={loadData} />}
+          <button onClick={loadData} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -183,120 +196,198 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Sync buttons */}
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-        <p className="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Sincronização</p>
-        <div className="flex flex-wrap gap-3">
-          <SyncActionButton label="Histórico 30d" path="/amazon/sync/history_30d" onDone={loadData} />
-          <SyncActionButton label="Sync Mensal" path="/amazon/sync/monthly" onDone={loadData} />
-          <MetricsSyncButton onDone={loadData} />
-        </div>
-      </div>
-
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {(kpiCards.length > 0 ? kpiCards : Array(8).fill(null)).slice(0, 8).map((card, i) => (
-          <KPICard key={i} card={card || {}} loading={loading || !card} />
-        ))}
+        <KPICard label="Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled').length} campanhas ativas`} loading={loading} />
+        <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
+        <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
+        <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
+        <KPICard label="Cliques" value={kpis.clicks.toLocaleString()} sub="30 dias" loading={loading} />
+        <KPICard label="Impressões" value={kpis.impressions.toLocaleString()} sub="30 dias" loading={loading} />
+        <KPICard label="Campanhas" value={campaigns.length} sub={`${campaigns.filter(c => c.state === 'paused').length} pausadas`} loading={loading} />
+        <KPICard label="Produtos" value={products.length} sub={`${products.filter(p => p.fba_inventory > 0).length} com stock`} loading={loading} />
       </div>
 
-      {/* Chart + Logs */}
+      {/* Chart + Decisions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2 bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-300">Spend vs Sales (últimos 14 dias)</h2>
+            <h2 className="text-sm font-semibold text-slate-300">Spend vs Vendas — 30 dias</h2>
             <BarChart2 className="w-4 h-4 text-slate-500" />
           </div>
           {loading ? (
-            <div className="h-48 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+            <div className="h-52 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
           ) : chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={210}>
               <AreaChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
                 <defs>
                   <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} />
                     <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
                   </linearGradient>
                   <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.3} />
+                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.25} />
                     <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="name" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} />
-                <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend (R$)" />
-                <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Sales (R$)" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `$${Number(v).toFixed(2)}`} />
+                <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" />
+                <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-48 flex items-center justify-center">
-              <p className="text-sm text-slate-500">Sem dados de métricas. Execute um Sync.</p>
+            <div className="h-52 flex flex-col items-center justify-center gap-2">
+              <p className="text-sm text-slate-500">Sem dados de métricas.</p>
+              <p className="text-xs text-slate-600">Execute "Sync Completo 30d + IA" para popular o gráfico.</p>
             </div>
           )}
         </div>
 
+        {/* Decisões IA */}
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-slate-300 mb-4">Logs Recentes</h2>
-          <div className="space-y-3">
-            {xanoLogs.length === 0 && !loading && (
-              <p className="text-sm text-slate-500 text-center py-4">Sem logs recentes</p>
-            )}
-            {xanoLogs.map((log, i) => (
-              <div key={i} className="flex items-start gap-3">
-                <StatusBadge status={log.status || 'pending'} size="xs" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-slate-300 truncate">{log.operation || log.type || log.event || `Log ${i + 1}`}</p>
-                  <p className="text-xs text-slate-500">{log.message || log.details || '—'}</p>
-                </div>
-              </div>
-            ))}
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Brain className="w-4 h-4 text-cyan" /> Decisões IA
+            </h2>
+            <Link to="/learner" className="text-xs text-cyan hover:underline">Ver todas</Link>
           </div>
+          {loading ? (
+            <div className="space-y-2">
+              {[1,2,3].map(i => <div key={i} className="h-12 bg-surface-2 rounded animate-pulse" />)}
+            </div>
+          ) : decisions.length === 0 ? (
+            <p className="text-sm text-slate-500 text-center py-6">Sem decisões pendentes.<br/><span className="text-xs">Execute um sync para gerar recomendações.</span></p>
+          ) : (
+            <div className="space-y-2">
+              {decisions.slice(0, 6).map(d => (
+                <div key={d.id} className="p-2.5 bg-surface-2 rounded-lg border border-surface-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <StatusBadge status={d.priority} size="xs" />
+                    <span className="text-xs text-slate-500">{d.decision_type?.replace('_', ' ')}</span>
+                  </div>
+                  <p className="text-xs text-slate-300 truncate">{d.entity_name || d.entity_id}</p>
+                  <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{d.rationale}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Campaign table */}
+      {/* Campanhas Top */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-surface-2">
-          <h2 className="text-sm font-semibold text-slate-300">Produtos</h2>
-          <span className="text-xs text-slate-500">{campaigns.length} produtos</span>
+          <h2 className="text-sm font-semibold text-slate-300">Top Campanhas (30d)</h2>
+          <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
         </div>
         {loading ? (
           <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
         ) : campaigns.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-sm text-slate-400">Sem produtos. Execute um Sync.</p>
+            <p className="text-sm text-slate-400">Sem campanhas. Execute um Sync.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['ASIN', 'Título', 'SKU', 'Preço', 'Stock', 'Status'].map(h => (
-                    <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  {['Nome', 'Tipo', 'Estado', 'Spend', 'Vendas', 'ACoS', 'ROAS', 'Cliques'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {campaigns.slice(0, 25).map((p, i) => (
-                  <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
-                    <td className="px-5 py-3 font-mono text-xs text-cyan">{p.asin || '—'}</td>
-                    <td className="px-5 py-3 text-white truncate max-w-xs">{p.title || p.name || '—'}</td>
-                    <td className="px-5 py-3 text-slate-400 font-mono text-xs">{p.sku || '—'}</td>
-                    <td className="px-5 py-3 text-slate-300">${(p.price || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3">
-                      <span className={`font-semibold ${(p.stock || 0) === 0 ? 'text-red-400' : (p.stock || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
-                        {p.stock || 0}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3"><StatusBadge status={p.status || 'active'} /></td>
-                  </tr>
-                ))}
+                {campaigns.slice(0, 20).map((c, i) => {
+                  const acosVal = c.acos || 0;
+                  const acosColor = acosVal > 50 ? 'text-red-400' : acosVal > 30 ? 'text-amber-400' : 'text-emerald-400';
+                  return (
+                    <tr key={c.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
+                      <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
+                      <td className="px-4 py-3"><span className="text-xs px-1.5 py-0.5 rounded bg-surface-3 text-slate-400">{c.campaign_type || 'SP'}</span></td>
+                      <td className="px-4 py-3"><StatusBadge status={c.state || 'enabled'} size="xs" /></td>
+                      <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
+                      <td className={`px-4 py-3 font-semibold ${acosColor}`}>{acosVal.toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
+                      <td className="px-4 py-3 text-slate-400">{(c.clicks || 0).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
+      </div>
+
+      {/* Produtos + Sync Logs */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Produtos com mais vendas */}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-surface-2">
+            <h2 className="text-sm font-semibold text-slate-300">Produtos (30d)</h2>
+            <Link to="/inventory" className="text-xs text-cyan hover:underline">Ver todos →</Link>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-2">
+                  {['ASIN', 'SKU', 'Receita 30d', 'Units', 'Stock FBA'].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {products.slice(0, 10).map((p, i) => (
+                  <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
+                    <td className="px-4 py-2.5 font-mono text-xs text-cyan">{p.asin || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{p.sku || '—'}</td>
+                    <td className="px-4 py-2.5 text-emerald-400">${(p.total_revenue_30d || 0).toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{p.units_sold_30d || 0}</td>
+                    <td className="px-4 py-2.5">
+                      <span className={`font-semibold text-xs ${(p.fba_inventory || 0) === 0 ? 'text-red-400' : (p.fba_inventory || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
+                        {p.fba_inventory || 0}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {products.length === 0 && !loading && (
+                  <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">Sem produtos. Execute um sync.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Logs de Sync */}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+          <h2 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-slate-500" /> Histórico de Syncs
+          </h2>
+          {syncRuns.length === 0 && !loading ? (
+            <p className="text-sm text-slate-500 text-center py-4">Sem syncs registados</p>
+          ) : (
+            <div className="space-y-2">
+              {syncRuns.map((run, i) => (
+                <div key={run.id || i} className="flex items-center gap-3 py-2 border-b border-surface-2/50 last:border-0">
+                  <StatusBadge status={run.status} size="xs" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-300 truncate">{run.operation}</p>
+                    <p className="text-xs text-slate-500">
+                      {run.records_upserted ? `${run.records_upserted} registos` : ''}
+                      {run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}
+                    </p>
+                  </div>
+                  <span className="text-xs text-slate-600 flex-shrink-0">
+                    {run.started_at ? new Date(run.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
