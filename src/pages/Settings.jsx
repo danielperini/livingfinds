@@ -234,9 +234,13 @@ export default function Settings() {
                 setImporting(true);
                 setImportResult(null);
                 try {
-                  const res = await base44.functions.invoke('importFromXano', { amazon_account_id: account.id });
+                  // Passo 1: sync_all (pede relatórios)
+                  await base44.functions.invoke('importFromXano', { amazon_account_id: account.id, action: 'sync' });
+                  // Passo 2: aguarda 60s e baixa relatórios + dashboard
+                  await new Promise(r => setTimeout(r, 60000));
+                  const res = await base44.functions.invoke('importFromXano', { amazon_account_id: account.id, action: 'download' });
                   const d = res.data;
-                  setImportResult({ ok: d?.ok, message: d?.message || d?.error, campaigns: d?.campaigns_upserted, products: d?.products_upserted });
+                  setImportResult({ ok: d?.ok, message: d?.error, campaigns: d?.campaigns_upserted, metrics: d?.metrics_upserted, dash: d?.dashboard });
                 } catch (e) {
                   setImportResult({ ok: false, message: e.message });
                 } finally {
