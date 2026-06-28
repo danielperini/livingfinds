@@ -109,29 +109,30 @@ export default function Dashboard() {
       const today = new Date().toISOString().slice(0, 10);
       const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-      const [xProds, xMetrics] = await Promise.allSettled([
+      const [xProds, xCampaigns, xMetrics] = await Promise.allSettled([
         xanoRequest('GET', '/amazon/products'),
+        xanoRequest('GET', '/amazon/campaigns'),
         xanoRequest('GET', '/amazon/metrics/daily_summary'),
       ]);
 
-      // Calcular KPIs a partir de produtos (dashboard endpoint com bug no Xano)
+      // Produtos
       if (xProds.status === 'fulfilled') {
-        const prods = toArray(xProds.value, 'products');
-        setCampaigns(prods); // usar produtos como fallback de listagem
-        const totalRevenue = prods.reduce((s, p) => s + (p.total_revenue_30d || 0), 0);
-        const totalSpend = prods.reduce((s, p) => s + (p.total_spend_30d || 0), 0);
+        const prods = toArray(xProds.value, 'data');
+        setCampaigns(prods);
+        const totalRevenue = prods.reduce((s, p) => s + (p.sales || p.total_revenue_30d || 0), 0);
+        const totalUnits = prods.reduce((s, p) => s + (p.units || p.units_sold_30d || 0), 0);
         setKpiCards([
-          { label: 'Receita 30d', value: totalRevenue.toFixed(2), unit: 'BRL' },
-          { label: 'Produtos Ativos', value: prods.filter(p => p.status === 'active').length.toString(), unit: '' },
-          { label: 'Stock Total', value: prods.reduce((s, p) => s + (p.stock || 0), 0).toString(), unit: '' },
-          { label: 'Sem Stock', value: prods.filter(p => (p.stock || 0) === 0).length.toString(), unit: '' },
+          { label: 'Receita Total', value: totalRevenue.toFixed(2), unit: 'BRL' },
+          { label: 'Unidades Vendidas', value: totalUnits.toString(), unit: '' },
+          { label: 'Produtos', value: prods.length.toString(), unit: '' },
+          { label: 'Sem Stock', value: prods.filter(p => (p.stock || p.fba_inventory || 0) === 0).length.toString(), unit: '' },
         ]);
       }
 
+      // Métricas diárias
       if (xMetrics.status === 'fulfilled') {
-        const metrics = toArray(xMetrics.value, 'metrics');
+        const metrics = toArray(xMetrics.value, 'data');
         setDailyMetrics(metrics.slice(-14));
-        // Calcular KPIs de métricas se disponível
         if (metrics.length > 0) {
           const totalSpend = metrics.reduce((s, m) => s + (m.spend || m.cost || 0), 0);
           const totalSales = metrics.reduce((s, m) => s + (m.sales || m.ads_sales || 0), 0);
