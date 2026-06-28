@@ -62,7 +62,7 @@ Deno.serve(async (req) => {
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
-    const mode = Deno.env.get('OPERATION_MODE') || 'mock';
+    const mode = body.force_mode || Deno.env.get('OPERATION_MODE') || 'mock';
 
     // Create sync run record
     const syncRun = await base44.asServiceRole.entities.SyncRun.create({
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
     }
 
     // Fetch campaigns
-    const campaigns = await adsGet('/v2/sp/campaigns?stateFilter=enabled,paused,archived&count=100');
+    const campaigns = await adsGet('/sp/campaigns?stateFilter=enabled,paused,archived&count=100');
     const campaignList = Array.isArray(campaigns) ? campaigns : [];
 
     let upserted = 0;
