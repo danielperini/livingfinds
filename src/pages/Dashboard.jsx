@@ -109,48 +109,39 @@ export default function Dashboard() {
       const today = new Date().toISOString().slice(0, 10);
       const start = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-      const [xProds, xCampaigns, xMetrics] = await Promise.allSettled([
+      const [xDashboard, xProds, xMetrics] = await Promise.allSettled([
+        xanoRequest('GET', '/amazon/dashboard'),
         xanoRequest('GET', '/amazon/products'),
-        xanoRequest('GET', '/amazon/campaigns'),
         xanoRequest('GET', '/amazon/metrics/daily_summary'),
       ]);
 
-      // Produtos
-      if (xProds.status === 'fulfilled') {
-        const prods = toArray(xProds.value, 'data');
-        setCampaigns(prods);
-        const totalRevenue = prods.reduce((s, p) => s + (p.sales || p.total_revenue_30d || 0), 0);
-        const totalUnits = prods.reduce((s, p) => s + (p.units || p.units_sold_30d || 0), 0);
+      // KPIs do dashboard
+      if (xDashboard.status === 'fulfilled') {
+        const d = xDashboard.value?.data || xDashboard.value || {};
+        const acos = d.acos || (d.spend > 0 && d.revenue > 0 ? (d.spend / d.revenue * 100) : 0);
+        const roas = d.roas || (d.spend > 0 ? (d.revenue / d.spend) : 0);
         setKpiCards([
-          { label: 'Receita Total', value: totalRevenue.toFixed(2), unit: 'BRL' },
-          { label: 'Unidades Vendidas', value: totalUnits.toString(), unit: '' },
-          { label: 'Produtos', value: prods.length.toString(), unit: '' },
-          { label: 'Sem Stock', value: prods.filter(p => (p.stock || p.fba_inventory || 0) === 0).length.toString(), unit: '' },
+          { label: 'Receita', value: Number(d.revenue || 0).toFixed(2), unit: 'BRL' },
+          { label: 'Ad Spend', value: Number(d.spend || 0).toFixed(2), unit: 'BRL' },
+          { label: 'ACoS', value: Number(acos).toFixed(1), unit: '%', inverse_trend: true },
+          { label: 'ROAS', value: Number(roas).toFixed(2), unit: 'x' },
+          { label: 'Cliques', value: Number(d.clicks || 0).toLocaleString(), unit: '' },
+          { label: 'Impressões', value: Number(d.impressions || 0).toLocaleString(), unit: '' },
+          { label: 'Pedidos', value: Number(d.orders || 0).toLocaleString(), unit: '' },
+          { label: 'TaCoS', value: Number(d.tacos || 0).toFixed(1), unit: '%', inverse_trend: true },
         ]);
       }
 
-      // Métricas diárias
+      // Produtos para a tabela
+      if (xProds.status === 'fulfilled') {
+        const prods = toArray(xProds.value, 'data');
+        setCampaigns(prods);
+      }
+
+      // Métricas diárias para o gráfico
       if (xMetrics.status === 'fulfilled') {
         const metrics = toArray(xMetrics.value, 'data');
         setDailyMetrics(metrics.slice(-14));
-        if (metrics.length > 0) {
-          const totalSpend = metrics.reduce((s, m) => s + (m.spend || m.cost || 0), 0);
-          const totalSales = metrics.reduce((s, m) => s + (m.sales || m.ads_sales || 0), 0);
-          const totalClicks = metrics.reduce((s, m) => s + (m.clicks || 0), 0);
-          const totalImpressions = metrics.reduce((s, m) => s + (m.impressions || 0), 0);
-          const totalOrders = metrics.reduce((s, m) => s + (m.orders || 0), 0);
-          const acos = totalSales > 0 ? (totalSpend / totalSales * 100) : 0;
-          const roas = totalSpend > 0 ? (totalSales / totalSpend) : 0;
-          setKpiCards([
-            { label: 'Ad Spend', value: totalSpend.toFixed(2), unit: 'BRL' },
-            { label: 'Sales', value: totalSales.toFixed(2), unit: 'BRL' },
-            { label: 'ACoS', value: acos.toFixed(1), unit: '%', inverse_trend: true },
-            { label: 'ROAS', value: roas.toFixed(2), unit: 'x' },
-            { label: 'Cliques', value: totalClicks.toLocaleString(), unit: '' },
-            { label: 'Impressões', value: totalImpressions.toLocaleString(), unit: '' },
-            { label: 'Pedidos', value: totalOrders.toLocaleString(), unit: '' },
-          ]);
-        }
       }
 
     } catch (err) {
