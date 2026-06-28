@@ -1,42 +1,47 @@
 /**
  * importFromXano — Importa dados reais do Xano para a Base44
  *
- * Endpoints Xano (base: XANO_BASE_URL = https://[dominio]/api:amazon):
- *   GET  /health           → valida tokens Amazon
- *   GET  /dashboard        → resumo financeiro (Revenue, Spend, ROAS) 30 dias
- *   POST /sync_all         → importa campanhas/produtos e pede relatórios
- *   POST /reports/download → baixa métricas da Amazon
+ * Namespaces Xano:
+ *   XANO_BASE_URL          → api:living-finds-api  (health, produtos legacy)
+ *   XANO_BASE_URL_AMAZON   → api:amazon            (dashboard, sync_all, reports/download)
+ *
+ * Se XANO_BASE_URL_AMAZON não estiver definido, usa XANO_BASE_URL com namespace corrigido.
  *
  * Payload: { amazon_account_id, action? }
- *   action = "sync"     → POST /sync_all + POST /reports/download + GET /dashboard
- *   action = "download" → POST /reports/download + GET /dashboard
- *   action = "dashboard"→ GET /dashboard apenas (default)
+ *   "dashboard" → GET /dashboard (default)
+ *   "sync"      → POST /sync_all + GET /dashboard
+ *   "download"  → POST /reports/download + GET /dashboard
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const XANO_BASE = Deno.env.get('XANO_BASE_URL')?.replace(/\/$/, '') || '';
-
-async function callXano(method, path, body) {
+function getBase(namespace) {
   const key = Deno.env.get('XANO_API_KEY');
-  if (!key) throw new Error('XANO_API_KEY não configurada nos secrets');
-  if (!XANO_BASE) throw new Error('XANO_BASE_URL não configurada nos secrets');
+  if (!key) throw new Error('XANO_API_KEY não configurada');
 
+  const raw = (Deno.env.get('XANO_BASE_URL') || '').replace(/\/$/, '');
+  if (!raw) throw new Error('XANO_BASE_URL não configurada');
+
+  // Substituir namespace na URL base
+  // Padrão: https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api
+  // → troca o api:XXXX pelo namespace pedido
+  const base = raw.replace(/\/api:[^/\s]+$/, `/api:${namespace}`);
+  return { base, key };
+}
+
+async function callXano(namespace, method, path, body) {
+  const { base, key } = getBase(namespace);
   const opts = {
     method: method.toUpperCase(),
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': key,
-    },
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': key },
   };
   if (body && ['POST', 'PUT', 'PATCH'].includes(opts.method)) {
     opts.body = JSON.stringify(body);
   }
-
-  const res = await fetch(`${XANO_BASE}${path}`, opts);
+  const res = await fetch(`${base}${path}`, opts);
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  if (!res.ok) throw new Error(`Xano ${path} → ${res.status}: ${data?.message || data?.error || text.slice(0, 200)}`);
+  if (!res.ok) throw new Error(`[${namespace}] ${path} → ${res.status}: ${data?.message || data?.error || text.slice(0, 150)}`);
   return data;
 }
 
@@ -58,36 +63,36 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const amazonAccountId = body.amazon_account_id;
     const action = body.action || 'dashboard';
-
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
     const result = { action, ok: true };
 
-    // 1. Validar saúde (sempre)
+    // 1. Health check via namespace living-finds-api
     try {
-      const health = await callXano('GET', '/health');
-      result.health = health;
+      const health = await callXano('living-finds-api', 'GET', '/health');
+      result.health = health?.data || health;
     } catch (e) {
       result.health_error = e.message;
+      // Se health falha, abortar
+      return Response.json({ ok: false, error: `Health check falhou: ${e.message}`, result }, { status: 503 });
     }
 
-    // 2. Se action = "sync" → POST /sync_all
+    // 2. sync_all via namespace amazon
     if (action === 'sync') {
       try {
-        const syncRes = await callXano('POST', '/sync_all', {});
-        result.sync_all = syncRes;
+        const syncRes = await callXano('amazon', 'POST', '/sync_all', {});
+        result.sync_all = syncRes?.data || syncRes;
       } catch (e) {
         result.sync_all_error = e.message;
       }
     }
 
-    // 3. Se action = "sync" ou "download" → POST /reports/download
+    // 3. reports/download via namespace amazon
     if (action === 'sync' || action === 'download') {
       try {
-        const dlRes = await callXano('POST', '/reports/download', {});
-        result.reports_download = dlRes;
+        const dlRes = await callXano('amazon', 'POST', '/reports/download', {});
+        result.reports_download = dlRes?.data || dlRes;
 
-        // Persistir métricas de campanhas vindas do download
         const campaigns = normalizeArray(dlRes, 'campaigns', 'items', 'data');
         let campaignUpserted = 0;
         for (const c of campaigns) {
@@ -98,7 +103,6 @@ Deno.serve(async (req) => {
             name: c.name || `Campaign ${campaignId}`,
             state: (c.state || c.status || 'enabled').toLowerCase().includes('paus') ? 'paused' : 'enabled',
             campaign_type: c.campaign_type || c.campaignType || 'SP',
-            targeting_type: c.targeting_type || c.targetingType || 'MANUAL',
             daily_budget: c.daily_budget || c.dailyBudget || 0,
             spend: c.spend || c.cost || 0,
             sales: c.sales || c.attributedSales30d || 0,
@@ -124,20 +128,19 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 4. Sempre busca /dashboard para resumo financeiro
+    // 4. dashboard via namespace amazon
     try {
-      const dash = await callXano('GET', '/dashboard');
-      result.dashboard = dash;
+      const dash = await callXano('amazon', 'GET', '/dashboard');
+      const dashData = dash?.data || dash;
+      result.dashboard = dashData;
 
-      // Persistir métricas do dashboard em CampaignMetricsDaily se houver histórico
-      const dailyData = normalizeArray(dash, 'daily', 'metrics', 'history', 'data');
+      // Persistir métricas diárias se houver
+      const dailyData = normalizeArray(dashData, 'daily', 'metrics', 'history', 'data');
       let metricsUpserted = 0;
       for (const d of dailyData) {
         const date = d.date || d.day;
         if (!date) continue;
-        const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
-          amazon_account_id: amazonAccountId, date,
-        });
+        const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: amazonAccountId, date });
         const record = {
           spend: d.spend || d.cost || 0,
           sales: d.sales || d.revenue || 0,
@@ -152,13 +155,17 @@ Deno.serve(async (req) => {
         if (existing.length > 0) {
           await base44.asServiceRole.entities.CampaignMetricsDaily.update(existing[0].id, record);
         } else {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.create({
-            ...record, amazon_account_id: amazonAccountId, campaign_id: 'all', date,
-          });
+          await base44.asServiceRole.entities.CampaignMetricsDaily.create({ ...record, amazon_account_id: amazonAccountId, campaign_id: 'all', date });
         }
         metricsUpserted++;
       }
       result.metrics_upserted = metricsUpserted;
+
+      // Persistir KPIs do dashboard diretamente nas campanhas se vier resumo
+      const totalSpend = dashData?.total_spend || dashData?.spend || dashData?.data?.total_spend || 0;
+      const totalSales = dashData?.total_revenue || dashData?.sales || dashData?.revenue || dashData?.data?.total_revenue || 0;
+      result.kpis = { spend: totalSpend, sales: totalSales };
+
     } catch (e) {
       result.dashboard_error = e.message;
     }
@@ -171,7 +178,7 @@ Deno.serve(async (req) => {
     await base44.asServiceRole.entities.SyncRun.create({
       amazon_account_id: amazonAccountId,
       operation: `importFromXano:${action}`,
-      status: 'success',
+      status: result.dashboard_error && !result.dashboard ? 'partial' : 'success',
       records_upserted: (result.campaigns_upserted || 0) + (result.metrics_upserted || 0),
       duration_ms: Date.now() - startTime,
       started_at: new Date().toISOString(),

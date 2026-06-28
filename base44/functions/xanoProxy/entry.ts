@@ -1,11 +1,7 @@
 /**
  * xanoProxy — Gateway seguro Base44 → Xano
- *
- * O frontend NUNCA chama o Xano diretamente.
- * Esta função injeta XANO_BASE_URL e XANO_API_KEY (secrets seguros).
- *
  * Payload: { method, path, body?, params? }
- * Resposta padrão Xano: { success, data, message, error }
+ * XANO_BASE_URL deve apontar para: https://x8ki-letl-twmt.n7.xano.io/api:amazon
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -18,18 +14,12 @@ Deno.serve(async (req) => {
     const { method = 'GET', path, body, params } = await req.json();
     if (!path) return Response.json({ error: 'path is required' }, { status: 400 });
 
-    // XANO_BASE_URL deve ser: https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api
-    const xanoBase = (Deno.env.get('XANO_BASE_URL') || '').replace(/\/api:workspace:[^/]+/, '/api:living-finds-api').replace(/\/$/, '') || 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
+    const xanoBase = (Deno.env.get('XANO_BASE_URL') || '').replace(/\/$/, '');
     const xanoKey = Deno.env.get('XANO_API_KEY') || '';
 
-    if (!xanoKey) {
-      return Response.json({
-        ok: false,
-        error: 'XANO_API_KEY não configurada. Acede a Dashboard → Settings → Environment Variables.',
-      }, { status: 503 });
-    }
+    if (!xanoBase) return Response.json({ ok: false, error: 'XANO_BASE_URL não configurada.' }, { status: 503 });
+    if (!xanoKey) return Response.json({ ok: false, error: 'XANO_API_KEY não configurada.' }, { status: 503 });
 
-    // Construir URL com query params
     let url = `${xanoBase}${path}`;
     if (params && Object.keys(params).length > 0) {
       url += '?' + new URLSearchParams(params).toString();
@@ -40,8 +30,6 @@ Deno.serve(async (req) => {
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': xanoKey,
-        'x-api-key': xanoKey,
-        'Authorization': `Bearer ${xanoKey}`,
       },
     };
 
