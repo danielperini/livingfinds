@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { xanoRequest } from '@/lib/useXano';
-import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink } from 'lucide-react';
+import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink, Cloud } from 'lucide-react';
 import SyncPanel from '@/components/SyncPanel';
 
 export default function Settings() {
@@ -12,6 +12,8 @@ export default function Settings() {
   const [lastAttempt, setLastAttempt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
   const [form, setForm] = useState({
     seller_name: '',
     ai_auto_optimization: false,
@@ -215,6 +217,48 @@ export default function Settings() {
           {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
         </button>
       </div>
+
+      {/* Importação do Xano */}
+      {account && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Cloud className="w-4 h-4 text-emerald-400" /> Importar dados do Xano
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">Carrega o resumo real de campanhas, produtos e métricas financeiras do Xano para a Base44</p>
+            </div>
+            <button
+              onClick={async () => {
+                if (!account) return;
+                setImporting(true);
+                setImportResult(null);
+                try {
+                  const res = await base44.functions.invoke('importFromXano', { amazon_account_id: account.id });
+                  const d = res.data;
+                  setImportResult({ ok: d?.ok, message: d?.message || d?.error, campaigns: d?.campaigns_upserted, products: d?.products_upserted });
+                } catch (e) {
+                  setImportResult({ ok: false, message: e.message });
+                } finally {
+                  setImporting(false);
+                }
+              }}
+              disabled={importing || !account}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+            >
+              {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+              {importing ? 'A importar...' : 'Importar do Xano'}
+            </button>
+          </div>
+          {importResult && (
+            <div className={`p-3 rounded-lg border text-xs ${importResult.ok
+              ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300'
+              : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
+              {importResult.ok ? `✓ Importado: ${importResult.campaigns || 0} campanhas, ${importResult.products || 0} produtos` : `✕ ${importResult.message}`}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Sync Panel */}
       {account && (
