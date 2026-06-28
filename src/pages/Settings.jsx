@@ -15,6 +15,7 @@ export default function Settings() {
   const [form, setForm] = useState({
     seller_name: '',
     ai_auto_optimization: false,
+    mode: 'real',
     max_daily_budget_limit: 1000,
     max_bid_change_pct: 20,
   });
@@ -30,6 +31,7 @@ export default function Settings() {
         setForm({
           seller_name: acc.seller_name || '',
           ai_auto_optimization: acc.ai_auto_optimization || false,
+          mode: acc.mode || 'real',
           max_daily_budget_limit: acc.max_daily_budget_limit || 1000,
           max_bid_change_pct: acc.max_bid_change_pct || 20,
         });
@@ -204,6 +206,20 @@ export default function Settings() {
               <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all duration-200 ${form.ai_auto_optimization ? 'left-6' : 'left-1'}`} />
             </button>
           </div>
+        </div>
+
+        {/* Modo de sincronização */}
+        <div className="p-4 bg-surface-2 rounded-lg border border-surface-3">
+          <label className="block text-xs text-slate-400 mb-1.5">Modo de Sincronização da Amazon</label>
+          <select
+            value={form.mode}
+            onChange={e => setForm(p => ({ ...p, mode: e.target.value }))}
+            className="w-full px-3 py-2.5 bg-surface-3 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50"
+          >
+            <option value="real">Real — Chamadas reais à Amazon Ads API</option>
+            <option value="mock">Mock — Dados simulados de exemplo</option>
+          </select>
+          <p className="text-xs text-slate-500 mt-1.5">O modo {form.mode === 'mock' ? 'mock gera dados de exemplo — sem chamadas reais.' : 'real faz chamadas autênticas à API da Amazon.'} Altere e guar-de.</p>
         </div>
 
         <button
