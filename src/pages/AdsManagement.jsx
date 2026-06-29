@@ -40,6 +40,7 @@ export default function AdsManagement() {
   const selectCampaign = async (campaign) => {
     setSelectedCampaign(campaign);
     setPendingBids({});
+    setActiveTab('keywords');
     setKwLoading(true);
     try {
       const [kws, st, negs] = await Promise.all([
@@ -267,6 +268,23 @@ export default function AdsManagement() {
                   )}
                 </div>
               </div>
+            </div>
+
+            {/* Tab switcher */}
+            <div className="flex border-b border-surface-2 bg-[#0D0F14] flex-shrink-0">
+              {[
+                { key: 'keywords', label: `Keywords (${keywords.length})` },
+                { key: 'search-terms', label: `Search Terms ${searchTerms.length > 0 ? `(${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
+              ].map(tab => (
+                <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+                  className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${
+                    activeTab === tab.key
+                      ? 'border-cyan text-cyan'
+                      : 'border-transparent text-slate-500 hover:text-slate-300'
+                  }`}>
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
             {/* Tabs content */}
