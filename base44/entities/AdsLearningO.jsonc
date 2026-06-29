@@ -1,0 +1,76 @@
+{
+  "name": "AdsLearningO",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "keyword",
+        "product",
+        "ad_group"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "before_metrics": {
+      "type": "object"
+    },
+    "after_1d_metrics": {
+      "type": "object"
+    },
+    "after_3d_metrics": {
+      "type": "object"
+    },
+    "after_7d_metrics": {
+      "type": "object"
+    },
+    "after_14d_metrics": {
+      "type": "object"
+    },
+    "result": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "negative",
+        "neutral"
+      ],
+      "default": "neutral"
+    },
+    "lesson": {
+      "type": "string"
+    },
+    "confidence_delta": {
+      "type": "number"
+    },
+    "trend": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "decision_id",
+    "entity_type",
+    "entity_id"
+  ]
+}

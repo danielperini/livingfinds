@@ -1,0 +1,96 @@
+{
+  "name": "AdsBidChangeL",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "execution_run_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "old_bid": {
+      "type": "number"
+    },
+    "new_bid": {
+      "type": "number"
+    },
+    "change_amount": {
+      "type": "number"
+    },
+    "change_percent": {
+      "type": "number"
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "increase",
+        "decrease",
+        "unchanged"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "ai_confidence": {
+      "type": "number"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "failed",
+        "skipped"
+      ],
+      "default": "pending"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_id",
+    "direction"
+  ]
+}

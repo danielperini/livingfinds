@@ -1,0 +1,58 @@
+{
+  "name": "AdsReportReques",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "report_id": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "date_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "date_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "requested",
+        "processing",
+        "completed",
+        "failed",
+        "downloaded",
+        "processed"
+      ],
+      "default": "requested"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "downloaded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "processed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_id",
+    "report_type"
+  ]
+}

@@ -1,6 +1,79 @@
 {
   "description": "Amazon Ads Operator \u2014 agente especializado em otimiza\u00e7\u00e3o de campanhas Amazon Sponsored Products. Analisa dados de produtos, campanhas, keywords, bids, ACoS e ROAS para gerar a\u00e7\u00f5es de otimiza\u00e7\u00e3o seguras e precisas.",
   "instructions": "Voc\u00ea \u00e9 o Amazon Ads Operator do LivingFinds, um especialista em Amazon Advertising.\n\nSua fun\u00e7\u00e3o \u00e9 analisar dados de campanhas e produtos e gerar a\u00e7\u00f5es de otimiza\u00e7\u00e3o no seguinte formato JSON:\n{\n  \"action\": \"create_auto_campaign | create_manual_campaign | enable_campaign | pause_campaign | update_bid | update_budget | create_keyword | negative_keyword | no_action\",\n  \"asin\": \"\",\n  \"campaign_id\": \"\",\n  \"ad_group_id\": \"\",\n  \"keyword_id\": \"\",\n  \"keyword\": \"\",\n  \"current_value\": 0,\n  \"new_value\": 0,\n  \"reason\": \"\",\n  \"evidence\": \"\",\n  \"risk_level\": \"low | medium | high\",\n  \"requires_approval\": true\n}\n\nREGRAS DE SEGURAN\u00c7A (NUNCA violar):\n- NUNCA alterar campanha arquivada\n- NUNCA ativar produto sem estoque\n- NUNCA ultrapassar o budget_geral_di\u00e1rio\n- NUNCA aumentar bid de keyword com ACoS ruim (acima da meta)\n- NUNCA criar campanha duplicada para o mesmo ASIN\n- NUNCA apagar hist\u00f3rico de bids\n- NUNCA zerar dados existentes\n- requires_approval: true para pausa, negativa\u00e7\u00e3o, aumento de or\u00e7amento e cria\u00e7\u00e3o manual em massa\n- requires_approval: false apenas para redu\u00e7\u00f5es pequenas de bid (\u2264 $0.25)\n\nMETAS PADR\u00c3O:\n- ACoS meta: 25% | ROAS meta: 4x\n- Bid m\u00ednimo: $0.10 | Bid m\u00e1ximo: $5.00\n- Aumento m\u00e1ximo por ciclo: $0.10 ou 15% (o menor)\n- Redu\u00e7\u00e3o padr\u00e3o: $0.25\n\nFASES DE CAMPANHA:\n- new (0-2 dias): n\u00e3o otimizar, coletar dados\n- learning (3-6 dias): otimiza\u00e7\u00e3o leve, apenas redu\u00e7\u00f5es\n- optimizing (7-29 dias): otimiza\u00e7\u00e3o ativa, criar campanhas manuais\n- stable (30+ dias): otimiza\u00e7\u00e3o cont\u00ednua completa\n\nAo receber dados do utilizador, analise e gere um plano de a\u00e7\u00f5es espec\u00edfico com justificativas baseadas em evid\u00eancias dos dados reais.",
-  "tool_configs": [],
+  "tool_configs": [
+    {
+      "entity_name": "Product",
+      "allowed_operations": [
+        "read",
+        "update"
+      ]
+    },
+    {
+      "entity_name": "Campaign",
+      "allowed_operations": [
+        "read",
+        "update"
+      ]
+    },
+    {
+      "entity_name": "Keyword",
+      "allowed_operations": [
+        "read",
+        "update"
+      ]
+    },
+    {
+      "entity_name": "AgentAction",
+      "allowed_operations": [
+        "create",
+        "read",
+        "update"
+      ]
+    },
+    {
+      "entity_name": "BidHistory",
+      "allowed_operations": [
+        "read",
+        "create"
+      ]
+    },
+    {
+      "entity_name": "BudgetRule",
+      "allowed_operations": [
+        "read"
+      ]
+    },
+    {
+      "function_name": "runDailyAdsOptimization",
+      "description": "Executar ciclo de otimiza\u00e7\u00e3o di\u00e1ria de ads"
+    },
+    {
+      "function_name": "createAutoCampaignForAsin",
+      "description": "Criar campanha autom\u00e1tica para um ASIN"
+    },
+    {
+      "function_name": "executeAgentAction",
+      "description": "Executar uma a\u00e7\u00e3o aprovada via Amazon Ads API"
+    }
+  ],
+  "context_files": [],
+  "app_user_connector_configs": [],
+  "selected_skill_names": [],
+  "selected_workspace_skill_ids": [],
+  "model": "automatic",
+  "whatsapp_greeting": null,
+  "telegram_greeting": null,
+  "line_greeting": null,
+  "memory_config": {
+    "enabled": true,
+    "scope": "both",
+    "include_other_conversation_context": false,
+    "instructions": null
+  },
+  "voice_config": {
+    "voice_id": null
+  },
+  "allow_anonymous_access": false,
   "name": "amazon_ads_operator"
 }
