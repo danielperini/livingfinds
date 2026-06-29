@@ -25,23 +25,29 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 function ReportSyncWidget({ amazonAccountId, onDone }) {
   const [state, setState] = useState('idle'); // idle | requesting | polling | done | error
   const [msg, setMsg] = useState('');
-  const [reportId, setReportId] = useState(null);
+  const [reportIds, setReportIds] = useState(null);
+  const [pollCount, setPollCount] = useState(0);
 
-  // Polling a cada 30s enquanto aguarda o relatório
+  // Polling a cada 30s enquanto aguarda os relatórios
   useEffect(() => {
-    if (state !== 'polling' || !reportId) return;
+    if (state !== 'polling' || !reportIds) return;
     const interval = setInterval(async () => {
       try {
-        const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'download', report_id: reportId });
+        const res = await base44.functions.invoke('downloadAdsReport', {
+          amazon_account_id: amazonAccountId,
+          report_ids: reportIds,
+        });
         const d = res.data;
+        setPollCount(p => p + 1);
         if (!d?.ok) { clearInterval(interval); setState('error'); setMsg(d?.error || 'Erro desconhecido'); return; }
         if (d.ready) {
           clearInterval(interval);
           setState('done');
-          setMsg(`✓ ${d.upserted} campanhas com métricas 30d · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
+          setMsg(`✓ ${d.campaigns_upserted || 0} campanhas · ${d.keywords_upserted || 0} keywords · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
           onDone?.();
         } else {
-          setMsg(`Relatório ${d.status || 'a processar'}... (a verificar a cada 30s)`);
+          const pending = Object.entries(d.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
+          setMsg(`⏳ Aguardando relatório da Amazon... (${pending})`);
         }
       } catch (e) {
         clearInterval(interval);
@@ -50,22 +56,30 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
       }
     }, 30000);
     return () => clearInterval(interval);
-  }, [state, reportId, amazonAccountId]);
+  }, [state, reportIds, amazonAccountId]);
 
   const request = async () => {
     setState('requesting');
-    setMsg('A importar campanhas e solicitar relatório 30d...');
+    setPollCount(0);
+    setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {
-      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'request' });
-      const d = res.data;
-      if (!d?.ok) throw new Error(d?.error || 'Falhou');
-      setReportId(d.report_id);
+      // Fase 1: importar campanhas via syncAdsQuick
+      const r1 = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'request' });
+      const d1 = r1.data;
+      if (!d1?.ok) throw new Error(d1?.error || 'Falhou ao importar campanhas');
+
+      // Fase 2: solicitar os 3 relatórios completos
+      const r2 = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
+      const d2 = r2.data;
+      if (!d2?.ok || !d2.reportIds) throw new Error(d2?.error || 'Falhou ao solicitar relatórios');
+
+      setReportIds(d2.reportIds);
       setState('polling');
-      setMsg(`✓ ${d.campaigns_imported} campanhas. Relatório solicitado — a aguardar processamento (2-10 min)...`);
+      setMsg(`✓ ${d1.campaigns_imported} campanhas importadas. ⏳ Aguardando relatório da Amazon... (pode demorar 5-15 min)`);
     } catch (e) {
       setState('error');
       setMsg(e.message);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 10000);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
     }
   };
 
@@ -75,7 +89,7 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
 
   const label = state === 'requesting' ? 'A solicitar...'
-    : state === 'polling' ? 'A aguardar relatório...'
+    : state === 'polling' ? `Aguardando Amazon... (${pollCount * 30}s)`
     : state === 'done' ? 'Concluído!'
     : 'Sync Amazon Ads 30d';
 

@@ -129,10 +129,10 @@ Deno.serve(async (req) => {
     for (const row of data.campaigns) {
       const campaignId = String(row.campaignId);
       const spend = Number(row.cost) || 0;
-      const sales = Number(row.sales14d) || Number(row.sales1d) || 0;
+      const sales = Number(row.sales30d) || Number(row.sales14d) || Number(row.sales1d) || 0;
       const clicks = Number(row.clicks) || 0;
       const impressions = Number(row.impressions) || 0;
-      const orders = Number(row.purchases14d) || Number(row.purchases1d) || 0;
+      const orders = Number(row.purchases30d) || Number(row.purchases14d) || Number(row.purchases1d) || 0;
       const acos = sales > 0 ? (spend / sales * 100) : 0;
       const roas = spend > 0 ? (sales / spend) : 0;
       const ctr = impressions > 0 ? (clicks / impressions * 100) : 0;
@@ -172,17 +172,17 @@ Deno.serve(async (req) => {
     let productUpserted = 0;
     const asinMetrics = {};
     for (const row of data.products) {
-      const asin = row.asin;
+      const asin = row.advertisedAsin || row.asin;
       if (!asin) continue;
       if (!asinMetrics[asin]) {
         asinMetrics[asin] = { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0, units: 0, sku: row.advertisedSku };
       }
       asinMetrics[asin].spend += Number(row.cost) || 0;
-      asinMetrics[asin].sales += Number(row.sales14d) || Number(row.sales1d) || 0;
+      asinMetrics[asin].sales += Number(row.sales30d) || Number(row.sales14d) || Number(row.sales1d) || 0;
       asinMetrics[asin].clicks += Number(row.clicks) || 0;
       asinMetrics[asin].impressions += Number(row.impressions) || 0;
-      asinMetrics[asin].orders += Number(row.purchases14d) || Number(row.purchases1d) || 0;
-      asinMetrics[asin].units += Number(row.unitsSoldClicks14d) || Number(row.unitsSoldClicks1d) || 0;
+      asinMetrics[asin].orders += Number(row.purchases30d) || Number(row.purchases14d) || Number(row.purchases1d) || 0;
+      asinMetrics[asin].units += Number(row.unitsSoldClicks30d) || Number(row.unitsSoldClicks14d) || Number(row.unitsSoldClicks1d) || 0;
     }
 
     for (const [asin, m] of Object.entries(asinMetrics)) {

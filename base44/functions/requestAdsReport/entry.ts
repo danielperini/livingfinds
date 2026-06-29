@@ -81,8 +81,7 @@ const REPORT_CONFIGS = [
         'attributedSalesSameSku1d', 'attributedSalesSameSku7d', 'attributedSalesSameSku14d', 'attributedSalesSameSku30d',
         'unitsSoldSameSku1d', 'unitsSoldSameSku7d', 'unitsSoldSameSku14d', 'unitsSoldSameSku30d',
         'kindleEditionNormalizedPagesRead14d', 'kindleEditionNormalizedPagesRoyalties14d',
-        'salesOtherSku7d', 'unitsSoldOtherSku7d',
-        'acosClicks7d', 'acosClicks14d', 'roasClicks7d', 'roasClicks14d',
+        'acosClicks14d', 'roasClicks14d',
       ],
       reportTypeId: 'spCampaigns',
       timeUnit: 'SUMMARY',
@@ -97,7 +96,7 @@ const REPORT_CONFIGS = [
       groupBy: ['advertiser'],
       columns: [
         'campaignId', 'campaignName', 'adGroupId', 'adGroupName',
-        'adId', 'asin', 'advertisedSku', 'keywordBid',
+        'adId', 'advertisedAsin', 'advertisedSku',
         'impressions', 'clicks', 'cost',
         'purchases1d', 'purchases7d', 'purchases14d', 'purchases30d',
         'purchasesSameSku1d', 'purchasesSameSku7d', 'purchasesSameSku14d', 'purchasesSameSku30d',
@@ -144,7 +143,8 @@ Deno.serve(async (req) => {
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
     const endDate = new Date();
-    const startDate = new Date(endDate - 30 * 86400000);
+    endDate.setDate(endDate.getDate() - 1); // ontem como end date para evitar duplicates
+    const startDate = new Date(endDate - 29 * 86400000);
     const fmt = d => d.toISOString().slice(0, 10);
     const dateStr = fmt(endDate);
 
