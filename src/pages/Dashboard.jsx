@@ -147,7 +147,7 @@ export default function Dashboard() {
       const [cams, prods, metrics, decs, runs] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
-        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 90),
+        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
       ]);

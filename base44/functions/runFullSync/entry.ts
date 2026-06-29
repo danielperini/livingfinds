@@ -384,12 +384,56 @@ Deno.serve(async (req) => {
       }
 
       if (allDailyRecords.length > 0) {
-        // Apagar registros do período e reinserir (garante idempotência)
-        await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId }).catch(() => {});
-        for (let i = 0; i < allDailyRecords.length; i += 500) {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(allDailyRecords.slice(i, i + 500));
+        // Upsert incremental: buscar registros existentes no período e atualizar ou criar
+        const cutoff120 = new Date(Date.now() - 120 * 86400000);
+        const cutoff120Str = cutoff120.toISOString().slice(0, 10);
+
+        // 1. Apagar registros mais antigos que 120 dias (limpeza histórica)
+        const oldRecords = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+          { amazon_account_id: amazonAccountId },
+          'date',
+          5000
+        );
+        const toDelete = oldRecords.filter(r => r.date && r.date < cutoff120Str);
+        for (let i = 0; i < toDelete.length; i += 500) {
+          const ids = toDelete.slice(i, i + 500).map(r => r.id);
+          await Promise.all(ids.map(id => base44.asServiceRole.entities.CampaignMetricsDaily.delete(id))).catch(() => {});
         }
-        console.log(`[runFullSync] CampaignMetricsDaily: ${allDailyRecords.length} registros inseridos`);
+        if (toDelete.length > 0) console.log(`[runFullSync] CampaignMetricsDaily: ${toDelete.length} registros antigos removidos (>120d)`);
+
+        // 2. Buscar registros existentes no período do relatório (últimos 30d) para upsert
+        const startDate30Str = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+          { amazon_account_id: amazonAccountId },
+          '-date',
+          5000
+        );
+        // Mapa: "campaignId|date" -> id do registro existente
+        const existingMap = {};
+        for (const r of existing) {
+          if (r.date >= startDate30Str) {
+            existingMap[`${r.campaign_id}|${r.date}`] = r.id;
+          }
+        }
+
+        // 3. Separar em criar vs atualizar
+        const dailyToCreate = [], dailyToUpdate = [];
+        for (const rec of allDailyRecords) {
+          const key = `${rec.campaign_id}|${rec.date}`;
+          if (existingMap[key]) {
+            dailyToUpdate.push({ id: existingMap[key], ...rec });
+          } else {
+            dailyToCreate.push(rec);
+          }
+        }
+
+        for (let i = 0; i < dailyToCreate.length; i += 500) {
+          await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(dailyToCreate.slice(i, i + 500));
+        }
+        for (let i = 0; i < dailyToUpdate.length; i += 500) {
+          await base44.asServiceRole.entities.CampaignMetricsDaily.bulkUpdate(dailyToUpdate.slice(i, i + 500));
+        }
+        console.log(`[runFullSync] CampaignMetricsDaily: ${dailyToCreate.length} criados, ${dailyToUpdate.length} atualizados, histórico 120d preservado`);
       }
 
       // ── 2. Processar SUMMARY campaigns — atualizar métricas nas campanhas ──
