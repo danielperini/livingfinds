@@ -18,6 +18,7 @@ const navItems = [
   { path: '/learner', icon: Brain, label: 'Learner' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
   { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
+  { path: '/diagnostico', icon: Activity, label: 'Diagnóstico Amazon' },
   { path: '/logs', icon: Activity, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
