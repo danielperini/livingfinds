@@ -1,0 +1,77 @@
+{
+  "name": "BiddingRule",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "all_campaigns",
+        "campaign_type",
+        "specific_campaign"
+      ],
+      "default": "all_campaigns"
+    },
+    "campaign_type_filter": {
+      "type": "string"
+    },
+    "campaign_id_filter": {
+      "type": "string"
+    },
+    "acos_min": {
+      "type": "number"
+    },
+    "acos_max": {
+      "type": "number"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "auto_approve",
+        "increase_bid",
+        "decrease_bid",
+        "pause_campaign",
+        "alert_only"
+      ],
+      "default": "auto_approve"
+    },
+    "bid_change_pct": {
+      "type": "number",
+      "default": 10
+    },
+    "min_impressions": {
+      "type": "number",
+      "default": 100
+    },
+    "min_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence_threshold": {
+      "type": "number",
+      "default": 0.6
+    },
+    "last_applied_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "applied_count": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "name",
+    "action"
+  ]
+}

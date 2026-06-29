@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Brain, CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown,
-  Zap, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Clock, Filter
+  Zap, ChevronDown, ChevronUp, RefreshCw, AlertCircle, Clock, Filter, Sliders
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import BiddingRulesPanel from '@/components/learner/BiddingRulesPanel';
 
 const DECISION_LABELS = {
   bid_adjust: 'Ajuste de Bid',
@@ -110,6 +111,7 @@ function DecisionCard({ dec, onApprove, onReject, actionState }) {
 }
 
 export default function LearnerEngine() {
+  const [account, setAccount] = useState(null);
   const [decisions, setDecisions] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -127,6 +129,7 @@ export default function LearnerEngine() {
       const me = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       const acc = accounts[0];
+      setAccount(acc);
       if (!acc) { setLoading(false); return; }
 
       const [pending, done] = await Promise.all([
@@ -253,6 +256,7 @@ export default function LearnerEngine() {
         {[
           { id: 'pending', label: `Pendentes (${stats.pending})` },
           { id: 'history', label: `Histórico (${history.length})` },
+          { id: 'rules', label: 'Regras Automáticas' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
@@ -317,6 +321,9 @@ export default function LearnerEngine() {
           )}
         </>
       ) : (
+        tab === 'rules' ? (
+          <BiddingRulesPanel amazonAccountId={account?.id} />
+        ) :
         /* Histórico */
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
