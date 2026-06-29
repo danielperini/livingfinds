@@ -23,59 +23,69 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 }
 
 function ReportSyncWidget({ amazonAccountId, onDone }) {
-  const [state, setState] = useState('idle'); // idle | requesting | polling | done | error
+  const [state, setState] = useState('idle');
   const [msg, setMsg] = useState('');
-  const [reportIds, setReportIds] = useState(null);
   const [pollCount, setPollCount] = useState(0);
+  const pollRef = useRef(null);
+  const pendingRef = useRef(null);
 
-  // Polling a cada 30s enquanto aguarda os relatórios
-  useEffect(() => {
-    if (state !== 'polling' || !reportIds) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await base44.functions.invoke('runFullSync', {
-          amazon_account_id: amazonAccountId,
-          action: 'download',
-          reportIds: reportIds?.reportIds || reportIds,
-          syncRunId: reportIds?.syncRunId || null,
-        });
-        const d = res.data;
-        setPollCount(p => p + 1);
-        if (!d?.ok) { clearInterval(interval); setState('error'); setMsg(d?.error || 'Erro desconhecido'); return; }
-        if (d.ready) {
-          clearInterval(interval);
-          setState('done');
-          setMsg(`✓ ${d.products || 0} produtos · ${d.keywords || 0} keywords · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
-          onDone?.();
-        } else {
-          const pending = Object.entries(d.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
-          setMsg(`⏳ Aguardando relatório da Amazon... (${pending})`);
-        }
-      } catch (e) {
-        clearInterval(interval);
-        setState('error');
-        setMsg(e.message);
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [state, reportIds, amazonAccountId]);
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   const request = async () => {
+    if (pollRef.current) clearInterval(pollRef.current);
     setState('requesting');
     setPollCount(0);
     setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {
       const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
       const d1 = r1.data;
-      if (!d1?.ok) throw new Error(d1?.error || 'Falhou ao iniciar sync');
+      if (!d1?.ok) {
+        setState('error');
+        setMsg(d1?.message || d1?.amazon_error || 'Falhou ao iniciar sync');
+        setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+        return;
+      }
 
-      setReportIds({ reportIds: d1.reportIds, syncRunId: d1.syncRunId });
+      pendingRef.current = { reportIds: d1.reportIds, syncRunId: d1.syncRunId };
       setState('polling');
-      setMsg(`✓ ${d1.campaigns_imported} campanhas importadas. ⏳ Aguardando relatório da Amazon... (pode demorar 5-15 min)`);
+      setMsg(`✓ ${d1.campaigns_imported} campanhas. ⏳ Aguardando relatórios Amazon (5-15 min)...`);
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const r2 = await base44.functions.invoke('runFullSync', {
+            amazon_account_id: amazonAccountId,
+            action: 'download',
+            ...pendingRef.current,
+          });
+          const d2 = r2.data;
+          setPollCount(p => p + 1);
+          if (!d2?.ok) {
+            clearInterval(pollRef.current);
+            setState('error');
+            setMsg(d2?.message || d2?.amazon_error || 'Erro ao baixar relatórios');
+            setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+            return;
+          }
+          if (d2.ready) {
+            clearInterval(pollRef.current);
+            setState('done');
+            setMsg(`✓ ${d2.products || 0} produtos · ${d2.keywords || 0} keywords · $${(d2.summary?.total_spend || 0).toFixed(2)} spend`);
+            onDone?.();
+          } else {
+            const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
+            setMsg(`⏳ Aguardando Amazon (${pollCount * 30}s)... ${pend}`);
+          }
+        } catch (e) {
+          clearInterval(pollRef.current);
+          setState('error');
+          setMsg(e.message);
+          setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+        }
+      }, 30000);
     } catch (e) {
       setState('error');
       setMsg(e.message);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
     }
   };
 
@@ -96,7 +106,7 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
         {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
         {label}
       </button>
-      {msg && <p className="text-xs text-slate-400 max-w-xs">{msg}</p>}
+      {msg && <p className={`text-xs max-w-xs ${state === 'error' ? 'text-red-400' : 'text-slate-400'}`}>{msg}</p>}
     </div>
   );
 }
@@ -357,8 +367,8 @@ export default function Dashboard() {
                   <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
                     <td className="px-4 py-2.5 font-mono text-xs text-cyan">{p.asin || '—'}</td>
                     <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{p.sku || '—'}</td>
-                    <td className="px-4 py-2.5 text-emerald-400">${(p.total_revenue_30d || 0).toFixed(2)}</td>
-                    <td className="px-4 py-2.5 text-slate-300">{p.units_sold_30d || 0}</td>
+                    <td className="px-4 py-2.5 text-emerald-400">${(p.total_revenue_30d || p.total_sales_30d || 0).toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{p.units_sold_30d || p.total_units_30d || 0}</td>
                     <td className="px-4 py-2.5">
                       <span className={`font-semibold text-xs ${(p.fba_inventory || 0) === 0 ? 'text-red-400' : (p.fba_inventory || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
                         {p.fba_inventory || 0}

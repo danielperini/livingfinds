@@ -1,228 +1,143 @@
 /**
- * SyncPanel — Painel de sincronização completa com progresso por etapa
+ * SyncPanel — Sync completo Amazon Ads usando apenas runFullSync
+ * Fase 1: action=request → importa campanhas + solicita relatórios
+ * Fase 2: polling action=download a cada 30s até ready=true
  */
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { RefreshCw, CheckCircle, XCircle, Clock, Zap, Package, Tag, Database, BarChart2, Layers } from 'lucide-react';
-
-const STEPS_CONFIG = [
-  { key: 'campaigns', label: 'Campanhas SP + SB + SD', icon: Layers, fn: 'syncCampaignsFull' },
-  { key: 'adGroups_keywords', label: 'Ad Groups + Keywords', icon: Tag, fn: 'syncAdGroupsAndKeywords' },
-  { key: 'product_ads', label: 'Product Ads + Targets', icon: Zap, fn: 'syncProductAds' },
-  { key: 'product_catalog', label: 'Catálogo + Inventário FBA', icon: Package, fn: 'syncProductCatalog' },
-  { key: 'metrics_report_request', label: 'Relatório de Métricas 30d', icon: BarChart2, fn: 'requestAdsReport' },
-];
+import { RefreshCw, CheckCircle, XCircle, Loader2, Database, BarChart2 } from 'lucide-react';
 
 export default function SyncPanel({ amazonAccountId, onDone }) {
-  const [state, setState] = useState('idle'); // idle | running | done | error
-  const [steps, setSteps] = useState([]);
-  const [currentStep, setCurrentStep] = useState(null);
-  const [reportId, setReportId] = useState(null);
-  const [summary, setSummary] = useState(null);
-
-  const runFullSync = async () => {
-    setState('running');
-    setSteps([]);
-    setCurrentStep(null);
-    setReportId(null);
-    setSummary(null);
-
-    const results = [];
-
-    for (const step of STEPS_CONFIG) {
-      setCurrentStep(step.key);
-      try {
-        const res = await base44.functions.invoke(step.fn, { amazon_account_id: amazonAccountId, days: 30 });
-        const data = res.data;
-        const upserted = data?.totalUpserted ?? data?.records_upserted ?? 0;
-        const result = { ...step, ok: data?.ok !== false, upserted, errors: data?.errors || [], reportId: data?.reportId };
-        results.push(result);
-        setSteps([...results]);
-        if (data?.reportId) setReportId(data.reportId);
-      } catch (e) {
-        results.push({ ...step, ok: false, upserted: 0, errors: [e.message] });
-        setSteps([...results]);
-      }
-    }
-
-    setCurrentStep(null);
-    const totalUpserted = results.reduce((s, r) => s + (r.upserted || 0), 0);
-    const failedCount = results.filter(r => !r.ok).length;
-    setSummary({ totalUpserted, failedCount });
-    setState(failedCount === STEPS_CONFIG.length ? 'error' : 'done');
-    onDone?.();
-  };
-
-  const runSingleStep = async (step) => {
-    setCurrentStep(step.key);
-    try {
-      const res = await base44.functions.invoke(step.fn, { amazon_account_id: amazonAccountId, days: 30 });
-      const data = res.data;
-      const upserted = data?.totalUpserted ?? data?.records_upserted ?? 0;
-      setSteps(prev => {
-        const idx = prev.findIndex(s => s.key === step.key);
-        const updated = { ...step, ok: data?.ok !== false, upserted, errors: data?.errors || [], reportId: data?.reportId };
-        if (data?.reportId) setReportId(data.reportId);
-        if (idx >= 0) { const n = [...prev]; n[idx] = updated; return n; }
-        return [...prev, updated];
-      });
-    } catch (e) {
-      setSteps(prev => {
-        const idx = prev.findIndex(s => s.key === step.key);
-        const updated = { ...step, ok: false, upserted: 0, errors: [e.message] };
-        if (idx >= 0) { const n = [...prev]; n[idx] = updated; return n; }
-        return [...prev, updated];
-      });
-    } finally {
-      setCurrentStep(null);
-      onDone?.();
-    }
-  };
-
-  const isRunning = state === 'running' || currentStep !== null;
-
-  return (
-    <div className="bg-surface-1 border border-surface-2 rounded-xl p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-            <Database className="w-4 h-4 text-cyan" /> Sincronização Completa
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">Importa campanhas, keywords, produtos e métricas da Amazon</p>
-        </div>
-        <button
-          onClick={runFullSync}
-          disabled={isRunning}
-          className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-        >
-          <RefreshCw className={`w-4 h-4 ${isRunning ? 'animate-spin' : ''}`} />
-          {isRunning ? 'Sincronizando...' : 'Sync Completo'}
-        </button>
-      </div>
-
-      {/* Steps */}
-      <div className="space-y-2">
-        {STEPS_CONFIG.map((step) => {
-          const result = steps.find(s => s.key === step.key);
-          const isActive = currentStep === step.key;
-          const Icon = step.icon;
-
-          return (
-            <div key={step.key} className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
-              isActive ? 'border-cyan/30 bg-cyan/5' :
-              result?.ok === true ? 'border-emerald-400/20 bg-emerald-400/5' :
-              result?.ok === false ? 'border-red-400/20 bg-red-400/5' :
-              'border-surface-3 bg-surface-2'
-            }`}>
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                isActive ? 'bg-cyan/20' :
-                result?.ok === true ? 'bg-emerald-400/15' :
-                result?.ok === false ? 'bg-red-400/15' :
-                'bg-surface-3'
-              }`}>
-                {isActive ? (
-                  <RefreshCw className="w-3.5 h-3.5 text-cyan animate-spin" />
-                ) : result?.ok === true ? (
-                  <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                ) : result?.ok === false ? (
-                  <XCircle className="w-3.5 h-3.5 text-red-400" />
-                ) : (
-                  <Icon className="w-3.5 h-3.5 text-slate-500" />
-                )}
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <p className={`text-xs font-medium ${
-                  isActive ? 'text-cyan' :
-                  result?.ok === true ? 'text-emerald-300' :
-                  result?.ok === false ? 'text-red-300' :
-                  'text-slate-400'
-                }`}>{step.label}</p>
-                {result?.ok === true && (
-                  <p className="text-xs text-slate-500">{result.upserted} registos actualizados{result.reportId ? ` · reportId: ${result.reportId.slice(0, 8)}…` : ''}</p>
-                )}
-                {result?.ok === false && result.errors?.length > 0 && (
-                  <p className="text-xs text-red-400 truncate">{result.errors[0]}</p>
-                )}
-                {isActive && <p className="text-xs text-cyan/70">A processar...</p>}
-              </div>
-
-              <button
-                onClick={() => runSingleStep(step)}
-                disabled={isRunning}
-                title={`Executar apenas: ${step.label}`}
-                className="flex-shrink-0 p-1.5 rounded-md text-slate-500 hover:text-slate-300 hover:bg-surface-3 transition-colors disabled:opacity-40"
-              >
-                <RefreshCw className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Summary */}
-      {summary && (
-        <div className={`p-3 rounded-lg border text-xs ${
-          summary.failedCount === 0
-            ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300'
-            : summary.failedCount < STEPS_CONFIG.length
-            ? 'border-amber-400/20 bg-amber-400/5 text-amber-300'
-            : 'border-red-400/20 bg-red-400/5 text-red-300'
-        }`}>
-          {summary.failedCount === 0
-            ? `✓ Sync completo! ${summary.totalUpserted} registos importados.`
-            : `Sync parcial — ${summary.totalUpserted} registos importados, ${summary.failedCount} etapas com erro.`}
-          {reportId && <span className="ml-2 text-slate-400">Métricas em processamento. Baixe em 2-5 min.</span>}
-        </div>
-      )}
-
-      {/* Download metrics if we have a reportId */}
-      {reportId && (
-        <DownloadMetricsButton amazonAccountId={amazonAccountId} reportId={reportId} onDone={onDone} />
-      )}
-    </div>
-  );
-}
-
-function DownloadMetricsButton({ amazonAccountId, reportId, onDone }) {
-  const [state, setState] = useState('idle');
+  const [state, setState] = useState('idle'); // idle | requesting | polling | done | error
   const [msg, setMsg] = useState('');
+  const [detail, setDetail] = useState(null);
+  const [pollCount, setPollCount] = useState(0);
+  const pollRef = useRef(null);
+  const pendingRef = useRef(null);
 
-  const download = async () => {
-    setState('loading');
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+  }, []);
+
+  const startSync = async () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setState('requesting');
+    setMsg('A importar campanhas e solicitar relatórios 30d...');
+    setDetail(null);
+    setPollCount(0);
+
     try {
-      const res = await base44.functions.invoke('downloadAdsReport', { amazon_account_id: amazonAccountId, report_id: reportId });
-      const data = res.data;
-      if (!data.ok) throw new Error(data.error || 'Erro');
-      if (data.ready) {
-        setState('done');
-        setMsg(`✓ ${data.records_upserted} campanhas com métricas actualizadas`);
-        onDone?.();
-      } else {
-        setState('idle');
-        setMsg(`Ainda a processar (${data.status}) — tente novamente`);
+      const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
+      const d1 = r1.data;
+
+      if (!d1?.ok) {
+        setState('error');
+        setMsg(d1?.message || d1?.amazon_error || 'Falhou ao iniciar sync');
+        setDetail(d1);
+        return;
       }
+
+      pendingRef.current = { reportIds: d1.reportIds, syncRunId: d1.syncRunId };
+      setState('polling');
+      setMsg(`✓ ${d1.campaigns_imported} campanhas importadas. Aguardando relatórios Amazon (5-15 min)...`);
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const r2 = await base44.functions.invoke('runFullSync', {
+            amazon_account_id: amazonAccountId,
+            action: 'download',
+            ...pendingRef.current,
+          });
+          const d2 = r2.data;
+          setPollCount(p => p + 1);
+
+          if (!d2?.ok) {
+            clearInterval(pollRef.current);
+            setState('error');
+            setMsg(d2?.message || d2?.amazon_error || 'Erro ao baixar relatórios');
+            setDetail(d2);
+            return;
+          }
+
+          if (d2.ready) {
+            clearInterval(pollRef.current);
+            setState('done');
+            setMsg(`✓ ${d2.products || 0} produtos · ${d2.keywords || 0} keywords · Spend $${(d2.summary?.total_spend || 0).toFixed(2)}`);
+            setDetail(d2);
+            onDone?.();
+          } else {
+            const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
+            setMsg(`⏳ Aguardando relatórios... ${pend || ''}`);
+          }
+        } catch (e) {
+          clearInterval(pollRef.current);
+          setState('error');
+          setMsg(e.message);
+        }
+      }, 30000);
+
     } catch (e) {
       setState('error');
       setMsg(e.message);
     }
   };
 
+  const isRunning = state === 'requesting' || state === 'polling';
+
   return (
-    <div className="flex items-center gap-3">
-      <button
-        onClick={download}
-        disabled={state === 'loading' || state === 'done'}
-        className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg border transition-colors disabled:opacity-60 ${
-          state === 'done' ? 'border-emerald-400/20 text-emerald-400 bg-emerald-400/5' :
-          state === 'error' ? 'border-red-400/20 text-red-400 bg-red-400/5' :
-          'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10'
-        }`}
-      >
-        <BarChart2 className={`w-3.5 h-3.5 ${state === 'loading' ? 'animate-pulse' : ''}`} />
-        {state === 'loading' ? 'A verificar...' : state === 'done' ? 'Métricas importadas!' : 'Baixar Métricas Agora'}
-      </button>
-      {msg && <p className={`text-xs ${state === 'error' ? 'text-red-400' : 'text-slate-400'}`}>{msg}</p>}
+    <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Database className="w-4 h-4 text-cyan" /> Sync Amazon Ads 30d
+          </h2>
+          <p className="text-xs text-slate-400 mt-0.5">Importa campanhas, produtos, keywords e métricas</p>
+        </div>
+        <button
+          onClick={startSync}
+          disabled={isRunning}
+          className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+        >
+          {isRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+          {isRunning ? (state === 'requesting' ? 'Solicitando...' : `Aguardando... (${pollCount * 30}s)`) : 'Sync Completo'}
+        </button>
+      </div>
+
+      {msg && (
+        <div className={`flex items-start gap-2 p-3 rounded-lg border text-xs ${
+          state === 'done' ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300' :
+          state === 'error' ? 'border-red-400/20 bg-red-400/5 text-red-300' :
+          'border-cyan/20 bg-cyan/5 text-cyan'
+        }`}>
+          {state === 'done' ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> :
+           state === 'error' ? <XCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> :
+           <Loader2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 animate-spin" />}
+          <div className="space-y-1">
+            <p>{msg}</p>
+            {detail?.download_errors?.length > 0 && (
+              <p className="text-amber-400">Avisos: {detail.download_errors.join('; ')}</p>
+            )}
+            {detail?.amazon_status && (
+              <p className="text-red-300">Amazon HTTP {detail.amazon_status}: {detail.amazon_error}</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {state === 'done' && detail?.summary && (
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { label: 'Spend', value: `$${(detail.summary.total_spend || 0).toFixed(2)}` },
+            { label: 'Vendas', value: `$${(detail.summary.total_sales || 0).toFixed(2)}` },
+            { label: 'Cliques', value: (detail.summary.total_clicks || 0).toLocaleString() },
+          ].map(m => (
+            <div key={m.label} className="bg-surface-2 rounded-lg p-2 text-center">
+              <p className="text-xs text-slate-400">{m.label}</p>
+              <p className="text-sm font-bold text-white">{m.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

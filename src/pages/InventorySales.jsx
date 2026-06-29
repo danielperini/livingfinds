@@ -37,8 +37,8 @@ export default function InventorySales() {
     (p.sku || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const totalRevenue = products.reduce((s, p) => s + (p.total_revenue_30d || 0), 0);
-  const totalUnits = products.reduce((s, p) => s + (p.units_sold_30d || 0), 0);
+  const totalRevenue = products.reduce((s, p) => s + (p.total_revenue_30d || p.total_sales_30d || 0), 0);
+  const totalUnits = products.reduce((s, p) => s + (p.units_sold_30d || p.total_units_30d || 0), 0);
   const lowStock = products.filter(p => (p.fba_inventory || 0) < 10 && (p.fba_inventory || 0) > 0).length;
   const outOfStock = products.filter(p => (p.fba_inventory || 0) === 0).length;
 
@@ -121,8 +121,8 @@ export default function InventorySales() {
                           {p.fba_inventory || 0}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-emerald-400">${(p.total_revenue_30d || 0).toFixed(2)}</td>
-                      <td className="px-5 py-3 text-slate-300">{p.units_sold_30d || 0}</td>
+                      <td className="px-5 py-3 text-emerald-400">${(p.total_revenue_30d || p.total_sales_30d || 0).toFixed(2)}</td>
+                      <td className="px-5 py-3 text-slate-300">{p.units_sold_30d || p.total_units_30d || 0}</td>
                       <td className="px-5 py-3">
                         {stockAlert !== 'ok' && (
                           <div className={`flex items-center gap-1 text-xs ${stockAlert === 'out' ? 'text-red-400' : 'text-amber-400'}`}>
