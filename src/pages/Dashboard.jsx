@@ -74,7 +74,8 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
           if (d2.ready) {
             clearInterval(pollRef.current);
             setState('done');
-            setMsg(`✓ ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} produtos · ${d2.keywords || 0} kws · $${(d2.summary?.total_spend || 0).toFixed(2)} spend`);
+            const sum = d2.summary || {};
+            setMsg(`✓ ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} prod. · ${d2.keywords || 0} kws · $${(sum.total_spend || 0).toFixed(2)} spend · $${(sum.total_sales || 0).toFixed(2)} vendas`);
             onDone?.();
           } else {
             const elapsed = elapsedSec();
@@ -145,7 +146,7 @@ export default function Dashboard() {
       const aid = acc.id;
       const [cams, prods, metrics, decs, runs] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
-        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_revenue_30d', 30),
+        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 90),
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
@@ -167,14 +168,26 @@ export default function Dashboard() {
 
 
 
-  // Calcular KPIs agregados das campanhas
-  const kpis = campaigns.reduce((acc, c) => ({
+  // KPIs — usar CampaignMetricsDaily como fonte primária (tem dados reais do relatório)
+  // Fallback: somar das campanhas (antes do primeiro download de relatório)
+  const metricsSum = metricsDaily.reduce((acc, m) => ({
+    spend: acc.spend + (m.spend || 0),
+    sales: acc.sales + (m.sales || 0),
+    clicks: acc.clicks + (m.clicks || 0),
+    impressions: acc.impressions + (m.impressions || 0),
+    orders: acc.orders + (m.orders || 0),
+  }), { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
+
+  const campSum = campaigns.reduce((acc, c) => ({
     spend: acc.spend + (c.spend || 0),
     sales: acc.sales + (c.sales || 0),
     clicks: acc.clicks + (c.clicks || 0),
     impressions: acc.impressions + (c.impressions || 0),
     orders: acc.orders + (c.orders || 0),
   }), { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
+
+  // Preferir métricas das campanhas se tiverem dados (atualizadas pelo download), senão usar daily
+  const kpis = campSum.spend > 0 ? campSum : metricsSum;
 
   const acos = kpis.sales > 0 ? (kpis.spend / kpis.sales * 100) : 0;
   const roas = kpis.spend > 0 ? (kpis.sales / kpis.spend) : 0;

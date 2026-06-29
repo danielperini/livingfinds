@@ -1,9 +1,9 @@
 /**
- * dailyReportScheduler — Executa automaticamente toda a manhã:
- *   1. Solicita os 3 relatórios de 30 dias (requestAdsReport)
- *   2. Aguarda 15 minutos e tenta baixar (downloadAdsReport) — repete até completar ou falhar
- * Chamado pela automação agendada diária.
- * Payload: {} (sem payload — usa o primeiro AmazonAccount activo)
+ * dailyReportScheduler — Agendado diariamente às 10h (BRT).
+ * Usa runFullSync para pipeline completo:
+ * 1. Importa campanhas + solicita relatórios 30d
+ * 2. Aguarda até 30 min com polling de 5 min
+ * 3. Baixa, normaliza e persiste todos os dados
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -11,55 +11,38 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
 
-    // Encontrar conta Amazon activa (service role)
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-    if (accounts.length === 0) {
-      return Response.json({ ok: false, message: 'Nenhuma conta Amazon conectada.' });
-    }
+    if (accounts.length === 0) return Response.json({ ok: false, message: 'Nenhuma conta Amazon conectada.' });
     const amazonAccountId = accounts[0].id;
 
-    // 1. Solicitar relatórios
-    const reqRes = await base44.asServiceRole.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
-    const reqData = reqRes?.data || reqRes;
-    if (!reqData?.ok) {
-      return Response.json({ ok: false, step: 'request', error: reqData?.error || 'requestAdsReport falhou' });
-    }
+    // Fase 1: importar campanhas + solicitar relatórios
+    const r1 = await base44.asServiceRole.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
+    const d1 = r1?.data || r1;
 
-    const reportIds = reqData.reportIds;
+    if (!d1?.ok) return Response.json({ ok: false, step: 'request', error: d1?.message || d1?.amazon_error });
 
-    // 2. Polling — tenta até 6x com 5 minutos de intervalo (máx 30 min total)
+    const { reportIds, syncRunId } = d1;
+
+    // Fase 2: polling até 30 min (6 tentativas × 5 min)
     let downloadResult = null;
     for (let attempt = 1; attempt <= 6; attempt++) {
-      // Aguardar 5 minutos entre tentativas (primeira tentativa: 5 min após solicitar)
       await new Promise(r => setTimeout(r, 5 * 60 * 1000));
-
-      const dlRes = await base44.asServiceRole.functions.invoke('downloadAdsReport', {
+      const r2 = await base44.asServiceRole.functions.invoke('runFullSync', {
         amazon_account_id: amazonAccountId,
-        report_ids: reportIds,
+        action: 'download',
+        reportIds,
+        syncRunId,
       });
-      const dlData = dlRes?.data || dlRes;
-
-      if (dlData?.ready === true) {
-        downloadResult = dlData;
-        break;
-      }
-      if (dlData?.ready === false && Object.keys(dlData.pending || {}).length > 0) {
-        // ainda a processar — continuar polling
-        continue;
-      }
-      // erro — parar
-      break;
+      const d2 = r2?.data || r2;
+      if (d2?.ready === true) { downloadResult = d2; break; }
+      if (!d2?.ok && !d2?.ready) break; // erro real
+      // ainda pendente → continuar
     }
-
-    // Actualizar last_sync_at na conta
-    await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
-      last_sync_at: new Date().toISOString(),
-    });
 
     return Response.json({
       ok: true,
       amazon_account_id: amazonAccountId,
-      report_ids: reportIds,
+      campaigns_imported: d1.campaigns_imported,
       download: downloadResult,
     });
 
