@@ -119,7 +119,7 @@ Deno.serve(async (req) => {
       const fmt = d => d.toISOString().slice(0, 10);
 
       const reportReq = await adsCall('POST', '/reporting/reports', {
-        name: `SP Campaigns 30d ${fmt(endDate)}`,
+        name: `SP Campaigns 30d ${fmt(endDate)}-${Date.now()}`,
         startDate: fmt(startDate),
         endDate: fmt(endDate),
         configuration: {
