@@ -30,6 +30,7 @@ import Products from '@/pages/Products';
 import Report from '@/pages/Report';
 import LogDeBids from '@/pages/LogDeBids';
 import Diagnostico from '@/pages/Diagnostico';
+import Analytics from '@/pages/Analytics';
 import AmazonAdsCallback from '@/pages/AmazonAdsCallback';
 
 const AuthenticatedApp = () => {
@@ -70,6 +71,7 @@ const AuthenticatedApp = () => {
           <Route path="/transitions" element={<Transitions />} />
           <Route path="/products" element={<Products />} />
           <Route path="/bids-log" element={<LogDeBids />} />
+          <Route path="/analytics" element={<Analytics />} />
           <Route path="/diagnostico" element={<Diagnostico />} />
           <Route path="/report" element={<Report />} />
           <Route path="/logs" element={<Logs />} />

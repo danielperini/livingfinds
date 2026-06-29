@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Brain, Package, Rocket,
   Settings, Activity, Menu, X, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon
+  Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon, BarChart2
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -18,6 +18,7 @@ const navItems = [
   { path: '/learner', icon: Brain, label: 'Learner' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
   { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
+  { path: '/analytics', icon: BarChart2, label: 'Analytics' },
   { path: '/diagnostico', icon: Activity, label: 'Diagnóstico Amazon' },
   { path: '/logs', icon: Activity, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
