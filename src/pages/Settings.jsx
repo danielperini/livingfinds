@@ -1,20 +1,20 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink, Zap } from 'lucide-react';
-import SyncPanel from '@/components/SyncPanel';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw } from 'lucide-react';
+import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
   const [user, setUser] = useState(null);
   const [account, setAccount] = useState(null);
-  const [xanoHealth, setXanoHealth] = useState(null);
-  const [healthLoading, setHealthLoading] = useState(false);
-  const [lastAttempt, setLastAttempt] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
   const [form, setForm] = useState({
     seller_name: '',
+    marketplace_id: '',
+    ads_profile_id: '',
+    region: 'NA',
     ai_auto_optimization: false,
     max_daily_budget_limit: 1000,
     max_bid_change_pct: 20,
@@ -30,6 +30,9 @@ export default function Settings() {
         setAccount(acc);
         setForm({
           seller_name: acc.seller_name || '',
+          marketplace_id: acc.marketplace_id || '',
+          ads_profile_id: acc.ads_profile_id || '',
+          region: acc.region || 'NA',
           ai_auto_optimization: acc.ai_auto_optimization || false,
           max_daily_budget_limit: acc.max_daily_budget_limit || 1000,
           max_bid_change_pct: acc.max_bid_change_pct || 20,
@@ -38,29 +41,15 @@ export default function Settings() {
     }).catch(console.error);
   }, []);
 
-  const testXanoHealth = async () => {
-    setHealthLoading(true);
-    setLastAttempt(new Date().toLocaleString('pt-BR'));
-    try {
-      const res = await base44.functions.invoke('xanoProxy', { method: 'GET', path: '/health' });
-      const d = res.data;
-      if (!d?.ok) throw new Error(d?.error || 'Falhou');
-      setXanoHealth({ ok: true, data: d.data });
-    } catch (err) {
-      setXanoHealth({ ok: false, error: err.message });
-    } finally {
-      setHealthLoading(false);
-    }
-  };
-
   const saveAccount = async () => {
     if (!user) return;
     setSaving(true);
     try {
       if (account) {
-        await base44.entities.AmazonAccount.update(account.id, { ...form });
+        await base44.entities.AmazonAccount.update(account.id, form);
       } else {
-        await base44.entities.AmazonAccount.create({ user_id: user.id, ...form, status: 'pending' });
+        const created = await base44.entities.AmazonAccount.create({ user_id: user.id, ...form, status: 'pending', mode: 'real' });
+        setAccount(created);
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -71,6 +60,28 @@ export default function Settings() {
     }
   };
 
+  const runSync = async () => {
+    if (!account) return;
+    setSyncLoading(true);
+    setSyncResult(null);
+    try {
+      const res = await base44.functions.invoke('syncAds', { amazon_account_id: account.id });
+      const d = res.data;
+      setSyncResult({ ok: d?.ok, message: d?.ok ? `✓ ${d.records_upserted || 0} campanhas sincronizadas` : (d?.error || 'Erro') });
+    } catch (e) {
+      setSyncResult({ ok: false, message: e.message });
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const fields = [
+    { key: 'seller_name', label: 'Nome do Seller', placeholder: 'Ex: My Store LLC' },
+    { key: 'marketplace_id', label: 'Marketplace ID', placeholder: 'Ex: ATVPDKIKX0DER' },
+    { key: 'ads_profile_id', label: 'Ads Profile ID', placeholder: 'Ex: 1234567890' },
+    { key: 'region', label: 'Região', placeholder: 'NA / EU / FE' },
+  ];
+
   return (
     <div className="p-6 space-y-6 max-w-3xl animate-fade-in">
       <div className="flex items-center gap-3">
@@ -80,206 +91,108 @@ export default function Settings() {
         <h1 className="text-lg font-bold text-white">Configurações</h1>
       </div>
 
-      {/* Status Xano */}
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
-        <div className="flex items-center justify-between mb-4">
+      {/* Status da Conta */}
+      {account && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 flex items-center gap-4">
+          <StatusBadge status={account.status || 'pending'} />
           <div>
-            <h2 className="text-sm font-semibold text-white">Status Xano</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Conexão Base44 → Xano via X-API-Key</p>
-          </div>
-          <button
-            onClick={testXanoHealth}
-            disabled={healthLoading}
-            className="flex items-center gap-2 px-3 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-          >
-            {healthLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-            Testar Conexão
-          </button>
-        </div>
-
-        {/* Status indicator */}
-        <div className={`flex items-center gap-2 p-3 rounded-lg border mb-4 ${
-          xanoHealth === null ? 'border-surface-3 bg-surface-2' :
-          xanoHealth.ok ? 'border-emerald-400/20 bg-emerald-400/5' :
-          'border-red-400/20 bg-red-400/5'
-        }`}>
-          {xanoHealth === null
-            ? <WifiOff className="w-4 h-4 text-slate-500" />
-            : xanoHealth.ok
-            ? <Wifi className="w-4 h-4 text-emerald-400" />
-            : <WifiOff className="w-4 h-4 text-red-400" />}
-          <div className="flex-1">
-            <p className={`text-sm font-semibold ${xanoHealth === null ? 'text-slate-400' : xanoHealth.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-              {xanoHealth === null ? 'Não testado' : xanoHealth.ok ? 'Conectado' : 'Desconectado'}
-            </p>
-            {lastAttempt && <p className="text-xs text-slate-500">Última tentativa: {lastAttempt}</p>}
+            <p className="text-sm font-semibold text-white">{account.seller_name || 'Conta Amazon'}</p>
+            <p className="text-xs text-slate-500">Último sync: {account.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca'}</p>
           </div>
         </div>
+      )}
 
-        {xanoHealth?.ok && xanoHealth.data && (
-          <div className="bg-surface-2 rounded-lg p-3 mb-4">
-            <p className="text-xs font-semibold text-slate-300 mb-1">Resposta GET /health</p>
-            <pre className="text-xs text-emerald-300 whitespace-pre-wrap">{JSON.stringify(xanoHealth.data, null, 2)}</pre>
-          </div>
-        )}
-
-        {xanoHealth?.ok === false && (
-          <div className="bg-red-400/5 border border-red-400/20 rounded-lg p-3 mb-4">
-            <p className="text-xs text-red-400">{xanoHealth.error}</p>
-          </div>
-        )}
-
-        {/* Config info */}
-        <div className="space-y-2 text-xs">
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500 w-28">XANO_BASE_URL:</span>
-            <code className="text-cyan/70 bg-surface-2 px-2 py-0.5 rounded text-xs">configurada como secret no Base44</code>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500 w-28">XANO_API_KEY:</span>
-            <code className="text-cyan/70 bg-surface-2 px-2 py-0.5 rounded text-xs">configurada como secret no Base44</code>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500 w-28">Auth header:</span>
-            <code className="text-slate-400 bg-surface-2 px-2 py-0.5 rounded text-xs">X-API-Key: ••••••••</code>
-          </div>
-        </div>
-
-        <a
-          href="https://app.base44.com"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-1.5 text-xs text-cyan hover:underline"
-        >
-          <ExternalLink className="w-3 h-3" /> Gerir secrets em Dashboard → Settings → Environment Variables
-        </a>
-      </div>
-
-      {/* Account Settings */}
+      {/* Configurações da Conta */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
         <h2 className="text-sm font-semibold text-white mb-5">Configurações da Conta Amazon</h2>
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Nome do Seller</label>
-            <input
-              value={form.seller_name}
-              onChange={e => setForm(p => ({ ...p, seller_name: e.target.value }))}
-              placeholder="Ex: My Store LLC"
-              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan/50"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {fields.map(f => (
+              <div key={f.key}>
+                <label className="block text-xs text-slate-400 mb-1.5">{f.label}</label>
+                <input
+                  value={form[f.key]}
+                  onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder}
+                  className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+                />
+              </div>
+            ))}
           </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-slate-400 mb-1.5">Orçamento Máximo Diário ($)</label>
-              <input
-                type="number"
-                value={form.max_daily_budget_limit}
+              <input type="number" value={form.max_daily_budget_limit}
                 onChange={e => setForm(p => ({ ...p, max_daily_budget_limit: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50"
-              />
+                className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
             </div>
             <div>
               <label className="block text-xs text-slate-400 mb-1.5">Alteração Máxima de Bid (%)</label>
-              <input
-                type="number"
-                value={form.max_bid_change_pct}
+              <input type="number" value={form.max_bid_change_pct}
                 onChange={e => setForm(p => ({ ...p, max_bid_change_pct: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50"
-              />
+                className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
             </div>
           </div>
 
           <div className="flex items-start justify-between p-4 bg-surface-2 rounded-lg border border-surface-3">
             <div>
               <p className="text-sm font-medium text-white">Otimização Automática AI</p>
-              <p className="text-xs text-slate-500 mt-0.5">Quando ativo, o Learner executa decisões automaticamente. Requer aprovação manual por defeito.</p>
+              <p className="text-xs text-slate-500 mt-0.5">Quando ativo, o Learner executa decisões automaticamente sem revisão manual.</p>
               {form.ai_auto_optimization && (
                 <div className="flex items-center gap-1.5 mt-2 text-xs text-amber-400">
-                  <AlertTriangle className="w-3 h-3" />
-                  Modo automático ativo — decisões sem revisão.
+                  <AlertTriangle className="w-3 h-3" /> Modo automático ativo — decisões sem revisão.
                 </div>
               )}
             </div>
-            <button
-              onClick={() => setForm(p => ({ ...p, ai_auto_optimization: !p.ai_auto_optimization }))}
-              className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-4 ${form.ai_auto_optimization ? 'bg-cyan' : 'bg-surface-3'}`}
-            >
+            <button onClick={() => setForm(p => ({ ...p, ai_auto_optimization: !p.ai_auto_optimization }))}
+              className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ml-4 ${form.ai_auto_optimization ? 'bg-cyan' : 'bg-surface-3'}`}>
               <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all duration-200 ${form.ai_auto_optimization ? 'left-6' : 'left-1'}`} />
             </button>
           </div>
         </div>
 
-        <button
-          onClick={saveAccount}
-          disabled={saving}
-          className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-        >
+        <button onClick={saveAccount} disabled={saving}
+          className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
           {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
         </button>
       </div>
 
-      {/* Sync Amazon Ads Directo */}
+      {/* Sync Rápido */}
       {account && (
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Zap className="w-4 h-4 text-cyan" /> Sync Amazon Ads (Directo)
+                <Zap className="w-4 h-4 text-cyan" /> Sync Campanhas (Amazon Ads API)
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">Liga directamente à Amazon Ads API usando as credenciais ADS_* configuradas</p>
+              <p className="text-xs text-slate-400 mt-0.5">Importa campanhas via credenciais ADS_* configuradas</p>
             </div>
-            <button
-              onClick={async () => {
-                if (!account) return;
-                setImporting(true);
-                setImportResult(null);
-                try {
-                  const res = await base44.functions.invoke('syncAds', { amazon_account_id: account.id });
-                  const d = res.data;
-                  setImportResult({ ok: d?.ok, campaigns: d?.records_upserted, message: d?.error });
-                } catch (e) {
-                  setImportResult({ ok: false, message: e.message });
-                } finally {
-                  setImporting(false);
-                }
-              }}
-              disabled={importing || !account}
-              className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
-            >
-              {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-              {importing ? 'A sincronizar...' : 'Sync Campanhas'}
+            <button onClick={runSync} disabled={syncLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+              {syncLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              {syncLoading ? 'Sincronizando...' : 'Sincronizar'}
             </button>
           </div>
-          {importResult && (
-            <div className={`p-3 rounded-lg border text-xs ${importResult.ok
-              ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300'
-              : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
-              {importResult.ok ? `✓ ${importResult.campaigns || 0} campanhas sincronizadas da Amazon Ads` : `✕ ${importResult.message}`}
+          {syncResult && (
+            <div className={`p-3 rounded-lg border text-xs ${syncResult.ok ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300' : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
+              {syncResult.message}
             </div>
           )}
         </div>
       )}
 
-      {/* Sync Panel */}
-      {account && (
-        <SyncPanel amazonAccountId={account.id} onDone={() => {}} />
-      )}
-
-      {/* Arquitetura info */}
-      <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-6">
-        <div className="flex items-center gap-2 mb-3">
-          <AlertTriangle className="w-4 h-4 text-amber-400" />
-          <h2 className="text-sm font-semibold text-amber-300">Arquitetura de Integração</h2>
-        </div>
-        <p className="text-xs text-slate-400 leading-relaxed mb-3">
-          <strong className="text-slate-300">Amazon APIs → Xano → Base44 → Usuário</strong><br />
-          O Base44 nunca se conecta diretamente à Amazon. Todas as chamadas passam pelo Xano via <code className="text-cyan/70 bg-surface-2 px-1 rounded">X-API-Key</code>.
-        </p>
-        <p className="text-xs text-slate-500">Secrets necessários no Base44:</p>
-        <div className="mt-2 flex gap-2 flex-wrap">
-          {['XANO_BASE_URL', 'XANO_API_KEY'].map(s => (
-            <code key={s} className="text-xs font-mono text-cyan/70 bg-surface-2 px-2 py-0.5 rounded">{s}</code>
+      {/* Secrets Info */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+        <h2 className="text-sm font-semibold text-white mb-3">Credenciais Amazon (Environment Variables)</h2>
+        <p className="text-xs text-slate-400 mb-4">Configuradas como secrets no painel do Base44 → Settings → Environment Variables.</p>
+        <div className="grid grid-cols-2 gap-2">
+          {['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_REGION'].map(s => (
+            <div key={s} className="flex items-center gap-2 p-2.5 bg-surface-2 rounded-lg border border-surface-3">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+              <code className="text-xs font-mono text-slate-300">{s}</code>
+            </div>
           ))}
         </div>
       </div>
