@@ -1,56 +1,68 @@
 /**
- * importFromXano — Importa dados reais do Xano para a Base44
- *
- * Namespaces Xano:
- *   XANO_BASE_URL          → api:living-finds-api  (health, produtos legacy)
- *   XANO_BASE_URL_AMAZON   → api:amazon            (dashboard, sync_all, reports/download)
- *
- * Se XANO_BASE_URL_AMAZON não estiver definido, usa XANO_BASE_URL com namespace corrigido.
+ * importFromXano — Importa TODOS os dados do Xano para a Base44 sem limites.
+ * Endpoints usados:
+ *   GET /campaigns  → todas as campanhas
+ *   GET /products   → todos os produtos
+ *   GET /keywords?campaign_id=X → keywords por campanha (quando campaign_id disponível)
+ *   GET /dashboard  → KPIs resumo
  *
  * Payload: { amazon_account_id, action? }
- *   "dashboard" → GET /dashboard (default)
- *   "sync"      → POST /sync_all + GET /dashboard
- *   "download"  → POST /reports/download + GET /dashboard
+ *   "dashboard" → só KPIs (default)
+ *   "sync"      → campanhas + produtos + keywords + KPIs
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-function getBase(namespace) {
-  const key = Deno.env.get('XANO_API_KEY');
-  if (!key) throw new Error('XANO_API_KEY não configurada');
+const XANO_BASE = 'https://x8ki-letl-twmt.n7.xano.io/api:amazon';
 
-  const raw = (Deno.env.get('XANO_BASE_URL') || '').replace(/\/$/, '');
-  if (!raw) throw new Error('XANO_BASE_URL não configurada');
-
-  // Substituir namespace na URL base
-  // Padrão: https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api
-  // → troca o api:XXXX pelo namespace pedido
-  const base = raw.replace(/\/api:[^/\s]+$/, `/api:${namespace}`);
-  return { base, key };
+function buildUrl(path, params = {}) {
+  const key = Deno.env.get('XANO_API_KEY') || '';
+  const qs = new URLSearchParams({ ...params, api_key: key }).toString();
+  return `${XANO_BASE}${path}?${qs}`;
 }
 
-async function callXano(namespace, method, path, body) {
-  const { base, key } = getBase(namespace);
-  const opts = {
-    method: method.toUpperCase(),
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': key },
-  };
-  if (body && ['POST', 'PUT', 'PATCH'].includes(opts.method)) {
-    opts.body = JSON.stringify(body);
-  }
-  const res = await fetch(`${base}${path}`, opts);
+async function xanoGet(path, params = {}) {
+  const key = Deno.env.get('XANO_API_KEY') || '';
+  const res = await fetch(buildUrl(path, params), {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': key,
+      'Authorization': `Bearer ${key}`,
+    },
+  });
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  if (!res.ok) throw new Error(`[${namespace}] ${path} → ${res.status}: ${data?.message || data?.error || text.slice(0, 150)}`);
-  return data;
+  if (!res.ok) throw new Error(`[${path}] ${res.status}: ${data?.message || data?.error || text.slice(0, 150)}`);
+  // Normalizar: data.data[] ou data[] ou []
+  const inner = data?.data ?? data;
+  return Array.isArray(inner) ? inner : (inner?.data && Array.isArray(inner.data) ? inner.data : data);
 }
 
-function normalizeArray(val, ...keys) {
-  if (!val) return [];
-  if (Array.isArray(val)) return val;
-  for (const k of keys) { if (val[k] && Array.isArray(val[k])) return val[k]; }
-  const arrKey = Object.keys(val).find(k => Array.isArray(val[k]));
-  return arrKey ? val[arrKey] : [];
+async function xanoGetObj(path, params = {}) {
+  const key = Deno.env.get('XANO_API_KEY') || '';
+  const res = await fetch(buildUrl(path, params), {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Key': key,
+      'Authorization': `Bearer ${key}`,
+    },
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`[${path}] ${res.status}: ${data?.message || data?.error || text.slice(0, 150)}`);
+  return data?.data ?? data;
+}
+
+// Batch upsert: apaga registos antigos da conta e recria tudo de uma vez
+async function batchReplace(entity, amazonAccountId, records, base44) {
+  if (records.length === 0) return;
+  // Apagar existentes desta conta
+  await base44.asServiceRole.entities[entity].deleteMany({ amazon_account_id: amazonAccountId });
+  // Inserir todos de uma vez em lotes de 500
+  for (let i = 0; i < records.length; i += 500) {
+    await base44.asServiceRole.entities[entity].bulkCreate(records.slice(i, i + 500));
+  }
 }
 
 Deno.serve(async (req) => {
@@ -60,6 +72,10 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    if (!Deno.env.get('XANO_API_KEY')) {
+      return Response.json({ ok: false, error: 'XANO_API_KEY não configurada.' }, { status: 503 });
+    }
+
     const body = await req.json().catch(() => ({}));
     const amazonAccountId = body.amazon_account_id;
     const action = body.action || 'dashboard';
@@ -67,119 +83,145 @@ Deno.serve(async (req) => {
 
     const result = { action, ok: true };
 
-    // 1. Health check via namespace living-finds-api
+    // ── 1. Dashboard KPIs ──────────────────────────────────────────────────
     try {
-      const health = await callXano('living-finds-api', 'GET', '/health');
-      result.health = health?.data || health;
-    } catch (e) {
-      result.health_error = e.message;
-      // Se health falha, abortar
-      return Response.json({ ok: false, error: `Health check falhou: ${e.message}`, result }, { status: 503 });
-    }
-
-    // 2. sync_all via namespace amazon
-    if (action === 'sync') {
-      try {
-        const syncRes = await callXano('amazon', 'POST', '/sync_all', {});
-        result.sync_all = syncRes?.data || syncRes;
-      } catch (e) {
-        result.sync_all_error = e.message;
-      }
-    }
-
-    // 3. reports/download via namespace amazon
-    if (action === 'sync' || action === 'download') {
-      try {
-        const dlRes = await callXano('amazon', 'POST', '/reports/download', {});
-        result.reports_download = dlRes?.data || dlRes;
-
-        const campaigns = normalizeArray(dlRes, 'campaigns', 'items', 'data');
-        let campaignUpserted = 0;
-        for (const c of campaigns) {
-          const campaignId = String(c.amazon_campaign_id || c.campaignId || c.id || '');
-          if (!campaignId) continue;
-          const existing = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId, campaign_id: campaignId });
-          const record = {
-            name: c.name || `Campaign ${campaignId}`,
-            state: (c.state || c.status || 'enabled').toLowerCase().includes('paus') ? 'paused' : 'enabled',
-            campaign_type: c.campaign_type || c.campaignType || 'SP',
-            daily_budget: c.daily_budget || c.dailyBudget || 0,
-            spend: c.spend || c.cost || 0,
-            sales: c.sales || c.attributedSales30d || 0,
-            impressions: c.impressions || 0,
-            clicks: c.clicks || 0,
-            orders: c.orders || c.attributedConversions30d || 0,
-            acos: c.acos || 0,
-            roas: c.roas || 0,
-            ctr: c.ctr || 0,
-            cpc: c.cpc || 0,
-            synced_at: new Date().toISOString(),
-          };
-          if (existing.length > 0) {
-            await base44.asServiceRole.entities.Campaign.update(existing[0].id, record);
-          } else {
-            await base44.asServiceRole.entities.Campaign.create({ ...record, amazon_account_id: amazonAccountId, campaign_id: campaignId });
-          }
-          campaignUpserted++;
-        }
-        result.campaigns_upserted = campaignUpserted;
-      } catch (e) {
-        result.reports_error = e.message;
-      }
-    }
-
-    // 4. dashboard via namespace amazon
-    try {
-      const dash = await callXano('amazon', 'GET', '/dashboard');
-      const dashData = dash?.data || dash;
-      result.dashboard = dashData;
-
-      // Persistir métricas diárias se houver
-      const dailyData = normalizeArray(dashData, 'daily', 'metrics', 'history', 'data');
-      let metricsUpserted = 0;
-      for (const d of dailyData) {
-        const date = d.date || d.day;
-        if (!date) continue;
-        const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: amazonAccountId, date });
-        const record = {
-          spend: d.spend || d.cost || 0,
-          sales: d.sales || d.revenue || 0,
-          impressions: d.impressions || 0,
-          clicks: d.clicks || 0,
-          orders: d.orders || d.conversions || 0,
-          acos: d.acos || 0,
-          roas: d.roas || 0,
-          ctr: d.ctr || 0,
-          cpc: d.cpc || 0,
-        };
-        if (existing.length > 0) {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.update(existing[0].id, record);
-        } else {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.create({ ...record, amazon_account_id: amazonAccountId, campaign_id: 'all', date });
-        }
-        metricsUpserted++;
-      }
-      result.metrics_upserted = metricsUpserted;
-
-      // Persistir KPIs do dashboard diretamente nas campanhas se vier resumo
-      const totalSpend = dashData?.total_spend || dashData?.spend || dashData?.data?.total_spend || 0;
-      const totalSales = dashData?.total_revenue || dashData?.sales || dashData?.revenue || dashData?.data?.total_revenue || 0;
-      result.kpis = { spend: totalSpend, sales: totalSales };
-
+      const dash = await xanoGetObj('/dashboard');
+      result.dashboard = dash;
+      result.kpis = {
+        revenue_30d: dash?.revenue_30d || 0,
+        spend_30d: dash?.spend_30d || 0,
+        acos_30d: dash?.acos_30d || 0,
+        clicks_30d: dash?.clicks_30d || 0,
+        impressions_30d: dash?.impressions_30d || 0,
+        orders_30d: dash?.orders_30d || 0,
+        campaigns_count: dash?.campaigns_count || 0,
+        active_campaigns_count: dash?.active_campaigns_count || 0,
+        products_count: dash?.products_count || 0,
+      };
     } catch (e) {
       result.dashboard_error = e.message;
     }
 
-    // 5. Atualizar conta + SyncRun
+    if (action === 'sync') {
+      // ── 2. Campanhas — TODAS sem limite ──────────────────────────────────
+      try {
+        const campaigns = await xanoGet('/campaigns');
+        result.campaigns_received = campaigns.length;
+        const allCampaignRecords = [];
+        const allKeywords = [];
+        let campaignsUpserted = 0;
+
+        for (const c of campaigns) {
+          const campaignId = String(c.campaign_id || c.campaignId || c.id || '');
+          const name = c.name || c.campaignName || `Campaign ${campaignId}`;
+          const stateRaw = (c.status || c.state || 'enabled').toLowerCase();
+          const state = stateRaw.includes('paus') ? 'paused' : stateRaw.includes('arch') ? 'archived' : 'enabled';
+
+          const record = {
+            amazon_account_id: amazonAccountId,
+            campaign_id: campaignId || name, // fallback ao nome se id vazio
+            name,
+            campaign_type: c.campaign_type || c.campaignType || 'SP',
+            state,
+            daily_budget: c.daily_budget || c.dailyBudget || 0,
+            spend: c.spend_30d || c.spend || c.cost || 0,
+            sales: c.sales_30d || c.sales || c.attributedSales30d || 0,
+            impressions: c.impressions_30d || c.impressions || 0,
+            clicks: c.clicks_30d || c.clicks || 0,
+            orders: c.orders_30d || c.orders || c.attributedConversions30d || 0,
+            acos: c.acos_30d || c.acos || 0,
+            roas: c.roas_30d || c.roas || 0,
+            ctr: c.ctr_30d || c.ctr || 0,
+            cpc: c.cpc_30d || c.cpc || 0,
+            synced_at: new Date().toISOString(),
+          };
+
+          allCampaignRecords.push(record);
+          campaignsUpserted++;
+
+              // ── 3. Keywords por campanha (se campaign_id disponível) ──────────
+          if (campaignId) {
+            try {
+              const keywords = await xanoGet('/keywords', { campaign_id: campaignId });
+              for (const kw of keywords) {
+                const kwId = String(kw.keyword_id || kw.keywordId || kw.id || '');
+                if (!kwId) continue;
+                allKeywords.push({
+                  amazon_account_id: amazonAccountId,
+                  campaign_id: campaignId,
+                  ad_group_id: String(kw.ad_group_id || kw.adGroupId || ''),
+                  keyword_id: kwId,
+                  keyword_text: kw.keyword_text || kw.keyword || kw.keywordText || kw.searchTerm || '',
+                  match_type: (kw.match_type || kw.matchType || 'broad').toLowerCase(),
+                  state: (kw.state || kw.status || 'enabled').toLowerCase(),
+                  bid: kw.bid || kw.keywordBid || 0,
+                  impressions: kw.impressions_30d || kw.impressions || 0,
+                  clicks: kw.clicks_30d || kw.clicks || 0,
+                  spend: kw.spend_30d || kw.spend || kw.cost || 0,
+                  sales: kw.sales_30d || kw.sales || 0,
+                  acos: kw.acos_30d || kw.acos || 0,
+                  cpc: kw.cpc_30d || kw.cpc || 0,
+                  synced_at: new Date().toISOString(),
+                });
+              }
+              result.keywords_received = (result.keywords_received || 0) + keywords.length;
+            } catch (_) {
+              // keywords podem não existir para todas as campanhas — ignorar silenciosamente
+            }
+          }
+        }
+        // Batch replace campanhas e keywords
+        await batchReplace('Campaign', amazonAccountId, allCampaignRecords, base44);
+        if (allKeywords.length > 0) {
+          await batchReplace('Keyword', amazonAccountId, allKeywords, base44);
+        }
+        result.campaigns_upserted = campaignsUpserted;
+        result.keywords_upserted = allKeywords.length;
+      } catch (e) {
+        result.campaigns_error = e.message;
+      }
+
+      // ── 4. Produtos — TODOS sem limite ───────────────────────────────────
+      try {
+        const products = await xanoGet('/products');
+        result.products_received = products.length;
+        const allProductRecords = [];
+
+        for (const p of products) {
+          const asin = String(p.asin || p.ASIN || '');
+          if (!asin) continue;
+          allProductRecords.push({
+            amazon_account_id: amazonAccountId,
+            asin,
+            sku: p.sku || p.SKU || '',
+            name: p.title || p.name || p.productName || asin,
+            status: (p.status || 'active').toLowerCase(),
+            price: p.price || 0,
+            fba_inventory: p.inventory || p.fba_inventory || 0,
+            total_revenue_30d: p.sales_30d || p.revenue_30d || 0,
+            units_sold_30d: p.units_30d || p.unitsSold30d || 0,
+            synced_at: new Date().toISOString(),
+          });
+        }
+        await batchReplace('Product', amazonAccountId, allProductRecords, base44);
+        result.products_upserted = allProductRecords.length;
+      } catch (e) {
+        result.products_error = e.message;
+      }
+    }
+
+    // ── 5. Atualizar conta + SyncRun ─────────────────────────────────────
     await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
       last_sync_at: new Date().toISOString(),
       status: 'connected',
     });
+
+    const hasError = result.campaigns_error || result.products_error || result.dashboard_error;
     await base44.asServiceRole.entities.SyncRun.create({
       amazon_account_id: amazonAccountId,
       operation: `importFromXano:${action}`,
-      status: result.dashboard_error && !result.dashboard ? 'partial' : 'success',
-      records_upserted: (result.campaigns_upserted || 0) + (result.metrics_upserted || 0),
+      status: hasError ? 'partial' : 'success',
+      records_upserted: (result.campaigns_upserted || 0) + (result.products_upserted || 0),
       duration_ms: Date.now() - startTime,
       started_at: new Date().toISOString(),
       completed_at: new Date().toISOString(),
