@@ -167,8 +167,18 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Persistir todos os reportIds num único SyncRun para o downloader encontrar
-    await base44.asServiceRole.entities.SyncRun.create({
+    if (Object.keys(reportIds).length === 0) {
+      return Response.json({ ok: false, error: 'Todos os relatórios falharam', errors }, { status: 500 });
+    }
+
+    // Cancelar SyncRuns running anteriores para este account para não poluir o histórico
+    await base44.asServiceRole.entities.SyncRun.updateMany(
+      { amazon_account_id: amazonAccountId, status: 'running' },
+      { $set: { status: 'error', error_message: 'Cancelado por novo ciclo', completed_at: new Date().toISOString() } }
+    );
+
+    // Persistir reportIds no SyncRun para o downloader encontrar
+    const syncRun = await base44.asServiceRole.entities.SyncRun.create({
       amazon_account_id: amazonAccountId,
       operation: `adsReports:${dateStr}:${JSON.stringify(reportIds)}`,
       status: 'running',
@@ -178,6 +188,7 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: true,
       reportIds,
+      syncRunId: syncRun.id,
       date: dateStr,
       errors,
       message: `${Object.keys(reportIds).length} relatórios solicitados. Execute downloadAdsReport em 5-15 minutos.`,

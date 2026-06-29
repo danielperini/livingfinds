@@ -90,19 +90,19 @@ Deno.serve(async (req) => {
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
-    // Resolver reportIds — do payload ou do último SyncRun pendente
+    // Resolver reportIds — do payload ou do último SyncRun running
     let reportIds = body.report_ids || null;
-    let syncRunId = null;
+    let syncRunId = body.sync_run_id || null;
 
-    if (!reportIds) {
+    if (!reportIds || !syncRunId) {
       const runs = await base44.asServiceRole.entities.SyncRun.filter(
-        { amazon_account_id: amazonAccountId, status: 'running' }, '-started_at', 20
+        { amazon_account_id: amazonAccountId, status: 'running' }, '-started_at', 5
       );
       const pending = runs.find(r => r.operation?.startsWith('adsReports:'));
       if (!pending) return Response.json({ ok: false, error: 'Nenhum relatório pendente. Execute requestAdsReport primeiro.' }, { status: 404 });
       const match = pending.operation.match(/adsReports:[^:]+:(.+)/);
-      reportIds = match ? JSON.parse(match[1]) : {};
-      syncRunId = pending.id;
+      if (!reportIds) reportIds = match ? JSON.parse(match[1]) : {};
+      if (!syncRunId) syncRunId = pending.id;
     }
 
     // Verificar status de cada relatório
