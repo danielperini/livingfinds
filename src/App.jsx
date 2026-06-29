@@ -30,6 +30,7 @@ import Products from '@/pages/Products';
 import Report from '@/pages/Report';
 import LogDeBids from '@/pages/LogDeBids';
 import Diagnostico from '@/pages/Diagnostico';
+import AmazonAdsCallback from '@/pages/AmazonAdsCallback';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -54,6 +55,7 @@ const AuthenticatedApp = () => {
 
   return (
     <Routes>
+      <Route path="/amazon-ads-callback" element={<AmazonAdsCallback />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
