@@ -26,6 +26,7 @@ import InventorySales from '@/pages/InventorySales';
 import Transitions from '@/pages/Transitions';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
+import Products from '@/pages/Products';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -62,6 +63,7 @@ const AuthenticatedApp = () => {
           <Route path="/learner" element={<LearnerEngine />} />
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/transitions" element={<Transitions />} />
+          <Route path="/products" element={<Products />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
         </Route>

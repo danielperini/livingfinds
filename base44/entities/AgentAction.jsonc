@@ -1,0 +1,92 @@
+{
+  "name": "AgentAction",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "create_auto_campaign",
+        "create_manual_campaign",
+        "enable_campaign",
+        "pause_campaign",
+        "update_bid",
+        "update_budget",
+        "create_keyword",
+        "negative_keyword",
+        "no_action"
+      ]
+    },
+    "asin": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "number"
+    },
+    "new_value": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "executed",
+        "failed"
+      ],
+      "default": "pending"
+    },
+    "reviewed_by": {
+      "type": "string"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "execution_response": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "action"
+  ]
+}

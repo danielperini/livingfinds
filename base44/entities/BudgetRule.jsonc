@@ -1,0 +1,72 @@
+{
+  "name": "BudgetRule",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "total_daily_budget": {
+      "type": "number",
+      "default": 100
+    },
+    "max_budget_per_campaign": {
+      "type": "number",
+      "default": 30
+    },
+    "max_budget_per_asin": {
+      "type": "number",
+      "default": 50
+    },
+    "min_auto_campaign_bid": {
+      "type": "number",
+      "default": 0.25
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.1
+    },
+    "bid_increase_step": {
+      "type": "number",
+      "default": 0.1
+    },
+    "bid_decrease_step": {
+      "type": "number",
+      "default": 0.25
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 25
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "auto_apply_bid_reduction": {
+      "type": "boolean",
+      "default": false
+    },
+    "auto_apply_budget_redistribution": {
+      "type": "boolean",
+      "default": false
+    },
+    "approval_required_pause": {
+      "type": "boolean",
+      "default": true
+    },
+    "approval_required_negative": {
+      "type": "boolean",
+      "default": true
+    },
+    "approval_required_budget_increase": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

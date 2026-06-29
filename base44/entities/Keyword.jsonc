@@ -14,6 +14,12 @@
     "keyword_id": {
       "type": "string"
     },
+    "asin": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
     "keyword_text": {
       "type": "string"
     },
@@ -23,7 +29,8 @@
         "exact",
         "phrase",
         "broad"
-      ]
+      ],
+      "default": "broad"
     },
     "state": {
       "type": "string",
@@ -31,9 +38,27 @@
         "enabled",
         "paused",
         "archived"
-      ]
+      ],
+      "default": "enabled"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0.25
     },
     "bid": {
+      "type": "number",
+      "default": 0.25
+    },
+    "suggested_bid": {
       "type": "number"
     },
     "impressions": {
@@ -52,13 +77,46 @@
       "type": "number",
       "default": 0
     },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
     "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
       "type": "number",
       "default": 0
     },
     "cpc": {
       "type": "number",
       "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "search_term",
+        "suggested"
+      ],
+      "default": "manual"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "synced_at": {
       "type": "string",

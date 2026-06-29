@@ -11,7 +11,8 @@
         "campaign",
         "ad_group",
         "keyword"
-      ]
+      ],
+      "default": "keyword"
     },
     "entity_id": {
       "type": "string"
@@ -19,10 +20,16 @@
     "entity_name": {
       "type": "string"
     },
-    "bid_before": {
+    "asin": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "old_bid": {
       "type": "number"
     },
-    "bid_after": {
+    "new_bid": {
       "type": "number"
     },
     "budget_before": {
@@ -37,6 +44,32 @@
     "reason": {
       "type": "string"
     },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "failed",
+        "cancelled"
+      ],
+      "default": "pending"
+    },
+    "applied_by": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "autopilot",
+        "rule",
+        "agent"
+      ],
+      "default": "manual"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
     "acos_at_change": {
       "type": "number"
     },
@@ -46,19 +79,13 @@
     "sales_at_change": {
       "type": "number"
     },
-    "applied_by": {
+    "created_at": {
       "type": "string",
-      "enum": [
-        "manual",
-        "autopilot",
-        "rule"
-      ]
+      "format": "date-time"
     },
-    "decision_id": {
-      "type": "string"
-    },
-    "amazon_response": {
-      "type": "string"
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [

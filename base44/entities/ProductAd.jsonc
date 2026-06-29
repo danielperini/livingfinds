@@ -1,8 +1,11 @@
 {
-  "name": "AdGroup",
+  "name": "ProductAd",
   "type": "object",
   "properties": {
     "amazon_account_id": {
+      "type": "string"
+    },
+    "product_ad_id": {
       "type": "string"
     },
     "campaign_id": {
@@ -11,10 +14,10 @@
     "ad_group_id": {
       "type": "string"
     },
-    "ad_group_name": {
+    "asin": {
       "type": "string"
     },
-    "name": {
+    "sku": {
       "type": "string"
     },
     "state": {
@@ -35,9 +38,8 @@
       ],
       "default": "enabled"
     },
-    "default_bid": {
-      "type": "number",
-      "default": 0.25
+    "bid": {
+      "type": "number"
     },
     "impressions": {
       "type": "number",
@@ -55,7 +57,15 @@
       "type": "number",
       "default": 0
     },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
     "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
       "type": "number",
       "default": 0
     },
@@ -66,7 +76,6 @@
   },
   "required": [
     "amazon_account_id",
-    "campaign_id",
-    "ad_group_id"
+    "product_ad_id"
   ]
 }
