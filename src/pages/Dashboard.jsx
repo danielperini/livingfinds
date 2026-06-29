@@ -22,75 +22,114 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
   );
 }
 
+const SYNC_KEY = 'lf_sync_state';
+
+function saveSyncState(data) {
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify(data)); } catch {}
+}
+function loadSyncState() {
+  try { return JSON.parse(localStorage.getItem(SYNC_KEY) || 'null'); } catch { return null; }
+}
+function clearSyncState() {
+  try { localStorage.removeItem(SYNC_KEY); } catch {}
+}
+
 function ReportSyncWidget({ amazonAccountId, onDone }) {
   const [state, setState] = useState('idle');
   const [msg, setMsg] = useState('');
+  const [elapsed, setElapsed] = useState(0);
   const pollRef = useRef(null);
+  const timerRef = useRef(null);
   const pendingRef = useRef(null);
   const startTimeRef = useRef(null);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  const stopAll = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+  };
 
-  const elapsedSec = () => startTimeRef.current ? Math.round((Date.now() - startTimeRef.current) / 1000) : 0;
+  const startElapsedTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      setElapsed(startTimeRef.current ? Math.round((Date.now() - startTimeRef.current) / 1000) : 0);
+    }, 1000);
+  };
+
+  const startPolling = (pending, campaigns_imported, report_errors) => {
+    pendingRef.current = pending;
+    setState('polling');
+    setMsg(`✓ ${campaigns_imported} campanhas importadas. A aguardar relatórios Amazon...`);
+    if (report_errors?.length > 0) setMsg(prev => prev + ` ⚠ ${report_errors.join(', ')}`);
+
+    pollRef.current = setInterval(async () => {
+      try {
+        const r2 = await base44.functions.invoke('runFullSync', {
+          amazon_account_id: amazonAccountId,
+          action: 'download',
+          ...pendingRef.current,
+        });
+        const d2 = r2.data;
+        if (!d2?.ok && !d2?.ready) {
+          stopAll(); clearSyncState();
+          setState('error');
+          setMsg(d2?.message || JSON.stringify(d2).slice(0, 200));
+          setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
+          return;
+        }
+        if (d2.ready) {
+          stopAll(); clearSyncState();
+          setState('done');
+          const sum = d2.summary || {};
+          setMsg(`✓ Concluído — ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} prod. · ${d2.keywords || 0} kws · $${(sum.total_spend || 0).toFixed(2)} spend · $${(sum.total_sales || 0).toFixed(2)} vendas`);
+          onDone?.();
+        } else {
+          const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+          const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
+          setMsg(`A aguardar Amazon... ${pend}${fail}`);
+          // Persistir estado para sobreviver a navegação
+          saveSyncState({ reportIds: pendingRef.current.reportIds, syncRunId: pendingRef.current.syncRunId, startedAt: startTimeRef.current, campaigns_imported });
+        }
+      } catch (e) {
+        stopAll(); clearSyncState();
+        setState('error');
+        setMsg(e.message);
+        setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
+      }
+    }, 30000);
+  };
+
+  // Ao montar, verificar se havia um sync em progresso
+  useEffect(() => {
+    const saved = loadSyncState();
+    if (saved?.reportIds && amazonAccountId) {
+      startTimeRef.current = saved.startedAt || Date.now();
+      setElapsed(Math.round((Date.now() - startTimeRef.current) / 1000));
+      startElapsedTimer();
+      startPolling({ reportIds: saved.reportIds, syncRunId: saved.syncRunId }, saved.campaigns_imported || '?', []);
+    }
+    return stopAll;
+  }, [amazonAccountId]);
 
   const request = async () => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    stopAll();
     setState('requesting');
-    startTimeRef.current = null;
+    startTimeRef.current = Date.now();
+    setElapsed(0);
     setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {
       const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
       const d1 = r1.data;
       if (!d1?.ok) {
         setState('error');
-        setMsg(d1?.message || d1?.amazon_error || d1?.amazon_error || JSON.stringify(d1).slice(0, 200));
+        setMsg(d1?.message || d1?.amazon_error || JSON.stringify(d1).slice(0, 200));
         setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
         return;
       }
-
-      pendingRef.current = { reportIds: d1.reportIds, syncRunId: d1.syncRunId };
-      startTimeRef.current = Date.now();
-      setState('polling');
-      setMsg(`✓ ${d1.campaigns_imported} campanhas. ⏳ Aguardando relatórios Amazon...`);
-      if (d1.report_errors?.length > 0) {
-        setMsg(prev => prev + ` ⚠ ${d1.report_errors.join(', ')}`);
-      }
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const r2 = await base44.functions.invoke('runFullSync', {
-            amazon_account_id: amazonAccountId,
-            action: 'download',
-            ...pendingRef.current,
-          });
-          const d2 = r2.data;
-          if (!d2?.ok && !d2?.ready) {
-            clearInterval(pollRef.current);
-            setState('error');
-            setMsg(d2?.message || JSON.stringify(d2).slice(0, 200));
-            setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-            return;
-          }
-          if (d2.ready) {
-            clearInterval(pollRef.current);
-            setState('done');
-            const sum = d2.summary || {};
-            setMsg(`✓ ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} prod. · ${d2.keywords || 0} kws · $${(sum.total_spend || 0).toFixed(2)} spend · $${(sum.total_sales || 0).toFixed(2)} vendas`);
-            onDone?.();
-          } else {
-            const elapsed = elapsedSec();
-            const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
-            const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
-            setMsg(`⏳ Aguardando Amazon (${elapsed}s)... ${pend}${fail}`);
-          }
-        } catch (e) {
-          clearInterval(pollRef.current);
-          setState('error');
-          setMsg(e.message);
-          setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-        }
-      }, 30000);
+      startElapsedTimer();
+      saveSyncState({ reportIds: d1.reportIds, syncRunId: d1.syncRunId, startedAt: startTimeRef.current, campaigns_imported: d1.campaigns_imported });
+      startPolling({ reportIds: d1.reportIds, syncRunId: d1.syncRunId }, d1.campaigns_imported, d1.report_errors);
     } catch (e) {
+      stopAll(); clearSyncState();
       setState('error');
       setMsg(e.message);
       setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
@@ -103,8 +142,8 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
 
   const label = state === 'requesting' ? 'A solicitar...'
-    : state === 'polling' ? `Aguardando Amazon... (${elapsedSec()}s)`
-    : state === 'done' ? 'Concluído!'
+    : state === 'polling' ? `A aguardar Amazon... (${elapsed}s)`
+    : state === 'done' ? 'Sync Concluído!'
     : 'Sync Amazon Ads 30d';
 
   return (
