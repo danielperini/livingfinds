@@ -61,7 +61,7 @@ async function adsCall(method, path, body) {
   return data;
 }
 
-async function waitForReport(reportId, maxWaitMs = 180000) {
+async function waitForReport(reportId, maxWaitMs = 270000) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     await new Promise(r => setTimeout(r, 10000));
@@ -109,7 +109,7 @@ Deno.serve(async (req) => {
       configuration: {
         adProduct: 'SPONSORED_PRODUCTS',
         groupBy: ['campaign'],
-        columns: ['campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases1d', 'sales1d'],
+        columns: ['campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d'],
         reportTypeId: 'spCampaigns',
         timeUnit: 'SUMMARY',
         format: 'GZIP_JSON',
@@ -148,10 +148,10 @@ Deno.serve(async (req) => {
     for (const row of rows) {
       const campaignId = String(row.campaignId);
       const spend = Number(row.cost) || 0;
-      const sales = Number(row.sales1d) || 0;
+      const sales = Number(row.sales30d) || Number(row.sales1d) || 0;
       const clicks = Number(row.clicks) || 0;
       const impressions = Number(row.impressions) || 0;
-      const orders = Number(row.purchases1d) || 0;
+      const orders = Number(row.purchases30d) || Number(row.purchases1d) || 0;
       const acos = sales > 0 ? (spend / sales * 100) : 0;
       const roas = spend > 0 ? (sales / spend) : 0;
       const ctr = impressions > 0 ? (clicks / impressions * 100) : 0;

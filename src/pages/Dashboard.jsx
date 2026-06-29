@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock } from 'lucide-react';
@@ -23,59 +23,45 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 }
 
 function ReportSyncWidget({ amazonAccountId, onDone }) {
-  const [state, setState] = useState('idle');
+  const [state, setState] = useState('idle'); // idle | requesting | polling | done | error
   const [msg, setMsg] = useState('');
+  const [reportId, setReportId] = useState(null);
+
+  // Polling a cada 30s enquanto aguarda o relatório
+  useEffect(() => {
+    if (state !== 'polling' || !reportId) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'download', report_id: reportId });
+        const d = res.data;
+        if (!d?.ok) { clearInterval(interval); setState('error'); setMsg(d?.error || 'Erro desconhecido'); return; }
+        if (d.ready) {
+          clearInterval(interval);
+          setState('done');
+          setMsg(`✓ ${d.upserted} campanhas com métricas 30d · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
+          onDone?.();
+        } else {
+          setMsg(`Relatório ${d.status || 'a processar'}... (a verificar a cada 30s)`);
+        }
+      } catch (e) {
+        clearInterval(interval);
+        setState('error');
+        setMsg(e.message);
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [state, reportId, amazonAccountId]);
 
   const request = async () => {
-    setState('syncing_campaigns');
-    setMsg('Passo 1/3: A importar campanhas da Amazon Ads...');
+    setState('requesting');
+    setMsg('A importar campanhas e solicitar relatório 30d...');
     try {
-      // Passo 1: sincronizar lista de campanhas
-      const syncRes = await base44.functions.invoke('syncAds', { amazon_account_id: amazonAccountId });
-      const syncD = syncRes.data;
-      if (!syncD?.ok) throw new Error(syncD?.error || 'syncAds falhou');
-
-      setState('requesting');
-      setMsg(`✓ ${syncD.records_upserted} campanhas. Passo 2/3: A solicitar relatórios de métricas 30d...`);
-
-      // Passo 2: solicitar relatórios
-      const reportRes = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
-      const reportD = reportRes.data;
-      if (!reportD?.ok) throw new Error(reportD?.error || 'requestAdsReport falhou');
-
-      const reportIds = reportD.reportIds;
+      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'request' });
+      const d = res.data;
+      if (!d?.ok) throw new Error(d?.error || 'Falhou');
+      setReportId(d.report_id);
       setState('polling');
-      setMsg(`✓ ${Object.keys(reportIds).length} relatórios solicitados. Passo 3/3: A aguardar processamento (5-15 min)...`);
-
-      // Passo 3: polling a cada 2 min
-      let tries = 0;
-      const poll = setInterval(async () => {
-        tries++;
-        try {
-          const dlRes = await base44.functions.invoke('downloadAdsReport', {
-            amazon_account_id: amazonAccountId,
-            report_ids: reportIds,
-          });
-          const dd = dlRes.data;
-          if (dd?.ready) {
-            clearInterval(poll);
-            setState('done');
-            setMsg(`✓ ${syncD.records_upserted} campanhas · ${dd.products?.rows || 0} produtos · ${dd.decisions_created || 0} decisões IA`);
-            onDone?.();
-          } else if (tries >= 10) {
-            clearInterval(poll);
-            setState('timeout');
-            setMsg('Relatórios ainda a processar. Tente "Baixar Relatórios" em alguns minutos.');
-          } else {
-            const pending = Object.keys(dd?.pending || {});
-            setMsg(`A processar: ${pending.join(', ')} (tentativa ${tries}/10)...`);
-          }
-        } catch (e) {
-          clearInterval(poll);
-          setState('error');
-          setMsg(e.message);
-        }
-      }, 2 * 60 * 1000);
+      setMsg(`✓ ${d.campaigns_imported} campanhas. Relatório solicitado — a aguardar processamento (2-10 min)...`);
     } catch (e) {
       setState('error');
       setMsg(e.message);
@@ -83,17 +69,15 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     }
   };
 
-  const isLoading = ['syncing_campaigns', 'requesting', 'polling'].includes(state);
+  const isLoading = state === 'requesting' || state === 'polling';
   const color = state === 'done' ? 'border-emerald-400/30 text-emerald-400 bg-emerald-400/5'
     : state === 'error' ? 'border-red-400/30 text-red-400 bg-red-400/5'
-    : state === 'timeout' ? 'border-amber-400/30 text-amber-400 bg-amber-400/5'
     : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
 
-  const label = state === 'syncing_campaigns' ? 'A importar campanhas...'
-    : state === 'requesting' ? 'A solicitar relatórios...'
-    : state === 'polling' ? 'A aguardar relatórios...'
+  const label = state === 'requesting' ? 'A solicitar...'
+    : state === 'polling' ? 'A aguardar relatório...'
     : state === 'done' ? 'Concluído!'
-    : 'Sync Amazon Ads 30d + IA';
+    : 'Sync Amazon Ads 30d';
 
   return (
     <div className="flex flex-col gap-2">
