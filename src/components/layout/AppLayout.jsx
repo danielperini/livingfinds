@@ -28,7 +28,7 @@ export default function AppLayout() {
     base44.auth.me().then(me => {
       return base44.entities.AmazonAccount.filter({ user_id: me.id });
     }).then(accounts => {
-      if (accounts.length > 0) setAccountMode(accounts[0].mode || 'mock');
+      if (accounts.length > 0) setAccountMode(accounts[0].mode || 'real');
     }).catch(() => {});
   }, []);
 
