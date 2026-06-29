@@ -57,7 +57,6 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
       }
 
       pollRef.current = setInterval(async () => {
-        pollCountRef.current += 1;
         try {
           const r2 = await base44.functions.invoke('runFullSync', {
             amazon_account_id: amazonAccountId,
@@ -103,7 +102,7 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
 
   const label = state === 'requesting' ? 'A solicitar...'
-    : state === 'polling' ? `Aguardando Amazon... (${pollCount * 30}s)`
+    : state === 'polling' ? `Aguardando Amazon... (${elapsedSec()}s)`
     : state === 'done' ? 'Concluído!'
     : 'Sync Amazon Ads 30d';
 
