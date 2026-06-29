@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { xanoRequest } from '@/lib/useXano';
-import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink, Cloud } from 'lucide-react';
+import { Settings as SettingsIcon, Wifi, WifiOff, CheckCircle, AlertTriangle, Loader2, Save, ExternalLink, Zap } from 'lucide-react';
 import SyncPanel from '@/components/SyncPanel';
 
 export default function Settings() {
@@ -43,8 +42,10 @@ export default function Settings() {
     setHealthLoading(true);
     setLastAttempt(new Date().toLocaleString('pt-BR'));
     try {
-      const data = await xanoRequest('GET', '/health');
-      setXanoHealth({ ok: true, data });
+      const res = await base44.functions.invoke('xanoProxy', { method: 'GET', path: '/health' });
+      const d = res.data;
+      if (!d?.ok) throw new Error(d?.error || 'Falhou');
+      setXanoHealth({ ok: true, data: d.data });
     } catch (err) {
       setXanoHealth({ ok: false, error: err.message });
     } finally {
@@ -218,15 +219,15 @@ export default function Settings() {
         </button>
       </div>
 
-      {/* Importação do Xano */}
+      {/* Sync Amazon Ads Directo */}
       {account && (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-6 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Cloud className="w-4 h-4 text-emerald-400" /> Importar dados do Xano
+                <Zap className="w-4 h-4 text-cyan" /> Sync Amazon Ads (Directo)
               </h2>
-              <p className="text-xs text-slate-400 mt-0.5">Carrega o resumo real de campanhas, produtos e métricas financeiras do Xano para a Base44</p>
+              <p className="text-xs text-slate-400 mt-0.5">Liga directamente à Amazon Ads API usando as credenciais ADS_* configuradas</p>
             </div>
             <button
               onClick={async () => {
@@ -234,13 +235,9 @@ export default function Settings() {
                 setImporting(true);
                 setImportResult(null);
                 try {
-                  // Passo 1: sync_all (pede relatórios)
-                  await base44.functions.invoke('importFromXano', { amazon_account_id: account.id, action: 'sync' });
-                  // Passo 2: aguarda 60s e baixa relatórios + dashboard
-                  await new Promise(r => setTimeout(r, 60000));
-                  const res = await base44.functions.invoke('importFromXano', { amazon_account_id: account.id, action: 'download' });
+                  const res = await base44.functions.invoke('syncAds', { amazon_account_id: account.id });
                   const d = res.data;
-                  setImportResult({ ok: d?.ok, message: d?.error, campaigns: d?.campaigns_upserted, metrics: d?.metrics_upserted, dash: d?.dashboard });
+                  setImportResult({ ok: d?.ok, campaigns: d?.records_upserted, message: d?.error });
                 } catch (e) {
                   setImportResult({ ok: false, message: e.message });
                 } finally {
@@ -248,17 +245,17 @@ export default function Settings() {
                 }
               }}
               disabled={importing || !account}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+              className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
             >
-              {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
-              {importing ? 'A importar...' : 'Importar do Xano'}
+              {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {importing ? 'A sincronizar...' : 'Sync Campanhas'}
             </button>
           </div>
           {importResult && (
             <div className={`p-3 rounded-lg border text-xs ${importResult.ok
               ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300'
               : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
-              {importResult.ok ? `✓ Importado: ${importResult.campaigns || 0} campanhas, ${importResult.products || 0} produtos` : `✕ ${importResult.message}`}
+              {importResult.ok ? `✓ ${importResult.campaigns || 0} campanhas sincronizadas da Amazon Ads` : `✕ ${importResult.message}`}
             </div>
           )}
         </div>

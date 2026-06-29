@@ -25,38 +25,47 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 function ReportSyncWidget({ amazonAccountId, onDone }) {
   const [state, setState] = useState('idle');
   const [msg, setMsg] = useState('');
-  const [reportIds, setReportIds] = useState(null);
-  const pollRef = { current: null };
 
   const request = async () => {
-    setState('requesting');
-    setMsg('');
+    setState('syncing_campaigns');
+    setMsg('Passo 1/3: A importar campanhas da Amazon Ads...');
     try {
-      const res = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
-      const d = res.data;
-      if (!d?.ok) throw new Error(d?.error || 'Falhou');
-      setReportIds(d.reportIds);
+      // Passo 1: sincronizar lista de campanhas
+      const syncRes = await base44.functions.invoke('syncAds', { amazon_account_id: amazonAccountId });
+      const syncD = syncRes.data;
+      if (!syncD?.ok) throw new Error(syncD?.error || 'syncAds falhou');
+
+      setState('requesting');
+      setMsg(`✓ ${syncD.records_upserted} campanhas. Passo 2/3: A solicitar relatórios de métricas 30d...`);
+
+      // Passo 2: solicitar relatórios
+      const reportRes = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
+      const reportD = reportRes.data;
+      if (!reportD?.ok) throw new Error(reportD?.error || 'requestAdsReport falhou');
+
+      const reportIds = reportD.reportIds;
       setState('polling');
-      setMsg(`${Object.keys(d.reportIds).length} relatórios solicitados. A aguardar processamento (5-15 min)...`);
-      // polling automático a cada 2 min
+      setMsg(`✓ ${Object.keys(reportIds).length} relatórios solicitados. Passo 3/3: A aguardar processamento (5-15 min)...`);
+
+      // Passo 3: polling a cada 2 min
       let tries = 0;
       const poll = setInterval(async () => {
         tries++;
         try {
           const dlRes = await base44.functions.invoke('downloadAdsReport', {
             amazon_account_id: amazonAccountId,
-            report_ids: d.reportIds,
+            report_ids: reportIds,
           });
           const dd = dlRes.data;
           if (dd?.ready) {
             clearInterval(poll);
             setState('done');
-            setMsg(`✓ Campanhas: ${dd.campaigns?.upserted || 0} · Produtos: ${dd.products?.upserted || 0} · ${dd.decisions_created || 0} decisões IA geradas`);
+            setMsg(`✓ ${syncD.records_upserted} campanhas · ${dd.products?.rows || 0} produtos · ${dd.decisions_created || 0} decisões IA`);
             onDone?.();
           } else if (tries >= 10) {
             clearInterval(poll);
             setState('timeout');
-            setMsg('Relatórios ainda a processar. A automação diária irá tentar novamente amanhã.');
+            setMsg('Relatórios ainda a processar. Tente "Baixar Relatórios" em alguns minutos.');
           } else {
             const pending = Object.keys(dd?.pending || {});
             setMsg(`A processar: ${pending.join(', ')} (tentativa ${tries}/10)...`);
@@ -70,22 +79,28 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     } catch (e) {
       setState('error');
       setMsg(e.message);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 8000);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 10000);
     }
   };
 
-  const isLoading = state === 'requesting' || state === 'polling';
+  const isLoading = ['syncing_campaigns', 'requesting', 'polling'].includes(state);
   const color = state === 'done' ? 'border-emerald-400/30 text-emerald-400 bg-emerald-400/5'
     : state === 'error' ? 'border-red-400/30 text-red-400 bg-red-400/5'
     : state === 'timeout' ? 'border-amber-400/30 text-amber-400 bg-amber-400/5'
     : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
+
+  const label = state === 'syncing_campaigns' ? 'A importar campanhas...'
+    : state === 'requesting' ? 'A solicitar relatórios...'
+    : state === 'polling' ? 'A aguardar relatórios...'
+    : state === 'done' ? 'Concluído!'
+    : 'Sync Amazon Ads 30d + IA';
 
   return (
     <div className="flex flex-col gap-2">
       <button onClick={request} disabled={isLoading}
         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition-all disabled:opacity-60 ${color}`}>
         {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-        {state === 'requesting' ? 'Solicitando...' : state === 'polling' ? 'A aguardar relatórios...' : state === 'done' ? 'Concluído!' : 'Sync Completo 30d + IA'}
+        {label}
       </button>
       {msg && <p className="text-xs text-slate-400 max-w-xs">{msg}</p>}
     </div>
