@@ -27,6 +27,7 @@ import Transitions from '@/pages/Transitions';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Products from '@/pages/Products';
+import Report from '@/pages/Report';
 import LogDeBids from '@/pages/LogDeBids';
 
 const AuthenticatedApp = () => {
@@ -66,6 +67,7 @@ const AuthenticatedApp = () => {
           <Route path="/transitions" element={<Transitions />} />
           <Route path="/products" element={<Products />} />
           <Route path="/bids-log" element={<LogDeBids />} />
+          <Route path="/report" element={<Report />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
         </Route>
