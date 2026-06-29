@@ -10,12 +10,12 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const tokenCache = {};
 
-async function getAdsToken() {
+async function getAdsToken(refreshToken) {
   const cached = tokenCache['ads'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
+    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
     client_id: Deno.env.get('ADS_CLIENT_ID'),
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
@@ -37,14 +37,14 @@ function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsPost(path, body) {
-  const token = await getAdsToken();
+async function adsPost(path, body, refreshToken, profileId) {
+  const token = await getAdsToken(refreshToken);
   const res = await fetch(`${getAdsBaseUrl()}${path}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+      'Amazon-Advertising-API-Scope': String(profileId || Deno.env.get('ADS_PROFILE_ID')),
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     },
@@ -142,6 +142,10 @@ Deno.serve(async (req) => {
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
+    // Resolver refresh token: preferir da conta, fallback para secret
+    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId).catch(() => null);
+    const refreshToken = account?.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1); // ontem como end date para evitar duplicates
     const startDate = new Date(endDate - 29 * 86400000);
@@ -158,7 +162,7 @@ Deno.serve(async (req) => {
           startDate: fmt(startDate),
           endDate: dateStr,
           configuration: rc.config,
-        });
+        }, refreshToken, account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID'));
         const reportId = result.reportId;
         if (!reportId) throw new Error('No reportId returned');
         reportIds[rc.key] = reportId;

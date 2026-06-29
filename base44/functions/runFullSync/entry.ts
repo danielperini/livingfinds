@@ -1,23 +1,25 @@
 /**
- * runFullSync — Orquestra o ciclo completo:
- * 1. Renova access token via refresh token (AmazonAccount.ads_refresh_token ou secret)
- * 2. Importa campanhas
- * 3. Solicita relatórios 30d (campanhas, produtos anunciados, search terms)
- * 4. Polling até prontos (max 20 tentativas × 30s = 10 min)
- * 5. Baixa e processa tudo → Campaign, Product, Keyword, CampaignMetricsDaily
- * 6. Gera decisões IA
- * 7. Atualiza AmazonAccount + SyncRun
+ * runFullSync — Orquestra o ciclo completo Amazon Ads em 2 fases:
+ *
+ * action="request" (padrão):
+ *   1. Renova access token via refresh token da conta
+ *   2. Importa campanhas SP
+ *   3. Solicita 3 relatórios 30d (campanhas, produtos, search terms)
+ *   → Retorna reportIds imediatamente (relatórios ficam prontos em 5-15 min na Amazon)
+ *
+ * action="download":
+ *   4. Verifica status dos relatórios
+ *   5. Se prontos: baixa, descomprime, popula Campaign, Product, Keyword, CampaignMetricsDaily
+ *   6. Gera decisões IA
+ *   7. Atualiza AmazonAccount + SyncRun
+ *   → Retorna { ready: false } se ainda não prontos (frontend faz polling a cada 30s)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-
-const POLL_INTERVAL_MS = 30000;
-const MAX_POLLS = 20;
 
 let _tokenCache = null;
 
 async function getAdsToken(refreshToken) {
   if (_tokenCache && _tokenCache.expires_at > Date.now() + 5000) return _tokenCache.access_token;
-
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -57,15 +59,15 @@ async function adsGet(path, token, profileId) {
   return data;
 }
 
-async function adsPost(path, token, profileId, body, accept = 'application/json') {
+async function adsPost(path, token, profileId, body, contentType = 'application/json') {
   const res = await fetch(`${getAdsBase()}${path}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
       'Amazon-Advertising-API-Scope': String(profileId),
-      'Content-Type': accept,
-      'Accept': accept,
+      'Content-Type': contentType,
+      'Accept': contentType,
     },
     body: JSON.stringify(body),
   });
@@ -76,7 +78,7 @@ async function adsPost(path, token, profileId, body, accept = 'application/json'
       const match = JSON.stringify(data).match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
       if (match) return { reportId: match[0], _duplicate: true };
     }
-    throw new Error(`ADS POST ${path} → ${res.status}: ${JSON.stringify(data).slice(0, 200)}`);
+    throw new Error(`ADS POST ${path} → ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
   }
   return data;
 }
@@ -96,44 +98,24 @@ async function decompress(arrayBuffer) {
   return JSON.parse(text);
 }
 
-async function pollReport(reportId, token, profileId) {
-  for (let i = 0; i < MAX_POLLS; i++) {
-    const status = await adsGet(`/reporting/reports/${reportId}`, token, profileId);
-    if (status.status === 'COMPLETED' && status.url) return status.url;
-    if (status.status === 'FAILED') throw new Error(`Report ${reportId} failed: ${status.failureReason}`);
-    if (i < MAX_POLLS - 1) await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-  }
-  throw new Error(`Report ${reportId} still not ready after ${MAX_POLLS} polls`);
-}
-
-async function downloadReport(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-  return decompress(await res.arrayBuffer());
-}
-
-async function bulkUpsert(base44, entity, amazonAccountId, records) {
+async function bulkReplace(base44, entity, amazonAccountId, records) {
   if (!records.length) return 0;
   await base44.asServiceRole.entities[entity].deleteMany({ amazon_account_id: amazonAccountId });
-  let n = 0;
   for (let i = 0; i < records.length; i += 500) {
     await base44.asServiceRole.entities[entity].bulkCreate(records.slice(i, i + 500));
-    n += records.slice(i, i + 500).length;
   }
-  return n;
+  return records.length;
 }
 
 Deno.serve(async (req) => {
   const startTime = Date.now();
-  let syncRunId = null;
-  let base44 = null;
-
   try {
-    base44 = createClientFromRequest(req);
+    const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
+    const action = body.action || 'request';
     let amazonAccountId = body.amazon_account_id;
 
     // Resolver conta
@@ -148,306 +130,313 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ error: 'Nenhuma AmazonAccount encontrada' }, { status: 404 });
     amazonAccountId = account.id;
 
-    // Resolver refresh token (preferir da conta, fallback para secret)
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
-    if (!refreshToken) return Response.json({ error: 'Nenhum refresh_token disponível. Conecte o Amazon Ads primeiro.' }, { status: 400 });
-
+    if (!refreshToken) return Response.json({ error: 'Nenhum refresh_token. Conecte o Amazon Ads primeiro.' }, { status: 400 });
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) return Response.json({ error: 'ads_profile_id não configurado' }, { status: 400 });
 
-    // Criar SyncRun
-    const syncRun = await base44.asServiceRole.entities.SyncRun.create({
-      amazon_account_id: amazonAccountId,
-      operation: 'runFullSync',
-      status: 'running',
-      started_at: new Date().toISOString(),
-    });
-    syncRunId = syncRun.id;
+    // ══════════════════════════════════════════════════════════════════
+    // FASE 1: request — importar campanhas + solicitar relatórios
+    // ══════════════════════════════════════════════════════════════════
+    if (action === 'request') {
+      // Renovar token
+      const token = await getAdsToken(refreshToken);
 
-    const log = [];
-    const addLog = (msg) => { console.log(msg); log.push(msg); };
-
-    // ── STEP 1: Renovar token ─────────────────────────────────────────
-    addLog('→ Renovando access token...');
-    const token = await getAdsToken(refreshToken);
-    const tokenRenewedAt = new Date().toISOString();
-    addLog(`✓ Token renovado`);
-
-    // ── STEP 2: Importar campanhas ────────────────────────────────────
-    addLog('→ Importando campanhas...');
-    const campData = await adsPost('/sp/campaigns/list', token, profileId,
-      { stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, maxResults: 500 },
-      'application/vnd.spCampaign.v3+json'
-    );
-    const campaigns = campData?.campaigns || [];
-    const campaignRecords = campaigns.map(c => ({
-      amazon_account_id: amazonAccountId,
-      campaign_id: String(c.campaignId),
-      name: c.name,
-      campaign_type: 'SP',
-      targeting_type: c.targetingType,
-      state: (c.state || 'ENABLED').toLowerCase(),
-      daily_budget: c.budget?.budget || c.dailyBudget || 0,
-      start_date: c.startDate,
-      end_date: c.endDate || null,
-      bidding_strategy: c.dynamicBidding?.strategy || null,
-      synced_at: new Date().toISOString(),
-    }));
-    // Não apaga ainda — apaga só depois de ter métricas
-    addLog(`✓ ${campaigns.length} campanhas encontradas`);
-
-    // ── STEP 3: Solicitar relatórios 30d ──────────────────────────────
-    addLog('→ Solicitando relatórios 30d...');
-    const endDate = new Date();
-    const startDate = new Date(Date.now() - 30 * 86400000);
-    const fmt = (d) => d.toISOString().slice(0, 10);
-    const ts = Date.now();
-
-    const [rCampaigns, rProducts, rKeywords] = await Promise.all([
-      adsPost('/reporting/reports', token, profileId, {
-        name: `SP_campaigns_30d_${ts}`,
-        startDate: fmt(startDate), endDate: fmt(endDate),
-        configuration: {
-          adProduct: 'SPONSORED_PRODUCTS', groupBy: ['campaign'],
-          columns: ['campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d', 'unitsSoldClicks30d'],
-          reportTypeId: 'spCampaigns', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
-        },
-      }),
-      adsPost('/reporting/reports', token, profileId, {
-        name: `SP_products_30d_${ts}`,
-        startDate: fmt(startDate), endDate: fmt(endDate),
-        configuration: {
-          adProduct: 'SPONSORED_PRODUCTS', groupBy: ['advertiser'],
-          columns: ['advertisedAsin', 'advertisedSku', 'campaignId', 'adGroupId', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d', 'unitsSoldClicks30d'],
-          reportTypeId: 'spAdvertisedProduct', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
-        },
-      }),
-      adsPost('/reporting/reports', token, profileId, {
-        name: `SP_searchterms_30d_${ts}`,
-        startDate: fmt(startDate), endDate: fmt(endDate),
-        configuration: {
-          adProduct: 'SPONSORED_PRODUCTS', groupBy: ['query'],
-          columns: ['searchTerm', 'campaignId', 'adGroupId', 'keywordId', 'matchType', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'],
-          reportTypeId: 'spSearchTerm', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
-        },
-      }),
-    ]);
-
-    const reportIds = {
-      campaigns: rCampaigns.reportId,
-      products: rProducts.reportId,
-      keywords: rKeywords.reportId,
-    };
-    addLog(`✓ Relatórios solicitados: ${JSON.stringify(reportIds)}`);
-
-    // ── STEP 4: Polling até prontos ───────────────────────────────────
-    addLog('→ Aguardando relatórios ficarem prontos...');
-    const freshToken = await getAdsToken(refreshToken); // renovar antes do polling longo
-    const [urlCampaigns, urlProducts, urlKeywords] = await Promise.all([
-      pollReport(reportIds.campaigns, freshToken, profileId),
-      pollReport(reportIds.products, freshToken, profileId),
-      pollReport(reportIds.keywords, freshToken, profileId),
-    ]);
-    addLog(`✓ Relatórios prontos para download`);
-
-    // ── STEP 5: Download e parse ──────────────────────────────────────
-    addLog('→ Baixando relatórios...');
-    const [dataCampaigns, dataProducts, dataKeywords] = await Promise.all([
-      downloadReport(urlCampaigns),
-      downloadReport(urlProducts),
-      downloadReport(urlKeywords),
-    ]);
-    addLog(`✓ Baixados: ${dataCampaigns.length} campanhas, ${dataProducts.length} produtos, ${dataKeywords.length} keywords`);
-
-    // ── STEP 6: Popular Campaign + métricas ───────────────────────────
-    addLog('→ Populando Campaigns...');
-    let totalSpend = 0, totalSales = 0, totalClicks = 0, totalImpressions = 0, totalOrders = 0;
-    const today = fmt(new Date());
-    const metricsRecords = [];
-
-    const metricsByCAMP = {};
-    for (const row of dataCampaigns) {
-      const campaignId = String(row.campaignId);
-      const spend = Number(row.cost) || 0;
-      const sales = Number(row.sales30d) || 0;
-      const clicks = Number(row.clicks) || 0;
-      const impressions = Number(row.impressions) || 0;
-      const orders = Number(row.purchases30d) || 0;
-      const acos = sales > 0 ? spend / sales * 100 : 0;
-      const roas = spend > 0 ? sales / spend : 0;
-      const ctr = impressions > 0 ? clicks / impressions * 100 : 0;
-      const cpc = clicks > 0 ? spend / clicks : 0;
-      totalSpend += spend; totalSales += sales; totalClicks += clicks; totalImpressions += impressions; totalOrders += orders;
-      metricsByCAMP[campaignId] = { spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc };
-      metricsRecords.push({ amazon_account_id: amazonAccountId, campaign_id: campaignId, date: today, spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc });
-    }
-
-    // Enriquecer registos de campanhas com métricas
-    const enrichedCampaignRecords = campaignRecords.map(c => ({
-      ...c, ...(metricsByCAMP[c.campaign_id] || {}),
-    }));
-    const campCount = await bulkUpsert(base44, 'Campaign', amazonAccountId, enrichedCampaignRecords);
-
-    // Métricas diárias
-    await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId, date: today });
-    for (let i = 0; i < metricsRecords.length; i += 500) {
-      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
-    }
-    addLog(`✓ ${campCount} campanhas + ${metricsRecords.length} métricas diárias`);
-
-    // ── STEP 7: Popular Products ──────────────────────────────────────
-    addLog('→ Populando Products...');
-    const asinMap = {};
-    for (const row of dataProducts) {
-      const asin = row.advertisedAsin;
-      if (!asin) continue;
-      if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, clicks: 0, sku: row.advertisedSku };
-      asinMap[asin].spend += Number(row.cost) || 0;
-      asinMap[asin].sales += Number(row.sales30d) || 0;
-      asinMap[asin].units += Number(row.unitsSoldClicks30d) || 0;
-      asinMap[asin].clicks += Number(row.clicks) || 0;
-    }
-    const productRecords = Object.entries(asinMap).map(([asin, m]) => ({
-      amazon_account_id: amazonAccountId,
-      asin, sku: m.sku || null, status: 'active',
-      total_revenue_30d: m.sales,
-      units_sold_30d: m.units,
-      total_spend_30d: m.spend,
-      acos: m.sales > 0 ? m.spend / m.sales * 100 : 0,
-      roas: m.spend > 0 ? m.sales / m.spend : 0,
-      synced_at: new Date().toISOString(),
-    }));
-    const prodCount = await bulkUpsert(base44, 'Product', amazonAccountId, productRecords);
-    addLog(`✓ ${prodCount} produtos`);
-
-    // ── STEP 8: Popular Keywords / Search Terms ───────────────────────
-    addLog('→ Populando Keywords...');
-    const kwRecords = [];
-    for (const row of dataKeywords) {
-      if (!row.searchTerm && !row.keywordId) continue;
-      const kwId = String(row.keywordId || `st_${row.searchTerm}`);
-      const spend = Number(row.cost) || 0;
-      const sales = Number(row.sales14d) || 0;
-      const clicks = Number(row.clicks) || 0;
-      const impressions = Number(row.impressions) || 0;
-      kwRecords.push({
+      // Importar campanhas
+      const campData = await adsPost('/sp/campaigns/list', token, profileId,
+        { stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, maxResults: 500 },
+        'application/vnd.spCampaign.v3+json'
+      );
+      const campaigns = campData?.campaigns || [];
+      const campaignRecords = campaigns.map(c => ({
         amazon_account_id: amazonAccountId,
-        campaign_id: String(row.campaignId || ''),
-        ad_group_id: String(row.adGroupId || ''),
-        keyword_id: kwId,
-        keyword_text: row.searchTerm || '',
-        match_type: (row.matchType || 'broad').toLowerCase(),
-        state: 'enabled',
-        spend, sales, clicks, impressions,
-        acos: sales > 0 ? spend / sales * 100 : 0,
-        cpc: clicks > 0 ? spend / clicks : 0,
+        campaign_id: String(c.campaignId),
+        name: c.name,
+        campaign_type: 'SP',
+        targeting_type: c.targetingType,
+        state: (c.state || 'ENABLED').toLowerCase(),
+        daily_budget: c.budget?.budget || c.dailyBudget || 0,
+        start_date: c.startDate,
+        end_date: c.endDate || null,
+        bidding_strategy: c.dynamicBidding?.strategy || null,
         synced_at: new Date().toISOString(),
+      }));
+
+      await base44.asServiceRole.entities.Campaign.deleteMany({ amazon_account_id: amazonAccountId });
+      for (let i = 0; i < campaignRecords.length; i += 500) {
+        await base44.asServiceRole.entities.Campaign.bulkCreate(campaignRecords.slice(i, i + 500));
+      }
+
+      // Solicitar 3 relatórios 30d
+      const endDate = new Date();
+      const startDate = new Date(Date.now() - 30 * 86400000);
+      const fmt = (d) => d.toISOString().slice(0, 10);
+      const ts = Date.now();
+
+      const [rCampaigns, rProducts, rKeywords] = await Promise.all([
+        adsPost('/reporting/reports', token, profileId, {
+          name: `SP_campaigns_30d_${ts}`,
+          startDate: fmt(startDate), endDate: fmt(endDate),
+          configuration: {
+            adProduct: 'SPONSORED_PRODUCTS', groupBy: ['campaign'],
+            columns: ['campaignId', 'campaignName', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d', 'unitsSoldClicks30d'],
+            reportTypeId: 'spCampaigns', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
+          },
+        }),
+        adsPost('/reporting/reports', token, profileId, {
+          name: `SP_products_30d_${ts}`,
+          startDate: fmt(startDate), endDate: fmt(endDate),
+          configuration: {
+            adProduct: 'SPONSORED_PRODUCTS', groupBy: ['advertiser'],
+            columns: ['advertisedAsin', 'advertisedSku', 'campaignId', 'adGroupId', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d', 'unitsSoldClicks30d'],
+            reportTypeId: 'spAdvertisedProduct', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
+          },
+        }),
+        adsPost('/reporting/reports', token, profileId, {
+          name: `SP_searchterms_30d_${ts}`,
+          startDate: fmt(startDate), endDate: fmt(endDate),
+          configuration: {
+            adProduct: 'SPONSORED_PRODUCTS', groupBy: ['searchTerm'],
+            columns: ['searchTerm', 'campaignId', 'adGroupId', 'keywordId', 'matchType', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d'],
+            reportTypeId: 'spSearchTerm', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
+          },
+        }),
+      ]);
+
+      const reportIds = {
+        campaigns: rCampaigns.reportId,
+        products: rProducts.reportId,
+        keywords: rKeywords.reportId,
+      };
+
+      // Cancelar SyncRuns running antigos
+      await base44.asServiceRole.entities.SyncRun.updateMany(
+        { amazon_account_id: amazonAccountId, status: 'running' },
+        { $set: { status: 'error', error_message: 'Cancelado por novo ciclo', completed_at: new Date().toISOString() } }
+      );
+
+      const syncRun = await base44.asServiceRole.entities.SyncRun.create({
+        amazon_account_id: amazonAccountId,
+        operation: 'runFullSync:request',
+        status: 'running',
+        started_at: new Date().toISOString(),
+      });
+
+      await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
+        last_sync_at: new Date().toISOString(),
+        status: 'connected',
+        error_message: null,
+      });
+
+      return Response.json({
+        ok: true,
+        campaigns_imported: campaigns.length,
+        reportIds,
+        syncRunId: syncRun.id,
+        message: `${campaigns.length} campanhas importadas. Aguarde 5-15 min e chame action=download.`,
       });
     }
-    const kwCount = await bulkUpsert(base44, 'Keyword', amazonAccountId, kwRecords);
-    addLog(`✓ ${kwCount} keywords/search terms`);
 
-    // ── STEP 9: IA → Decisões ─────────────────────────────────────────
-    addLog('→ Gerando decisões IA...');
-    let decisionsCreated = 0;
-    try {
-      const topCampaigns = enrichedCampaignRecords
-        .filter(c => (c.impressions || 0) > 100)
-        .sort((a, b) => (b.spend || 0) - (a.spend || 0))
-        .slice(0, 20)
-        .map(c => ({ id: c.campaign_id, name: c.name, spend: (c.spend || 0).toFixed(2), sales: (c.sales || 0).toFixed(2), acos: (c.acos || 0).toFixed(1) }));
+    // ══════════════════════════════════════════════════════════════════
+    // FASE 2: download — verificar + baixar + popular tabelas
+    // ══════════════════════════════════════════════════════════════════
+    if (action === 'download') {
+      const { reportIds, syncRunId } = body;
+      if (!reportIds) return Response.json({ error: 'reportIds required for action=download' }, { status: 400 });
 
-      const aiResult = await base44.asServiceRole.integrations.Core.InvokeLLM({
-        prompt: `Analise Amazon Ads (30d). Spend: $${totalSpend.toFixed(2)}, Vendas: $${totalSales.toFixed(2)}, ACoS: ${totalSales > 0 ? (totalSpend/totalSales*100).toFixed(1) : 'N/A'}%, ROAS: ${totalSpend > 0 ? (totalSales/totalSpend).toFixed(2) : 'N/A'}x. Top campanhas: ${JSON.stringify(topCampaigns)}. Gere 5-8 recomendações accionáveis com campaign_id específico, problema concreto, acção exacta e impacto esperado.`,
-        response_json_schema: {
-          type: 'object',
-          properties: {
-            decisions: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  decision_type: { type: 'string', enum: ['bid_adjust', 'budget_change', 'pause_campaign', 'enable_campaign', 'negate_keyword'] },
-                  entity_type: { type: 'string', enum: ['campaign', 'keyword'] },
-                  entity_id: { type: 'string' },
-                  entity_name: { type: 'string' },
-                  rationale: { type: 'string' },
-                  current_value: { type: 'number' },
-                  proposed_value: { type: 'number' },
-                  change_pct: { type: 'number' },
-                  confidence: { type: 'number' },
-                  priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+      const token = await getAdsToken(refreshToken);
+
+      // Verificar status dos 3 relatórios
+      const [sCampaigns, sProducts, sKeywords] = await Promise.all([
+        adsGet(`/reporting/reports/${reportIds.campaigns}`, token, profileId),
+        adsGet(`/reporting/reports/${reportIds.products}`, token, profileId),
+        adsGet(`/reporting/reports/${reportIds.keywords}`, token, profileId),
+      ]);
+
+      const pending = {
+        campaigns: sCampaigns.status,
+        products: sProducts.status,
+        keywords: sKeywords.status,
+      };
+
+      const allReady = [sCampaigns, sProducts, sKeywords].every(s => s.status === 'COMPLETED' && s.url);
+      if (!allReady) {
+        const anyFailed = [sCampaigns, sProducts, sKeywords].some(s => s.status === 'FAILED');
+        if (anyFailed) return Response.json({ ok: false, error: 'Um ou mais relatórios falharam', pending }, { status: 500 });
+        return Response.json({ ok: true, ready: false, pending });
+      }
+
+      // Baixar os 3
+      const [dataCampaigns, dataProducts, dataKeywords] = await Promise.all([
+        fetch(sCampaigns.url).then(r => r.arrayBuffer()).then(decompress),
+        fetch(sProducts.url).then(r => r.arrayBuffer()).then(decompress),
+        fetch(sKeywords.url).then(r => r.arrayBuffer()).then(decompress),
+      ]);
+
+      // Métricas de campanhas
+      const fmt = (d) => d.toISOString().slice(0, 10);
+      const today = fmt(new Date());
+      let totalSpend = 0, totalSales = 0, totalClicks = 0, totalImpressions = 0, totalOrders = 0;
+      const metricsByCAMP = {};
+      const metricsRecords = [];
+
+      for (const row of dataCampaigns) {
+        const campaignId = String(row.campaignId);
+        const spend = Number(row.cost) || 0;
+        const sales = Number(row.sales30d) || 0;
+        const clicks = Number(row.clicks) || 0;
+        const impressions = Number(row.impressions) || 0;
+        const orders = Number(row.purchases30d) || 0;
+        const acos = sales > 0 ? spend / sales * 100 : 0;
+        const roas = spend > 0 ? sales / spend : 0;
+        const ctr = impressions > 0 ? clicks / impressions * 100 : 0;
+        const cpc = clicks > 0 ? spend / clicks : 0;
+        totalSpend += spend; totalSales += sales; totalClicks += clicks; totalImpressions += impressions; totalOrders += orders;
+        metricsByCAMP[campaignId] = { spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc };
+        metricsRecords.push({ amazon_account_id: amazonAccountId, campaign_id: campaignId, date: today, spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc });
+      }
+
+      // Enriquecer campanhas já importadas com métricas e re-salvar
+      const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId }, '-created_date', 2000);
+      for (const c of existingCampaigns) {
+        const m = metricsByCAMP[c.campaign_id];
+        if (m) {
+          await base44.asServiceRole.entities.Campaign.update(c.id, { ...m, synced_at: new Date().toISOString() });
+        }
+      }
+
+      // Métricas diárias
+      await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId, date: today });
+      for (let i = 0; i < metricsRecords.length; i += 500) {
+        await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
+      }
+
+      // Produtos
+      const asinMap = {};
+      for (const row of dataProducts) {
+        const asin = row.advertisedAsin;
+        if (!asin) continue;
+        if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, sku: row.advertisedSku };
+        asinMap[asin].spend += Number(row.cost) || 0;
+        asinMap[asin].sales += Number(row.sales30d) || 0;
+        asinMap[asin].units += Number(row.unitsSoldClicks30d) || 0;
+      }
+      const productRecords = Object.entries(asinMap).map(([asin, m]) => ({
+        amazon_account_id: amazonAccountId, asin, sku: m.sku || null, status: 'active',
+        total_revenue_30d: m.sales, units_sold_30d: m.units, total_spend_30d: m.spend,
+        acos: m.sales > 0 ? m.spend / m.sales * 100 : 0,
+        roas: m.spend > 0 ? m.sales / m.spend : 0,
+        synced_at: new Date().toISOString(),
+      }));
+      const prodCount = await bulkReplace(base44, 'Product', amazonAccountId, productRecords);
+
+      // Keywords / Search Terms
+      const kwRecords = [];
+      for (const row of dataKeywords) {
+        if (!row.searchTerm && !row.keywordId) continue;
+        const kwId = String(row.keywordId || `st_${row.searchTerm}`);
+        const spend = Number(row.cost) || 0;
+        const sales = Number(row.sales14d) || 0;
+        const clicks = Number(row.clicks) || 0;
+        kwRecords.push({
+          amazon_account_id: amazonAccountId,
+          campaign_id: String(row.campaignId || ''),
+          ad_group_id: String(row.adGroupId || ''),
+          keyword_id: kwId,
+          keyword_text: row.searchTerm || '',
+          match_type: (row.matchType || 'broad').toLowerCase(),
+          state: 'enabled',
+          spend, sales, clicks,
+          impressions: Number(row.impressions) || 0,
+          acos: sales > 0 ? spend / sales * 100 : 0,
+          cpc: clicks > 0 ? spend / clicks : 0,
+          synced_at: new Date().toISOString(),
+        });
+      }
+      const kwCount = await bulkReplace(base44, 'Keyword', amazonAccountId, kwRecords);
+
+      // IA → Decisões
+      let decisionsCreated = 0;
+      try {
+        const topCampaigns = existingCampaigns
+          .filter(c => (metricsByCAMP[c.campaign_id]?.impressions || 0) > 100)
+          .sort((a, b) => (metricsByCAMP[b.campaign_id]?.spend || 0) - (metricsByCAMP[a.campaign_id]?.spend || 0))
+          .slice(0, 15)
+          .map(c => { const m = metricsByCAMP[c.campaign_id] || {}; return { id: c.campaign_id, name: c.name, spend: (m.spend||0).toFixed(2), sales: (m.sales||0).toFixed(2), acos: (m.acos||0).toFixed(1) }; });
+
+        const aiResult = await base44.asServiceRole.integrations.Core.InvokeLLM({
+          prompt: `Analise Amazon Ads (30d). Spend: $${totalSpend.toFixed(2)}, Vendas: $${totalSales.toFixed(2)}, ACoS: ${totalSales > 0 ? (totalSpend/totalSales*100).toFixed(1) : 'N/A'}%, ROAS: ${totalSpend > 0 ? (totalSales/totalSpend).toFixed(2) : 'N/A'}x. Top campanhas: ${JSON.stringify(topCampaigns)}. Gere 5-8 recomendações accionáveis com campaign_id específico.`,
+          response_json_schema: {
+            type: 'object',
+            properties: {
+              decisions: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    decision_type: { type: 'string', enum: ['bid_adjust', 'budget_change', 'pause_campaign', 'enable_campaign', 'negate_keyword'] },
+                    entity_type: { type: 'string', enum: ['campaign', 'keyword'] },
+                    entity_id: { type: 'string' }, entity_name: { type: 'string' },
+                    rationale: { type: 'string' }, current_value: { type: 'number' },
+                    proposed_value: { type: 'number' }, change_pct: { type: 'number' },
+                    confidence: { type: 'number' }, priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+                  },
                 },
               },
             },
           },
-        },
+        });
+
+        const decisionRecords = (aiResult?.decisions || []).map(d => ({
+          amazon_account_id: amazonAccountId,
+          decision_type: d.decision_type || 'bid_adjust',
+          entity_type: d.entity_type || 'campaign',
+          entity_id: d.entity_id || '', entity_name: d.entity_name || '',
+          rationale: d.rationale || '', current_value: d.current_value || 0,
+          proposed_value: d.proposed_value || 0, change_pct: d.change_pct || 0,
+          confidence: d.confidence || 0.5, priority: d.priority || 'medium',
+          status: 'pending',
+        }));
+        if (decisionRecords.length > 0) {
+          await base44.asServiceRole.entities.Decision.bulkCreate(decisionRecords);
+          decisionsCreated = decisionRecords.length;
+        }
+      } catch (aiErr) {
+        console.warn('IA falhou:', aiErr.message);
+      }
+
+      const durationMs = Date.now() - startTime;
+
+      await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
+        status: 'connected', last_sync_at: new Date().toISOString(), error_message: null,
       });
 
-      const decisionRecords = (aiResult?.decisions || []).map(d => ({
-        amazon_account_id: amazonAccountId,
-        decision_type: d.decision_type || 'bid_adjust',
-        entity_type: d.entity_type || 'campaign',
-        entity_id: d.entity_id || '',
-        entity_name: d.entity_name || '',
-        rationale: d.rationale || '',
-        current_value: d.current_value || 0,
-        proposed_value: d.proposed_value || 0,
-        change_pct: d.change_pct || 0,
-        confidence: d.confidence || 0.5,
-        priority: d.priority || 'medium',
-        status: 'pending',
-      }));
-
-      if (decisionRecords.length > 0) {
-        await base44.asServiceRole.entities.Decision.bulkCreate(decisionRecords);
-        decisionsCreated = decisionRecords.length;
+      if (syncRunId) {
+        await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
+          status: 'success',
+          records_received: dataCampaigns.length + dataProducts.length + dataKeywords.length,
+          records_upserted: existingCampaigns.length + prodCount + kwCount,
+          duration_ms: durationMs,
+          completed_at: new Date().toISOString(),
+        });
       }
-      addLog(`✓ ${decisionsCreated} decisões IA geradas`);
-    } catch (aiErr) {
-      addLog(`⚠ IA falhou: ${aiErr.message}`);
+
+      return Response.json({
+        ok: true,
+        ready: true,
+        campaigns_metrics: dataCampaigns.length,
+        products: prodCount,
+        keywords: kwCount,
+        metrics_today: metricsRecords.length,
+        decisions_created: decisionsCreated,
+        duration_s: (durationMs / 1000).toFixed(1),
+        summary: { total_spend: totalSpend, total_sales: totalSales, total_clicks: totalClicks, total_impressions: totalImpressions, total_orders: totalOrders },
+      });
     }
 
-    // ── STEP 10: Atualizar conta + SyncRun ────────────────────────────
-    const durationMs = Date.now() - startTime;
-    await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
-      status: 'connected',
-      last_sync_at: new Date().toISOString(),
-      error_message: null,
-    });
-
-    await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
-      status: 'success',
-      records_received: dataCampaigns.length + dataProducts.length + dataKeywords.length,
-      records_upserted: campCount + prodCount + kwCount,
-      duration_ms: durationMs,
-      completed_at: new Date().toISOString(),
-    });
-
-    addLog(`✓ Sync completo em ${(durationMs / 1000).toFixed(1)}s`);
-
-    return Response.json({
-      ok: true,
-      token_renewed_at: tokenRenewedAt,
-      campaigns: campCount,
-      products: prodCount,
-      keywords: kwCount,
-      metrics_today: metricsRecords.length,
-      decisions_created: decisionsCreated,
-      duration_s: (durationMs / 1000).toFixed(1),
-      summary: { total_spend: totalSpend, total_sales: totalSales, total_clicks: totalClicks, total_impressions: totalImpressions, total_orders: totalOrders },
-      log,
-    });
+    return Response.json({ error: 'action must be "request" or "download"' }, { status: 400 });
 
   } catch (error) {
-    if (base44 && syncRunId) {
-      await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
-        status: 'error',
-        error_message: error.message,
-        completed_at: new Date().toISOString(),
-        duration_ms: Date.now() - startTime,
-      }).catch(() => {});
-    }
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });

@@ -164,11 +164,45 @@ export default function Diagnostico() {
     }
   };
 
-  const runFullSync = () => run('fullSync', async () => {
-    if (!account) throw new Error('Nenhuma conta Amazon encontrada');
-    const r = await base44.functions.invoke('runFullSync', { amazon_account_id: account.id });
-    return r.data;
-  });
+  const runFullSync = async () => {
+    if (!account) return;
+    setLoadingBtn(p => ({ ...p, fullSync: true }));
+    setResults(p => ({ ...p, fullSync: { status: 'Solicitando relatórios...' } }));
+    try {
+      // Fase 1: importar campanhas + solicitar relatórios
+      const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: account.id, action: 'request' });
+      const d1 = r1.data;
+      if (!d1?.ok) throw new Error(d1?.error || 'Falhou na fase 1');
+      setResults(p => ({ ...p, fullSync: { status: `✓ ${d1.campaigns_imported} campanhas importadas. ⏳ Aguardando relatórios (5-15 min)...`, reportIds: d1.reportIds } }));
+
+      // Fase 2: polling até relatórios prontos
+      let attempts = 0;
+      while (attempts < 30) {
+        await new Promise(r => setTimeout(r, 30000));
+        attempts++;
+        const r2 = await base44.functions.invoke('runFullSync', {
+          amazon_account_id: account.id,
+          action: 'download',
+          reportIds: d1.reportIds,
+          syncRunId: d1.syncRunId,
+        });
+        const d2 = r2.data;
+        if (d2?.ready) {
+          setResults(p => ({ ...p, fullSync: d2 }));
+          await loadData();
+          return;
+        }
+        if (!d2?.ok) throw new Error(d2?.error || 'Erro no download');
+        setResults(p => ({ ...p, fullSync: { status: `⏳ Tentativa ${attempts}/30 — ${JSON.stringify(d2.pending)}` } }));
+      }
+      throw new Error('Relatórios não ficaram prontos após 15 min');
+    } catch (e) {
+      setResults(p => ({ ...p, fullSync: { error: e.message } }));
+      await loadData();
+    } finally {
+      setLoadingBtn(p => ({ ...p, fullSync: false }));
+    }
+  };
 
   const testToken = () => run('token', async () => {
     const r = await base44.functions.invoke('testAuthHealth', {});

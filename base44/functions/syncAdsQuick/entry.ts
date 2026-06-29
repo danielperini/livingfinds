@@ -8,12 +8,12 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const tokenCache = {};
 
-async function getAdsToken() {
+async function getAdsToken(refreshToken) {
   const cached = tokenCache['ads'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
+    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
     client_id: Deno.env.get('ADS_CLIENT_ID'),
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
@@ -35,14 +35,14 @@ function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsCall(method, path, body) {
-  const token = await getAdsToken();
+async function adsCall(method, path, body, refreshToken, profileId) {
+  const token = await getAdsToken(refreshToken);
   const opts = {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+      'Amazon-Advertising-API-Scope': String(profileId || Deno.env.get('ADS_PROFILE_ID')),
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     },
@@ -74,17 +74,22 @@ Deno.serve(async (req) => {
     const { amazon_account_id, action, report_id } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
+    // Resolver refresh token: preferir da conta, fallback para secret
+    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
+    const refreshToken = account?.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+    const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+
     // ── FASE 1: importar campanhas + solicitar relatório ──────────────────
     if (action === 'request' || !action) {
       // 1a. Importar lista de campanhas via SP Campaigns API
       const adsBase = getAdsBaseUrl();
-      const token = await getAdsToken();
+      const token = await getAdsToken(refreshToken);
       const campRes = await fetch(`${adsBase}/sp/campaigns/list`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-          'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+          'Amazon-Advertising-API-Scope': String(profileId),
           'Content-Type': 'application/vnd.spCampaign.v3+json',
           'Accept': 'application/vnd.spCampaign.v3+json',
         },
@@ -131,7 +136,7 @@ Deno.serve(async (req) => {
           timeUnit: 'SUMMARY',
           format: 'GZIP_JSON',
         },
-      });
+      }, refreshToken, profileId);
 
       const reportId = reportReq.reportId;
       if (!reportId) throw new Error('No reportId: ' + JSON.stringify(reportReq));
@@ -154,7 +159,7 @@ Deno.serve(async (req) => {
     if (action === 'download') {
       if (!report_id) return Response.json({ error: 'report_id required for action=download' }, { status: 400 });
 
-      const status = await adsCall('GET', `/reporting/reports/${report_id}`);
+      const status = await adsCall('GET', `/reporting/reports/${report_id}`, null, refreshToken, profileId);
 
       if (status.status === 'PENDING' || status.status === 'PROCESSING') {
         return Response.json({ ok: true, ready: false, status: status.status, message: 'Relatório ainda a processar. Tente novamente em 1-2 min.' });

@@ -33,10 +33,11 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     if (state !== 'polling' || !reportIds) return;
     const interval = setInterval(async () => {
       try {
-        const res = await base44.functions.invoke('downloadAdsReport', {
+        const res = await base44.functions.invoke('runFullSync', {
           amazon_account_id: amazonAccountId,
-          report_ids: reportIds?.reportIds || reportIds,
-          sync_run_id: reportIds?.syncRunId || null,
+          action: 'download',
+          reportIds: reportIds?.reportIds || reportIds,
+          syncRunId: reportIds?.syncRunId || null,
         });
         const d = res.data;
         setPollCount(p => p + 1);
@@ -44,7 +45,7 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
         if (d.ready) {
           clearInterval(interval);
           setState('done');
-          setMsg(`✓ ${d.campaigns_upserted || 0} campanhas · ${d.keywords_upserted || 0} keywords · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
+          setMsg(`✓ ${d.products || 0} produtos · ${d.keywords || 0} keywords · spend $${(d.summary?.total_spend || 0).toFixed(2)}`);
           onDone?.();
         } else {
           const pending = Object.entries(d.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
@@ -64,17 +65,11 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     setPollCount(0);
     setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {
-      // Fase 1: importar campanhas via syncAdsQuick
-      const r1 = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: amazonAccountId, action: 'request' });
+      const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
       const d1 = r1.data;
-      if (!d1?.ok) throw new Error(d1?.error || 'Falhou ao importar campanhas');
+      if (!d1?.ok) throw new Error(d1?.error || 'Falhou ao iniciar sync');
 
-      // Fase 2: solicitar os 3 relatórios completos
-      const r2 = await base44.functions.invoke('requestAdsReport', { amazon_account_id: amazonAccountId });
-      const d2 = r2.data;
-      if (!d2?.ok || !d2.reportIds) throw new Error(d2?.error || 'Falhou ao solicitar relatórios');
-
-      setReportIds({ reportIds: d2.reportIds, syncRunId: d2.syncRunId });
+      setReportIds({ reportIds: d1.reportIds, syncRunId: d1.syncRunId });
       setState('polling');
       setMsg(`✓ ${d1.campaigns_imported} campanhas importadas. ⏳ Aguardando relatório da Amazon... (pode demorar 5-15 min)`);
     } catch (e) {
