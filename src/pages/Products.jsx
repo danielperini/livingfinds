@@ -3,9 +3,10 @@ import { base44 } from '@/api/base44Client';
 import {
   Package, Search, RefreshCw, Loader2, AlertTriangle, Play, Pause,
   Plus, Tag, ChevronDown, ChevronUp, Filter, Zap, CheckCircle, XCircle, Radio,
-  TrendingUp, TrendingDown, MinusCircle
+  TrendingUp, TrendingDown, MinusCircle, Rocket
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import KickoffModal from '@/components/products/KickoffModal';
 
 function CampaignStatusCell({ product }) {
   if (!product.has_campaign) {
@@ -70,7 +71,7 @@ function AdsActionButton({ product, onCreateCampaign, onToggleCampaign, loading 
   );
 }
 
-function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading }) {
+function ProductRow({ product, onToggleCampaign, onCreateCampaign, onKickoff, actionLoading }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -101,22 +102,28 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
   return (
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-        {/* Produto */}
-        <td className="px-4 py-3 min-w-[200px]">
-          <div className="flex items-center gap-2.5">
+        {/* ASIN */}
+        <td className="px-4 py-3 min-w-[110px]">
+          <div className="flex items-center gap-2">
             {product.product_image_url ? (
-              <img src={product.product_image_url} alt={product.asin} className="w-9 h-9 rounded-lg object-cover bg-surface-3 flex-shrink-0" />
+              <img src={product.product_image_url} alt={product.asin} className="w-8 h-8 rounded-lg object-cover bg-surface-3 flex-shrink-0" />
             ) : (
-              <div className="w-9 h-9 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
-                <Package className="w-4 h-4 text-slate-600" />
+              <div className="w-8 h-8 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
+                <Package className="w-3.5 h-3.5 text-slate-600" />
               </div>
             )}
-            <div className="min-w-0">
-              <p className="text-xs font-mono font-semibold text-cyan">{product.asin}</p>
-              {product.sku && <p className="text-xs text-slate-500 font-mono">{product.sku}</p>}
-              {product.product_name && <p className="text-xs text-slate-400 truncate max-w-[140px] mt-0.5">{product.product_name}</p>}
-            </div>
+            <p className="text-xs font-mono font-semibold text-cyan">{product.asin}</p>
           </div>
+        </td>
+
+        {/* Nome */}
+        <td className="px-4 py-3 min-w-[160px] max-w-[220px]">
+          <p className="text-xs text-slate-200 truncate" title={product.product_name}>{product.product_name || <span className="text-slate-600">—</span>}</p>
+        </td>
+
+        {/* SKU */}
+        <td className="px-4 py-3 min-w-[90px]">
+          <p className="text-xs font-mono text-slate-400 truncate">{product.sku || <span className="text-slate-600">—</span>}</p>
         </td>
 
         {/* Estoque */}
@@ -156,13 +163,24 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
 
         {/* Ação */}
         <td className="px-4 py-3 pr-5">
-          <div className="flex items-center gap-1.5">
-            <AdsActionButton
-              product={product}
-              onCreateCampaign={onCreateCampaign}
-              onToggleCampaign={onToggleCampaign}
-              loading={isLoading}
-            />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {!product.has_campaign ? (
+              <button
+                onClick={() => onKickoff(product)}
+                disabled={isLoading || (product.fba_inventory || 0) === 0}
+                title="Kick-off: cria campanha AUTO + manuais por palavra-chave"
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 whitespace-nowrap">
+                {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
+                Kick-off
+              </button>
+            ) : (
+              <AdsActionButton
+                product={product}
+                onCreateCampaign={onCreateCampaign}
+                onToggleCampaign={onToggleCampaign}
+                loading={isLoading}
+              />
+            )}
             {product.linked_campaign_id && (
               <button onClick={toggleKeywords} className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors" title="Ver search terms">
                 {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
@@ -283,6 +301,7 @@ export default function Products() {
   const [actionMsg, setActionMsg] = useState(null);
   const [sortBy, setSortBy] = useState('total_sales_30d');
   const [bulkActivating, setBulkActivating] = useState(false);
+  const [kickoffProduct, setKickoffProduct] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -529,7 +548,7 @@ export default function Products() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Produto', 'Estoque FBA', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
+                  {['ASIN', 'Nome', 'SKU', 'Estoque FBA', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -541,6 +560,7 @@ export default function Products() {
                     product={p}
                     onToggleCampaign={toggleCampaign}
                     onCreateCampaign={createCampaign}
+                    onKickoff={setKickoffProduct}
                     actionLoading={actionLoading}
                   />
                 ))}
@@ -548,6 +568,15 @@ export default function Products() {
             </table>
           </div>
         </div>
+      )}
+
+      {kickoffProduct && (
+        <KickoffModal
+          product={kickoffProduct}
+          account={account}
+          onClose={() => setKickoffProduct(null)}
+          onDone={() => { setKickoffProduct(null); load(); }}
+        />
       )}
     </div>
   );
