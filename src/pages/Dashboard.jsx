@@ -36,7 +36,6 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
   const request = async () => {
     if (pollRef.current) clearInterval(pollRef.current);
     setState('requesting');
-    pollCountRef.current = 0;
     startTimeRef.current = null;
     setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {

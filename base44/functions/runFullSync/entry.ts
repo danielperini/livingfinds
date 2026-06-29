@@ -170,10 +170,10 @@ Deno.serve(async (req) => {
         last_sync_at: new Date().toISOString(),
       }));
 
-      // Cancelar SyncRuns running antigos
+      // Cancelar SyncRuns running antigos silenciosamente (marcar como partial, não error)
       await base44.asServiceRole.entities.SyncRun.updateMany(
         { amazon_account_id: amazonAccountId, status: 'running' },
-        { $set: { status: 'error', error_message: 'Cancelado por novo ciclo', completed_at: new Date().toISOString() } }
+        { $set: { status: 'partial', error_message: 'Substituído por novo ciclo', completed_at: new Date().toISOString() } }
       );
 
       // Upsert campanhas: atualizar existentes, criar novas — não apagar históricas

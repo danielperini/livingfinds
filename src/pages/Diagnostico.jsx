@@ -48,13 +48,13 @@ function ActionButton({ icon: Icon, label, onClick, loading, variant = 'default'
 function ConnectionStatusPanel({ account, syncRuns, loading }) {
   const connStatus = account?.status || 'unknown';
   const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca';
-  const lastReportRun = syncRuns.find(r => r.operation === 'runFullSync' || r.operation?.startsWith('adsReports:'));
+  const lastReportRun = syncRuns.find(r => (r.operation === 'runFullSync' || r.operation?.startsWith('adsReports:')) && r.status === 'success');
   const lastReport = lastReportRun?.completed_at ? new Date(lastReportRun.completed_at).toLocaleString('pt-BR') : 'Nunca';
   const hasRefreshToken = !!account?.ads_refresh_token;
   const tokenStatus = hasRefreshToken ? 'ok' : 'warning';
 
   // Última renovação: pegar o SyncRun mais recente com sucesso
-  const lastSuccessRun = syncRuns.find(r => r.status === 'success');
+  const lastSuccessRun = syncRuns.find(r => r.status === 'success' && r.operation === 'runFullSync:request');
   const lastTokenRenewal = lastSuccessRun?.completed_at ? new Date(lastSuccessRun.completed_at).toLocaleString('pt-BR') : 'Nunca';
 
   if (loading) {
