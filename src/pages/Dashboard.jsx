@@ -25,32 +25,40 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 function ReportSyncWidget({ amazonAccountId, onDone }) {
   const [state, setState] = useState('idle');
   const [msg, setMsg] = useState('');
-  const [pollCount, setPollCount] = useState(0);
   const pollRef = useRef(null);
   const pendingRef = useRef(null);
+  const startTimeRef = useRef(null);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const elapsedSec = () => startTimeRef.current ? Math.round((Date.now() - startTimeRef.current) / 1000) : 0;
 
   const request = async () => {
     if (pollRef.current) clearInterval(pollRef.current);
     setState('requesting');
-    setPollCount(0);
+    pollCountRef.current = 0;
+    startTimeRef.current = null;
     setMsg('A importar campanhas e solicitar relatórios 30d...');
     try {
       const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
       const d1 = r1.data;
       if (!d1?.ok) {
         setState('error');
-        setMsg(d1?.message || d1?.amazon_error || 'Falhou ao iniciar sync');
-        setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+        setMsg(d1?.message || d1?.amazon_error || d1?.amazon_error || JSON.stringify(d1).slice(0, 200));
+        setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
         return;
       }
 
       pendingRef.current = { reportIds: d1.reportIds, syncRunId: d1.syncRunId };
+      startTimeRef.current = Date.now();
       setState('polling');
-      setMsg(`✓ ${d1.campaigns_imported} campanhas. ⏳ Aguardando relatórios Amazon (5-15 min)...`);
+      setMsg(`✓ ${d1.campaigns_imported} campanhas. ⏳ Aguardando relatórios Amazon...`);
+      if (d1.report_errors?.length > 0) {
+        setMsg(prev => prev + ` ⚠ ${d1.report_errors.join(', ')}`);
+      }
 
       pollRef.current = setInterval(async () => {
+        pollCountRef.current += 1;
         try {
           const r2 = await base44.functions.invoke('runFullSync', {
             amazon_account_id: amazonAccountId,
@@ -58,34 +66,35 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
             ...pendingRef.current,
           });
           const d2 = r2.data;
-          setPollCount(p => p + 1);
-          if (!d2?.ok) {
+          if (!d2?.ok && !d2?.ready) {
             clearInterval(pollRef.current);
             setState('error');
-            setMsg(d2?.message || d2?.amazon_error || 'Erro ao baixar relatórios');
-            setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+            setMsg(d2?.message || JSON.stringify(d2).slice(0, 200));
+            setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
             return;
           }
           if (d2.ready) {
             clearInterval(pollRef.current);
             setState('done');
-            setMsg(`✓ ${d2.products || 0} produtos · ${d2.keywords || 0} keywords · $${(d2.summary?.total_spend || 0).toFixed(2)} spend`);
+            setMsg(`✓ ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} produtos · ${d2.keywords || 0} kws · $${(d2.summary?.total_spend || 0).toFixed(2)} spend`);
             onDone?.();
           } else {
-            const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(' · ');
-            setMsg(`⏳ Aguardando Amazon (${pollCount * 30}s)... ${pend}`);
+            const elapsed = elapsedSec();
+            const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+            const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
+            setMsg(`⏳ Aguardando Amazon (${elapsed}s)... ${pend}${fail}`);
           }
         } catch (e) {
           clearInterval(pollRef.current);
           setState('error');
           setMsg(e.message);
-          setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+          setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
         }
       }, 30000);
     } catch (e) {
       setState('error');
       setMsg(e.message);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 12000);
+      setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
     }
   };
 

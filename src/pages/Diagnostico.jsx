@@ -176,6 +176,7 @@ export default function Diagnostico() {
       setResults(p => ({ ...p, fullSync: { status: `✓ ${d1.campaigns_imported} campanhas importadas. ⏳ Aguardando relatórios (5-15 min)...`, reportIds: d1.reportIds } }));
 
       // Fase 2: polling até relatórios prontos
+      const startTime = Date.now();
       let attempts = 0;
       while (attempts < 30) {
         await new Promise(r => setTimeout(r, 30000));
@@ -192,8 +193,13 @@ export default function Diagnostico() {
           await loadData();
           return;
         }
-        if (!d2?.ok) throw new Error(d2?.error || 'Erro no download');
-        setResults(p => ({ ...p, fullSync: { status: `⏳ Tentativa ${attempts}/30 — ${JSON.stringify(d2.pending)}` } }));
+        if (!d2?.ok && !d2?.pending) {
+          throw new Error(d2?.message || JSON.stringify(d2).slice(0, 200));
+        }
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
+        const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
+        setResults(p => ({ ...p, fullSync: { status: `⏳ ${elapsed}s — tentativa ${attempts}/30 — ${pend}${fail}` } }));
       }
       throw new Error('Relatórios não ficaram prontos após 15 min');
     } catch (e) {
