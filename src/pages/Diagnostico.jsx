@@ -62,21 +62,17 @@ export default function Diagnostico() {
       setAccount(acc);
 
       if (acc) {
-        const [camps, prods, kwds, runs] = await Promise.all([
-          base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-created_date', 1),
-          base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 1),
-          base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-created_date', 1),
-          base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 5),
-        ]);
-        // Contar totais
-        const [campsAll, prodsAll, kwdsAll] = await Promise.all([
+        const [campsAll, prodsAll, kwdsAll, runs] = await Promise.all([
           base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
           base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
           base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
+          base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 5),
         ]);
         setStats({ campaigns: campsAll.length, products: prodsAll.length, keywords: kwdsAll.length });
         setSyncRuns(runs);
       }
+    } catch (e) {
+      console.error('loadData error:', e);
     } finally {
       setLoading(false);
     }
