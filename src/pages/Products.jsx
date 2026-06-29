@@ -305,6 +305,7 @@ export default function Products() {
   const [actionMsg, setActionMsg] = useState(null);
   const [sortBy, setSortBy] = useState('total_sales_30d');
   const [bulkActivating, setBulkActivating] = useState(false);
+  const [syncingInventory, setSyncingInventory] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
 
   const load = useCallback(async () => {
@@ -375,6 +376,27 @@ export default function Products() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
+  const syncInventory = async () => {
+    if (!account) return;
+    setSyncingInventory(true);
+    setActionMsg({ type: 'info', text: 'A sincronizar estoque FBA com a Amazon...' });
+    try {
+      const res = await base44.functions.invoke('syncProductsFromInventory', { amazon_account_id: account.id });
+      const d = res.data;
+      if (d?.ok) {
+        setActionMsg({ type: 'success', text: `✓ Estoque atualizado: ${d.imported} produtos · ${d.new_asins || 0} novos ASINs` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: d?.error || 'Erro ao sincronizar estoque' });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncingInventory(false);
+      setTimeout(() => setActionMsg(null), 10000);
+    }
+  };
+
   const toggleCampaign = async (product) => {
     if (!product.linked_campaign_id) return;
     setActionLoading(product.id);
@@ -443,6 +465,11 @@ export default function Products() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={syncInventory} disabled={syncingInventory || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {syncingInventory ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            {syncingInventory ? 'Sync Estoque...' : 'Sync Estoque FBA'}
+          </button>
           {needsAds > 0 && (
             <button onClick={bulkActivateAll} disabled={bulkActivating || !account}
               className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
