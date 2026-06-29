@@ -11,6 +11,12 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 // Layout
 import AppLayout from '@/components/layout/AppLayout';
 
+// Auth Pages
+import Login from '@/pages/Login';
+import Register from '@/pages/Register';
+import ForgotPassword from '@/pages/ForgotPassword';
+import ResetPassword from '@/pages/ResetPassword';
+
 // Pages
 import Dashboard from '@/pages/Dashboard';
 import AdsManagement from '@/pages/AdsManagement';
@@ -43,6 +49,10 @@ const AuthenticatedApp = () => {
 
   return (
     <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
