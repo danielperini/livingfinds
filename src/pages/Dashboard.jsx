@@ -129,7 +129,7 @@ export default function Dashboard() {
 
       const aid = acc.id;
       const [cams, prods, metrics, decs, runs] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 50),
+        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_revenue_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 90),
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
@@ -217,13 +217,13 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled').length} campanhas ativas`} loading={loading} />
+        <KPICard label="Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled').length} ativas · ${campaigns.filter(c => c.state !== 'enabled').length} inativas`} loading={loading} />
         <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
         <KPICard label="Cliques" value={kpis.clicks.toLocaleString()} sub="30 dias" loading={loading} />
         <KPICard label="Impressões" value={kpis.impressions.toLocaleString()} sub="30 dias" loading={loading} />
-        <KPICard label="Campanhas" value={campaigns.length} sub={`${campaigns.filter(c => c.state === 'paused').length} pausadas`} loading={loading} />
+        <KPICard label="Campanhas" value={campaigns.length} sub={`${campaigns.filter(c => c.state === 'enabled').length} ativas · ${campaigns.filter(c => c.state === 'paused').length} pausadas · ${campaigns.filter(c => c.state === 'archived').length} arquivadas`} loading={loading} />
         <KPICard label="Produtos" value={products.length} sub={`${products.filter(p => p.fba_inventory > 0).length} com stock`} loading={loading} />
       </div>
 
@@ -319,7 +319,7 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {campaigns.slice(0, 20).map((c, i) => {
+                {campaigns.map((c, i) => {
                   const acosVal = c.acos || 0;
                   const acosColor = acosVal > 50 ? 'text-red-400' : acosVal > 30 ? 'text-amber-400' : 'text-emerald-400';
                   return (
