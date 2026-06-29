@@ -2,21 +2,70 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Package, Search, RefreshCw, Loader2, AlertTriangle, Play, Pause,
-  Plus, ChevronDown, ChevronUp, Tag, TrendingUp, TrendingDown, Zap, Filter
+  Plus, Tag, ChevronDown, ChevronUp, Filter, Zap, CheckCircle, XCircle, Radio
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
-function InventoryBadge({ status }) {
-  const cfg = {
-    in_stock: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
-    low_stock: 'text-amber-400 bg-amber-400/10 border-amber-400/20',
-    out_of_stock: 'text-red-400 bg-red-400/10 border-red-400/20',
-  };
-  const labels = { in_stock: 'Em Stock', low_stock: 'Stock Baixo', out_of_stock: 'Sem Stock' };
+function CampaignStatusCell({ product }) {
+  if (!product.has_campaign) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <XCircle className="w-3.5 h-3.5 text-slate-600" />
+        <span className="text-xs text-slate-500">Sem campanha</span>
+      </div>
+    );
+  }
+  const active = product.campaign_status === 'active';
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-medium ${cfg[status] || cfg.in_stock}`}>
-      {labels[status] || status}
-    </span>
+    <div>
+      <div className={`flex items-center gap-1.5 ${active ? 'text-emerald-400' : 'text-amber-400'}`}>
+        {active
+          ? <><Radio className="w-3.5 h-3.5" /><span className="text-xs font-semibold">Ads Ativo</span></>
+          : <><Pause className="w-3.5 h-3.5" /><span className="text-xs font-semibold">Ads Pausado</span></>
+        }
+      </div>
+      {product.linked_campaign_id && (
+        <p className="text-xs text-slate-600 font-mono mt-0.5 truncate max-w-[100px]">
+          ...{product.linked_campaign_id.slice(-8)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AdsActionButton({ product, onCreateCampaign, onToggleCampaign, loading }) {
+  const hasStock = (product.fba_inventory || 0) > 0;
+  if (!product.has_campaign) {
+    return (
+      <button
+        onClick={() => onCreateCampaign(product)}
+        disabled={loading || !hasStock}
+        title={!hasStock ? 'Sem estoque — não pode criar campanha' : 'Criar campanha AUTO para este produto'}
+        className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 whitespace-nowrap ${
+          hasStock
+            ? 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'
+            : 'bg-surface-3 border-surface-3 text-slate-600'
+        }`}
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+        {hasStock ? 'Ativar Ads' : 'Sem Stock'}
+      </button>
+    );
+  }
+  const isActive = product.campaign_status === 'active';
+  return (
+    <button
+      onClick={() => onToggleCampaign(product)}
+      disabled={loading}
+      className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 whitespace-nowrap ${
+        isActive
+          ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/20'
+          : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+      }`}
+    >
+      {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : isActive ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+      {isActive ? 'Pausar' : 'Ativar'}
+    </button>
   );
 }
 
@@ -25,11 +74,11 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
   const [keywords, setKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
 
-  const loadKeywords = async () => {
+  const toggleKeywords = async () => {
     if (!expanded) {
       setKwLoading(true);
       try {
-        const kws = await base44.entities.Keyword.filter({ asin: product.asin }, '-spend', 50);
+        const kws = await base44.entities.Keyword.filter({ campaign_id: product.linked_campaign_id || '' }, '-spend', 50);
         setKeywords(kws);
       } finally {
         setKwLoading(false);
@@ -41,107 +90,78 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
   const acos = product.acos || 0;
   const acosColor = acos > 50 ? 'text-red-400' : acos > 30 ? 'text-amber-400' : acos > 0 ? 'text-emerald-400' : 'text-slate-500';
   const isLoading = actionLoading === product.id;
+  const hasStock = (product.fba_inventory || 0) > 0;
 
   return (
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
         {/* Produto */}
-        <td className="px-4 py-3 min-w-[220px]">
-          <div className="flex items-center gap-3">
+        <td className="px-4 py-3 min-w-[200px]">
+          <div className="flex items-center gap-2.5">
             {product.product_image_url ? (
-              <img src={product.product_image_url} alt={product.product_name} className="w-10 h-10 rounded-lg object-cover bg-surface-3 flex-shrink-0" />
+              <img src={product.product_image_url} alt={product.asin} className="w-9 h-9 rounded-lg object-cover bg-surface-3 flex-shrink-0" />
             ) : (
-              <div className="w-10 h-10 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
+              <div className="w-9 h-9 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
                 <Package className="w-4 h-4 text-slate-600" />
               </div>
             )}
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-white truncate max-w-[160px]">{product.product_name || product.asin}</p>
-              <p className="text-xs font-mono text-cyan mt-0.5">{product.asin}</p>
-              {product.sku && <p className="text-xs text-slate-600 font-mono">{product.sku}</p>}
+              <p className="text-xs font-mono font-semibold text-cyan">{product.asin}</p>
+              {product.sku && <p className="text-xs text-slate-500 font-mono">{product.sku}</p>}
+              {product.product_name && <p className="text-xs text-slate-400 truncate max-w-[140px] mt-0.5">{product.product_name}</p>}
             </div>
           </div>
         </td>
 
-        {/* Inventário */}
+        {/* Estoque */}
         <td className="px-4 py-3">
-          <InventoryBadge status={product.inventory_status || 'in_stock'} />
-          <p className="text-xs text-slate-500 mt-1">{product.fba_inventory || 0} un.</p>
+          <div className={`text-sm font-bold ${!hasStock ? 'text-red-400' : (product.fba_inventory || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
+            {product.fba_inventory || 0}
+          </div>
+          <div className="text-xs text-slate-500 mt-0.5">
+            {!hasStock ? (
+              <span className="flex items-center gap-1 text-red-400"><AlertTriangle className="w-3 h-3" />Sem stock</span>
+            ) : (product.fba_inventory || 0) < 10 ? (
+              <span className="flex items-center gap-1 text-amber-400"><AlertTriangle className="w-3 h-3" />Baixo</span>
+            ) : 'FBA'}
+          </div>
         </td>
 
-        {/* Status */}
+        {/* Status Campanha */}
         <td className="px-4 py-3">
-          <StatusBadge status={product.status || 'active'} size="xs" />
-          {product.is_new_asin && (
-            <span className="ml-1 text-xs px-1.5 py-0.5 bg-cyan/15 text-cyan border border-cyan/20 rounded-full font-medium">Novo</span>
-          )}
+          <CampaignStatusCell product={product} />
         </td>
 
-        {/* Disponível desde */}
-        <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
-          {product.first_available_date || '—'}
+        {/* Métricas 30d */}
+        <td className="px-4 py-3 text-xs text-emerald-400 font-semibold">
+          {(product.total_sales_30d || product.total_revenue_30d || 0) > 0
+            ? `$${(product.total_sales_30d || product.total_revenue_30d || 0).toFixed(2)}`
+            : <span className="text-slate-600">—</span>}
         </td>
-
-        {/* Campanha */}
-        <td className="px-4 py-3">
-          {product.has_campaign ? (
-            <div>
-              <StatusBadge status={product.campaign_status === 'active' ? 'enabled' : product.campaign_status || 'paused'} size="xs" />
-              {product.linked_campaign_id && (
-                <p className="text-xs text-slate-600 font-mono mt-0.5 truncate max-w-[100px]">{product.linked_campaign_id.slice(-8)}</p>
-              )}
-            </div>
-          ) : (
-            <span className="text-xs text-slate-600">Sem campanha</span>
-          )}
-        </td>
-
-        {/* Métricas */}
-        <td className="px-4 py-3 text-xs">
-          <span className={`font-semibold ${acosColor}`}>{acos > 0 ? `${acos.toFixed(1)}%` : '—'}</span>
-        </td>
-        <td className="px-4 py-3 text-xs text-cyan">
-          {(product.roas || 0) > 0 ? `${(product.roas).toFixed(2)}x` : '—'}
-        </td>
-        <td className="px-4 py-3 text-xs text-slate-300">
+        <td className="px-4 py-3 text-xs text-slate-400">
           ${(product.total_spend_30d || 0).toFixed(2)}
         </td>
-        <td className="px-4 py-3 text-xs text-emerald-400">
-          ${(product.total_sales_30d || 0).toFixed(2)}
+        <td className="px-4 py-3 text-xs">
+          <span className={acosColor}>{acos > 0 ? `${acos.toFixed(1)}%` : <span className="text-slate-600">—</span>}</span>
+        </td>
+        <td className="px-4 py-3 text-xs text-slate-400">
+          {(product.units_sold_30d || product.total_units_30d || 0) || <span className="text-slate-600">—</span>}
         </td>
 
-        {/* Ações */}
+        {/* Ação */}
         <td className="px-4 py-3 pr-5">
           <div className="flex items-center gap-1.5">
-            {!product.has_campaign ? (
-              <button
-                onClick={() => onCreateCampaign(product)}
-                disabled={isLoading || product.inventory_status === 'out_of_stock'}
-                title={product.inventory_status === 'out_of_stock' ? 'Sem estoque — não pode criar campanha' : 'Criar campanha AUTO'}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-cyan hover:bg-cyan/90 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 whitespace-nowrap"
-              >
-                {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-                Criar Camp.
-              </button>
-            ) : (
-              <button
-                onClick={() => onToggleCampaign(product)}
-                disabled={isLoading}
-                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg transition-colors disabled:opacity-40 whitespace-nowrap ${
-                  product.campaign_status === 'active'
-                    ? 'bg-amber-500/15 border border-amber-500/20 text-amber-400 hover:bg-amber-500/25'
-                    : 'bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/25'
-                }`}
-              >
-                {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : product.campaign_status === 'active' ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                {product.campaign_status === 'active' ? 'Pausar' : 'Ativar'}
+            <AdsActionButton
+              product={product}
+              onCreateCampaign={onCreateCampaign}
+              onToggleCampaign={onToggleCampaign}
+              loading={isLoading}
+            />
+            {product.linked_campaign_id && (
+              <button onClick={toggleKeywords} className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors" title="Ver search terms">
+                {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <Tag className="w-3.5 h-3.5" />}
               </button>
             )}
-
-            <button onClick={loadKeywords} className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors" title="Ver keywords">
-              <Tag className="w-3.5 h-3.5" />
-              {expanded ? <ChevronUp className="w-3 h-3 inline ml-0.5" /> : <ChevronDown className="w-3 h-3 inline ml-0.5" />}
-            </button>
           </div>
         </td>
       </tr>
@@ -149,39 +169,37 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
       {/* Keywords expandido */}
       {expanded && (
         <tr className="border-b border-surface-2/40 bg-surface-2/20">
-          <td colSpan={10} className="px-6 py-3">
+          <td colSpan={8} className="px-6 py-3">
             {kwLoading ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" />
-                <span className="text-xs text-slate-400">Carregando keywords...</span>
+                <span className="text-xs text-slate-400">Carregando search terms...</span>
               </div>
             ) : keywords.length === 0 ? (
-              <p className="text-xs text-slate-500 py-1">Sem keywords registadas para este ASIN.</p>
+              <p className="text-xs text-slate-500 py-1">Sem search terms registados para esta campanha.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr>
-                      {['Keyword', 'Match', 'Bid', 'ACoS', 'ROAS', 'Cliques', 'Spend', 'Vendas', 'Estado'].map(h => (
-                        <th key={h} className="pr-4 py-1.5 text-left text-slate-500 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      {['Search Term', 'Match', 'Clicks', 'Spend', 'Vendas', 'ACoS'].map(h => (
+                        <th key={h} className="pr-5 py-1.5 text-left text-slate-500 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {keywords.map(kw => {
                       const kwAcos = kw.acos || 0;
-                      const kwAcosColor = kwAcos > 50 ? 'text-red-400' : kwAcos > 30 ? 'text-amber-400' : kwAcos > 0 ? 'text-emerald-400' : 'text-slate-500';
                       return (
                         <tr key={kw.id} className="border-t border-surface-2/30">
-                          <td className="pr-4 py-1.5 text-slate-300 font-medium max-w-[180px] truncate">{kw.keyword || kw.keyword_text || '—'}</td>
-                          <td className="pr-4 py-1.5"><span className="px-1.5 py-0.5 bg-surface-3 text-slate-400 rounded text-xs">{kw.match_type}</span></td>
-                          <td className="pr-4 py-1.5 font-mono text-slate-300">${(kw.current_bid || kw.bid || 0).toFixed(2)}</td>
-                          <td className={`pr-4 py-1.5 font-semibold ${kwAcosColor}`}>{kwAcos > 0 ? `${kwAcos.toFixed(1)}%` : '—'}</td>
-                          <td className="pr-4 py-1.5 text-cyan">{(kw.roas || 0) > 0 ? `${kw.roas.toFixed(2)}x` : '—'}</td>
-                          <td className="pr-4 py-1.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
-                          <td className="pr-4 py-1.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
-                          <td className="pr-4 py-1.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
-                          <td className="pr-4 py-1.5"><StatusBadge status={kw.state || kw.status || 'enabled'} size="xs" /></td>
+                          <td className="pr-5 py-1.5 text-slate-300 max-w-[200px] truncate">{kw.keyword_text || kw.keyword || '—'}</td>
+                          <td className="pr-5 py-1.5"><span className="px-1.5 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type}</span></td>
+                          <td className="pr-5 py-1.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
+                          <td className="pr-5 py-1.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
+                          <td className="pr-5 py-1.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
+                          <td className={`pr-5 py-1.5 font-semibold ${kwAcos > 50 ? 'text-red-400' : kwAcos > 30 ? 'text-amber-400' : kwAcos > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                            {kwAcos > 0 ? `${kwAcos.toFixed(1)}%` : '—'}
+                          </td>
                         </tr>
                       );
                     })}
@@ -200,19 +218,19 @@ export default function Products() {
   const [account, setAccount] = useState(null);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [actionLoading, setActionLoading] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
   const [sortBy, setSortBy] = useState('total_sales_30d');
+  const [bulkActivating, setBulkActivating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const me = await base44.auth.me();
-      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
       const acc = accounts[0] || null;
       setAccount(acc);
       if (!acc) return;
@@ -224,27 +242,6 @@ export default function Products() {
   }, [sortBy]);
 
   useEffect(() => { load(); }, [load]);
-
-  const syncInventory = async () => {
-    if (!account) return;
-    setSyncing(true);
-    setSyncMsg('Sincronizando inventário...');
-    try {
-      const res = await base44.functions.invoke('syncProductsFromInventory', { amazon_account_id: account.id });
-      const d = res.data;
-      if (d?.ok) {
-        setSyncMsg(`✓ ${d.imported} produtos importados${d.new_asins > 0 ? ` · ${d.new_asins} novos ASINs` : ''}`);
-        await load();
-      } else {
-        setSyncMsg(`⚠ ${d?.error || 'Erro ao sincronizar'}`);
-      }
-    } catch (e) {
-      setSyncMsg(`Erro: ${e.message}`);
-    } finally {
-      setSyncing(false);
-      setTimeout(() => setSyncMsg(''), 8000);
-    }
-  };
 
   const createCampaign = async (product) => {
     setActionLoading(product.id);
@@ -258,7 +255,7 @@ export default function Products() {
       });
       const d = res.data;
       if (d?.ok) {
-        setActionMsg({ type: 'success', text: `✓ Campanha criada para ${product.asin}: ${d.campaign_name}` });
+        setActionMsg({ type: 'success', text: `✓ Campanha AUTO criada para ${product.asin}: ${d.campaign_name} — Budget: $${d.daily_budget}/dia` });
         await load();
       } else {
         setActionMsg({ type: 'error', text: d?.error || 'Erro ao criar campanha' });
@@ -267,8 +264,33 @@ export default function Products() {
       setActionMsg({ type: 'error', text: e.message });
     } finally {
       setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
+      setTimeout(() => setActionMsg(null), 10000);
     }
+  };
+
+  // Ativar ads em massa para todos os produtos com estoque e sem campanha
+  const bulkActivateAll = async () => {
+    const targets = products.filter(p => !p.has_campaign && (p.fba_inventory || 0) > 0);
+    if (targets.length === 0) return;
+    setBulkActivating(true);
+    setActionMsg({ type: 'info', text: `Ativando ads para ${targets.length} produtos...` });
+    let success = 0, failed = 0;
+    for (const p of targets) {
+      try {
+        const res = await base44.functions.invoke('createAutoCampaignForAsin', {
+          amazon_account_id: account.id,
+          asin: p.asin,
+          sku: p.sku,
+          product_name: p.product_name,
+        });
+        if (res.data?.ok) success++;
+        else failed++;
+      } catch { failed++; }
+    }
+    setBulkActivating(false);
+    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `✓ ${success} campanhas criadas${failed > 0 ? ` · ${failed} falharam` : ''}` });
+    await load();
+    setTimeout(() => setActionMsg(null), 10000);
   };
 
   const toggleCampaign = async (product) => {
@@ -277,27 +299,22 @@ export default function Products() {
     const isActive = product.campaign_status === 'active';
     const action = isActive ? 'pause_campaign' : 'enable_campaign';
     try {
-      // Criar ação no agente (requer aprovação para pause)
       const agentAction = await base44.entities.AgentAction.create({
         amazon_account_id: account.id,
         action,
         asin: product.asin,
         campaign_id: product.linked_campaign_id,
-        reason: isActive ? 'Pausa manual solicitada pelo utilizador' : 'Ativação manual solicitada pelo utilizador',
-        evidence: `Produto: ${product.product_name || product.asin}`,
+        reason: isActive ? 'Pausa manual' : 'Ativação manual',
+        evidence: `Produto: ${product.asin}`,
         risk_level: isActive ? 'high' : 'medium',
         requires_approval: isActive,
-        current_value: null,
-        new_value: null,
       });
-
       if (!isActive) {
-        // Ativar não requer aprovação — executar imediatamente
         await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
         setActionMsg({ type: 'success', text: `✓ Campanha ativada para ${product.asin}` });
         await load();
       } else {
-        setActionMsg({ type: 'info', text: `⏳ Pedido de pausa criado para aprovação. Aceda ao Painel de Ações para aprovar.` });
+        setActionMsg({ type: 'info', text: `⏳ Pedido de pausa criado para aprovação.` });
       }
     } catch (e) {
       setActionMsg({ type: 'error', text: e.message });
@@ -307,41 +324,28 @@ export default function Products() {
     }
   };
 
-  // Filtros e pesquisa
-  const filtered = products
-    .filter(p => {
-      const matchSearch = !search || (
-        (p.asin || '').toLowerCase().includes(search.toLowerCase()) ||
-        (p.product_name || '').toLowerCase().includes(search.toLowerCase()) ||
-        (p.sku || '').toLowerCase().includes(search.toLowerCase())
-      );
-      const matchFilter =
-        filter === 'all' ? true :
-        filter === 'active' ? p.status === 'active' :
-        filter === 'with_campaign' ? p.has_campaign :
-        filter === 'no_campaign' ? !p.has_campaign :
-        filter === 'new' ? p.is_new_asin :
-        filter === 'out_of_stock' ? p.inventory_status === 'out_of_stock' :
-        true;
-      return matchSearch && matchFilter;
-    });
+  const filtered = products.filter(p => {
+    const matchSearch = !search || (
+      (p.asin || '').toLowerCase().includes(search.toLowerCase()) ||
+      (p.product_name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (p.sku || '').toLowerCase().includes(search.toLowerCase())
+    );
+    const matchFilter =
+      filter === 'all' ? true :
+      filter === 'with_campaign' ? p.has_campaign :
+      filter === 'no_campaign' ? !p.has_campaign :
+      filter === 'active_ads' ? (p.has_campaign && p.campaign_status === 'active') :
+      filter === 'needs_ads' ? (!p.has_campaign && (p.fba_inventory || 0) > 0) :
+      filter === 'no_stock' ? (p.fba_inventory || 0) === 0 :
+      true;
+    return matchSearch && matchFilter;
+  });
 
-  // KPIs
   const totalProducts = products.length;
-  const withCampaign = products.filter(p => p.has_campaign).length;
-  const newAsins = products.filter(p => p.is_new_asin).length;
-  const outOfStock = products.filter(p => p.inventory_status === 'out_of_stock').length;
-  const totalSpend = products.reduce((s, p) => s + (p.total_spend_30d || 0), 0);
-  const totalSales = products.reduce((s, p) => s + (p.total_sales_30d || 0), 0);
-
-  const filterButtons = [
-    { key: 'all', label: `Todos (${totalProducts})` },
-    { key: 'active', label: 'Ativos' },
-    { key: 'with_campaign', label: `Com Camp. (${withCampaign})` },
-    { key: 'no_campaign', label: `Sem Camp. (${totalProducts - withCampaign})` },
-    { key: 'new', label: `Novos (${newAsins})` },
-    { key: 'out_of_stock', label: `Sem Stock (${outOfStock})` },
-  ];
+  const withActiveAds = products.filter(p => p.has_campaign && p.campaign_status === 'active').length;
+  const withPausedAds = products.filter(p => p.has_campaign && p.campaign_status !== 'active').length;
+  const needsAds = products.filter(p => !p.has_campaign && (p.fba_inventory || 0) > 0).length;
+  const noStock = products.filter(p => (p.fba_inventory || 0) === 0).length;
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -352,28 +356,24 @@ export default function Products() {
             <Package className="w-5 h-5 text-cyan" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">Produtos</h1>
-            <p className="text-xs text-slate-400">{totalProducts} ASINs · {withCampaign} com campanha</p>
+            <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
+            <p className="text-xs text-slate-400">{totalProducts} ASINs · {withActiveAds} ads ativos · {needsAds} precisam de ads</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={syncInventory} disabled={syncing || !account}
-            className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-            {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-            {syncing ? 'Sincronizando...' : 'Sync Inventário'}
-          </button>
+          {needsAds > 0 && (
+            <button onClick={bulkActivateAll} disabled={bulkActivating || !account}
+              className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+              {bulkActivating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {bulkActivating ? 'Ativando...' : `Ativar Ads (${needsAds} produtos)`}
+            </button>
+          )}
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
-
-      {syncMsg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${syncMsg.startsWith('✓') ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-amber-400/10 border-amber-400/20 text-amber-300'}`}>
-          {syncMsg}
-        </div>
-      )}
 
       {actionMsg && (
         <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${
@@ -385,32 +385,52 @@ export default function Products() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {[
-          { label: 'Produtos Ativos', value: totalProducts, color: 'text-white' },
-          { label: 'Com Campanha', value: withCampaign, color: 'text-cyan' },
-          { label: 'Spend 30d', value: `$${totalSpend.toFixed(0)}`, color: 'text-slate-300' },
-          { label: 'Vendas 30d', value: `$${totalSales.toFixed(0)}`, color: 'text-emerald-400' },
-        ].map(k => (
-          <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">{k.label}</p>
-            <p className={`text-xl font-bold ${k.color}`}>{loading ? '—' : k.value}</p>
-          </div>
-        ))}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+          <p className="text-xs text-slate-500 mb-1">Total Produtos</p>
+          <p className="text-xl font-bold text-white">{loading ? '—' : totalProducts}</p>
+        </div>
+        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+          <p className="text-xs text-slate-500 mb-1">Ads Ativos</p>
+          <p className="text-xl font-bold text-emerald-400">{loading ? '—' : withActiveAds}</p>
+          {withPausedAds > 0 && <p className="text-xs text-amber-400 mt-0.5">{withPausedAds} pausados</p>}
+        </div>
+        <div className={`rounded-xl p-4 border ${needsAds > 0 ? 'bg-cyan/5 border-cyan/20' : 'bg-surface-1 border-surface-2'}`}>
+          <p className="text-xs text-slate-500 mb-1">Precisam de Ads</p>
+          <p className={`text-xl font-bold ${needsAds > 0 ? 'text-cyan' : 'text-slate-400'}`}>{loading ? '—' : needsAds}</p>
+          {needsAds > 0 && <p className="text-xs text-slate-500 mt-0.5">com estoque, sem campanha</p>}
+        </div>
+        <div className={`rounded-xl p-4 border ${noStock > 0 ? 'bg-red-500/5 border-red-500/20' : 'bg-surface-1 border-surface-2'}`}>
+          <p className="text-xs text-slate-500 mb-1">Sem Estoque</p>
+          <p className={`text-xl font-bold ${noStock > 0 ? 'text-red-400' : 'text-slate-400'}`}>{loading ? '—' : noStock}</p>
+        </div>
       </div>
 
       {/* Filtros + pesquisa */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-shrink-0 sm:w-72">
+        <div className="relative flex-shrink-0 sm:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Pesquisar ASIN, nome ou SKU..."
+            placeholder="Pesquisar ASIN, SKU..."
             className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-          {filterButtons.map(f => (
+          {[
+            { key: 'all', label: `Todos (${totalProducts})` },
+            { key: 'active_ads', label: `Ads Ativos (${withActiveAds})` },
+            { key: 'needs_ads', label: `Precisam de Ads (${needsAds})`, highlight: needsAds > 0 },
+            { key: 'with_campaign', label: `Com Camp. (${withActiveAds + withPausedAds})` },
+            { key: 'no_campaign', label: `Sem Camp. (${totalProducts - withActiveAds - withPausedAds})` },
+            { key: 'no_stock', label: `Sem Stock (${noStock})` },
+          ].map(f => (
             <button key={f.key} onClick={() => setFilter(f.key)}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${
+                filter === f.key
+                  ? 'bg-cyan/20 text-cyan border-cyan/30'
+                  : f.highlight
+                  ? 'bg-cyan/5 text-cyan/70 border-cyan/20 hover:border-cyan/30'
+                  : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'
+              }`}>
               {f.label}
             </button>
           ))}
@@ -423,20 +443,16 @@ export default function Products() {
       ) : !account ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
           <Package className="w-12 h-12 text-slate-600" />
-          <p className="text-sm text-slate-400">Nenhuma conta Amazon configurada.<br/>Aceda às Configurações para conectar.</p>
+          <p className="text-sm text-slate-400">Nenhuma conta Amazon configurada.</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
           <Package className="w-12 h-12 text-slate-600" />
           <p className="text-sm text-slate-400">
-            {products.length === 0 ? 'Sem produtos. Execute "Sync Inventário" para importar.' : 'Nenhum produto encontrado com estes filtros.'}
+            {products.length === 0
+              ? 'Sem produtos. Execute um Sync no Dashboard.'
+              : 'Nenhum produto encontrado com estes filtros.'}
           </p>
-          {products.length === 0 && (
-            <button onClick={syncInventory} disabled={syncing}
-              className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors">
-              <Zap className="w-4 h-4" /> Sync Inventário
-            </button>
-          )}
         </div>
       ) : (
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
@@ -444,17 +460,17 @@ export default function Products() {
             <p className="text-xs text-slate-500">{filtered.length} produtos</p>
             <select value={sortBy} onChange={e => setSortBy(e.target.value)}
               className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-1 focus:outline-none">
-              <option value="total_sales_30d">Ordenar: Vendas</option>
-              <option value="total_spend_30d">Ordenar: Spend</option>
+              <option value="total_sales_30d">Ordenar: Vendas 30d</option>
+              <option value="total_spend_30d">Ordenar: Spend 30d</option>
+              <option value="fba_inventory">Ordenar: Estoque</option>
               <option value="acos">Ordenar: ACoS</option>
-              <option value="fba_inventory">Ordenar: Stock</option>
             </select>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Produto', 'Inventário', 'Status', 'Disponível desde', 'Campanha', 'ACoS', 'ROAS', 'Spend 30d', 'Vendas 30d', 'Ações'].map(h => (
+                  {['Produto', 'Estoque FBA', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>

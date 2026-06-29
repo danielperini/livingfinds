@@ -176,10 +176,22 @@ Deno.serve(async (req) => {
         { $set: { status: 'error', error_message: 'Cancelado por novo ciclo', completed_at: new Date().toISOString() } }
       );
 
-      // Apagar campanhas antigas e inserir novas
-      await base44.asServiceRole.entities.Campaign.deleteMany({ amazon_account_id: amazonAccountId });
-      for (let i = 0; i < campaignRecords.length; i += 500) {
-        await base44.asServiceRole.entities.Campaign.bulkCreate(campaignRecords.slice(i, i + 500));
+      // Upsert campanhas: atualizar existentes, criar novas — não apagar históricas
+      const existingCampsReq = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId }, '-created_date', 2000);
+      const existingCampMap = {};
+      for (const c of existingCampsReq) existingCampMap[c.campaign_id] = c;
+      const toCreate = [], toUpdate = [];
+      for (const rec of campaignRecords) {
+        if (existingCampMap[rec.campaign_id]) toUpdate.push({ id: existingCampMap[rec.campaign_id].id, ...rec });
+        else toCreate.push(rec);
+      }
+      if (toCreate.length > 0) {
+        for (let i = 0; i < toCreate.length; i += 500)
+          await base44.asServiceRole.entities.Campaign.bulkCreate(toCreate.slice(i, i + 500));
+      }
+      if (toUpdate.length > 0) {
+        for (let i = 0; i < toUpdate.length; i += 500)
+          await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + 500));
       }
 
       // Solicitar 3 relatórios 30d em paralelo
@@ -345,60 +357,92 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Métricas diárias — apagar só de hoje e reinserir
+      // Métricas diárias — apagar só registros de hoje e reinserir (preserva histórico)
       if (metricsRecords.length > 0) {
         await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId, date: today });
         for (let i = 0; i < metricsRecords.length; i += 500) {
           await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
         }
       }
+      // Também registrar métricas diárias dos últimos 30d a partir do relatório SUMMARY
+      // (o relatório SUMMARY agrega tudo em 1 linha — guardamos em today para histórico)
 
-      // ── Processar produtos ──
+      // ── Processar produtos — upsert, nunca apagar ──
       let prodCount = 0;
       if (data.products.length > 0) {
         const asinMap = {};
         for (const row of data.products) {
           const asin = row.advertisedAsin || row.asin;
           if (!asin) continue;
-          if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, sku: row.advertisedSku };
+          if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, sku: row.advertisedSku, campaignId: row.campaignId };
           asinMap[asin].spend += Number(row.cost) || 0;
           asinMap[asin].sales += Number(row.sales30d) || Number(row.sales14d) || 0;
           asinMap[asin].units += Number(row.unitsSoldClicks30d) || Number(row.unitsSoldClicks14d) || 0;
         }
-        const productRecords = Object.entries(asinMap).map(([asin, m]) => ({
-          amazon_account_id: amazonAccountId,
-          asin,
-          sku: m.sku || null,
-          status: 'active',
-          // Ambos os pares para compatibilidade com frontend
-          total_revenue_30d: m.sales,
-          total_sales_30d: m.sales,
-          units_sold_30d: m.units,
-          total_units_30d: m.units,
-          total_spend_30d: m.spend,
-          acos: m.sales > 0 ? m.spend / m.sales * 100 : 0,
-          roas: m.spend > 0 ? m.sales / m.spend : 0,
-          synced_at: new Date().toISOString(),
-          last_sync_at: new Date().toISOString(),
-        }));
-        await base44.asServiceRole.entities.Product.deleteMany({ amazon_account_id: amazonAccountId });
-        for (let i = 0; i < productRecords.length; i += 500) {
-          await base44.asServiceRole.entities.Product.bulkCreate(productRecords.slice(i, i + 500));
+        // Buscar produtos existentes para fazer upsert
+        const existingProds = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId }, '-created_date', 2000);
+        const existingProdMap = {};
+        for (const p of existingProds) existingProdMap[p.asin] = p;
+
+        // Buscar campanhas existentes para linkar ao produto
+        const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId }, '-created_date', 2000);
+        const campByAsin = {};
+        for (const c of allCampaigns) { if (c.asin) campByAsin[c.asin] = c; }
+        const campById = {};
+        for (const c of allCampaigns) campById[c.campaign_id] = c;
+
+        const prodToCreate = [], prodToUpdate = [];
+        for (const [asin, m] of Object.entries(asinMap)) {
+          // Verificar se há campanha ativa para este ASIN
+          const linkedCamp = campByAsin[asin] || (m.campaignId ? campById[String(m.campaignId)] : null);
+          const hasCampaign = !!linkedCamp;
+          const campActive = linkedCamp && (linkedCamp.state === 'enabled');
+          const metrics = {
+            total_revenue_30d: m.sales,
+            total_sales_30d: m.sales,
+            units_sold_30d: m.units,
+            total_units_30d: m.units,
+            total_spend_30d: m.spend,
+            acos: m.sales > 0 ? m.spend / m.sales * 100 : 0,
+            roas: m.spend > 0 ? m.sales / m.spend : 0,
+            has_campaign: hasCampaign,
+            campaign_status: hasCampaign ? (campActive ? 'active' : 'paused') : 'none',
+            linked_campaign_id: linkedCamp?.campaign_id || null,
+            synced_at: new Date().toISOString(),
+            last_sync_at: new Date().toISOString(),
+          };
+          if (existingProdMap[asin]) {
+            prodToUpdate.push({ id: existingProdMap[asin].id, ...metrics });
+          } else {
+            prodToCreate.push({ amazon_account_id: amazonAccountId, asin, sku: m.sku || null, status: 'active', ...metrics });
+          }
         }
-        prodCount = productRecords.length;
+        if (prodToCreate.length > 0) {
+          for (let i = 0; i < prodToCreate.length; i += 500)
+            await base44.asServiceRole.entities.Product.bulkCreate(prodToCreate.slice(i, i + 500));
+        }
+        if (prodToUpdate.length > 0) {
+          for (let i = 0; i < prodToUpdate.length; i += 500)
+            await base44.asServiceRole.entities.Product.bulkUpdate(prodToUpdate.slice(i, i + 500));
+        }
+        prodCount = prodToCreate.length + prodToUpdate.length;
       }
 
-      // ── Processar keywords / search terms ──
+      // ── Processar keywords / search terms — upsert por keyword_id ──
       let kwCount = 0;
       if (data.keywords.length > 0) {
-        const kwRecords = [];
+        const existingKws = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: amazonAccountId }, '-created_date', 5000);
+        const existingKwMap = {};
+        for (const kw of existingKws) existingKwMap[kw.keyword_id] = kw;
+
+        const kwToCreate = [], kwToUpdate = [];
         for (const row of data.keywords) {
           if (!row.keywordId && !row.searchTerm) continue;
           const kwId = String(row.keywordId || `st_${row.searchTerm}`);
           const spend = Number(row.cost) || 0;
           const sales = Number(row.sales14d) || Number(row.sales30d) || 0;
           const clicks = Number(row.clicks) || 0;
-          kwRecords.push({
+          const rec = {
             amazon_account_id: amazonAccountId,
             campaign_id: String(row.campaignId || ''),
             ad_group_id: String(row.adGroupId || ''),
@@ -411,13 +455,19 @@ Deno.serve(async (req) => {
             acos: sales > 0 ? spend / sales * 100 : 0,
             cpc: clicks > 0 ? spend / clicks : 0,
             synced_at: new Date().toISOString(),
-          });
+          };
+          if (existingKwMap[kwId]) kwToUpdate.push({ id: existingKwMap[kwId].id, ...rec });
+          else kwToCreate.push(rec);
         }
-        await base44.asServiceRole.entities.Keyword.deleteMany({ amazon_account_id: amazonAccountId });
-        for (let i = 0; i < kwRecords.length; i += 500) {
-          await base44.asServiceRole.entities.Keyword.bulkCreate(kwRecords.slice(i, i + 500));
+        if (kwToCreate.length > 0) {
+          for (let i = 0; i < kwToCreate.length; i += 500)
+            await base44.asServiceRole.entities.Keyword.bulkCreate(kwToCreate.slice(i, i + 500));
         }
-        kwCount = kwRecords.length;
+        if (kwToUpdate.length > 0) {
+          for (let i = 0; i < kwToUpdate.length; i += 500)
+            await base44.asServiceRole.entities.Keyword.bulkUpdate(kwToUpdate.slice(i, i + 500));
+        }
+        kwCount = kwToCreate.length + kwToUpdate.length;
       }
 
       // ── Decisões IA ──

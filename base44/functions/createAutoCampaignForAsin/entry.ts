@@ -7,12 +7,12 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const tokenCache = {};
 
-async function getAdsToken() {
+async function getAdsToken(refreshToken) {
   const cached = tokenCache['ads'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
+    refresh_token: refreshToken,
     client_id: Deno.env.get('ADS_CLIENT_ID'),
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
@@ -20,7 +20,7 @@ async function getAdsToken() {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || 'Token failed');
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Token failed');
   tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
   return data.access_token;
 }
@@ -32,19 +32,23 @@ function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsRequest(method, path, body) {
-  const token = await getAdsToken();
+async function adsRequest(method, path, body, refreshToken, profileId, contentType = 'application/json') {
+  const token = await getAdsToken(refreshToken);
   const res = await fetch(`${getAdsBaseUrl()}${path}`, {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
-      'Content-Type': 'application/json',
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': contentType,
+      'Accept': contentType,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return await res.json();
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(`Amazon Ads API ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
+  return data;
 }
 
 Deno.serve(async (req) => {
@@ -56,6 +60,14 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, asin, sku, product_name } = body;
     if (!amazon_account_id || !asin) return Response.json({ error: 'amazon_account_id and asin required' }, { status: 400 });
+
+    // Resolver conta e credenciais
+    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
+    if (!account) return Response.json({ ok: false, error: 'AmazonAccount não encontrada' });
+    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+    if (!refreshToken) return Response.json({ ok: false, error: 'Sem refresh_token. Conecte o Amazon Ads primeiro.' });
+    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+    if (!profileId) return Response.json({ ok: false, error: 'ads_profile_id não configurado' });
 
     // Verificar se já existe campanha ativa para este ASIN
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
@@ -86,46 +98,64 @@ Deno.serve(async (req) => {
     const campaignName = `AUTO | ${asin} | ${product_name ? product_name.slice(0, 30) : 'Produto'} | ${new Date().toISOString().slice(0, 10)}`;
     const today = new Date().toISOString().slice(0, 10);
 
-    // Criar campanha na Amazon Ads API
-    const campaignPayload = [{
-      name: campaignName,
-      campaignType: 'sponsoredProducts',
-      targetingType: 'auto',
-      state: 'enabled',
-      dailyBudget: campaignBudget,
-      startDate: today.replace(/-/g, ''),
-    }];
+    // Criar campanha na Amazon Ads API (v3)
+    const campaignPayload = {
+      campaigns: [{
+        name: campaignName,
+        targetingType: 'AUTO',
+        state: 'ENABLED',
+        budget: { budgetType: 'DAILY', budget: campaignBudget },
+        startDate: today,
+      }],
+    };
 
-    const campaignResult = await adsRequest('POST', '/v2/sp/campaigns', campaignPayload);
-    const createdCampaign = Array.isArray(campaignResult) ? campaignResult[0] : campaignResult;
+    let campaignResult;
+    try {
+      campaignResult = await adsRequest('POST', '/sp/campaigns', campaignPayload, refreshToken, profileId, 'application/vnd.spCampaign.v3+json');
+    } catch (e) {
+      return Response.json({ ok: false, error: `Falha ao criar campanha: ${e.message}` });
+    }
 
+    const createdCampaign = campaignResult?.campaigns?.success?.[0] || campaignResult?.success?.[0] || (Array.isArray(campaignResult) ? campaignResult[0] : null);
     if (!createdCampaign?.campaignId) {
-      return Response.json({ ok: false, error: 'Amazon Ads API não retornou campaignId', details: createdCampaign });
+      return Response.json({ ok: false, error: 'Amazon Ads não retornou campaignId', details: campaignResult });
     }
 
     const campaignId = String(createdCampaign.campaignId);
 
     // Criar Ad Group
-    const adGroupPayload = [{
-      name: `AdGroup | ${asin}`,
-      campaignId: Number(campaignId),
-      defaultBid: budgetRule.min_auto_campaign_bid || 0.25,
-      state: 'enabled',
-    }];
-    const adGroupResult = await adsRequest('POST', '/v2/sp/adGroups', adGroupPayload);
-    const createdAdGroup = Array.isArray(adGroupResult) ? adGroupResult[0] : adGroupResult;
-    const adGroupId = String(createdAdGroup?.adGroupId || '');
+    let adGroupId = '';
+    try {
+      const adGroupPayload = {
+        adGroups: [{
+          name: `AdGroup | ${asin}`,
+          campaignId,
+          defaultBid: budgetRule.min_auto_campaign_bid || 0.25,
+          state: 'ENABLED',
+        }],
+      };
+      const adGroupResult = await adsRequest('POST', '/sp/adGroups', adGroupPayload, refreshToken, profileId, 'application/vnd.spAdGroup.v3+json');
+      adGroupId = String(adGroupResult?.adGroups?.success?.[0]?.adGroupId || adGroupResult?.success?.[0]?.adGroupId || '');
+    } catch (e) {
+      console.warn('AdGroup creation failed:', e.message);
+    }
 
     // Criar Product Ad
     if (adGroupId) {
-      const adPayload = [{
-        campaignId: Number(campaignId),
-        adGroupId: Number(adGroupId),
-        asin,
-        sku: sku || null,
-        state: 'enabled',
-      }];
-      await adsRequest('POST', '/v2/sp/productAds', adPayload);
+      try {
+        const adPayload = {
+          productAds: [{
+            campaignId,
+            adGroupId,
+            asin,
+            sku: sku || undefined,
+            state: 'ENABLED',
+          }],
+        };
+        await adsRequest('POST', '/sp/productAds', adPayload, refreshToken, profileId, 'application/vnd.spProductAd.v3+json');
+      } catch (e) {
+        console.warn('ProductAd creation failed:', e.message);
+      }
     }
 
     const now = new Date().toISOString();
