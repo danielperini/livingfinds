@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Zap, List, Users, Radio, FileText, Eye, Download } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Zap, List, Users, Radio, FileText, Eye, Download, Play } from 'lucide-react';
+import StatusBadge from '@/components/ui/StatusBadge';
 
 function StatusDot({ status }) {
   if (status === 'ok' || status === 'connected') return <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />;
@@ -43,12 +44,81 @@ function ActionButton({ icon: Icon, label, onClick, loading, variant = 'default'
   );
 }
 
+// Painel de status automático com os 4 indicadores
+function ConnectionStatusPanel({ account, syncRuns, loading }) {
+  const connStatus = account?.status || 'unknown';
+  const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca';
+  const lastReportRun = syncRuns.find(r => r.operation === 'runFullSync' || r.operation?.startsWith('adsReports:'));
+  const lastReport = lastReportRun?.completed_at ? new Date(lastReportRun.completed_at).toLocaleString('pt-BR') : 'Nunca';
+  const hasRefreshToken = !!account?.ads_refresh_token;
+  const tokenStatus = hasRefreshToken ? 'ok' : 'warning';
+
+  // Última renovação: pegar o SyncRun mais recente com sucesso
+  const lastSuccessRun = syncRuns.find(r => r.status === 'success');
+  const lastTokenRenewal = lastSuccessRun?.completed_at ? new Date(lastSuccessRun.completed_at).toLocaleString('pt-BR') : 'Nunca';
+
+  if (loading) {
+    return (
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-pulse">
+        {[1,2,3,4].map(i => <div key={i} className="bg-surface-2 rounded-xl h-24" />)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Status da Conexão */}
+      <div className={`rounded-xl p-4 border ${connStatus === 'connected' ? 'bg-emerald-500/5 border-emerald-500/20' : connStatus === 'error' ? 'bg-red-500/5 border-red-500/20' : 'bg-amber-500/5 border-amber-500/20'}`}>
+        <div className="flex items-center gap-2 mb-2">
+          <StatusDot status={connStatus} />
+          <span className="text-xs text-slate-400">Status Amazon</span>
+        </div>
+        <p className="text-sm font-bold text-white capitalize">{connStatus}</p>
+        <p className="text-xs text-slate-500 mt-1">
+          {hasRefreshToken ? '✓ Refresh token salvo' : '⚠ Sem refresh token'}
+        </p>
+      </div>
+
+      {/* Última Sincronização */}
+      <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+        <p className="text-xs text-slate-400 mb-2">Última Sincronização</p>
+        <p className="text-sm font-bold text-white">{lastSync}</p>
+        {lastSuccessRun && (
+          <p className="text-xs text-slate-500 mt-1">
+            {lastSuccessRun.records_upserted ? `${lastSuccessRun.records_upserted} registos` : ''}
+            {lastSuccessRun.duration_ms ? ` · ${(lastSuccessRun.duration_ms / 1000).toFixed(1)}s` : ''}
+          </p>
+        )}
+      </div>
+
+      {/* Último Relatório */}
+      <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+        <p className="text-xs text-slate-400 mb-2">Último Relatório Baixado</p>
+        <p className="text-sm font-bold text-white">{lastReport}</p>
+        {lastReportRun && (
+          <p className="text-xs text-slate-500 mt-1 capitalize">
+            <StatusBadge status={lastReportRun.status} size="xs" />
+          </p>
+        )}
+      </div>
+
+      {/* Última Renovação do Token */}
+      <div className={`rounded-xl p-4 border ${hasRefreshToken ? 'bg-surface-2 border-surface-3' : 'bg-amber-500/5 border-amber-500/20'}`}>
+        <p className="text-xs text-slate-400 mb-2">Última Renovação do Token</p>
+        <p className="text-sm font-bold text-white">{lastTokenRenewal}</p>
+        <p className="text-xs text-slate-500 mt-1">
+          {hasRefreshToken ? 'Auto-renovação ativa' : 'Conecte o Amazon Ads'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function Diagnostico() {
   const [account, setAccount] = useState(null);
   const [stats, setStats] = useState({ campaigns: 0, products: 0, keywords: 0 });
   const [syncRuns, setSyncRuns] = useState([]);
   const [loading, setLoading] = useState(true);
-
   const [results, setResults] = useState({});
   const [loadingBtn, setLoadingBtn] = useState({});
 
@@ -66,7 +136,7 @@ export default function Diagnostico() {
           base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
           base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
           base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
-          base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 5),
+          base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 10),
         ]);
         setStats({ campaigns: campsAll.length, products: prodsAll.length, keywords: kwdsAll.length });
         setSyncRuns(runs);
@@ -93,6 +163,12 @@ export default function Diagnostico() {
       await loadData();
     }
   };
+
+  const runFullSync = () => run('fullSync', async () => {
+    if (!account) throw new Error('Nenhuma conta Amazon encontrada');
+    const r = await base44.functions.invoke('runFullSync', { amazon_account_id: account.id });
+    return r.data;
+  });
 
   const testToken = () => run('token', async () => {
     const r = await base44.functions.invoke('testAuthHealth', {});
@@ -143,103 +219,94 @@ export default function Diagnostico() {
     return r.data;
   });
 
-  const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca';
   const lastError = account?.error_message || syncRuns.find(r => r.status === 'error')?.error_message || null;
-  const lastReportRun = syncRuns.find(r => r.operation?.startsWith('adsReports:'));
-  const lastReportDate = lastReportRun?.started_at ? new Date(lastReportRun.started_at).toLocaleString('pt-BR') : 'Nunca';
-
-  const connStatus = account?.status || 'unknown';
 
   return (
     <div className="p-6 space-y-6 animate-fade-in max-w-5xl mx-auto">
-      <div>
-        <h1 className="text-xl font-bold text-white">Diagnóstico Amazon</h1>
-        <p className="text-sm text-slate-400 mt-1">Ferramentas de diagnóstico e sincronização manual</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-white">Diagnóstico Amazon</h1>
+          <p className="text-sm text-slate-400 mt-1">Monitoramento de conexão e sincronização</p>
+        </div>
+        <button onClick={loadData} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1">
+          <RefreshCw className="w-3 h-3" /> Atualizar
+        </button>
       </div>
 
-      {/* Status da Conexão */}
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-        <h2 className="text-sm font-semibold text-slate-300 mb-4">Status da Conexão</h2>
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-slate-400"><Loader2 className="w-4 h-4 animate-spin" />Carregando...</div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            <div className="bg-surface-2 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-1">
-                <StatusDot status={connStatus} />
-                <span className="text-xs text-slate-400">Conexão</span>
-              </div>
-              <p className="text-sm font-semibold text-white capitalize">{connStatus}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Último Sync</p>
-              <p className="text-sm font-semibold text-white">{lastSync}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Último Report</p>
-              <p className="text-sm font-semibold text-white">{lastReportDate}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Campanhas</p>
-              <p className="text-2xl font-bold text-cyan">{stats.campaigns}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Produtos</p>
-              <p className="text-2xl font-bold text-cyan">{stats.products}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-xs text-slate-400 mb-1">Keywords</p>
-              <p className="text-2xl font-bold text-cyan">{stats.keywords}</p>
-            </div>
-            {lastError && (
-              <div className="col-span-2 bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                <p className="text-xs text-red-400 font-semibold mb-1">Último Erro Amazon</p>
-                <p className="text-xs text-red-300 break-all">{lastError}</p>
-              </div>
-            )}
-            {account && (
-              <div className="bg-surface-2 rounded-lg p-3">
-                <p className="text-xs text-slate-400 mb-1">Profile ID</p>
-                <p className="text-xs font-mono text-slate-300 break-all">{account.ads_profile_id || 'N/D'}</p>
-              </div>
-            )}
+      {/* 4 indicadores de status */}
+      <ConnectionStatusPanel account={account} syncRuns={syncRuns} loading={loading} />
+
+      {/* Stats de dados */}
+      {!loading && account && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Campanhas</p>
+            <p className="text-3xl font-bold text-cyan">{stats.campaigns}</p>
+          </div>
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Produtos</p>
+            <p className="text-3xl font-bold text-cyan">{stats.products}</p>
+          </div>
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Keywords</p>
+            <p className="text-3xl font-bold text-cyan">{stats.keywords}</p>
+          </div>
+        </div>
+      )}
+
+      {lastError && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-red-400 mb-1">Último Erro</p>
+            <p className="text-xs text-red-300 break-all">{lastError}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Completo Automático */}
+      <div className="bg-surface-1 border border-cyan/20 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Sync Completo Automático</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Renova token → importa campanhas → relatórios 30d → popula tabelas → decisões IA</p>
+          </div>
+          <ActionButton icon={Play} label={loadingBtn.fullSync ? 'Executando...' : 'Executar Sync Completo'} onClick={runFullSync} loading={loadingBtn.fullSync} variant="primary" />
+        </div>
+        {loadingBtn.fullSync && (
+          <div className="flex items-center gap-2 text-xs text-cyan mt-2">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            Aguardando relatórios Amazon (pode demorar 5-15 min)...
           </div>
         )}
+        <ResultBox title="Resultado: Sync Completo" result={results.fullSync} loading={loadingBtn.fullSync} />
       </div>
 
-      {/* Botões de Ação */}
+      {/* Ações manuais individuais */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-slate-300">Ações de Diagnóstico</h2>
-          <button onClick={loadData} className="text-xs text-slate-500 hover:text-slate-300 flex items-center gap-1">
-            <RefreshCw className="w-3 h-3" /> Atualizar
-          </button>
-        </div>
-
+        <h2 className="text-sm font-semibold text-slate-300 mb-4">Ações Individuais de Diagnóstico</h2>
         <div className="flex flex-wrap gap-3">
           <ActionButton icon={CheckCircle} label="Testar Token" onClick={testToken} loading={loadingBtn.token} variant="primary" />
           <ActionButton icon={List} label="Listar Profiles" onClick={listProfiles} loading={loadingBtn.profiles} />
-          <ActionButton icon={Users} label="Listar Advertiser Accounts" onClick={listAccounts} loading={loadingBtn.accounts} />
-          <ActionButton icon={Radio} label="Sincronizar Campanhas" onClick={syncCampaigns} loading={loadingBtn.sync} />
+          <ActionButton icon={Users} label="Advertiser Accounts" onClick={listAccounts} loading={loadingBtn.accounts} />
+          <ActionButton icon={Radio} label="Sync Campanhas" onClick={syncCampaigns} loading={loadingBtn.sync} />
           <ActionButton icon={FileText} label="Solicitar Reports" onClick={requestReports} loading={loadingBtn.reportRequest} />
           <ActionButton icon={Eye} label="Verificar Reports" onClick={checkReports} loading={loadingBtn.reportCheck} />
-          <ActionButton icon={Download} label="Baixar Reports" onClick={downloadReports} loading={loadingBtn.reportDownload} variant="primary" />
+          <ActionButton icon={Download} label="Baixar Reports" onClick={downloadReports} loading={loadingBtn.reportDownload} />
         </div>
-
-        {/* Resultados */}
-        <ResultBox title="Resultado: Testar Token" result={results.token} loading={loadingBtn.token} />
-        <ResultBox title="Resultado: Listar Profiles" result={results.profiles} loading={loadingBtn.profiles} />
-        <ResultBox title="Resultado: Listar Advertiser Accounts" result={results.accounts} loading={loadingBtn.accounts} />
-        <ResultBox title="Resultado: Sincronizar Campanhas" result={results.sync} loading={loadingBtn.sync} />
-        <ResultBox title="Resultado: Solicitar Reports" result={results.reportRequest} loading={loadingBtn.reportRequest} />
-        <ResultBox title="Resultado: Verificar Reports" result={results.reportCheck} loading={loadingBtn.reportCheck} />
-        <ResultBox title="Resultado: Baixar Reports" result={results.reportDownload} loading={loadingBtn.reportDownload} />
+        <ResultBox title="Testar Token" result={results.token} loading={loadingBtn.token} />
+        <ResultBox title="Listar Profiles" result={results.profiles} loading={loadingBtn.profiles} />
+        <ResultBox title="Advertiser Accounts" result={results.accounts} loading={loadingBtn.accounts} />
+        <ResultBox title="Sync Campanhas" result={results.sync} loading={loadingBtn.sync} />
+        <ResultBox title="Solicitar Reports" result={results.reportRequest} loading={loadingBtn.reportRequest} />
+        <ResultBox title="Verificar Reports" result={results.reportCheck} loading={loadingBtn.reportCheck} />
+        <ResultBox title="Baixar Reports" result={results.reportDownload} loading={loadingBtn.reportDownload} />
       </div>
 
-      {/* Últimos SyncRuns */}
+      {/* Histórico de Syncs */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-surface-2">
-          <h2 className="text-sm font-semibold text-slate-300">Histórico de Syncs Recentes</h2>
+          <h2 className="text-sm font-semibold text-slate-300">Histórico de Syncs</h2>
         </div>
         {syncRuns.length === 0 ? (
           <p className="text-sm text-slate-500 text-center py-6">Nenhum sync encontrado</p>
