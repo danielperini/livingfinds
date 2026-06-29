@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Package, Search, RefreshCw, Loader2, AlertTriangle, Play, Pause,
-  Plus, Tag, ChevronDown, ChevronUp, Filter, Zap, CheckCircle, XCircle, Radio
+  Plus, Tag, ChevronDown, ChevronUp, Filter, Zap, CheckCircle, XCircle, Radio,
+  TrendingUp, TrendingDown, MinusCircle
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -72,14 +73,19 @@ function AdsActionButton({ product, onCreateCampaign, onToggleCampaign, loading 
 function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
+  const [negSuggestions, setNegSuggestions] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
 
   const toggleKeywords = async () => {
     if (!expanded) {
       setKwLoading(true);
       try {
-        const kws = await base44.entities.Keyword.filter({ campaign_id: product.linked_campaign_id || '' }, '-spend', 50);
+        const [kws, negs] = await Promise.all([
+          base44.entities.Keyword.filter({ campaign_id: product.linked_campaign_id || '' }, '-spend', 50),
+          base44.entities.NegativeKeywordSuggestion.filter({ campaign_id: product.linked_campaign_id || '', status: 'pending' }, '-created_date', 20),
+        ]);
         setKeywords(kws);
+        setNegSuggestions(negs);
       } finally {
         setKwLoading(false);
       }
@@ -169,43 +175,96 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, actionLoading
       {/* Keywords expandido */}
       {expanded && (
         <tr className="border-b border-surface-2/40 bg-surface-2/20">
-          <td colSpan={8} className="px-6 py-3">
+          <td colSpan={8} className="px-6 py-4 space-y-4">
             {kwLoading ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" />
                 <span className="text-xs text-slate-400">Carregando search terms...</span>
               </div>
-            ) : keywords.length === 0 ? (
-              <p className="text-xs text-slate-500 py-1">Sem search terms registados para esta campanha.</p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr>
-                      {['Search Term', 'Match', 'Clicks', 'Spend', 'Vendas', 'ACoS'].map(h => (
-                        <th key={h} className="pr-5 py-1.5 text-left text-slate-500 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
+              <>
+                {/* Sugestões de ação do monitor */}
+                {negSuggestions.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-red-400 flex items-center gap-1.5">
+                      <TrendingDown className="w-3.5 h-3.5" /> {negSuggestions.length} termos para negativar
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {negSuggestions.map(n => (
+                        <span key={n.id} title={n.reason}
+                          className="text-xs px-2 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-red-300 cursor-help">
+                          ✕ {n.keyword_text} (${(n.spend||0).toFixed(2)}, {n.sales > 0 ? `${(n.acos||0).toFixed(0)}% ACoS` : '0 vendas'})
+                        </span>
                       ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {keywords.map(kw => {
-                      const kwAcos = kw.acos || 0;
-                      return (
-                        <tr key={kw.id} className="border-t border-surface-2/30">
-                          <td className="pr-5 py-1.5 text-slate-300 max-w-[200px] truncate">{kw.keyword_text || kw.keyword || '—'}</td>
-                          <td className="pr-5 py-1.5"><span className="px-1.5 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type}</span></td>
-                          <td className="pr-5 py-1.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
-                          <td className="pr-5 py-1.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
-                          <td className="pr-5 py-1.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
-                          <td className={`pr-5 py-1.5 font-semibold ${kwAcos > 50 ? 'text-red-400' : kwAcos > 30 ? 'text-amber-400' : kwAcos > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
-                            {kwAcos > 0 ? `${kwAcos.toFixed(1)}%` : '—'}
-                          </td>
+                    </div>
+                  </div>
+                )}
+
+                {/* Sugestões de promoção */}
+                {(() => {
+                  const toPromote = keywords.filter(kw => kw.source === 'suggested');
+                  if (toPromote.length === 0) return null;
+                  return (
+                    <div className="space-y-1">
+                      <p className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                        <TrendingUp className="w-3.5 h-3.5" /> {toPromote.length} termos rentáveis — promover a manual
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {toPromote.map(kw => (
+                          <span key={kw.id} title={`ACoS: ${(kw.acos||0).toFixed(0)}% · Spend: $${(kw.spend||0).toFixed(2)}`}
+                            className="text-xs px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 cursor-help">
+                            ↑ {kw.keyword_text} ({(kw.acos||0).toFixed(0)}% ACoS)
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Tabela de search terms */}
+                {keywords.filter(kw => kw.source === 'search_term').length === 0 ? (
+                  <p className="text-xs text-slate-500 py-1">Sem search terms capturados ainda. Execute um sync após a campanha rodar por alguns dias.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <p className="text-xs text-slate-500 mb-2 font-semibold">Search Terms Capturados</p>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr>
+                          {['Search Term', 'Clicks', 'Spend', 'Vendas', 'ACoS', 'Sinal'].map(h => (
+                            <th key={h} className="pr-5 py-1.5 text-left text-slate-500 font-semibold uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody>
+                        {keywords.filter(kw => kw.source === 'search_term').map(kw => {
+                          const kwAcos = kw.acos || 0;
+                          const isWasting = (kw.clicks || 0) >= 5 && (kw.spend || 0) >= 2 && (kw.sales || 0) === 0;
+                          const isGood = (kw.sales || 0) > 0 && kwAcos > 0 && kwAcos < 40;
+                          return (
+                            <tr key={kw.id} className="border-t border-surface-2/30">
+                              <td className="pr-5 py-1.5 text-slate-300 max-w-[180px] truncate">{kw.keyword_text || kw.keyword || '—'}</td>
+                              <td className="pr-5 py-1.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
+                              <td className="pr-5 py-1.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
+                              <td className="pr-5 py-1.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
+                              <td className={`pr-5 py-1.5 font-semibold ${kwAcos > 50 ? 'text-red-400' : kwAcos > 30 ? 'text-amber-400' : kwAcos > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                {kwAcos > 0 ? `${kwAcos.toFixed(1)}%` : '—'}
+                              </td>
+                              <td className="pr-5 py-1.5">
+                                {isGood
+                                  ? <span className="flex items-center gap-1 text-emerald-400 text-xs"><TrendingUp className="w-3 h-3" />Promover</span>
+                                  : isWasting
+                                  ? <span className="flex items-center gap-1 text-red-400 text-xs"><TrendingDown className="w-3 h-3" />Negativar</span>
+                                  : <span className="text-slate-600 text-xs">Observar</span>
+                                }
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </td>
         </tr>

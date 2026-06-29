@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
 
     // Buscar regra de budget
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
-    const budgetRule = budgetRules[0] || { total_daily_budget: 100, max_budget_per_campaign: 20, min_auto_campaign_bid: 0.25 };
+    const budgetRule = budgetRules[0] || { total_daily_budget: 100, max_budget_per_campaign: 20, min_auto_campaign_bid: 0.30 };
 
     // Calcular budget disponível para nova campanha
     const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
@@ -130,7 +130,7 @@ Deno.serve(async (req) => {
         adGroups: [{
           name: `AdGroup | ${asin}`,
           campaignId,
-          defaultBid: budgetRule.min_auto_campaign_bid || 0.25,
+          defaultBid: budgetRule.min_auto_campaign_bid || 0.30,
           state: 'ENABLED',
         }],
       };
@@ -187,7 +187,7 @@ Deno.serve(async (req) => {
         ad_group_id: adGroupId,
         ad_group_name: `AdGroup | ${asin}`,
         name: `AdGroup | ${asin}`,
-        default_bid: budgetRule.min_auto_campaign_bid || 0.25,
+        default_bid: budgetRule.min_auto_campaign_bid || 0.30,
         state: 'enabled',
         status: 'enabled',
         synced_at: now,
@@ -211,7 +211,7 @@ Deno.serve(async (req) => {
       event_type: 'campaign_created',
       entity_type: 'campaign',
       entity_id: campaignId,
-      observation: `Campanha AUTO criada para ASIN ${asin}: "${campaignName}" — Budget: $${campaignBudget}/dia, Bid inicial: $${budgetRule.min_auto_campaign_bid || 0.25}`,
+      observation: `Campanha AUTO criada para ASIN ${asin}: "${campaignName}" — Budget: $${campaignBudget}/dia, Bid inicial: $${budgetRule.min_auto_campaign_bid || 0.30}`,
       recorded_at: now,
     });
 
@@ -221,7 +221,7 @@ Deno.serve(async (req) => {
       ad_group_id: adGroupId,
       campaign_name: campaignName,
       daily_budget: campaignBudget,
-      initial_bid: budgetRule.min_auto_campaign_bid || 0.25,
+      initial_bid: budgetRule.min_auto_campaign_bid || 0.30,
     });
 
   } catch (error) {
