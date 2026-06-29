@@ -1,9 +1,7 @@
 /**
  * downloadAdsReport — Verifica, baixa e processa os 3 relatórios de 30 dias.
- * Popula: Campaign (métricas), Product (vendas ads), Keyword (search terms), CampaignMetricsDaily, Decision (via IA).
- * Depois invoca análise IA para gerar decisões automáticas.
+ * Usa bulkCreate/bulkUpdate para evitar rate limits.
  * Payload: { amazon_account_id, report_ids?: {campaigns, products, keywords} }
- *   Se report_ids omitido, busca o último SyncRun pendente automaticamente.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -45,8 +43,7 @@ async function checkReport(reportId) {
       'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
     },
   });
-  const data = await res.json();
-  return data; // { status, url, ... }
+  return await res.json();
 }
 
 async function downloadAndParse(url) {
@@ -67,12 +64,25 @@ async function downloadAndParse(url) {
   return JSON.parse(text);
 }
 
+// Bulk upsert helper: deletes existing records for the account+key and bulk inserts new ones
+async function bulkUpsert(base44, entityName, amazonAccountId, records) {
+  if (!records.length) return 0;
+  // Delete all existing for this account then bulk insert
+  await base44.asServiceRole.entities[entityName].deleteMany({ amazon_account_id: amazonAccountId });
+  // Insert in batches of 500
+  let total = 0;
+  for (let i = 0; i < records.length; i += 500) {
+    const batch = records.slice(i, i + 500);
+    await base44.asServiceRole.entities[entityName].bulkCreate(batch);
+    total += batch.length;
+  }
+  return total;
+}
+
 Deno.serve(async (req) => {
   const startTime = Date.now();
-  let base44;
-
   try {
-    base44 = createClientFromRequest(req);
+    const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -85,10 +95,9 @@ Deno.serve(async (req) => {
     let syncRunId = null;
 
     if (!reportIds) {
-      const runs = await base44.asServiceRole.entities.SyncRun.filter({
-        amazon_account_id: amazonAccountId,
-        status: 'running',
-      }, '-started_at', 20);
+      const runs = await base44.asServiceRole.entities.SyncRun.filter(
+        { amazon_account_id: amazonAccountId, status: 'running' }, '-started_at', 20
+      );
       const pending = runs.find(r => r.operation?.startsWith('adsReports:'));
       if (!pending) return Response.json({ ok: false, error: 'Nenhum relatório pendente. Execute requestAdsReport primeiro.' }, { status: 404 });
       const match = pending.operation.match(/adsReports:[^:]+:(.+)/);
@@ -96,35 +105,34 @@ Deno.serve(async (req) => {
       syncRunId = pending.id;
     }
 
-    const results = { ready: {}, pending: {}, failed: {} };
+    // Verificar status de cada relatório
+    const pending = {};
+    const failed = {};
     const data = { campaigns: [], products: [], keywords: [] };
 
-    // Verificar e baixar cada relatório
     for (const [key, reportId] of Object.entries(reportIds)) {
       if (!reportId) continue;
       const status = await checkReport(reportId);
       if (status.status === 'COMPLETED' && status.url) {
-        try {
-          data[key] = await downloadAndParse(status.url);
-          results.ready[key] = { reportId, rows: data[key].length };
-        } catch (e) {
-          results.failed[key] = e.message;
-        }
+        data[key] = await downloadAndParse(status.url);
       } else if (status.status === 'FAILED') {
-        results.failed[key] = status.failureReason || 'Report FAILED';
+        failed[key] = status.failureReason || 'FAILED';
       } else {
-        results.pending[key] = status.status;
+        pending[key] = status.status;
       }
     }
 
-    const pendingCount = Object.keys(results.pending).length;
-    if (pendingCount > 0 && Object.keys(results.ready).length === 0) {
-      return Response.json({ ok: true, ready: false, pending: results.pending, message: 'Relatórios ainda a processar. Tente novamente em 5 minutos.' });
+    // Se ainda há relatórios pendentes e nenhum está pronto, retornar estado
+    if (Object.keys(pending).length > 0 && data.campaigns.length === 0 && data.products.length === 0 && data.keywords.length === 0) {
+      return Response.json({ ok: true, ready: false, pending, message: 'Relatórios ainda a processar. Tente novamente em 5 minutos.' });
     }
 
+    const today = new Date().toISOString().slice(0, 10);
+
     // ── Processar Campanhas ──
-    let campaignUpserted = 0;
     let totalSpend = 0, totalSales = 0, totalClicks = 0, totalImpressions = 0, totalOrders = 0;
+    const campaignRecords = [];
+    const metricsRecords = [];
 
     for (const row of data.campaigns) {
       const campaignId = String(row.campaignId);
@@ -144,70 +152,60 @@ Deno.serve(async (req) => {
       totalImpressions += impressions;
       totalOrders += orders;
 
-      const existing = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId, campaign_id: campaignId });
-      const update = {
+      campaignRecords.push({
+        amazon_account_id: amazonAccountId,
+        campaign_id: campaignId,
+        name: row.campaignName || '',
+        campaign_type: 'SP',
+        state: (row.campaignStatus || 'enabled').toLowerCase(),
+        daily_budget: Number(row.campaignBudgetAmount) || 0,
         spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc,
-        // campos extras das colunas expandidas
         synced_at: new Date().toISOString(),
-      };
-      if (existing.length > 0) {
-        await base44.asServiceRole.entities.Campaign.update(existing[0].id, update);
-        campaignUpserted++;
-      }
-
-      // Gravar métricas diárias (summary = data de hoje)
-      const today = new Date().toISOString().slice(0, 10);
-      const metricEx = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
-        amazon_account_id: amazonAccountId, campaign_id: campaignId, date: today,
       });
-      const metricRecord = { amazon_account_id: amazonAccountId, campaign_id: campaignId, date: today, spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc };
-      if (metricEx.length > 0) {
-        await base44.asServiceRole.entities.CampaignMetricsDaily.update(metricEx[0].id, metricRecord);
-      } else {
-        await base44.asServiceRole.entities.CampaignMetricsDaily.create(metricRecord);
-      }
+
+      metricsRecords.push({
+        amazon_account_id: amazonAccountId,
+        campaign_id: campaignId,
+        date: today,
+        spend, sales, clicks, impressions, orders, acos, roas, ctr, cpc,
+      });
+    }
+
+    // Bulk upsert campaigns (delete + insert)
+    await bulkUpsert(base44, 'Campaign', amazonAccountId, campaignRecords);
+
+    // Bulk upsert daily metrics for today
+    await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId, date: today });
+    for (let i = 0; i < metricsRecords.length; i += 500) {
+      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
     }
 
     // ── Processar Produtos Anunciados ──
-    let productUpserted = 0;
-    const asinMetrics = {};
+    const asinMap = {};
     for (const row of data.products) {
       const asin = row.advertisedAsin || row.asin;
       if (!asin) continue;
-      if (!asinMetrics[asin]) {
-        asinMetrics[asin] = { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0, units: 0, sku: row.advertisedSku };
-      }
-      asinMetrics[asin].spend += Number(row.cost) || 0;
-      asinMetrics[asin].sales += Number(row.sales30d) || Number(row.sales14d) || Number(row.sales1d) || 0;
-      asinMetrics[asin].clicks += Number(row.clicks) || 0;
-      asinMetrics[asin].impressions += Number(row.impressions) || 0;
-      asinMetrics[asin].orders += Number(row.purchases30d) || Number(row.purchases14d) || Number(row.purchases1d) || 0;
-      asinMetrics[asin].units += Number(row.unitsSoldClicks30d) || Number(row.unitsSoldClicks14d) || Number(row.unitsSoldClicks1d) || 0;
+      if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, clicks: 0, sku: row.advertisedSku };
+      asinMap[asin].spend += Number(row.cost) || 0;
+      asinMap[asin].sales += Number(row.sales30d) || Number(row.sales14d) || Number(row.sales1d) || 0;
+      asinMap[asin].units += Number(row.unitsSoldClicks30d) || Number(row.unitsSoldClicks14d) || Number(row.unitsSoldClicks1d) || 0;
+      asinMap[asin].clicks += Number(row.clicks) || 0;
     }
 
-    for (const [asin, m] of Object.entries(asinMetrics)) {
-      const existing = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId, asin });
-      const update = {
-        sku: m.sku || existing[0]?.sku || null,
-        total_revenue_30d: m.sales,
-        units_sold_30d: m.units,
-        synced_at: new Date().toISOString(),
-      };
-      if (existing.length > 0) {
-        await base44.asServiceRole.entities.Product.update(existing[0].id, update);
-      } else {
-        await base44.asServiceRole.entities.Product.create({
-          amazon_account_id: amazonAccountId,
-          asin,
-          status: 'active',
-          ...update,
-        });
-      }
-      productUpserted++;
-    }
+    const productRecords = Object.entries(asinMap).map(([asin, m]) => ({
+      amazon_account_id: amazonAccountId,
+      asin,
+      sku: m.sku || null,
+      status: 'active',
+      total_revenue_30d: m.sales,
+      units_sold_30d: m.units,
+      synced_at: new Date().toISOString(),
+    }));
+
+    await bulkUpsert(base44, 'Product', amazonAccountId, productRecords);
 
     // ── Processar Keywords / Search Terms ──
-    let keywordUpserted = 0;
+    const keywordRecords = [];
     for (const row of data.keywords) {
       if (!row.keywordId && !row.searchTerm) continue;
       const kwId = String(row.keywordId || `st_${row.searchTerm}`);
@@ -215,82 +213,48 @@ Deno.serve(async (req) => {
       const sales = Number(row.sales14d) || Number(row.sales1d) || 0;
       const clicks = Number(row.clicks) || 0;
       const impressions = Number(row.impressions) || 0;
-
-      const existing = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: amazonAccountId, keyword_id: kwId });
-      const update = {
+      keywordRecords.push({
+        amazon_account_id: amazonAccountId,
+        campaign_id: String(row.campaignId || ''),
+        ad_group_id: String(row.adGroupId || ''),
+        keyword_id: kwId,
+        keyword_text: row.searchTerm || row.keyword || '',
+        match_type: (row.matchType || 'broad').toLowerCase(),
+        state: 'enabled',
         spend, sales, clicks, impressions,
         acos: sales > 0 ? (spend / sales * 100) : 0,
         cpc: clicks > 0 ? (spend / clicks) : 0,
         synced_at: new Date().toISOString(),
-      };
-      if (existing.length > 0) {
-        await base44.asServiceRole.entities.Keyword.update(existing[0].id, update);
-        keywordUpserted++;
-      }
+      });
     }
 
-    // ── Análise IA completa → Decisões automáticas ──
+    await bulkUpsert(base44, 'Keyword', amazonAccountId, keywordRecords);
+
+    // ── Análise IA → Decisões ──
     let decisionsCreated = 0;
     try {
-      const topCampaigns = data.campaigns
-        .filter(r => Number(r.impressions) > 100)
-        .sort((a, b) => Number(b.cost) - Number(a.cost))
+      const topCampaigns = campaignRecords
+        .filter(c => c.impressions > 100)
+        .sort((a, b) => b.spend - a.spend)
         .slice(0, 20)
-        .map(r => ({
-          id: r.campaignId, name: r.campaignName,
-          spend: Number(r.cost).toFixed(2),
-          sales: Number(r.sales14d || r.sales1d).toFixed(2),
-          acos: Number(r.acosClicks14d || (r.sales14d > 0 ? r.cost / r.sales14d * 100 : 0)).toFixed(1),
-          roas: Number(r.roasClicks14d || (r.cost > 0 ? r.sales14d / r.cost : 0)).toFixed(2),
-          clicks: r.clicks, impressions: r.impressions,
-        }));
+        .map(c => ({ id: c.campaign_id, name: c.name, spend: c.spend.toFixed(2), sales: c.sales.toFixed(2), acos: c.acos.toFixed(1), roas: c.roas.toFixed(2) }));
 
-      const topProducts = Object.entries(asinMetrics)
-        .sort((a, b) => b[1].spend - a[1].spend)
-        .slice(0, 15)
-        .map(([asin, m]) => ({
-          asin, spend: m.spend.toFixed(2), sales: m.sales.toFixed(2),
-          acos: m.sales > 0 ? (m.spend / m.sales * 100).toFixed(1) : '∞',
-          units: m.units, clicks: m.clicks,
-        }));
-
-      const topKeywords = data.keywords
-        .filter(r => Number(r.clicks) > 5)
-        .sort((a, b) => Number(b.cost) - Number(a.cost))
+      const topKeywords = keywordRecords
+        .filter(k => k.clicks > 5)
+        .sort((a, b) => b.spend - a.spend)
         .slice(0, 20)
-        .map(r => ({
-          term: r.searchTerm || r.keyword, matchType: r.matchType,
-          spend: Number(r.cost).toFixed(2), sales: Number(r.sales14d || r.sales1d).toFixed(2),
-          clicks: r.clicks, acos: Number(r.acosClicks14d || 0).toFixed(1),
-        }));
+        .map(k => ({ term: k.keyword_text, matchType: k.match_type, spend: k.spend.toFixed(2), sales: k.sales.toFixed(2), clicks: k.clicks, acos: k.acos.toFixed(1) }));
 
-      const prompt = `Você é um especialista em Amazon Ads com 10 anos de experiência. Analise os dados dos últimos 30 dias e gere recomendações de optimização accionáveis.
+      const prompt = `Você é um especialista em Amazon Ads. Analise os dados dos últimos 30 dias e gere recomendações de optimização accionáveis.
 
-RESUMO GERAL (30 dias):
-- Spend Total: $${totalSpend.toFixed(2)}
-- Vendas Ads: $${totalSales.toFixed(2)}
-- ACoS geral: ${totalSales > 0 ? (totalSpend / totalSales * 100).toFixed(1) : 'N/A'}%
-- ROAS geral: ${totalSpend > 0 ? (totalSales / totalSpend).toFixed(2) : 'N/A'}x
-- Cliques: ${totalClicks.toLocaleString()}
-- Impressões: ${totalImpressions.toLocaleString()}
-- Pedidos: ${totalOrders}
+RESUMO (30 dias):
+- Spend: $${totalSpend.toFixed(2)} | Vendas: $${totalSales.toFixed(2)} | ACoS: ${totalSales > 0 ? (totalSpend/totalSales*100).toFixed(1) : 'N/A'}% | ROAS: ${totalSpend > 0 ? (totalSales/totalSpend).toFixed(2) : 'N/A'}x
+- Cliques: ${totalClicks} | Impressões: ${totalImpressions} | Pedidos: ${totalOrders}
 
-TOP CAMPANHAS (por spend):
-${JSON.stringify(topCampaigns, null, 1)}
+TOP CAMPANHAS: ${JSON.stringify(topCampaigns)}
+TOP KEYWORDS: ${JSON.stringify(topKeywords)}
 
-TOP PRODUTOS ANUNCIADOS (por spend):
-${JSON.stringify(topProducts, null, 1)}
-
-TOP SEARCH TERMS (por spend):
-${JSON.stringify(topKeywords, null, 1)}
-
-Gere entre 5 e 10 recomendações concretas. Para cada uma:
-- Identifique o item específico (campanha/produto/keyword)
-- Explique o problema com dados
-- Sugira a acção exacta (bid, orçamento, estado)
-- Estime o impacto esperado
-
-Foco em: campanhas com ACoS > 40%, campanhas sem conversões mas com gasto, produtos rentáveis para aumentar budget, keywords de alto custo sem retorno.`;
+Gere 5-10 recomendações concretas com campanhas/keywords específicas, problema com dados, acção exacta e impacto esperado.`;
 
       const aiResult = await base44.asServiceRole.integrations.Core.InvokeLLM({
         prompt,
@@ -315,41 +279,46 @@ Foco em: campanhas com ACoS > 40%, campanhas sem conversões mas com gasto, prod
                 },
               },
             },
-            summary: { type: 'string' },
-            overall_health: { type: 'string', enum: ['excellent', 'good', 'fair', 'poor'] },
           },
         },
       });
 
       const aiDecisions = aiResult?.decisions || [];
-      for (const d of aiDecisions) {
-        await base44.asServiceRole.entities.Decision.create({
-          amazon_account_id: amazonAccountId,
-          decision_type: d.decision_type || 'bid_adjust',
-          entity_type: d.entity_type || 'campaign',
-          entity_id: d.entity_id || '',
-          entity_name: d.entity_name || '',
-          rationale: d.rationale || '',
-          current_value: d.current_value || 0,
-          proposed_value: d.proposed_value || 0,
-          change_pct: d.change_pct || 0,
-          confidence: d.confidence || 0.5,
-          priority: d.priority || 'medium',
-          status: 'pending',
-        });
-        decisionsCreated++;
+      const decisionRecords = aiDecisions.map(d => ({
+        amazon_account_id: amazonAccountId,
+        decision_type: d.decision_type || 'bid_adjust',
+        entity_type: d.entity_type || 'campaign',
+        entity_id: d.entity_id || '',
+        entity_name: d.entity_name || '',
+        rationale: d.rationale || '',
+        current_value: d.current_value || 0,
+        proposed_value: d.proposed_value || 0,
+        change_pct: d.change_pct || 0,
+        confidence: d.confidence || 0.5,
+        priority: d.priority || 'medium',
+        status: 'pending',
+      }));
+
+      if (decisionRecords.length > 0) {
+        await base44.asServiceRole.entities.Decision.bulkCreate(decisionRecords);
+        decisionsCreated = decisionRecords.length;
       }
     } catch (aiErr) {
-      // AI failure não bloqueia o sync
       console.error('AI analysis failed:', aiErr.message);
     }
+
+    // Atualizar last_sync_at na conta
+    await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
+      last_sync_at: new Date().toISOString(),
+      status: 'connected',
+    });
 
     // Marcar SyncRun como concluído
     if (syncRunId) {
       await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
         status: 'success',
         records_received: data.campaigns.length + data.products.length + data.keywords.length,
-        records_upserted: campaignUpserted + productUpserted + keywordUpserted,
+        records_upserted: campaignRecords.length + productRecords.length + keywordRecords.length,
         duration_ms: Date.now() - startTime,
         completed_at: new Date().toISOString(),
       });
@@ -358,12 +327,12 @@ Foco em: campanhas com ACoS > 40%, campanhas sem conversões mas com gasto, prod
     return Response.json({
       ok: true,
       ready: true,
-      pending: results.pending,
-      campaigns: { rows: data.campaigns.length, upserted: campaignUpserted },
-      products: { rows: data.products.length, upserted: productUpserted },
-      keywords: { rows: data.keywords.length, upserted: keywordUpserted },
+      pending,
+      campaigns_upserted: campaignRecords.length,
+      keywords_upserted: keywordRecords.length,
+      products_upserted: productRecords.length,
       decisions_created: decisionsCreated,
-      summary: { total_spend: totalSpend, total_sales: totalSales, acos: totalSales > 0 ? totalSpend / totalSales * 100 : 0 },
+      summary: { total_spend: totalSpend, total_sales: totalSales, acos: totalSales > 0 ? totalSpend/totalSales*100 : 0 },
     });
 
   } catch (error) {
