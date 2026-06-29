@@ -1,0 +1,64 @@
+{
+  "name": "AutopilotAlert",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "alert_type": {
+      "type": "string",
+      "enum": [
+        "budget_exceeded",
+        "high_acos",
+        "zero_sales",
+        "bid_floor",
+        "bid_ceiling",
+        "emergency_pause",
+        "spend_spike"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "default": "warning"
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "entity_name": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "value": {
+      "type": "number"
+    },
+    "threshold": {
+      "type": "number"
+    },
+    "is_read": {
+      "type": "boolean",
+      "default": false
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "alert_type",
+    "message"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "BidHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "keyword"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "entity_name": {
+      "type": "string"
+    },
+    "bid_before": {
+      "type": "number"
+    },
+    "bid_after": {
+      "type": "number"
+    },
+    "budget_before": {
+      "type": "number"
+    },
+    "budget_after": {
+      "type": "number"
+    },
+    "change_pct": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "acos_at_change": {
+      "type": "number"
+    },
+    "spend_at_change": {
+      "type": "number"
+    },
+    "sales_at_change": {
+      "type": "number"
+    },
+    "applied_by": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "autopilot",
+        "rule"
+      ]
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "entity_type",
+    "entity_id"
+  ]
+}

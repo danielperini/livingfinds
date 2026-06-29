@@ -19,6 +19,7 @@ import ResetPassword from '@/pages/ResetPassword';
 
 // Pages
 import Dashboard from '@/pages/Dashboard';
+import AdsAutopilot from '@/pages/AdsAutopilot';
 import AdsManagement from '@/pages/AdsManagement';
 import LearnerEngine from '@/pages/LearnerEngine';
 import InventorySales from '@/pages/InventorySales';
@@ -57,6 +58,7 @@ const AuthenticatedApp = () => {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/ads" element={<AdsManagement />} />
+          <Route path="/autopilot" element={<AdsAutopilot />} />
           <Route path="/learner" element={<LearnerEngine />} />
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/transitions" element={<Transitions />} />

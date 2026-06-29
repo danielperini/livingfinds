@@ -1,0 +1,56 @@
+{
+  "name": "AutopilotConfig",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "acos_target": {
+      "type": "number",
+      "default": 25
+    },
+    "roas_target": {
+      "type": "number",
+      "default": 4
+    },
+    "daily_budget_limit": {
+      "type": "number",
+      "default": 500
+    },
+    "max_bid_increase_pct": {
+      "type": "number",
+      "default": 15
+    },
+    "max_bid_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.1
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "auto_apply_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "approval_required": {
+      "type": "boolean",
+      "default": true
+    },
+    "emergency_pause_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "learning_enabled": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}
