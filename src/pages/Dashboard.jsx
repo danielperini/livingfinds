@@ -389,7 +389,9 @@ export default function Dashboard() {
                 <div key={run.id || i} className="flex items-center gap-3 py-2 border-b border-surface-2/50 last:border-0">
                   <StatusBadge status={run.status} size="xs" />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-300 truncate">{run.operation}</p>
+                    <p className="text-xs font-medium text-slate-300 truncate">
+                      {run.operation?.startsWith('adsReports:') ? `Sync Ads 30d — ${run.operation.split(':')[1] || ''}` : run.operation}
+                    </p>
                     <p className="text-xs text-slate-500">
                       {run.records_upserted ? `${run.records_upserted} registos` : ''}
                       {run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}
