@@ -1,4 +1,4 @@
-// approveDecision — delega aprovação/execução ao Xano (único gateway Amazon)
+// approveDecision — aprova ou rejeita uma decisão IA localmente, sem dependência do Xano
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 Deno.serve(async (req) => {
@@ -17,42 +17,26 @@ Deno.serve(async (req) => {
       return Response.json({ error: `Decision is already ${decision.status}` }, { status: 409 });
     }
 
-    const xanoBase = Deno.env.get('XANO_BASE_URL') || 'https://x8ki-letl-twmt.n7.xano.io/api:living-finds-api';
-    const endpoint = (action === 'reject') ? '/decisions/reject' : '/decisions/approve';
+    const newStatus = action === 'reject' ? 'rejected' : 'approved';
 
-    // Delegar ao Xano — ele aplica na Amazon API
-    const xanoRes = await fetch(`${xanoBase}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision_id }),
-    });
-
-    const xanoData = await xanoRes.json().catch(() => ({}));
-
-    const newStatus = (action === 'reject') ? 'rejected' : (xanoRes.ok ? 'executed' : 'failed');
-
-    // Actualizar entidade local
     await base44.asServiceRole.entities.Decision.update(decision_id, {
       status: newStatus,
       reviewed_by: user.id,
       reviewed_at: new Date().toISOString(),
-      executed_at: xanoRes.ok && action !== 'reject' ? new Date().toISOString() : null,
-      error_message: xanoRes.ok ? null : (xanoData.message || `HTTP ${xanoRes.status}`),
     });
 
-    // Log evento de aprendizagem
     await base44.asServiceRole.entities.LearningEvent.create({
       amazon_account_id: decision.amazon_account_id,
       event_type: `decision_${newStatus}`,
       entity_type: decision.entity_type,
       entity_id: decision.entity_id,
-      observation: `Decisão ${newStatus} por ${user.full_name || user.id}. Xano: ${xanoData.message || 'ok'}`,
+      observation: `Decisão ${newStatus} por ${user.full_name || user.email}`,
       decision_id,
       recorded_at: new Date().toISOString(),
     });
 
-    return Response.json({ ok: xanoRes.ok, status: newStatus, xano: xanoData });
+    return Response.json({ ok: true, status: newStatus });
   } catch (error) {
-    return Response.json({ ok: false, message: error.message || 'approveDecision failed' }, { status: 500 });
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });
