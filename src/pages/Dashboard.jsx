@@ -150,6 +150,12 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Realtime: recarregar quando campanhas mudarem
+  useEffect(() => {
+    const unsub = base44.entities.Campaign.subscribe(() => { loadData(); });
+    return unsub;
+  }, [loadData]);
+
   // Calcular KPIs agregados das campanhas
   const kpis = campaigns.reduce((acc, c) => ({
     spend: acc.spend + (c.spend || 0),
