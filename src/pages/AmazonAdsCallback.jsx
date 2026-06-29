@@ -4,9 +4,10 @@ import { CheckCircle, XCircle, Loader2, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export default function AmazonAdsCallback() {
-  const [status, setStatus] = useState('loading'); // loading | success | error
+  const [status, setStatus] = useState('loading');
   const [message, setMessage] = useState('');
   const [details, setDetails] = useState(null);
+  const [rawError, setRawError] = useState(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -22,18 +23,30 @@ export default function AmazonAdsCallback() {
 
     if (!code) {
       setStatus('error');
-      setMessage('Parâmetro "code" não encontrado na URL. Tente novamente.');
+      setMessage('Parâmetro "code" não encontrado na URL. Tente novamente o fluxo OAuth.');
       return;
     }
 
     (async () => {
+      // Verificar autenticação antes de chamar a função
+      try {
+        const isAuth = await base44.auth.isAuthenticated();
+        if (!isAuth) {
+          // Salvar code na sessão e redirecionar para login
+          sessionStorage.setItem('amazon_ads_pending_code', code);
+          window.location.href = `/login?next=/amazon-ads-callback?code=${encodeURIComponent(code)}`;
+          return;
+        }
+      } catch (_) {}
+
       try {
         const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code });
         const data = res.data;
 
         if (!data?.ok) {
           setStatus('error');
-          setMessage(data?.error || 'Falha ao processar autorização.');
+          setMessage(data?.error_description || data?.error || 'Falha ao processar autorização.');
+          setRawError(data);
           return;
         }
 
@@ -41,8 +54,17 @@ export default function AmazonAdsCallback() {
         setMessage(data.message || 'Amazon Ads conectada com sucesso.');
         setDetails(data);
       } catch (e) {
+        // Extrair detalhe do erro HTTP
+        const errData = e?.response?.data;
         setStatus('error');
-        setMessage(e.message || 'Erro ao conectar com a Amazon Ads.');
+        setMessage(
+          errData?.error_description ||
+          errData?.message ||
+          errData?.error ||
+          e.message ||
+          'Erro ao conectar com a Amazon Ads.'
+        );
+        setRawError(errData || { message: e.message });
       }
     })();
   }, []);
@@ -77,7 +99,7 @@ export default function AmazonAdsCallback() {
                 <div className="text-left bg-[#0A0B0F] border border-[#1A1D26] rounded-xl p-4 mb-6 space-y-3">
                   {details.refresh_token_preview && (
                     <div>
-                      <p className="text-xs text-slate-500 mb-0.5">Refresh Token</p>
+                      <p className="text-xs text-slate-500 mb-0.5">Refresh Token (mascarado)</p>
                       <p className="text-xs font-mono text-slate-300">{details.refresh_token_preview}</p>
                     </div>
                   )}
@@ -113,7 +135,22 @@ export default function AmazonAdsCallback() {
             <>
               <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
               <h1 className="text-lg font-semibold text-white mb-2">Erro na autorização Amazon Ads</h1>
-              <p className="text-sm text-red-300 mb-6 break-words">{message}</p>
+              <p className="text-sm text-red-300 mb-4 break-words">{message}</p>
+
+              {rawError && (
+                <div className="text-left bg-[#0A0B0F] border border-red-500/20 rounded-xl p-3 mb-6">
+                  <p className="text-xs text-slate-500 mb-1">Detalhe do erro:</p>
+                  {rawError.amazon_status && <p className="text-xs text-slate-400">HTTP {rawError.amazon_status}</p>}
+                  {rawError.error && <p className="text-xs text-slate-400">error: {rawError.error}</p>}
+                  {rawError.error_description && <p className="text-xs text-slate-400">description: {rawError.error_description}</p>}
+                  {rawError.message && <p className="text-xs text-slate-400">message: {rawError.message}</p>}
+                </div>
+              )}
+
+              <p className="text-xs text-slate-500 mb-4">
+                O código OAuth da Amazon expira em segundos. Inicie o fluxo novamente na página de Diagnóstico.
+              </p>
+
               <Link
                 to="/diagnostico"
                 className="inline-flex items-center gap-2 px-5 py-2.5 bg-surface-2 border border-surface-3 text-slate-300 rounded-lg text-sm font-medium hover:text-white transition-colors"
