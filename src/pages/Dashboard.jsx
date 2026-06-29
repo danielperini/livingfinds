@@ -123,7 +123,9 @@ export default function Dashboard() {
     try {
       const me = await base44.auth.me();
       setUser(me);
-      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      // Tenta por user_id primeiro, fallback para o primeiro registro disponível
+      let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
       const acc = accounts[0] || null;
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
