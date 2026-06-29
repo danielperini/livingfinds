@@ -122,6 +122,8 @@ export default function BiddingRulesPanel({ amazonAccountId }) {
   const [form, setForm] = useState(EMPTY_RULE);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyResult, setApplyResult] = useState(null);
 
   const loadRules = useCallback(async () => {
     if (!amazonAccountId) return;
@@ -172,6 +174,29 @@ export default function BiddingRulesPanel({ amazonAccountId }) {
 
   const set = (key, val) => setForm(p => ({ ...p, [key]: val }));
 
+  const applyRules = async () => {
+    setApplying(true);
+    setApplyResult(null);
+    try {
+      const res = await base44.functions.invoke('approveDecision', {
+        apply_rules: true,
+        amazon_account_id: amazonAccountId,
+      });
+      const d = res.data;
+      setApplyResult({
+        ok: d?.ok,
+        message: d?.ok
+          ? `✓ ${d.auto_approved} sugestões aprovadas automaticamente de ${d.total_checked} analisadas`
+          : (d?.error || 'Erro ao aplicar regras'),
+      });
+    } catch (e) {
+      setApplyResult({ ok: false, message: e.message });
+    } finally {
+      setApplying(false);
+      setTimeout(() => setApplyResult(null), 6000);
+    }
+  };
+
   const activeCount = rules.filter(r => r.is_active).length;
 
   return (
@@ -197,13 +222,28 @@ export default function BiddingRulesPanel({ amazonAccountId }) {
         </button>
       </div>
 
-      {/* Aviso informativo */}
-      <div className="flex items-start gap-3 p-3 bg-amber-400/5 border border-amber-400/15 rounded-xl">
-        <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-slate-400 leading-relaxed">
-          As regras são aplicadas quando a IA gera novas sugestões via Sync. A ação <strong className="text-cyan">Aprovar automaticamente</strong> aprova imediatamente sugestões que estejam dentro dos seus limites de ACoS definidos e com confiança suficiente — sem revisão manual.
-        </p>
+      {/* Aplicar Regras + Aviso */}
+      <div className="flex items-stretch gap-3">
+        <div className="flex-1 flex items-start gap-3 p-4 bg-amber-400/5 border border-amber-400/15 rounded-xl">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-slate-400 leading-relaxed">
+            A IA aplica as regras automaticamente após cada Sync. Use <strong className="text-white">"Aplicar Agora"</strong> para processar as sugestões pendentes imediatamente com as regras ativas.
+          </p>
+        </div>
+        {activeCount > 0 && (
+          <button onClick={applyRules} disabled={applying}
+            className="flex-shrink-0 flex flex-col items-center justify-center gap-1.5 px-5 py-3 bg-cyan hover:bg-cyan/90 text-white font-semibold rounded-xl transition-colors disabled:opacity-60 min-w-[120px]">
+            {applying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5" />}
+            <span className="text-xs">{applying ? 'Aplicando...' : 'Aplicar Agora'}</span>
+          </button>
+        )}
       </div>
+
+      {applyResult && (
+        <div className={`p-3 rounded-xl border text-xs font-medium ${applyResult.ok ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+          {applyResult.message}
+        </div>
+      )}
 
       {/* Formulário de nova regra */}
       {showForm && (
@@ -293,10 +333,27 @@ export default function BiddingRulesPanel({ amazonAccountId }) {
       {loading ? (
         <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
       ) : rules.length === 0 ? (
-        <div className="text-center py-10 border border-dashed border-surface-3 rounded-xl">
-          <Sliders className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-          <p className="text-sm text-slate-500">Nenhuma regra configurada.</p>
-          <p className="text-xs text-slate-600 mt-1">Crie uma regra para automatizar decisões da IA.</p>
+        <div className="border border-dashed border-surface-3 rounded-xl p-6">
+          <div className="text-center mb-5">
+            <Sliders className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <p className="text-sm font-semibold text-slate-400">Nenhuma regra configurada</p>
+            <p className="text-xs text-slate-600 mt-1">Crie regras para a IA aprovar lances automaticamente dentro dos seus limites de ACoS.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {[
+              { name: 'ACoS Conservador', desc: 'ACoS ≤ 25% → aprovar sugestões', acos_max: 25, action: 'auto_approve' },
+              { name: 'ACoS Agressivo', desc: 'ACoS ≤ 40% → aprovar sugestões', acos_max: 40, action: 'auto_approve' },
+              { name: 'ACoS Alto → Pausar', desc: 'ACoS > 60% → pausar campanha', acos_min: 60, action: 'pause_campaign' },
+            ].map(tmpl => (
+              <button key={tmpl.name} onClick={() => {
+                setForm({ ...EMPTY_RULE, name: tmpl.name, acos_max: tmpl.acos_max ?? '', acos_min: tmpl.acos_min ?? '', action: tmpl.action });
+                setShowForm(true);
+              }} className="text-left p-3 bg-surface-2 hover:bg-surface-3 border border-surface-3 hover:border-cyan/30 rounded-lg transition-colors">
+                <p className="text-xs font-semibold text-slate-300 mb-0.5">{tmpl.name}</p>
+                <p className="text-xs text-slate-500">{tmpl.desc}</p>
+              </button>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
