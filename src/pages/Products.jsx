@@ -167,11 +167,15 @@ function ProductRow({ product, onToggleCampaign, onCreateCampaign, onKickoff, ac
             {!product.has_campaign ? (
               <button
                 onClick={() => onKickoff(product)}
-                disabled={isLoading || (product.fba_inventory || 0) === 0}
-                title="Kick-off: cria campanha AUTO + manuais por palavra-chave"
-                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 whitespace-nowrap">
+                disabled={isLoading || !hasStock}
+                title={!hasStock ? 'Sem estoque — não pode criar campanha' : 'Kick-off: cria campanha AUTO + manuais por palavra-chave'}
+                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-40 whitespace-nowrap ${
+                  hasStock
+                    ? 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'
+                    : 'bg-surface-3 border-surface-3 text-slate-600 cursor-not-allowed'
+                }`}>
                 {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
-                Kick-off
+                {hasStock ? 'Kick-off' : 'Sem Stock'}
               </button>
             ) : (
               <AdsActionButton
