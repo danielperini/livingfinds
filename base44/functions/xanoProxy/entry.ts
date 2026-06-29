@@ -20,16 +20,17 @@ Deno.serve(async (req) => {
     if (!xanoBase) return Response.json({ ok: false, error: 'XANO_BASE_URL não configurada.' }, { status: 503 });
     if (!xanoKey) return Response.json({ ok: false, error: 'XANO_API_KEY não configurada.' }, { status: 503 });
 
-    let url = `${xanoBase}${path}`;
-    if (params && Object.keys(params).length > 0) {
-      url += '?' + new URLSearchParams(params).toString();
-    }
+    // Forçar base para api:amazon
+    const amazonBase = 'https://x8ki-letl-twmt.n7.xano.io/api:amazon';
+    const queryParams = new URLSearchParams({ ...(params || {}), api_key: xanoKey });
+    const url = `${amazonBase}${path}?${queryParams.toString()}`;
 
     const fetchOptions = {
       method: method.toUpperCase(),
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': xanoKey,
+        'Authorization': `Bearer ${xanoKey}`,
       },
     };
 
