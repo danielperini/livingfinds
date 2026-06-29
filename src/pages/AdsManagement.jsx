@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown } from 'lucide-react';
+import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function AdsManagement() {
@@ -15,6 +15,9 @@ export default function AdsManagement() {
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   const [stateFilter, setStateFilter] = useState('all');
+  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms'
+  const [searchTerms, setSearchTerms] = useState([]);
+  const [negSuggestions, setNegSuggestions] = useState([]);
 
   useEffect(() => {
     const load = async () => {
@@ -39,13 +42,29 @@ export default function AdsManagement() {
     setPendingBids({});
     setKwLoading(true);
     try {
-      const kws = await base44.entities.Keyword.filter({
-        amazon_account_id: campaign.amazon_account_id,
-        campaign_id: campaign.campaign_id,
-      }, '-spend', 500);
-      setKeywords(kws);
+      const [kws, st, negs] = await Promise.all([
+        base44.entities.Keyword.filter({
+          amazon_account_id: campaign.amazon_account_id,
+          campaign_id: campaign.campaign_id,
+        }, '-spend', 500),
+        base44.entities.Keyword.filter({
+          amazon_account_id: campaign.amazon_account_id,
+          campaign_id: campaign.campaign_id,
+          source: 'search_term',
+        }, '-spend', 200),
+        base44.entities.NegativeKeywordSuggestion.filter({
+          amazon_account_id: campaign.amazon_account_id,
+          campaign_id: campaign.campaign_id,
+          status: 'pending',
+        }, '-created_date', 50),
+      ]);
+      setKeywords(kws.filter(k => k.source !== 'search_term'));
+      setSearchTerms(st);
+      setNegSuggestions(negs);
     } catch {
       setKeywords([]);
+      setSearchTerms([]);
+      setNegSuggestions([]);
     } finally {
       setKwLoading(false);
     }
@@ -56,10 +75,8 @@ export default function AdsManagement() {
     setSaveState('loading');
     setSaveError(null);
     try {
-      // Atualizar bids na entidade Keyword localmente
       const updates = Object.entries(pendingBids).map(([id, bid]) => ({ id, bid }));
       await base44.entities.Keyword.bulkUpdate(updates);
-      // Refletir na lista
       setKeywords(prev => prev.map(kw => pendingBids[kw.id] !== undefined ? { ...kw, bid: pendingBids[kw.id] } : kw));
       setSaveState('success');
       setPendingBids({});
@@ -68,6 +85,52 @@ export default function AdsManagement() {
       setSaveState('error');
       setSaveError(err.message || 'Erro ao aplicar bids');
       setTimeout(() => setSaveState('idle'), 4000);
+    }
+  };
+
+  const negateKeyword = async (suggestion) => {
+    try {
+      await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, { status: 'approved' });
+      setNegSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
+      // Criar ação para execução via agente
+      await base44.entities.AgentAction.create({
+        amazon_account_id: account.id,
+        action: 'negative_keyword',
+        campaign_id: suggestion.campaign_id,
+        keyword: suggestion.keyword_text,
+        reason: 'Negativação manual via dashboard',
+        evidence: `Search term: ${suggestion.keyword_text}, Spend: $${(suggestion.spend||0).toFixed(2)}, Clicks: ${suggestion.clicks||0}`,
+        risk_level: 'medium',
+        requires_approval: false,
+        status: 'pending',
+      });
+    } catch (err) {
+      console.error('Erro ao negativar:', err);
+    }
+  };
+
+  const promoteKeyword = async (searchTerm) => {
+    try {
+      // Criar keyword manual com bid sugerido de $0.30
+      await base44.entities.Keyword.create({
+        amazon_account_id: account.id,
+        campaign_id: searchTerm.campaign_id,
+        ad_group_id: searchTerm.ad_group_id || '',
+        keyword_id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        keyword_text: searchTerm.keyword_text,
+        match_type: 'exact',
+        state: 'enabled',
+        status: 'enabled',
+        current_bid: 0.30,
+        bid: 0.30,
+        source: 'manual',
+        first_seen_at: new Date().toISOString(),
+        last_seen_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      });
+      setSearchTerms(prev => prev.filter(st => st.id !== searchTerm.id));
+    } catch (err) {
+      console.error('Erro ao promover:', err);
     }
   };
 
@@ -89,11 +152,10 @@ export default function AdsManagement() {
       {/* Sidebar */}
       <div className="w-72 flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
         <div className="p-4 border-b border-surface-2">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-white">Campanhas</h2>
-            <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">{campaigns.length} total</span>
-          </div>
-
+          <h2 className="text-sm font-semibold text-white mb-1">Campanhas</h2>
+          <p className="text-xs text-slate-500">{campaigns.length} campanhas</p>
+        </div>
+        <div className="p-4 border-b border-surface-2">
           {/* Filtros de estado */}
           <div className="flex gap-1 mb-3">
             {[
@@ -183,28 +245,44 @@ export default function AdsManagement() {
                     <span className="text-xs text-slate-400">Pedidos: <span className="text-white">{selectedCampaign.orders || 0}</span></span>
                   </div>
                 </div>
-                {hasPending && (
-                  <button onClick={applyBids} disabled={saveState === 'loading'}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex-shrink-0 ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
-                    {saveState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : saveState === 'success' ? <CheckCircle className="w-4 h-4" /> : saveState === 'error' ? <AlertCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-                    {saveState === 'loading' ? 'Guardando...' : saveState === 'success' ? 'Bids guardados!' : saveState === 'error' ? (saveError || 'Erro') : `Guardar ${Object.keys(pendingBids).length} bid(s)`}
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  <button onClick={async () => {
+                    try {
+                      await base44.functions.invoke('monitorSearchTerms', { amazon_account_id: account.id });
+                    } catch (e) {
+                      console.error('Erro ao executar monitor:', e);
+                    }
+                }}
+                className="px-3 py-2 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5"
+                title="Executar análise de search terms agora"
+              >
+                <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
+              </button>
+                  {hasPending && (
+                    <button onClick={applyBids} disabled={saveState === 'loading'}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex-shrink-0 ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
+                      {saveState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : saveState === 'success' ? <CheckCircle className="w-4 h-4" /> : saveState === 'error' ? <AlertCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                      {saveState === 'loading' ? 'Guardando...' : saveState === 'success' ? 'Bids guardados!' : saveState === 'error' ? (saveError || 'Erro') : `Guardar ${Object.keys(pendingBids).length} bid(s)`}
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* Tabela de keywords */}
+            {/* Tabs content */}
             <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {kwLoading ? (
-                <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-              ) : keywords.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-                  <Search className="w-8 h-8 text-slate-600" />
-                  <p className="text-sm text-slate-400">Sem keywords para esta campanha.</p>
-                  <p className="text-xs text-slate-600">Execute um Sync completo para importar keywords.</p>
-                </div>
-              ) : (
-                <table className="w-full text-sm">
+              {activeTab === 'keywords' ? (
+                <>
+                  {kwLoading ? (
+                    <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+                  ) : keywords.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                      <Search className="w-8 h-8 text-slate-600" />
+                      <p className="text-sm text-slate-400">Sem keywords para esta campanha.</p>
+                      <p className="text-xs text-slate-600">Execute um Sync completo para importar keywords.</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-[#0D0F14] z-10">
                     <tr className="border-b border-surface-2">
                       {['Keyword / Search Term', 'Match', 'Estado', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
@@ -237,6 +315,89 @@ export default function AdsManagement() {
                     })}
                   </tbody>
                 </table>
+              )}
+                </>
+              ) : (
+                /* Search Terms Tab */
+                <div className="p-4 space-y-4">
+                  {/* Sugestões de negativação */}
+                  {negSuggestions.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-red-400 mb-2 flex items-center gap-1.5">
+                        <TrendingDown className="w-3.5 h-3.5" /> {negSuggestions.length} termos para negativar
+                      </h3>
+                      <div className="space-y-2">
+                        {negSuggestions.map(neg => (
+                          <div key={neg.id} className="flex items-center justify-between p-3 bg-red-500/5 border border-red-500/20 rounded-lg">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-white truncate">{neg.keyword_text}</p>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {(neg.clicks||0)} clicks · ${(neg.spend||0).toFixed(2)} spend · {neg.sales > 0 ? `$${(neg.sales||0).toFixed(2)} vendas` : 'zero vendas'}
+                                {neg.acos > 0 && ` · ${(neg.acos||0).toFixed(0)}% ACoS`}
+                              </p>
+                              <p className="text-xs text-red-400 mt-1">{neg.reason}</p>
+                            </div>
+                            <button onClick={() => negateKeyword(neg)}
+                              className="ml-3 px-3 py-1.5 text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors flex items-center gap-1.5">
+                              <X className="w-3.5 h-3.5" /> Negativar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Search terms capturados */}
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                      <ListFilter className="w-3.5 h-3.5" /> {searchTerms.length} search terms capturados
+                    </h3>
+                    {searchTerms.length === 0 ? (
+                      <p className="text-sm text-slate-500 text-center py-8">Sem search terms capturados ainda.</p>
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-surface-2">
+                            {['Search Term', 'Clicks', 'Spend', 'Vendas', 'ACoS', 'Ação'].map(h => (
+                              <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {searchTerms.map(st => {
+                            const isWasting = (st.clicks||0) >= 5 && (st.spend||0) >= 2 && (st.sales||0) === 0;
+                            const isGood = (st.sales||0) > 0 && (st.acos||0) > 0 && (st.acos||0) < 40;
+                            return (
+                              <tr key={st.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
+                                <td className="px-4 py-2.5 text-slate-300 max-w-[200px] truncate">{st.keyword_text || st.keyword || '—'}</td>
+                                <td className="px-4 py-2.5 text-slate-400">{(st.clicks||0).toLocaleString()}</td>
+                                <td className="px-4 py-2.5 text-slate-400">${(st.spend||0).toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-emerald-400">${(st.sales||0).toFixed(2)}</td>
+                                <td className={`px-4 py-2.5 font-semibold ${(st.acos||0) > 50 ? 'text-red-400' : (st.acos||0) > 30 ? 'text-amber-400' : (st.acos||0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                  {(st.acos||0) > 0 ? `${(st.acos||0).toFixed(1)}%` : '—'}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  {isGood ? (
+                                    <button onClick={() => promoteKeyword(st)}
+                                      className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
+                                      <Plus className="w-3 h-3" /> Promover
+                                    </button>
+                                  ) : isWasting ? (
+                                    <span className="text-xs text-red-400 flex items-center gap-1">
+                                      <TrendingDown className="w-3 h-3" /> Desperdício
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-slate-500">Observar</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </>
