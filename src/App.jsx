@@ -44,6 +44,7 @@ import ManualInstrucoes from '@/pages/ManualInstrucoes';
 import Alerts from '@/pages/Alerts';
 import OptimizerPipeline from '@/pages/OptimizerPipeline';
 import CurrencyAudit from '@/pages/CurrencyAudit';
+import NegativeKeywords from '@/pages/NegativeKeywords';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -100,7 +101,7 @@ const AuthenticatedApp = () => {
           <Route path="/alerts" element={<Alerts />} />
           <Route path="/optimizer" element={<OptimizerPipeline />} />
           <Route path="/currency-audit" element={<CurrencyAudit />} />
-          <Route path="/currency-audit" element={<CurrencyAudit />} />
+          <Route path="/negative-keywords" element={<NegativeKeywords />} />
           {/* Redirects de rotas obsoletas */}
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
