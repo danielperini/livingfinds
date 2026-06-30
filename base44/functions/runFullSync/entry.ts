@@ -148,6 +148,29 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, message: 'Nenhuma AmazonAccount encontrada' });
     amazonAccountId = account.id;
 
+    // ── Limite de 6 syncs automáticos por dia ──
+    const today = new Date().toISOString().slice(0, 10);
+    const triggerType = body.trigger_type || 'automatic'; // 'automatic' ou 'manual'
+    
+    if (triggerType === 'automatic') {
+      const todaySyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+        amazon_account_id: amazonAccountId,
+        execution_date: today,
+        status: { $in: ['success', 'started'] },
+      });
+      
+      if (todaySyncs.length >= 6) {
+        console.log(`[runFullSync] Limite diário atingido: ${todaySyncs.length}/6 syncs automáticos`);
+        return Response.json({
+          ok: false,
+          skipped: true,
+          reason: 'Limite diário de 6 sincronizações automáticas atingido',
+          daily_count: todaySyncs.length,
+          max_daily: 6,
+        });
+      }
+    }
+
     // ── Credenciais — prioridade: conta > env ──
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     if (!refreshToken) return Response.json({ ok: false, step: 'auth', message: 'Sem refresh_token. Configure AmazonAccount.ads_refresh_token ou ADS_REFRESH_TOKEN.' });
@@ -283,6 +306,21 @@ Deno.serve(async (req) => {
       if (Object.keys(reportIds).length === 0) {
         return Response.json({ ok: false, step: 'request_reports', message: 'Todos os relatórios falharam', errors: reportErrors });
       }
+
+      // Registrar início da execução
+      const syncLog = await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: amazonAccountId,
+        operation: 'full_sync',
+        trigger_type: triggerType,
+        status: 'started',
+        execution_date: today,
+        started_at: new Date().toISOString(),
+        daily_count_at_execution: triggerType === 'automatic' ? (await base44.asServiceRole.entities.SyncExecutionLog.filter({
+          amazon_account_id: amazonAccountId,
+          execution_date: today,
+          status: { $in: ['success', 'started'] },
+        })).length : 0,
+      });
 
       const syncRun = await base44.asServiceRole.entities.SyncRun.create({
         amazon_account_id: amazonAccountId,
@@ -663,6 +701,16 @@ Deno.serve(async (req) => {
           duration_ms: durationMs,
           completed_at: now2,
           error_message: downloadErrors.length > 0 ? downloadErrors.join('; ') : null,
+        }).catch(() => {});
+      }
+
+      // Atualizar log de execução
+      if (syncLog) {
+        await base44.asServiceRole.entities.SyncExecutionLog.update(syncLog.id, {
+          status: 'success',
+          completed_at: now2,
+          duration_ms: durationMs,
+          records_processed: campUpdates.length + prodCount + kwCount,
         }).catch(() => {});
       }
 

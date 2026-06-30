@@ -1,0 +1,67 @@
+{
+  "name": "SyncExecutionLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "full_sync",
+        "ads_sync",
+        "product_sync",
+        "metrics_sync",
+        "quick_sync"
+      ]
+    },
+    "trigger_type": {
+      "type": "string",
+      "enum": [
+        "automatic",
+        "manual"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "started",
+        "success",
+        "error",
+        "skipped_limit"
+      ]
+    },
+    "execution_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "records_processed": {
+      "type": "number",
+      "default": 0
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "daily_count_at_execution": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "operation",
+    "trigger_type",
+    "status",
+    "execution_date"
+  ]
+}
