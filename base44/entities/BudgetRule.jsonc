@@ -53,6 +53,22 @@
       "type": "boolean",
       "default": false
     },
+    "auto_pause_no_conversion_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_pause_no_conversion_days": {
+      "type": "number",
+      "default": 14
+    },
+    "auto_pause_no_conversion_min_clicks": {
+      "type": "number",
+      "default": 20
+    },
+    "auto_pause_no_conversion_min_spend": {
+      "type": "number",
+      "default": 30
+    },
     "approval_required_pause": {
       "type": "boolean",
       "default": true
