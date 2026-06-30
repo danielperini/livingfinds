@@ -4,7 +4,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, BarChart, Bar, Legend
 } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, RefreshCw, Target, Zap, AlertTriangle } from 'lucide-react';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, RefreshCw, Target, Zap, AlertTriangle, Clock } from 'lucide-react';
 
 function safe(num, decimals = 2) {
   if (!num || !isFinite(num) || isNaN(num)) return null;
@@ -57,6 +57,7 @@ export default function MetricsDashboard() {
   const [account, setAccount] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
   const [metricsDaily, setMetricsDaily] = useState([]);
+  const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState(30);
 
@@ -68,12 +69,14 @@ export default function MetricsDashboard() {
       const acc = accounts[0] || (await base44.entities.AmazonAccount.list())[0];
       setAccount(acc);
       if (!acc) return;
-      const [cams, metrics] = await Promise.all([
+      const [cams, metrics, kws] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: acc.id }, '-date', 300),
+        base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 500),
       ]);
       setCampaigns(cams);
       setMetricsDaily(metrics);
+      setKeywords(kws.filter(k => k.source !== 'search_term'));
     } finally {
       setLoading(false);
     }
@@ -236,6 +239,85 @@ export default function MetricsDashboard() {
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+
+      {/* Keywords com desempenho horário */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-300">Palavras-Chave com Desempenho Horário</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Otimização de lances baseada na conversão por horário</p>
+          </div>
+        </div>
+        {loading ? (
+          <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+        ) : keywords.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">Sem keywords. Execute um Sync completo.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-2 bg-surface-2/40">
+                  {['Keyword', 'Match', 'Melhor horário', 'Ação sugerida', 'Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas', 'ROAS'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {keywords.slice(0, 50).map(kw => {
+                  const hasHourlyData = kw.hourly_data_mature && kw.best_hour_start != null;
+                  const start = kw.best_hour_start != null ? String(kw.best_hour_start).padStart(2, '0') : null;
+                  const end = kw.best_hour_end != null ? String(kw.best_hour_end).padStart(2, '0') : null;
+                  const actionColors = {
+                    increase_peak: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+                    reduce_off_peak: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                    maintain: 'text-cyan bg-cyan/10 border-cyan/20',
+                    insufficient_data: 'text-slate-500 bg-slate-500/10 border-slate-500/20',
+                  };
+                  const actionLabels = {
+                    increase_peak: '↑ Aumentar no pico',
+                    reduce_off_peak: '↓ Reduzir fora do pico',
+                    maintain: '→ Manter',
+                    insufficient_data: 'Em aprendizado',
+                  };
+                  const acosCls = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
+                  
+                  return (
+                    <tr key={kw.id} className="border-b border-surface-2/50 hover:bg-surface-2/50 transition-colors">
+                      <td className="px-4 py-2.5 font-medium text-white max-w-[180px] truncate" title={kw.keyword_text}>{kw.keyword_text || '—'}</td>
+                      <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
+                      <td className="px-4 py-2.5">
+                        {hasHourlyData ? (
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-cyan" />
+                            <span className="text-xs font-semibold text-white">{start}h–{end}h</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-500 italic">Dados insuficientes</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {hasHourlyData && kw.hourly_action_suggestion ? (
+                          <span className={`text-xs px-2 py-1 rounded border font-medium ${actionColors[kw.hourly_action_suggestion] || actionColors.insufficient_data}`}>
+                            {actionLabels[kw.hourly_action_suggestion] || actionLabels.insufficient_data}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-300">${(kw.bid || 0).toFixed(2)}</td>
+                      <td className={`px-4 py-2.5 font-semibold text-xs ${acosCls}`}>{(kw.acos || 0).toFixed(1)}%</td>
+                      <td className="px-4 py-2.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
+                      <td className="px-4 py-2.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5 text-slate-300">{(kw.roas || 0).toFixed(2)}x</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Top campanhas */}
