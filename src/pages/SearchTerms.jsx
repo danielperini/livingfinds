@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
-  ArrowUpRight, X, CheckCircle, AlertCircle, Brain
+  ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload
 } from 'lucide-react';
 
 const CLASSIFICATION_CONFIG = {
@@ -63,6 +63,8 @@ export default function SearchTerms() {
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [acosTarget, setAcosTarget] = useState(30);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,6 +159,40 @@ export default function SearchTerms() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !account) return;
+    
+    setImporting(true);
+    setActionMsg({ type: 'info', text: 'Importando arquivo...' });
+    
+    try {
+      const uploadRes = await base44.integrations.Core.UploadFile({ file });
+      const fileUrl = uploadRes.file_url;
+      
+      const importRes = await base44.functions.invoke('importSearchTermReport', {
+        file_url: fileUrl,
+        amazon_account_id: account.id,
+      });
+      
+      if (importRes.data?.ok) {
+        setActionMsg({ 
+          type: 'success', 
+          text: `✓ ${importRes.data.imported || 0} termos importados · ${importRes.data.deleted || 0} antigos removidos` 
+        });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: importRes.data?.error || 'Falha na importação' });
+      }
+    } catch (err) {
+      setActionMsg({ type: 'error', text: err.message });
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setTimeout(() => setActionMsg(null), 10000);
+    }
+  };
+
   const classified = keywords.map(kw => ({
     ...kw,
     _class: classifyTerm(kw, acosTarget),
@@ -197,6 +233,12 @@ export default function SearchTerms() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.csv" onChange={handleImportFile} className="hidden" />
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            <Upload className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
+            {importing ? 'Importando...' : 'Importar Excel'}
+          </button>
           <button onClick={enrichWithAI} disabled={loading || !account}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             <Brain className="w-4 h-4 text-cyan" /> Analisar com IA
