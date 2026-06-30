@@ -310,6 +310,7 @@ Deno.serve(async (req) => {
       created_by_app: true,
       launch_phase: 'new',
       days_running: 0,
+      created_at: now,
       synced_at: now,
       last_sync_at: now,
     });

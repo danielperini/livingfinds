@@ -123,6 +123,10 @@
       "type": "number",
       "default": 0
     },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "last_sync_at": {
       "type": "string",
       "format": "date-time"
