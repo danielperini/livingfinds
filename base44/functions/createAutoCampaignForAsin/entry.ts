@@ -113,28 +113,35 @@ function extractAdGroupId(result) {
 
 async function reconcileCampaign(token, profileId, campaignName, asin) {
   try {
-    const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns/list`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-        'Amazon-Advertising-API-Scope': String(profileId),
-        'Content-Type': 'application/vnd.spCampaign.v3+json',
-        'Accept': 'application/vnd.spCampaign.v3+json',
-      },
-      body: JSON.stringify({
-        stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
-        maxResults: 100,
-      }),
-    });
-    const data = await res.json();
-    const campaigns = data?.campaigns || [];
-    const found = campaigns.find(c => 
-      c.name?.includes(asin) || 
-      c.name === campaignName ||
-      (c.name?.includes('AUTO') && c.name?.includes(asin))
-    );
-    return found ? String(found.campaignId) : null;
+    let nextToken = undefined;
+    for (let page = 0; page < 20; page++) {
+      const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns/list`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+          'Amazon-Advertising-API-Scope': String(profileId),
+          'Content-Type': 'application/vnd.spCampaign.v3+json',
+          'Accept': 'application/vnd.spCampaign.v3+json',
+        },
+        body: JSON.stringify({
+          stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
+          maxResults: 100,
+          ...(nextToken ? { nextToken } : {}),
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const campaigns = data?.campaigns || [];
+      const found = campaigns.find(c =>
+        c.name === campaignName ||
+        (c.name?.includes('AUTO') && c.name?.includes(asin))
+      );
+      if (found?.campaignId) return String(found.campaignId);
+      nextToken = data?.nextToken;
+      if (!nextToken) break;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -159,7 +166,6 @@ Deno.serve(async (req) => {
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) return Response.json({ ok: false, error: 'ads_profile_id não configurado' });
 
-    // 1. Verificar campanha existente local
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
     const activeCampaign = existingCampaigns.find(c => c.archived !== true);
     if (activeCampaign) {
@@ -173,11 +179,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 2. Buscar regra de budget
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
     const budgetRule = budgetRules[0] || { total_daily_budget: 100, max_budget_per_campaign: 20, min_auto_campaign_bid: 0.30 };
 
-    // 3. Calcular budget disponível
     const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
     const currentTotalBudget = activeCampaigns
       .filter(c => c.state === 'enabled' && c.archived !== true)
@@ -194,9 +198,7 @@ Deno.serve(async (req) => {
 
     const campaignName = `AUTO | ${asin} | ${new Date().toISOString().slice(0, 10)}`;
     const today = new Date().toISOString().slice(0, 10);
-    const clientRequestToken = `kickoff:${asin}:${Date.now()}`;
 
-    // 4. Verificar duplicata na Amazon antes de criar
     const token = await getAdsToken(refreshToken);
     const existingCampaignId = await reconcileCampaign(token, profileId, campaignName, asin);
     
@@ -204,7 +206,6 @@ Deno.serve(async (req) => {
     let campaignId = existingCampaignId;
     
     if (!campaignId) {
-      // Criar campanha na Amazon Ads API v3
       const campaignPayload = {
         campaigns: [{
           name: campaignName,
@@ -221,13 +222,14 @@ Deno.serve(async (req) => {
         return Response.json({ ok: false, error: `Falha ao criar campanha: ${e.message}` });
       }
 
-      // Extrair campaignId de forma tolerante
       const responseData = campaignResult.data;
       campaignId = extractCampaignId(responseData);
 
-      // Reconciliação se não encontrou campaignId
       if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
-        campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+        for (let attempt = 0; attempt < 4 && !campaignId; attempt++) {
+          if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750 * attempt));
+          campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+        }
       }
 
       if (!campaignId) {
@@ -242,11 +244,9 @@ Deno.serve(async (req) => {
         });
       }
     } else {
-      // Campanha já existe na Amazon
       campaignResult = { status: 200, data: { campaignId }, headers: { requestId: '' } };
     }
 
-    // 7. Criar Ad Group
     let adGroupId = '';
     try {
       const adGroupPayload = {
@@ -263,7 +263,6 @@ Deno.serve(async (req) => {
       console.warn('AdGroup creation failed:', e.message);
     }
 
-    // 8. Criar Product Ad — com confirmação do adId
     let productAdId = '';
     if (adGroupId) {
       try {
@@ -277,7 +276,6 @@ Deno.serve(async (req) => {
           }],
         };
         const adResult = await adsRequestWithDetails('POST', '/sp/productAds', adPayload, refreshToken, profileId, 'application/vnd.spProductAd.v3+json');
-        // Extrair adId de forma tolerante
         productAdId = String(
           adResult.data?.productAds?.success?.[0]?.adId || 
           adResult.data?.success?.[0]?.adId || 
@@ -294,8 +292,8 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
 
-    // 9. Salvar no banco local
-    const savedCampaign = await base44.asServiceRole.entities.Campaign.create({
+    const existingLocal = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, campaign_id: campaignId });
+    const campaignRecord = {
       amazon_account_id,
       campaign_id: campaignId,
       asin,
@@ -313,7 +311,13 @@ Deno.serve(async (req) => {
       created_at: now,
       synced_at: now,
       last_sync_at: now,
-    });
+      currency_code: account.currency_code || 'BRL',
+      marketplace_id: account.marketplace_id || 'A2Q3Y263D00KWC',
+      profile_id: String(profileId),
+    };
+    const savedCampaign = existingLocal.length > 0
+      ? await base44.asServiceRole.entities.Campaign.update(existingLocal[0].id, campaignRecord)
+      : await base44.asServiceRole.entities.Campaign.create(campaignRecord);
 
     if (adGroupId) {
       await base44.asServiceRole.entities.AdGroup.create({
@@ -329,7 +333,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Salvar productAdId se confirmado
     if (productAdId) {
       await base44.asServiceRole.entities.ProductAd.create({
         amazon_account_id,
@@ -344,7 +347,6 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
 
-    // 10. Atualizar produto
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
     if (products.length > 0) {
       await base44.asServiceRole.entities.Product.update(products[0].id, {
@@ -355,13 +357,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    // 11. Log
     await base44.asServiceRole.entities.LearningEvent.create({
       amazon_account_id,
       event_type: 'campaign_created',
       entity_type: 'campaign',
       entity_id: campaignId,
-      observation: `Campanha AUTO criada para ASIN ${asin}: "${campaignName}" — Budget: $${campaignBudget}/dia`,
+      observation: `Campanha AUTO vinculada para ASIN ${asin}: "${campaignName}" — Budget: R$ ${campaignBudget.toFixed(2).replace('.', ',')}/dia`,
       recorded_at: now,
     });
 
@@ -377,6 +378,9 @@ Deno.serve(async (req) => {
       request_id: campaignResult.headers.requestId,
       ad_confirmed: !!adGroupId,
       product_ad_confirmed: !!productAdId,
+      already_exists: !!existingCampaignId,
+      currency_code: account.currency_code || 'BRL',
+      action_label: existingCampaignId ? 'pause_or_edit' : 'created',
     });
 
   } catch (error) {
