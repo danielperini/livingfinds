@@ -5,10 +5,12 @@ import { Loader2, Plus, Trash2, Rocket, CheckCircle, XCircle, ChevronRight } fro
 const MATCH_TYPES = ['exact', 'phrase', 'broad'];
 
 export default function KickoffModal({ product, account, onClose, onDone }) {
-  const [step, setStep] = useState('auto'); // 'auto' | 'manual' | 'done'
+  const [step, setStep] = useState('auto');
   const [autoResult, setAutoResult] = useState(null);
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoError, setAutoError] = useState(null);
+  const [showTechDetails, setShowTechDetails] = useState(false);
+  const [lastErrorDetails, setLastErrorDetails] = useState(null);
 
   // Keywords para campanhas manuais
   const [keywords, setKeywords] = useState([{ text: '', matchType: 'exact', bid: '0.30' }]);
@@ -19,6 +21,8 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
   const runAuto = async () => {
     setAutoLoading(true);
     setAutoError(null);
+    setLastErrorDetails(null);
+    setShowTechDetails(false);
     try {
       const res = await base44.functions.invoke('createAutoCampaignForAsin', {
         amazon_account_id: account.id,
@@ -31,10 +35,24 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
         setAutoResult(d);
         setStep('manual');
       } else {
-        setAutoError(d?.error || d?.message || 'Erro ao criar campanha AUTO');
+        let errorMsg = d?.error || 'Erro ao criar campanha AUTO';
+        if (d?.http_status) errorMsg += ` (HTTP ${d.http_status})`;
+        if (d?.amazon_error) errorMsg += ` — ${d.amazon_error}`;
+        setAutoError(errorMsg);
+        setLastErrorDetails({
+          http_status: d.http_status,
+          request_id: d.request_id,
+          amazon_error: d.amazon_error,
+          response_sample: d.response_sample,
+          profile_id: account.ads_profile_id,
+          region: account.region,
+        });
+        setShowTechDetails(true);
       }
     } catch (e) {
       setAutoError(e.message);
+      setLastErrorDetails({ error: e.message });
+      setShowTechDetails(true);
     } finally {
       setAutoLoading(false);
     }
@@ -119,7 +137,36 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                   <p className="text-sm text-white font-medium">{product.product_name}</p>
                 </div>
               )}
-              {autoError && <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2">{autoError}</p>}
+              {autoError && (
+                <div className="space-y-2">
+                  <p className="text-xs text-red-400 bg-red-400/10 border border-red-400/20 rounded-lg px-3 py-2 whitespace-pre-wrap">{autoError}</p>
+                  {lastErrorDetails && showTechDetails && (
+                    <div className="text-xs bg-slate-900/50 border border-slate-700 rounded-lg p-3 font-mono text-slate-300 max-h-48 overflow-y-auto scrollbar-thin">
+                      <p className="font-semibold text-slate-400 mb-2">Detalhes Técnicos:</p>
+                      <div className="space-y-1">
+                        <p>ASIN: {product.asin}</p>
+                        <p>SKU: {product.sku || 'N/A'}</p>
+                        <p>Profile ID: {account.ads_profile_id || 'N/A'}</p>
+                        <p>Região: {account.region || 'N/A'}</p>
+                        {lastErrorDetails.http_status && <p>HTTP Status: {lastErrorDetails.http_status}</p>}
+                        {lastErrorDetails.request_id && <p>Request ID: {lastErrorDetails.request_id}</p>}
+                        {lastErrorDetails.amazon_error && <p>Amazon Error: {lastErrorDetails.amazon_error}</p>}
+                        {lastErrorDetails.response_sample && (
+                          <div className="mt-2">
+                            <p className="font-semibold text-slate-400">Resposta Amazon:</p>
+                            <pre className="whitespace-pre-wrap text-[10px] mt-1">{lastErrorDetails.response_sample}</pre>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {lastErrorDetails && (
+                    <button onClick={() => setShowTechDetails(!showTechDetails)} className="text-xs text-cyan hover:text-cyan/80">
+                      {showTechDetails ? 'Ocultar detalhes técnicos' : 'Ver detalhes técnicos'}
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={onClose} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">Cancelar</button>
                 <button onClick={runAuto} disabled={autoLoading}
