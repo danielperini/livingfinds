@@ -137,7 +137,7 @@ function visibleName(product) {
   return `Produto ${product.asin}`;
 }
 
-function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate }) {
+function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate, onEnrichSingle, enriching }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -241,6 +241,16 @@ function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, o
                 )}
                 {syncStatus === 'error' && (
                   <span className="text-[10px] text-red-400/80">Erro sync</span>
+                )}
+                {!product.product_name && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEnrichSingle?.(product.asin); }}
+                    disabled={enriching}
+                    className="text-[10px] text-cyan hover:text-cyan/80 flex items-center gap-0.5 disabled:opacity-50"
+                    title="Buscar nome do produto"
+                  >
+                    <RotateCcw className="w-2 h-2" /> Buscar nome
+                  </button>
                 )}
               </div>
               <a href={`https://www.amazon.com.br/dp/${product.asin}`} target="_blank" rel="noopener noreferrer"
@@ -504,6 +514,32 @@ export default function Products() {
     }
   };
 
+  const enrichSingleProduct = async (asin) => {
+    if (!account || enriching) return;
+    setEnriching(true);
+    setActionMsg({ type: 'info', text: `Buscando nome para ${asin}...` });
+    try {
+      const res = await base44.functions.invoke('enrichProductNames', { 
+        amazon_account_id: account.id,
+        asins: [asin],
+      });
+      const d = res.data;
+      if (d?.ok && d.enriched > 0) {
+        setActionMsg({ type: 'success', text: `✓ Nome encontrado para ${asin}` });
+        await load();
+      } else if (d?.note) {
+        setActionMsg({ type: 'info', text: `⚠️ Sem permissão de catálogo. Edite o nome manualmente.` });
+      } else {
+        setActionMsg({ type: 'error', text: `${asin} não encontrado no marketplace` });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setEnriching(false);
+      setTimeout(() => setActionMsg(null), 8000);
+    }
+  };
+
   // Bulk kick-off para produtos sem campanha
   const bulkKickoff = async () => {
     const targets = filtered.filter(p => !p.has_campaign);
@@ -701,6 +737,8 @@ export default function Products() {
                     onAccelerator={setAcceleratorProduct}
                     actionLoading={actionLoading}
                     onNameUpdate={(id, name) => setProducts(prev => prev.map(pr => pr.id === id ? { ...pr, display_name: name } : pr))}
+                    onEnrichSingle={enrichSingleProduct}
+                    enriching={enriching}
                   />
                 ))}
               </tbody>
