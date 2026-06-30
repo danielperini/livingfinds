@@ -1,0 +1,90 @@
+{
+  "name": "ProductTarget",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "target_type": {
+      "type": "string",
+      "enum": [
+        "asin",
+        "category",
+        "brand"
+      ]
+    },
+    "target_value": {
+      "type": "string"
+    },
+    "bid": {
+      "type": "number",
+      "default": 0.3
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "negative",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "is_negative": {
+      "type": "boolean",
+      "default": false
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "ad_group_id",
+    "target_type",
+    "target_value"
+  ]
+}
