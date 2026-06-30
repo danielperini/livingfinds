@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Search, Filter, RefreshCw, Loader2, TrendingUp, TrendingDown,
-  ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload
+  ArrowUpRight, X, CheckCircle, AlertCircle, Brain, Upload, FileText
 } from 'lucide-react';
 
 const CLASSIFICATION_CONFIG = {
@@ -159,6 +159,26 @@ export default function SearchTerms() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
+  const analyzeWithRules = async () => {
+    if (!account) return;
+    setActionMsg({ type: 'info', text: 'Aplicando regras avançadas de otimização...' });
+    try {
+      const res = await base44.functions.invoke('analyzeSearchTermsWithRules', { amazon_account_id: account.id });
+      const d = res.data;
+      const manualCount = d?.grouped?.manual_candidate?.length + d?.grouped?.migrate_to_manual?.length || 0;
+      const failures = d?.grouped?.conversion_failure?.length || 0;
+      const negate = d?.grouped?.negate?.length || 0;
+      setActionMsg({ 
+        type: 'success', 
+        text: `✓ ${d?.analyzed_count || 0} termos analisados · ${manualCount} candidatos a manual · ${failures} falhas conversão · ${negate} para negativar` 
+      });
+      await load();
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    }
+    setTimeout(() => setActionMsg(null), 12000);
+  };
+
   const handleImportFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !account) return;
@@ -242,6 +262,10 @@ export default function SearchTerms() {
           <button onClick={enrichWithAI} disabled={loading || !account}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             <Brain className="w-4 h-4 text-cyan" /> Analisar com IA
+          </button>
+          <button onClick={analyzeWithRules} disabled={loading || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            <TrendingUp className="w-4 h-4" /> Regras Avançadas
           </button>
           <button onClick={load} disabled={loading} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
