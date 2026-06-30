@@ -1,18 +1,19 @@
 /**
- * enrichProductNames — busca nomes e imagens de produtos via SP-API Catalog Items
- * e atualiza Product.product_name + Product.product_image_url no banco.
+ * enrichProductNames — busca nomes via Catalog Items API (ASIN) e Listings Items API (SKU)
+ * Usa marketplace Brasil: A2Q3Y263D00KWC
+ * Fallback visual: "Produto {ASIN}" — nunca salva "Sem nome" no banco
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 let _tokenCache = null;
 
-async function getSpToken(refreshToken) {
+async function getSpToken(refreshToken, clientId, clientSecret) {
   if (_tokenCache && _tokenCache.expires_at > Date.now() + 5000) return _tokenCache.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
+    client_id: clientId,
+    client_secret: clientSecret,
   });
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
@@ -32,6 +33,69 @@ function getSpEndpoint(region) {
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
+// Tenta buscar sellerId via SP-API marketplace participations
+async function fetchSellerId(spBase, token) {
+  try {
+    const res = await fetch(`${spBase}/sellers/v1/marketplaceParticipations`, {
+      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const participation = data.payload?.[0];
+    return participation?.seller?.sellerId || null;
+  } catch {
+    return null;
+  }
+}
+
+// Catalog Items API por ASIN (endpoint individual — mais confiável que batch para BR)
+async function fetchByCatalogAsin(spBase, token, asin, marketplaceId) {
+  try {
+    const url = `${spBase}/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,images`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.log(`[catalog] ASIN ${asin} HTTP ${res.status}: ${errText.slice(0, 200)}`);
+      return null;
+    }
+    const data = await res.json();
+    const summary = data.summaries?.find(s => s.marketplaceId === marketplaceId) || data.summaries?.[0];
+    const name = summary?.itemName || null;
+    const imageGroup = data.images?.find(ig => ig.marketplaceId === marketplaceId) || data.images?.[0];
+    const image = imageGroup?.images?.find(i => i.variant === 'MAIN')?.link || imageGroup?.images?.[0]?.link || null;
+    const brand = summary?.brandName || null;
+    return name ? { name, image, brand, source: 'catalog_asin' } : null;
+  } catch (e) {
+    console.log(`[catalog] ASIN ${asin} erro: ${e.message}`);
+    return null;
+  }
+}
+
+// Listings Items API por SKU
+async function fetchByListingsSku(spBase, token, sellerId, sku, marketplaceId) {
+  if (!sellerId) return null;
+  try {
+    const encodedSku = encodeURIComponent(sku);
+    const url = `${spBase}/listings/2021-08-01/items/${sellerId}/${encodedSku}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const summary = data.summaries?.find(s => s.marketplaceId === marketplaceId) || data.summaries?.[0];
+    const name = summary?.itemName
+      || data.attributes?.item_name?.[0]?.value
+      || null;
+    const image = summary?.mainImage?.link || null;
+    const brand = summary?.brandName || data.attributes?.brand?.[0]?.value || null;
+    return name ? { name, image, brand, source: 'listings_sku' } : null;
+  } catch {
+    return null;
+  }
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -40,6 +104,8 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     let amazonAccountId = body.amazon_account_id;
+    const forceAll = body.force_all === true;
+    const singleAsin = body.asin || null; // para re-sync individual
 
     let account = null;
     if (amazonAccountId) {
@@ -52,114 +118,138 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, message: 'Nenhuma conta encontrada' });
     amazonAccountId = account.id;
 
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     if (!refreshToken) return Response.json({ ok: false, message: 'Sem refresh_token configurado' });
 
-    const marketplaceId = account.marketplace_id || 'ATVPDKIKX0DER'; // US default
+    const marketplaceId = account.marketplace_id || 'A2Q3Y263D00KWC';
     const region = account.region || 'NA';
     const spBase = getSpEndpoint(region);
 
-    // Buscar produtos sem nome
-    const products = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: amazonAccountId },
-      '-created_date',
-      500
+    let token;
+    try {
+      token = await getSpToken(refreshToken, clientId, clientSecret);
+    } catch (e) {
+      return Response.json({ ok: false, message: `Falha ao obter token: ${e.message}` });
+    }
+
+    // Tentar obter sellerId — primeiro da conta, depois via SP-API
+    let sellerId = account.seller_id || null;
+    if (!sellerId) {
+      sellerId = await fetchSellerId(spBase, token);
+      if (sellerId) {
+        // Persistir para próximas chamadas
+        await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, { seller_id: sellerId });
+        console.log(`[enrichProductNames] sellerId descoberto: ${sellerId}`);
+      }
+    }
+
+    // Buscar produtos alvo
+    const allProducts = await base44.asServiceRole.entities.Product.filter(
+      { amazon_account_id: amazonAccountId }, '-created_date', 500
     );
 
-    const withoutName = products.filter(p => !p.product_name);
-    if (withoutName.length === 0) {
-      return Response.json({ ok: true, message: 'Todos os produtos já têm nome', enriched: 0 });
+    let targets;
+    if (singleAsin) {
+      targets = allProducts.filter(p => p.asin === singleAsin);
+    } else if (forceAll) {
+      targets = allProducts.filter(p => !p.display_name?.trim());
+    } else {
+      targets = allProducts.filter(p =>
+        !p.product_name?.trim() ||
+        p.catalog_sync_status === 'error' ||
+        p.catalog_sync_status === 'pending'
+      );
     }
 
-    console.log(`[enrichProductNames] Enriquecendo ${withoutName.length} produtos sem nome`);
+    if (targets.length === 0) {
+      return Response.json({ ok: true, message: 'Nenhum produto pendente de enriquecimento', enriched: 0, total: 0 });
+    }
 
-    const token = await getSpToken(refreshToken);
+    console.log(`[enrichProductNames] ${targets.length} produtos. Marketplace: ${marketplaceId}. SellerID: ${sellerId || 'N/A'}`);
 
-    // Processar em lotes de 20 (limite da API)
-    let enriched = 0;
+    // Marcar como "syncing"
+    await base44.asServiceRole.entities.Product.bulkUpdate(
+      targets.map(p => ({ id: p.id, catalog_sync_status: 'syncing' }))
+    );
+
+    let enriched = 0, notFound = 0;
     const updates = [];
+    const results = [];
 
-    for (let i = 0; i < withoutName.length; i += 20) {
-      const batch = withoutName.slice(i, i + 20);
-      const asins = batch.map(p => p.asin).join(',');
-
-      try {
-        const res = await fetch(
-          `${spBase}/catalog/2022-04-01/items?identifiers=${asins}&identifiersType=ASIN&marketplaceIds=${marketplaceId}&includedData=summaries,images`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'x-amz-access-token': token,
-              'Content-Type': 'application/json',
-            },
-          }
-        );
-
-        if (!res.ok) {
-          console.warn(`[enrichProductNames] Batch ${i/20 + 1} falhou: HTTP ${res.status}`);
-          // Fallback: usar SKU como nome
-          for (const p of batch) {
-            if (!p.product_name) {
-              updates.push({ id: p.id, product_name: `ASIN ${p.asin}` });
-            }
-          }
-          continue;
-        }
-
-        const data = await res.json();
-        const itemMap = {};
-        for (const item of (data.items || [])) {
-          const asin = item.asin;
-          const summary = item.summaries?.[0];
-          const image = item.images?.[0]?.images?.find(img => img.variant === 'MAIN') || item.images?.[0]?.images?.[0];
-          itemMap[asin] = {
-            name: summary?.itemName || summary?.brandName || null,
-            image: image?.link || null,
-          };
-        }
-
-        for (const p of batch) {
-          const info = itemMap[p.asin];
-          if (info?.name) {
-            updates.push({
-              id: p.id,
-              product_name: info.name,
-              ...(info.image ? { product_image_url: info.image } : {}),
-            });
-            enriched++;
-          } else {
-            // Fallback: marcar com ASIN para não tentar de novo
-            updates.push({ id: p.id, product_name: `ASIN ${p.asin}` });
-          }
-        }
-      } catch (e) {
-        console.warn(`[enrichProductNames] Erro no batch: ${e.message}`);
-        for (const p of batch) {
-          updates.push({ id: p.id, product_name: `ASIN ${p.asin}` });
-        }
+    for (const p of targets) {
+      // Nunca sobrescrever display_name (nome manual)
+      if (p.display_name?.trim()) {
+        updates.push({ id: p.id, catalog_sync_status: 'success' });
+        enriched++;
+        continue;
       }
 
-      // Pequena pausa entre batches para evitar rate limit
-      if (i + 20 < withoutName.length) {
-        await new Promise(r => setTimeout(r, 500));
+      let found = null;
+
+      // Prioridade 1: Listings Items API (precisa de sellerId)
+      if (sellerId && p.sku) {
+        found = await fetchByListingsSku(spBase, token, sellerId, p.sku, marketplaceId);
       }
+
+      // Prioridade 2: Catalog Items API pelo ASIN
+      if (!found && p.asin) {
+        found = await fetchByCatalogAsin(spBase, token, p.asin, marketplaceId);
+      }
+
+      const now = new Date().toISOString();
+      if (found?.name) {
+        updates.push({
+          id: p.id,
+          product_name: found.name,
+          ...(found.image ? { product_image_url: found.image } : {}),
+          ...(found.brand ? { brand: found.brand } : {}),
+          catalog_sync_status: 'success',
+          last_catalog_sync_at: now,
+          catalog_sync_error: null,
+          catalog_sync_attempts: (p.catalog_sync_attempts || 0) + 1,
+        });
+        enriched++;
+        results.push({ asin: p.asin, sku: p.sku, name: found.name, source: found.source });
+      } else {
+        updates.push({
+          id: p.id,
+          catalog_sync_status: 'not_found',
+          last_catalog_sync_at: now,
+          catalog_sync_error: sellerId
+            ? `Não encontrado no marketplace ${marketplaceId}`
+            : `Sem sellerId — SP-API Catalog pode requerer permissão adicional`,
+          catalog_sync_attempts: (p.catalog_sync_attempts || 0) + 1,
+        });
+        notFound++;
+        results.push({ asin: p.asin, sku: p.sku, name: null, source: 'not_found' });
+      }
+
+      // Rate limit
+      await new Promise(r => setTimeout(r, 250));
     }
 
-    // Salvar tudo em bulk
+    // Bulk save
     for (let i = 0; i < updates.length; i += 500) {
       await base44.asServiceRole.entities.Product.bulkUpdate(updates.slice(i, i + 500));
     }
 
-    console.log(`[enrichProductNames] Concluído: ${enriched} enriquecidos de ${withoutName.length}`);
+    console.log(`[enrichProductNames] Resultado: ${enriched} encontrados, ${notFound} não encontrados`);
+
     return Response.json({
       ok: true,
-      total: withoutName.length,
+      total: targets.length,
       enriched,
-      fallback: withoutName.length - enriched,
+      not_found: notFound,
+      results,
+      marketplace_used: marketplaceId,
+      seller_id_used: sellerId || 'não encontrado',
+      note: !sellerId ? 'sellerId não disponível — Listings API não pôde ser usada. Verifique permissões SP-API.' : undefined,
     });
 
   } catch (error) {
-    console.error('[enrichProductNames] Erro:', error.message);
-    return Response.json({ ok: false, message: error.message }, { status: 500 });
+    console.error('[enrichProductNames] Erro:', error.message, error.stack?.slice(0, 300));
+    return Response.json({ ok: false, message: error.message });
   }
 });

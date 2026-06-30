@@ -14,7 +14,13 @@
     "product_name": {
       "type": "string"
     },
+    "display_name": {
+      "type": "string"
+    },
     "product_image_url": {
+      "type": "string"
+    },
+    "brand": {
       "type": "string"
     },
     "status": {
@@ -112,6 +118,28 @@
     },
     "category": {
       "type": "string"
+    },
+    "catalog_sync_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "syncing",
+        "success",
+        "not_found",
+        "error"
+      ],
+      "default": "pending"
+    },
+    "catalog_sync_error": {
+      "type": "string"
+    },
+    "catalog_sync_attempts": {
+      "type": "number",
+      "default": 0
+    },
+    "last_catalog_sync_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "last_sync_at": {
       "type": "string",

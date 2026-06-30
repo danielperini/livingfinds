@@ -8,6 +8,9 @@
     "seller_name": {
       "type": "string"
     },
+    "seller_id": {
+      "type": "string"
+    },
     "marketplace_id": {
       "type": "string"
     },

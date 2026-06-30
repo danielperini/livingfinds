@@ -3,7 +3,8 @@ import { base44 } from '@/api/base44Client';
 import {
   Package, Search, RefreshCw, Loader2, Play, Pause,
   Plus, Tag, ChevronUp, Filter, Zap, XCircle, Radio,
-  TrendingUp, TrendingDown, Rocket, ShoppingBag, AlertCircle
+  TrendingUp, TrendingDown, Rocket, ShoppingBag, AlertCircle,
+  Pencil, RotateCcw, ExternalLink, Check, X
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import KickoffModal from '@/components/products/KickoffModal';
@@ -107,11 +108,42 @@ function ActionButtons({ product, onKickoff, onToggleCampaign, loading }) {
   );
 }
 
-function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
+// Retorna o nome visível seguindo prioridade: display_name > product_name > "Produto {ASIN}"
+function visibleName(product) {
+  if (product.display_name?.trim()) return product.display_name.trim();
+  if (product.product_name?.trim()) return product.product_name.trim();
+  return `Produto ${product.asin}`;
+}
+
+function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading, onNameUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [editValue, setEditValue] = useState('');
+  const [savingName, setSavingName] = useState(false);
+
+  const isFallback = !product.display_name?.trim() && !product.product_name?.trim();
+  const name = visibleName(product);
+  const syncStatus = product.catalog_sync_status;
+
+  const startEdit = () => {
+    setEditValue(product.display_name || product.product_name || '');
+    setEditingName(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editValue.trim()) return;
+    setSavingName(true);
+    try {
+      await base44.entities.Product.update(product.id, { display_name: editValue.trim() });
+      onNameUpdate && onNameUpdate(product.id, editValue.trim());
+    } finally {
+      setSavingName(false);
+      setEditingName(false);
+    }
+  };
 
   const toggleKeywords = async () => {
     if (!expanded && product.linked_campaign_id) {
@@ -136,8 +168,8 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
   return (
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-        {/* Produto: imagem + nome completo + ASIN + SKU */}
-        <td className="px-4 py-3 min-w-[340px] max-w-[420px]">
+        {/* Produto: imagem + nome + ASIN + SKU */}
+        <td className="px-4 py-3 min-w-[340px] max-w-[440px]">
           <div className="flex items-start gap-3">
             {product.product_image_url ? (
               <img src={product.product_image_url} alt={product.asin} className="w-12 h-12 rounded-lg object-cover bg-surface-3 flex-shrink-0 mt-0.5" />
@@ -147,15 +179,52 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
               </div>
             )}
             <div className="min-w-0 flex-1">
-              {product.product_name ? (
-                <p className="text-xs text-slate-100 leading-snug font-medium line-clamp-2" title={product.product_name}>{product.product_name}</p>
+              {editingName ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    autoFocus
+                    value={editValue}
+                    onChange={e => setEditValue(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') setEditingName(false); }}
+                    className="flex-1 min-w-0 text-xs px-2 py-1 bg-surface-3 border border-cyan/40 rounded text-white focus:outline-none"
+                  />
+                  <button onClick={saveEdit} disabled={savingName} className="p-1 text-emerald-400 hover:text-emerald-300">
+                    {savingName ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  </button>
+                  <button onClick={() => setEditingName(false)} className="p-1 text-slate-500 hover:text-slate-300">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
               ) : (
-                <p className="text-xs text-slate-500 italic leading-snug">Sem nome</p>
+                <div className="flex items-start gap-1 group">
+                  <p
+                    className={`text-xs leading-snug font-medium line-clamp-2 ${isFallback ? 'text-slate-500 italic' : 'text-slate-100'}`}
+                    title={name}
+                  >
+                    {syncStatus === 'syncing' ? 'Buscando nome do produto…' : name}
+                    {product.display_name?.trim() && <span className="ml-1 text-cyan/60 text-[10px]">(editado)</span>}
+                  </p>
+                  <button onClick={startEdit} className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-cyan transition-opacity mt-0.5" title="Editar nome">
+                    <Pencil className="w-2.5 h-2.5" />
+                  </button>
+                </div>
               )}
-              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
                 <span className="text-xs font-mono text-cyan">{product.asin}</span>
                 {product.sku && <span className="text-xs text-slate-500 font-mono">SKU: {product.sku}</span>}
+                {syncStatus === 'not_found' && (
+                  <span className="text-[10px] text-amber-500/80 flex items-center gap-0.5">
+                    <AlertCircle className="w-2.5 h-2.5" /> Não encontrado
+                  </span>
+                )}
+                {syncStatus === 'error' && (
+                  <span className="text-[10px] text-red-400/80">Erro sync</span>
+                )}
               </div>
+              <a href={`https://www.amazon.com.br/dp/${product.asin}`} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-0.5 text-[10px] text-slate-600 hover:text-cyan mt-0.5 transition-colors">
+                <ExternalLink className="w-2.5 h-2.5" /> Ver na Amazon
+              </a>
             </div>
           </div>
         </td>
@@ -367,7 +436,12 @@ export default function Products() {
       const res = await base44.functions.invoke('enrichProductNames', { amazon_account_id: account.id });
       const d = res.data;
       if (d?.ok) {
-        setActionMsg({ type: 'success', text: `✓ ${d.enriched} nomes obtidos (${d.fallback || 0} sem nome na Amazon)` });
+        const msg = d.enriched > 0
+          ? `✓ ${d.enriched} nomes obtidos. ${d.not_found || 0} não encontrados na Amazon.`
+          : d.note
+          ? `⚠️ SP-API sem permissão de catálogo. Use o lápis (✏) na tabela para editar nomes manualmente.`
+          : `${d.not_found || 0} produtos não encontrados no marketplace. Edite os nomes manualmente.`;
+        setActionMsg({ type: d.enriched > 0 ? 'success' : 'info', text: msg });
         await load();
       } else {
         setActionMsg({ type: 'error', text: d?.message || 'Erro ao buscar nomes' });
@@ -456,13 +530,11 @@ export default function Products() {
               {bulkActivating ? 'Criando...' : `Kick-off em massa (${noCampaignInFiltered})`}
             </button>
           )}
-          {productsWithoutName > 0 && (
-            <button onClick={enrichNames} disabled={enriching || !account}
-              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-              {enriching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
-              {enriching ? 'Buscando nomes...' : `Buscar Nomes (${productsWithoutName})`}
-            </button>
-          )}
+          <button onClick={enrichNames} disabled={enriching || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {enriching ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            {enriching ? 'Sincronizando nomes...' : `Sincronizar Nomes`}
+          </button>
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -577,6 +649,7 @@ export default function Products() {
                     onToggleCampaign={toggleCampaign}
                     onKickoff={setKickoffProduct}
                     actionLoading={actionLoading}
+                    onNameUpdate={(id, name) => setProducts(prev => prev.map(pr => pr.id === id ? { ...pr, display_name: name } : pr))}
                   />
                 ))}
               </tbody>
