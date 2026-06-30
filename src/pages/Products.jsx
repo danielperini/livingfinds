@@ -27,9 +27,13 @@ const PAGE_SIZE = 20;
 
 function offerStatus(product) {
   const status = String(product?.status || 'active').toLowerCase();
-  if (status === 'active') return 'active';
   if (status === 'archived') return 'archived';
-  return 'inactive';
+  if (status === 'inactive') return 'inactive';
+  // Usar inventory_status como indicador real da situação da oferta
+  const inv = String(product?.inventory_status || '').toLowerCase();
+  if (inv === 'out_of_stock') return 'out_of_stock';
+  if (inv === 'low_stock') return 'low_stock';
+  return 'active';
 }
 
 function productHasCampaign(product) {
@@ -86,11 +90,26 @@ function OfferStatusBadge({ product }) {
     return (
       <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold">
         <ShoppingBag className="w-3.5 h-3.5" />
-        Ativa
+        Em Estoque
       </span>
     );
   }
-
+  if (status === 'low_stock') {
+    return (
+      <span className="flex items-center gap-1 text-xs text-amber-400 font-semibold">
+        <AlertCircle className="w-3.5 h-3.5" />
+        Estoque Baixo
+      </span>
+    );
+  }
+  if (status === 'out_of_stock') {
+    return (
+      <span className="flex items-center gap-1 text-xs text-red-400 font-semibold">
+        <XCircle className="w-3.5 h-3.5" />
+        Sem Estoque
+      </span>
+    );
+  }
   if (status === 'archived') {
     return (
       <span className="flex items-center gap-1 text-xs text-slate-500">
@@ -99,7 +118,6 @@ function OfferStatusBadge({ product }) {
       </span>
     );
   }
-
   return (
     <span className="flex items-center gap-1 text-xs text-amber-400">
       <AlertCircle className="w-3.5 h-3.5" />
@@ -669,7 +687,8 @@ export default function Products() {
       const matchesFilter =
         filter === 'all' ||
         (filter === 'offer_active' && offerStatus(product) === 'active') ||
-        (filter === 'offer_inactive' && offerStatus(product) !== 'active') ||
+        (filter === 'out_of_stock' && offerStatus(product) === 'out_of_stock') ||
+        (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
         (filter === 'ads_active' && hasCampaign && active) ||
         (filter === 'ads_paused' && hasCampaign && !active) ||
         (filter === 'no_campaign' && !hasCampaign);
@@ -682,7 +701,15 @@ export default function Products() {
     (product) => offerStatus(product) === 'active'
   ).length;
 
-  const inactiveOffers = products.length - activeOffers;
+  const lowStockOffers = products.filter(
+    (product) => offerStatus(product) === 'low_stock'
+  ).length;
+
+  const outOfStockOffers = products.filter(
+    (product) => offerStatus(product) === 'out_of_stock'
+  ).length;
+
+  const inactiveOffers = outOfStockOffers + lowStockOffers;
 
   const activeAds = products.filter(
     (product) => productHasCampaign(product) && isCampaignActive(product)
@@ -842,16 +869,16 @@ export default function Products() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KpiCard
-          label="Ofertas Ativas"
+          label="Em Estoque"
           value={loading ? '0' : activeOffers}
-          detail="listings ativos na Amazon"
+          detail={`${lowStockOffers} estoque baixo · ${outOfStockOffers} sem estoque`}
           tone="success"
         />
 
         <KpiCard
-          label="Ofertas Inativas"
-          value={loading ? '0' : inactiveOffers}
-          detail="pausadas ou arquivadas"
+          label="Sem Estoque"
+          value={loading ? '0' : outOfStockOffers}
+          detail={`${lowStockOffers} com estoque baixo`}
           tone="warning"
         />
 
@@ -890,11 +917,9 @@ export default function Products() {
 
           {[
             { key: 'all', label: `Todos (${products.length})` },
-            { key: 'offer_active', label: `Oferta Ativa (${activeOffers})` },
-            {
-              key: 'offer_inactive',
-              label: `Oferta Inativa (${inactiveOffers})`,
-            },
+            { key: 'offer_active', label: `Em Estoque (${activeOffers})` },
+            { key: 'out_of_stock', label: `Sem Estoque (${outOfStockOffers})` },
+            { key: 'low_stock', label: `Estoque Baixo (${lowStockOffers})` },
             { key: 'ads_active', label: `Ads Ativos (${activeAds})` },
             { key: 'ads_paused', label: `Ads Pausados (${pausedAds})` },
             {
