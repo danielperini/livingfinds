@@ -515,28 +515,21 @@ export default function Products() {
         campaign_id: campaignId,
         reason: active ? 'Pausa manual' : 'Ativação manual',
         evidence: `Produto: ${product.asin}`,
-        risk_level: active ? 'high' : 'medium',
-        requires_approval: active,
+        risk_level: 'medium',
+        requires_approval: false,
       });
 
-      if (active) {
-        setActionMsg({
-          type: 'info',
-          text: 'Pedido de pausa criado para aprovação.',
-        });
-      } else {
-        await base44.functions.invoke('executeAgentAction', {
-          action_id: agentAction.id,
-          approve: true,
-        });
+      await base44.functions.invoke('executeAgentAction', {
+        action_id: agentAction.id,
+        approve: true,
+      });
 
-        setActionMsg({
-          type: 'success',
-          text: `Campanha ativada para ${product.asin}.`,
-        });
+      setActionMsg({
+        type: 'success',
+        text: active ? `Campanha pausada para ${product.asin}.` : `Campanha ativada para ${product.asin}.`,
+      });
 
-        await load();
-      }
+      await load();
     } catch (error) {
       setActionMsg({
         type: 'error',
