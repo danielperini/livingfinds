@@ -122,6 +122,7 @@ async function requestReport(base, token, profileId, payload) {
 
 Deno.serve(async (req) => {
   const startTime = Date.now();
+  let syncLog = null;
   try {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
@@ -152,11 +153,28 @@ Deno.serve(async (req) => {
     const today = new Date().toISOString().slice(0, 10);
     const triggerType = body.trigger_type || 'automatic'; // 'automatic' ou 'manual'
     
+    // Verificar se já existe sync em andamento
+    const runningSyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+      amazon_account_id: amazonAccountId,
+      execution_date: today,
+      status: 'started',
+    });
+    
+    if (runningSyncs.length > 0 && triggerType === 'automatic') {
+      console.log(`[runFullSync] Sync já em andamento, ignorando`);
+      return Response.json({
+        ok: false,
+        skipped: true,
+        reason: 'Sync já em andamento',
+        running_count: runningSyncs.length,
+      });
+    }
+    
     if (triggerType === 'automatic') {
       const todaySyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
         amazon_account_id: amazonAccountId,
         execution_date: today,
-        status: { $in: ['success', 'started'] },
+        status: 'success',
       });
       
       if (todaySyncs.length >= 6) {
@@ -742,6 +760,23 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('[runFullSync] Erro inesperado:', error.message, error.stack?.slice(0, 500));
+    
+    // Atualizar AmazonAccount com erro
+    await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
+      status: 'error',
+      error_message: error.message,
+    }).catch(() => {});
+    
+    // Atualizar SyncExecutionLog com erro (se existir)
+    if (typeof syncLog !== 'undefined' && syncLog) {
+      await base44.asServiceRole.entities.SyncExecutionLog.update(syncLog.id, {
+        status: 'error',
+        completed_at: new Date().toISOString(),
+        error_message: error.message,
+        duration_ms: Date.now() - startTime,
+      }).catch(() => {});
+    }
+    
     return Response.json({ ok: false, step: 'unknown', message: error.message, stack: error.stack?.slice(0, 300) });
   }
 });
