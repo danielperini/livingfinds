@@ -138,9 +138,11 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // === 5. MONTAR MATRIZ HORÁRIA ===
+        // === 5. MONTAR MATRIZ HORÁRIA E POR DIA DA SEMANA ===
         const hourlyMatrix: any = {};
-        const dailyMatrix: any = {};
+        const dailyMetrics: any = {};
+        const weekdayMetrics = { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 }; // Seg-Sex (0-4)
+        const weekendMetrics = { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 }; // Sáb-Dom (5-6)
 
         for (let d = 0; d < 7; d++) {
           for (let h = 0; h < 24; h++) {
@@ -155,6 +157,8 @@ Deno.serve(async (req) => {
               units: 0,
             };
           }
+          
+          dailyMetrics[d] = { day_of_week: d, impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 };
         }
 
         for (const metric of hourlyMetrics) {
@@ -167,12 +171,71 @@ Deno.serve(async (req) => {
             hourlyMatrix[key].orders += metric.orders || 0;
             hourlyMatrix[key].units += metric.units || 0;
           }
+          
+          // Agregar por dia da semana
+          if (dailyMetrics[metric.day_of_week]) {
+            dailyMetrics[metric.day_of_week].impressions += metric.impressions || 0;
+            dailyMetrics[metric.day_of_week].clicks += metric.clicks || 0;
+            dailyMetrics[metric.day_of_week].spend += metric.spend || 0;
+            dailyMetrics[metric.day_of_week].sales += metric.sales || 0;
+            dailyMetrics[metric.day_of_week].orders += metric.orders || 0;
+          }
+          
+          // Separar dias úteis vs finais de semana
+          const isWeekend = metric.day_of_week === 0 || metric.day_of_week === 6; // Domingo ou Sábado
+          if (isWeekend) {
+            weekendMetrics.impressions += metric.impressions || 0;
+            weekendMetrics.clicks += metric.clicks || 0;
+            weekendMetrics.spend += metric.spend || 0;
+            weekendMetrics.sales += metric.sales || 0;
+            weekendMetrics.orders += metric.orders || 0;
+          } else {
+            weekdayMetrics.impressions += metric.impressions || 0;
+            weekdayMetrics.clicks += metric.clicks || 0;
+            weekdayMetrics.spend += metric.spend || 0;
+            weekdayMetrics.sales += metric.sales || 0;
+            weekdayMetrics.orders += metric.orders || 0;
+          }
         }
 
         // === 6. CALCULAR MÉTRICAS DERIVADAS ===
         const avgConversionRate = totalClicks > 0 ? (hourlyMetrics.reduce((sum, h) => sum + (h.orders || 0), 0) / totalClicks) : 0;
         const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 100;
         const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
+        
+        // Métricas por dia da semana
+        const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+        const dailyAnalysis = Object.values(dailyMetrics).map((d: any) => ({
+          day_of_week: d.day_of_week,
+          day_name: dayNames[d.day_of_week],
+          is_weekend: d.day_of_week === 0 || d.day_of_week === 6,
+          impressions: d.impressions,
+          clicks: d.clicks,
+          spend: d.spend,
+          sales: d.sales,
+          orders: d.orders,
+          roas: d.spend > 0 ? d.sales / d.spend : 0,
+          acos: d.sales > 0 ? (d.spend / d.sales) * 100 : 100,
+          conversion_rate: d.clicks > 0 ? d.orders / d.clicks : 0,
+        })).sort((a, b) => a.day_of_week - b.day_of_week);
+        
+        // Métricas agregadas: dias úteis vs finais de semana
+        const weekdayRoas = weekdayMetrics.spend > 0 ? weekdayMetrics.sales / weekdayMetrics.spend : 0;
+        const weekdayAcos = weekdayMetrics.sales > 0 ? (weekdayMetrics.spend / weekdayMetrics.sales) * 100 : 100;
+        const weekdayCvr = weekdayMetrics.clicks > 0 ? weekdayMetrics.orders / weekdayMetrics.clicks : 0;
+        
+        const weekendRoas = weekendMetrics.spend > 0 ? weekendMetrics.sales / weekendMetrics.spend : 0;
+        const weekendAcos = weekendMetrics.sales > 0 ? (weekendMetrics.spend / weekendMetrics.sales) * 100 : 100;
+        const weekendCvr = weekendMetrics.clicks > 0 ? weekendMetrics.orders / weekendMetrics.clicks : 0;
+        
+        // Identificar melhor dia da semana
+        const bestDay = dailyAnalysis
+          .filter(d => d.clicks >= 10 && d.sales >= 2)
+          .sort((a, b) => b.roas - a.roas)[0];
+        
+        const worstDay = dailyAnalysis
+          .filter(d => d.clicks >= 10 && d.sales >= 2)
+          .sort((a, b) => a.acos - b.acos)[0];
 
         const classifiedHours = [];
 
@@ -320,6 +383,39 @@ Deno.serve(async (req) => {
           current_avg_conversion: avgConversionRate,
           hourly_classification: classifiedHours,
           dayparting_windows: dayPartingWindows,
+          daily_analysis,
+          weekday_metrics: {
+            spend: weekdayMetrics.spend,
+            sales: weekdayMetrics.sales,
+            clicks: weekdayMetrics.clicks,
+            orders: weekdayMetrics.orders,
+            roas: weekdayRoas,
+            acos: weekdayAcos,
+            cvr: weekdayCvr,
+          },
+          weekend_metrics: {
+            spend: weekendMetrics.spend,
+            sales: weekendMetrics.sales,
+            clicks: weekendMetrics.clicks,
+            orders: weekendMetrics.orders,
+            roas: weekendRoas,
+            acos: weekendAcos,
+            cvr: weekendCvr,
+          },
+          best_day_of_week: bestDay ? {
+            day_name: bestDay.day_name,
+            day_of_week: bestDay.day_of_week,
+            roas: bestDay.roas,
+            sales: bestDay.sales,
+            clicks: bestDay.clicks,
+          } : null,
+          worst_day_of_week: worstDay ? {
+            day_name: worstDay.day_name,
+            day_of_week: worstDay.day_of_week,
+            acos: worstDay.acos,
+            sales: worstDay.sales,
+            clicks: worstDay.clicks,
+          } : null,
           estimated_daily_savings: estimatedSavings / 30,
           estimated_roas_improvement_pct: estimatedRoasImprovement,
           confidence_score: 85,

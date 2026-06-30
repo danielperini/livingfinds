@@ -228,6 +228,12 @@ export default function DaypartingDashboard() {
                       <span>Vendas: <span className="text-emerald-400">{opp.total_sales}</span></span>
                       <span>ACoS: <span className={opp.current_avg_acos > 30 ? 'text-red-400' : 'text-emerald-400'}>{opp.current_avg_acos.toFixed(1)}%</span></span>
                       <span>ROAS: <span className="text-cyan">{opp.current_avg_roas.toFixed(2)}</span></span>
+                      {opp.best_day_of_week && (
+                        <span className="flex items-center gap-1 text-emerald-400">
+                          <TrendingUp className="w-3 h-3" />
+                          Melhor dia: <span className="font-semibold text-white">{opp.best_day_of_week.day_name}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                   
@@ -305,6 +311,137 @@ export default function DaypartingDashboard() {
                   <p className="text-xs text-slate-500">ACoS Atual</p>
                   <p className="text-lg font-bold text-amber-400">{selectedOpp.current_avg_acos?.toFixed(1)}%</p>
                 </div>
+              </div>
+
+              {/* Análise por Dia da Semana */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-cyan" />
+                  Desempenho por Dia da Semana
+                </h3>
+                
+                {/* Comparação Dias Úteis vs Finais de Semana */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3">
+                    <p className="text-xs text-cyan font-semibold mb-2">Dias Úteis (Seg–Sex)</p>
+                    <div className="space-y-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ROAS:</span>
+                        <span className="text-white font-semibold">{(selectedOpp.weekday_metrics?.roas || 0).toFixed(2)}x</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ACoS:</span>
+                        <span className="text-white font-semibold">{(selectedOpp.weekday_metrics?.acos || 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Vendas:</span>
+                        <span className="text-emerald-400 font-semibold">${(selectedOpp.weekday_metrics?.sales || 0).toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Conversão:</span>
+                        <span className="text-white font-semibold">{((selectedOpp.weekday_metrics?.cvr || 0) * 100).toFixed(1)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-amber/5 border border-amber/20 rounded-lg p-3">
+                    <p className="text-xs text-amber-400 font-semibold mb-2">Finais de Semana (Sáb–Dom)</p>
+                    <div className="space-y-1 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ROAS:</span>
+                        <span className="text-white font-semibold">{(selectedOpp.weekend_metrics?.roas || 0).toFixed(2)}x</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">ACoS:</span>
+                        <span className="text-white font-semibold">{(selectedOpp.weekend_metrics?.acos || 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Vendas:</span>
+                        <span className="text-emerald-400 font-semibold">${(selectedOpp.weekend_metrics?.sales || 0).toFixed(0)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Conversão:</span>
+                        <span className="text-white font-semibold">{((selectedOpp.weekend_metrics?.cvr || 0) * 100).toFixed(1)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Melhor e Pior Dia */}
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  {selectedOpp.best_day_of_week && (
+                    <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
+                      <p className="text-xs text-emerald-400 font-semibold mb-2 flex items-center gap-1">
+                        <TrendingUp className="w-3 h-3" /> Melhor Dia
+                      </p>
+                      <p className="text-sm font-bold text-white mb-1">{selectedOpp.best_day_of_week.day_name}</p>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">ROAS:</span>
+                          <span className="text-emerald-400 font-semibold">{(selectedOpp.best_day_of_week.roas || 0).toFixed(2)}x</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Vendas:</span>
+                          <span className="text-emerald-400 font-semibold">${(selectedOpp.best_day_of_week.sales || 0).toFixed(0)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Cliques:</span>
+                          <span className="text-white font-semibold">{(selectedOpp.best_day_of_week.clicks || 0).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {selectedOpp.worst_day_of_week && (
+                    <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3">
+                      <p className="text-xs text-red-400 font-semibold mb-2 flex items-center gap-1">
+                        <TrendingDown className="w-3 h-3" /> Pior Dia
+                      </p>
+                      <p className="text-sm font-bold text-white mb-1">{selectedOpp.worst_day_of_week.day_name}</p>
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">ACoS:</span>
+                          <span className="text-red-400 font-semibold">{(selectedOpp.worst_day_of_week.acos || 0).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Vendas:</span>
+                          <span className="text-emerald-400 font-semibold">${(selectedOpp.worst_day_of_week.sales || 0).toFixed(0)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Cliques:</span>
+                          <span className="text-white font-semibold">{(selectedOpp.worst_day_of_week.clicks || 0).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Tabela de todos os dias */}
+                {selectedOpp.daily_analysis && selectedOpp.daily_analysis.length > 0 && (
+                  <div>
+                    <p className="text-xs text-slate-400 mb-2">Desempenho detalhado por dia:</p>
+                    <div className="space-y-1">
+                      {selectedOpp.daily_analysis.map((day, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs py-1.5 px-2 rounded bg-surface-3/50">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${
+                              day.is_weekend ? 'bg-amber-400' : 'bg-cyan-400'
+                            }`} />
+                            <span className="text-white font-medium">{day.day_name}</span>
+                            {day.is_weekend && <span className="text-[10px] text-amber-400">(Fim de Semana)</span>}
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-slate-400">${day.spend?.toFixed(0)}</span>
+                            <span className="text-emerald-400">${day.sales?.toFixed(0)}</span>
+                            <span className={`font-semibold ${day.roas >= 3 ? 'text-emerald-400' : day.roas >= 1 ? 'text-amber-400' : 'text-red-400'}`}>
+                              {day.roas?.toFixed(2)}x
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Estratégia Proposta */}
