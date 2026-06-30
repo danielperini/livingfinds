@@ -1,16 +1,49 @@
 /**
- * syncProductSalesMetrics — Busca métricas de vendas de produtos via SP-API
+ * syncProductSalesMetrics — Busca métricas completas de vendas e tráfego via SP-API
  * 
- * Dados retornados:
- * - sales (vendas em $)
+ * Relatório: GET_SALES_AND_TRAFFIC_REPORT (Business Reports)
+ * 
+ * Métricas retornadas:
+ * Vendas:
+ * - orderedProductSales (vendas de produtos pedidos)
  * - unitsOrdered (unidades pedidas)
  * - orderItemCount (total de itens do pedido)
  * - averageSalesPerOrderItem (vendas médias por item)
  * - averageUnitsPerOrder (média de unidades por pedido)
  * - averagePrice (preço médio de venda)
- * - sessions (sessões - total)
- * - sessionPercentage (porcentagem da sessão do item)
- * - offerCount (média de contagem de ofertas)
+ * 
+ * Tráfego:
+ * - pageViewsMobile (visualizações mobile)
+ * - pageViewsDesktop (visualizações desktop)
+ * - pageViewsTotal (visualizações total)
+ * - sessionsMobile (sessões mobile)
+ * - sessionsDesktop (sessões desktop)
+ * - sessionsTotal (sessões total)
+ * 
+ * Conversão:
+ * - buyBoxPercentage (porcentagem buy box)
+ * - sessionItemOrderRatio (porcentagem sessão do item do pedido)
+ * - unitSessionRatio (porcentagem sessão de unidade)
+ * - offerCount (média de ofertas)
+ * - parentItemCount (média de produtos parent)
+ * 
+ * Reembolsos:
+ * - unitsRefunded (unidades reembolsadas)
+ * - refundRate (tarifa de reembolso)
+ * 
+ * Avaliações:
+ * - reviewsReceived (avaliações recebidas)
+ * - negativeReviewsReceived (avaliações negativas)
+ * - negativeReviewRate (índice negativas)
+ * 
+ * Reclamações:
+ * - claimsGranted (reivindicações A-Z)
+ * - claimsAmount (valor das reivindicações)
+ * 
+ * Envios:
+ * - shippedProductSales (vendas de produtos enviados)
+ * - unitsShipped (unidades enviadas)
+ * - ordersShipped (pedidos enviados)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -67,7 +100,7 @@ Deno.serve(async (req) => {
     const token = await getSPApiToken(refreshToken);
     const spBase = getSPApiBase(account.region);
 
-    // Buscar relatório de vendas de produtos (últimos 30 dias)
+    // Solicitar relatório GET_SALES_AND_TRAFFIC_REPORT (últimos 30 dias)
     const endDate = new Date();
     const startDate = new Date(Date.now() - 30 * 86400000);
     
@@ -79,8 +112,10 @@ Deno.serve(async (req) => {
         'x-amz-access-token': token,
       },
       body: JSON.stringify({
-        reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
+        reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
         marketplaceIds: [marketplaceId],
+        dataStartTime: startDate.toISOString(),
+        dataEndTime: endDate.toISOString(),
       }),
     });
 
@@ -94,14 +129,16 @@ Deno.serve(async (req) => {
 
     const reportData = await reportRes.json();
     const reportId = reportData.reportId;
+    console.log(`[syncProductSalesMetrics] Relatório solicitado: ${reportId}`);
 
-    // Aguardar processamento (polling simples)
+    // Aguardar processamento (polling)
     let reportStatus = 'IN_QUEUE';
-    let reportUrl = null;
+    let reportDocumentId = null;
     let attempts = 0;
     
-    while (reportStatus === 'IN_QUEUE' && attempts < 10) {
-      await new Promise(resolve => setTimeout(resolve, 3000));
+    while (['IN_QUEUE', 'IN_PROGRESS'].includes(reportStatus) && attempts < 15) {
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      
       const statusRes = await fetch(`${spBase}/reports/2021-06-30/reports/${reportId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -111,68 +148,134 @@ Deno.serve(async (req) => {
       
       const statusData = await statusRes.json();
       reportStatus = statusData.processingStatus;
-      if (reportStatus === 'DONE') reportUrl = statusData.reportDocumentId;
+      if (reportStatus === 'DONE') reportDocumentId = statusData.reportDocumentId;
+      else if (reportStatus === 'CANCELLED' || reportStatus === 'FATAL') {
+        return Response.json({ error: 'Relatório falhou', status: reportStatus }, { status: 500 });
+      }
       attempts++;
+      console.log(`[syncProductSalesMetrics] Aguardando... ${attempts}/15 - Status: ${reportStatus}`);
     }
 
-    if (!reportUrl) {
+    if (!reportDocumentId) {
       return Response.json({ error: 'Relatório não processado a tempo', status: reportStatus }, { status: 500 });
     }
 
     // Baixar documento do relatório
-    const docRes = await fetch(`${spBase}/reports/2021-06-30/documents/${reportUrl}`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'x-amz-access-token': token },
+    const docRes = await fetch(`${spBase}/reports/2021-06-30/documents/${reportDocumentId}`, {
+      headers: { 
+        'Authorization': `Bearer ${token}`, 
+        'x-amz-access-token': token,
+        'Accept': 'text/tab-separated-values',
+      },
     });
+    
+    if (!docRes.ok) {
+      return Response.json({ error: 'Falha ao baixar relatório', status: docRes.status }, { status: 500 });
+    }
     
     const reportText = await docRes.text();
     const lines = reportText.split('\n').filter(l => l.trim());
-    const headers = lines[0].split('\t');
+    
+    if (lines.length < 2) {
+      return Response.json({ error: 'Relatório vazio', lines: lines.length }, { status: 400 });
+    }
+
+    // Parse TSV
+    const headers = lines[0].split('\t').map(h => h.trim());
+    console.log(`[syncProductSalesMetrics] Headers: ${headers.length} colunas`);
     
     const products = [];
-    for (let i = 1; i < Math.min(lines.length, 100); i++) {
+    for (let i = 1; i < Math.min(lines.length, 200); i++) {
       const values = lines[i].split('\t');
       const row = {};
-      headers.forEach((h, idx) => { row[h.trim()] = values[idx] || '' });
+      headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim() });
+      
+      // Mapear colunas do relatório
+      const asin = row['ASIN'] || row['asin'] || '';
+      const sku = row['SKU'] || row['seller-sku'] || '';
+      const title = row['title'] || row['item-name'] || '';
+      
+      // Helper para parsear números
+      const num = (val) => {
+        if (!val || val === '--' || val === '-') return 0;
+        return parseFloat(val.replace(/[^0-9.-]/g, '')) || 0;
+      };
       
       products.push({
-        asin: row['asin'] || '',
-        sku: row['seller-sku'] || '',
-        title: row['item-name'] || '',
-        price: parseFloat(row['your-price'] || '0'),
-        sales: parseFloat(row['sales-last-30-days'] || '0'),
-        unitsOrdered: parseInt(row['units-ordered-last-30-days'] || '0'),
-        sessions: parseInt(row['page-views-last-30-days'] || '0'),
-        buyBoxPercentage: parseFloat(row['buy-box-percentage-last-30-days'] || '0'),
+        asin,
+        sku,
+        title,
+        // Vendas
+        orderedProductSales: num(row['orderedProductSales']),
+        unitsOrdered: num(row['unitsOrdered']),
+        orderItemCount: num(row['orderItemCount']),
+        averageSalesPerOrderItem: num(row['averageSalesPerOrderItem']),
+        averageUnitsPerOrder: num(row['averageUnitsPerOrder']),
+        averagePrice: num(row['averagePrice']),
+        
+        // Tráfego
+        pageViewsMobile: num(row['pageViewsMobile']),
+        pageViewsDesktop: num(row['pageViewsDesktop']),
+        pageViewsTotal: num(row['pageViewsTotal']),
+        sessionsMobile: num(row['sessionsMobile']),
+        sessionsDesktop: num(row['sessionsDesktop']),
+        sessionsTotal: num(row['sessionsTotal']),
+        
+        // Conversão
+        buyBoxPercentage: num(row['buyBoxPercentage']),
+        sessionItemOrderRatio: num(row['sessionItemOrderRatio']),
+        unitSessionRatio: num(row['unitSessionRatio']),
+        offerCount: num(row['offerCount']),
+        parentItemCount: num(row['parentItemCount']),
+        
+        // Reembolsos
+        unitsRefunded: num(row['unitsRefunded']),
+        refundRate: num(row['refundRate']),
+        
+        // Avaliações
+        reviewsReceived: num(row['reviewsReceived']),
+        negativeReviewsReceived: num(row['negativeReviewsReceived']),
+        negativeReviewRate: num(row['negativeReviewRate']),
+        
+        // Reclamações
+        claimsGranted: num(row['claimsGranted']),
+        claimsAmount: num(row['claimsAmount']),
+        
+        // Envios
+        shippedProductSales: num(row['shippedProductSales']),
+        unitsShipped: num(row['unitsShipped']),
+        ordersShipped: num(row['ordersShipped']),
       });
     }
 
-    // Calcular métricas agregadas
-    const totalSales = products.reduce((sum, p) => sum + p.sales, 0);
-    const totalUnits = products.reduce((sum, p) => sum + p.unitsOrdered, 0);
-    const totalSessions = products.reduce((sum, p) => sum + p.sessions, 0);
-    const avgPrice = products.length > 0 ? products.reduce((sum, p) => sum + p.price, 0) / products.length : 0;
-    const avgUnitsPerOrder = totalUnits > 0 ? totalUnits / products.length : 0;
-    const avgSalesPerItem = products.length > 0 ? totalSales / products.length : 0;
-    const sessionPercentage = totalSessions > 0 ? (totalUnits / totalSessions * 100) : 0;
+    // Calcular totais agregados
+    const summary = {
+      totalOrderedProductSales: products.reduce((sum, p) => sum + p.orderedProductSales, 0),
+      totalUnitsOrdered: products.reduce((sum, p) => sum + p.unitsOrdered, 0),
+      totalPageViews: products.reduce((sum, p) => sum + p.pageViewsTotal, 0),
+      totalSessions: products.reduce((sum, p) => sum + p.sessionsTotal, 0),
+      totalReviews: products.reduce((sum, p) => sum + p.reviewsReceived, 0),
+      totalNegativeReviews: products.reduce((sum, p) => sum + p.negativeReviewsReceived, 0),
+      totalUnitsShipped: products.reduce((sum, p) => sum + p.unitsShipped, 0),
+      avgBuyBoxPercentage: products.length > 0 ? products.reduce((sum, p) => sum + p.buyBoxPercentage, 0) / products.length : 0,
+      avgRefundRate: products.length > 0 ? products.reduce((sum, p) => sum + p.refundRate, 0) / products.length : 0,
+      totalProducts: products.length,
+    };
+
+    console.log(`[syncProductSalesMetrics] ${products.length} produtos processados`);
 
     return Response.json({
       ok: true,
       amazon_account_id: amazonAccountId,
       period: { start: startDate.toISOString().slice(0, 10), end: endDate.toISOString().slice(0, 10) },
-      summary: {
-        totalSales,
-        totalUnits,
-        totalSessions,
-        avgPrice,
-        avgUnitsPerOrder,
-        avgSalesPerItem,
-        sessionPercentage,
-        totalProducts: products.length,
-      },
-      products: products.slice(0, 50),
-      message: `${products.length} produtos sincronizados`,
+      report_id: reportId,
+      summary,
+      products: products.slice(0, 100),
+      total_products: products.length,
+      message: `${products.length} produtos sincronizados com métricas completas`,
     });
   } catch (error) {
+    console.error('[syncProductSalesMetrics] Erro:', error.message);
     return Response.json({ error: error.message }, { status: 500 });
   }
 });
