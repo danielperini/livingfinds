@@ -40,7 +40,8 @@ function OfferStatusBadge({ product }) {
 }
 
 function CampaignStatusCell({ product }) {
-  if (!product.linked_campaign_id) {
+  const hasCampaign = product.has_campaign || product.linked_campaign_id;
+  if (!hasCampaign || !product.linked_campaign_id) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-slate-500">
         <XCircle className="w-3.5 h-3.5 text-slate-600" /> Sem campanha
@@ -67,8 +68,9 @@ function CampaignStatusCell({ product }) {
 
 function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading }) {
   const isLoading = loading === product.id;
+  const hasCampaign = product.has_campaign || product.linked_campaign_id;
 
-  if (!product.linked_campaign_id) {
+  if (!hasCampaign || !product.linked_campaign_id) {
     return (
       <div className="flex items-center gap-1.5">
         <button
@@ -403,6 +405,7 @@ export default function Products() {
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
   const [enriching, setEnriching] = useState(false);
+  const [fixingLinks, setFixingLinks] = useState(false);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
 
@@ -531,9 +534,32 @@ export default function Products() {
     }
   };
 
+  const fixCampaignLinks = async () => {
+    if (!account) return;
+    setFixingLinks(true);
+    setActionMsg({ type: 'info', text: 'Corrigindo vínculos de campanhas...' });
+    try {
+      const res = await base44.functions.invoke('fixProductCampaignLinks', { 
+        amazon_account_id: account.id,
+      });
+      const d = res.data;
+      if (d?.ok) {
+        setActionMsg({ type: 'success', text: `✓ ${d.updated || 0} produtos corrigidos. ${d.message || ''}` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: d?.error || 'Erro ao corrigir vínculos' });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setFixingLinks(false);
+      setTimeout(() => setActionMsg(null), 10000);
+    }
+  };
+
   // Bulk kick-off para produtos sem campanha
   const bulkKickoff = async () => {
-    const targets = filtered.filter(p => !p.linked_campaign_id);
+    const targets = filtered.filter(p => !(p.has_campaign || p.linked_campaign_id));
     if (!targets.length) return;
     setBulkActivating(true);
     setActionMsg({ type: 'info', text: `Criando campanhas para ${targets.length} produtos...` });
@@ -559,9 +585,9 @@ export default function Products() {
   // Classificação por oferta e campanhas - usa linked_campaign_id como fonte da verdade
   const activeOffers = products.filter(p => offerStatus(p) === 'active');
   const inactiveOffers = products.filter(p => offerStatus(p) !== 'active');
-  const withActiveAds = products.filter(p => p.linked_campaign_id && p.campaign_status === 'active').length;
-  const withPausedAds = products.filter(p => p.linked_campaign_id && p.campaign_status !== 'active').length;
-  const withoutCampaign = products.filter(p => !p.linked_campaign_id).length;
+  const withActiveAds = products.filter(p => (p.has_campaign || p.linked_campaign_id) && p.campaign_status === 'active').length;
+  const withPausedAds = products.filter(p => (p.has_campaign || p.linked_campaign_id) && p.campaign_status !== 'active').length;
+  const withoutCampaign = products.filter(p => !(p.has_campaign || p.linked_campaign_id)).length;
   const totalProducts = products.length;
 
   const filtered = products.filter(p => {
@@ -570,18 +596,19 @@ export default function Products() {
       (p.product_name || '').toLowerCase().includes(search.toLowerCase()) ||
       (p.sku || '').toLowerCase().includes(search.toLowerCase())
     );
+    const hasCampaign = p.has_campaign || p.linked_campaign_id;
     const matchFilter =
       filter === 'all' ? true :
       filter === 'offer_active' ? offerStatus(p) === 'active' :
       filter === 'offer_inactive' ? offerStatus(p) !== 'active' :
-      filter === 'ads_active' ? (p.linked_campaign_id && p.campaign_status === 'active') :
-      filter === 'ads_paused' ? (p.linked_campaign_id && p.campaign_status !== 'active') :
-      filter === 'no_campaign' ? !p.linked_campaign_id :
+      filter === 'ads_active' ? (hasCampaign && p.campaign_status === 'active') :
+      filter === 'ads_paused' ? (hasCampaign && p.campaign_status !== 'active') :
+      filter === 'no_campaign' ? !hasCampaign :
       true;
     return matchSearch && matchFilter;
   });
 
-  const noCampaignInFiltered = filtered.filter(p => !p.linked_campaign_id).length;
+  const noCampaignInFiltered = filtered.filter(p => !(p.has_campaign || p.linked_campaign_id)).length;
   const productsWithoutName = products.filter(p => !p.product_name).length;
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -611,6 +638,11 @@ export default function Products() {
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             {enriching ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
             {enriching ? 'Sincronizando nomes...' : `Sincronizar Nomes`}
+          </button>
+          <button onClick={fixCampaignLinks} disabled={fixingLinks || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {fixingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            {fixingLinks ? 'Corrigindo...' : `Corrigir Vínculos`}
           </button>
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
