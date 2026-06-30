@@ -306,6 +306,29 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
                 </div>
               )}
 
+              {/* Conflito de categoria */}
+              {validation.blocks?.some(b => b.field === 'category_mismatch') && (
+                <div className="space-y-2">
+                  {validation.blocks.filter(b => b.field === 'category_mismatch').map((block, i) => (
+                    <div key={i} className="flex items-start gap-3 px-4 py-3 bg-red-400/10 border border-red-400/20 rounded-xl">
+                      <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-red-300">Violação: Regra de Finalidade Única</p>
+                        <p className="text-xs text-red-400/80 mt-1">{block.message}</p>
+                        {block.data?.existing_categories && (
+                          <div className="mt-2 text-xs bg-surface-3 rounded-lg p-2 space-y-1">
+                            <p className="text-slate-400">Categorias existentes no grupo:</p>
+                            <p className="text-white font-semibold">{block.data.existing_categories.join(', ')}</p>
+                            <p className="text-slate-400 mt-1">Categoria do novo produto:</p>
+                            <p className="text-white font-semibold">{block.data.new_category}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {!validation.blocks?.length && !validation.alerts?.length && !validation.sku_conflict && !validation.duplicate && (
                 <div className="flex items-center gap-3 px-4 py-3 bg-emerald-400/10 border border-emerald-400/20 rounded-xl">
                   <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" />

@@ -76,6 +76,36 @@ Deno.serve(async (req) => {
           severity: 'medium',
         });
       }
+
+      // === REGRA DE FINALIDADE ÚNICA: Verificar categoria do produto ===
+      const productCategory = product.category || 'unknown';
+      validations.suggestions.product_category = productCategory;
+      
+      // Extrair categoria do nome do produto para validação
+      const productNameLower = (product.product_name || '').toLowerCase();
+      let inferredCategory = 'unknown';
+      
+      // Categorias comuns (expandir conforme necessário)
+      const categoryKeywords = {
+        'lixeira': ['lixeira', 'lixo', 'resíduo', 'descarte'],
+        'interruptor': ['interruptor', 'switch', 'botão', 'tecla'],
+        'fechadura': ['fechadura', 'lock', 'tranca', 'cadeado'],
+        'headset': ['headset', 'fone', 'auricular', 'headphone'],
+        'organizador': ['organizador', 'caixa', 'armazenamento', 'storage'],
+        'moedor': ['moedor', 'triturador', 'grinder', 'mill'],
+        'iluminacao': ['lâmpada', 'lampada', 'luz', 'led', 'iluminação'],
+        'cabos': ['cabo', 'cable', 'usb', 'hdmi', 'carregador'],
+      };
+      
+      for (const [cat, keywords] of Object.entries(categoryKeywords)) {
+        if (keywords.some(k => productNameLower.includes(k))) {
+          inferredCategory = cat;
+          break;
+        }
+      }
+      
+      validations.suggestions.inferred_category = inferredCategory;
+      validations.checks.has_defined_category = inferredCategory !== 'unknown';
     }
 
     // === 2. VERIFICAR ASIN COM MÚLTIPLOS SKUS ===
@@ -88,6 +118,7 @@ Deno.serve(async (req) => {
         price: p.price,
         inventory: p.fba_inventory || 0,
         status: p.status,
+        category: p.category || 'unknown',
       }));
       
       validations.alerts.push({
@@ -106,26 +137,78 @@ Deno.serve(async (req) => {
           severity: 'high',
         });
       }
+      
+      // === REGRA DE FINALIDADE ÚNICA: Verificar se SKUs têm categorias consistentes ===
+      const categories = [...new Set(skus.map(s => s.category))];
+      validations.checks.consistent_categories_across_skus = categories.length === 1;
+      
+      if (categories.length > 1) {
+        validations.warnings.push({
+          field: 'category_mismatch_skus',
+          message: `SKUs do mesmo ASIN possuem categorias diferentes: ${categories.join(', ')}. Isso pode indicar erro de cadastro.`,
+          severity: 'medium',
+        });
+      }
     }
 
     // === 3. VERIFICAR DUPLICIDADE DE GRUPO ===
     const existingGroups = await base44.asServiceRole.entities.AdGroup.filter({
       amazon_account_id,
       campaign_id,
-      primary_asin: asin,
-      group_type,
     });
 
-    const activeGroup = existingGroups.find(g => g.state === 'enabled' && !g.archived);
-    validations.checks.no_duplicate_group = !activeGroup;
+    // Verificar duplicidade por ASIN
+    const activeGroupSameAsin = existingGroups.find(g => 
+      g.state === 'enabled' && 
+      !g.archived && 
+      g.primary_asin === asin
+    );
     
-    if (activeGroup) {
+    validations.checks.no_duplicate_group = !activeGroupSameAsin;
+    
+    if (activeGroupSameAsin) {
       validations.blocks.push({
         field: 'duplicate_group',
-        message: `Já existe grupo ativo para este ASIN com segmentação ${group_type}: ${activeGroup.ad_group_name}`,
-        data: { existing_group_id: activeGroup.ad_group_id },
+        message: `Já existe grupo ativo para este ASIN: ${activeGroupSameAsin.ad_group_name}`,
+        data: { existing_group_id: activeGroupSameAsin.ad_group_id },
       });
       validations.passed = false;
+    }
+
+    // === REGRA DE FINALIDADE ÚNICA: Verificar se grupo mistura categorias diferentes ===
+    if (campaign_id && !campaign_id.includes('NEW')) {
+      // Buscar todos os produtos já neste grupo/campanha
+      const campaignProducts = await base44.asServiceRole.entities.ProductAd.filter({
+        amazon_account_id,
+        campaign_id,
+        state: 'enabled',
+      });
+      
+      if (campaignProducts.length > 0) {
+        const productAsins = campaignProducts.map(pa => pa.asin);
+        const existingProducts = await base44.asServiceRole.entities.Product.filter({
+          amazon_account_id,
+          asin: { $in: productAsins },
+        });
+        
+        const existingCategories = [...new Set(existingProducts.map(p => p.category || 'unknown'))];
+        const newProductCategory = product?.category || 'unknown';
+        
+        validations.checks.category_consistency = existingCategories.includes(newProductCategory);
+        
+        if (!validations.checks.category_consistency) {
+          validations.blocks.push({
+            field: 'category_mismatch',
+            message: `Este grupo contém produtos da categoria "${existingCategories.join(', ')}", mas o produto ${asin} é da categoria "${newProductCategory}". Grupos devem ter finalidade única — não misture categorias diferentes.`,
+            data: {
+              existing_categories: existingCategories,
+              new_category: newProductCategory,
+              existing_products: existingProducts.map(p => ({ asin: p.asin, category: p.category, name: p.product_name })),
+            },
+          });
+          validations.passed = false;
+        }
+      }
     }
 
     // === 4. VALIDAR NOMENCLATURA ===
@@ -251,6 +334,17 @@ Deno.serve(async (req) => {
         message: 'SKU não informado. Usando ASIN como identificador.',
         severity: 'low',
       });
+    }
+
+    // === REGRA DE FINALIDADE ÚNICA: Resumo da categoria ===
+    if (product) {
+      validations.suggestions.category_rule = {
+        rule: 'Um grupo de anúncios deve conter produtos da mesma categoria',
+        rationale: 'Misturar categorias diferentes (ex: lixeira + interruptor) viola a regra de finalidade única',
+        product_category: product.category || 'unknown',
+        inferred_category: validations.suggestions.inferred_category || 'unknown',
+        action: 'Crie grupos separados para cada categoria de produto',
+      };
     }
 
     // Resumo final
