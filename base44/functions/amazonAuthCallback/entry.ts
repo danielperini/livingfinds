@@ -72,7 +72,8 @@ Deno.serve(async (req) => {
   console.log(`[amazonAuthCallback] ✅ seller=${sellingPartnerId}`);
   console.log(`[amazonAuthCallback] REFRESH_TOKEN=${refreshToken}`);
 
-  // Persistir estado de conexão na AmazonAccount
+  // Persistir estado de conexão na AmazonAccount + salvar refresh token
+  let accountId: string | null = null;
   try {
     const base44 = createClientFromRequest(req);
     const accounts = sellingPartnerId
@@ -80,15 +81,32 @@ Deno.serve(async (req) => {
       : [];
     const account = accounts[0] || (await base44.asServiceRole.entities.AmazonAccount.list())[0];
     if (account) {
+      accountId = account.id;
       await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
         seller_id: sellingPartnerId || account.seller_id,
         status: 'connected',
+        ads_refresh_token: refreshToken, // salvar para sync automático
         error_message: null,
         last_sync_at: new Date().toISOString(),
       });
     }
   } catch (dbErr) {
     console.warn('[amazonAuthCallback] DB update falhou (não crítico):', (dbErr as Error).message);
+  }
+
+  // Disparar sync automático em background (não bloqueia o redirect)
+  if (accountId) {
+    const syncUrl = `${APP_BASE_URL}/api/functions/runFullSync`;
+    fetch(syncUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amazon_account_id: accountId, action: 'request' }),
+    }).then(async (r) => {
+      const d = await r.json().catch(() => ({}));
+      console.log(`[amazonAuthCallback] Auto-sync disparado: ok=${d.ok} camps=${d.campaigns_imported} reports=${JSON.stringify(d.reportIds)}`);
+    }).catch((e) => {
+      console.warn('[amazonAuthCallback] Auto-sync falhou (não crítico):', e.message);
+    });
   }
 
   return redirectSuccess;

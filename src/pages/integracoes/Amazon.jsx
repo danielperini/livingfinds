@@ -50,6 +50,71 @@ export default function AmazonIntegracao() {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
+  const [syncState, setSyncState] = useState(null); // null | 'syncing' | 'done' | 'error'
+  const [syncDetails, setSyncDetails] = useState(null);
+
+  // Após conexão bem-sucedida: disparar sync completo
+  const triggerAutoSync = async () => {
+    setSyncState('syncing');
+    setSyncDetails({ step: 'Importando campanhas e solicitando relatórios...' });
+    try {
+      const res = await base44.functions.invoke('runFullSync', { action: 'request' });
+      const d = res.data;
+      if (!d?.ok) {
+        setSyncState('error');
+        setSyncDetails({ step: d?.message || 'Falha no sync inicial' });
+        return;
+      }
+      setSyncDetails({ step: `${d.campaigns_imported || 0} campanhas importadas. Aguardando relatórios...`, reportIds: d.reportIds, syncRunId: d.syncRunId });
+
+      // Poll para download
+      const reportIds = d.reportIds;
+      const syncRunId = d.syncRunId;
+      let attempts = 0;
+      const poll = async () => {
+        attempts++;
+        if (attempts > 24) { // 24 × 30s = 12 min timeout
+          setSyncState('error');
+          setSyncDetails(prev => ({ ...prev, step: 'Timeout: relatórios demoraram mais que 12 minutos.' }));
+          return;
+        }
+        try {
+          const r2 = await base44.functions.invoke('runFullSync', { action: 'download', reportIds, syncRunId });
+          const d2 = r2.data;
+          if (!d2?.ok) {
+            setSyncState('error');
+            setSyncDetails(prev => ({ ...prev, step: d2?.message || 'Erro no download dos relatórios' }));
+            return;
+          }
+          if (!d2.ready) {
+            const pending = Object.keys(d2.pending || {}).join(', ');
+            setSyncDetails(prev => ({ ...prev, step: `Relatórios processando (${attempts}/24): ${pending}` }));
+            setTimeout(poll, 30000);
+            return;
+          }
+          // Concluído
+          setSyncState('done');
+          setSyncDetails({
+            step: 'Sincronização concluída!',
+            campaigns: d2.campaigns_metrics,
+            products: d2.products,
+            keywords: d2.keywords,
+            decisions: d2.decisions_created,
+            spend: d2.summary?.total_spend,
+            sales: d2.summary?.total_sales,
+          });
+        } catch (e) {
+          setSyncState('error');
+          setSyncDetails(prev => ({ ...prev, step: `Erro: ${e.message}` }));
+        }
+      };
+      setTimeout(poll, 30000); // primeiro poll após 30s
+    } catch (e) {
+      setSyncState('error');
+      setSyncDetails({ step: `Erro ao iniciar sync: ${e.message}` });
+    }
+  };
+
   // Detectar retorno do OAuth
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -60,6 +125,8 @@ export default function AmazonIntegracao() {
     if (status === 'success') {
       setStatusMsg({ type: 'success', text: `✅ Amazon conectada com sucesso!${seller ? ` Seller ID: ${seller}` : ''}` });
       window.history.replaceState({}, '', window.location.pathname);
+      // Disparar sync automático
+      triggerAutoSync();
     } else if (status === 'error') {
       setStatusMsg({ type: 'error', text: `❌ Erro: ${msg || 'Falha na autorização'}` });
       window.history.replaceState({}, '', window.location.pathname);
@@ -114,6 +181,56 @@ export default function AmazonIntegracao() {
             ? <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
             : <XCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />}
           {statusMsg.text}
+        </div>
+      )}
+
+      {/* Painel de sync automático */}
+      {syncState && (
+        <div className={`rounded-xl border p-4 space-y-2 ${
+          syncState === 'done' ? 'bg-emerald-400/5 border-emerald-400/20' :
+          syncState === 'error' ? 'bg-red-400/5 border-red-400/20' :
+          'bg-cyan/5 border-cyan/20'
+        }`}>
+          <div className="flex items-center gap-2">
+            {syncState === 'syncing' && <Loader2 className="w-4 h-4 text-cyan animate-spin" />}
+            {syncState === 'done' && <CheckCircle className="w-4 h-4 text-emerald-400" />}
+            {syncState === 'error' && <XCircle className="w-4 h-4 text-red-400" />}
+            <p className={`text-sm font-semibold ${
+              syncState === 'done' ? 'text-emerald-400' :
+              syncState === 'error' ? 'text-red-400' : 'text-cyan'
+            }`}>
+              {syncState === 'syncing' ? 'Sincronização automática em andamento...' :
+               syncState === 'done' ? 'Sincronização concluída!' : 'Erro na sincronização'}
+            </p>
+          </div>
+          <p className="text-xs text-slate-400">{syncDetails?.step}</p>
+          {syncState === 'done' && syncDetails && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+              {[
+                { label: 'Campanhas', value: syncDetails.campaigns },
+                { label: 'Produtos', value: syncDetails.products },
+                { label: 'Keywords', value: syncDetails.keywords },
+                { label: 'Decisões IA', value: syncDetails.decisions },
+              ].map(({ label, value }) => value != null && (
+                <div key={label} className="bg-surface-2 rounded-lg p-2.5 text-center">
+                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className="text-sm font-bold text-white">{value}</p>
+                </div>
+              ))}
+              {syncDetails.spend != null && (
+                <div className="bg-surface-2 rounded-lg p-2.5 text-center">
+                  <p className="text-xs text-slate-500">Spend 30d</p>
+                  <p className="text-sm font-bold text-slate-200">${syncDetails.spend?.toFixed(2)}</p>
+                </div>
+              )}
+              {syncDetails.sales != null && (
+                <div className="bg-surface-2 rounded-lg p-2.5 text-center">
+                  <p className="text-xs text-slate-500">Vendas 30d</p>
+                  <p className="text-sm font-bold text-emerald-400">${syncDetails.sales?.toFixed(2)}</p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
