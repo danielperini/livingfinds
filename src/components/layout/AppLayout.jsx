@@ -23,7 +23,6 @@ const navItems = [
   { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
   { path: '/dayparting', icon: Clock, label: 'Dayparting' },
   { path: '/manual', icon: Book, label: 'Manual' },
-  { path: '/alerts', icon: Bell, label: 'Alertas' },
   { path: '/alerts', icon: AlertTriangle, label: 'Alertas' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
