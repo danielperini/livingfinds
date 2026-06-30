@@ -183,8 +183,24 @@ export default function SearchTerms() {
     const file = e.target.files?.[0];
     if (!file || !account) return;
     
+    // Validar tipo de arquivo
+    const validTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    
+    if (!validTypes.includes(file.type) && !file.name.endsWith('.csv')) {
+      setActionMsg({ 
+        type: 'error', 
+        text: 'Formato inválido. Use CSV ou Excel (.xlsx, .xls)' 
+      });
+      setTimeout(() => setActionMsg(null), 8000);
+      return;
+    }
+    
     setImporting(true);
-    setActionMsg({ type: 'info', text: 'Importando arquivo...' });
+    setActionMsg({ type: 'info', text: 'Importando relatório de search terms...' });
     
     try {
       const uploadRes = await base44.integrations.Core.UploadFile({ file });
@@ -253,11 +269,12 @@ export default function SearchTerms() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <input ref={fileInputRef} type="file" accept=".xlsx,.csv" onChange={handleImportFile} className="hidden" />
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="hidden" />
           <button onClick={() => fileInputRef.current?.click()} disabled={importing || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+            title="Importar relatório CSV/Excel da Amazon Ads">
             <Upload className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
-            {importing ? 'Importando...' : 'Importar Excel'}
+            {importing ? 'Importando...' : 'Importar CSV'}
           </button>
           <button onClick={enrichWithAI} disabled={loading || !account}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
