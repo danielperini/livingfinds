@@ -22,7 +22,6 @@ const navItems = [
   { path: '/bid-logs', icon: FileText, label: 'Histórico de Bids' },
   { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
   { path: '/dayparting', icon: Clock, label: 'Dayparting' },
-  { path: '/dayparting', icon: Clock, label: 'Dayparting' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
   { path: '/logs', icon: FileText, label: 'Logs' },
