@@ -37,6 +37,7 @@ import SearchTerms from '@/pages/SearchTerms';
 import MetricsDashboard from '@/pages/MetricsDashboard';
 import MotorConfig from '@/pages/MotorConfig';
 import SpApiSetup from '@/pages/SpApiSetup';
+import AmazonIntegracao from '@/pages/integracoes/Amazon';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -86,6 +87,7 @@ const AuthenticatedApp = () => {
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/sp-api-setup" element={<SpApiSetup />} />
+          <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />

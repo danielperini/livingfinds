@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Megaphone, Brain, Package, Rocket,
   Settings, Activity, Menu, ChevronLeft, ChevronRight,
   Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon, BarChart2,
-  Search, Target, Cpu
+  Search, Target, Cpu, Link2
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -22,6 +22,7 @@ const navItems = [
   { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
   { path: '/motor-config', icon: Cpu, label: 'Motor IA' },
+  { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/diagnostico', icon: Activity, label: 'Diagnóstico' },
   { path: '/logs', icon: Activity, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
