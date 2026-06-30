@@ -27,7 +27,7 @@ const DEFAULT_CONFIG = {
   marketplace: 'Amazon Brasil',
   currency: 'BRL',
   timezone: 'America/Sao_Paulo',
-  operation_mode: 'manual',
+  operation_mode: 'production',
   primary_objective: 'acos',
   ads_profile_id: '',
 
