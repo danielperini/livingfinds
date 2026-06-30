@@ -1,13 +1,13 @@
 /**
  * enrichProductNames — busca nomes via Catalog Items API (ASIN) e Listings Items API (SKU)
- * Usa marketplace Brasil: A2Q3Y263D00KWC
- * Fallback visual: "Produto {ASIN}" — nunca salva "Sem nome" no banco
+ * Suporta: token via refresh_token (ADS_REFRESH_TOKEN) OU sp_access_token direto no payload
+ * Marketplace Brasil: A2Q3Y263D00KWC
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 let _tokenCache = null;
 
-async function getSpToken(refreshToken, clientId, clientSecret) {
+async function getSpTokenFromRefresh(refreshToken, clientId, clientSecret) {
   if (_tokenCache && _tokenCache.expires_at > Date.now() + 5000) return _tokenCache.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -33,28 +33,29 @@ function getSpEndpoint(region) {
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
-// Tenta buscar sellerId via SP-API marketplace participations
 async function fetchSellerId(spBase, token) {
   try {
     const res = await fetch(`${spBase}/sellers/v1/marketplaceParticipations`, {
-      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
+      headers: { 'x-amz-access-token': token },
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const t = await res.text();
+      console.log(`[sellerId] HTTP ${res.status}: ${t.slice(0, 200)}`);
+      return null;
+    }
     const data = await res.json();
     const participation = data.payload?.[0];
     return participation?.seller?.sellerId || null;
-  } catch {
+  } catch (e) {
+    console.log(`[sellerId] erro: ${e.message}`);
     return null;
   }
 }
 
-// Catalog Items API por ASIN (endpoint individual — mais confiável que batch para BR)
 async function fetchByCatalogAsin(spBase, token, asin, marketplaceId) {
   try {
     const url = `${spBase}/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,images`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
-    });
+    const res = await fetch(url, { headers: { 'x-amz-access-token': token } });
     if (!res.ok) {
       const errText = await res.text();
       console.log(`[catalog] ASIN ${asin} HTTP ${res.status}: ${errText.slice(0, 200)}`);
@@ -73,25 +74,25 @@ async function fetchByCatalogAsin(spBase, token, asin, marketplaceId) {
   }
 }
 
-// Listings Items API por SKU
 async function fetchByListingsSku(spBase, token, sellerId, sku, marketplaceId) {
   if (!sellerId) return null;
   try {
     const encodedSku = encodeURIComponent(sku);
     const url = `${spBase}/listings/2021-08-01/items/${sellerId}/${encodedSku}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, 'x-amz-access-token': token },
-    });
-    if (!res.ok) return null;
+    const res = await fetch(url, { headers: { 'x-amz-access-token': token } });
+    if (!res.ok) {
+      const t = await res.text();
+      console.log(`[listings] SKU ${sku} HTTP ${res.status}: ${t.slice(0, 200)}`);
+      return null;
+    }
     const data = await res.json();
     const summary = data.summaries?.find(s => s.marketplaceId === marketplaceId) || data.summaries?.[0];
-    const name = summary?.itemName
-      || data.attributes?.item_name?.[0]?.value
-      || null;
+    const name = summary?.itemName || data.attributes?.item_name?.[0]?.value || null;
     const image = summary?.mainImage?.link || null;
     const brand = summary?.brandName || data.attributes?.brand?.[0]?.value || null;
     return name ? { name, image, brand, source: 'listings_sku' } : null;
-  } catch {
+  } catch (e) {
+    console.log(`[listings] SKU ${sku} erro: ${e.message}`);
     return null;
   }
 }
@@ -105,7 +106,9 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     let amazonAccountId = body.amazon_account_id;
     const forceAll = body.force_all === true;
-    const singleAsin = body.asin || null; // para re-sync individual
+    const singleAsin = body.asin || null;
+    // Token SP-API direto (access token já obtido externamente)
+    const spAccessTokenDirect = body.sp_access_token || null;
 
     let account = null;
     if (amazonAccountId) {
@@ -118,30 +121,31 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, message: 'Nenhuma conta encontrada' });
     amazonAccountId = account.id;
 
-    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
-    if (!refreshToken) return Response.json({ ok: false, message: 'Sem refresh_token configurado' });
-
     const marketplaceId = account.marketplace_id || 'A2Q3Y263D00KWC';
     const region = account.region || 'NA';
     const spBase = getSpEndpoint(region);
 
-    let token;
-    try {
-      token = await getSpToken(refreshToken, clientId, clientSecret);
-    } catch (e) {
-      return Response.json({ ok: false, message: `Falha ao obter token: ${e.message}` });
+    // Obter token SP-API: prioridade ao token direto passado no payload
+    let token = spAccessTokenDirect;
+    if (!token) {
+      const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+      const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+      const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+      if (!refreshToken) return Response.json({ ok: false, message: 'Sem refresh_token e sem sp_access_token configurado' });
+      try {
+        token = await getSpTokenFromRefresh(refreshToken, clientId, clientSecret);
+      } catch (e) {
+        return Response.json({ ok: false, message: `Falha ao obter token: ${e.message}` });
+      }
     }
 
-    // Tentar obter sellerId — primeiro da conta, depois via SP-API
+    // Obter sellerId
     let sellerId = account.seller_id || null;
     if (!sellerId) {
       sellerId = await fetchSellerId(spBase, token);
       if (sellerId) {
-        // Persistir para próximas chamadas
         await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, { seller_id: sellerId });
-        console.log(`[enrichProductNames] sellerId descoberto: ${sellerId}`);
+        console.log(`[enrichProductNames] sellerId descoberto e salvo: ${sellerId}`);
       }
     }
 
@@ -159,7 +163,8 @@ Deno.serve(async (req) => {
       targets = allProducts.filter(p =>
         !p.product_name?.trim() ||
         p.catalog_sync_status === 'error' ||
-        p.catalog_sync_status === 'pending'
+        p.catalog_sync_status === 'pending' ||
+        p.catalog_sync_status === 'not_found'
       );
     }
 
@@ -167,7 +172,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, message: 'Nenhum produto pendente de enriquecimento', enriched: 0, total: 0 });
     }
 
-    console.log(`[enrichProductNames] ${targets.length} produtos. Marketplace: ${marketplaceId}. SellerID: ${sellerId || 'N/A'}`);
+    console.log(`[enrichProductNames] ${targets.length} produtos. Marketplace: ${marketplaceId}. SellerID: ${sellerId || 'N/A'}. Token: ${token ? token.slice(0, 12) + '...' : 'NONE'}`);
 
     // Marcar como "syncing"
     await base44.asServiceRole.entities.Product.bulkUpdate(
@@ -179,7 +184,6 @@ Deno.serve(async (req) => {
     const results = [];
 
     for (const p of targets) {
-      // Nunca sobrescrever display_name (nome manual)
       if (p.display_name?.trim()) {
         updates.push({ id: p.id, catalog_sync_status: 'success' });
         enriched++;
@@ -188,7 +192,7 @@ Deno.serve(async (req) => {
 
       let found = null;
 
-      // Prioridade 1: Listings Items API (precisa de sellerId)
+      // Prioridade 1: Listings Items API (precisa de sellerId + SKU)
       if (sellerId && p.sku) {
         found = await fetchByListingsSku(spBase, token, sellerId, p.sku, marketplaceId);
       }
@@ -219,18 +223,16 @@ Deno.serve(async (req) => {
           last_catalog_sync_at: now,
           catalog_sync_error: sellerId
             ? `Não encontrado no marketplace ${marketplaceId}`
-            : `Sem sellerId — SP-API Catalog pode requerer permissão adicional`,
+            : `Sem sellerId — verifique permissões SP-API`,
           catalog_sync_attempts: (p.catalog_sync_attempts || 0) + 1,
         });
         notFound++;
         results.push({ asin: p.asin, sku: p.sku, name: null, source: 'not_found' });
       }
 
-      // Rate limit
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise(r => setTimeout(r, 300));
     }
 
-    // Bulk save
     for (let i = 0; i < updates.length; i += 500) {
       await base44.asServiceRole.entities.Product.bulkUpdate(updates.slice(i, i + 500));
     }
@@ -245,7 +247,6 @@ Deno.serve(async (req) => {
       results,
       marketplace_used: marketplaceId,
       seller_id_used: sellerId || 'não encontrado',
-      note: !sellerId ? 'sellerId não disponível — Listings API não pôde ser usada. Verifique permissões SP-API.' : undefined,
     });
 
   } catch (error) {
