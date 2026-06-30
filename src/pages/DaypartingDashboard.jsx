@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Clock, TrendingUp, TrendingDown, DollarSign, Activity, Loader2, Search, Filter, Calendar, Play, RotateCcw } from 'lucide-react';
+import { Clock, TrendingUp, TrendingDown, DollarSign, Activity, Loader2, Search, Filter, Calendar, Play, RotateCcw, CheckCircle, XCircle, AlertTriangle, ChevronRight, BarChart2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
@@ -44,8 +44,12 @@ export default function DaypartingDashboard() {
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [data, setData] = useState(null);
-  const [metricType, setMetricType] = useState('roas'); // roas, spend, sales, clicks
+  const [executing, setExecuting] = useState(false);
+  const [opportunities, setOpportunities] = useState([]);
+  const [skipped, setSkipped] = useState([]);
+  const [selectedOpp, setSelectedOpp] = useState(null);
+  const [executionMode, setExecutionMode] = useState('hybrid'); // native, programmatic, hybrid
+  const [metricType, setMetricType] = useState('roas');
   const [days, setDays] = useState(30);
 
   useEffect(() => {
@@ -67,13 +71,13 @@ export default function DaypartingDashboard() {
     
     setAnalyzing(true);
     try {
-      const res = await base44.functions.invoke('analyzeDayparting', {
+      const res = await base44.functions.invoke('analyzeDaypartingOpportunities', {
         amazon_account_id: account.id,
-        days,
       });
       
       if (res.data?.ok) {
-        setData(res.data);
+        setOpportunities(res.data.opportunities || []);
+        setSkipped(res.data.skipped || []);
       }
     } catch (error) {
       console.error('Erro na análise:', error);
@@ -82,24 +86,29 @@ export default function DaypartingDashboard() {
     }
   };
 
-  const runOptimization = async () => {
+  const executeDayparting = async (opp, approve = true) => {
     if (!account) return;
     
-    setLoading(true);
+    setExecuting(true);
     try {
-      const res = await base44.functions.invoke('runAiOptimization', {
-        amazon_account_id: account.id,
-        mode: 'assisted',
+      const res = await base44.functions.invoke('applyDaypartingSchedule', {
+        opportunity_id: opp.id,
+        mode: executionMode,
+        approve,
       });
       
       if (res.data?.ok) {
-        alert(`Otimização concluída! ${res.data.summary.decisions_generated} decisões geradas.`);
+        alert(`Dayparting aplicado com sucesso!\n\nRegras criadas: ${res.data.results.rules_created.length}\nModo: ${res.data.results.mode}`);
+        setOpportunities(prev => prev.filter(o => o.id !== opp.id));
+        setSelectedOpp(null);
+      } else {
+        alert('Erro: ' + (res.data?.error || 'Falha na execução'));
       }
     } catch (error) {
-      console.error('Erro na otimização:', error);
+      console.error('Erro na execução:', error);
       alert('Erro: ' + error.message);
     } finally {
-      setLoading(false);
+      setExecuting(false);
     }
   };
 
@@ -144,224 +153,260 @@ export default function DaypartingDashboard() {
             {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
             {analyzing ? 'Analisando...' : 'Analisar Horários'}
           </Button>
-          
-          <Button onClick={runOptimization} disabled={loading} variant="outline" size="sm">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-            {loading ? 'Otimizando...' : 'Otimizar Agora'}
-          </Button>
         </div>
       </div>
 
       {/* KPIs */}
-      {data && (
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <Card className="bg-surface-1 border-surface-2">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-slate-500">Período Analisado</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-lg font-bold text-white">{data.analysis_period_days} dias</p>
-            </CardContent>
-          </Card>
-          
-          <Card className="bg-surface-1 border-surface-2">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-slate-500">Pontos de Dados</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-lg font-bold text-white">{data.total_data_points?.toLocaleString() || 0}</p>
-            </CardContent>
-          </Card>
-          
+      {opportunities.length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Card className="bg-emerald-500/5 border-emerald-500/20">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-emerald-400">Melhores Horários</CardTitle>
+              <CardTitle className="text-xs text-emerald-400">Campanhas Elegíveis</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-lg font-bold text-emerald-400">{data.best_hours?.length || 0}</p>
-            </CardContent>
-          </Card>
-          
-          <Card className="bg-red-500/5 border-red-500/20">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-red-400">Piores Horários</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-lg font-bold text-red-400">{data.worst_hours?.length || 0}</p>
+              <p className="text-lg font-bold text-emerald-400">{opportunities.length}</p>
             </CardContent>
           </Card>
           
           <Card className="bg-cyan/5 border-cyan/20">
             <CardHeader className="pb-2">
-              <CardTitle className="text-xs text-cyan">Recomendações</CardTitle>
+              <CardTitle className="text-xs text-cyan">Economia Estimada/dia</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-lg font-bold text-cyan">{data.recommendations?.length || 0}</p>
+              <p className="text-lg font-bold text-cyan">
+                ${opportunities.reduce((sum, o) => sum + (o.estimated_daily_savings || 0), 0).toFixed(2)}
+              </p>
+            </CardContent>
+          </Card>
+          
+          <Card className="bg-amber-500/5 border-amber-500/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs text-amber-400">Melhoria ROAS</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-lg font-bold text-amber-400">
+                +{opportunities.reduce((sum, o) => sum + (o.estimated_roas_improvement_pct || 0), 0) / opportunities.length.toFixed(1)}%
+              </p>
+            </CardContent>
+          </Card>
+          
+          <Card className="bg-surface-1 border-surface-2">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs text-slate-500">Campanhas Inelegíveis</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-lg font-bold text-white">{skipped.length}</p>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Mapa de Calor */}
-      {data && data.classifications && (
-        <Card className="bg-surface-1 border-surface-2">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-semibold text-white">Mapa de Calor por Horário</CardTitle>
-                <CardDescription className="text-xs text-slate-500">
-                  {metricType === 'roas' ? 'ROAS por hora e dia da semana' :
-                   metricType === 'spend' ? 'Gasto (USD) por hora e dia da semana' :
-                   metricType === 'sales' ? 'Vendas (USD) por hora e dia da semana' :
-                   'Cliques por hora e dia da semana'}
-                </CardDescription>
-              </div>
-              
-              <div className="flex items-center gap-1">
-                <Button
-                  variant={metricType === 'roas' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setMetricType('roas')}
-                >
-                  ROAS
-                </Button>
-                <Button
-                  variant={metricType === 'spend' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setMetricType('spend')}
-                >
-                  Gasto
-                </Button>
-                <Button
-                  variant={metricType === 'sales' ? 'default' : 'outline'}
-                  size="sm"
-                  onClick={() => setMetricType('sales')}
-                >
-                  Vendas
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <div className="min-w-[1600px]">
-                {/* Header horas */}
-                <div className="flex mb-2">
-                  <div className="w-16 flex-shrink-0" />
-                  {Array.from({ length: 24 }, (_, i) => (
-                    <div key={i} className="w-[64px] text-center text-[10px] text-slate-500">
-                      {i}:00
-                    </div>
-                  ))}
-                </div>
-                
-                {/* Linhas por dia */}
-                {daysOfWeek.map((dayName, dayIndex) => (
-                  <div key={dayIndex} className="flex items-center mb-1">
-                    <div className="w-16 flex-shrink-0 text-xs font-semibold text-slate-400">
-                      {dayName}
-                    </div>
-                    {Array.from({ length: 24 }, (_, hour) => {
-                      const cellData = data.classifications.find(c => c.day === dayIndex && c.hour === hour);
-                      const value = cellData?.metrics?.[metricType] || 0;
-                      const colorClass = getHeatColor(value, metricType);
-                      
-                      return (
-                        <div
-                          key={hour}
-                          className={`${colorClass} w-[64px] h-8 mx-px rounded cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center`}
-                          title={`${dayName}, ${hour}:00 — ${metricType === 'roas' ? `ROAS ${value?.toFixed(2)}` :
-                            metricType === 'spend' || metricType === 'sales' ? `$${value?.toFixed(2)}` :
-                            `${value?.toLocaleString()} cliques`}`}
-                        >
-                          <p className="text-[9px] font-semibold text-white drop-shadow">
-                            {metricType === 'roas' && value > 0 ? value.toFixed(1) :
-                             metricType === 'spend' || metricType === 'sales' ? value?.toFixed(0) :
-                             value?.toLocaleString() || '0'}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
-      {/* Classificações */}
-      {data && data.classifications && (
-        <Card className="bg-surface-1 border-surface-2">
-          <CardHeader>
-            <CardTitle className="text-sm font-semibold text-white">Classificação de Horários</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-              {Object.entries(classificationConfig).map(([key, config]) => {
-                const count = data.classifications.filter(c => c.classification === key).length;
-                return (
-                  <div key={key} className={`p-3 rounded-lg border ${config.color}/10 ${config.color.replace('bg-', 'border-')}/20`}>
+
+      {/* Lista de Oportunidades */}
+      {opportunities.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-bold text-white flex items-center gap-2">
+            <BarChart2 className="w-4 h-4 text-cyan" />
+            Campanhas Elegíveis para Dayparting ({opportunities.length})
+          </h2>
+          
+          {opportunities.map(opp => (
+            <Card key={opp.id} className="bg-surface-1 border-surface-2">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <div className={`w-2 h-2 rounded-full ${config.color}`} />
-                      <p className={`text-xs font-semibold ${config.text}`}>{config.label}</p>
+                      <p className="text-sm font-bold text-white truncate">{opp.campaign_name}</p>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-semibold">
+                        {opp.days_running} dias
+                      </span>
                     </div>
-                    <p className="text-lg font-bold text-white">{count}</p>
+                    <div className="flex items-center gap-4 text-xs text-slate-400 flex-wrap">
+                      <span>ASIN: <span className="font-mono text-cyan">{opp.asin}</span></span>
+                      <span>Cliques: <span className="text-white">{opp.total_clicks}</span></span>
+                      <span>Vendas: <span className="text-emerald-400">{opp.total_sales}</span></span>
+                      <span>ACoS: <span className={opp.current_avg_acos > 30 ? 'text-red-400' : 'text-emerald-400'}>{opp.current_avg_acos.toFixed(1)}%</span></span>
+                      <span>ROAS: <span className="text-cyan">{opp.current_avg_roas.toFixed(2)}</span></span>
+                    </div>
                   </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
+                  
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <p className="text-xs text-slate-500">Economia estimada</p>
+                      <p className="text-sm font-bold text-emerald-400">${opp.estimated_daily_savings?.toFixed(2)}/dia</p>
+                    </div>
+                    <Button onClick={() => setSelectedOpp(opp)} size="sm">
+                      Revisar <ChevronRight className="w-4 h-4 ml-1" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
 
-      {/* Recomendações */}
-      {data && data.recommendations && data.recommendations.length > 0 && (
+      {/* Campanhas Inelegíveis */}
+      {skipped.length > 0 && (
         <Card className="bg-surface-1 border-surface-2">
           <CardHeader>
             <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-cyan" />
-              Recomendações da IA
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              Campanhas Inelegíveis ({skipped.length})
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {data.recommendations.map((rec, i) => (
-              <div
-                key={i}
-                className={`p-3 rounded-lg border ${
-                  rec.type === 'oportunidade' ? 'bg-emerald-500/5 border-emerald-500/20' :
-                  rec.type === 'atencao' ? 'bg-amber-500/5 border-amber-500/20' :
-                  'bg-slate-500/5 border-slate-500/20'
-                }`}
-              >
-                <p className={`text-xs font-semibold mb-1 ${
-                  rec.type === 'oportunidade' ? 'text-emerald-400' :
-                  rec.type === 'atencao' ? 'text-amber-400' :
-                  'text-slate-400'
-                }`}>
-                  {rec.title}
-                </p>
-                <p className="text-xs text-slate-300 mb-1">{rec.action}</p>
-                {rec.details && (
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {rec.details.slice(0, 5).map((d, j) => (
-                      <span key={j} className="text-[10px] px-2 py-0.5 rounded bg-surface-2 border border-surface-3 text-slate-400">
-                        {d}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+          <CardContent>
+            <div className="space-y-1">
+              {skipped.slice(0, 5).map((s, i) => (
+                <div key={i} className="text-xs text-slate-400 flex items-center justify-between py-1 border-b border-surface-2/50 last:border-0">
+                  <span className="font-mono text-cyan">{s.campaign_id}</span>
+                  <span className="text-slate-500">{s.reason}</span>
+                </div>
+              ))}
+              {skipped.length > 5 && (
+                <p className="text-xs text-slate-500 italic">+{skipped.length - 5} mais...</p>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
 
-      {!data && !analyzing && (
+      {/* Modal de Aprovação */}
+      {selectedOpp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={e => e.target === e.currentTarget && setSelectedOpp(null)}>
+          <div className="bg-surface-1 border border-surface-2 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-surface-2">
+              <div>
+                <h2 className="text-sm font-bold text-white">Aprovar Dayparting</h2>
+                <p className="text-xs text-slate-400 font-mono">{selectedOpp.campaign_name}</p>
+              </div>
+              <button onClick={() => setSelectedOpp(null)} className="text-slate-500 hover:text-white">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {/* Resumo da Campanha */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-surface-2 rounded-xl p-3">
+                  <p className="text-xs text-slate-500">Dias de execução</p>
+                  <p className="text-lg font-bold text-white">{selectedOpp.days_running}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-3">
+                  <p className="text-xs text-slate-500">Bid Original</p>
+                  <p className="text-lg font-bold text-cyan">R$ {selectedOpp.original_bid?.toFixed(2)}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-3">
+                  <p className="text-xs text-slate-500">ROAS Atual</p>
+                  <p className="text-lg font-bold text-emerald-400">{selectedOpp.current_avg_roas?.toFixed(2)}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-3">
+                  <p className="text-xs text-slate-500">ACoS Atual</p>
+                  <p className="text-lg font-bold text-amber-400">{selectedOpp.current_avg_acos?.toFixed(1)}%</p>
+                </div>
+              </div>
+
+              {/* Estratégia Proposta */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-sm font-semibold text-white mb-3">Estratégia Proposta</h3>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Estratégia de Lance</span>
+                    <span className="text-white font-semibold">Dynamic Bids — Down Only</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Bid Fora do Pico</span>
+                    <span className="text-white font-semibold">R$ {(selectedOpp.original_bid * 0.20).toFixed(2)} (20% do original)</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Bid Pico Vencedor</span>
+                    <span className="text-emerald-400 font-semibold">R$ {selectedOpp.original_bid?.toFixed(2)} (100% do original)</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Modo de Execução</span>
+                    <select
+                      value={executionMode}
+                      onChange={e => setExecutionMode(e.target.value)}
+                      className="text-xs bg-surface-3 border border-surface-3 text-white rounded px-2 py-1"
+                    >
+                      <option value="hybrid">Híbrido (Base 50% + Regra +100%)</option>
+                      <option value="native">Nativo (Regra Programada)</option>
+                      <option value="programmatic">Programático (Alteração Direta)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Janelas de Dayparting */}
+              <div>
+                <h3 className="text-sm font-semibold text-white mb-2">Janelas Propostas por Dia</h3>
+                <div className="space-y-2">
+                  {Object.entries(selectedOpp.dayparting_windows || {}).map(([day, windows]) => {
+                    const dayNames = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+                    return (
+                      <div key={day} className="bg-surface-2 rounded-lg p-3">
+                        <p className="text-xs font-semibold text-white mb-2">{dayNames[parseInt(day)] || day}</p>
+                        <div className="space-y-1">
+                          {windows.map((w, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400">{String(w.startHour).padStart(2, '0')}h–{String(w.endHour).padStart(2, '0')}h</span>
+                              <span className={`font-semibold ${
+                                w.targetBidPct >= 80 ? 'text-emerald-400' :
+                                w.targetBidPct >= 50 ? 'text-amber-400' :
+                                'text-red-400'
+                              }`}>
+                                {w.targetBidPct}% do bid original
+                              </span>
+                              <span className="text-slate-500">{w.classification}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Impacto Esperado */}
+              <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-emerald-300 mb-2">Impacto Esperado</h3>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <p className="text-slate-400">Economia diária estimada</p>
+                    <p className="text-lg font-bold text-emerald-400">${selectedOpp.estimated_daily_savings?.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-400">Melhoria ROAS</p>
+                    <p className="text-lg font-bold text-emerald-400">+{selectedOpp.estimated_roas_improvement_pct?.toFixed(1)}%</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Ações */}
+            <div className="px-6 py-4 border-t border-surface-2 flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setSelectedOpp(null)}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={() => executeDayparting(selectedOpp, true)}
+                disabled={executing}
+                className="bg-emerald-500 hover:bg-emerald-400"
+              >
+                {executing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                {executing ? 'Aplicando...' : 'Aprovar e Aplicar Dayparting'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!opportunities.length && !analyzing && (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
           <Clock className="w-12 h-12 text-slate-600" />
           <p className="text-sm text-slate-400">
-            Clique em "Analisar Horários" para gerar o mapa de calor e recomendações.
+            Clique em "Analisar Horários" para identificar campanhas elegíveis para dayparting.
           </p>
         </div>
       )}
