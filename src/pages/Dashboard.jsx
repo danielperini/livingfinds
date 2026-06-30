@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity } from 'lucide-react';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
 
@@ -86,7 +87,6 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
           const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
           const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
           setMsg(`A aguardar Amazon... ${pend}${fail}`);
-          // Persistir estado para sobreviver a navegação
           saveSyncState({ reportIds: pendingRef.current.reportIds, syncRunId: pendingRef.current.syncRunId, startedAt: startTimeRef.current, campaigns_imported });
         }
       } catch (e) {
@@ -98,7 +98,6 @@ function ReportSyncWidget({ amazonAccountId, onDone }) {
     }, 30000);
   };
 
-  // Ao montar, verificar se havia um sync em progresso
   useEffect(() => {
     const saved = loadSyncState();
     if (saved?.reportIds && amazonAccountId) {
@@ -169,6 +168,8 @@ export default function Dashboard() {
   const [syncRuns, setSyncRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [auditData, setAuditData] = useState(null);
+  const [showAudit, setShowAudit] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -176,7 +177,6 @@ export default function Dashboard() {
     try {
       const me = await base44.auth.me();
       setUser(me);
-      // Tenta por user_id primeiro, fallback para o primeiro registro disponível
       let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
       const acc = accounts[0] || null;
@@ -188,7 +188,7 @@ export default function Dashboard() {
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
-        base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720), // 30 dias * 24h
+        base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
       ]);
@@ -208,14 +208,9 @@ export default function Dashboard() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-
-
-  // KPIs — usar APENAS CampaignMetricsDaily (dados reais dos relatórios Amazon)
-  // Filtrar por data e remover duplicatas por campaign_id + date
   const cutoffDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const metricsLast30Days = metricsDaily.filter(m => m.date >= cutoffDate);
   
-  // Remover duplicatas: manter apenas último registro por campaign_id + date
   const uniqueMetricsMap = new Map();
   metricsLast30Days.forEach(m => {
     const key = `${m.campaign_id || ''}-${m.date}`;
@@ -236,7 +231,6 @@ export default function Dashboard() {
   const ctr = kpis.impressions > 0 ? (kpis.clicks / kpis.impressions * 100) : 0;
   const cpc = kpis.clicks > 0 ? (kpis.spend / kpis.clicks) : 0;
 
-  // Agrupar métricas por data para o gráfico (dados únicos, sem duplicar)
   const chartData = Object.values(
     uniqueMetrics.reduce((acc, m) => {
       if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', date: m.date, spend: 0, sales: 0, orders: 0, clicks: 0 };
@@ -248,7 +242,6 @@ export default function Dashboard() {
     }, {})
   ).sort((a, b) => a.date.localeCompare(b.date));
 
-  // Agrupar métricas por hora para o gráfico de conversão horária
   const hourlyData = Object.values(
     hourlyMetrics.reduce((acc, h) => {
       const hour = h.hour ?? 0;
@@ -272,7 +265,21 @@ export default function Dashboard() {
     return Number(num.toFixed(decimals));
   }
 
-  // Debug: log dos KPIs para auditoria
+  const runAudit = async () => {
+    if (!account) return;
+    try {
+      const res = await base44.functions.invoke('auditSyncData', { amazon_account_id: account.id });
+      if (res.data?.ok) {
+        setAuditData(res.data);
+        setShowAudit(true);
+      } else {
+        alert('Erro na auditoria: ' + (res.data?.error || 'Falha desconhecida'));
+      }
+    } catch (error) {
+      alert('Erro: ' + error.message);
+    }
+  };
+
   useEffect(() => {
     if (!loading && kpis.spend > 0) {
       console.log('📊 AUDITORIA DASHBOARD:', {
@@ -312,6 +319,11 @@ export default function Dashboard() {
           <button onClick={loadData} disabled={loading}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={runAudit} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm rounded-lg transition-colors">
+            <Activity className="w-4 h-4" />
+            Auditoria
           </button>
         </div>
       </div>
@@ -359,280 +371,135 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard 
-          label="✓ Ad Spend 30d (Relatório)" 
-          value={`$${kpis.spend.toFixed(2)}`} 
-          sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas · ${campaigns.filter(c => c.state === 'paused' && !c.archived).length} pausadas`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="Vendas Ads 30d" 
-          value={`$${kpis.sales.toFixed(2)}`} 
-          sub={`${kpis.orders} pedidos · Ticket: $${(kpis.orders > 0 ? kpis.sales / kpis.orders : 0).toFixed(2)}`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="ACoS" 
-          value={`${acos.toFixed(1)}%`} 
-          sub={`ROAS: ${roas.toFixed(2)}x · TACoS: ${(kpis.sales > 0 ? (kpis.spend / kpis.sales * 100) : 0).toFixed(1)}%`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="CPC Médio" 
-          value={`$${cpc.toFixed(2)}`} 
-          sub={`CTR: ${ctr.toFixed(2)}% · CVR: ${(kpis.clicks > 0 ? (kpis.orders / kpis.clicks * 100) : 0).toFixed(2)}%`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="Cliques" 
-          value={kpis.clicks.toLocaleString()} 
-          sub={`Custo/clique: $${(kpis.clicks > 0 ? kpis.spend / kpis.clicks : 0).toFixed(2)}`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="Impressões" 
-          value={kpis.impressions.toLocaleString()} 
-          sub={`CTR: ${ctr.toFixed(2)}%`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="Campanhas" 
-          value={campaigns.filter(c => !c.archived).length} 
-          sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas · ${campaigns.filter(c => c.state === 'paused' && !c.archived).length} pausadas · ${campaigns.filter(c => c.archived).length} arquivadas`}
-          loading={loading} 
-        />
-        <KPICard 
-          label="Produtos" 
-          value={products.length} 
-          sub={`${products.filter(p => p.inventory_status === 'in_stock' || p.fba_inventory > 0).length} com stock · ${products.filter(p => p.inventory_status === 'out_of_stock' || p.fba_inventory === 0).length} sem stock`}
-          loading={loading} 
-        />
+        <KPICard label="✓ Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas`} loading={loading} />
+        <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
+        <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
+        <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
 
-      {/* Gráfico de Conversão Horária */}
+      {/* Gráfico Spend vs Vendas */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyan" />
-              Conversão por Horário (30d)
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">Taxa de conversão e ROAS médio por hora do dia</p>
-          </div>
-        </div>
-        {loading ? (
-          <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-        ) : hourlyData.length === 0 ? (
-          <div className="h-40 flex flex-col items-center justify-center gap-2">
-            <p className="text-sm text-slate-500">Sem dados horários.</p>
-            <p className="text-xs text-slate-600">Execute um Sync para importar dados detalhados.</p>
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={hourlyData}>
+        <h2 className="text-sm font-semibold text-slate-300 mb-4">Spend vs Vendas — 30 dias</h2>
+        {loading ? <div className="h-52 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : chartData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={210}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
+                <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-              <XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
-              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <Tooltip
-                contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 11 }}
-                formatter={(v, name) => {
-                  if (name === 'CVR (%)') return [`${Number(v).toFixed(2)}%`, name];
-                  if (name === 'ROAS') return [Number(v).toFixed(2), name];
-                  return [`$${Number(v).toFixed(2)}`, name];
-                }}
-              />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar yAxisId="left" dataKey="cvr" fill="#3B82F6" name="CVR (%)" radius={[2, 2, 0, 0]} />
-              <Bar yAxisId="right" dataKey="roas" fill="#10B981" name="ROAS" radius={[2, 2, 0, 0]} />
-            </BarChart>
+              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `$${Number(v).toFixed(2)}`} />
+              <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" />
+              <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" />
+            </AreaChart>
           </ResponsiveContainer>
-        )}
+        ) : <div className="h-52 flex items-center justify-center text-sm text-slate-500">Sem dados. Execute um Sync.</div>}
       </div>
 
-      {/* Chart + Decisions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-300">Spend vs Vendas — 30 dias</h2>
-            <BarChart2 className="w-4 h-4 text-slate-500" />
-          </div>
-          {loading ? (
-            <div className="h-52 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-          ) : chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={210}>
-              <AreaChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10B981" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `$${Number(v).toFixed(2)}`} />
-                <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" />
-                <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-52 flex flex-col items-center justify-center gap-2">
-              <p className="text-sm text-slate-500">Sem dados de métricas.</p>
-              <p className="text-xs text-slate-600">Execute "Sync Completo 30d + IA" para popular o gráfico.</p>
-            </div>
-          )}
-        </div>
-
-        {/* Decisões IA */}
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
-              <Brain className="w-4 h-4 text-cyan" /> Decisões IA
-            </h2>
-            <Link to="/learner" className="text-xs text-cyan hover:underline">Ver todas</Link>
-          </div>
-          {loading ? (
-            <div className="space-y-2">
-              {[1,2,3].map(i => <div key={i} className="h-12 bg-surface-2 rounded animate-pulse" />)}
-            </div>
-          ) : decisions.length === 0 ? (
-            <p className="text-sm text-slate-500 text-center py-6">Sem decisões pendentes.<br/><span className="text-xs">Execute um sync para gerar recomendações.</span></p>
-          ) : (
-            <div className="space-y-2">
-              {decisions.slice(0, 6).map(d => (
-                <div key={d.id} className="p-2.5 bg-surface-2 rounded-lg border border-surface-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <StatusBadge status={d.priority} size="xs" />
-                    <span className="text-xs text-slate-500">{d.decision_type?.replace('_', ' ')}</span>
-                  </div>
-                  <p className="text-xs text-slate-300 truncate">{d.entity_name || d.entity_id}</p>
-                  <p className="text-xs text-slate-500 mt-0.5 line-clamp-1">{d.rationale}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Campanhas Top */}
+      {/* Campanhas */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-surface-2">
-          <h2 className="text-sm font-semibold text-slate-300">Top Campanhas (30d)</h2>
+        <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
           <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
         </div>
-        {loading ? (
-          <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-        ) : campaigns.length === 0 ? (
-          <div className="p-8 text-center">
-            <p className="text-sm text-slate-400">Sem campanhas. Execute um Sync.</p>
-          </div>
+        {loading ? <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : campaigns.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">Sem campanhas</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-surface-2">
-                  {['Nome', 'Tipo', 'Estado', 'Spend', 'Vendas', 'ACoS', 'ROAS', 'Cliques'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
+              <thead><tr className="border-b border-surface-2">{['Nome', 'Estado', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
               <tbody>
-                {campaigns.map((c, i) => {
-                  const acosVal = c.acos || 0;
-                  const acosColor = acosVal > 50 ? 'text-red-400' : acosVal > 30 ? 'text-amber-400' : 'text-emerald-400';
-                  return (
-                    <tr key={c.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
-                      <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
-                      <td className="px-4 py-3"><span className="text-xs px-1.5 py-0.5 rounded bg-surface-3 text-slate-400">{c.campaign_type || 'SP'}</span></td>
-                      <td className="px-4 py-3"><StatusBadge status={c.state || 'enabled'} size="xs" /></td>
-                      <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
-                      <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
-                      <td className={`px-4 py-3 font-semibold ${acosColor}`}>{acosVal.toFixed(1)}%</td>
-                      <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
-                      <td className="px-4 py-3 text-slate-400">{(c.clicks || 0).toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
+                {campaigns.slice(0, 20).map(c => (
+                  <tr key={c.id} className="border-b border-surface-2/50 hover:bg-surface-2">
+                    <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
+                    <td className="px-4 py-3"><StatusBadge status={c.state} size="xs" /></td>
+                    <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
+                    <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>{(c.acos || 0).toFixed(1)}%</td>
+                    <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* Produtos + Sync Logs */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Produtos com mais vendas */}
-        <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-surface-2">
-            <h2 className="text-sm font-semibold text-slate-300">Produtos (30d)</h2>
-            <Link to="/inventory" className="text-xs text-cyan hover:underline">Ver todos →</Link>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-surface-2">
-                  {['ASIN', 'SKU', 'Receita 30d', 'Units', 'Stock FBA'].map(h => (
-                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {products.slice(0, 10).map((p, i) => (
-                  <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
-                    <td className="px-4 py-2.5 font-mono text-xs text-cyan">{p.asin || '—'}</td>
-                    <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{p.sku || '—'}</td>
-                    <td className="px-4 py-2.5 text-emerald-400">${(p.total_revenue_30d || p.total_sales_30d || 0).toFixed(2)}</td>
-                    <td className="px-4 py-2.5 text-slate-300">{p.units_sold_30d || p.total_units_30d || 0}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={`font-semibold text-xs ${(p.fba_inventory || 0) === 0 ? 'text-red-400' : (p.fba_inventory || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
-                        {p.fba_inventory || 0}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-                {products.length === 0 && !loading && (
-                  <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500">Sem produtos. Execute um sync.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Logs de Sync */}
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-slate-500" /> Histórico de Syncs
-          </h2>
-          {syncRuns.length === 0 && !loading ? (
-            <p className="text-sm text-slate-500 text-center py-4">Sem syncs registados</p>
-          ) : (
-            <div className="space-y-2">
-              {syncRuns.map((run, i) => (
-                <div key={run.id || i} className="flex items-center gap-3 py-2 border-b border-surface-2/50 last:border-0">
-                  <StatusBadge status={run.status} size="xs" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-300 truncate">
-                      {run.operation?.startsWith('adsReports:') ? `Sync Ads 30d — ${run.operation.split(':')[1] || ''}` : run.operation}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {run.records_upserted ? `${run.records_upserted} registos` : ''}
-                      {run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}
-                    </p>
-                  </div>
-                  <span className="text-xs text-slate-600 flex-shrink-0">
-                    {run.started_at ? new Date(run.started_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : ''}
-                  </span>
-                </div>
-              ))}
+      {/* Modal de Auditoria */}
+      {showAudit && auditData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={e => e.target === e.currentTarget && setShowAudit(false)}>
+          <div className="bg-surface-1 border border-surface-2 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-surface-2">
+              <div>
+                <h2 className="text-sm font-bold text-white">📊 Auditoria de Dados Amazon</h2>
+                <p className="text-xs text-slate-400 font-mono">{auditData.account?.seller_name || auditData.account?.id}</p>
+              </div>
+              <button onClick={() => setShowAudit(false)} className="text-slate-500 hover:text-white">
+                <XCircle className="w-5 h-5" />
+              </button>
             </div>
-          )}
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Totais */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">Spend</p>
+                  <p className="text-lg font-bold text-white">{auditData.formatted?.spend}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">Vendas</p>
+                  <p className="text-lg font-bold text-emerald-400">{auditData.formatted?.sales}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">ACoS</p>
+                  <p className="text-lg font-bold text-amber-400">{auditData.formatted?.acos}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">ROAS</p>
+                  <p className="text-lg font-bold text-cyan">{auditData.formatted?.roas}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">CPC</p>
+                  <p className="text-lg font-bold text-slate-300">{auditData.formatted?.cpc}</p>
+                </div>
+              </div>
+
+              {/* Qualidade */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-xs font-semibold text-slate-400 mb-3">Qualidade dos Dados</h3>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Total:</span><span className="text-white font-semibold">{auditData.metrics?.total_records}</span></div>
+                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Únicos:</span><span className="text-emerald-400 font-semibold">{auditData.metrics?.unique_records}</span></div>
+                  <div className="flex items-center justify-between py-1.5"><span className="text-slate-500">Duplicatas:</span><span className={`font-semibold ${auditData.metrics?.duplicates_removed > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{auditData.metrics?.duplicates_removed}</span></div>
+                </div>
+              </div>
+
+              {/* Campanhas */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-xs font-semibold text-slate-400 mb-3">Campanhas</h3>
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  <div><p className="text-xs text-slate-500">Total</p><p className="text-lg font-bold text-white">{auditData.campaigns?.total}</p></div>
+                  <div><p className="text-xs text-slate-500">Ativas</p><p className="text-lg font-bold text-emerald-400">{auditData.campaigns?.active}</p></div>
+                  <div><p className="text-xs text-slate-500">Pausadas</p><p className="text-lg font-bold text-amber-400">{auditData.campaigns?.paused}</p></div>
+                  <div><p className="text-xs text-slate-500">Arquivadas</p><p className="text-lg font-bold text-slate-400">{auditData.campaigns?.archived}</p></div>
+                </div>
+              </div>
+
+              {/* Nota */}
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                <p className="text-xs text-amber-300"><strong>⚠️ Nota:</strong> Divergências podem indicar necessidade de novo sync. Dados Amazon levam 48h para atribuição completa.</p>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-surface-2 flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowAudit(false)}>Fechar</Button>
+              <Button onClick={() => { setShowAudit(false); loadData(); }}>Atualizar</Button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
