@@ -242,16 +242,16 @@ Deno.serve(async (req) => {
       for (let i = 0; i < toCreate.length; i += 500) await base44.asServiceRole.entities.Campaign.bulkCreate(toCreate.slice(i, i + 500));
       for (let i = 0; i < toUpdate.length; i += 500) await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + 500));
 
-      // 4. Solicitar 4 relatórios em paralelo
+      // 4. Solicitar 4 relatórios em paralelo (API Amazon limita a 31 dias)
       const endDate = new Date();
-      const startDate180 = new Date(Date.now() - 180 * 86400000); // 180 dias para IA
+      const startDate30 = new Date(Date.now() - 30 * 86400000); // 30 dias (limite Amazon)
       const ts = Date.now();
 
       const [rCampDaily, rCampSummary, rProducts, rSearchTerms] = await Promise.all([
-        // Relatório DAILY — 180 dias para análise temporal e IA
+        // Relatório DAILY — 30 dias
         requestReport(adsBase, token, profileId, {
           name: `SP_camp_daily_${ts}`,
-          startDate: fmt(startDate180), endDate: fmt(endDate),
+          startDate: fmt(startDate30), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['campaign'],
@@ -259,10 +259,10 @@ Deno.serve(async (req) => {
             reportTypeId: 'spCampaigns', timeUnit: 'DAILY', format: 'GZIP_JSON',
           },
         }),
-        // Relatório SUMMARY — 180 dias para métricas consolidadas
+        // Relatório SUMMARY — 30 dias
         requestReport(adsBase, token, profileId, {
           name: `SP_camp_summary_${ts}`,
-          startDate: fmt(startDate180), endDate: fmt(endDate),
+          startDate: fmt(startDate30), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['campaign'],
@@ -270,10 +270,10 @@ Deno.serve(async (req) => {
             reportTypeId: 'spCampaigns', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
           },
         }),
-        // Relatório produtos — 180 dias
+        // Relatório produtos — 30 dias
         requestReport(adsBase, token, profileId, {
           name: `SP_products_${ts}`,
-          startDate: fmt(startDate180), endDate: fmt(endDate),
+          startDate: fmt(startDate30), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['advertiser'],
@@ -281,10 +281,10 @@ Deno.serve(async (req) => {
             reportTypeId: 'spAdvertisedProduct', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
           },
         }),
-        // Search Terms — 180 dias para análise de palavras-chave
+        // Search Terms — 30 dias
         requestReport(adsBase, token, profileId, {
           name: `SP_searchterms_${ts}`,
-          startDate: fmt(startDate180), endDate: fmt(endDate),
+          startDate: fmt(startDate30), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['searchTerm'],
