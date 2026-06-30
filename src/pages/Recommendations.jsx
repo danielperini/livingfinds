@@ -7,6 +7,14 @@ import {
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
+// Taxa de conversão USD → BRL (fixa para consistência)
+const USD_TO_BRL = 5.50;
+
+function formatBRL(value) {
+  if (value == null) return '—';
+  return `R$${Number(value).toFixed(2)}`;
+}
+
 const ACTION_CONFIG = {
   bid_adjust: { label: 'Ajuste de Bid', icon: '💰', color: 'text-cyan' },
   budget_change: { label: 'Orçamento', icon: '📊', color: 'text-amber-400' },
@@ -105,14 +113,14 @@ function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect
         <td className="px-3 py-3 w-56">
           {dec.current_value != null && dec.proposed_value != null ? (
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-mono text-slate-400">${Number(dec.current_value).toFixed(2)}</span>
+              <span className="text-xs font-mono text-slate-400">{formatBRL(dec.current_value)}</span>
               <span className={`text-xs font-bold flex items-center gap-0.5 ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
                 {isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
                 {changePct != null ? `${isUp ? '+' : ''}${changePct.toFixed(1)}%` : '→'}
               </span>
               {editBid ? (
                 <div className="flex items-center gap-1">
-                  <span className="text-xs text-slate-500">$</span>
+                  <span className="text-xs text-slate-500">R$</span>
                   <input type="number" value={bidValue} onChange={e => setBidValue(e.target.value)}
                     step={0.01} min={0.02}
                     className="w-16 px-1.5 py-0.5 bg-surface-3 border border-cyan/40 rounded text-xs font-mono text-white focus:outline-none"
@@ -124,7 +132,7 @@ function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect
               ) : (
                 <button onClick={() => setEditBid(true)}
                   className="text-xs font-mono text-white bg-surface-2 hover:bg-surface-3 border border-surface-3 px-2 py-0.5 rounded transition-colors">
-                  ${Number(bidValue || dec.proposed_value).toFixed(2)}
+                  {formatBRL(bidValue || dec.proposed_value)}
                 </button>
               )}
             </div>
@@ -180,12 +188,12 @@ function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect
                 <p className="text-xs font-semibold text-slate-400 mb-2">Métricas usadas</p>
                 <div className="flex flex-wrap gap-1.5">
                   {metricsUsed.clicks != null && <MetricPill label="Cliques" value={metricsUsed.clicks} />}
-                  {metricsUsed.spend != null && <MetricPill label="Spend" value={`$${Number(metricsUsed.spend).toFixed(2)}`} />}
-                  {metricsUsed.sales != null && <MetricPill label="Vendas" value={`$${Number(metricsUsed.sales).toFixed(2)}`} />}
+                  {metricsUsed.spend != null && <MetricPill label="Spend" value={formatBRL(metricsUsed.spend)} />}
+                  {metricsUsed.sales != null && <MetricPill label="Vendas" value={formatBRL(metricsUsed.sales)} />}
                   {metricsUsed.orders != null && <MetricPill label="Pedidos" value={metricsUsed.orders} />}
                   {metricsUsed.acos != null && <MetricPill label="ACoS" value={`${Number(metricsUsed.acos).toFixed(1)}%`} highlight />}
                   {metricsUsed.roas != null && <MetricPill label="ROAS" value={`${Number(metricsUsed.roas).toFixed(2)}x`} highlight />}
-                  {metricsUsed.cpc != null && <MetricPill label="CPC" value={`$${Number(metricsUsed.cpc).toFixed(2)}`} />}
+                  {metricsUsed.cpc != null && <MetricPill label="CPC" value={formatBRL(metricsUsed.cpc)} />}
                   {metricsUsed.period && <MetricPill label="Período" value={metricsUsed.period} />}
                 </div>
               </div>
@@ -497,7 +505,7 @@ export default function Recommendations() {
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-400 max-w-[180px] truncate">{d.entity_name || d.entity_id || '—'}</td>
                     <td className="px-4 py-3 text-xs font-mono text-slate-300 whitespace-nowrap">
-                      {d.current_value != null ? `$${Number(d.current_value).toFixed(2)} → $${Number(d.proposed_value).toFixed(2)}` : '—'}
+                      {d.current_value != null ? `${formatBRL(d.current_value)} → ${formatBRL(d.proposed_value)}` : '—'}
                     </td>
                     <td className="px-4 py-3">
                       {changePct != null && (
