@@ -76,8 +76,8 @@ export default function Analytics() {
 
       const aid = acc.id;
       const [prods, mets, camps] = await Promise.all([
-        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 50),
-        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 500),
+        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 100),
+        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 2000),
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 500),
       ]);
       setProducts(prods);
@@ -144,8 +144,16 @@ export default function Analytics() {
   const totSpend = dailyData.reduce((s, d) => s + d.spend, 0);
   const totSales = dailyData.reduce((s, d) => s + d.sales, 0);
   const totOrders = dailyData.reduce((s, d) => s + d.orders, 0);
+  const totClicks = dailyData.reduce((s, d) => s + d.clicks, 0);
+  const totImpressions = dailyData.reduce((s, d) => s + d.impressions, 0);
   const avgAcos = totSales > 0 ? totSpend / totSales * 100 : 0;
   const avgRoas = totSpend > 0 ? totSales / totSpend : 0;
+  const avgCpc = totClicks > 0 ? totSpend / totClicks : 0;
+  const avgCtr = totImpressions > 0 ? totClicks / totImpressions * 100 : 0;
+  const cvr = totClicks > 0 ? totOrders / totClicks * 100 : 0;
+  const cpa = totOrders > 0 ? totSpend / totOrders : 0;
+  const rpc = totClicks > 0 ? totSales / totClicks : 0;
+  const ticketMedio = totOrders > 0 ? totSales / totOrders : 0;
 
   // Tendência: comparar primeira e segunda metade do período
   const half = Math.floor(dailyData.length / 2);
@@ -173,7 +181,7 @@ export default function Analytics() {
         <div className="flex items-center gap-2">
           {/* Seletor de período */}
           <div className="flex bg-surface-2 border border-surface-3 rounded-lg p-0.5 gap-0.5">
-            {[7, 14, 30].map(d => (
+            {[7, 14, 30, 60].map(d => (
               <button key={d} onClick={() => setPeriod(d)}
                 className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${period === d ? 'bg-cyan text-white' : 'text-slate-400 hover:text-slate-200'}`}>
                 {d}d
@@ -188,12 +196,23 @@ export default function Analytics() {
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <KPI label="Vendas Ads" value={`$${totSales.toFixed(2)}`} trend={salesTrend} loading={loading} />
-        <KPI label="Ad Spend" value={`$${totSpend.toFixed(2)}`} loading={loading} />
-        <KPI label="ACoS Médio" value={`${avgAcos.toFixed(1)}%`} trend={acosTrend} inverse loading={loading} />
-        <KPI label="ROAS Médio" value={`${avgRoas.toFixed(2)}x`} loading={loading} />
-        <KPI label="Pedidos" value={totOrders.toLocaleString()} loading={loading} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI label={`Spend ${period}d`} value={`$${totSpend.toFixed(2)}`} loading={loading} />
+        <KPI label={`Vendas Ads ${period}d`} value={`$${totSales.toFixed(2)}`} trend={salesTrend} loading={loading} />
+        <KPI label="ACoS" value={`${avgAcos.toFixed(2)}%`} trend={acosTrend} inverse loading={loading} />
+        <KPI label="CPC Médio" value={`$${avgCpc.toFixed(2)}`} loading={loading} />
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI label="CVR (Conversão)" value={`${cvr.toFixed(1)}%`} loading={loading} />
+        <KPI label="CPA" value={`$${cpa.toFixed(2)}`} loading={loading} />
+        <KPI label="RPC (Receita/Clique)" value={`$${rpc.toFixed(2)}`} loading={loading} />
+        <KPI label="Ticket Médio" value={`$${ticketMedio.toFixed(2)}`} loading={loading} />
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI label="Cliques" value={totClicks.toLocaleString('pt-BR')} loading={loading} />
+        <KPI label="Impressões" value={totImpressions.toLocaleString('pt-BR')} loading={loading} />
+        <KPI label="CTR" value={`${avgCtr.toFixed(3)}%`} loading={loading} />
+        <KPI label="Pedidos" value={totOrders.toLocaleString('pt-BR')} loading={loading} />
       </div>
 
       {loading ? (
