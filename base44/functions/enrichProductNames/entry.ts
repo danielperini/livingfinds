@@ -125,17 +125,17 @@ Deno.serve(async (req) => {
     const region = account.region || 'NA';
     const spBase = getSpEndpoint(region);
 
-    // Obter token SP-API: prioridade ao token direto passado no payload
+    // Obter token SP-API: prioridade ao token direto > secrets SP-API dedicados > fallback ADS
     let token = spAccessTokenDirect;
     if (!token) {
-      const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-      const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-      const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
-      if (!refreshToken) return Response.json({ ok: false, message: 'Sem refresh_token e sem sp_access_token configurado' });
+      const clientId = Deno.env.get('SP_CLIENT_ID') || Deno.env.get('ADS_CLIENT_ID') || '';
+      const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('ADS_CLIENT_SECRET') || '';
+      const refreshToken = Deno.env.get('SP_REFRESH_TOKEN') || account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+      if (!refreshToken) return Response.json({ ok: false, message: 'Sem SP_REFRESH_TOKEN configurado' });
       try {
         token = await getSpTokenFromRefresh(refreshToken, clientId, clientSecret);
       } catch (e) {
-        return Response.json({ ok: false, message: `Falha ao obter token: ${e.message}` });
+        return Response.json({ ok: false, message: `Falha ao obter token SP-API: ${e.message}` });
       }
     }
 
