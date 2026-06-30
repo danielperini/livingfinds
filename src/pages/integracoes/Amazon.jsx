@@ -1,27 +1,14 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { appParams } from '@/lib/app-params';
 import {
   Link2, CheckCircle, XCircle, Loader2, Copy, Check,
   ExternalLink, AlertCircle, ShieldCheck, RefreshCw
 } from 'lucide-react';
 
-const SP_APP_ID = 'amzn1.application-oa2-client.a911098372f94b8a8ae0f5f5df3a18c2';
-
-function getAppBaseUrl() {
-  const base = appParams.appBaseUrl || window.location.origin;
-  return base.replace(/\/$/, '');
-}
-
-function buildUrls() {
-  const base = getAppBaseUrl();
-  return {
-    appBaseUrl: base,
-    loginUri: `${base}/integracoes/amazon`,
-    redirectUri: `${base}/integracoes/amazon`,
-    callbackFunction: `${base}/api/functions/amazonSpApiCallback`,
-  };
-}
+const SP_APP_ID = 'amzn1.sp.solution.cc1bd118-49e3-438e-8cf1-42169eb3f443';
+const BASE_URL = 'https://livingfinds-app.base44.app';
+const LOGIN_URI = `${BASE_URL}/integracoes/amazon`;
+const REDIRECT_URI = `${BASE_URL}/api/auth/amazon/callback`;
 
 function buildAuthorizeUrl(state) {
   return (
@@ -63,8 +50,6 @@ export default function AmazonIntegracao() {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
-  const urls = buildUrls();
-
   // Detectar retorno do OAuth
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -207,10 +192,9 @@ export default function AmazonIntegracao() {
           Regista estas URLs nas credenciais LWA do teu app no Seller Central Developer Central.
         </p>
 
-        <CopyField label="App ID (Client ID)" value={SP_APP_ID} />
-        <CopyField label="Login URI (Allowed Login URL)" value={urls.loginUri} />
-        <CopyField label="Redirect URI (Allowed Return URL)" value={urls.redirectUri} />
-        <CopyField label="Callback Backend URL" value={urls.callbackFunction} />
+        <CopyField label="SP App ID (Solution ID)" value={SP_APP_ID} />
+        <CopyField label="Login URI" value={LOGIN_URI} />
+        <CopyField label="OAuth Redirect URI" value={REDIRECT_URI} />
 
         <a
           href="https://sellercentral.amazon.com.br/apps/manage"
