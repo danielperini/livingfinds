@@ -93,13 +93,27 @@ export default function Analytics() {
   // ── Dados para gráficos ──
 
   // Agregar métricas diárias por data (filtrado por período)
-  const cutoff = new Date(Date.now() - period * 86400000).toISOString().slice(0, 10);
-  const filteredMetrics = metrics.filter(m => m.date >= cutoff);
+  const cutoffDate = new Date(Date.now() - period * 86400000);
+  cutoffDate.setHours(0, 0, 0, 0);
+  const cutoff = cutoffDate.toISOString().slice(0, 10);
+
+  const filteredMetrics = metrics.filter(m => m.date && m.date >= cutoff);
+
+  // Deduplicar por (campaign_id, date) antes de agregar
+  const dedupMap = new Map();
+  filteredMetrics.forEach(m => {
+    const key = `${m.campaign_id || 'global'}-${m.date}`;
+    if (!dedupMap.has(key)) {
+      dedupMap.set(key, m);
+    }
+  });
+  const dedupedMetrics = Array.from(dedupMap.values());
 
   const dailyData = Object.values(
-    filteredMetrics.reduce((acc, m) => {
-      const d = m.date?.slice(5) || m.date || '';
-      if (!acc[d]) acc[d] = { name: d, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
+    dedupedMetrics.reduce((acc, m) => {
+      const d = m.date || '';
+      const label = d.slice(5) || d; // MM-DD
+      if (!acc[d]) acc[d] = { name: label, date: d, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
       acc[d].spend += m.spend || 0;
       acc[d].sales += m.sales || 0;
       acc[d].orders += m.orders || 0;
@@ -114,7 +128,7 @@ export default function Analytics() {
       roas: d.spend > 0 ? d.sales / d.spend : 0,
       ctr: d.impressions > 0 ? d.clicks / d.impressions * 100 : 0,
     }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   // Top produtos por receita
   const topProducts = [...products]
