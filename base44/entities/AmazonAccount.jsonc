@@ -33,6 +33,36 @@
       ],
       "default": "pending"
     },
+    "country_code": {
+      "type": "string",
+      "default": "BR"
+    },
+    "currency_code": {
+      "type": "string",
+      "default": "BRL"
+    },
+    "currency_symbol": {
+      "type": "string",
+      "default": "R$"
+    },
+    "locale": {
+      "type": "string",
+      "default": "pt-BR"
+    },
+    "profile_validated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profile_validation_status": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid",
+        "error",
+        "pending"
+      ],
+      "default": "pending"
+    },
     "ai_auto_optimization": {
       "type": "boolean",
       "default": false

@@ -43,14 +43,20 @@ export function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-export async function adsCall(method, path, body, contentType = 'application/json') {
+export async function adsCall(method, path, body, contentType = 'application/json', profileId?: string) {
   const token = await getAdsToken();
+  const scope = profileId || String(Deno.env.get('ADS_PROFILE_ID'));
+  
+  if (!scope) {
+    throw new Error('profileId não informado. Perfil Amazon Ads é obrigatório.');
+  }
+  
   const opts = {
     method: method || 'GET',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+      'Amazon-Advertising-API-Scope': scope,
       'Content-Type': contentType,
       'Accept': contentType,
     },

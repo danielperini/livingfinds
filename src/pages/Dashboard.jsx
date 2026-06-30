@@ -316,17 +316,24 @@ export default function Dashboard() {
   }, {});
   const heatMapArray = Object.values(heatMapData);
 
-  // Budget suggestion - baseado em 14 dias
+  // Budget suggestion - baseado em 14 dias, mas só calcula após 20 dias de aprendizado
   const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
   const metricsTwoWeeks = metricsDaily.filter(m => m.date >= twoWeeksAgo);
   const avgDailySpend = metricsTwoWeeks.length > 0 
     ? metricsTwoWeeks.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsTwoWeeks.length 
     : 0;
+  
+  // Verificar se tem dados suficientes (mínimo 20 dias para sair do modo aprendizado)
+  const uniqueDaysWithData = new Set(metricsDaily.map(m => m.date)).size;
+  const isLearningMode = uniqueDaysWithData < 20;
+  
   const totalProducts = products.length;
   const totalKeywords = campaigns.length > 0 ? campaigns.reduce((sum, c) => sum + 5, 0) : 0; // estimativa
-  const suggestedBudget = avgDailySpend > 0 
-    ? Math.max(avgDailySpend * 1.2, totalProducts * 2, totalKeywords * 0.5)
-    : totalProducts * 2 + totalKeywords * 0.5;
+  const suggestedBudget = isLearningMode 
+    ? 0 
+    : (avgDailySpend > 0 
+        ? Math.max(avgDailySpend * 1.2, totalProducts * 2, totalKeywords * 0.5)
+        : totalProducts * 2 + totalKeywords * 0.5);
 
   // Alterações diárias
   const changesByDay = bidChanges.reduce((acc, change) => {

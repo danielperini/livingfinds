@@ -54,6 +54,24 @@
     "asin": {
       "type": "string"
     },
+    "profile_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "country_code": {
+      "type": "string",
+      "default": "BR"
+    },
+    "currency_code": {
+      "type": "string",
+      "default": "BRL"
+    },
+    "currency_symbol": {
+      "type": "string",
+      "default": "R$"
+    },
     "action": {
       "type": "string"
     },
