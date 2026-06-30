@@ -99,10 +99,10 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
       <button
         onClick={() => onToggleCampaign(product)}
         disabled={isLoading}
-        className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+        className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
           isActive
-            ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/20'
-            : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+            ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30'
+            : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'
         }`}
       >
         {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : isActive ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
@@ -116,15 +116,6 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
       >
         {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
         Arquivar
-      </button>
-      {/* Botão para criar nova campanha adicional */}
-      <button
-        onClick={() => onKickoff(product)}
-        disabled={isLoading}
-        title="Criar nova campanha para este produto"
-        className="flex items-center gap-1 px-2 py-1.5 text-xs text-slate-500 hover:text-cyan border border-surface-3 hover:border-cyan/30 rounded-lg transition-all whitespace-nowrap"
-      >
-        <Plus className="w-3 h-3" />
       </button>
     </div>
   );
