@@ -398,23 +398,22 @@ export default function Dashboard() {
         ) : <div className="h-52 flex items-center justify-center text-sm text-slate-500">Sem dados. Execute um Sync.</div>}
       </div>
 
-      {/* Campanhas */}
+      {/* Campanhas Ativas */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
+          <h2 className="text-sm font-semibold text-slate-300">Campanhas Ativas</h2>
           <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
         </div>
-        {loading ? <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : campaigns.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-500">Sem campanhas</div>
+        {loading ? <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : campaigns.filter(c => c.state === 'enabled' && !c.archived).length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">Nenhuma campanha ativa</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead><tr className="border-b border-surface-2">{['Nome', 'Estado', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
+              <thead><tr className="border-b border-surface-2">{['Nome', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
               <tbody>
-                {campaigns.slice(0, 20).map(c => (
+                {campaigns.filter(c => c.state === 'enabled' && !c.archived).slice(0, 20).map(c => (
                   <tr key={c.id} className="border-b border-surface-2/50 hover:bg-surface-2">
                     <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
-                    <td className="px-4 py-3"><StatusBadge status={c.state} size="xs" /></td>
                     <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
                     <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
                     <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>{(c.acos || 0).toFixed(1)}%</td>
