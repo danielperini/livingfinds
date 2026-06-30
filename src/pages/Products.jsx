@@ -508,21 +508,32 @@ export default function Products() {
     setActionLoading(product.id);
 
     try {
-      const agentAction = await base44.entities.AgentAction.create({
-        amazon_account_id: account.id,
-        action: active ? 'pause_campaign' : 'enable_campaign',
-        asin: product.asin,
-        campaign_id: campaignId,
-        reason: active ? 'Pausa manual' : 'Ativação manual',
-        evidence: `Produto: ${product.asin}`,
-        risk_level: 'medium',
-        requires_approval: false,
-      });
-
-      await base44.functions.invoke('executeAgentAction', {
-        action_id: agentAction.id,
-        approve: true,
-      });
+      if (active) {
+        // Pausar: usar função dedicada que usa credenciais da conta corretamente
+        const response = await base44.functions.invoke('pauseCampaign', {
+          amazon_account_id: account.id,
+          campaign_id: campaignId,
+        });
+        if (!response?.data?.ok) {
+          throw new Error(response?.data?.error || JSON.stringify(response?.data?.amazon_response) || 'Falha ao pausar campanha');
+        }
+      } else {
+        // Ativar: via AgentAction
+        const agentAction = await base44.entities.AgentAction.create({
+          amazon_account_id: account.id,
+          action: 'enable_campaign',
+          asin: product.asin,
+          campaign_id: campaignId,
+          reason: 'Ativação manual',
+          evidence: `Produto: ${product.asin}`,
+          risk_level: 'medium',
+          requires_approval: false,
+        });
+        await base44.functions.invoke('executeAgentAction', {
+          action_id: agentAction.id,
+          approve: true,
+        });
+      }
 
       setActionMsg({
         type: 'success',
