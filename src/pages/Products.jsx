@@ -128,41 +128,52 @@ function OfferStatusBadge({ product }) {
 
 function CampaignStatusCell({ product }) {
   const hasCampaign = productHasCampaign(product);
+  const campaignId = campaignIdOf(product);
+  const campStatus = String(product?.campaign_status || '').toLowerCase();
 
   if (!hasCampaign) {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-slate-500">
-        <XCircle className="w-3.5 h-3.5 text-slate-600" />
-        0 campanhas
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">
+        <XCircle className="w-3 h-3" />
+        Sem campanha
       </span>
     );
   }
 
-  const active = isCampaignActive(product);
-  const campaignId = campaignIdOf(product);
+  let badge;
+  if (campStatus === 'archived' || campStatus === 'encerrada') {
+    badge = (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/20">
+        Encerrada
+      </span>
+    );
+  } else if (campStatus === 'paused' || campStatus === 'pausada') {
+    badge = (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/20">
+        <Pause className="w-3 h-3" />
+        Pausada
+      </span>
+    );
+  } else if (campStatus === 'active' || campStatus === 'enabled') {
+    badge = (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+        Ativa
+      </span>
+    );
+  } else {
+    badge = (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">
+        Indisponível
+      </span>
+    );
+  }
 
   return (
-    <div>
-      <div
-        className={`flex items-center gap-1.5 ${
-          active ? 'text-emerald-400' : 'text-amber-400'
-        }`}
-      >
-        {active ? (
-          <>
-            <Radio className="w-3.5 h-3.5" />
-            <span className="text-xs font-semibold">Ads Ativo</span>
-          </>
-        ) : (
-          <>
-            <Pause className="w-3.5 h-3.5" />
-            <span className="text-xs font-semibold">Ads Pausado</span>
-          </>
-        )}
-      </div>
-
+    <div className="space-y-1">
+      {badge}
       {campaignId && (
-        <p className="text-xs text-slate-600 font-mono mt-0.5 truncate max-w-[100px]">
+        <p className="text-[10px] text-slate-600 font-mono truncate max-w-[110px]">
           ...{String(campaignId).slice(-8)}
         </p>
       )}

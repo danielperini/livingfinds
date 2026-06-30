@@ -171,6 +171,7 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
   const [auditData, setAuditData] = useState(null);
   const [showAudit, setShowAudit] = useState(false);
+  const [campFilter, setCampFilter] = useState('all');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -622,33 +623,88 @@ export default function Dashboard() {
         ) : <div className="h-52 flex items-center justify-center text-sm text-slate-500">Sem dados. Execute um Sync.</div>}
       </div>
 
-      {/* Campanhas Ativas */}
-      <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-300">Campanhas Ativas</h2>
-          <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
-        </div>
-        {loading ? <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : campaigns.filter(c => c.state === 'enabled' && !c.archived).length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-500">Nenhuma campanha ativa</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-surface-2">{['Nome', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
-              <tbody>
-                {campaigns.filter(c => c.state === 'enabled' && !c.archived).sort((a, b) => (b.spend || 0) - (a.spend || 0) || new Date(b.created_date || 0) - new Date(a.created_date || 0)).slice(0, 20).map(c => (
-                  <tr key={c.id} className="border-b border-surface-2/50 hover:bg-surface-2">
-                    <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
-                    <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
-                    <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
-                    <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400'}`}>{(c.acos || 0).toFixed(1)}%</td>
-                    <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Campanhas */}
+      {(() => {
+        const activeCamps = campaigns.filter(c => (c.state === 'enabled' || c.status === 'enabled') && !c.archived);
+        const pausedCamps = campaigns.filter(c => (c.state === 'paused' || c.status === 'paused') && !c.archived);
+        const archivedCamps = campaigns.filter(c => c.archived || c.state === 'archived' || c.status === 'archived');
+
+        const filtered = campFilter === 'active' ? activeCamps
+          : campFilter === 'paused' ? pausedCamps
+          : campFilter === 'archived' ? archivedCamps
+          : campaigns;
+
+        const sorted = [...filtered].sort((a, b) => (b.spend || 0) - (a.spend || 0) || new Date(b.created_date || 0) - new Date(a.created_date || 0)).slice(0, 25);
+
+        function CampStatusBadge({ c }) {
+          if (c.archived || c.state === 'archived' || c.status === 'archived') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/20">Encerrada</span>;
+          }
+          if (c.state === 'paused' || c.status === 'paused') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/20">Pausada</span>;
+          }
+          if (c.state === 'enabled' || c.status === 'enabled') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"><span className="w-1 h-1 rounded-full bg-emerald-400" />Ativa</span>;
+          }
+          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">Indisponível</span>;
+        }
+
+        return (
+          <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: 'all', label: `Todas (${campaigns.length})` },
+                    { key: 'active', label: `Ativas (${activeCamps.length})` },
+                    { key: 'paused', label: `Pausadas (${pausedCamps.length})` },
+                    { key: 'archived', label: `Encerradas (${archivedCamps.length})` },
+                  ].map(f => (
+                    <button key={f.key} onClick={() => setCampFilter(f.key)}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap ${campFilter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
+            </div>
+            {loading ? (
+              <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+            ) : sorted.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-500">Nenhuma campanha encontrada</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-surface-2">
+                      {['Status', 'Nome', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(c => {
+                      const isInactive = c.archived || c.state === 'archived' || c.state === 'paused' || c.status === 'paused' || c.status === 'archived';
+                      return (
+                        <tr key={c.id} className={`border-b border-surface-2/50 hover:bg-surface-2 transition-colors ${isInactive ? 'opacity-60' : ''}`}>
+                          <td className="px-4 py-3"><CampStatusBadge c={c} /></td>
+                          <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || c.campaign_name || '—'}</td>
+                          <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
+                          <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : (c.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>{(c.acos || 0).toFixed(1)}%</td>
+                          <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        );
+      })()}
 
       {/* Modal de Auditoria */}
       {showAudit && auditData && (
