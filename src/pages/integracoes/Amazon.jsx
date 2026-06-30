@@ -5,7 +5,7 @@ import {
   ExternalLink, AlertCircle, ShieldCheck, RefreshCw, Activity
 } from 'lucide-react';
 
-const SP_APP_ID = 'amzn1.sp.solution.cc1bd118-49e3-438e-8cf1-42169eb3f443'; // App ID correto
+const SP_APP_ID = 'amzn1.sp.solution.d511548d-3436-4b1e-92c1-9091b4fb0020';
 const BASE_URL = 'https://livingfinds-app.base44.app';
 const LOGIN_URI = `${BASE_URL}/integracoes/amazon`;
 const REDIRECT_URI = `${BASE_URL}/api/auth/amazon/callback`;
