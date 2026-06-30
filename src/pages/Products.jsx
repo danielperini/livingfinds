@@ -107,7 +107,7 @@ function ActionButtons({ product, onKickoff, onToggleCampaign, loading }) {
   );
 }
 
-function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
+function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading, selected, onSelect }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -135,7 +135,16 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
 
   return (
     <>
-      <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
+      <tr className={`border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors ${selected ? 'bg-cyan/5' : ''}`}>
+        {/* Checkbox */}
+        <td className="pl-4 pr-2 py-3 w-8">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={e => onSelect(product.id, e.target.checked)}
+            className="w-4 h-4 rounded border-surface-3 bg-surface-2 accent-cyan cursor-pointer"
+          />
+        </td>
         {/* Produto: imagem + nome completo + ASIN + SKU */}
         <td className="px-4 py-3 min-w-[340px] max-w-[420px]">
           <div className="flex items-start gap-3">
@@ -207,7 +216,7 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
       {/* Keywords expandido */}
       {expanded && (
         <tr className="border-b border-surface-2/40 bg-surface-2/20">
-          <td colSpan={8} className="px-6 py-4 space-y-4">
+          <td colSpan={9} className="px-6 py-4 space-y-4">
             {kwLoading ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" />
@@ -309,6 +318,8 @@ export default function Products() {
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [enriching, setEnriching] = useState(false);
   const [page, setPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [selectionKickoffLoading, setSelectionKickoffLoading] = useState(false);
   const PAGE_SIZE = 20;
 
   const load = useCallback(async () => {
@@ -380,6 +391,49 @@ export default function Products() {
     }
   };
 
+  const handleSelect = (id, checked) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const handleSelectAll = (checked) => {
+    if (checked) setSelectedIds(new Set(paginated.map(p => p.id)));
+    else setSelectedIds(new Set());
+  };
+
+  const selectionKickoff = async () => {
+    const targets = paginated.filter(p => selectedIds.has(p.id) && !p.has_campaign);
+    if (!targets.length) {
+      setActionMsg({ type: 'info', text: 'Nenhum produto selecionado sem campanha para fazer kick-off.' });
+      setTimeout(() => setActionMsg(null), 5000);
+      return;
+    }
+    setSelectionKickoffLoading(true);
+    setActionMsg({ type: 'info', text: `Criando campanhas para ${targets.length} produtos selecionados...` });
+    let success = 0, failed = 0;
+    for (const p of targets) {
+      try {
+        const res = await base44.functions.invoke('createAutoCampaignForAsin', {
+          amazon_account_id: account.id,
+          asin: p.asin,
+          sku: p.sku,
+          product_name: p.product_name,
+        });
+        if (res.data?.ok) success++;
+        else failed++;
+      } catch { failed++; }
+    }
+    setSelectionKickoffLoading(false);
+    setSelectedIds(new Set());
+    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `✓ ${success} campanhas criadas${failed > 0 ? ` · ${failed} falharam` : ''}` });
+    await load();
+    setTimeout(() => setActionMsg(null), 10000);
+  };
+
   // Bulk kick-off para produtos sem campanha
   const bulkKickoff = async () => {
     const targets = filtered.filter(p => !p.has_campaign);
@@ -434,6 +488,11 @@ export default function Products() {
   const productsWithoutName = products.filter(p => !p.product_name).length;
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const selectedCount = selectedIds.size;
+  const selectedNoCampaign = paginated.filter(p => selectedIds.has(p.id) && !p.has_campaign).length;
+  const allPageSelected = paginated.length > 0 && paginated.every(p => selectedIds.has(p.id));
+  const somePageSelected = paginated.some(p => selectedIds.has(p.id));
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -560,10 +619,35 @@ export default function Products() {
               <option value="acos">Ordenar: ACoS</option>
             </select>
           </div>
+          {/* Barra de seleção */}
+          {selectedCount > 0 && (
+            <div className="px-4 py-2.5 bg-cyan/10 border-b border-cyan/20 flex items-center justify-between gap-3">
+              <span className="text-xs text-cyan font-semibold">{selectedCount} produto(s) selecionado(s){selectedNoCampaign > 0 ? ` · ${selectedNoCampaign} sem campanha` : ''}</span>
+              <div className="flex items-center gap-2">
+                {selectedNoCampaign > 0 && (
+                  <button onClick={selectionKickoff} disabled={selectionKickoffLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-cyan text-white rounded-lg hover:bg-cyan/90 disabled:opacity-60 transition-colors">
+                    {selectionKickoffLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
+                    Kick-off ({selectedNoCampaign})
+                  </button>
+                )}
+                <button onClick={() => setSelectedIds(new Set())} className="text-xs text-slate-400 hover:text-white transition-colors">Limpar</button>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
+                  <th className="pl-4 pr-2 py-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={allPageSelected}
+                      ref={el => { if (el) el.indeterminate = somePageSelected && !allPageSelected; }}
+                      onChange={e => handleSelectAll(e.target.checked)}
+                      className="w-4 h-4 rounded border-surface-3 bg-surface-2 accent-cyan cursor-pointer"
+                    />
+                  </th>
                   {['Produto', 'Oferta', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
@@ -577,6 +661,8 @@ export default function Products() {
                     onToggleCampaign={toggleCampaign}
                     onKickoff={setKickoffProduct}
                     actionLoading={actionLoading}
+                    selected={selectedIds.has(p.id)}
+                    onSelect={handleSelect}
                   />
                 ))}
               </tbody>
