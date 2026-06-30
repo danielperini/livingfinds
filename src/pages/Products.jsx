@@ -152,7 +152,13 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
 
         {/* Nome */}
         <td className="px-4 py-3 min-w-[160px] max-w-[220px]">
-          <p className="text-xs text-slate-200 truncate" title={product.product_name}>{product.product_name || <span className="text-slate-600">—</span>}</p>
+          {product.product_name ? (
+            <p className="text-xs text-slate-200 truncate" title={product.product_name}>{product.product_name}</p>
+          ) : (
+            <p className="text-xs text-slate-500 italic truncate" title={`ASIN: ${product.asin}`}>
+              {product.sku ? `SKU: ${product.sku}` : product.asin}
+            </p>
+          )}
         </td>
 
         {/* SKU */}
@@ -307,6 +313,9 @@ export default function Products() {
   const [sortBy, setSortBy] = useState('total_sales_30d');
   const [bulkActivating, setBulkActivating] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
+  const [enriching, setEnriching] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -353,6 +362,27 @@ export default function Products() {
     } finally {
       setActionLoading(null);
       setTimeout(() => setActionMsg(null), 8000);
+    }
+  };
+
+  const enrichNames = async () => {
+    if (!account) return;
+    setEnriching(true);
+    setActionMsg({ type: 'info', text: 'A buscar nomes dos produtos na Amazon...' });
+    try {
+      const res = await base44.functions.invoke('enrichProductNames', { amazon_account_id: account.id });
+      const d = res.data;
+      if (d?.ok) {
+        setActionMsg({ type: 'success', text: `✓ ${d.enriched} nomes obtidos (${d.fallback || 0} sem nome na Amazon)` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: d?.message || 'Erro ao buscar nomes' });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setEnriching(false);
+      setTimeout(() => setActionMsg(null), 10000);
     }
   };
 
@@ -407,6 +437,9 @@ export default function Products() {
   });
 
   const noCampaignInFiltered = filtered.filter(p => !p.has_campaign).length;
+  const productsWithoutName = products.filter(p => !p.product_name).length;
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -427,6 +460,13 @@ export default function Products() {
               className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
               {bulkActivating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
               {bulkActivating ? 'Criando...' : `Kick-off em massa (${noCampaignInFiltered})`}
+            </button>
+          )}
+          {productsWithoutName > 0 && (
+            <button onClick={enrichNames} disabled={enriching || !account}
+              className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+              {enriching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
+              {enriching ? 'Buscando nomes...' : `Buscar Nomes (${productsWithoutName})`}
             </button>
           )}
           <button onClick={load} disabled={loading}
@@ -472,7 +512,7 @@ export default function Products() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-shrink-0 sm:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
+          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
             placeholder="Pesquisar ASIN, SKU..."
             className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
         </div>
@@ -486,7 +526,7 @@ export default function Products() {
             { key: 'ads_paused', label: `Ads Pausados (${withPausedAds})` },
             { key: 'no_campaign', label: `Sem Campanha (${withoutCampaign})`, highlight: withoutCampaign > 0 },
           ].map(f => (
-            <button key={f.key} onClick={() => setFilter(f.key)}
+            <button key={f.key} onClick={() => { setFilter(f.key); setPage(1); }}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${
                 filter === f.key
                   ? 'bg-cyan/20 text-cyan border-cyan/30'
@@ -518,7 +558,7 @@ export default function Products() {
       ) : (
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-surface-2 flex items-center justify-between">
-            <p className="text-xs text-slate-500">{filtered.length} produtos</p>
+            <p className="text-xs text-slate-500">{filtered.length} produtos · página {page} de {totalPages}</p>
             <select value={sortBy} onChange={e => setSortBy(e.target.value)}
               className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-1 focus:outline-none">
               <option value="total_sales_30d">Ordenar: Vendas 30d</option>
@@ -536,7 +576,7 @@ export default function Products() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(p => (
+                {paginated.map(p => (
                   <ProductRow
                     key={p.id}
                     product={p}
@@ -548,6 +588,26 @@ export default function Products() {
               </tbody>
             </table>
           </div>
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 px-4 py-3 border-t border-surface-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">
+                ← Anterior
+              </button>
+              <div className="flex items-center gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(n => (
+                  <button key={n} onClick={() => setPage(n)}
+                    className={`w-7 h-7 text-xs rounded-lg transition-colors ${n === page ? 'bg-cyan text-white' : 'bg-surface-2 border border-surface-3 text-slate-400 hover:text-white'}`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">
+                Próxima →
+              </button>
+            </div>
+          )}
         </div>
       )}
 
