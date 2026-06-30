@@ -29,6 +29,7 @@ import Products from '@/pages/Products';
 import Report from '@/pages/Report';
 import LogDeBids from '@/pages/LogDeBids';
 import Diagnostico from '@/pages/Diagnostico';
+import BidLogs from '@/pages/BidLogs';
 import Analytics from '@/pages/Analytics';
 import AmazonAdsCallback from '@/pages/AmazonAdsCallback';
 import Recommendations from '@/pages/Recommendations';
@@ -76,6 +77,7 @@ const AuthenticatedApp = () => {
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/products" element={<Products />} />
           <Route path="/bids-log" element={<LogDeBids />} />
+          <Route path="/bid-logs" element={<BidLogs />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/metrics" element={<MetricsDashboard />} />
           <Route path="/recommendations" element={<Recommendations />} />

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import KickoffModal from '@/components/products/KickoffModal';
+import AcceleratorModal from '@/components/products/AcceleratorModal';
 
 // Oferta ativa = produto com status 'active' na Amazon
 // Oferta inativa = produto arquivado, inativo ou sem listing ativo
@@ -63,20 +64,31 @@ function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onToggleCampaign, loading }) {
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, loading }) {
   const isLoading = loading === product.id;
 
   if (!product.has_campaign) {
     return (
-      <button
-        onClick={() => onKickoff(product)}
-        disabled={isLoading}
-        title="Kick-off: cria campanha AUTO + manuais"
-        className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 whitespace-nowrap"
-      >
-        {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
-        Kick-off
-      </button>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => onKickoff(product)}
+          disabled={isLoading}
+          title="Kick-off: cria campanha AUTO + manuais"
+          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 whitespace-nowrap"
+        >
+          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
+          Kick-off
+        </button>
+        <button
+          onClick={() => onAccelerator(product)}
+          disabled={isLoading}
+          title="Acelerador: cria campanha MANUAL com múltiplas keywords exatas"
+          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
+        >
+          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+          Acelerar
+        </button>
+      </div>
     );
   }
 
@@ -115,7 +127,7 @@ function visibleName(product) {
   return `Produto ${product.asin}`;
 }
 
-function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading, onNameUpdate }) {
+function ProductRow({ product, onToggleCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -260,7 +272,8 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading, onNam
           <div className="flex items-center gap-1.5 flex-wrap">
             <ActionButtons
               product={product}
-              onKickoff={onKickoff}
+              onKickoff={() => onKickoff(product)}
+              onAccelerator={() => onAccelerator(product)}
               onToggleCampaign={onToggleCampaign}
               loading={actionLoading}
             />
@@ -376,6 +389,7 @@ export default function Products() {
   const [sortBy, setSortBy] = useState('total_sales_30d');
   const [bulkActivating, setBulkActivating] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
+  const [acceleratorProduct, setAcceleratorProduct] = useState(null);
   const [enriching, setEnriching] = useState(false);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
@@ -648,6 +662,7 @@ export default function Products() {
                     product={p}
                     onToggleCampaign={toggleCampaign}
                     onKickoff={setKickoffProduct}
+                    onAccelerator={setAcceleratorProduct}
                     actionLoading={actionLoading}
                     onNameUpdate={(id, name) => setProducts(prev => prev.map(pr => pr.id === id ? { ...pr, display_name: name } : pr))}
                   />
@@ -684,6 +699,15 @@ export default function Products() {
           account={account}
           onClose={() => setKickoffProduct(null)}
           onDone={() => { setKickoffProduct(null); load(); }}
+        />
+      )}
+
+      {acceleratorProduct && (
+        <AcceleratorModal
+          product={acceleratorProduct}
+          account={account}
+          onClose={() => setAcceleratorProduct(null)}
+          onDone={() => { setAcceleratorProduct(null); load(); }}
         />
       )}
     </div>

@@ -19,6 +19,7 @@ const navItems = [
   { path: '/autopilot', icon: Bot, label: 'Ads Autopilot' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
+  { path: '/bid-logs', icon: FileText, label: 'Histórico de Bids' },
   { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
