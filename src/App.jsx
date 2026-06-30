@@ -40,6 +40,7 @@ import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
 import CampaignConfig from '@/pages/CampaignConfig';
 import DaypartingDashboard from '@/pages/DaypartingDashboard';
+import ManualInstrucoes from '@/pages/ManualInstrucoes';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -92,6 +93,7 @@ const AuthenticatedApp = () => {
           <Route path="/saude-do-sistema" element={<SystemHealth />} />
           <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
           <Route path="/dayparting" element={<DaypartingDashboard />} />
+          <Route path="/manual" element={<ManualInstrucoes />} />
           {/* Redirects de rotas obsoletas */}
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
