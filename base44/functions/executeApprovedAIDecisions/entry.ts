@@ -61,17 +61,16 @@ Deno.serve(async (req) => {
 
     // Buscar decisões: aprovadas/agendadas do dia
     let decisions = [];
+    // Nota: entidade real é "AdsAiDecisio" (nome truncado na plataforma)
     if (body.decision_ids) {
       for (const id of body.decision_ids) {
-        const d = await base44.asServiceRole.entities.AdsAiDecision.get(id);
+        const d = await base44.asServiceRole.entities.AdsAiDecisio.get(id).catch(() => null);
         if (d && ['approved', 'scheduled'].includes(d.status)) decisions.push(d);
       }
     } else if (amazon_account_id) {
-      const statusFilter = force_execute_all ? ['approved', 'scheduled'] : ['scheduled'];
-      decisions = await base44.asServiceRole.entities.AdsAiDecision.filter({
+      decisions = await base44.asServiceRole.entities.AdsAiDecisio.filter({
         amazon_account_id,
-        status: { $in: statusFilter },
-        date: today,
+        status: 'approved',
       }, '-confidence_score', 500);
     }
     if (!decisions.length) return Response.json({ ok: true, executed: 0, decisions_found: 0, log: ['No decisions to execute'] });
@@ -124,7 +123,7 @@ Deno.serve(async (req) => {
           result = { ok: false, data: { error: `Unsupported action: ${action}` } };
       }
       const newStatus = result.ok ? 'executed' : 'failed';
-      await base44.asServiceRole.entities.AdsAiDecision.update(decision.id, {
+      await base44.asServiceRole.entities.AdsAiDecisio.update(decision.id, {
         status: newStatus,
         executed_at: new Date().toISOString(),
         amazon_response: JSON.stringify(result.data),
@@ -210,27 +209,28 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Nota: entidade real é "AdsBidChangeL" (nome truncado na plataforma)
     for (let i = 0; i < logRecords.length; i += 200) {
-      await base44.asServiceRole.entities.AdsBidChangeLog.bulkCreate(logRecords.slice(i, i + 200));
+      await base44.asServiceRole.entities.AdsBidChangeL.bulkCreate(logRecords.slice(i, i + 200)).catch(e => {
+        console.warn('[executeApprovedAIDecisions] Log de bids falhou:', e.message);
+      });
     }
+
+    const actionBreakdown = results.reduce((acc, r) => {
+      const d = decisions.find(d => d.id === r.id);
+      const action = d?.action || 'unknown';
+      acc[action] = (acc[action] || 0) + 1;
+      return acc;
+    }, {});
 
     return Response.json({
-      ok: true, executed, failed,
+      ok: true,
+      executed,
+      failed,
       total_looked: decisions.length,
-      breakdown: countActions(results, resultsMap => {
-        const face = {};
-        for (const d of results) {
-          if (!face[d.id]) face[d.id] = item.action;
-        }
-        return Object.values(face).reduce((acc, a) => ({ ...acc, [a]: (acc[a] || 0) + 1 }), {});
-      }),
-      log
+      breakdown: actionBreakdown,
+      log,
     });
-
-    function countActions(execResults) {
-      const filterById = execResults || results.reduce((acc, r, idx) => ({ ...acc, [r.id]: r.id }), {});
-      return Object.values(filterById).length;
-    }
   } catch (error) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }

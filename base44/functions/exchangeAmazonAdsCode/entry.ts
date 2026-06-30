@@ -1,6 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const REDIRECT_URI = 'https://living-finds-flow.base44.app/amazon-ads-callback';
+const REDIRECT_URI = 'https://livingfinds-app.base44.app/amazon-ads-callback';
 
 Deno.serve(async (req) => {
   try {

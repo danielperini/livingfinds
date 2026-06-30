@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+// AppLayout — sidebar navigation
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Brain, Package, Rocket,
@@ -23,8 +24,9 @@ const navItems = [
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
   { path: '/motor-config', icon: Cpu, label: 'Motor IA' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
-  { path: '/diagnostico', icon: Activity, label: 'Diagnóstico' },
-  { path: '/logs', icon: Activity, label: 'Logs' },
+  { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
+  { path: '/diagnostico', icon: ChartIcon, label: 'Diagnóstico' },
+  { path: '/logs', icon: FileText, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
 

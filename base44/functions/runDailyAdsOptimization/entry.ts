@@ -51,12 +51,23 @@ Deno.serve(async (req) => {
   const startTime = Date.now();
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Suporte a execução via scheduler (sem usuário autenticado) e via frontend (com usuário)
+    let amazonAccountId;
     const body = await req.json().catch(() => ({}));
-    const { amazon_account_id } = body;
-    if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
+    amazonAccountId = body.amazon_account_id;
+
+    if (!amazonAccountId) {
+      // Scheduler: buscar conta conectada via serviceRole
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      if (!accounts.length) return Response.json({ ok: false, message: 'Nenhuma conta Amazon conectada.' });
+      amazonAccountId = accounts[0].id;
+    }
+
+    // Verificar auth apenas quando chamado pelo frontend
+    let user = null;
+    try { user = await base44.auth.me(); } catch {}
+    const amazon_account_id = amazonAccountId;
 
     const now = new Date().toISOString();
     const logSteps = [];

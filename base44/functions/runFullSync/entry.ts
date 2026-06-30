@@ -131,14 +131,19 @@ Deno.serve(async (req) => {
     const action = body.action || 'request';
     let amazonAccountId = body.amazon_account_id;
 
-    // ── Resolver conta ──
+    // ── Resolver conta (suporta scheduler sem user_id) ──
     let account = null;
     if (amazonAccountId) {
       account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId).catch(() => null);
     }
-    if (!account) {
+    if (!account && user) {
       const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id });
-      account = accounts[0] || (await base44.asServiceRole.entities.AmazonAccount.list())[0] || null;
+      account = accounts[0] || null;
+    }
+    if (!account) {
+      // Fallback: primeira conta conectada (usado por schedulers)
+      const all = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      account = all[0] || (await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 1))[0] || null;
     }
     if (!account) return Response.json({ ok: false, message: 'Nenhuma AmazonAccount encontrada' });
     amazonAccountId = account.id;

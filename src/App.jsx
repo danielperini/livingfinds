@@ -38,6 +38,7 @@ import MetricsDashboard from '@/pages/MetricsDashboard';
 import MotorConfig from '@/pages/MotorConfig';
 import SpApiSetup from '@/pages/SpApiSetup';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
+import SystemHealth from '@/pages/SystemHealth';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -88,6 +89,7 @@ const AuthenticatedApp = () => {
           <Route path="/settings" element={<Settings />} />
           <Route path="/sp-api-setup" element={<SpApiSetup />} />
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
+          <Route path="/saude-do-sistema" element={<SystemHealth />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />
