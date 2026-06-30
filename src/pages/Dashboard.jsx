@@ -211,11 +211,19 @@ export default function Dashboard() {
 
 
   // KPIs — usar APENAS CampaignMetricsDaily (dados reais dos relatórios Amazon)
-  // NÃO somar campanhas diretamente para evitar duplicação
+  // Filtrar por data e remover duplicatas por campaign_id + date
   const cutoffDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const metricsLast30Days = metricsDaily.filter(m => m.date >= cutoffDate);
   
-  const kpis = metricsLast30Days.reduce((acc, m) => ({
+  // Remover duplicatas: manter apenas último registro por campaign_id + date
+  const uniqueMetricsMap = new Map();
+  metricsLast30Days.forEach(m => {
+    const key = `${m.campaign_id || ''}-${m.date}`;
+    uniqueMetricsMap.set(key, m);
+  });
+  const uniqueMetrics = Array.from(uniqueMetricsMap.values());
+  
+  const kpis = uniqueMetrics.reduce((acc, m) => ({
     spend: acc.spend + (m.spend || 0),
     sales: acc.sales + (m.sales || 0),
     clicks: acc.clicks + (m.clicks || 0),
@@ -228,9 +236,9 @@ export default function Dashboard() {
   const ctr = kpis.impressions > 0 ? (kpis.clicks / kpis.impressions * 100) : 0;
   const cpc = kpis.clicks > 0 ? (kpis.spend / kpis.clicks) : 0;
 
-  // Agrupar métricas por data para o gráfico (apenas últimos 30 dias, sem duplicar)
+  // Agrupar métricas por data para o gráfico (dados únicos, sem duplicar)
   const chartData = Object.values(
-    metricsLast30Days.reduce((acc, m) => {
+    uniqueMetrics.reduce((acc, m) => {
       if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', date: m.date, spend: 0, sales: 0, orders: 0, clicks: 0 };
       acc[m.date].spend += m.spend || 0;
       acc[m.date].sales += m.sales || 0;
@@ -263,6 +271,23 @@ export default function Dashboard() {
     if (!num || !isFinite(num) || isNaN(num)) return 0;
     return Number(num.toFixed(decimals));
   }
+
+  // Debug: log dos KPIs para auditoria
+  useEffect(() => {
+    if (!loading && kpis.spend > 0) {
+      console.log('📊 AUDITORIA DASHBOARD:', {
+        'Ad Spend': `$${kpis.spend.toFixed(2)}`,
+        'Vendas': `$${kpis.sales.toFixed(2)}`,
+        'Pedidos': kpis.orders,
+        'Cliques': kpis.clicks,
+        'ACoS': `${acos.toFixed(2)}%`,
+        'ROAS': `${roas.toFixed(2)}x`,
+        'Registros diários': metricsDaily.length,
+        'Registros únicos': uniqueMetrics.length,
+        'Duplicatas': metricsDaily.length - uniqueMetrics.length,
+      });
+    }
+  }, [loading, kpis, metricsDaily.length, uniqueMetrics.length]);
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
@@ -298,10 +323,44 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Painel de Auditoria de Dados */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-slate-400">📊 Auditoria de Dados (30 dias)</h3>
+          <span className="text-[10px] text-slate-500">Fontes: CampaignMetricsDaily</span>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Registros diários</p>
+            <p className="text-white font-semibold">{metricsDaily.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Registros únicos</p>
+            <p className="text-white font-semibold">{uniqueMetrics.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Duplicatas removidas</p>
+            <p className="text-amber-400 font-semibold">{metricsDaily.length - uniqueMetrics.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Campanhas ativas</p>
+            <p className="text-emerald-400 font-semibold">{campaigns.filter(c => c.state === 'enabled' && !c.archived).length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Campanhas totais</p>
+            <p className="text-white font-semibold">{campaigns.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Data corte</p>
+            <p className="text-cyan font-mono text-[10px]">{cutoffDate}</p>
+          </div>
+        </div>
+      </div>
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard 
-          label="Ad Spend 30d" 
+          label="✓ Ad Spend 30d (Relatório)" 
           value={`$${kpis.spend.toFixed(2)}`} 
           sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas · ${campaigns.filter(c => c.state === 'paused' && !c.archived).length} pausadas`}
           loading={loading} 
