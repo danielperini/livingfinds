@@ -13,13 +13,14 @@ Deno.serve(async (req) => {
       return Response.json({ error: 'Admin only' }, { status: 403 });
     }
 
-    const cutoff = new Date(Date.now() - 30 * 86400000);
+    // Preservar logs de 180 dias para auditoria de IA
+    const cutoff = new Date(Date.now() - 180 * 86400000);
     const cutoffStr = cutoff.toISOString().slice(0, 10);
 
-    // Buscar logs antigos
+    // Buscar logs antigos (>180 dias)
     const oldLogs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
       execution_date: { $lt: cutoffStr },
-    }, 'execution_date', 1000);
+    }, 'execution_date', 2000);
 
     // Deletar em batches de 500
     let deletedCount = 0;
@@ -36,7 +37,8 @@ Deno.serve(async (req) => {
       ok: true,
       deleted_count: deletedCount,
       cutoff_date: cutoffStr,
-      message: `${deletedCount} logs de sync removidos (>30 dias)`,
+      retention_days: 180,
+      message: `${deletedCount} logs removidos (>180 dias), histórico preservado para IA`,
     });
 
   } catch (error) {

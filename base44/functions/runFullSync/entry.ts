@@ -244,14 +244,14 @@ Deno.serve(async (req) => {
 
       // 4. Solicitar 4 relatórios em paralelo
       const endDate = new Date();
-      const startDate30 = new Date(Date.now() - 30 * 86400000);
+      const startDate180 = new Date(Date.now() - 180 * 86400000); // 180 dias para IA
       const ts = Date.now();
 
       const [rCampDaily, rCampSummary, rProducts, rSearchTerms] = await Promise.all([
-        // Relatório DAILY — para gráfico temporal (últimos 30d por dia)
+        // Relatório DAILY — 180 dias para análise temporal e IA
         requestReport(adsBase, token, profileId, {
           name: `SP_camp_daily_${ts}`,
-          startDate: fmt(startDate30), endDate: fmt(endDate),
+          startDate: fmt(startDate180), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['campaign'],
@@ -259,10 +259,10 @@ Deno.serve(async (req) => {
             reportTypeId: 'spCampaigns', timeUnit: 'DAILY', format: 'GZIP_JSON',
           },
         }),
-        // Relatório SUMMARY — métricas totais por campanha
+        // Relatório SUMMARY — 180 dias para métricas consolidadas
         requestReport(adsBase, token, profileId, {
           name: `SP_camp_summary_${ts}`,
-          startDate: fmt(startDate30), endDate: fmt(endDate),
+          startDate: fmt(startDate180), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['campaign'],
@@ -270,10 +270,10 @@ Deno.serve(async (req) => {
             reportTypeId: 'spCampaigns', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
           },
         }),
-        // Relatório produtos
+        // Relatório produtos — 180 dias
         requestReport(adsBase, token, profileId, {
           name: `SP_products_${ts}`,
-          startDate: fmt(startDate30), endDate: fmt(endDate),
+          startDate: fmt(startDate180), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['advertiser'],
@@ -281,14 +281,14 @@ Deno.serve(async (req) => {
             reportTypeId: 'spAdvertisedProduct', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
           },
         }),
-        // Search Terms
+        // Search Terms — 180 dias para análise de palavras-chave
         requestReport(adsBase, token, profileId, {
           name: `SP_searchterms_${ts}`,
-          startDate: fmt(startDate30), endDate: fmt(endDate),
+          startDate: fmt(startDate180), endDate: fmt(endDate),
           configuration: {
             adProduct: 'SPONSORED_PRODUCTS',
             groupBy: ['searchTerm'],
-            columns: ['searchTerm', 'campaignId', 'adGroupId', 'keywordId', 'matchType', 'impressions', 'clicks', 'cost', 'purchases14d', 'sales14d', 'unitsSoldClicks14d'],
+            columns: ['searchTerm', 'campaignId', 'adGroupId', 'keywordId', 'matchType', 'impressions', 'clicks', 'cost', 'purchases30d', 'sales30d', 'unitsSoldClicks30d'],
             reportTypeId: 'spSearchTerm', timeUnit: 'SUMMARY', format: 'GZIP_JSON',
           },
         }),
@@ -427,34 +427,34 @@ Deno.serve(async (req) => {
       }
 
       if (allDailyRecords.length > 0) {
-        // Upsert incremental: buscar registros existentes no período e atualizar ou criar
-        const cutoff120 = new Date(Date.now() - 120 * 86400000);
-        const cutoff120Str = cutoff120.toISOString().slice(0, 10);
+        // Upsert incremental: preservar 180 dias para IA
+        const cutoff180 = new Date(Date.now() - 180 * 86400000);
+        const cutoff180Str = cutoff180.toISOString().slice(0, 10);
 
-        // 1. Apagar registros mais antigos que 120 dias (limpeza histórica)
+        // 1. Apagar apenas registros >180 dias (preservar histórico para IA)
         const oldRecords = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
           { amazon_account_id: amazonAccountId },
           'date',
           5000
         );
-        const toDelete = oldRecords.filter(r => r.date && r.date < cutoff120Str);
+        const toDelete = oldRecords.filter(r => r.date && r.date < cutoff180Str);
         for (let i = 0; i < toDelete.length; i += 500) {
           const ids = toDelete.slice(i, i + 500).map(r => r.id);
           await Promise.all(ids.map(id => base44.asServiceRole.entities.CampaignMetricsDaily.delete(id))).catch(() => {});
         }
-        if (toDelete.length > 0) console.log(`[runFullSync] CampaignMetricsDaily: ${toDelete.length} registros antigos removidos (>120d)`);
+        if (toDelete.length > 0) console.log(`[runFullSync] CampaignMetricsDaily: ${toDelete.length} registros removidos (>180d)`);
 
-        // 2. Buscar registros existentes no período do relatório (últimos 30d) para upsert
-        const startDate30Str = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        // 2. Buscar registros existentes (180 dias) para upsert
+        const startDate180Str = cutoff180Str;
         const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
           { amazon_account_id: amazonAccountId },
           '-date',
-          5000
+          10000
         );
         // Mapa: "campaignId|date" -> id do registro existente
         const existingMap = {};
         for (const r of existing) {
-          if (r.date >= startDate30Str) {
+          if (r.date >= startDate180Str) {
             existingMap[`${r.campaign_id}|${r.date}`] = r.id;
           }
         }

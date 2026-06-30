@@ -17,14 +17,43 @@ Deno.serve(async (req) => {
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
     const today = new Date().toISOString().slice(0, 10);
-    const [campaigns, keywords, products] = await Promise.all([
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, '-spend', 500),
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id }, '-spend', 2000),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id }, null, 500),
+    const startDate180 = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+    
+    // Carregar TODOS os dados (180 dias) para análise completa de IA
+    const [campaigns, keywords, products, dailyMetrics] = await Promise.all([
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, '-spend', 1000),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id }, '-spend', 5000),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id }, null, 1000),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+        { amazon_account_id, date: { $gte: startDate180 } },
+        '-date',
+        50000
+      ),
     ]);
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
     const budgetRule = budgetRules[0] || { target_acos: 25, target_roas: 4, total_daily_budget: 100, min_bid: 0.10, max_bid: 5.0, bid_increase_step: 0.10, bid_decrease_step: 0.25, auto_apply_bid_reduction: false };
     const { target_acos, target_roas, min_bid, max_bid, bid_increase_step, bid_decrease_step, auto_apply_bid_reduction } = budgetRule;
+
+    // Calcular tendências de 180 dias para contexto de IA
+    const historical180 = { spend: 0, sales: 0, clicks: 0, orders: 0 };
+    for (const m of dailyMetrics) {
+      historical180.spend += m.spend || 0;
+      historical180.sales += m.sales || 0;
+      historical180.clicks += m.clicks || 0;
+      historical180.orders += m.orders || 0;
+    }
+
+    // Calcular tendências de 180 dias para IA
+    const campaignTrends = {};
+    for (const m of dailyMetrics) {
+      const cid = m.campaign_id;
+      if (!campaignTrends[cid]) campaignTrends[cid] = { days: [], spend: 0, sales: 0, clicks: 0, impressions: 0 };
+      campaignTrends[cid].days.push(m.date);
+      campaignTrends[cid].spend += m.spend || 0;
+      campaignTrends[cid].sales += m.sales || 0;
+      campaignTrends[cid].clicks += m.clicks || 0;
+      campaignTrends[cid].impressions += m.impressions || 0;
+    }
 
     const currentActiveBudget = campaigns.filter(c => c.state === 'enabled').reduce((s, c) => s + (c.daily_budget || 0), 0);
     const budgetExhausted = currentActiveBudget >= budgetRule.total_daily_budget;
