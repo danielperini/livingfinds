@@ -136,23 +136,26 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
   return (
     <>
       <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-        {/* ASIN + Nome do Produto (coluna unificada com imagem) */}
-        <td className="px-4 py-3 min-w-[260px] max-w-[320px]">
-          <div className="flex items-center gap-2.5">
+        {/* Produto: imagem + nome completo + ASIN + SKU */}
+        <td className="px-4 py-3 min-w-[340px] max-w-[420px]">
+          <div className="flex items-start gap-3">
             {product.product_image_url ? (
-              <img src={product.product_image_url} alt={product.asin} className="w-9 h-9 rounded-lg object-cover bg-surface-3 flex-shrink-0" />
+              <img src={product.product_image_url} alt={product.asin} className="w-12 h-12 rounded-lg object-cover bg-surface-3 flex-shrink-0 mt-0.5" />
             ) : (
-              <div className="w-9 h-9 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0">
-                <Package className="w-4 h-4 text-slate-600" />
+              <div className="w-12 h-12 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Package className="w-5 h-5 text-slate-600" />
               </div>
             )}
-            <div className="min-w-0">
-              <p className="text-xs font-mono font-semibold text-cyan leading-none">{product.asin}</p>
+            <div className="min-w-0 flex-1">
               {product.product_name ? (
-                <p className="text-xs text-slate-200 truncate mt-1 leading-tight" title={product.product_name}>{product.product_name}</p>
+                <p className="text-xs text-slate-100 leading-snug font-medium line-clamp-2" title={product.product_name}>{product.product_name}</p>
               ) : (
-                <p className="text-xs text-slate-500 italic mt-1 leading-tight">Sem nome</p>
+                <p className="text-xs text-slate-500 italic leading-snug">Sem nome</p>
               )}
+              <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                <span className="text-xs font-mono text-cyan">{product.asin}</span>
+                {product.sku && <span className="text-xs text-slate-500 font-mono">SKU: {product.sku}</span>}
+              </div>
             </div>
           </div>
         </td>
@@ -204,7 +207,7 @@ function ProductRow({ product, onToggleCampaign, onKickoff, actionLoading }) {
       {/* Keywords expandido */}
       {expanded && (
         <tr className="border-b border-surface-2/40 bg-surface-2/20">
-          <td colSpan={9} className="px-6 py-4 space-y-4">
+          <td colSpan={8} className="px-6 py-4 space-y-4">
             {kwLoading ? (
               <div className="flex items-center gap-2 py-2">
                 <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" />
@@ -561,7 +564,7 @@ export default function Products() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['ASIN / Nome do Produto', 'SKU', 'Oferta', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
+                  {['Produto', 'Oferta', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
