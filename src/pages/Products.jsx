@@ -9,6 +9,7 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
+import CampaignCard from '@/components/products/CampaignCard';
 
 // Oferta ativa = produto com status 'active' na Amazon
 // Oferta inativa = produto arquivado, inativo ou sem listing ativo
