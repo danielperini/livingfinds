@@ -36,6 +36,7 @@ import Recommendations from '@/pages/Recommendations';
 import SearchTerms from '@/pages/SearchTerms';
 import MetricsDashboard from '@/pages/MetricsDashboard';
 import MotorConfig from '@/pages/MotorConfig';
+import SpApiSetup from '@/pages/SpApiSetup';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -84,6 +85,7 @@ const AuthenticatedApp = () => {
           <Route path="/report" element={<Report />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/sp-api-setup" element={<SpApiSetup />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />
