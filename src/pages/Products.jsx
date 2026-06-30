@@ -40,7 +40,7 @@ function OfferStatusBadge({ product }) {
 }
 
 function CampaignStatusCell({ product }) {
-  if (!product.has_campaign) {
+  if (!product.linked_campaign_id) {
     return (
       <span className="flex items-center gap-1.5 text-xs text-slate-500">
         <XCircle className="w-3.5 h-3.5 text-slate-600" /> Sem campanha
@@ -68,7 +68,7 @@ function CampaignStatusCell({ product }) {
 function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading }) {
   const isLoading = loading === product.id;
 
-  if (!product.has_campaign) {
+  if (!product.linked_campaign_id) {
     return (
       <div className="flex items-center gap-1.5">
         <button
@@ -533,7 +533,7 @@ export default function Products() {
 
   // Bulk kick-off para produtos sem campanha
   const bulkKickoff = async () => {
-    const targets = filtered.filter(p => !p.has_campaign);
+    const targets = filtered.filter(p => !p.linked_campaign_id);
     if (!targets.length) return;
     setBulkActivating(true);
     setActionMsg({ type: 'info', text: `Criando campanhas para ${targets.length} produtos...` });
@@ -556,12 +556,12 @@ export default function Products() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
-  // Classificação por oferta
+  // Classificação por oferta e campanhas - usa linked_campaign_id como fonte da verdade
   const activeOffers = products.filter(p => offerStatus(p) === 'active');
   const inactiveOffers = products.filter(p => offerStatus(p) !== 'active');
-  const withActiveAds = products.filter(p => p.has_campaign && p.campaign_status === 'active').length;
-  const withPausedAds = products.filter(p => p.has_campaign && p.campaign_status !== 'active').length;
-  const withoutCampaign = products.filter(p => !p.has_campaign).length;
+  const withActiveAds = products.filter(p => p.linked_campaign_id && p.campaign_status === 'active').length;
+  const withPausedAds = products.filter(p => p.linked_campaign_id && p.campaign_status !== 'active').length;
+  const withoutCampaign = products.filter(p => !p.linked_campaign_id).length;
   const totalProducts = products.length;
 
   const filtered = products.filter(p => {
@@ -574,14 +574,14 @@ export default function Products() {
       filter === 'all' ? true :
       filter === 'offer_active' ? offerStatus(p) === 'active' :
       filter === 'offer_inactive' ? offerStatus(p) !== 'active' :
-      filter === 'ads_active' ? (p.has_campaign && p.campaign_status === 'active') :
-      filter === 'ads_paused' ? (p.has_campaign && p.campaign_status !== 'active') :
-      filter === 'no_campaign' ? !p.has_campaign :
+      filter === 'ads_active' ? (p.linked_campaign_id && p.campaign_status === 'active') :
+      filter === 'ads_paused' ? (p.linked_campaign_id && p.campaign_status !== 'active') :
+      filter === 'no_campaign' ? !p.linked_campaign_id :
       true;
     return matchSearch && matchFilter;
   });
 
-  const noCampaignInFiltered = filtered.filter(p => !p.has_campaign).length;
+  const noCampaignInFiltered = filtered.filter(p => !p.linked_campaign_id).length;
   const productsWithoutName = products.filter(p => !p.product_name).length;
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
