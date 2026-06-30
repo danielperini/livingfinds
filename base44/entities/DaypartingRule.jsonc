@@ -1,0 +1,152 @@
+{
+  "name": "DaypartingRule",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "rule_type": {
+      "type": "string",
+      "enum": [
+        "bid_schedule",
+        "budget_schedule",
+        "placement_schedule"
+      ],
+      "default": "bid_schedule"
+    },
+    "days_of_week": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 6
+      }
+    },
+    "start_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "end_hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "adjustment_type": {
+      "type": "string",
+      "enum": [
+        "percentage",
+        "fixed"
+      ],
+      "default": "percentage"
+    },
+    "adjustment_value": {
+      "type": "number"
+    },
+    "bid_base_before": {
+      "type": "number"
+    },
+    "placement_top_before": {
+      "type": "number"
+    },
+    "placement_rest_before": {
+      "type": "number"
+    },
+    "placement_product_before": {
+      "type": "number"
+    },
+    "budget_before": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "expired",
+        "deleted"
+      ],
+      "default": "active"
+    },
+    "amazon_rule_id": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "sample_days": {
+      "type": "integer",
+      "default": 0
+    },
+    "sample_clicks": {
+      "type": "integer",
+      "default": 0
+    },
+    "sample_sales": {
+      "type": "integer",
+      "default": 0
+    },
+    "avg_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "created_by": {
+      "type": "string",
+      "enum": [
+        "ai",
+        "manual"
+      ],
+      "default": "ai"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_type",
+    "days_of_week",
+    "start_hour",
+    "end_hour",
+    "adjustment_value"
+  ]
+}

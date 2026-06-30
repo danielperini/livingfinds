@@ -1,0 +1,169 @@
+{
+  "name": "OptimizationDecision",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "decision_type": {
+      "type": "string",
+      "enum": [
+        "bid_change",
+        "budget_change",
+        "pause",
+        "enable",
+        "negative_keyword",
+        "create_keyword",
+        "dayparting_rule",
+        "placement_change",
+        "harvest_search_term",
+        "create_campaign"
+      ],
+      "default": "bid_change"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "keyword",
+        "search_term",
+        "product_target",
+        "account"
+      ],
+      "default": "keyword"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "value_before": {
+      "type": "number"
+    },
+    "value_after": {
+      "type": "number"
+    },
+    "change_pct": {
+      "type": "number"
+    },
+    "objective": {
+      "type": "string",
+      "enum": [
+        "launch",
+        "growth",
+        "profitability",
+        "defense",
+        "liquidation",
+        "ranking",
+        "discovery",
+        "maintenance"
+      ],
+      "default": "maintenance"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "data_used": {
+      "type": "string"
+    },
+    "period_analyzed": {
+      "type": "string"
+    },
+    "sample_size": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "very_low",
+        "low",
+        "medium",
+        "high",
+        "very_high"
+      ],
+      "default": "medium"
+    },
+    "expected_impact": {
+      "type": "string"
+    },
+    "reversible": {
+      "type": "boolean",
+      "default": true
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "scheduled",
+        "executing",
+        "executed",
+        "failed",
+        "rolled_back"
+      ],
+      "default": "pending"
+    },
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "decision_type",
+    "action",
+    "status"
+  ]
+}

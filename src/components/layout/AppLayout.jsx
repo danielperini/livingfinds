@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, BarChart2, Search, Target, Link2, Brain
+  Zap, Bell, Bot, ShoppingBag, FileText, BarChart2, Search, Target, Link2, Brain, Clock
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -21,6 +21,8 @@ const navItems = [
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
   { path: '/bid-logs', icon: FileText, label: 'Histórico de Bids' },
   { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
+  { path: '/dayparting', icon: Clock, label: 'Dayparting' },
+  { path: '/dayparting', icon: Clock, label: 'Dayparting' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
   { path: '/logs', icon: FileText, label: 'Logs' },

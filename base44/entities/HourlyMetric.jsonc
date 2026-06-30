@@ -1,0 +1,161 @@
+{
+  "name": "HourlyMetric",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "day_of_week": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "units": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_top": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_rest": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_product": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_consumed_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "organic_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_estimate": {
+      "type": "number",
+      "default": 0
+    },
+    "margin_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "data_maturity": {
+      "type": "string",
+      "enum": [
+        "provisional",
+        "attribution",
+        "mature"
+      ],
+      "default": "provisional"
+    },
+    "sample_size": {
+      "type": "string",
+      "enum": [
+        "insufficient",
+        "low",
+        "adequate",
+        "high"
+      ],
+      "default": "insufficient"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "peak_high_profit",
+        "peak_conversion",
+        "peak_traffic",
+        "efficient",
+        "neutral",
+        "discovery",
+        "low_efficiency",
+        "deficit",
+        "insufficient_data"
+      ],
+      "default": "insufficient_data"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "hour"
+  ]
+}

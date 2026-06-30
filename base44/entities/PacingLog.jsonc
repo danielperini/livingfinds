@@ -1,0 +1,103 @@
+{
+  "name": "PacingLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "daily_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "spent_to_date": {
+      "type": "number",
+      "default": 0
+    },
+    "spent_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "pacing_ratio": {
+      "type": "number",
+      "default": 0
+    },
+    "pacing_status": {
+      "type": "string",
+      "enum": [
+        "underdelivering",
+        "normal",
+        "accelerated",
+        "risk_exhaustion"
+      ],
+      "default": "normal"
+    },
+    "burn_rate_hourly": {
+      "type": "number",
+      "default": 0
+    },
+    "exhaustion_forecast": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "exhaustion_risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "default": "low"
+    },
+    "next_peak_window": {
+      "type": "string"
+    },
+    "reserved_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "action_taken": {
+      "type": "string",
+      "enum": [
+        "none",
+        "bid_reduction",
+        "placement_reduction",
+        "budget_increase",
+        "paused_discovery",
+        "protected_winners"
+      ],
+      "default": "none"
+    },
+    "action_rationale": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "date",
+    "hour",
+    "daily_budget",
+    "spent_to_date"
+  ]
+}

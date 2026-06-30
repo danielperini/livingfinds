@@ -1,0 +1,142 @@
+{
+  "name": "KeywordResearch",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "keyword_type": {
+      "type": "string",
+      "enum": [
+        "principal",
+        "categoria",
+        "atributo",
+        "beneficio",
+        "uso",
+        "problema",
+        "solucao",
+        "ambiente",
+        "publico",
+        "tamanho",
+        "material",
+        "cor",
+        "compatibilidade",
+        "cauda_media",
+        "cauda_longa",
+        "inten\u00e7\u00e3o_compra"
+      ],
+      "default": "principal"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad"
+      ],
+      "default": "exact"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "amazon_recommendation",
+        "search_term",
+        "auto_campaign",
+        "web_research",
+        "catalog",
+        "brand_analytics"
+      ],
+      "default": "web_research"
+    },
+    "relevance_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "search_intent": {
+      "type": "string",
+      "enum": [
+        "informational",
+        "navigational",
+        "commercial",
+        "transactional"
+      ],
+      "default": "commercial"
+    },
+    "estimated_volume": {
+      "type": "string",
+      "enum": [
+        "very_low",
+        "low",
+        "medium",
+        "high",
+        "very_high",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "competition": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "suggested_bid": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending_review",
+        "approved",
+        "rejected",
+        "created",
+        "failed"
+      ],
+      "default": "pending_review"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "reviewed_by": {
+      "type": "string"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "keyword",
+    "source",
+    "relevance_score"
+  ]
+}

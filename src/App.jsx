@@ -39,6 +39,7 @@ import SpApiSetup from '@/pages/SpApiSetup';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
 import CampaignConfig from '@/pages/CampaignConfig';
+import DaypartingDashboard from '@/pages/DaypartingDashboard';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -90,6 +91,7 @@ const AuthenticatedApp = () => {
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
           <Route path="/saude-do-sistema" element={<SystemHealth />} />
           <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
+          <Route path="/dayparting" element={<DaypartingDashboard />} />
           {/* Redirects de rotas obsoletas */}
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
