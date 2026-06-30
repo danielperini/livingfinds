@@ -15,6 +15,14 @@ const UI_STATES = {
   NEEDS_RECONCILIATION: 'NEEDS_RECONCILIATION',
 };
 
+const ACTION_BY_STATE = {
+  NOT_CREATED: 'KICK_OFF',
+  ACTIVE: 'PAUSE',
+  PAUSED: 'ENABLE',
+  ARCHIVED: 'CREATE_NEW',
+  ERROR: 'RETRY',
+};
+
 const STATE_LABELS = {
   [UI_STATES.CHECKING]: 'Verificando...',
   [UI_STATES.CREATING]: 'Criando...',
@@ -33,27 +41,93 @@ export default function CampaignCard({ asin, accountId, onCampaignChange }) {
     setError(null);
     
     try {
-      const campaigns = await base44.entities.Campaign.filter({ 
+      // 1. Verificar campanhas locais
+      const localCampaigns = await base44.entities.Campaign.filter({ 
         amazon_account_id: accountId, 
         asin 
       });
 
-      if (campaigns.length === 0) {
+      if (localCampaigns.length === 0) {
+        // 2. Verificar na Amazon se existe campanha
+        try {
+          const amazonRes = await base44.functions.invoke('verifyAmazonCampaignState', {
+            amazon_account_id: accountId,
+            asin,
+          });
+          
+          if (amazonRes.data?.ok && amazonRes.data?.campaign) {
+            // Campanha encontrada na Amazon mas não no banco - sincronizar
+            const amazonCampaign = amazonRes.data.campaign;
+            await base44.entities.Campaign.create({
+              amazon_account_id: accountId,
+              campaign_id: amazonCampaign.campaign_id,
+              campaign_name: amazonCampaign.name,
+              asin,
+              state: amazonCampaign.state?.toLowerCase() || 'enabled',
+              daily_budget: amazonCampaign.budget?.budget || 0,
+              start_date: amazonCampaign.startDate,
+              created_by_app: false,
+            });
+            setCampaign({
+              campaign_id: amazonCampaign.campaign_id,
+              campaign_name: amazonCampaign.name,
+              state: amazonCampaign.state?.toLowerCase(),
+              daily_budget: amazonCampaign.budget?.budget,
+              start_date: amazonCampaign.startDate,
+            });
+            
+            if (amazonCampaign.state === 'ENABLED') {
+              setUiState(UI_STATES.ACTIVE);
+            } else if (amazonCampaign.state === 'PAUSED') {
+              setUiState(UI_STATES.PAUSED);
+            } else if (amazonCampaign.state === 'ARCHIVED') {
+              setUiState(UI_STATES.ARCHIVED);
+            }
+            return;
+          }
+        } catch (amazonErr) {
+          console.error('Erro ao verificar Amazon:', amazonErr.message);
+        }
+        
         setUiState(UI_STATES.NOT_CREATED);
         setCampaign(null);
         return;
       }
 
-      const activeCampaign = campaigns.find(c => !c.archived);
+      const activeCampaign = localCampaigns.find(c => !c.archived);
       
       if (!activeCampaign) {
-        const archivedCampaign = campaigns[campaigns.length - 1];
+        const archivedCampaign = localCampaigns[localCampaigns.length - 1];
         setCampaign(archivedCampaign);
         setUiState(UI_STATES.ARCHIVED);
         return;
       }
 
       setCampaign(activeCampaign);
+
+      // 3. Verificar estado real na Amazon
+      try {
+        const amazonRes = await base44.functions.invoke('verifyAmazonCampaignState', {
+          amazon_account_id: accountId,
+          campaign_id: activeCampaign.campaign_id,
+        });
+        
+        if (amazonRes.data?.ok && amazonRes.data?.campaign) {
+          const amazonState = amazonRes.data.campaign.state;
+          const localState = activeCampaign.state?.toLowerCase();
+          
+          // Atualizar estado local se diferente da Amazon
+          if (amazonState && amazonState.toLowerCase() !== localState) {
+            await base44.entities.Campaign.update(activeCampaign.id, {
+              state: amazonState.toLowerCase(),
+              campaign_status: amazonState.toLowerCase(),
+            });
+            activeCampaign.state = amazonState.toLowerCase();
+          }
+        }
+      } catch (amazonErr) {
+        console.error('Erro ao sincronizar com Amazon:', amazonErr.message);
+      }
 
       if (activeCampaign.state === 'enabled' || activeCampaign.campaign_status === 'active') {
         setUiState(UI_STATES.ACTIVE);
