@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, ComposedChart, Line } from 'recharts';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Calendar, Send, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
@@ -166,6 +166,7 @@ export default function Dashboard() {
   const [hourlyMetrics, setHourlyMetrics] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [syncRuns, setSyncRuns] = useState([]);
+  const [bidChanges, setBidChanges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [auditData, setAuditData] = useState(null);
@@ -184,13 +185,14 @@ export default function Dashboard() {
       if (!acc) { setLoading(false); return; }
 
       const aid = acc.id;
-      const [cams, prods, metrics, hourly, decs, runs] = await Promise.all([
+      const [cams, prods, metrics, hourly, decs, runs, changes] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),
       ]);
 
       setCampaigns(cams);
@@ -199,6 +201,7 @@ export default function Dashboard() {
       setHourlyMetrics(hourly);
       setDecisions(decs);
       setSyncRuns(runs);
+      setBidChanges(changes);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -296,6 +299,49 @@ export default function Dashboard() {
     }
   }, [loading, kpis, metricsDaily.length, uniqueMetrics.length]);
 
+  // Heat map data - dias do mês vs horas
+  const heatMapData = hourlyMetrics.reduce((acc, h) => {
+    const day = h.date ? new Date(h.date).getDate() : 1;
+    const hour = h.hour ?? 0;
+    const key = `${day}-${hour}`;
+    if (!acc[key]) {
+      acc[key] = { day, hour, spend: 0, sales: 0, impressions: 0, clicks: 0, active: false };
+    }
+    acc[key].spend += h.spend || 0;
+    acc[key].sales += h.sales || 0;
+    acc[key].impressions += h.impressions || 0;
+    acc[key].clicks += h.clicks || 0;
+    acc[key].active = acc[key].spend > 0;
+    return acc;
+  }, {});
+  const heatMapArray = Object.values(heatMapData);
+
+  // Budget suggestion - baseado em 14 dias
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const metricsTwoWeeks = metricsDaily.filter(m => m.date >= twoWeeksAgo);
+  const avgDailySpend = metricsTwoWeeks.length > 0 
+    ? metricsTwoWeeks.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsTwoWeeks.length 
+    : 0;
+  const totalProducts = products.length;
+  const totalKeywords = campaigns.length > 0 ? campaigns.reduce((sum, c) => sum + 5, 0) : 0; // estimativa
+  const suggestedBudget = avgDailySpend > 0 
+    ? Math.max(avgDailySpend * 1.2, totalProducts * 2, totalKeywords * 0.5)
+    : totalProducts * 2 + totalKeywords * 0.5;
+
+  // Alterações diárias
+  const changesByDay = bidChanges.reduce((acc, change) => {
+    const date = change.created_at ? new Date(change.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : 'N/A';
+    if (!acc[date]) acc[date] = { date, changes: 0 };
+    acc[date].changes++;
+    return acc;
+  }, {});
+  const changesChartData = Object.values(changesByDay).sort((a, b) => {
+    const [d1, m1] = a.date.split('/');
+    const [d2, m2] = b.date.split('/');
+    return new Date(2026, m1-1, d1) - new Date(2026, m2-1, d2);
+  });
+  const totalChanges = bidChanges.length;
+
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
@@ -375,6 +421,159 @@ export default function Dashboard() {
         <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
+      </div>
+
+      {/* Cards de Análise Avançada */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Heat Map - Horário de Veiculação */}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 lg:col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-cyan" />
+              Horário de Veiculação dos Ads
+            </h2>
+            <span className="text-xs text-slate-500">Últimos 30 dias</span>
+          </div>
+          {loading ? (
+            <div className="h-64 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+          ) : heatMapArray.length > 0 ? (
+            <div className="overflow-x-auto">
+              <div className="min-w-[600px]">
+                <div className="grid gap-1" style={{ gridTemplateColumns: '40px repeat(24, 1fr)' }}>
+                  {/* Header - Horas */}
+                  <div className="text-[9px] text-slate-500 font-semibold">Dia</div>
+                  {Array.from({ length: 24 }, (_, h) => (
+                    <div key={h} className="text-[9px] text-slate-500 text-center font-semibold">{h}</div>
+                  ))}
+                  
+                  {/* Dias */}
+                  {Array.from({ length: 30 }, (_, d) => (
+                    <React.Fragment key={d}>
+                      <div className="text-[9px] text-slate-400 text-right pr-2">{d + 1}</div>
+                      {Array.from({ length: 24 }, (_, h) => {
+                        const cell = heatMapArray.find(c => c.day === d + 1 && c.hour === h);
+                        const intensity = cell 
+                          ? cell.spend > 5 ? 'bg-cyan/60' 
+                            : cell.spend > 2 ? 'bg-cyan/40'
+                            : cell.spend > 0 ? 'bg-cyan/20'
+                            : 'bg-surface-2'
+                          : 'bg-surface-2';
+                        const isBudgetExceeded = cell && cell.spend > 10;
+                        return (
+                          <div
+                            key={h}
+                            className={`h-3 rounded-sm ${intensity} ${isBudgetExceeded ? 'ring-1 ring-amber-400/50' : ''}`}
+                            title={`Dia ${d + 1} · ${h}:00 · Spend: $${(cell?.spend || 0).toFixed(2)}`}
+                          />
+                        );
+                      })}
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div className="flex items-center gap-4 mt-3 text-[10px] text-slate-500">
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-surface-2" /> Sem veiculação
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/20" /> Baixo spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/40" /> Médio spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/60" /> Alto spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm ring-1 ring-amber-400/50" /> Budget excedido
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-64 flex flex-col items-center justify-center text-sm text-slate-500">
+              <Clock className="w-8 h-8 text-slate-600 mb-2" />
+              Sem dados horários. Execute um Sync completo.
+            </div>
+          )}
+        </div>
+
+        {/* Sugestão de Budget */}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <DollarSign className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-sm font-semibold text-slate-300">Sugestão de Budget Diário</h2>
+          </div>
+          {loading ? (
+            <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+          ) : (
+            <div className="space-y-4">
+              <div className="text-center py-3 bg-surface-2 rounded-lg border border-surface-3">
+                <p className="text-xs text-slate-500 mb-1">Budget Sugerido</p>
+                <p className="text-2xl font-bold text-emerald-400">${suggestedBudget.toFixed(2)}</p>
+                <p className="text-[10px] text-slate-500 mt-1">por dia</p>
+              </div>
+              
+              <div className="space-y-2 text-xs">
+                <div className="flex justify-between py-1.5 border-b border-surface-2">
+                  <span className="text-slate-500">Média diária (14d)</span>
+                  <span className="text-white font-semibold">${avgDailySpend.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between py-1.5 border-b border-surface-2">
+                  <span className="text-slate-500">Produtos (SKUs)</span>
+                  <span className="text-white font-semibold">{totalProducts}</span>
+                </div>
+                <div className="flex justify-between py-1.5 border-b border-surface-2">
+                  <span className="text-slate-500">Keywords estimadas</span>
+                  <span className="text-white font-semibold">{totalKeywords}</span>
+                </div>
+                <div className="flex justify-between py-1.5">
+                  <span className="text-slate-500">Campanhas ativas</span>
+                  <span className="text-emerald-400 font-semibold">{campaigns.filter(c => c.state === 'enabled' && !c.archived).length}</span>
+                </div>
+              </div>
+
+              <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
+                <p className="font-semibold mb-1">Como calculamos:</p>
+                <p>Média dos últimos 14 dias + margem de 20%, considerando R$2/SKU e R$0,50/keyword.</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Gráfico de Alterações Enviadas */}
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 lg:col-span-3">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Send className="w-4 h-4 text-amber-400" />
+              <h2 className="text-sm font-semibold text-slate-300">Alterações Enviadas para Amazon</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Total: </span>
+              <span className="text-sm font-bold text-amber-400">{totalChanges}</span>
+            </div>
+          </div>
+          {loading ? (
+            <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+          ) : changesChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={changesChartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip 
+                  contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }}
+                  formatter={(v) => [`${v} alterações`, 'Envios']}
+                />
+                <Bar dataKey="changes" fill="#F59E0B" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-40 flex flex-col items-center justify-center text-sm text-slate-500">
+              <Send className="w-8 h-8 text-slate-600 mb-2" />
+              Nenhuma alteração enviada ainda.
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Gráfico Spend vs Vendas */}
