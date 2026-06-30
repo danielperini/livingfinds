@@ -292,6 +292,19 @@ export default function AdsManagement() {
               >
                 <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
               </button>
+                  {keywords.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const bulk = {};
+                        keywords.forEach(kw => { bulk[kw.id] = 0.50; });
+                        setPendingBids(bulk);
+                      }}
+                      className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5"
+                      title="Definir bid de R$0,50 em todas as keywords"
+                    >
+                      <TrendingUp className="w-3.5 h-3.5" /> Bids → R$0,50
+                    </button>
+                  )}
                   {hasPending && (
                     <button onClick={applyBids} disabled={saveState === 'loading'}
                       className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex-shrink-0 ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
