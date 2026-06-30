@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Link2, CheckCircle, XCircle, Loader2, Copy, Check,
-  ExternalLink, AlertCircle, ShieldCheck, RefreshCw
+  ExternalLink, AlertCircle, ShieldCheck, RefreshCw, Activity
 } from 'lucide-react';
 
 const SP_APP_ID = 'amzn1.sp.solution.cc1bd118-49e3-438e-8cf1-42169eb3f443';
@@ -41,6 +41,112 @@ function CopyField({ label, value }) {
           {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </button>
       </div>
+    </div>
+  );
+}
+
+function DiagnosticPanel() {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    setRunning(true);
+    try {
+      const res = await base44.functions.invoke('testSpApiAuth', {});
+      setResult(res.data);
+    } catch (e) {
+      setResult({ error: e.message });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const statusIcon = (s) => {
+    if (s === 'PASSED') return <CheckCircle className="w-4 h-4 text-emerald-400" />;
+    if (s === 'FAILED') return <XCircle className="w-4 h-4 text-red-400" />;
+    if (s === 'SKIPPED') return <AlertCircle className="w-4 h-4 text-slate-500" />;
+    return <div className="w-4 h-4 rounded-full border border-slate-600" />;
+  };
+
+  const testLabels = {
+    lwa_authentication: 'LWA Authentication',
+    sp_api_authorization: 'SP-API Authorization',
+    marketplace_configuration: 'Marketplace Configuration',
+    endpoint_access: 'Endpoint Access',
+  };
+
+  return (
+    <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Activity className="w-4 h-4 text-cyan" />
+          <p className="text-sm font-semibold text-white">Diagnóstico de Autenticação SP-API</p>
+        </div>
+        <button onClick={run} disabled={running}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60">
+          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          {running ? 'A testar...' : 'Testar credenciais'}
+        </button>
+      </div>
+
+      {result?.credentials && (
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {[
+            { label: 'App ID', value: result.credentials.sp_app_id },
+            { label: 'LWA Client ID', value: result.credentials.lwa_client_id },
+            { label: 'LWA Client Secret', value: result.credentials.lwa_client_secret },
+            { label: 'Refresh Token', value: result.credentials.sp_refresh_token },
+            { label: 'Marketplace', value: result.credentials.marketplace_id },
+            { label: 'Testado em', value: result.timestamp ? new Date(result.timestamp).toLocaleString('pt-BR') : '—' },
+          ].map(({ label, value }) => (
+            <div key={label} className="bg-surface-2 rounded-lg px-3 py-2">
+              <p className="text-slate-500">{label}</p>
+              <p className="text-slate-200 font-mono truncate">{value || '—'}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result?.tests && (
+        <div className="space-y-2">
+          {Object.entries(result.tests).map(([key, t]) => (
+            <div key={key} className={`flex items-start gap-3 px-3 py-2.5 rounded-lg border ${
+              t.status === 'PASSED' ? 'bg-emerald-400/5 border-emerald-400/20' :
+              t.status === 'FAILED' ? 'bg-red-400/5 border-red-400/20' :
+              'bg-surface-2 border-surface-3'
+            }`}>
+              <div className="mt-0.5">{statusIcon(t.status)}</div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-300">{testLabels[key] || key}</p>
+                {t.message && <p className="text-xs text-slate-400 mt-0.5">{t.message}</p>}
+                {t.detail?.error && (
+                  <p className="text-xs text-red-400 mt-0.5 font-mono">
+                    {t.detail.error}: {t.detail.description}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {result?.error && (
+        <p className="text-xs text-red-400">{result.error}</p>
+      )}
+
+      {!result && !running && (
+        <p className="text-xs text-slate-500">Clique em "Testar credenciais" para executar o diagnóstico completo.</p>
+      )}
+
+      {result?.error_detail?.amazonError === 'invalid_grant' && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+          <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-amber-300 space-y-1">
+            <p className="font-semibold">Reautorização necessária</p>
+            <p>O refresh token está inválido ou revogado. Clique em "Reautorizar Amazon" abaixo para iniciar um novo fluxo OAuth e obter um novo refresh token.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -298,6 +404,9 @@ export default function AmazonIntegracao() {
           )}
         </button>
       </div>
+
+      {/* Diagnóstico SP-API */}
+      <DiagnosticPanel />
 
       {/* URLs para cadastrar */}
       <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5 space-y-4">

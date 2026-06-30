@@ -32,9 +32,14 @@ Deno.serve(async (req) => {
   if (usedStates.has(state)) return redirectError('State já utilizado (replay negado)');
   usedStates.add(state);
 
-  // Credenciais LWA
-  const clientId = Deno.env.get('SP_CLIENT_ID') || '';
-  const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || '';
+  // Credenciais LWA — usar secrets canónicos AMAZON_LWA_* (fallback para SP_* legados)
+  const clientId = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '';
+  const clientSecret = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '';
+
+  // Guardar: NUNCA usar App ID como client_id
+  if (clientId.startsWith('amzn1.sp.solution')) {
+    return redirectError('AMAZON_LWA_CLIENT_ID contém um App ID (amzn1.sp.solution...) em vez do LWA Client ID. Corrija o secret.');
+  }
 
   if (!clientId || !clientSecret) {
     return redirectError('SP_CLIENT_ID ou SP_CLIENT_SECRET não configurados');

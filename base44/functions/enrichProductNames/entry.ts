@@ -125,13 +125,16 @@ Deno.serve(async (req) => {
     const region = account.region || 'NA';
     const spBase = getSpEndpoint(region);
 
-    // Obter token SP-API: prioridade ao token direto > secrets SP-API dedicados > fallback ADS
+    // Obter token SP-API: prioridade ao token direto > secrets canónicos AMAZON_LWA_* > fallback SP_*
     let token = spAccessTokenDirect;
     if (!token) {
-      const clientId = Deno.env.get('SP_CLIENT_ID') || Deno.env.get('ADS_CLIENT_ID') || '';
-      const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('ADS_CLIENT_SECRET') || '';
-      const refreshToken = Deno.env.get('SP_REFRESH_TOKEN') || account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
-      if (!refreshToken) return Response.json({ ok: false, message: 'Sem SP_REFRESH_TOKEN configurado' });
+      const clientId = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '';
+      const clientSecret = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '';
+      const refreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || account.ads_refresh_token;
+      if (!clientId || clientId.startsWith('amzn1.sp.solution')) {
+        return Response.json({ ok: false, message: 'AMAZON_LWA_CLIENT_ID inválido ou ausente. Deve começar com amzn1.application-oa2-client.', note: 'sp_api_config_error' });
+      }
+      if (!refreshToken) return Response.json({ ok: false, message: 'AMAZON_SP_REFRESH_TOKEN não configurado' });
       try {
         token = await getSpTokenFromRefresh(refreshToken, clientId, clientSecret);
       } catch (e) {

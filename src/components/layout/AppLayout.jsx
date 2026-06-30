@@ -23,6 +23,7 @@ const navItems = [
   { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
   { path: '/motor-config', icon: Cpu, label: 'Motor IA' },
+  { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
   { path: '/diagnostico', icon: ChartIcon, label: 'Diagnóstico' },

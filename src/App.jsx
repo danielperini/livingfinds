@@ -39,6 +39,7 @@ import MotorConfig from '@/pages/MotorConfig';
 import SpApiSetup from '@/pages/SpApiSetup';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
+import CampaignConfig from '@/pages/CampaignConfig';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -90,6 +91,7 @@ const AuthenticatedApp = () => {
           <Route path="/sp-api-setup" element={<SpApiSetup />} />
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
           <Route path="/saude-do-sistema" element={<SystemHealth />} />
+          <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />
