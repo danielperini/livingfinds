@@ -210,9 +210,12 @@ export default function Dashboard() {
 
 
 
-  // KPIs — usar CampaignMetricsDaily como fonte primária (tem dados reais do relatório)
-  // Fallback: somar das campanhas (antes do primeiro download de relatório)
-  const metricsSum = metricsDaily.reduce((acc, m) => ({
+  // KPIs — usar APENAS CampaignMetricsDaily (dados reais dos relatórios Amazon)
+  // NÃO somar campanhas diretamente para evitar duplicação
+  const cutoffDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const metricsLast30Days = metricsDaily.filter(m => m.date >= cutoffDate);
+  
+  const kpis = metricsLast30Days.reduce((acc, m) => ({
     spend: acc.spend + (m.spend || 0),
     sales: acc.sales + (m.sales || 0),
     clicks: acc.clicks + (m.clicks || 0),
@@ -220,32 +223,22 @@ export default function Dashboard() {
     orders: acc.orders + (m.orders || 0),
   }), { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
 
-  const campSum = campaigns.reduce((acc, c) => ({
-    spend: acc.spend + (c.spend || 0),
-    sales: acc.sales + (c.sales || 0),
-    clicks: acc.clicks + (c.clicks || 0),
-    impressions: acc.impressions + (c.impressions || 0),
-    orders: acc.orders + (c.orders || 0),
-  }), { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
-
-  // Preferir métricas das campanhas se tiverem dados (atualizadas pelo download), senão usar daily
-  const kpis = campSum.spend > 0 ? campSum : metricsSum;
-
   const acos = kpis.sales > 0 ? (kpis.spend / kpis.sales * 100) : 0;
   const roas = kpis.spend > 0 ? (kpis.sales / kpis.spend) : 0;
   const ctr = kpis.impressions > 0 ? (kpis.clicks / kpis.impressions * 100) : 0;
   const cpc = kpis.clicks > 0 ? (kpis.spend / kpis.clicks) : 0;
 
-  // Agrupar métricas por data para o gráfico
+  // Agrupar métricas por data para o gráfico (apenas últimos 30 dias, sem duplicar)
   const chartData = Object.values(
-    metricsDaily.reduce((acc, m) => {
-      if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', spend: 0, sales: 0, orders: 0 };
+    metricsLast30Days.reduce((acc, m) => {
+      if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', date: m.date, spend: 0, sales: 0, orders: 0, clicks: 0 };
       acc[m.date].spend += m.spend || 0;
       acc[m.date].sales += m.sales || 0;
       acc[m.date].orders += m.orders || 0;
+      acc[m.date].clicks += m.clicks || 0;
       return acc;
     }, {})
-  ).sort((a, b) => a.name.localeCompare(b.name)).slice(-30);
+  ).sort((a, b) => a.date.localeCompare(b.date));
 
   // Agrupar métricas por hora para o gráfico de conversão horária
   const hourlyData = Object.values(
@@ -307,14 +300,54 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled').length} ativas · ${campaigns.filter(c => c.state !== 'enabled').length} inativas`} loading={loading} />
-        <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
-        <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
-        <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
-        <KPICard label="Cliques" value={kpis.clicks.toLocaleString()} sub="30 dias" loading={loading} />
-        <KPICard label="Impressões" value={kpis.impressions.toLocaleString()} sub="30 dias" loading={loading} />
-        <KPICard label="Campanhas" value={campaigns.length} sub={`${campaigns.filter(c => c.state === 'enabled').length} ativas · ${campaigns.filter(c => c.state === 'paused').length} pausadas · ${campaigns.filter(c => c.state === 'archived').length} arquivadas`} loading={loading} />
-        <KPICard label="Produtos" value={products.length} sub={`${products.filter(p => p.fba_inventory > 0).length} com stock`} loading={loading} />
+        <KPICard 
+          label="Ad Spend 30d" 
+          value={`$${kpis.spend.toFixed(2)}`} 
+          sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas · ${campaigns.filter(c => c.state === 'paused' && !c.archived).length} pausadas`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="Vendas Ads 30d" 
+          value={`$${kpis.sales.toFixed(2)}`} 
+          sub={`${kpis.orders} pedidos · Ticket: $${(kpis.orders > 0 ? kpis.sales / kpis.orders : 0).toFixed(2)}`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="ACoS" 
+          value={`${acos.toFixed(1)}%`} 
+          sub={`ROAS: ${roas.toFixed(2)}x · TACoS: ${(kpis.sales > 0 ? (kpis.spend / kpis.sales * 100) : 0).toFixed(1)}%`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="CPC Médio" 
+          value={`$${cpc.toFixed(2)}`} 
+          sub={`CTR: ${ctr.toFixed(2)}% · CVR: ${(kpis.clicks > 0 ? (kpis.orders / kpis.clicks * 100) : 0).toFixed(2)}%`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="Cliques" 
+          value={kpis.clicks.toLocaleString()} 
+          sub={`Custo/clique: $${(kpis.clicks > 0 ? kpis.spend / kpis.clicks : 0).toFixed(2)}`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="Impressões" 
+          value={kpis.impressions.toLocaleString()} 
+          sub={`CTR: ${ctr.toFixed(2)}%`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="Campanhas" 
+          value={campaigns.filter(c => !c.archived).length} 
+          sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas · ${campaigns.filter(c => c.state === 'paused' && !c.archived).length} pausadas · ${campaigns.filter(c => c.archived).length} arquivadas`}
+          loading={loading} 
+        />
+        <KPICard 
+          label="Produtos" 
+          value={products.length} 
+          sub={`${products.filter(p => p.inventory_status === 'in_stock' || p.fba_inventory > 0).length} com stock · ${products.filter(p => p.inventory_status === 'out_of_stock' || p.fba_inventory === 0).length} sem stock`}
+          loading={loading} 
+        />
       </div>
 
       {/* Gráfico de Conversão Horária */}
