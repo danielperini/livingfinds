@@ -196,44 +196,54 @@ Deno.serve(async (req) => {
     const today = new Date().toISOString().slice(0, 10);
     const clientRequestToken = `kickoff:${asin}:${Date.now()}`;
 
-    // 4. Criar campanha na Amazon Ads API v3
-    const campaignPayload = {
-      campaigns: [{
-        name: campaignName,
-        targetingType: 'AUTO',
-        state: 'ENABLED',
-        budget: { budgetType: 'DAILY', budget: campaignBudget },
-        startDate: today,
-      }],
-    };
-
+    // 4. Verificar duplicata na Amazon antes de criar
+    const token = await getAdsToken(refreshToken);
+    const existingCampaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+    
     let campaignResult;
-    try {
-      campaignResult = await adsRequestWithDetails('POST', '/sp/campaigns', campaignPayload, refreshToken, profileId, 'application/vnd.spCampaign.v3+json');
-    } catch (e) {
-      return Response.json({ ok: false, error: `Falha ao criar campanha: ${e.message}` });
-    }
-
-    // 5. Extrair campaignId de forma tolerante
-    const responseData = campaignResult.data;
-    let campaignId = extractCampaignId(responseData);
-
-    // 6. Reconciliação se não encontrou campaignId
-    if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
-      const token = await getAdsToken(refreshToken);
-      campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
-    }
-
+    let campaignId = existingCampaignId;
+    
     if (!campaignId) {
-      const errorDetail = extractCampaignError(responseData);
-      return Response.json({ 
-        ok: false, 
-        error: 'Amazon Ads não retornou campaignId',
-        http_status: campaignResult.status,
-        request_id: campaignResult.headers.requestId,
-        amazon_error: errorDetail ? (errorDetail.code || errorDetail.description || JSON.stringify(errorDetail)) : null,
-        response_sample: JSON.stringify(responseData).slice(0, 500),
-      });
+      // Criar campanha na Amazon Ads API v3
+      const campaignPayload = {
+        campaigns: [{
+          name: campaignName,
+          targetingType: 'AUTO',
+          state: 'ENABLED',
+          budget: { budgetType: 'DAILY', budget: campaignBudget },
+          startDate: today,
+        }],
+      };
+
+      try {
+        campaignResult = await adsRequestWithDetails('POST', '/sp/campaigns', campaignPayload, refreshToken, profileId, 'application/vnd.spCampaign.v3+json');
+      } catch (e) {
+        return Response.json({ ok: false, error: `Falha ao criar campanha: ${e.message}` });
+      }
+
+      // Extrair campaignId de forma tolerante
+      const responseData = campaignResult.data;
+      campaignId = extractCampaignId(responseData);
+
+      // Reconciliação se não encontrou campaignId
+      if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
+        campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+      }
+
+      if (!campaignId) {
+        const errorDetail = extractCampaignError(responseData);
+        return Response.json({ 
+          ok: false, 
+          error: 'Amazon Ads não retornou campaignId',
+          http_status: campaignResult.status,
+          request_id: campaignResult.headers.requestId,
+          amazon_error: errorDetail ? (errorDetail.code || errorDetail.description || JSON.stringify(errorDetail)) : null,
+          response_sample: JSON.stringify(responseData).slice(0, 500),
+        });
+      }
+    } else {
+      // Campanha já existe na Amazon
+      campaignResult = { status: 200, data: { campaignId }, headers: { requestId: '' } };
     }
 
     // 7. Criar Ad Group

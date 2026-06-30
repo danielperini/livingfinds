@@ -64,7 +64,7 @@ function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, loading }) {
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading }) {
   const isLoading = loading === product.id;
 
   if (!product.has_campaign) {
@@ -107,6 +107,15 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, lo
         {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : isActive ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
         {isActive ? 'Pausar' : 'Ativar'}
       </button>
+      <button
+        onClick={() => onArchiveCampaign(product)}
+        disabled={isLoading}
+        title="Arquivar campanha permanentemente"
+        className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20"
+      >
+        {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+        Arquivar
+      </button>
       {/* Botão para criar nova campanha adicional */}
       <button
         onClick={() => onKickoff(product)}
@@ -127,7 +136,7 @@ function visibleName(product) {
   return `Produto ${product.asin}`;
 }
 
-function ProductRow({ product, onToggleCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate }) {
+function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate }) {
   const [expanded, setExpanded] = useState(false);
   const [keywords, setKeywords] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -274,7 +283,8 @@ function ProductRow({ product, onToggleCampaign, onKickoff, onAccelerator, actio
               product={product}
               onKickoff={() => onKickoff(product)}
               onAccelerator={() => onAccelerator(product)}
-              onToggleCampaign={onToggleCampaign}
+              onToggleCampaign={() => onToggleCampaign(product)}
+              onArchiveCampaign={() => onArchiveCampaign(product)}
               loading={actionLoading}
             />
             {product.linked_campaign_id && (
@@ -433,6 +443,31 @@ export default function Products() {
         await load();
       } else {
         setActionMsg({ type: 'info', text: `⏳ Pedido de pausa criado para aprovação.` });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setActionLoading(null);
+      setTimeout(() => setActionMsg(null), 8000);
+    }
+  };
+
+  const archiveCampaign = async (product) => {
+    if (!product.linked_campaign_id) return;
+    if (!confirm(`Tem certeza que deseja arquivar a campanha de ${product.asin}? Esta ação não pode ser desfeita.`)) return;
+    
+    setActionLoading(product.id);
+    try {
+      const res = await base44.functions.invoke('archiveCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: product.linked_campaign_id,
+        archive_reason: `Arquivamento manual via interface - ${new Date().toLocaleDateString('pt-BR')}`,
+      });
+      if (res.data?.ok) {
+        setActionMsg({ type: 'success', text: `✓ Campanha arquivada para ${product.asin}` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: res.data?.error || 'Falha ao arquivar campanha' });
       }
     } catch (e) {
       setActionMsg({ type: 'error', text: e.message });
