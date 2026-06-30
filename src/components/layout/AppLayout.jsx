@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Brain, Package, Rocket,
-  Settings, Activity, Menu, X, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon, BarChart2
+  Settings, Activity, Menu, ChevronLeft, ChevronRight,
+  Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon, BarChart2,
+  Search, Target, Cpu
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -11,15 +12,17 @@ import ModeBadge from '@/components/ui/ModeBadge';
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
-  { path: '/report', icon: ChartIcon, label: 'Relatório' },
   { path: '/ads', icon: Megaphone, label: 'Gestão Ads' },
+  { path: '/search-terms', icon: Search, label: 'Search Terms' },
+  { path: '/recommendations', icon: Target, label: 'Recomendações' },
+  { path: '/learner', icon: Brain, label: 'Learner Engine' },
+  { path: '/metrics', icon: BarChart2, label: 'Analytics' },
   { path: '/autopilot', icon: Bot, label: 'Ads Autopilot' },
-  { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
-  { path: '/learner', icon: Brain, label: 'Learner' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
   { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
-  { path: '/analytics', icon: BarChart2, label: 'Analytics' },
-  { path: '/diagnostico', icon: Activity, label: 'Diagnóstico Amazon' },
+  { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
+  { path: '/motor-config', icon: Cpu, label: 'Motor IA' },
+  { path: '/diagnostico', icon: Activity, label: 'Diagnóstico' },
   { path: '/logs', icon: Activity, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];

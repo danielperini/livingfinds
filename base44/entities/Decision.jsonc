@@ -15,7 +15,14 @@
         "add_keyword",
         "negate_keyword",
         "pause_ad_group",
-        "enable_ad_group"
+        "enable_ad_group",
+        "create_campaign_auto",
+        "create_campaign_manual",
+        "migrate_to_exact",
+        "reduce_bid",
+        "increase_bid",
+        "create_product_targeting",
+        "migrate_to_phrase"
       ]
     },
     "entity_type": {
@@ -27,13 +34,37 @@
     "entity_name": {
       "type": "string"
     },
+    "asin": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "search_term": {
+      "type": "string"
+    },
     "rationale": {
+      "type": "string"
+    },
+    "formula": {
+      "type": "string"
+    },
+    "metrics_used": {
       "type": "string"
     },
     "current_value": {
       "type": "number"
     },
     "proposed_value": {
+      "type": "number"
+    },
+    "calculation_value": {
       "type": "number"
     },
     "change_pct": {
@@ -48,7 +79,35 @@
         "high",
         "medium",
         "low"
-      ]
+      ],
+      "default": "medium"
+    },
+    "data_maturity": {
+      "type": "string",
+      "enum": [
+        "provisional",
+        "attribution",
+        "mature",
+        "closed"
+      ],
+      "default": "mature"
+    },
+    "objective": {
+      "type": "string"
+    },
+    "expected_impact": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string"
+    },
+    "approval_required": {
+      "type": "boolean",
+      "default": true
+    },
+    "reversible": {
+      "type": "boolean",
+      "default": true
     },
     "status": {
       "type": "string",
@@ -57,7 +116,8 @@
         "approved",
         "rejected",
         "executed",
-        "failed"
+        "failed",
+        "skipped"
       ],
       "default": "pending"
     },
@@ -72,7 +132,14 @@
       "type": "string",
       "format": "date-time"
     },
+    "next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "error_message": {
+      "type": "string"
+    },
+    "amazon_response": {
       "type": "string"
     }
   },
