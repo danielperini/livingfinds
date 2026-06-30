@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Rocket, CheckCircle, XCircle, AlertTriangle, Loader2, X, ChevronRight, Info } from 'lucide-react';
+import { Rocket, CheckCircle, XCircle, AlertTriangle, Loader2, X, ChevronRight, Info, ShieldAlert, Package, DollarSign, Target } from 'lucide-react';
 
 export default function AcceleratorModal({ product, account, onClose, onDone }) {
   const [step, setStep] = useState('keywords'); // keywords | validate | preview | creating | done
@@ -15,18 +15,25 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
   const handleKeywordsChange = (value) => {
     setKeywordsRaw(value);
     if (value.trim().length > 0) {
-      const res = base44.functions.invoke('parseKeywords', { input: value }).catch(() => null);
-      // Nota: parse é feito no frontend também para feedback imediato
       const lines = value.split(/[\n,;]+/).filter(l => l.trim());
       const cleaned = [];
       const duplicates = [];
       const invalid = [];
+      const brandConflicts = [];
       const seen = new Set();
       
       for (const line of lines) {
         let text = line.replace(/^[\s\d\.\-\*\•\+\u2022\u2023\u25E6]+/, '').trim();
         if (!text) continue;
         if (text.length < 1 || text.length > 100) { invalid.push(text); continue; }
+        
+        // Verificar marcas conflitantes (simplificado)
+        const lowerText = text.toLowerCase();
+        if (lowerText.includes('tuya') || lowerText.includes('alexa') || lowerText.includes('google home')) {
+          // Verificar se produto é compatível
+          brandConflicts.push(text);
+        }
+        
         const normalized = text.toLowerCase().replace(/\s+/g, ' ');
         if (seen.has(normalized)) { duplicates.push(text); continue; }
         seen.add(normalized);
@@ -39,6 +46,8 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
         valid: cleaned,
         duplicate_count: duplicates.length,
         invalid_count: invalid.length,
+        brand_conflict_count: brandConflicts.length,
+        brand_conflicts: brandConflicts,
       });
     } else {
       setParsed(null);
@@ -51,29 +60,38 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
     
     setValidation({ loading: true });
     try {
-      // Verificar duplicidade
-      const existing = await base44.entities.Campaign.filter({
+      // Chamar validação backend
+      const res = await base44.functions.invoke('validateAdGroupCreation', {
         amazon_account_id: account.id,
         asin: product.asin,
+        sku: product.sku,
+        keywords: parsed.valid,
+        match_type: 'exact',
+        campaign_type: 'SP',
         targeting_type: 'MANUAL',
       });
       
-      const hasDuplicate = existing.some(c => !c.archived && c.created_by_app === true);
+      const d = res.data;
       
-      setValidation({
-        loading: false,
-        passed: !hasDuplicate,
-        duplicate: hasDuplicate ? existing[0] : null,
-        checks: {
-          has_asin: !!product.asin,
-          has_sku: !!product.sku,
-          has_keywords: parsed.valid_count > 0,
-          account_connected: account?.status === 'connected',
-          no_duplicate: !hasDuplicate,
-        },
-      });
-      
-      if (!hasDuplicate) setStep('preview');
+      if (d?.ok) {
+        const hasBlocks = d.validations?.blocks?.length > 0;
+        const hasAlerts = d.validations?.alerts?.length > 0;
+        
+        setValidation({
+          loading: false,
+          passed: !hasBlocks,
+          blocks: d.validations?.blocks || [],
+          alerts: d.validations?.alerts || [],
+          warnings: d.validations?.warnings || [],
+          checks: d.validations?.checks || {},
+          duplicate: d.validations?.existing_campaign || null,
+          sku_conflict: d.validations?.sku_conflict || null,
+        });
+        
+        if (!hasBlocks) setStep('preview');
+      } else {
+        setValidation({ loading: false, error: d?.error || 'Erro na validação' });
+      }
     } catch (e) {
       setValidation({ loading: false, error: e.message });
     }
@@ -109,9 +127,11 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
   };
 
   const canProceed = parsed && parsed.valid_count > 0;
-  const identifier = product.sku || product.asin;
-  const today = new Date().toISOString().slice(0, 10);
-  const campaignName = `SP-MAN-EXATA-${identifier}-IA-${today}`;
+  const identifier = (product.sku || product.asin).replace(/[^A-Z0-9]/gi, '-').toUpperCase();
+  const today = new Date().toISOString().slice(0, 7); // YYYY-MM
+  const productName = (product.product_name || 'PRODUTO').slice(0, 20).toUpperCase().replace(/[^A-Z0-9]/gi, '-');
+  const campaignName = `SP-MAN-EXATA-${identifier}-CONVERSAO-${today}`;
+  const adGroupName = `AG-SP-EXATA-${identifier}-${productName}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -217,22 +237,91 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
             </div>
           )}
 
-          {step === 'validate' && validation && !validation.loading && validation.duplicate && (
+          {step === 'validate' && validation && !validation.loading && (
             <div className="space-y-4">
-              <div className="flex items-start gap-3 px-4 py-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
-                <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-amber-300">Campanha já existe</p>
-                  <p className="text-xs text-amber-400/80 mt-1">
-                    Já existe uma campanha para este ASIN: <span className="font-mono">{validation.duplicate.campaign_name}</span> ({validation.duplicate.state})
-                  </p>
+              {/* Blocos críticos */}
+              {validation.blocks?.length > 0 && (
+                <div className="space-y-2">
+                  {validation.blocks.map((block, i) => (
+                    <div key={i} className="flex items-start gap-3 px-4 py-3 bg-red-400/10 border border-red-400/20 rounded-xl">
+                      <XCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-red-300">Bloqueio: {block.field}</p>
+                        <p className="text-xs text-red-400/80 mt-1">{block.message}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
+
+              {/* Alertas */}
+              {validation.alerts?.length > 0 && (
+                <div className="space-y-2">
+                  {validation.alerts.map((alert, i) => (
+                    <div key={i} className="flex items-start gap-3 px-4 py-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
+                      <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-amber-300">Alerta: {alert.field}</p>
+                        <p className="text-xs text-amber-400/80 mt-1">{alert.message}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Conflito de SKU */}
+              {validation.sku_conflict && (
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Package className="w-4 h-4 text-cyan" />
+                    <p className="text-sm font-semibold text-white">ASIN com múltiplos SKUs</p>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-3">
+                    Este ASIN está associado a mais de um SKU. Selecione qual será anunciado:
+                  </p>
+                  <div className="space-y-2">
+                    {validation.sku_conflict.skus.map((sku, i) => (
+                      <label key={i} className="flex items-center gap-3 p-3 bg-surface-3 rounded-lg cursor-pointer hover:bg-surface-3/80 transition-colors">
+                        <input type="radio" name="selected_sku" value={sku.sku} className="w-4 h-4" defaultChecked={sku.is_primary} />
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-white">{sku.sku}</p>
+                          <p className="text-xs text-slate-400">R$ {sku.price?.toFixed(2)} · {sku.stock_status || 'Estoque desconhecido'}</p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Campanha duplicada */}
+              {validation.duplicate && (
+                <div className="flex items-start gap-3 px-4 py-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-300">Campanha já existe</p>
+                    <p className="text-xs text-amber-400/80 mt-1">
+                      Já existe uma campanha para este ASIN: <span className="font-mono">{validation.duplicate.campaign_name}</span> ({validation.duplicate.state})
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {!validation.blocks?.length && !validation.alerts?.length && !validation.sku_conflict && !validation.duplicate && (
+                <div className="flex items-center gap-3 px-4 py-3 bg-emerald-400/10 border border-emerald-400/20 rounded-xl">
+                  <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+                  <p className="text-sm font-semibold text-emerald-300">Validação concluída! Tudo certo para criar a campanha.</p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={() => setStep('keywords')} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">
                   Voltar
                 </button>
+                {!validation.blocks?.length && (
+                  <button onClick={() => setStep('preview')} className="flex items-center gap-2 px-5 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors">
+                    Continuar <ChevronRight className="w-4 h-4" />
+                  </button>
+                )}
                 <button onClick={onClose} className="px-5 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors">
                   Fechar
                 </button>
@@ -249,56 +338,68 @@ export default function AcceleratorModal({ product, account, onClose, onDone }) 
                   Prévia da Campanha
                 </h3>
 
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <p className="text-slate-500">Produto</p>
-                    <p className="text-slate-200 font-medium truncate">{product.product_name || product.asin}</p>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="text-slate-500 mb-0.5">Produto</p>
+                      <p className="text-slate-200 font-medium truncate">{product.product_name || product.asin}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-0.5">ASIN</p>
+                      <p className="text-slate-200 font-mono">{product.asin}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-0.5">SKU</p>
+                      <p className="text-slate-200 font-mono">{product.sku || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-0.5">Campanha</p>
+                      <p className="text-slate-200 font-mono text-[10px]">{campaignName}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-0.5">Grupo de Anúncios</p>
+                      <p className="text-slate-200 font-mono text-[10px]">{adGroupName}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500 mb-0.5">Orçamento Diário</p>
+                      <p className="text-emerald-400 font-semibold">R$ 25,00</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-slate-500">ASIN</p>
-                    <p className="text-slate-200 font-mono">{product.asin}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">SKU</p>
-                    <p className="text-slate-200 font-mono">{product.sku || 'N/A'}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">Nome da Campanha</p>
-                    <p className="text-slate-200 font-mono text-[10px]">{campaignName}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">Orçamento Diário</p>
-                    <p className="text-emerald-400 font-semibold">R$ 25,00</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">Estratégia</p>
-                    <p className="text-slate-200">Dinâmica (aumentar e diminuir)</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">Keywords Exatas</p>
-                    <p className="text-cyan font-semibold">{parsed?.valid_count || 0}</p>
-                  </div>
-                  <div>
-                    <p className="text-slate-500">Lance Inicial</p>
-                    <p className="text-slate-200">R$ 0,50</p>
-                  </div>
-                </div>
 
-                <div className="border-t border-surface-3 pt-3">
-                  <p className="text-xs text-slate-500 mb-2">Ajustes de Posicionamento:</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400">Topo da Pesquisa</p>
-                      <p className="text-sm font-semibold text-cyan">+10%</p>
+                  <div className="border-t border-surface-3 pt-3">
+                    <p className="text-xs text-slate-500 mb-2 font-semibold">Configurações de Lance:</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-surface-3 rounded-lg px-3 py-2">
+                        <p className="text-[10px] text-slate-400">Lance Inicial</p>
+                        <p className="text-sm font-semibold text-white">R$ 0,30</p>
+                      </div>
+                      <div className="bg-surface-3 rounded-lg px-3 py-2">
+                        <p className="text-[10px] text-slate-400">Estratégia</p>
+                        <p className="text-xs text-slate-200">Down only</p>
+                      </div>
                     </div>
-                    <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400">Restante da Pesquisa</p>
-                      <p className="text-sm font-semibold text-cyan">+10%</p>
+                  </div>
+
+                  <div className="border-t border-surface-3 pt-3">
+                    <p className="text-xs text-slate-500 mb-2 font-semibold">Ajustes de Placement (Grupo Novo):</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400">Topo Pesquisa</p>
+                        <p className="text-sm font-semibold text-slate-300">0%</p>
+                      </div>
+                      <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400">Restante</p>
+                        <p className="text-sm font-semibold text-slate-300">0%</p>
+                      </div>
+                      <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
+                        <p className="text-[10px] text-slate-400">Páginas Produto</p>
+                        <p className="text-sm font-semibold text-slate-300">0%</p>
+                      </div>
                     </div>
-                    <div className="bg-surface-3 rounded-lg px-3 py-2 text-center">
-                      <p className="text-[10px] text-slate-400">Páginas de Produto</p>
-                      <p className="text-sm font-semibold text-cyan">+10%</p>
-                    </div>
+                    <p className="text-[10px] text-slate-500 mt-2 flex items-center gap-1">
+                      <ShieldAlert className="w-3 h-3" />
+                      Configuração conservadora para grupo em aprendizado
+                    </p>
                   </div>
                 </div>
               </div>

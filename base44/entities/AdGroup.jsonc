@@ -62,6 +62,82 @@
     "synced_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "group_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "product_targeting",
+        "category",
+        "brand",
+        "defense"
+      ],
+      "default": "exact"
+    },
+    "primary_asin": {
+      "type": "string"
+    },
+    "primary_sku": {
+      "type": "string"
+    },
+    "product_category": {
+      "type": "string"
+    },
+    "strategy_phase": {
+      "type": "string",
+      "enum": [
+        "new",
+        "discovery",
+        "learning",
+        "validated",
+        "winner",
+        "inefficient",
+        "deficit",
+        "paused",
+        "blocked"
+      ],
+      "default": "new"
+    },
+    "bidding_strategy": {
+      "type": "string",
+      "enum": [
+        "dynamic_down_only",
+        "dynamic_up_down",
+        "fixed"
+      ],
+      "default": "dynamic_down_only"
+    },
+    "placement_top_search": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_rest_search": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_product_pages": {
+      "type": "number",
+      "default": 0
+    },
+    "is_variation_group": {
+      "type": "boolean",
+      "default": false
+    },
+    "variation_asins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_by_app": {
+      "type": "boolean",
+      "default": false
+    },
+    "naming_standard": {
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [
