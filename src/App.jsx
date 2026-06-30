@@ -23,7 +23,6 @@ import AdsAutopilot from '@/pages/AdsAutopilot';
 import AdsManagement from '@/pages/AdsManagement';
 import LearnerEngine from '@/pages/LearnerEngine';
 import InventorySales from '@/pages/InventorySales';
-import Transitions from '@/pages/Transitions';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Products from '@/pages/Products';
@@ -35,7 +34,6 @@ import AmazonAdsCallback from '@/pages/AmazonAdsCallback';
 import Recommendations from '@/pages/Recommendations';
 import SearchTerms from '@/pages/SearchTerms';
 import MetricsDashboard from '@/pages/MetricsDashboard';
-import MotorConfig from '@/pages/MotorConfig';
 import SpApiSetup from '@/pages/SpApiSetup';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
@@ -76,14 +74,12 @@ const AuthenticatedApp = () => {
           <Route path="/autopilot" element={<AdsAutopilot />} />
           <Route path="/learner" element={<LearnerEngine />} />
           <Route path="/inventory" element={<InventorySales />} />
-          <Route path="/transitions" element={<Transitions />} />
           <Route path="/products" element={<Products />} />
           <Route path="/bids-log" element={<LogDeBids />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/metrics" element={<MetricsDashboard />} />
           <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/search-terms" element={<SearchTerms />} />
-          <Route path="/motor-config" element={<MotorConfig />} />
           <Route path="/diagnostico" element={<Diagnostico />} />
           <Route path="/report" element={<Report />} />
           <Route path="/logs" element={<Logs />} />
@@ -92,6 +88,9 @@ const AuthenticatedApp = () => {
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
           <Route path="/saude-do-sistema" element={<SystemHealth />} />
           <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
+          {/* Redirects de rotas obsoletas */}
+          <Route path="/transitions" element={<Navigate to="/products" replace />} />
+          <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />

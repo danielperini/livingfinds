@@ -5,15 +5,17 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "profile_id": {
+      "type": "string"
+    },
     "report_id": {
       "type": "string"
     },
     "report_type": {
       "type": "string"
     },
-    "requested_at": {
-      "type": "string",
-      "format": "date-time"
+    "configuration_hash": {
+      "type": "string"
     },
     "date_start": {
       "type": "string",
@@ -23,20 +25,47 @@
       "type": "string",
       "format": "date"
     },
+    "time_unit": {
+      "type": "string",
+      "enum": [
+        "DAILY",
+        "SUMMARY"
+      ]
+    },
+    "format": {
+      "type": "string",
+      "enum": [
+        "GZIP_JSON",
+        "JSON"
+      ]
+    },
     "status": {
       "type": "string",
       "enum": [
-        "requested",
-        "processing",
-        "completed",
-        "failed",
-        "downloaded",
-        "processed"
+        "PENDING",
+        "PROCESSING",
+        "COMPLETED",
+        "FAILED",
+        "EXPIRED",
+        "DOWNLOADED",
+        "PROCESSED"
       ],
-      "default": "requested"
+      "default": "PENDING"
     },
-    "amazon_response": {
+    "document_url": {
       "type": "string"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_polled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "downloaded_at": {
       "type": "string",
@@ -46,7 +75,11 @@
       "type": "string",
       "format": "date-time"
     },
-    "error": {
+    "retry_count": {
+      "type": "number",
+      "default": 0
+    },
+    "last_error": {
       "type": "string"
     }
   },

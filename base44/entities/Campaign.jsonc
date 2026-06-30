@@ -130,6 +130,32 @@
     "synced_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "archived": {
+      "type": "boolean",
+      "default": false
+    },
+    "archived_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "archive_reason": {
+      "type": "string"
+    },
+    "original_state": {
+      "type": "string"
+    },
+    "last_activity_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "learning_eligible": {
+      "type": "boolean",
+      "default": true
+    },
+    "excluded_from_dashboard": {
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [

@@ -1,0 +1,44 @@
+{
+  "name": "FeatureFlag",
+  "type": "object",
+  "properties": {
+    "key": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "environment": {
+      "type": "string",
+      "enum": [
+        "dev",
+        "prod",
+        "all"
+      ],
+      "default": "all"
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "account",
+        "campaign",
+        "global"
+      ],
+      "default": "global"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_by": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "key"
+  ]
+}

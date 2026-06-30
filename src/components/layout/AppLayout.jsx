@@ -2,10 +2,8 @@ import { useState, useEffect } from 'react';
 // AppLayout — sidebar navigation
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Megaphone, Brain, Package, Rocket,
-  Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, BarChart as ChartIcon, BarChart2,
-  Search, Target, Cpu, Link2
+  LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
+  Zap, Bell, Bot, ShoppingBag, FileText, BarChart2, Search, Target, Link2, Brain
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -20,13 +18,10 @@ const navItems = [
   { path: '/metrics', icon: BarChart2, label: 'Analytics' },
   { path: '/autopilot', icon: Bot, label: 'Ads Autopilot' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
-  { path: '/transitions', icon: Rocket, label: 'Transições & ASINs' },
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
-  { path: '/motor-config', icon: Cpu, label: 'Motor IA' },
-  { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas' },
+  { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
-  { path: '/diagnostico', icon: ChartIcon, label: 'Diagnóstico' },
   { path: '/logs', icon: FileText, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];

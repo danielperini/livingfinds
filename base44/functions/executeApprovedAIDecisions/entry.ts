@@ -59,19 +59,27 @@ Deno.serve(async (req) => {
     const now = new Date();
     const today = now.toISOString().slice(0, 10);
 
-    // Buscar decisões: aprovadas/agendadas do dia
+    // Buscar decisões com locking: approved -> executing
     let decisions = [];
-    // Nota: entidade real é "AdsAiDecisio" (nome truncado na plataforma)
     if (body.decision_ids) {
       for (const id of body.decision_ids) {
         const d = await base44.asServiceRole.entities.AdsAiDecisio.get(id).catch(() => null);
-        if (d && ['approved', 'scheduled'].includes(d.status)) decisions.push(d);
+        if (d && ['approved', 'scheduled'].includes(d.status)) {
+          // Lock atómico: approved -> executing
+          await base44.asServiceRole.entities.AdsAiDecisio.update(id, { status: 'executing', execution_started_at: now.toISOString() });
+          decisions.push(d);
+        }
       }
     } else if (amazon_account_id) {
-      decisions = await base44.asServiceRole.entities.AdsAiDecisio.filter({
+      const pending = await base44.asServiceRole.entities.AdsAiDecisio.filter({
         amazon_account_id,
         status: 'approved',
       }, '-confidence_score', 500);
+      // Lock em lote
+      for (const d of pending.slice(0, 100)) {
+        await base44.asServiceRole.entities.AdsAiDecisio.update(d.id, { status: 'executing', execution_started_at: now.toISOString() });
+        decisions.push(d);
+      }
     }
     if (!decisions.length) return Response.json({ ok: true, executed: 0, decisions_found: 0, log: ['No decisions to execute'] });
 
@@ -81,56 +89,82 @@ Deno.serve(async (req) => {
     // Ordem de execução: reduções → pausas → aumentos → budget
     const orderedActions = ['update_bid_decrease', 'pause_campaign', 'update_bid_increase', 'update_budget', 'enable_campaign', 'negative_keyword'];
 
-    // Função auxiliar para executar decisão
+    // Função auxiliar para executar decisão com idempotency e reconciliação
     async function executeDecision(decision) {
-      if (decision.status === 'executed') return { id: decision.id, ok: true, error: 'Already executed' };
+      // Verificar se já executada (idempotency)
+      const fresh = await base44.asServiceRole.entities.AdsAiDecisio.get(decision.id).catch(() => null);
+      if (!fresh || fresh.status === 'executed') return { id: decision.id, ok: true, status: 'executed', error: 'Already executed' };
+      if (fresh.status !== 'executing') return { id: decision.id, ok: false, status: fresh.status, error: `Status inválido: ${fresh.status}` };
+
       const action = decision.action;
       let result;
-      switch (action) {
-        case 'update_bid':
-          result = await adsPut('/v2/sp/keywords', [{ keywordId: decision.entity_id, bid: decision.recommended_value || decision.current_value }]);
-          break;
-        case 'update_budget':
-          result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, dailyBudget: decision.recommended_value || decision.current_value }]);
-          break;
-        case 'pause_campaign':
-          result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, state: 'paused' }]);
-          break;
-        case 'enable_campaign':
-          result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, state: 'enabled' }]);
-          break;
-        case 'negative_keyword': {
-          const token = await getAdsToken();
-          const naResult = await fetch(`https://advertising-api.amazon.com/v2/sp/negativeKeywords`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-              'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify([{
-              campaignId: decision.campaign_id || decision.entity_id,
-              keywordText: decision.keyword || decision.entity_id,
-              matchType: 'negativeExact',
-              state: 'enabled',
-            }]),
-          });
-          result = { ok: naResult.ok, status: naResult.status, data: await naResult.json().catch(() => null) };
-          break;
+      try {
+        switch (action) {
+          case 'update_bid':
+            result = await adsPut('/v2/sp/keywords', [{ keywordId: decision.entity_id, bid: decision.recommended_value || decision.current_value }]);
+            break;
+          case 'update_budget':
+            result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, dailyBudget: decision.recommended_value || decision.current_value }]);
+            break;
+          case 'pause_campaign':
+            result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, state: 'paused' }]);
+            break;
+          case 'enable_campaign':
+            result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, state: 'enabled' }]);
+            break;
+          case 'negative_keyword': {
+            const token = await getAdsToken();
+            const naResult = await fetch(`https://advertising-api.amazon.com/v2/sp/negativeKeywords`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+                'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify([{
+                campaignId: decision.campaign_id || decision.entity_id,
+                keywordText: decision.keyword || decision.entity_id,
+                matchType: 'negativeExact',
+                state: 'enabled',
+              }]),
+            });
+            result = { ok: naResult.ok, status: naResult.status, data: await naResult.json().catch(() => null) };
+            break;
+          }
+          default:
+            result = { ok: false, status: 0, data: { error: `Unsupported action: ${action}` } };
         }
-        default:
-          result = { ok: false, data: { error: `Unsupported action: ${action}` } };
-      }
-      const newStatus = result.ok ? 'executed' : 'failed';
-      await base44.asServiceRole.entities.AdsAiDecisio.update(decision.id, {
-        status: newStatus,
-        executed_at: new Date().toISOString(),
-        amazon_response: JSON.stringify(result.data),
-        error: !result.ok ? `HTTP: ${result.status || 'ok'}` : null,
-      });
 
-      return { id: decision.id, ok: result.ok, status: newStatus, ...(!result.ok ? { error: `HTTP: ${result.status || ''}` } : {}) };
+        // Determinar status final
+        let newStatus, errorMessage;
+        if (result.ok) {
+          newStatus = 'executed';
+          errorMessage = null;
+        } else if ([425, 429, 500, 502, 503, 504].includes(result.status)) {
+          newStatus = 'retryable';
+          errorMessage = `HTTP ${result.status}: ${JSON.stringify(result.data).slice(0, 200)}`;
+        } else {
+          newStatus = 'failed';
+          errorMessage = `HTTP ${result.status}: ${JSON.stringify(result.data).slice(0, 200)}`;
+        }
+
+        // Atualizar decisão com estado final
+        await base44.asServiceRole.entities.AdsAiDecisio.update(decision.id, {
+          status: newStatus,
+          executed_at: new Date().toISOString(),
+          amazon_response: JSON.stringify(result.data),
+          error: errorMessage,
+        });
+
+        return { id: decision.id, ok: result.ok, status: newStatus, amazon_status: result.status, ...(errorMessage ? { error: errorMessage } : {}) };
+      } catch (e) {
+        await base44.asServiceRole.entities.AdsAiDecisio.update(decision.id, {
+          status: 'retryable',
+          error: e.message,
+        });
+        return { id: decision.id, ok: false, status: 'retryable', error: e.message };
+      }
     }
 
     // Agrupar por ordem, rate-limit-aware
