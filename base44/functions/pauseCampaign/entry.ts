@@ -1,5 +1,5 @@
 /**
- * pauseCampaign — Pausa campanha na Amazon Ads e atualiza banco local
+ * pauseCampaign — Pausa campanha na Amazon Ads (SP API v3) e atualiza banco local
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -11,7 +11,9 @@ async function getAdsToken(refreshToken) {
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.error || 'Token failed');
@@ -33,7 +35,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, campaign_id } = body;
-    
+
     if (!amazon_account_id || !campaign_id) {
       return Response.json({ error: 'amazon_account_id e campaign_id necessários' }, { status: 400 });
     }
@@ -43,15 +45,16 @@ Deno.serve(async (req) => {
 
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-    
+
     if (!refreshToken || !profileId) {
-      return Response.json({ error: 'Credenciais Amazon não configuradas' }, { status: 400 });
+      return Response.json({ error: 'Credenciais Amazon Ads não configuradas' }, { status: 400 });
     }
 
     const token = await getAdsToken(refreshToken);
-    
-    // Atualizar estado na Amazon (API v3)
-    const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns/${campaign_id}`, {
+    const baseUrl = getAdsBaseUrl();
+
+    // Amazon Ads API v3 — PUT /sp/campaigns (array body)
+    const res = await fetch(`${baseUrl}/sp/campaigns`, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -60,14 +63,20 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/vnd.spCampaign.v3+json',
         'Accept': 'application/vnd.spCampaign.v3+json',
       },
-      body: JSON.stringify({ state: 'PAUSED' }),
+      body: JSON.stringify({
+        campaigns: [{ campaignId: campaign_id, state: 'PAUSED' }],
+      }),
     });
 
     const responseData = await res.json();
-    
-    if (!res.ok) {
-      return Response.json({ 
-        ok: false, 
+
+    // Verificar se a campanha foi pausada com sucesso
+    const updated = responseData?.campaigns?.success || responseData?.success;
+    const failed = responseData?.campaigns?.error || responseData?.error;
+
+    if (!res.ok || (failed && failed.length > 0 && (!updated || updated.length === 0))) {
+      return Response.json({
+        ok: false,
         error: 'Falha ao pausar campanha na Amazon',
         http_status: res.status,
         amazon_response: responseData,
@@ -76,37 +85,30 @@ Deno.serve(async (req) => {
 
     // Atualizar banco local
     const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, campaign_id });
-    if (campaigns.length === 0) {
-      return Response.json({ error: 'Campanha não encontrada no banco local' }, { status: 404 });
+    if (campaigns.length > 0) {
+      await base44.asServiceRole.entities.Campaign.update(campaigns[0].id, {
+        state: 'paused',
+        status: 'paused',
+        original_state: campaigns[0].state,
+        last_activity_at: new Date().toISOString(),
+      });
     }
 
-    await base44.asServiceRole.entities.Campaign.update(campaigns[0].id, {
-      state: 'paused',
-      status: 'paused',
-      archived: false,
-      archived_at: null,
-      archive_reason: null,
-      original_state: campaigns[0].state,
-      last_activity_at: new Date().toISOString(),
-    });
-
-    // Log
-    await base44.asServiceRole.entities.LearningEvent.create({
+    // Atualizar produto vinculado
+    const products = await base44.asServiceRole.entities.Product.filter({
       amazon_account_id,
-      event_type: 'campaign_paused',
-      entity_type: 'campaign',
-      entity_id: campaign_id,
-      observation: `Campanha pausada manualmente por ${user.full_name || user.email}`,
-      recorded_at: new Date().toISOString(),
+      linked_campaign_id: campaign_id,
     });
+    for (const p of products) {
+      await base44.asServiceRole.entities.Product.update(p.id, { campaign_status: 'paused' });
+    }
 
     return Response.json({
       ok: true,
       campaign_id,
-      previous_state: campaigns[0].state,
       new_state: 'paused',
-      http_status: res.status,
       message: 'Campanha pausada com sucesso',
+      amazon_response: responseData,
     });
 
   } catch (error) {

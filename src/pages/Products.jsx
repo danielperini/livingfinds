@@ -15,6 +15,7 @@ import {
   Rocket,
   Search,
   ShoppingBag,
+  Tag,
   X,
   XCircle,
   Zap,
@@ -455,6 +456,7 @@ export default function Products() {
   const [actionMsg, setActionMsg] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
   const [fixingLinks, setFixingLinks] = useState(false);
+  const [syncingTitles, setSyncingTitles] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
 
@@ -591,6 +593,25 @@ export default function Products() {
     } finally {
       setActionLoading(null);
       setTimeout(() => setActionMsg(null), 8000);
+    }
+  };
+
+  const syncTitles = async () => {
+    if (!account) return;
+    setSyncingTitles(true);
+    setActionMsg({ type: 'info', text: 'Sincronizando títulos via SP-API...' });
+    try {
+      const response = await base44.functions.invoke('syncProductCatalog', {
+        amazon_account_id: account.id,
+      });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Erro ao sincronizar');
+      setActionMsg({ type: 'success', text: `${response.data.total_updated || 0} produtos atualizados com títulos da Amazon.` });
+      await load();
+    } catch (error) {
+      setActionMsg({ type: 'error', text: error?.message || 'Erro ao sincronizar títulos.' });
+    } finally {
+      setSyncingTitles(false);
+      setTimeout(() => setActionMsg(null), 10000);
     }
   };
 
@@ -763,6 +784,20 @@ export default function Products() {
                 : `Kick-off em massa (${withoutCampaign})`}
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={syncTitles}
+            disabled={syncingTitles || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60"
+          >
+            {syncingTitles ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Tag className="w-4 h-4" />
+            )}
+            {syncingTitles ? 'Sincronizando...' : 'Sincronizar Títulos'}
+          </button>
 
           <button
             type="button"
