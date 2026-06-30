@@ -253,7 +253,8 @@ Deno.serve(async (req) => {
       console.warn('AdGroup creation failed:', e.message);
     }
 
-    // 8. Criar Product Ad
+    // 8. Criar Product Ad — com confirmação do adId
+    let productAdId = '';
     if (adGroupId) {
       try {
         const adPayload = {
@@ -265,9 +266,19 @@ Deno.serve(async (req) => {
             state: 'ENABLED',
           }],
         };
-        await adsRequestWithDetails('POST', '/sp/productAds', adPayload, refreshToken, profileId, 'application/vnd.spProductAd.v3+json');
+        const adResult = await adsRequestWithDetails('POST', '/sp/productAds', adPayload, refreshToken, profileId, 'application/vnd.spProductAd.v3+json');
+        // Extrair adId de forma tolerante
+        productAdId = String(
+          adResult.data?.productAds?.success?.[0]?.adId || 
+          adResult.data?.success?.[0]?.adId || 
+          adResult.data?.adId || 
+          ''
+        );
+        if (!productAdId && [200, 201, 207].includes(adResult.status)) {
+          console.warn(`ProductAd criado mas adId não extraído. Status: ${adResult.status}`);
+        }
       } catch (e) {
-        console.warn('ProductAd creation failed:', e.message);
+        console.error('ProductAd creation failed:', e.message);
       }
     }
 
@@ -307,6 +318,21 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Salvar productAdId se confirmado
+    if (productAdId) {
+      await base44.asServiceRole.entities.ProductAd.create({
+        amazon_account_id,
+        campaign_id: campaignId,
+        ad_group_id: adGroupId,
+        ad_id: productAdId,
+        asin,
+        sku: sku || null,
+        state: 'enabled',
+        status: 'enabled',
+        synced_at: now,
+      }).catch(() => {});
+    }
+
     // 10. Atualizar produto
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
     if (products.length > 0) {
@@ -332,11 +358,14 @@ Deno.serve(async (req) => {
       ok: true,
       campaign_id: campaignId,
       ad_group_id: adGroupId,
+      product_ad_id: productAdId || null,
       campaign_name: campaignName,
       daily_budget: campaignBudget,
       initial_bid: budgetRule.min_auto_campaign_bid || 0.30,
       http_status: campaignResult.status,
       request_id: campaignResult.headers.requestId,
+      ad_confirmed: !!adGroupId,
+      product_ad_confirmed: !!productAdId,
     });
 
   } catch (error) {

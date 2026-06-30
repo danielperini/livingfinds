@@ -131,6 +131,19 @@ export default function AdsManagement() {
 
   const promoteKeyword = async (searchTerm) => {
     try {
+      // Verificar duplicidade antes de criar
+      const existingKws = await base44.entities.Keyword.filter({
+        amazon_account_id: account.id,
+        campaign_id: searchTerm.campaign_id,
+        keyword_text: searchTerm.keyword_text,
+        source: 'manual',
+      });
+      
+      if (existingKws.length > 0) {
+        alert(`Keyword "${searchTerm.keyword_text}" já existe nesta campanha.`);
+        return;
+      }
+      
       // Criar keyword manual com bid sugerido de $0.30
       await base44.entities.Keyword.create({
         amazon_account_id: account.id,
@@ -151,6 +164,7 @@ export default function AdsManagement() {
       setSearchTerms(prev => prev.filter(st => st.id !== searchTerm.id));
     } catch (err) {
       console.error('Erro ao promover:', err);
+      alert('Erro ao promover keyword: ' + err.message);
     }
   };
 

@@ -1,6 +1,7 @@
 /**
- * executeAgentAction — Executa uma ação aprovada do Amazon Ads Operator via Amazon Ads API.
+ * executeAgentAction — Executa uma ação aprovada do Amazon Ads Operator via Amazon Ads API v3.
  * SEGURANÇA: Só executa ações com status='approved' ou não-críticas com requires_approval=false.
+ * MIGRADO PARA API v3 (endpoints /sp/*)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -31,7 +32,7 @@ function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsRequest(method, path, body) {
+async function adsRequestV3(method, path, body, contentType = 'application/json') {
   const token = await getAdsToken();
   const res = await fetch(`${getAdsBaseUrl()}${path}`, {
     method,
@@ -39,11 +40,15 @@ async function adsRequest(method, path, body) {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
       'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
+      'Accept': contentType,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  return await res.json();
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  return { status: res.status, data, requestId: res.headers.get('x-amzn-requestid') || '' };
 }
 
 Deno.serve(async (req) => {
@@ -85,13 +90,18 @@ Deno.serve(async (req) => {
     }
 
     let apiResult = null;
+    let requestId = '';
 
     switch (action.action) {
-      case 'update_bid':
-        apiResult = await adsRequest('PUT', '/v2/sp/keywords', [{
+      case 'update_bid': {
+        // API v3: PUT /sp/keywords com content-type específico
+        const result = await adsRequestV3('PUT', '/sp/keywords', [{
           keywordId: action.keyword_id,
           bid: action.new_value,
-        }]);
+        }], 'application/vnd.spKeyword.v3+json');
+        apiResult = result.data;
+        requestId = result.requestId;
+        
         // Salvar no BidHistory
         await base44.asServiceRole.entities.BidHistory.create({
           amazon_account_id: action.amazon_account_id,
@@ -106,8 +116,9 @@ Deno.serve(async (req) => {
           applied_by: 'agent',
           created_at: now,
           executed_at: now,
-          amazon_response: JSON.stringify(apiResult),
+          amazon_response: JSON.stringify(apiResult).slice(0, 500),
         });
+        
         // Atualizar bid na keyword
         const kws = await base44.asServiceRole.entities.Keyword.filter({
           amazon_account_id: action.amazon_account_id,
@@ -120,12 +131,17 @@ Deno.serve(async (req) => {
           });
         }
         break;
+      }
 
-      case 'update_budget':
-        apiResult = await adsRequest('PUT', '/v2/sp/campaigns', [{
+      case 'update_budget': {
+        // API v3: PUT /sp/campaigns
+        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
           campaignId: action.campaign_id,
-          dailyBudget: action.new_value,
-        }]);
+          budget: { budgetType: 'DAILY', budget: action.new_value },
+        }], 'application/vnd.spCampaign.v3+json');
+        apiResult = result.data;
+        requestId = result.requestId;
+        
         await base44.asServiceRole.entities.BidHistory.create({
           amazon_account_id: action.amazon_account_id,
           entity_type: 'campaign',
@@ -140,27 +156,41 @@ Deno.serve(async (req) => {
           applied_by: 'agent',
           created_at: now,
           executed_at: now,
+          amazon_response: JSON.stringify(apiResult).slice(0, 500),
         });
+        
         const campaigns = await base44.asServiceRole.entities.Campaign.filter({
           amazon_account_id: action.amazon_account_id,
           campaign_id: action.campaign_id,
         });
         if (campaigns.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campaigns[0].id, { daily_budget: action.new_value });
+          await base44.asServiceRole.entities.Campaign.update(campaigns[0].id, { 
+            daily_budget: action.new_value,
+            synced_at: now,
+          });
         }
         break;
+      }
 
-      case 'pause_campaign':
-        apiResult = await adsRequest('PUT', '/v2/sp/campaigns', [{
+      case 'pause_campaign': {
+        // API v3: PUT /sp/campaigns
+        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
           campaignId: action.campaign_id,
-          state: 'paused',
-        }]);
+          state: 'PAUSED',
+        }], 'application/vnd.spCampaign.v3+json');
+        apiResult = result.data;
+        requestId = result.requestId;
+        
         const campsToPause = await base44.asServiceRole.entities.Campaign.filter({
           amazon_account_id: action.amazon_account_id,
           campaign_id: action.campaign_id,
         });
         if (campsToPause.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campsToPause[0].id, { state: 'paused', status: 'paused' });
+          await base44.asServiceRole.entities.Campaign.update(campsToPause[0].id, { 
+            state: 'paused', 
+            status: 'paused',
+            synced_at: now,
+          });
         }
         await base44.asServiceRole.entities.LearningEvent.create({
           amazon_account_id: action.amazon_account_id,
@@ -171,38 +201,59 @@ Deno.serve(async (req) => {
           recorded_at: now,
         });
         break;
+      }
 
-      case 'enable_campaign':
-        apiResult = await adsRequest('PUT', '/v2/sp/campaigns', [{
+      case 'enable_campaign': {
+        // API v3: PUT /sp/campaigns
+        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
           campaignId: action.campaign_id,
-          state: 'enabled',
-        }]);
+          state: 'ENABLED',
+        }], 'application/vnd.spCampaign.v3+json');
+        apiResult = result.data;
+        requestId = result.requestId;
+        
         const campsToEnable = await base44.asServiceRole.entities.Campaign.filter({
           amazon_account_id: action.amazon_account_id,
           campaign_id: action.campaign_id,
         });
         if (campsToEnable.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campsToEnable[0].id, { state: 'enabled', status: 'enabled' });
+          await base44.asServiceRole.entities.Campaign.update(campsToEnable[0].id, { 
+            state: 'enabled', 
+            status: 'enabled',
+            synced_at: now,
+          });
         }
         break;
+      }
 
-      case 'negative_keyword':
-        apiResult = await adsRequest('POST', '/v2/sp/negativeKeywords', [{
-          campaignId: action.campaign_id,
-          adGroupId: action.ad_group_id,
-          keywordText: action.keyword,
-          matchType: 'negativeExact',
-          state: 'enabled',
-        }]);
+      case 'negative_keyword': {
+        // API v3: POST /sp/negativeKeywords
+        const result = await adsRequestV3('POST', '/sp/negativeKeywords', {
+          negativeKeywords: [{
+            campaignId: action.campaign_id,
+            adGroupId: action.ad_group_id,
+            keywordText: action.keyword,
+            matchType: 'NEGATIVE_EXACT',
+            state: 'ENABLED',
+          }],
+        }, 'application/vnd.spNegativeKeyword.v3+json');
+        apiResult = result.data;
+        requestId = result.requestId;
+        
+        // Extrair negativeKeywordId se criado
+        const negId = apiResult?.negativeKeywords?.success?.[0]?.negativeKeywordId || 
+                      apiResult?.success?.[0]?.negativeKeywordId || '';
+        
         await base44.asServiceRole.entities.LearningEvent.create({
           amazon_account_id: action.amazon_account_id,
           event_type: 'keyword_negativated',
           entity_type: 'keyword',
           entity_id: action.keyword_id || action.keyword,
-          observation: `Keyword negativada: "${action.keyword}". Motivo: ${action.reason}`,
+          observation: `Keyword negativada: "${action.keyword}". Motivo: ${action.reason}${negId ? ` (ID: ${negId})` : ''}`,
           recorded_at: now,
         });
         break;
+      }
 
       default:
         return Response.json({ error: `Ação '${action.action}' não mapeada para execução direta` }, { status: 400 });
@@ -211,10 +262,15 @@ Deno.serve(async (req) => {
     await base44.asServiceRole.entities.AgentAction.update(action_id, {
       status: 'executed',
       executed_at: now,
-      execution_response: JSON.stringify(apiResult),
+      execution_response: JSON.stringify(apiResult).slice(0, 500),
     });
 
-    return Response.json({ ok: true, status: 'executed', api_result: apiResult });
+    return Response.json({ 
+      ok: true, 
+      status: 'executed', 
+      api_result: apiResult,
+      request_id: requestId,
+    });
 
   } catch (error) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
