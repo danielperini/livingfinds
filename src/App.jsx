@@ -42,6 +42,7 @@ import CampaignConfig from '@/pages/CampaignConfig';
 import DaypartingDashboard from '@/pages/DaypartingDashboard';
 import ManualInstrucoes from '@/pages/ManualInstrucoes';
 import Alerts from '@/pages/Alerts';
+import OptimizerPipeline from '@/pages/OptimizerPipeline';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -96,6 +97,7 @@ const AuthenticatedApp = () => {
           <Route path="/dayparting" element={<DaypartingDashboard />} />
           <Route path="/manual" element={<ManualInstrucoes />} />
           <Route path="/alerts" element={<Alerts />} />
+          <Route path="/optimizer" element={<OptimizerPipeline />} />
           {/* Redirects de rotas obsoletas */}
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
