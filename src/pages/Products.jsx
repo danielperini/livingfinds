@@ -841,7 +841,7 @@ export default function Products() {
               setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="Pesquisar ASIN, SKU..."
+            placeholder="Pesquisar ASIN, SKU, nome ou título..."
             className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
           />
         </div>
