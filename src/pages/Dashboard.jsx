@@ -186,7 +186,7 @@ export default function Dashboard() {
 
       const aid = acc.id;
       const [cams, prods, metrics, hourly, decs, runs, changes] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
+        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-created_date', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
@@ -635,7 +635,7 @@ export default function Dashboard() {
             <table className="w-full text-sm">
               <thead><tr className="border-b border-surface-2">{['Nome', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>)}</tr></thead>
               <tbody>
-                {campaigns.filter(c => c.state === 'enabled' && !c.archived).slice(0, 20).map(c => (
+                {campaigns.filter(c => c.state === 'enabled' && !c.archived).sort((a, b) => (b.spend || 0) - (a.spend || 0) || new Date(b.created_date || 0) - new Date(a.created_date || 0)).slice(0, 20).map(c => (
                   <tr key={c.id} className="border-b border-surface-2/50 hover:bg-surface-2">
                     <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || '—'}</td>
                     <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
