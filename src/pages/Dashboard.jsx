@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
 
@@ -164,6 +164,7 @@ export default function Dashboard() {
   const [campaigns, setCampaigns] = useState([]);
   const [products, setProducts] = useState([]);
   const [metricsDaily, setMetricsDaily] = useState([]);
+  const [hourlyMetrics, setHourlyMetrics] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [syncRuns, setSyncRuns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -183,10 +184,11 @@ export default function Dashboard() {
       if (!acc) { setLoading(false); return; }
 
       const aid = acc.id;
-      const [cams, prods, metrics, decs, runs] = await Promise.all([
+      const [cams, prods, metrics, hourly, decs, runs] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 2000),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
+        base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720), // 30 dias * 24h
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
       ]);
@@ -194,6 +196,7 @@ export default function Dashboard() {
       setCampaigns(cams);
       setProducts(prods);
       setMetricsDaily(metrics);
+      setHourlyMetrics(hourly);
       setDecisions(decs);
       setSyncRuns(runs);
     } catch (err) {
@@ -244,6 +247,30 @@ export default function Dashboard() {
     }, {})
   ).sort((a, b) => a.name.localeCompare(b.name)).slice(-30);
 
+  // Agrupar métricas por hora para o gráfico de conversão horária
+  const hourlyData = Object.values(
+    hourlyMetrics.reduce((acc, h) => {
+      const hour = h.hour ?? 0;
+      if (!acc[hour]) acc[hour] = { hour: `${String(hour).padStart(2, '0')}:00`, clicks: 0, orders: 0, spend: 0, sales: 0, impressions: 0 };
+      acc[hour].clicks += h.clicks || 0;
+      acc[hour].orders += h.orders || 0;
+      acc[hour].spend += h.spend || 0;
+      acc[hour].sales += h.sales || 0;
+      acc[hour].impressions += h.impressions || 0;
+      return acc;
+    }, {})
+  ).sort((a, b) => parseInt(a.hour) - parseInt(b.hour)).map(h => ({
+    ...h,
+    cvr: h.clicks > 0 ? safe(h.orders / h.clicks * 100) : 0,
+    cpc: h.clicks > 0 ? safe(h.spend / h.clicks) : 0,
+    roas: h.spend > 0 ? safe(h.sales / h.spend) : 0,
+  }));
+
+  function safe(num, decimals = 2) {
+    if (!num || !isFinite(num) || isNaN(num)) return 0;
+    return Number(num.toFixed(decimals));
+  }
+
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
@@ -288,6 +315,47 @@ export default function Dashboard() {
         <KPICard label="Impressões" value={kpis.impressions.toLocaleString()} sub="30 dias" loading={loading} />
         <KPICard label="Campanhas" value={campaigns.length} sub={`${campaigns.filter(c => c.state === 'enabled').length} ativas · ${campaigns.filter(c => c.state === 'paused').length} pausadas · ${campaigns.filter(c => c.state === 'archived').length} arquivadas`} loading={loading} />
         <KPICard label="Produtos" value={products.length} sub={`${products.filter(p => p.fba_inventory > 0).length} com stock`} loading={loading} />
+      </div>
+
+      {/* Gráfico de Conversão Horária */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-cyan" />
+              Conversão por Horário (30d)
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">Taxa de conversão e ROAS médio por hora do dia</p>
+          </div>
+        </div>
+        {loading ? (
+          <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+        ) : hourlyData.length === 0 ? (
+          <div className="h-40 flex flex-col items-center justify-center gap-2">
+            <p className="text-sm text-slate-500">Sem dados horários.</p>
+            <p className="text-xs text-slate-600">Execute um Sync para importar dados detalhados.</p>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={hourlyData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+              <XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="left" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
+              <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <Tooltip
+                contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 11 }}
+                formatter={(v, name) => {
+                  if (name === 'CVR (%)') return [`${Number(v).toFixed(2)}%`, name];
+                  if (name === 'ROAS') return [Number(v).toFixed(2), name];
+                  return [`$${Number(v).toFixed(2)}`, name];
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Bar yAxisId="left" dataKey="cvr" fill="#3B82F6" name="CVR (%)" radius={[2, 2, 0, 0]} />
+              <Bar yAxisId="right" dataKey="roas" fill="#10B981" name="ROAS" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* Chart + Decisions */}
