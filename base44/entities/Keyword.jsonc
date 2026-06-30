@@ -121,6 +121,60 @@
     "synced_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "best_hour_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "best_hour_end": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "best_hour_roas": {
+      "type": "number"
+    },
+    "best_hour_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "best_hour_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "worst_hour_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "worst_hour_end": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "worst_hour_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "worst_hour_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "hourly_action_suggestion": {
+      "type": "string",
+      "enum": [
+        "increase_peak",
+        "reduce_off_peak",
+        "maintain",
+        "insufficient_data"
+      ],
+      "default": "insufficient_data"
+    },
+    "hourly_data_mature": {
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [

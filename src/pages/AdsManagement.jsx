@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter } from 'lucide-react';
+import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function AdsManagement() {
@@ -62,6 +62,25 @@ export default function AdsManagement() {
       setKeywords(kws.filter(k => k.source !== 'search_term'));
       setSearchTerms(st);
       setNegSuggestions(negs);
+      
+      // Analisar desempenho horário se campanha tem 30+ dias
+      const campaignAge = campaign.days_running || 0;
+      if (campaignAge >= 30) {
+        try {
+          await base44.functions.invoke('analyzeKeywordHourlyPerformance', {
+            amazon_account_id: campaign.amazon_account_id,
+            campaign_id: campaign.campaign_id,
+          });
+          // Recarregar keywords com dados atualizados
+          const updatedKws = await base44.entities.Keyword.filter({
+            amazon_account_id: campaign.amazon_account_id,
+            campaign_id: campaign.campaign_id,
+          }, '-spend', 500);
+          setKeywords(updatedKws.filter(k => k.source !== 'search_term'));
+        } catch (e) {
+          console.warn('Erro ao analisar horário:', e.message);
+        }
+      }
     } catch {
       setKeywords([]);
       setSearchTerms([]);
@@ -303,7 +322,7 @@ export default function AdsManagement() {
                     <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-[#0D0F14] z-10">
                     <tr className="border-b border-surface-2">
-                      {['Keyword / Search Term', 'Match', 'Estado', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
+                      {['Keyword / Search Term', 'Match', 'Estado', 'Melhor horário', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -312,11 +331,59 @@ export default function AdsManagement() {
                     {keywords.map((kw, i) => {
                       const changed = kw.id in pendingBids;
                       const acosColor = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
+                      
+                      // Renderizar melhor horário
+                      const renderBestHour = () => {
+                        if (!kw.hourly_data_mature || kw.best_hour_start == null) {
+                          return (
+                            <div className="flex items-center gap-1.5 text-slate-500">
+                              <Clock className="w-3.5 h-3.5" />
+                              <span className="text-xs">Em aprendizado</span>
+                            </div>
+                          );
+                        }
+                        
+                        const start = String(kw.best_hour_start).padStart(2, '0');
+                        const end = String(kw.best_hour_end).padStart(2, '0');
+                        const actionColors = {
+                          increase_peak: 'text-emerald-400',
+                          reduce_off_peak: 'text-amber-400',
+                          maintain: 'text-cyan',
+                          insufficient_data: 'text-slate-500',
+                        };
+                        const actionLabels = {
+                          increase_peak: 'Aumentar no pico',
+                          reduce_off_peak: 'Reduzir fora do pico',
+                          maintain: 'Manter',
+                          insufficient_data: 'Dados insuficientes',
+                        };
+                        
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5">
+                              <Clock className="w-3.5 h-3.5 text-cyan" />
+                              <span className="text-xs font-semibold text-white">{start}h–{end}h</span>
+                            </div>
+                            {kw.best_hour_roas && (
+                              <div className="text-[10px] text-slate-400">
+                                ROAS {kw.best_hour_roas} · {kw.best_hour_sales} vendas
+                              </div>
+                            )}
+                            {kw.hourly_action_suggestion && kw.hourly_action_suggestion !== 'insufficient_data' && (
+                              <div className={`text-[10px] font-medium ${actionColors[kw.hourly_action_suggestion]}`}>
+                                {actionLabels[kw.hourly_action_suggestion]}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      };
+                      
                       return (
                         <tr key={kw.id || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5' : 'hover:bg-surface-2'}`}>
                           <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || '—'}</td>
                           <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
                           <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
+                          <td className="px-4 py-2.5">{renderBestHour()}</td>
                           <td className="px-4 py-2.5 text-slate-300">${(kw.bid || 0).toFixed(2)}</td>
                           <td className="px-4 py-2.5">
                             <input type="number" step="0.01" min="0.02"
