@@ -512,6 +512,24 @@ export default function Dashboard() {
           </div>
           {loading ? (
             <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+          ) : isLearningMode ? (
+            <div className="space-y-4">
+              <div className="text-center py-6 bg-cyan/5 rounded-lg border border-cyan/20">
+                <Brain className="w-8 h-8 text-cyan mx-auto mb-2" />
+                <p className="text-lg font-bold text-cyan mb-1">Em aprendizado</p>
+                <p className="text-xs text-slate-400">
+                  {20 - uniqueDaysWithData} dias restantes para calcular
+                </p>
+                <p className="text-[10px] text-slate-500 mt-2">
+                  Coletando dados de {uniqueDaysWithData}/20 dias
+                </p>
+              </div>
+              
+              <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
+                <p className="font-semibold mb-1">📊 Fase de aprendizado</p>
+                <p>O sistema precisa de pelo menos 20 dias de dados históricos para fornecer uma sugestão de budget precisa e segura.</p>
+              </div>
+            </div>
           ) : (
             <div className="space-y-4">
               <div className="text-center py-3 bg-surface-2 rounded-lg border border-surface-3">
