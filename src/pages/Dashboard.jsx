@@ -172,6 +172,8 @@ export default function Dashboard() {
   const [auditData, setAuditData] = useState(null);
   const [showAudit, setShowAudit] = useState(false);
   const [campFilter, setCampFilter] = useState('all');
+  const [forcingSyncAds, setForcingSyncAds] = useState(false);
+  const [forceSyncMsg, setForceSyncMsg] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -268,6 +270,26 @@ export default function Dashboard() {
     if (!num || !isFinite(num) || isNaN(num)) return 0;
     return Number(num.toFixed(decimals));
   }
+
+  const forceAdsSync = async () => {
+    if (!account || forcingSyncAds) return;
+    setForcingSyncAds(true);
+    setForceSyncMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
+      if (res?.data?.ok) {
+        setForceSyncMsg({ type: 'success', text: `✓ ${res.data.campaigns_updated || 0} campanhas atualizadas` });
+        await loadData();
+      } else {
+        setForceSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar' });
+      }
+    } catch (e) {
+      setForceSyncMsg({ type: 'error', text: e.message });
+    } finally {
+      setForcingSyncAds(false);
+      setTimeout(() => setForceSyncMsg(null), 8000);
+    }
+  };
 
   const runAudit = async () => {
     if (!account) return;
@@ -370,6 +392,16 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2">
           {account && <ReportSyncWidget amazonAccountId={account.id} onDone={loadData} />}
+          <div className="flex flex-col items-end gap-1">
+            <button onClick={forceAdsSync} disabled={forcingSyncAds || !account}
+              className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
+              <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
+              {forcingSyncAds ? 'Atualizando...' : 'Atualizar Ads'}
+            </button>
+            {forceSyncMsg && (
+              <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
+            )}
+          </div>
           <button onClick={loadData} disabled={loading}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />

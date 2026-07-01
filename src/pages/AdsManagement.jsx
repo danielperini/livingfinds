@@ -18,24 +18,45 @@ export default function AdsManagement() {
   const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms'
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      try {
-        const me = await base44.auth.me();
-        const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-        const acc = accounts[0] || null;
-        setAccount(acc);
-        if (!acc) return;
-        const cams = await base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000);
-        setCampaigns(cams);
-      } finally {
-        setLoading(false);
+  const loadCampaigns = async () => {
+    setLoading(true);
+    try {
+      const me = await base44.auth.me();
+      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      const acc = accounts[0] || null;
+      setAccount(acc);
+      if (!acc) return;
+      const cams = await base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000);
+      setCampaigns(cams);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadCampaigns(); }, []);
+
+  const forceSync = async () => {
+    if (!account || syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
+      if (res?.data?.ok) {
+        setSyncMsg({ type: 'success', text: `Dados atualizados — ${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
+        await loadCampaigns();
+      } else {
+        setSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
       }
-    };
-    load();
-  }, []);
+    } catch (e) {
+      setSyncMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 8000);
+    }
+  };
 
   const selectCampaign = async (campaign) => {
     setSelectedCampaign(campaign);
@@ -186,8 +207,19 @@ export default function AdsManagement() {
       {/* Sidebar */}
       <div className="w-72 flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
         <div className="p-4 border-b border-surface-2">
-          <h2 className="text-sm font-semibold text-white mb-1">Campanhas</h2>
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-sm font-semibold text-white">Campanhas</h2>
+            <button onClick={forceSync} disabled={syncing || !account}
+              title="Forçar atualização dos dados da Amazon"
+              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
+              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Atualizando...' : 'Atualizar'}
+            </button>
+          </div>
           <p className="text-xs text-slate-500">{campaigns.length} campanhas</p>
+          {syncMsg && (
+            <p className={`text-xs mt-2 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+          )}
         </div>
         <div className="p-4 border-b border-surface-2">
           {/* Filtros de estado */}
