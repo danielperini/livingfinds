@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info } from 'lucide-react';
+import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info, Settings, Package } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 
 export default function AdsManagement() {
   const [account, setAccount] = useState(null);
@@ -15,11 +16,12 @@ export default function AdsManagement() {
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   const [stateFilter, setStateFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms'
+  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms' | 'config'
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [products, setProducts] = useState([]);
 
   const loadCampaigns = async () => {
     setLoading(true);
@@ -29,8 +31,12 @@ export default function AdsManagement() {
       const acc = accounts[0] || null;
       setAccount(acc);
       if (!acc) return;
-      const cams = await base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000);
+      const [cams, prods] = await Promise.all([
+        base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
+      ]);
       setCampaigns(cams);
+      setProducts(prods);
     } finally {
       setLoading(false);
     }
@@ -62,6 +68,7 @@ export default function AdsManagement() {
     setSelectedCampaign(campaign);
     setPendingBids({});
     setActiveTab('keywords');
+
     setKwLoading(true);
     try {
       const [kws, st, negs] = await Promise.all([
@@ -254,13 +261,22 @@ export default function AdsManagement() {
               const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
               return (
                 <div key={c.id || i} onClick={() => selectCampaign(c)}
-                  className={`w-full text-left px-4 py-3 border-b border-surface-2/50 transition-all cursor-pointer ${isSelected ? 'bg-surface-2 border-l-2 border-l-cyan' : 'hover:bg-surface-1/50 border-l-2 border-l-transparent'}`}>
-                  <p className="text-xs font-medium text-white truncate">{c.name}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <StatusBadge status={c.state} size="xs" />
-                    <span className="text-xs text-slate-500">${(c.spend || 0).toFixed(0)}</span>
-                    <span className={`text-xs font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}% ACoS</span>
-                  </div>
+                 className={`w-full text-left px-4 py-3 border-b border-surface-2/50 transition-all cursor-pointer ${isSelected ? 'bg-surface-2 border-l-2 border-l-cyan' : 'hover:bg-surface-1/50 border-l-2 border-l-transparent'}`}>
+                 <p className="text-xs font-medium text-white truncate">{c.name}</p>
+                 {(() => {
+                   const prod = c.asin ? products.find(p => p.asin === c.asin) : null;
+                   return prod ? (
+                     <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                       <span className="text-cyan font-mono">{prod.asin}</span>
+                       {prod.sku ? <span className="ml-1">· SKU: {prod.sku}</span> : null}
+                     </p>
+                   ) : null;
+                 })()}
+                 <div className="flex items-center gap-2 mt-1">
+                   <StatusBadge status={c.state} size="xs" />
+                   <span className="text-xs text-slate-500">${(c.spend || 0).toFixed(0)}</span>
+                   <span className={`text-xs font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}% ACoS</span>
+                 </div>
                 </div>
               );
             })
@@ -353,13 +369,15 @@ export default function AdsManagement() {
               {[
                 { key: 'keywords', label: `Keywords (${keywords.length})` },
                 { key: 'search-terms', label: `Search Terms ${searchTerms.length > 0 ? `(${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
+                { key: 'config', label: 'Configurações' },
               ].map(tab => (
                 <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                  className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${
+                  className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
                     activeTab === tab.key
                       ? 'border-cyan text-cyan'
                       : 'border-transparent text-slate-500 hover:text-slate-300'
                   }`}>
+                  {tab.key === 'config' && <Settings className="w-3.5 h-3.5" />}
                   {tab.label}
                 </button>
               ))}
@@ -367,7 +385,17 @@ export default function AdsManagement() {
 
             {/* Tabs content */}
             <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {activeTab === 'keywords' ? (
+              {activeTab === 'config' ? (
+                <CampaignConfigPanel
+                  campaign={selectedCampaign}
+                  account={account}
+                  products={products}
+                  onSaved={(updated) => {
+                    setSelectedCampaign(updated);
+                    setCampaigns(prev => prev.map(c => c.id === updated.id ? updated : c));
+                  }}
+                />
+              ) : activeTab === 'keywords' ? (
                 <>
                   {kwLoading ? (
                     <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
@@ -381,7 +409,7 @@ export default function AdsManagement() {
                     <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-[#0D0F14] z-10">
                     <tr className="border-b border-surface-2">
-                      {['Keyword / Search Term', 'Match', 'Estado', 'Melhor horário', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
+                      {['Produto / SKU', 'Keyword / Search Term', 'Match', 'Estado', 'Melhor horário', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
                         <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -389,6 +417,9 @@ export default function AdsManagement() {
                   <tbody>
                     {keywords.map((kw, i) => {
                       const changed = kw.id in pendingBids;
+                      const kwProduct = kw.asin
+                        ? products.find(p => p.asin === kw.asin) || products.find(p => p.asin === selectedCampaign?.asin)
+                        : products.find(p => p.asin === selectedCampaign?.asin);
                       const acosColor = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
                       
                       // Renderizar melhor horário
@@ -439,6 +470,26 @@ export default function AdsManagement() {
                       
                       return (
                         <tr key={kw.id || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5' : 'hover:bg-surface-2'}`}>
+                          <td className="px-4 py-2.5 min-w-[130px] max-w-[160px]">
+                            {kwProduct ? (
+                              <div className="flex items-center gap-2">
+                                {kwProduct.product_image_url ? (
+                                  <img src={kwProduct.product_image_url} alt={kwProduct.asin}
+                                    className="w-8 h-8 rounded object-cover bg-surface-3 flex-shrink-0" />
+                                ) : (
+                                  <div className="w-8 h-8 rounded bg-surface-3 flex items-center justify-center flex-shrink-0">
+                                    <Package className="w-3.5 h-3.5 text-slate-600" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-mono text-cyan truncate">{kwProduct.asin}</p>
+                                  {kwProduct.sku && <p className="text-[10px] text-slate-500 truncate">SKU: {kwProduct.sku}</p>}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-600 font-mono">{kw.asin || selectedCampaign?.asin || '—'}</span>
+                            )}
+                          </td>
                           <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || '—'}</td>
                           <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
                           <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
