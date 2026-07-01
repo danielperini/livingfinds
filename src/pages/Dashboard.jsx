@@ -291,6 +291,30 @@ export default function Dashboard() {
     }
   };
 
+  const [forcingMasterSync, setForcingMasterSync] = useState(false);
+  const [masterSyncMsg, setMasterSyncMsg] = useState(null);
+
+  const forceMasterSync = async () => {
+    if (!account || forcingMasterSync) return;
+    setForcingMasterSync(true);
+    setMasterSyncMsg({ type: 'info', text: 'Buscando dados da Amazon... pode levar alguns minutos.' });
+    try {
+      const res = await base44.functions.invoke('runDailyMasterSync', { amazon_account_id: account.id });
+      if (res?.data?.ok) {
+        const s = res.data.summary || {};
+        setMasterSyncMsg({ type: 'success', text: `✓ Sync completo — ${s.campaigns_updated || 0} camp. · ${s.keywords_updated || 0} kws · ${s.products_updated || 0} prod.` });
+        await loadData();
+      } else {
+        setMasterSyncMsg({ type: 'error', text: res?.data?.error || res?.data?.message || 'Falha no sync' });
+      }
+    } catch (e) {
+      setMasterSyncMsg({ type: 'error', text: e.message });
+    } finally {
+      setForcingMasterSync(false);
+      setTimeout(() => setMasterSyncMsg(null), 12000);
+    }
+  };
+
   const runAudit = async () => {
     if (!account) return;
     try {
@@ -393,13 +417,24 @@ export default function Dashboard() {
         <div className="flex items-center gap-2">
           {account && <ReportSyncWidget amazonAccountId={account.id} onDone={loadData} />}
           <div className="flex flex-col items-end gap-1">
-            <button onClick={forceAdsSync} disabled={forcingSyncAds || !account}
-              className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
-              <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
-              {forcingSyncAds ? 'Atualizando...' : 'Atualizar Ads'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={forceAdsSync} disabled={forcingSyncAds || forcingMasterSync || !account}
+                className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
+                <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
+                {forcingSyncAds ? 'Atualizando...' : 'Atualizar Ads'}
+              </button>
+              <button onClick={forceMasterSync} disabled={forcingMasterSync || forcingSyncAds || !account}
+                className="flex items-center gap-2 px-3 py-2 bg-purple-500/10 border border-purple-500/20 text-purple-400 hover:bg-purple-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
+                title="Busca dados completos de vendas e gastos diretamente da Amazon (demora ~2 min)">
+                <Zap className={`w-4 h-4 ${forcingMasterSync ? 'animate-spin' : ''}`} />
+                {forcingMasterSync ? 'Sincronizando...' : 'Sync Completo'}
+              </button>
+            </div>
             {forceSyncMsg && (
               <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
+            )}
+            {masterSyncMsg && (
+              <p className={`text-xs ${masterSyncMsg.type === 'success' ? 'text-emerald-400' : masterSyncMsg.type === 'error' ? 'text-red-400' : 'text-purple-400'}`}>{masterSyncMsg.text}</p>
             )}
           </div>
           <button onClick={loadData} disabled={loading}
