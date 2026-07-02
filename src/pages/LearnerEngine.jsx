@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import Recommendations from '@/pages/Recommendations';
+import DaypartingDashboard from '@/pages/DaypartingDashboard';
 import { base44 } from '@/api/base44Client';
 import {
   Brain, CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown,
@@ -295,7 +297,7 @@ export default function LearnerEngine() {
             <Brain className="w-5 h-5 text-cyan" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">Learner Engine</h1>
+            <h1 className="text-lg font-bold text-white">Otimização & IA</h1>
             <p className="text-xs text-slate-400">
               {stats.pending} pendentes · {stats.high} alta prioridade
             </p>
@@ -345,20 +347,22 @@ export default function LearnerEngine() {
       )}
 
       {/* ── Tabs ── */}
-      <div className="flex border-b border-surface-2">
+      <div className="flex border-b border-surface-2 overflow-x-auto">
         {[
-          { id: 'pending', label: `Sugestões (${stats.pending})` },
+          { id: 'pending', label: `Decisões (${stats.pending})` },
           { id: 'history', label: `Histórico (${history.length})` },
+          { id: 'recommendations', label: '🎯 Recomendações' },
+          { id: 'dayparting', label: '🕐 Dayparting' },
           { id: 'rules', label: 'Regras Automáticas' },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             {t.label}
           </button>
         ))}
       </div>
 
-      {loading ? (
+      {tab === 'recommendations' ? <Recommendations /> : tab === 'dayparting' ? <DaypartingDashboard /> : loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
       ) : tab === 'rules' ? (
         <BiddingRulesPanel amazonAccountId={account?.id} />

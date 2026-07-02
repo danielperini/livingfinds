@@ -102,9 +102,17 @@ const AuthenticatedApp = () => {
           <Route path="/optimizer" element={<OptimizerPipeline />} />
           <Route path="/currency-audit" element={<CurrencyAudit />} />
           <Route path="/keyword-management" element={<KeywordManagement />} />
+          {/* Redirects de rotas fundidas */}
+          <Route path="/bid-logs" element={<Navigate to="/bids-log" replace />} />
+          <Route path="/metrics" element={<Navigate to="/" replace />} />
+          <Route path="/recommendations" element={<Navigate to="/learner" replace />} />
+          <Route path="/dayparting" element={<Navigate to="/learner" replace />} />
+          <Route path="/keyword-management" element={<Navigate to="/ads" replace />} />
+          <Route path="/configuracao-de-campanhas" element={<Navigate to="/ads" replace />} />
+          <Route path="/optimizer" element={<Navigate to="/learner" replace />} />
           {/* Redirects de rotas obsoletas */}
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
-          <Route path="/motor-config" element={<Navigate to="/configuracao-de-campanhas" replace />} />
+          <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />

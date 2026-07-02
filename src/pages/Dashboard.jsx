@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, ComposedChart, Line } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Calendar, Send, DollarSign } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
+import Analytics from '@/pages/Analytics';
 
 function KPICard({ label, value, unit, sub, inverse, loading }) {
   if (loading) return (
@@ -410,6 +411,8 @@ export default function Dashboard() {
   });
   const totalChanges = bidChanges.length;
 
+  const [mainTab, setMainTab] = useState('dashboard');
+
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
@@ -469,6 +472,22 @@ export default function Dashboard() {
           <p className="text-sm text-red-400">{error}</p>
         </div>
       )}
+
+      {/* Tabs Dashboard / Analytics */}
+      <div className="flex border-b border-surface-2">
+        {[
+          { id: 'dashboard', label: 'Dashboard' },
+          { id: 'analytics', label: '📊 Analytics' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setMainTab(t.id)}
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${mainTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {mainTab === 'analytics' && <Analytics />}
+      {mainTab !== 'analytics' && <>
 
       {/* Painel de Auditoria de Dados */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
@@ -786,6 +805,8 @@ export default function Dashboard() {
           </div>
         );
       })()}
+
+      </>}
 
       {/* Modal de Auditoria */}
       {showAudit && auditData && (

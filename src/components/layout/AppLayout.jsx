@@ -3,30 +3,23 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, BarChart2, Search, Target, Link2, Brain, Clock, Book, AlertTriangle
+  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Brain, Book, AlertTriangle
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 
 const navItems = [
-  { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/', icon: LayoutDashboard, label: 'Dashboard & Analytics' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
   { path: '/ads', icon: Megaphone, label: 'Gestão Ads' },
-  { path: '/keyword-management', icon: Search, label: 'Gestão Palavras-chave' },
-  { path: '/recommendations', icon: Target, label: 'Recomendações' },
-  { path: '/learner', icon: Brain, label: 'Learner Engine' },
-  { path: '/metrics', icon: BarChart2, label: 'Analytics' },
+  { path: '/learner', icon: Brain, label: 'Otimização & IA' },
   { path: '/autopilot', icon: Bot, label: 'Ads Autopilot' },
   { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
   { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
-  { path: '/bid-logs', icon: FileText, label: 'Histórico de Bids' },
-  { path: '/configuracao-de-campanhas', icon: Settings, label: 'Config. Campanhas e IA' },
-  { path: '/dayparting', icon: Clock, label: 'Dayparting' },
-  { path: '/manual', icon: Book, label: 'Manual' },
   { path: '/alerts', icon: AlertTriangle, label: 'Alertas' },
+  { path: '/manual', icon: Book, label: 'Manual' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
-  { path: '/logs', icon: FileText, label: 'Logs' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
 
