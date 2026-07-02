@@ -37,6 +37,24 @@ const RISK_COLORS = {
 
 const RISK_LABELS = { very_low: 'Muito Baixo', low: 'Baixo', medium: 'Médio', high: 'Alto', very_high: 'Muito Alto' };
 
+const OUTCOME_COLORS = {
+  EXECUTE_NOW: 'text-emerald-400',
+  SCHEDULE: 'text-cyan',
+  WAIT_FOR_DATA: 'text-slate-400',
+  RECOMMEND_APPROVAL: 'text-amber-400',
+  BLOCK: 'text-red-400',
+  ROLLBACK: 'text-purple-400',
+  NO_ACTION: 'text-slate-500',
+};
+
+const MATURITY_LABELS = {
+  NEW: '🌱 Nova',
+  LEARNING: '📚 Aprendendo',
+  MATURE: '✅ Madura',
+  STALE: '⚠ Desatualizada',
+  INSUFFICIENT_DATA: '⏳ Aguardando dados',
+};
+
 function DecisionRow({ d, onUpdate }) {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -98,10 +116,22 @@ function DecisionRow({ d, onUpdate }) {
             <span className="text-xs text-slate-500">{ACTION_LABELS[d.action] || d.action}</span>
           )}
         </td>
-        <td className="px-3 py-3 max-w-[200px]">
+        <td className="px-3 py-3">
+          <div className="flex items-center gap-2 mb-1">
+            {d.confidence != null && (
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${d.confidence >= 75 ? 'bg-emerald-400/15 text-emerald-400' : d.confidence >= 60 ? 'bg-amber-400/15 text-amber-400' : 'bg-red-400/15 text-red-400'}`}>
+                {d.confidence}% conf.
+              </span>
+            )}
+            {d.evaluation_due_at && (
+              <span className="text-[10px] text-slate-500">
+                Rev. {new Date(d.evaluation_due_at).toLocaleDateString('pt-BR')}
+              </span>
+            )}
+          </div>
           <button onClick={() => setExpanded(v => !v)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">
             {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            <span className="truncate max-w-[160px]">{d.rationale || d.reason}</span>
+            <span className="truncate max-w-[200px]">{(d.rationale || d.reason || '').split('\n')[0]}</span>
           </button>
         </td>
         <td className="px-3 py-3"><StatusBadge status={d.status} size="xs" /></td>

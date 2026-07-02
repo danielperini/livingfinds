@@ -113,6 +113,22 @@
       "type": "number",
       "default": 24
     },
+    "cooldown_increase_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "cooldown_structural_days": {
+      "type": "number",
+      "default": 7
+    },
+    "attribution_safety_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "minimum_complete_data_days": {
+      "type": "number",
+      "default": 3
+    },
     "harvest_enabled": {
       "type": "boolean",
       "default": true
