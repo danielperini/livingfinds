@@ -293,7 +293,7 @@ export default function AmazonIntegracao() {
             { name: 'Finances',             version: 'v0',          path: 'finances-api-v0-reference',               used: false, desc: 'Eventos financeiros, reembolsos e pagamentos' },
             { name: 'Listings Items',       version: 'v2021-08-01', path: 'listings-items-api-v2021-08-01-reference',used: false, desc: 'Criar e atualizar listings de produtos' },
             { name: 'Notifications',        version: 'v1',          path: 'notifications-api-v1-reference',          used: false, desc: 'Webhooks para eventos de estoque, pedidos e preços' },
-            { name: 'Sales',                version: 'v1',          path: 'sales-api-v1-reference',                  used: false, desc: 'Métricas de vendas agregadas por período' },
+            { name: 'Sales',                version: 'v1',          path: 'sales-api-v1-reference',                  used: true,  desc: 'Métricas de vendas agregadas por período' },
           ].map(api => (
             <a
               key={api.name}
