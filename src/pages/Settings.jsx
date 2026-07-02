@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink } from 'lucide-react';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
@@ -14,6 +14,9 @@ export default function Settings() {
   const [authChecking, setAuthChecking] = useState(false);
   const [secretsPreview, setSecretsPreview] = useState(null);
   const [secretsLoading, setSecretsLoading] = useState(false);
+  const [bulkBidLoading, setBulkBidLoading] = useState(false);
+  const [bulkBidResult, setBulkBidResult] = useState(null);
+  const [bulkBidConfirm, setBulkBidConfirm] = useState(false);
   const [form, setForm] = useState({
     seller_name: '',
     marketplace_id: '',
@@ -86,6 +89,26 @@ export default function Settings() {
       setAuthStatus({ ok: false, error: e.message });
     } finally {
       setAuthChecking(false);
+    }
+  };
+
+  const runBulkBid = async () => {
+    if (!account) return;
+    setBulkBidLoading(true);
+    setBulkBidResult(null);
+    setBulkBidConfirm(false);
+    try {
+      const res = await base44.functions.invoke('bulkSetAllBids', { amazon_account_id: account.id, bid: 0.60 });
+      const d = res.data;
+      if (d?.ok) {
+        setBulkBidResult({ ok: true, message: `✓ ${d.keywords?.ok || 0} keywords + ${d.ad_groups?.ok || 0} ad groups atualizados para R$0,60` });
+      } else {
+        setBulkBidResult({ ok: false, message: d?.error || `Falha: ${d?.keywords?.failed || 0} keywords com erro` });
+      }
+    } catch (e) {
+      setBulkBidResult({ ok: false, message: e.message });
+    } finally {
+      setBulkBidLoading(false);
     }
   };
 
@@ -272,6 +295,58 @@ export default function Settings() {
           {syncResult && (
             <div className={`p-3 rounded-lg border text-xs ${syncResult.ok ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300' : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
               {syncResult.message}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Bulk Bid Reset */}
+      {account && (
+        <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+                <DollarSign className="w-4 h-4 text-amber-400" /> Bulk Reset de Bids — R$0,60
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">Aplica bid de R$0,60 em <strong className="text-white">todas</strong> as keywords e ad groups ativos/pausados via Amazon API.</p>
+            </div>
+          </div>
+
+          {!bulkBidConfirm && !bulkBidResult && (
+            <button onClick={() => setBulkBidConfirm(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 text-sm font-semibold rounded-lg transition-colors">
+              <DollarSign className="w-4 h-4" /> Definir todos bids para R$0,60
+            </button>
+          )}
+
+          {bulkBidConfirm && !bulkBidLoading && !bulkBidResult && (
+            <div className="p-4 bg-amber-400/5 border border-amber-400/30 rounded-lg space-y-3">
+              <p className="text-sm text-amber-300 font-semibold">⚠️ Confirmar alteração em massa?</p>
+              <p className="text-xs text-slate-400">Esta ação irá alterar o bid de <strong className="text-white">todas</strong> as keywords e ad groups diretamente na Amazon Ads API. Não pode ser desfeita em massa.</p>
+              <div className="flex gap-3">
+                <button onClick={runBulkBid}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-black text-sm font-bold rounded-lg transition-colors">
+                  Confirmar — Aplicar R$0,60
+                </button>
+                <button onClick={() => setBulkBidConfirm(false)}
+                  className="px-4 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors">
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {bulkBidLoading && (
+            <div className="flex items-center gap-3 p-4 bg-surface-2 rounded-lg">
+              <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+              <span className="text-sm text-slate-300">Aplicando R$0,60 em todas as keywords via Amazon API... pode demorar alguns segundos.</span>
+            </div>
+          )}
+
+          {bulkBidResult && (
+            <div className={`p-3 rounded-lg border text-xs flex items-center justify-between ${bulkBidResult.ok ? 'border-emerald-400/20 bg-emerald-400/5 text-emerald-300' : 'border-red-400/20 bg-red-400/5 text-red-400'}`}>
+              <span>{bulkBidResult.message}</span>
+              <button onClick={() => setBulkBidResult(null)} className="ml-4 text-slate-500 hover:text-white text-xs">Fechar</button>
             </div>
           )}
         </div>
