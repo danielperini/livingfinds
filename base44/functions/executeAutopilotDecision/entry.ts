@@ -165,11 +165,11 @@ async function executeDecision(d, account, base44) {
         throw new Error(`Ação não suportada: ${d.action}`);
     }
   } catch (callError) {
-    result = { ok: false, status: 500, data: { error: callError.message } };
+    result = { ok: false, status: 500, data: { error: String(callError?.message || callError) } };
   }
 
   // ── Registrar resultado com confirmação Amazon ────────────────────────────
-  const success = result.ok && (result.status === 200 || result.status === 207);
+  const success = result && result.ok && (result.status === 200 || result.status === 207);
   const newStatus = success ? 'executed' : 'failed';
   const evalDays = getEvaluationDays(d.decision_type, d.action);
   const evaluationDue = new Date(Date.now() + evalDays * 86400000).toISOString();
