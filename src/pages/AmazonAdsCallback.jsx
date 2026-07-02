@@ -34,13 +34,8 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // Usar o origin actual da app — evita hardcode de domínio
-        const fnRes = await fetch(`${window.location.origin}/functions/exchangeAmazonAdsCode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: finalCode }),
-        });
-        const data = await fnRes.json();
+        const fnRes = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
+        const data = fnRes.data;
 
         if (!data?.ok) {
           setStatus('error');
