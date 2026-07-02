@@ -43,7 +43,7 @@ const STEPS = [
     n: 3,
     title: 'Localizar a aplicação',
     desc: 'Procura pela aplicação com o seguinte App ID:',
-    code: 'amzn1.sp.solution.a6d89e43-051b-439f-9596-9e8b7a10affd',
+    code: 'amzn1.sp.solution.7c15f6b8-cfdd-4530-a25a-4c90edafe425',
   },
   {
     n: 4,

@@ -228,7 +228,7 @@ export default function AmazonIntegracao() {
           {[
             { n: 1, text: 'Acede ao Seller Central com o utilizador principal da conta.' },
             { n: 2, text: 'Vai a Apps e Serviços → Desenvolver Aplicações.' },
-            { n: 3, text: <>Localiza a aplicação <code className="font-mono text-cyan">amzn1.sp.solution.a6d89e43...</code></> },
+            { n: 3, text: <>Localiza a aplicação <code className="font-mono text-cyan">amzn1.sp.solution.7c15f6b8...</code></> },
             { n: 4, text: 'Clica na seta ao lado de "Alterar" e seleciona "Autorizar".' },
             { n: 5, text: <>Clica em "Autorizar aplicativo". A Amazon gera um token iniciado por <code className="font-mono text-cyan">Atzr|</code></> },
             { n: 6, text: <>Guarda esse token no secret <code className="font-mono text-cyan">AMAZON_SP_REFRESH_TOKEN</code> no painel do Base44.</> },
