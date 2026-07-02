@@ -3,6 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
 import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign } from 'lucide-react';
+import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
@@ -174,6 +175,7 @@ export default function Dashboard() {
   const [auditData, setAuditData] = useState(null);
   const [showAudit, setShowAudit] = useState(false);
   const [campFilter, setCampFilter] = useState('all');
+  const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [forcingSyncAds, setForcingSyncAds] = useState(false);
   const [forceSyncMsg, setForceSyncMsg] = useState(null);
 
@@ -190,7 +192,7 @@ export default function Dashboard() {
       if (!acc) { setLoading(false); return; }
 
       const aid = acc.id;
-      const [cams, prods, metrics, hourly, decs, runs, changes] = await Promise.all([
+      const [cams, prods, metrics, hourly, decs, runs, changes, apConfigs] = await Promise.all([
         loadAllCampaigns(aid),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
@@ -198,6 +200,7 @@ export default function Dashboard() {
         base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
         base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),
+        base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
       ]);
 
       setCampaigns(cams);
@@ -207,6 +210,7 @@ export default function Dashboard() {
       setDecisions(decs);
       setSyncRuns(runs);
       setBidChanges(changes);
+      setAutopilotConfig(apConfigs[0] || null);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -607,66 +611,14 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Sugestão de Budget */}
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <DollarSign className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-slate-300">Sugestão de Budget Diário</h2>
-          </div>
-          {loading ? (
-            <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-          ) : isLearningMode ? (
-            <div className="space-y-4">
-              <div className="text-center py-6 bg-cyan/5 rounded-lg border border-cyan/20">
-                <Brain className="w-8 h-8 text-cyan mx-auto mb-2" />
-                <p className="text-lg font-bold text-cyan mb-1">Em aprendizado</p>
-                <p className="text-xs text-slate-400">
-                  {Math.max(0, 20 - uniqueDaysWithDataAll)} dias restantes para calcular
-                </p>
-                <p className="text-[10px] text-slate-500 mt-2">
-                  Coletando dados de {uniqueDaysWithDataAll}/20 dias
-                </p>
-              </div>
-              
-              <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
-                <p className="font-semibold mb-1">📊 Fase de aprendizado</p>
-                <p>O sistema precisa de 20 dias de dados históricos para calcular o budget ideal com base no spend médio real deduplificado.</p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="text-center py-3 bg-surface-2 rounded-lg border border-surface-3">
-                <p className="text-xs text-slate-500 mb-1">Budget Sugerido</p>
-                <p className="text-2xl font-bold text-emerald-400">${suggestedBudget.toFixed(2)}</p>
-                <p className="text-[10px] text-slate-500 mt-1">por dia</p>
-              </div>
-              
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between py-1.5 border-b border-surface-2">
-                 <span className="text-slate-500">Spend médio real (20d)</span>
-                 <span className="text-white font-semibold">R${avgDailySpend.toFixed(2)}/dia</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-surface-2">
-                 <span className="text-slate-500">Dias com dados</span>
-                 <span className="text-white font-semibold">{uniqueDaysWithDataAll} dias</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-surface-2">
-                 <span className="text-slate-500">Budget total ativo</span>
-                 <span className="text-white font-semibold">R${activeCampaignsBudget.toFixed(2)}/dia</span>
-                </div>
-                <div className="flex justify-between py-1.5">
-                  <span className="text-slate-500">Campanhas ativas</span>
-                  <span className="text-emerald-400 font-semibold">{active_count}</span>
-                </div>
-              </div>
-
-              <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
-                <p className="font-semibold mb-1">Como calculamos:</p>
-                <p>Spend médio real dos últimos 20 dias (deduplicado por campanha/dia) + 20% de margem de crescimento, limitado ao budget total ativo atual.</p>
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Sugestão de Budget — IA */}
+        <BudgetSuggestionCard
+          metricsDaily={metricsDaily}
+          campaigns={campaigns}
+          products={products}
+          loading={loading}
+          autopilotConfig={autopilotConfig}
+        />
 
         {/* Gráfico de Alterações Enviadas */}
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 lg:col-span-3">

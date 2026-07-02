@@ -224,6 +224,23 @@
     "currency_symbol": {
       "type": "string",
       "default": "R$"
+    },
+    "ai_suggested_daily_budget": {
+      "type": "number"
+    },
+    "ai_budget_reasoning": {
+      "type": "string"
+    },
+    "ai_budget_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_budget_generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ai_budget_breakdown": {
+      "type": "string"
     }
   },
   "required": [
