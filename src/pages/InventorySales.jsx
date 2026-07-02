@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw, Sparkles } from 'lucide-react';
 
 export default function InventorySales() {
   const [account, setAccount] = useState(null);
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichMsg, setEnrichMsg] = useState(null);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('products');
 
@@ -30,6 +32,25 @@ export default function InventorySales() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const missingTitles = products.filter(p => !p.product_name && !p.display_name).length;
+
+  const enrichTitles = async () => {
+    if (!account || enriching) return;
+    setEnriching(true);
+    setEnrichMsg(null);
+    try {
+      const res = await base44.functions.invoke('enrichProductNames', { amazon_account_id: account.id });
+      const updated = res?.data?.updated || 0;
+      setEnrichMsg({ type: 'success', text: `${updated} títulos atualizados via IA.` });
+      await load();
+    } catch (e) {
+      setEnrichMsg({ type: 'error', text: e.message });
+    } finally {
+      setEnriching(false);
+      setTimeout(() => setEnrichMsg(null), 6000);
+    }
+  };
 
   const filtered = products.filter(p =>
     (p.asin || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -56,6 +77,16 @@ export default function InventorySales() {
               </button>
             ))}
           </div>
+          {tab === 'products' && missingTitles > 0 && (
+            <button onClick={enrichTitles} disabled={enriching}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors disabled:opacity-50">
+              {enriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {enriching ? 'Atualizando...' : `Enriquecer ${missingTitles} títulos via IA`}
+            </button>
+          )}
+          {enrichMsg && (
+            <span className={`text-xs ${enrichMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{enrichMsg.text}</span>
+          )}
           <button onClick={load} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -100,7 +131,7 @@ export default function InventorySales() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['ASIN / Nome', 'SKU', 'Preço', 'FBA Stock', 'Receita 30d', 'Unidades 30d', 'Alerta'].map(h => (
+                  {['ASIN', 'Título do Produto', 'SKU', 'Preço', 'FBA Stock', 'Receita 30d', 'Unidades 30d', 'Alerta'].map(h => (
                     <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -112,7 +143,13 @@ export default function InventorySales() {
                     <tr key={p.id} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
                       <td className="px-5 py-3">
                         <p className="font-medium text-cyan font-mono text-xs">{p.asin}</p>
-                        <p className="text-xs text-slate-500 truncate max-w-xs mt-0.5">{p.name || '—'}</p>
+                      </td>
+                      <td className="px-5 py-3 max-w-[260px]">
+                        {(p.product_name || p.display_name) ? (
+                          <p className="text-xs text-slate-200 leading-snug line-clamp-2">{p.product_name || p.display_name}</p>
+                        ) : (
+                          <span className="text-xs text-slate-600 italic">Sem título · clique em Enriquecer</span>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-xs text-slate-400 font-mono">{p.sku || '—'}</td>
                       <td className="px-5 py-3 text-slate-300">{p.price ? `$${p.price.toFixed(2)}` : '—'}</td>
