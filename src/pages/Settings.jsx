@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw } from 'lucide-react';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
@@ -10,6 +10,8 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
+  const [authStatus, setAuthStatus] = useState(null);
+  const [authChecking, setAuthChecking] = useState(false);
   const [form, setForm] = useState({
     seller_name: '',
     marketplace_id: '',
@@ -57,6 +59,19 @@ export default function Settings() {
       alert(`Erro: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const checkAuth = async () => {
+    setAuthChecking(true);
+    setAuthStatus(null);
+    try {
+      const res = await base44.functions.invoke('testAuthHealth', {});
+      setAuthStatus(res?.data || null);
+    } catch (e) {
+      setAuthStatus({ ok: false, error: e.message });
+    } finally {
+      setAuthChecking(false);
     }
   };
 
@@ -157,6 +172,67 @@ export default function Settings() {
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
           {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
         </button>
+      </div>
+
+      {/* Status de Autenticação Amazon */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-white">Diagnóstico de Credenciais Amazon</h2>
+          <button onClick={checkAuth} disabled={authChecking}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-60">
+            {authChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+            {authChecking ? 'Verificando...' : 'Verificar Credenciais'}
+          </button>
+        </div>
+
+        {!authStatus && !authChecking && (
+          <p className="text-xs text-slate-500">Clique em "Verificar Credenciais" para testar a conexão com a Amazon.</p>
+        )}
+
+        {authStatus && (
+          <div className="space-y-3">
+            {[
+              { key: 'ads', label: 'Amazon Ads API (ADS_REFRESH_TOKEN)', hint: 'Regenere o token em sellercentral.amazon.com.br → Apps & Services → Authorize Apps' },
+              { key: 'sp', label: 'SP-API (SP_CLIENT_ID / SP_CLIENT_SECRET)', hint: 'Verifique as credenciais no Amazon Developer Console' },
+            ].map(({ key, label, hint }) => {
+              const svc = authStatus?.services?.[key];
+              const ok = svc?.ok;
+              return (
+                <div key={key} className={`p-3 rounded-lg border ${ok ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-red-400/20 bg-red-400/5'}`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    {ok
+                      ? <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                      : <ShieldAlert className="w-4 h-4 text-red-400 flex-shrink-0" />}
+                    <span className={`text-xs font-semibold ${ok ? 'text-emerald-300' : 'text-red-300'}`}>{label}</span>
+                  </div>
+                  {!ok && svc && (
+                    <div className="ml-6 space-y-1">
+                      <p className="text-xs text-red-400">
+                        Erro: <span className="font-mono">{svc.error_code || svc.message || 'desconhecido'}</span>
+                      </p>
+                      <p className="text-[10px] text-slate-400">{hint}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {(!authStatus?.services?.ads?.ok || !authStatus?.services?.sp?.ok) && (
+              <div className="flex items-start gap-2 p-3 bg-amber-400/5 border border-amber-400/20 rounded-lg">
+                <WifiOff className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-300 space-y-1">
+                  <p className="font-semibold">Como renovar o token de Ads:</p>
+                  <ol className="list-decimal list-inside space-y-0.5 text-amber-200/80">
+                    <li>Acesse sellercentral.amazon.com.br</li>
+                    <li>Vá em Apps & Services → Manage Your Apps</li>
+                    <li>Clique na aplicação LWA e gere um novo refresh token</li>
+                    <li>Atualize o secret <code className="font-mono bg-surface-3 px-1 rounded">ADS_REFRESH_TOKEN</code> no Base44 → Settings → Environment Variables</li>
+                  </ol>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Sync Rápido */}
