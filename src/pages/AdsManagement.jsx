@@ -176,7 +176,7 @@ export default function AdsManagement() {
         return;
       }
       
-      // Criar keyword manual com bid sugerido de $0.30
+      // Criar keyword manual exact com bid sugerido de $0.30
       await base44.entities.Keyword.create({
         amazon_account_id: account.id,
         campaign_id: searchTerm.campaign_id,
@@ -193,6 +193,19 @@ export default function AdsManagement() {
         last_seen_at: new Date().toISOString(),
         synced_at: new Date().toISOString(),
       });
+
+      // ── Negativar automaticamente na campanha AUTO do mesmo produto ──────
+      const asin = searchTerm.advertised_asin || selectedCampaign?.asin;
+      if (asin && searchTerm.keyword_text) {
+        base44.functions.invoke('negateKeywordInAutoCampaign', {
+          amazon_account_id: account.id,
+          asin,
+          keyword_text: searchTerm.keyword_text,
+          manual_campaign_id: searchTerm.campaign_id,
+          triggered_by: 'user_promote',
+        }).catch(e => console.warn('Auto-negation skipped:', e.message));
+      }
+
       setSearchTerms(prev => prev.filter(st => st.id !== searchTerm.id));
     } catch (err) {
       console.error('Erro ao promover:', err);

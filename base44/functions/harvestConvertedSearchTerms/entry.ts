@@ -202,6 +202,19 @@ Deno.serve(async (req) => {
       created += batch.length;
     }
 
+    // ── Negativar nas campanhas AUTO: para cada decisão de harvest, disparar negativação ──
+    for (const d of decisions) {
+      if (d.keyword_text && d.asin) {
+        await base44.asServiceRole.functions.invoke('negateKeywordInAutoCampaign', {
+          amazon_account_id: account.id,
+          asin: d.asin,
+          keyword_text: d.keyword_text,
+          manual_campaign_id: d.campaign_id,
+          triggered_by: 'harvest_search_terms',
+        }).catch(e => console.warn('negateKeywordInAutoCampaign skip:', e.message));
+      }
+    }
+
     return Response.json({
       ok: true,
       harvested: created,

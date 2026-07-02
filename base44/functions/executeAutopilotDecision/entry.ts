@@ -147,6 +147,17 @@ async function executeDecision(d, account, base44) {
           asin: d.asin,
         });
         result = { ok: !!harvestResult?.ok, status: harvestResult?.ok ? 200 : 500, data: harvestResult };
+
+        // ── Negativar automaticamente na campanha AUTO do mesmo ASIN ──────────
+        if (result.ok && d.keyword_text && d.asin) {
+          await base44.asServiceRole.functions.invoke('negateKeywordInAutoCampaign', {
+            amazon_account_id: d.amazon_account_id,
+            asin: d.asin,
+            keyword_text: d.keyword_text,
+            manual_campaign_id: d.campaign_id,
+            triggered_by: 'autopilot_harvest',
+          }).catch(e => console.warn('negateKeywordInAutoCampaign error:', e.message));
+        }
         break;
       }
 
