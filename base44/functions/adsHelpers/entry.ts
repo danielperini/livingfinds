@@ -70,6 +70,25 @@ export async function adsCall(method, path, body, contentType = 'application/jso
   return data;
 }
 
+// Paginação completa de campanhas (evita limite de 500 registros por query)
+export async function loadAllCampaigns(base44, amazonAccountId) {
+  const allCampaigns = [];
+  let offset = 0;
+  const pageSize = 200;
+  while (true) {
+    const page = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id: amazonAccountId },
+      '-created_date',
+      pageSize,
+      offset
+    );
+    allCampaigns.push(...page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return allCampaigns;
+}
+
 // Endpoint handler obrigatório
 Deno.serve(async (req) => {
   return Response.json({ ok: true, message: 'adsHelpers — internal utility module' });
