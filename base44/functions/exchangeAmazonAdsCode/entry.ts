@@ -4,6 +4,8 @@ const REDIRECT_URI = 'https://livingfinds-app.base44.app/amazon-ads-callback';
 
 Deno.serve(async (req) => {
   try {
+    // Este endpoint é chamado sem sessão de utilizador (callback OAuth)
+    // Usa service role para aceder às entidades
     const base44 = createClientFromRequest(req);
 
     const body = await req.json().catch(() => ({}));
@@ -13,10 +15,10 @@ Deno.serve(async (req) => {
     const clientId = Deno.env.get('ADS_CLIENT_ID');
     const clientSecret = Deno.env.get('ADS_CLIENT_SECRET');
     if (!clientId || !clientSecret) {
-      return Response.json({ error: 'ADS_CLIENT_ID ou ADS_CLIENT_SECRET não configurados nos secrets' }, { status: 500 });
+      return Response.json({ error: 'ADS_CLIENT_ID ou ADS_CLIENT_SECRET não configurados' }, { status: 500 });
     }
 
-    // POST form-urlencoded para Amazon LWA
+    // POST para Amazon LWA — troca code por tokens
     const formBody = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
@@ -27,10 +29,7 @@ Deno.serve(async (req) => {
 
     const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
       body: formBody.toString(),
     });
 
@@ -74,7 +73,7 @@ Deno.serve(async (req) => {
       profilesError = e.message;
     }
 
-    // Salvar refresh_token na AmazonAccount via service role (não requer auth de usuário)
+    // Salvar refresh_token na AmazonAccount via service role
     let accountUpdated = false;
     let accountId = amazon_account_id;
     try {
@@ -86,7 +85,6 @@ Deno.serve(async (req) => {
       if (!accounts.length) {
         accounts = await base44.asServiceRole.entities.AmazonAccount.list();
       }
-
       if (accounts.length > 0) {
         const acc = accounts[0];
         accountId = acc.id;
@@ -102,7 +100,6 @@ Deno.serve(async (req) => {
       console.error('Erro ao salvar token na conta:', e.message);
     }
 
-    // Mascarar token para exibição
     const mask = (t) => t ? `${t.slice(0, 8)}...${t.slice(-4)}` : null;
 
     return Response.json({

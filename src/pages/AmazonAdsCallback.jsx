@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { base44 } from '@/api/base44Client';
 import { CheckCircle, XCircle, Loader2, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -33,19 +32,16 @@ export default function AmazonAdsCallback() {
       const finalCode = code || pendingCode;
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
-      // Verificar autenticação antes de chamar a função
       try {
-        const isAuth = await base44.auth.isAuthenticated();
-        if (!isAuth) {
-          sessionStorage.setItem('amazon_ads_pending_code', finalCode);
-          window.location.href = `/login?next=${encodeURIComponent(`/amazon-ads-callback`)}`;
-          return;
-        }
-      } catch (_) {}
-
-      try {
-        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
-        const data = res.data;
+        // Chamar directamente via fetch — sem necessidade de sessão após redirect OAuth
+        const appId = import.meta.env.VITE_BASE44_APP_ID;
+        const appBaseUrl = import.meta.env.VITE_BASE44_APP_BASE_URL || 'https://api.base44.com';
+        const fnRes = await fetch(`${appBaseUrl}/api/apps/${appId}/functions/exchangeAmazonAdsCode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: finalCode }),
+        });
+        const data = await fnRes.json();
 
         if (!data?.ok) {
           setStatus('error');
@@ -58,17 +54,9 @@ export default function AmazonAdsCallback() {
         setMessage(data.message || 'Amazon Ads conectada com sucesso.');
         setDetails(data);
       } catch (e) {
-        // Extrair detalhe do erro HTTP
-        const errData = e?.response?.data;
         setStatus('error');
-        setMessage(
-          errData?.error_description ||
-          errData?.message ||
-          errData?.error ||
-          e.message ||
-          'Erro ao conectar com a Amazon Ads.'
-        );
-        setRawError(errData || { message: e.message });
+        setMessage(e.message || 'Erro ao conectar com a Amazon Ads.');
+        setRawError({ message: e.message });
       }
     })();
   }, []);
