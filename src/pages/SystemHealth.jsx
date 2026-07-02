@@ -120,9 +120,9 @@ export default function SystemHealth() {
       }
       setChecks(c => ({ ...c, lastSync: result.lastSync }));
 
-      // 6. Sync Runs recentes — erros
+      // 6. Sync Runs recentes — erros (usa SyncExecutionLog)
       if (acc) {
-        const recentRuns = await base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 5);
+        const recentRuns = await base44.entities.SyncExecutionLog.filter({ amazon_account_id: acc.id }, '-started_at', 5);
         const errorRuns = recentRuns.filter(r => r.status === 'error');
         result.syncErrors = {
           status: errorRuns.length === 0 ? 'healthy' : errorRuns.length < 3 ? 'degraded' : 'unavailable',
@@ -133,12 +133,17 @@ export default function SystemHealth() {
       }
       setChecks(c => ({ ...c, syncErrors: result.syncErrors }));
 
-      // 7. Decisões pendentes
+      // 7. Decisões pendentes (usa OptimizationDecision — fonte canônica)
       if (acc) {
-        const pending = await base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 50);
+        const pending = await base44.entities.OptimizationDecision.filter(
+          { amazon_account_id: acc.id, status: 'pending' }, '-created_at', 50
+        );
+        const approved = await base44.entities.OptimizationDecision.filter(
+          { amazon_account_id: acc.id, status: 'approved' }, '-created_at', 50
+        );
         result.pendingDecisions = {
           status: pending.length > 20 ? 'degraded' : 'healthy',
-          detail: `${pending.length} decisão(ões) pendentes de aprovação`,
+          detail: `${pending.length} pendentes · ${approved.length} aprovadas aguardando execução`,
         };
       }
       setChecks(c => ({ ...c, pendingDecisions: result.pendingDecisions }));
@@ -217,16 +222,16 @@ export default function SystemHealth() {
           <HealthRow label="Último sync bem-sucedido" status={checks?.lastSync?.status || 'checking'} detail={checks?.lastSync?.detail} icon={RefreshCw} />
         </Section>
 
-        <Section title="Relatório de Auditoria" icon={Activity}>
+        <Section title="Funções do Motor IA" icon={Activity}>
           <div className="py-3 space-y-2">
-            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">Funções Backend</p>
+            <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-3">Estado Atual</p>
             {[
-              { label: 'runFullSync (pipeline principal)', status: 'healthy' },
-              { label: 'dailyReportScheduler (scheduler)', status: 'healthy' },
-              { label: 'runDailyAdsOptimization (otimização)', status: 'degraded', detail: 'Corrigido: fallback serviceRole adicionado' },
-              { label: 'executeApprovedAIDecisions', status: 'unavailable', detail: 'Bug JS pendente de correção' },
-              { label: 'syncAll (Xano)', status: 'not_configured', detail: 'Obsoleto — depende de Xano externo' },
-              { label: 'exchangeAmazonAdsCode', status: 'healthy', detail: 'REDIRECT_URI corrigido para domínio atual' },
+              { label: 'aiEngine (motor central)', status: 'healthy', detail: 'Modos: autopilot, smart_bid, calibrate_bids, harvest, mine_opportunities, negate, full' },
+              { label: 'runDailyAdsOptimization (decisório)', status: 'healthy', detail: 'Autonomy level 2 — executa low-risk automaticamente' },
+              { label: 'executeAutopilotDecision (execução)', status: 'healthy', detail: 'Executa bids, budgets, negativas e harvest via Amazon Ads API' },
+              { label: 'calibrateBidsNoImpressions', status: 'healthy', detail: '+R$0.10/24h sem impressão — teto R$1.20, piso R$0.25' },
+              { label: 'harvestConvertedSearchTerms', status: 'healthy', detail: 'Promove search terms convertidos a keywords manuais exact' },
+              { label: 'runFullProductAutomation', status: 'healthy', detail: 'Orquestrador: AUTO+MANUAL por produto com gate de conformidade' },
             ].map(item => (
               <HealthRow key={item.label} label={item.label} status={item.status} detail={item.detail} />
             ))}
@@ -241,12 +246,12 @@ export default function SystemHealth() {
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {[
-            { flag: 'ENABLE_AUTOMATIC_BID_EXECUTION', status: false, desc: 'Execução automática de bids' },
-            { flag: 'ENABLE_SEARCH_TERM_HARVESTING', status: true, desc: 'Monitor diário de search terms' },
-            { flag: 'ENABLE_CAMPAIGN_CREATION', status: true, desc: 'Criação de campanhas via Kick-off' },
-            { flag: 'ENABLE_AI_CLASSIFICATION', status: true, desc: 'Análise IA nas decisões de bid' },
-            { flag: 'ENABLE_BUDGET_PACING', status: false, desc: 'Pacing automático de orçamento' },
-            { flag: 'ENABLE_UNIFIED_PIPELINE', status: false, desc: 'Pipeline unificado (em desenvolvimento)' },
+            { flag: 'AUTOPILOT_AUTONOMY_LEVEL_2', status: true, desc: 'Execução automática low-risk (bids sem impressão, harvest)' },
+            { flag: 'ENABLE_SEARCH_TERM_HARVESTING', status: true, desc: 'Colheita de search terms convertidos → keywords manuais' },
+            { flag: 'ENABLE_CAMPAIGN_CREATION', status: true, desc: 'Criação AUTO+MANUAL via Kick-off e automação de produtos' },
+            { flag: 'ENABLE_AI_CLASSIFICATION', status: true, desc: 'Classificação IA: WINNER / HIGH_ACOS / WASTING / FIRST_SALE' },
+            { flag: 'ENABLE_COMPLIANCE_GATE', status: true, desc: 'Gate de conformidade por produto e termo antes de criar campanha' },
+            { flag: 'ENABLE_NEGATIVE_KEYWORD_AUTO', status: true, desc: 'Negativação automática na AUTO após promoção para MANUAL' },
           ].map(f => (
             <div key={f.flag} className={`p-3 rounded-lg border ${f.status ? 'bg-emerald-400/5 border-emerald-400/20' : 'bg-surface-2 border-surface-3'}`}>
               <div className="flex items-center gap-2 mb-1">

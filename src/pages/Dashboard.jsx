@@ -194,11 +194,11 @@ export default function Dashboard() {
       const aid = acc.id;
       const [cams, prods, metrics, hourly, decs, runs, changes, apConfigs] = await Promise.all([
         loadAllCampaigns(aid),
-        base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
+        base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
-        base44.entities.Decision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_date', 10),
-        base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 8),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
       ]);
@@ -432,8 +432,8 @@ export default function Dashboard() {
           <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-sm text-slate-400 mt-0.5">
             {decisions.length > 0
-              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> recomendações IA pendentes · </>
-              : 'Sem recomendações pendentes · '}
+              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes · </>
+              : 'Sem decisões pendentes · '}
             {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
           </p>
         </div>
@@ -531,10 +531,10 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="✓ Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
-        <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
+        <KPICard label="Ad Spend 30d" value={`R$${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
+        <KPICard label="Vendas Ads 30d" value={`R$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
-        <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
+        <KPICard label="CPC Médio" value={`R$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
 
       {/* Painel 48h */}
@@ -720,7 +720,7 @@ export default function Dashboard() {
               <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
               <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `$${Number(v).toFixed(2)}`} />
+              <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `R$${Number(v).toFixed(2)}`} />
               <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" />
               <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" />
             </AreaChart>
@@ -796,8 +796,8 @@ export default function Dashboard() {
                         <tr key={c.id} className={`border-b border-surface-2/50 hover:bg-surface-2 transition-colors ${isInactive ? 'opacity-60' : ''}`}>
                           <td className="px-4 py-3"><CampStatusBadge c={c} /></td>
                           <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || c.campaign_name || '—'}</td>
-                          <td className="px-4 py-3 text-slate-300">${(c.spend || 0).toFixed(2)}</td>
-                          <td className="px-4 py-3 text-emerald-400">${(c.sales || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-slate-300">R${(c.spend || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-emerald-400">R${(c.sales || 0).toFixed(2)}</td>
                           <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : (c.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>{(c.acos || 0).toFixed(1)}%</td>
                           <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
                         </tr>

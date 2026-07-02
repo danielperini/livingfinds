@@ -222,10 +222,9 @@ export default function LearnerEngine() {
       const acc = accounts[0];
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
-      const [optPending, legacyPending, done] = await Promise.all([
+      const [allDecs, doneDecs] = await Promise.all([
         base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_at', 200),
-        base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 100),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id }, '-created_at', 100),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id }, '-created_at', 200),
       ]);
       const normalize = d => ({
         ...d,
@@ -236,9 +235,8 @@ export default function LearnerEngine() {
         confidence: d.confidence != null ? (d.confidence > 1 ? d.confidence / 100 : d.confidence) : null,
         priority: (d.risk === 'high' || d.risk === 'very_high') ? 'high' : d.risk === 'medium' ? 'medium' : 'low',
       });
-      const allPending = [...optPending.map(normalize), ...legacyPending.filter(l => !optPending.find(o => o.legacy_id === l.id))];
-      setDecisions(allPending);
-      setHistory(done.filter(d => d.status !== 'pending').map(normalize));
+      setDecisions(allDecs.map(normalize));
+      setHistory(doneDecs.filter(d => d.status !== 'pending').map(normalize));
     } catch (err) {
       setError(err.message);
     } finally {

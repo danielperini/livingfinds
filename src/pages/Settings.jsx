@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign } from 'lucide-react';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package, BarChart2, Key } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
@@ -145,11 +145,29 @@ export default function Settings() {
 
       {/* Status da Conta */}
       {account && (
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 flex items-center gap-4">
-          <StatusBadge status={account.status || 'pending'} />
-          <div>
-            <p className="text-sm font-semibold text-white">{account.seller_name || 'Conta Amazon'}</p>
-            <p className="text-xs text-slate-500">Último sync: {account.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca'}</p>
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-3">
+          <div className="flex items-center gap-4">
+            <StatusBadge status={account.status || 'pending'} />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-white">{account.seller_name || 'Conta Amazon'}</p>
+              <p className="text-xs text-slate-500">Último sync: {account.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : 'Nunca'}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Seller ID', value: account.seller_id, icon: Package },
+              { label: 'Marketplace ID', value: account.marketplace_id, icon: BarChart2 },
+              { label: 'Ads Profile ID', value: account.ads_profile_id, icon: Key },
+              { label: 'Moeda', value: `${account.currency_code || 'BRL'} (${account.currency_symbol || 'R$'})`, icon: DollarSign },
+            ].map(({ label, value, icon: Icon }) => (
+              <div key={label} className="bg-surface-2 rounded-lg p-3">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Icon className="w-3 h-3 text-slate-500" />
+                  <p className="text-[10px] text-slate-500">{label}</p>
+                </div>
+                <p className="text-xs font-mono text-slate-200 truncate">{value || '—'}</p>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -366,7 +384,8 @@ export default function Settings() {
           </button>
         </div>
         <div className="space-y-2">
-          {['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_REGION'].map(s => {
+          {['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_REGION',
+            'AMAZON_SP_REFRESH_TOKEN', 'AMAZON_LWA_CLIENT_ID', 'AMAZON_LWA_CLIENT_SECRET', 'ANTHROPIC_API_KEY'].map(s => {
             const isSet = secretsPreview?.set?.[s];
             const val   = secretsPreview?.values?.[s];
             return (

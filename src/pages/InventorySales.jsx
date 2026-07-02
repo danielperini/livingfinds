@@ -21,7 +21,7 @@ export default function InventorySales() {
       setAccount(acc);
       if (!acc) return;
       const [prods, dailySales] = await Promise.all([
-        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-total_revenue_30d', 500),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-fba_inventory', 500),
         base44.entities.SalesDaily.filter({ amazon_account_id: acc.id }, '-date', 200),
       ]);
       setProducts(prods);
@@ -54,7 +54,7 @@ export default function InventorySales() {
 
   const filtered = products.filter(p =>
     (p.asin || '').toLowerCase().includes(search.toLowerCase()) ||
-    (p.name || '').toLowerCase().includes(search.toLowerCase()) ||
+    (p.product_name || p.display_name || '').toLowerCase().includes(search.toLowerCase()) ||
     (p.sku || '').toLowerCase().includes(search.toLowerCase())
   );
 
@@ -96,7 +96,7 @@ export default function InventorySales() {
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label: 'Receita 30d', value: `$${totalRevenue.toFixed(0)}`, color: 'text-emerald-400' },
+          { label: 'Receita 30d', value: `R$${totalRevenue.toFixed(0)}`, color: 'text-emerald-400' },
           { label: 'Unidades 30d', value: totalUnits.toLocaleString(), color: 'text-cyan' },
           { label: 'Stock Baixo', value: lowStock, color: 'text-amber-400', sub: '< 10 unidades' },
           { label: 'Sem Stock', value: outOfStock, color: 'text-red-400' },
@@ -159,13 +159,13 @@ export default function InventorySales() {
                             ? new Date(p.created_date).toLocaleDateString('pt-BR')
                             : '—'}
                       </td>
-                      <td className="px-5 py-3 text-slate-300">{p.price ? `$${p.price.toFixed(2)}` : '—'}</td>
+                      <td className="px-5 py-3 text-slate-300">{p.price ? `R$${p.price.toFixed(2)}` : '—'}</td>
                       <td className="px-5 py-3">
                         <span className={`font-bold ${stockAlert === 'out' ? 'text-red-400' : stockAlert === 'low' ? 'text-amber-400' : 'text-white'}`}>
                           {p.fba_inventory || 0}
                         </span>
                       </td>
-                      <td className="px-5 py-3 text-emerald-400">${(p.total_revenue_30d || p.total_sales_30d || 0).toFixed(2)}</td>
+                      <td className="px-5 py-3 text-emerald-400">R${(p.total_revenue_30d || p.total_sales_30d || 0).toFixed(2)}</td>
                       <td className="px-5 py-3 text-slate-300">{p.units_sold_30d || p.total_units_30d || 0}</td>
                       <td className="px-5 py-3">
                         {stockAlert !== 'ok' && (
@@ -204,7 +204,7 @@ export default function InventorySales() {
                     <td className="px-5 py-3 text-slate-300 whitespace-nowrap">{s.date}</td>
                     <td className="px-5 py-3 font-mono text-xs text-cyan">{s.asin || '—'}</td>
                     <td className="px-5 py-3 text-slate-300">{s.units_ordered || 0}</td>
-                    <td className="px-5 py-3 text-emerald-400">${(s.ordered_product_sales || 0).toFixed(2)}</td>
+                    <td className="px-5 py-3 text-emerald-400">R${(s.ordered_product_sales || 0).toFixed(2)}</td>
                     <td className="px-5 py-3 text-slate-400">{(s.sessions || 0).toLocaleString()}</td>
                     <td className="px-5 py-3 text-slate-400">{(s.page_views || 0).toLocaleString()}</td>
                     <td className="px-5 py-3 text-slate-300">{(s.buy_box_pct || 0).toFixed(1)}%</td>
