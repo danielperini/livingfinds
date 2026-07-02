@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
       if (!term || term.length < 4) continue;
       const n = norm(term);
       const orders = (st.orders_7d || 0) + (st.orders_14d || 0);
-      if (orders > 0 && !suggestions.has(n)) {
+      if (orders >= 4 && !suggestions.has(n)) {
         suggestions.set(n, {
           keyword: term,
           source: 'search_term_converted',
@@ -128,14 +128,17 @@ Deno.serve(async (req) => {
       const n = norm(term);
       if (suggestions.has(n)) continue; // já temos de fonte melhor
 
+      // Só usar termos com pelo menos 4 pedidos comprovados
+      if ((entry.orders || 0) < 4) continue;
+
       const isOwnAsin = entry.asin === asin;
       const isCrossAsin = (entry.compatible_asins || []).includes(asin);
       const titleSim = product_name
         ? titleSimilarity(entry.product_name || '', product_name)
         : 0;
 
-      // Incluir se: mesmo ASIN, ou compatível, ou título ≥80% similar E performance positiva
-      if (isOwnAsin || isCrossAsin || (titleSim >= 0.80 && (entry.orders || 0) > 0)) {
+      // Incluir se: mesmo ASIN, ou compatível, ou título ≥80% similar
+      if (isOwnAsin || isCrossAsin || titleSim >= 0.80) {
         const confidence = isOwnAsin
           ? Math.min(0.97, 0.70 + (entry.performance_score || 0) / 100 * 0.27)
           : isCrossAsin

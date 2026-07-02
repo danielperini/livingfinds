@@ -39,7 +39,7 @@ function calcPerformanceScore({ orders = 0, acos = 0, roas = 0, clicks = 0, conv
 }
 
 function classify(score, orders, clicks, spend) {
-  if (orders >= 1 && score >= 60) return 'winner';
+  if (orders >= 4 && score >= 60) return 'winner';
   if (orders >= 1 && score >= 30) return 'learning';
   if (orders === 0 && clicks >= 10 && spend >= 5) return 'wasting';
   if (clicks >= 3) return 'learning';
@@ -62,6 +62,11 @@ Deno.serve(async (req) => {
 
     if (!amazon_account_id || !term || !asin) {
       return Response.json({ ok: false, error: 'amazon_account_id, term e asin são obrigatórios' }, { status: 400 });
+    }
+
+    // Só entra no banco de termos quem vendeu pelo menos 4 vezes
+    if ((orders || 0) < 4) {
+      return Response.json({ ok: false, skipped: true, reason: 'Menos de 4 pedidos — termo não elegível para o banco' });
     }
 
     const now = new Date().toISOString();
