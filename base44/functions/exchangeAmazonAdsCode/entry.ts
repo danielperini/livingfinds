@@ -5,8 +5,6 @@ const REDIRECT_URI = 'https://livingfinds-app.base44.app/amazon-ads-callback';
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
     const { code, amazon_account_id } = body;
@@ -76,7 +74,7 @@ Deno.serve(async (req) => {
       profilesError = e.message;
     }
 
-    // Salvar refresh_token na AmazonAccount
+    // Salvar refresh_token na AmazonAccount via service role (não requer auth de usuário)
     let accountUpdated = false;
     let accountId = amazon_account_id;
     try {
@@ -84,9 +82,6 @@ Deno.serve(async (req) => {
       if (accountId) {
         const acc = await base44.asServiceRole.entities.AmazonAccount.get(accountId).catch(() => null);
         if (acc) accounts = [acc];
-      }
-      if (!accounts.length) {
-        accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id });
       }
       if (!accounts.length) {
         accounts = await base44.asServiceRole.entities.AmazonAccount.list();
