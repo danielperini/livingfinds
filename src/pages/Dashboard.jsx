@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
 import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -190,7 +191,7 @@ export default function Dashboard() {
 
       const aid = acc.id;
       const [cams, prods, metrics, hourly, decs, runs, changes] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-created_date', 2000),
+        loadAllCampaigns(aid),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
@@ -390,7 +391,8 @@ export default function Dashboard() {
 
   const totalProducts = products.length;
   // Budget sugerido = média real dos últimos 20 dias + 20%, sem exceder 2× o total de budgets ativos
-  const activeCampaignsBudget = campaigns.filter(c => c.state === 'enabled').reduce((s, c) => s + (c.daily_budget || 0), 0);
+  const { active: activeCampaignsList, paused: pausedCampaignsList, archived: archivedCampaignsList, active_count, paused_count, archived_count, total_current } = classifyCampaigns(campaigns);
+  const activeCampaignsBudget = activeCampaignsList.reduce((s, c) => s + (c.daily_budget || 0), 0);
   const suggestedBudget = isLearningMode
     ? 0
     : avgDailySpend > 0
@@ -510,11 +512,11 @@ export default function Dashboard() {
           </div>
           <div className="bg-surface-2 rounded-lg p-2">
             <p className="text-slate-500 mb-0.5">Campanhas ativas</p>
-            <p className="text-emerald-400 font-semibold">{campaigns.filter(c => c.state === 'enabled' && !c.archived).length}</p>
+            <p className="text-emerald-400 font-semibold">{active_count}</p>
           </div>
           <div className="bg-surface-2 rounded-lg p-2">
-            <p className="text-slate-500 mb-0.5">Campanhas totais</p>
-            <p className="text-white font-semibold">{campaigns.length}</p>
+            <p className="text-slate-500 mb-0.5">Operacionais / Total</p>
+            <p className="text-white font-semibold">{total_current} / {campaigns.length}</p>
           </div>
           <div className="bg-surface-2 rounded-lg p-2">
             <p className="text-slate-500 mb-0.5">Data corte</p>
@@ -525,7 +527,7 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard label="✓ Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${campaigns.filter(c => c.state === 'enabled' && !c.archived).length} ativas`} loading={loading} />
+        <KPICard label="✓ Ad Spend 30d" value={`$${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
         <KPICard label="Vendas Ads 30d" value={`$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
@@ -654,7 +656,7 @@ export default function Dashboard() {
                 </div>
                 <div className="flex justify-between py-1.5">
                   <span className="text-slate-500">Campanhas ativas</span>
-                  <span className="text-emerald-400 font-semibold">{campaigns.filter(c => c.state === 'enabled' && !c.archived).length}</span>
+                  <span className="text-emerald-400 font-semibold">{active_count}</span>
                 </div>
               </div>
 
@@ -725,9 +727,9 @@ export default function Dashboard() {
 
       {/* Campanhas */}
       {(() => {
-        const activeCamps = campaigns.filter(c => (c.state === 'enabled' || c.status === 'enabled') && !c.archived);
-        const pausedCamps = campaigns.filter(c => (c.state === 'paused' || c.status === 'paused') && !c.archived);
-        const archivedCamps = campaigns.filter(c => c.archived || c.state === 'archived' || c.status === 'archived');
+        const activeCamps = activeCampaignsList;
+        const pausedCamps = pausedCampaignsList;
+        const archivedCamps = archivedCampaignsList;
 
         const filtered = campFilter === 'active' ? activeCamps
           : campFilter === 'paused' ? pausedCamps

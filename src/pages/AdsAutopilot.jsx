@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadAllCampaigns, getAutopilotEligible } from '@/lib/campaignUtils';
 import { Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History, Zap, TrendingDown, Search, Unlock } from 'lucide-react';
 import AutopilotKPIBar from '@/components/autopilot/AutopilotKPIBar';
 import AutopilotConfigPanel from '@/components/autopilot/AutopilotConfigPanel';
@@ -57,7 +58,7 @@ export default function AdsAutopilot() {
       if (!acc) { setLoading(false); return; }
       const aid = acc.id;
       const [cams, decs, als, negs, hist, rs, cfgs, sts] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 200),
+        loadAllCampaigns(aid),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 300),
         base44.entities.AutopilotAlert.filter({ amazon_account_id: aid, is_read: false }, '-created_date', 50),
         base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: aid, status: 'pending' }, '-spend', 100),
@@ -66,7 +67,8 @@ export default function AdsAutopilot() {
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
         base44.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders_14d', 500),
       ]);
-      setCampaigns(cams);
+      // Autopilot analisa apenas campanhas não-arquivadas
+      setCampaigns(getAutopilotEligible(cams));
       setDecisions(decs);
       setAlerts(als);
       setNegatives(negs);

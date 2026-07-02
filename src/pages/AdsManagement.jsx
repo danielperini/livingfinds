@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info, Settings, Package, History } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -33,10 +34,12 @@ export default function AdsManagement() {
       setAccount(acc);
       if (!acc) return;
       const [cams, prods] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-spend', 2000),
+        loadAllCampaigns(acc.id),
         base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
       ]);
-      setCampaigns(cams);
+      // Excluir arquivadas da visão operacional
+      const operational = cams.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
+      setCampaigns(operational);
       setProducts(prods);
     } finally {
       setLoading(false);
@@ -207,8 +210,7 @@ export default function AdsManagement() {
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
-  const activeCount = campaigns.filter(c => c.state === 'enabled').length;
-  const pausedCount = campaigns.filter(c => c.state === 'paused').length;
+  const { active_count: activeCount, paused_count: pausedCount, total_current } = classifyCampaigns(campaigns);
 
   return (
     <div className="flex h-full">
@@ -224,7 +226,7 @@ export default function AdsManagement() {
               {syncing ? 'Atualizando...' : 'Atualizar'}
             </button>
           </div>
-          <p className="text-xs text-slate-500">{campaigns.length} campanhas</p>
+          <p className="text-xs text-slate-500">{total_current} campanhas operacionais ({activeCount} ativas · {pausedCount} pausadas)</p>
           {syncMsg && (
             <p className={`text-xs mt-2 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
           )}
@@ -236,6 +238,7 @@ export default function AdsManagement() {
               { key: 'all', label: 'Todas' },
               { key: 'enabled', label: `Ativas (${activeCount})` },
               { key: 'paused', label: `Pausadas (${pausedCount})` },
+              // archived excluídas da visão operacional
             ].map(f => (
               <button key={f.key} onClick={() => setStateFilter(f.key)}
                 className={`flex-1 text-xs py-1 rounded-lg transition-colors ${stateFilter === f.key ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-surface-2 text-slate-500 hover:text-slate-300'}`}>

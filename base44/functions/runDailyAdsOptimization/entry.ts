@@ -200,9 +200,24 @@ Deno.serve(async (req) => {
       started_at: now,
     });
 
-    // ── Carregar dados ────────────────────────────────────────────────────
+    // ── Carregar dados com paginação ───────────────────────────────────────
+    // Campanhas: paginação real — nunca usar limite como contagem esperada
+    async function loadAllCampaigns() {
+      const all = []; let offset = 0; const PAGE = 200;
+      while (true) {
+        const page = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: amazonAccountId }, '-created_date', PAGE, offset
+        );
+        all.push(...page);
+        if (page.length < PAGE) break;
+        offset += PAGE;
+      }
+      // Autopilot analisa apenas não-arquivadas
+      return all.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
+    }
+
     const [campaigns, keywords, products, searchTerms, recentDecisions] = await Promise.all([
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId }, '-spend', 500),
+      loadAllCampaigns(),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: amazonAccountId }, '-spend', 1000),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId }, null, 500),
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: amazonAccountId }, '-orders_14d', 2000),

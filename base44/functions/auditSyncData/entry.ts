@@ -1,8 +1,26 @@
 /**
  * auditSyncData — Auditoria de dados do último sync
- * Compara totais do dashboard com valores crus dos relatórios Amazon
+ * Inclui detecção de duplicatas de campanhas por (amazon_account_id + campaign_id)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+
+async function loadAllCampaigns(base44, amazonAccountId) {
+  const all = [];
+  let offset = 0;
+  const PAGE = 200;
+  while (true) {
+    const page = await base44.entities.Campaign.filter(
+      { amazon_account_id: amazonAccountId },
+      '-created_date',
+      PAGE,
+      offset
+    );
+    all.push(...page);
+    if (page.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
+}
 
 Deno.serve(async (req) => {
   try {
@@ -10,32 +28,25 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    // Buscar conta Amazon
     const accounts = await base44.entities.AmazonAccount.filter({ user_id: user.id });
     const account = accounts[0] || null;
     if (!account) return Response.json({ ok: false, message: 'Nenhuma conta Amazon' });
 
     const aid = account.id;
 
-    // Buscar últimos SyncRuns
-    const syncRuns = await base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 5);
-    const lastSync = syncRuns[0];
-
-    // Buscar CampaignMetricsDaily dos últimos 30 dias
+    // Métricas diárias — últimos 30 dias
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
     const metricsDaily = await base44.entities.CampaignMetricsDaily.filter(
       { amazon_account_id: aid, date: { $gte: cutoff } }
     );
 
-    // Remover duplicatas por campaign_id + date
-    const uniqueMap = new Map();
+    const uniqueMetricsMap = new Map();
     metricsDaily.forEach(m => {
       const key = `${m.campaign_id}-${m.date}`;
-      uniqueMap.set(key, m);
+      uniqueMetricsMap.set(key, m);
     });
-    const uniqueMetrics = Array.from(uniqueMap.values());
+    const uniqueMetrics = Array.from(uniqueMetricsMap.values());
 
-    // Totais
     const totals = uniqueMetrics.reduce((acc, m) => ({
       spend: acc.spend + (m.spend || 0),
       sales: acc.sales + (m.sales || 0),
@@ -44,23 +55,30 @@ Deno.serve(async (req) => {
       impressions: acc.impressions + (m.impressions || 0),
     }), { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 });
 
-    // Campanhas
-    const campaigns = await base44.entities.Campaign.filter({ amazon_account_id: aid });
-    const activeCampaigns = campaigns.filter(c => c.state === 'enabled' && !c.archived);
+    // Campanhas — carregamento paginado completo
+    const campaigns = await loadAllCampaigns(base44, aid);
 
-    // Buscar dados crus do último relatório (se existir)
-    let rawDataSummary = null;
-    if (lastSync?.records_received) {
-      // Tentar buscar relatório SUMMARY original (se disponível em AdsReportReques)
-      const reports = await base44.entities.AdsReportReques.filter(
-        { amazon_account_id: aid, status: 'DOWNLOADED' },
-        '-completed_at',
-        10
-      );
-      if (reports.length > 0) {
-        rawDataSummary = { count: reports.length, last_report_id: reports[0].report_id };
+    // Classificação correta: archived exclui do total operacional
+    const activeCampaigns   = campaigns.filter(c => (c.state === 'enabled' || c.status === 'enabled') && !c.archived && c.state !== 'archived');
+    const pausedCampaigns   = campaigns.filter(c => (c.state === 'paused'  || c.status === 'paused')  && !c.archived && c.state !== 'archived');
+    const archivedCampaigns = campaigns.filter(c => c.archived || c.state === 'archived' || c.status === 'archived');
+    const totalCurrent      = activeCampaigns.length + pausedCampaigns.length; // operacional
+
+    // Detecção de duplicatas por campaign_id
+    const byId = new Map();
+    const duplicates = [];
+    for (const c of campaigns) {
+      const key = `${c.amazon_account_id}|${c.campaign_id}`;
+      if (!byId.has(key)) {
+        byId.set(key, c);
+      } else {
+        duplicates.push({ duplicate_db_id: c.id, campaign_id: c.campaign_id, name: c.name, created_date: c.created_date });
       }
     }
+
+    // Sync runs
+    const syncRuns = await base44.entities.SyncRun.filter({ amazon_account_id: aid }, '-started_at', 5);
+    const lastSync = syncRuns[0];
 
     return Response.json({
       ok: true,
@@ -84,10 +102,13 @@ Deno.serve(async (req) => {
         cvr: totals.clicks > 0 ? (totals.orders / totals.clicks * 100) : 0,
       },
       campaigns: {
-        total: campaigns.length,
+        total_all: campaigns.length,
+        total_current: totalCurrent,       // operacional = ativas + pausadas
         active: activeCampaigns.length,
-        paused: campaigns.filter(c => c.state === 'paused' && !c.archived).length,
-        archived: campaigns.filter(c => c.archived).length,
+        paused: pausedCampaigns.length,
+        archived: archivedCampaigns.length,
+        duplicates_found: duplicates.length,
+        duplicate_campaign_ids: duplicates.map(d => d.campaign_id),
       },
       last_sync: lastSync ? {
         operation: lastSync.operation,
@@ -97,7 +118,6 @@ Deno.serve(async (req) => {
         duration_ms: lastSync.duration_ms,
         records_upserted: lastSync.records_upserted,
       } : null,
-      raw_data: rawDataSummary,
       formatted: {
         spend: `$${totals.spend.toFixed(2)}`,
         sales: `$${totals.sales.toFixed(2)}`,

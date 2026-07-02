@@ -1,6 +1,6 @@
 /**
- * syncCampaignsFull — Sincroniza TODAS as campanhas SP + SB + SD com todos os campos
- * Payload: { amazon_account_id }
+ * syncCampaignsFull — Sincroniza TODAS as campanhas SP + SB + SD com upsert por campaign_id
+ * Regra: nunca duplicar; nunca criar nova campanha se campaign_id já existe.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -32,7 +32,7 @@ async function getToken() {
     tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
     return data.access_token;
   }
-  throw new Error('Token refresh failed after 5 attempts — rate limit. Aguarde 1 minuto e tente novamente.');
+  throw new Error('Token refresh failed after 5 attempts');
 }
 
 function baseUrl() {
@@ -44,7 +44,7 @@ function baseUrl() {
 
 async function call(method, path, body, ct = 'application/json') {
   const token = await getToken();
-  const opts = {
+  const opts: any = {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -63,6 +63,16 @@ async function call(method, path, body, ct = 'application/json') {
   return data;
 }
 
+// Normaliza estado Amazon → padrão interno
+function normalizeState(s = '') {
+  const l = s.toLowerCase();
+  if (l === 'enabled' || l === 'active') return 'enabled';
+  if (l === 'paused') return 'paused';
+  if (l === 'archived') return 'archived';
+  return l;
+}
+
+// Upsert obrigatório por campaign_id — nunca duplica
 async function upsertCampaign(base44, amazonAccountId, record) {
   const existing = await base44.asServiceRole.entities.Campaign.filter({
     amazon_account_id: amazonAccountId,
@@ -70,9 +80,31 @@ async function upsertCampaign(base44, amazonAccountId, record) {
   });
   if (existing.length > 0) {
     await base44.asServiceRole.entities.Campaign.update(existing[0].id, record);
+    // Remover eventuais duplicatas além do primeiro
+    for (let i = 1; i < existing.length; i++) {
+      await base44.asServiceRole.entities.Campaign.update(existing[i].id, { archived: true, archive_reason: 'duplicate_removed' });
+    }
   } else {
     await base44.asServiceRole.entities.Campaign.create(record);
   }
+}
+
+// Busca SP com paginação real (nextToken)
+async function fetchAllSPCampaigns() {
+  const all = [];
+  let nextToken = undefined;
+  do {
+    const body: any = {
+      stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
+      maxResults: 500,
+    };
+    if (nextToken) body.nextToken = nextToken;
+    const data = await call('POST', '/sp/campaigns/list', body, 'application/vnd.spCampaign.v3+json');
+    const list = data?.campaigns || [];
+    all.push(...list);
+    nextToken = data?.nextToken;
+  } while (nextToken);
+  return all;
 }
 
 Deno.serve(async (req) => {
@@ -101,13 +133,9 @@ Deno.serve(async (req) => {
     let totalUpserted = 0;
     const errors = [];
 
-    // ── SP Campaigns (v3) ──
+    // ── SP Campaigns (v3, paginado) ──
     try {
-      const spData = await call('POST', '/sp/campaigns/list',
-        { stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, maxResults: 500 },
-        'application/vnd.spCampaign.v3+json'
-      );
-      const spList = spData?.campaigns || [];
+      const spList = await fetchAllSPCampaigns();
       totalReceived += spList.length;
       for (const c of spList) {
         await upsertCampaign(base44, amazonAccountId, {
@@ -116,7 +144,8 @@ Deno.serve(async (req) => {
           name: c.name,
           campaign_type: 'SP',
           targeting_type: c.targetingType,
-          state: (c.state || 'ENABLED').toLowerCase(),
+          state: normalizeState(c.state || 'ENABLED'),
+          status: normalizeState(c.state || 'ENABLED'),
           daily_budget: c.budget?.budget ?? c.dailyBudget ?? 0,
           start_date: c.startDate,
           end_date: c.endDate || null,
@@ -139,7 +168,8 @@ Deno.serve(async (req) => {
           name: c.name,
           campaign_type: 'SB',
           targeting_type: c.targetingType || null,
-          state: (c.state || 'enabled').toLowerCase(),
+          state: normalizeState(c.state || 'enabled'),
+          status: normalizeState(c.state || 'enabled'),
           daily_budget: c.budget || c.dailyBudget || 0,
           start_date: c.startDate || null,
           end_date: c.endDate || null,
@@ -162,7 +192,8 @@ Deno.serve(async (req) => {
           name: c.name,
           campaign_type: 'SD',
           targeting_type: c.tactic || null,
-          state: (c.state || 'enabled').toLowerCase(),
+          state: normalizeState(c.state || 'enabled'),
+          status: normalizeState(c.state || 'enabled'),
           daily_budget: c.budget || c.dailyBudget || 0,
           start_date: c.startDate || null,
           end_date: c.endDate || null,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
+import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Zap, List, Users, Radio, FileText, Eye, Download, Play } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -116,7 +117,7 @@ function ConnectionStatusPanel({ account, syncRuns, loading }) {
 
 export default function Diagnostico() {
   const [account, setAccount] = useState(null);
-  const [stats, setStats] = useState({ campaigns: 0, products: 0, keywords: 0 });
+  const [stats, setStats] = useState({ campaigns: 0, active: 0, paused: 0, archived: 0, total_current: 0, products: 0, keywords: 0 });
   const [syncRuns, setSyncRuns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [results, setResults] = useState({});
@@ -133,12 +134,13 @@ export default function Diagnostico() {
 
       if (acc) {
         const [campsAll, prodsAll, kwdsAll, runs] = await Promise.all([
-          base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
-          base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
-          base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-created_date', 5000),
+          loadAllCampaigns(acc.id),
+          base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 1000),
+          base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-created_date', 1000),
           base44.entities.SyncRun.filter({ amazon_account_id: acc.id }, '-started_at', 10),
         ]);
-        setStats({ campaigns: campsAll.length, products: prodsAll.length, keywords: kwdsAll.length });
+        const cls = classifyCampaigns(campsAll);
+        setStats({ campaigns: campsAll.length, active: cls.active_count, paused: cls.paused_count, archived: cls.archived_count, total_current: cls.total_current, products: prodsAll.length, keywords: kwdsAll.length });
         setSyncRuns(runs);
       }
     } catch (e) {
@@ -278,18 +280,27 @@ export default function Diagnostico() {
 
       {/* Stats de dados */}
       {!loading && account && (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
-            <p className="text-xs text-slate-400 mb-1">Campanhas</p>
-            <p className="text-3xl font-bold text-cyan">{stats.campaigns}</p>
+            <p className="text-xs text-slate-400 mb-1">Operacionais</p>
+            <p className="text-3xl font-bold text-cyan">{stats.total_current}</p>
+            <p className="text-[10px] text-slate-500 mt-1">ativas + pausadas</p>
+          </div>
+          <div className="bg-surface-1 border border-emerald-500/20 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Ativas</p>
+            <p className="text-3xl font-bold text-emerald-400">{stats.active}</p>
+          </div>
+          <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Pausadas</p>
+            <p className="text-3xl font-bold text-amber-400">{stats.paused}</p>
+          </div>
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
+            <p className="text-xs text-slate-400 mb-1">Arquivadas</p>
+            <p className="text-3xl font-bold text-slate-500">{stats.archived}</p>
           </div>
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
             <p className="text-xs text-slate-400 mb-1">Produtos</p>
             <p className="text-3xl font-bold text-cyan">{stats.products}</p>
-          </div>
-          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-center">
-            <p className="text-xs text-slate-400 mb-1">Keywords</p>
-            <p className="text-3xl font-bold text-cyan">{stats.keywords}</p>
           </div>
         </div>
       )}
