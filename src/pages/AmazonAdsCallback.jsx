@@ -15,15 +15,21 @@ export default function AmazonAdsCallback() {
     const error = params.get('error');
     const errorDescription = params.get('error_description');
 
+    // Debug: mostrar URL completo recebido
+    console.log('[AmazonCallback] URL completo:', window.location.href);
+    console.log('[AmazonCallback] Params:', Object.fromEntries(params.entries()));
+
     if (error) {
       setStatus('error');
       setMessage(`Erro na autorização Amazon Ads: ${errorDescription || error}`);
+      setRawError({ full_url: window.location.href, all_params: Object.fromEntries(params.entries()) });
       return;
     }
 
     if (!code) {
       setStatus('error');
       setMessage('Parâmetro "code" não encontrado na URL. Tente novamente o fluxo OAuth.');
+      setRawError({ full_url: window.location.href, all_params: Object.fromEntries(params.entries()) });
       return;
     }
 
@@ -137,6 +143,8 @@ export default function AmazonAdsCallback() {
                   {rawError.error && <p className="text-xs text-slate-400">error: {rawError.error}</p>}
                   {rawError.error_description && <p className="text-xs text-slate-400">description: {rawError.error_description}</p>}
                   {rawError.message && <p className="text-xs text-slate-400">message: {rawError.message}</p>}
+                  {rawError.full_url && <p className="text-xs text-slate-400 break-all mt-1">url: {rawError.full_url}</p>}
+                  {rawError.all_params && <p className="text-xs text-slate-400 font-mono mt-1">{JSON.stringify(rawError.all_params)}</p>}
                 </div>
               )}
 
