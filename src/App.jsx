@@ -71,11 +71,11 @@ const AuthenticatedApp = () => {
 
   return (
     <Routes>
-      <Route path="/amazon-ads-callback" element={<AmazonAdsCallback />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/amazon-ads-callback" element={<AmazonAdsCallback />} />
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
