@@ -370,17 +370,21 @@ export default function Dashboard() {
     ? metricsTwoWeeks.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsTwoWeeks.length 
     : 0;
   
-  // Verificar se tem dados suficientes (mínimo 20 dias para sair do modo aprendizado)
-  const uniqueDaysWithData = new Set(metricsDaily.map(m => m.date)).size;
-  const isLearningMode = uniqueDaysWithData < 20;
+  // Verificar se tem dados suficientes (mínimo 14 dias para sair do modo aprendizado)
+  // Usar todos os metricsDaily carregados (não só os filtrados dos últimos 30d)
+  const uniqueDaysWithDataAll = new Set(metricsDaily.map(m => m.date)).size;
+  const isLearningMode = uniqueDaysWithDataAll < 14;
   
   const totalProducts = products.length;
-  const totalKeywords = campaigns.length > 0 ? campaigns.reduce((sum, c) => sum + 5, 0) : 0; // estimativa
-  const suggestedBudget = isLearningMode 
-    ? 0 
-    : (avgDailySpend > 0 
-        ? Math.max(avgDailySpend * 1.2, totalProducts * 2, totalKeywords * 0.5)
-        : totalProducts * 2 + totalKeywords * 0.5);
+  const totalKeywords = 0; // placeholder — não usado na fórmula de budget
+  // Budget sugerido: baseado no spend médio real + 20% de margem de crescimento
+  // Mínimo R$10, máximo 2x o budget atual das campanhas ativas
+  const activeCampaignsBudget = campaigns.filter(c => c.state === 'enabled').reduce((s, c) => s + (c.daily_budget || 0), 0);
+  const suggestedBudget = isLearningMode
+    ? 0
+    : avgDailySpend > 0
+      ? Math.min(Math.max(avgDailySpend * 1.2, 10), activeCampaignsBudget * 2 || avgDailySpend * 2)
+      : Math.max(activeCampaignsBudget || 10, 10);
 
   // Alterações diárias
   const changesByDay = bidChanges.reduce((acc, change) => {
@@ -586,10 +590,10 @@ export default function Dashboard() {
                 <Brain className="w-8 h-8 text-cyan mx-auto mb-2" />
                 <p className="text-lg font-bold text-cyan mb-1">Em aprendizado</p>
                 <p className="text-xs text-slate-400">
-                  {20 - uniqueDaysWithData} dias restantes para calcular
+                  {Math.max(0, 14 - uniqueDaysWithDataAll)} dias restantes para calcular
                 </p>
                 <p className="text-[10px] text-slate-500 mt-2">
-                  Coletando dados de {uniqueDaysWithData}/20 dias
+                  Coletando dados de {uniqueDaysWithDataAll}/14 dias
                 </p>
               </div>
               
