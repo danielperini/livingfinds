@@ -7,12 +7,14 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const tokenCache = {};
 
-async function getAdsToken() {
-  const cached = tokenCache['ads'];
+async function getAdsToken(refreshTokenOverride = null) {
+  const cacheKey = refreshTokenOverride ? 'ads_override' : 'ads';
+  const cached = tokenCache[cacheKey];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  const refreshToken = refreshTokenOverride || Deno.env.get('ADS_REFRESH_TOKEN');
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
+    refresh_token: refreshToken,
     client_id: Deno.env.get('ADS_CLIENT_ID'),
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
@@ -27,7 +29,7 @@ async function getAdsToken() {
     if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500)); continue; }
     const data = await res.json();
     if (!res.ok) throw new Error(data.error_description || `Token refresh failed (${res.status})`);
-    tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
+    tokenCache[cacheKey] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
     return data.access_token;
   }
   throw new Error('Token refresh failed after 3 attempts');
@@ -54,6 +56,10 @@ Deno.serve(async (req) => {
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
+    // Carregar refresh token da entidade (fallback ao secret de ambiente)
+    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId);
+    const entityRefreshToken = account?.ads_refresh_token || null;
+
     const syncRun = await base44.asServiceRole.entities.SyncRun.create({
       amazon_account_id: amazonAccountId,
       operation: 'syncAds',
@@ -62,7 +68,7 @@ Deno.serve(async (req) => {
     });
     syncRunId = syncRun.id;
 
-    const token = await getAdsToken();
+    const token = await getAdsToken(entityRefreshToken);
     const adsBase = getAdsBaseUrl();
 
     const res = await fetch(`${adsBase}/sp/campaigns/list`, {

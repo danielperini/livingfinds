@@ -6,10 +6,14 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Carregar refresh token da entidade (fallback ao secret de ambiente)
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.list();
+    const entityRefreshToken = accounts[0]?.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+
     // Obter token LWA
     const params = new URLSearchParams({
       grant_type: 'refresh_token',
-      refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
+      refresh_token: entityRefreshToken,
       client_id: Deno.env.get('ADS_CLIENT_ID'),
       client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
     });
