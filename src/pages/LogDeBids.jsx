@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
-  FileText, Search, RefreshCw, Loader2, ChevronDown, ChevronUp,
-  ArrowUp, ArrowDown, Minus, XCircle, Filter, TrendingUp, TrendingDown
+  FileText, Search, RefreshCw, Loader2,
+  Minus, XCircle, Filter, TrendingUp, TrendingDown, Download
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -13,6 +13,8 @@ export default function LogDeBids() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ direction: 'all', status: 'all', date: '' });
   const [error, setError] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -20,14 +22,78 @@ export default function LogDeBids() {
     try {
       const me = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-      const acc = accounts[0];
+      const acc = accounts[0] || (await base44.entities.AmazonAccount.list())[0];
       setAccount(acc);
       if (!acc) return;
-      const l = await base44.entities.AdsBidChangeLog.filter({ amazon_account_id: acc.id }, '-created_at', 500);
-      setLogs(l);
+
+      // Buscar de AdsBidChangeLog (alterações detectadas via API)
+      // E de OptimizationDecision (bids do Autopilot executados/aprovados)
+      const [apiLogs, autopilotDecs] = await Promise.all([
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: acc.id }, '-created_at', 500),
+        base44.entities.OptimizationDecision.filter(
+          { amazon_account_id: acc.id, decision_type: 'bid_change' }, '-created_at', 500
+        ),
+      ]);
+
+      // Normalizar OptimizationDecision para o mesmo formato de AdsBidChangeLog
+      const decLogs = autopilotDecs.map(d => ({
+        id: `dec_${d.id}`,
+        date: d.executed_at?.slice(0, 10) || d.created_at?.slice(0, 10) || '',
+        campaign_id: d.campaign_id || '',
+        campaign_name: '',
+        ad_group_id: d.ad_group_id || '',
+        keyword_id: d.keyword_id || d.entity_id || '',
+        keyword: d.keyword_text || '',
+        asin: d.asin || '',
+        old_bid: d.value_before || 0,
+        new_bid: d.value_after || 0,
+        change_amount: (d.value_after || 0) - (d.value_before || 0),
+        change_percent: d.change_pct || 0,
+        direction: d.action?.includes('increase') ? 'increase' : d.action?.includes('reduce') ? 'decrease' : 'unchanged',
+        reason: d.rationale?.slice(0, 120) || d.action || '',
+        ai_confidence: d.confidence ? d.confidence / 100 : 0,
+        risk_level: d.risk || 'low',
+        status: d.status === 'executed' ? 'executed' : d.status === 'approved' ? 'pending' : d.status || 'pending',
+        created_at: d.created_at || '',
+        _source: 'autopilot',
+      }));
+
+      // Unir e ordenar por data desc, deduplicar por keyword_id+date
+      const seen = new Set();
+      const allLogs = [...apiLogs.map(l => ({ ...l, _source: 'api' })), ...decLogs]
+        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
+        .filter(l => {
+          const key = `${l.keyword_id}|${l.date}|${l.direction}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+      setLogs(allLogs);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, []);
+
+  const syncFromApi = async () => {
+    if (!account || syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncBidChangesFromApi', { amazon_account_id: account.id });
+      const d = res.data;
+      if (d?.ok) {
+        setSyncMsg({ type: 'success', text: `✓ ${d.keywords_synced} keywords sincronizadas · ${d.changes} alterações detectadas (↑${d.increases} ↓${d.decreases})` });
+        await load();
+      } else {
+        setSyncMsg({ type: 'error', text: d?.error || 'Falha na sincronização' });
+      }
+    } catch (e) {
+      setSyncMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 12000);
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -90,11 +156,23 @@ export default function LogDeBids() {
             <p className="text-xs text-slate-400">{total} alterações · {aumento} aumentos · {reducao} reduções</p>
           </div>
         </div>
-        <button onClick={load} disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={syncFromApi} disabled={syncing || loading || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50">
+            <Download className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Sincronizando...' : 'Sincronizar via API'}
+          </button>
+          <button onClick={load} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
+      {syncMsg && (
+        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${syncMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+          {syncMsg.text}
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-col gap-3">
@@ -162,7 +240,7 @@ export default function LogDeBids() {
           {filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
               <FileText className="w-12 h-12 text-slate-600" />
-              <p className="text-sm text-slate-400">{logs.length === 0 ? 'Sem logs. Execute o ciclo diário de IA para gerar alterações de bid.' : 'Nenhum resultado com estes filtros.'}</p>
+              <p className="text-sm text-slate-400">{logs.length === 0 ? 'Sem logs. Use "Sincronizar via API" para detectar alterações de bid, ou execute o Autopilot para gerar novas decisões.' : 'Nenhum resultado com estes filtros.'}</p>
             </div>
           ) : (
             <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
@@ -170,7 +248,7 @@ export default function LogDeBids() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-surface-2 bg-surface-2/40">
-                      {['Data', 'Keyword', 'ASIN', 'Campanha', 'Bid Antes', 'Bid Depois', 'Diferença', 'Variação', 'Direção', 'Confiança IA', 'Motivo', 'Estado'].map(h => (
+                      {['Data', 'Keyword', 'ASIN', 'Bid Antes', 'Bid Depois', 'Diferença', 'Variação', 'Direção', 'Motivo', 'Fonte', 'Estado'].map(h => (
                         <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -184,22 +262,28 @@ export default function LogDeBids() {
                       return (
                         <tr key={l.id} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
                           <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{l.date || l.created_at?.slice(0, 10) || '—'}</td>
-                          <td className="px-4 py-3 text-xs text-white font-medium max-w-[160px] truncate">{l.keyword || '—'}</td>
+                          <td className="px-4 py-3 text-xs text-white font-medium max-w-[180px]">
+                            <p className="truncate">{l.keyword || '—'}</p>
+                            {l.campaign_name && <p className="text-[10px] text-slate-500 truncate">{l.campaign_name}</p>}
+                          </td>
                           <td className="px-4 py-3 font-mono text-xs text-cyan">{l.asin || '—'}</td>
-                          <td className="px-4 py-3 text-xs text-slate-400 max-w-[140px] truncate">{l.campaign_name || l.campaign_id || ''}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-400">${(l.old_bid || 0).toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-white">${(l.new_bid || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-slate-400">R${(l.old_bid || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-white">R${(l.new_bid || 0).toFixed(2)}</td>
                           <td className={`px-4 py-3 font-mono text-xs font-semibold ${isAu ? 'text-emerald-400' : isDown ? 'text-red-400' : 'text-slate-500'}`}>
-                            {(isAu ? '+' : '')}${Math.abs(amount).toFixed(2)}
+                            {isAu ? '+' : ''}R${Math.abs(amount).toFixed(2)}
                           </td>
                           <td className={`px-4 py-3 text-xs font-semibold ${isAu ? 'text-emerald-400' : isDown ? 'text-red-400' : 'text-slate-500'}`}>
-                            {(isAu ? '+' : '')}{Number(pct).toFixed(1)}%
+                            {isAu ? '+' : ''}{Number(pct).toFixed(1)}%
                           </td>
                           <td className="px-4 py-3">
                             {isAu ? <TrendingUp className="w-4 h-4 text-emerald-400" /> : isDown ? <TrendingDown className="w-4 h-4 text-red-400" /> : <Minus className="w-4 h-4 text-slate-500" />}
                           </td>
-                          <td className="px-4 py-3 text-xs text-slate-500">{((l.ai_confidence || 0) * 100).toFixed(0)}%</td>
                           <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={l.reason}>{l.reason || '—'}</td>
+                          <td className="px-4 py-3">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${l._source === 'autopilot' ? 'text-purple-400 bg-purple-400/10 border-purple-400/20' : 'text-cyan bg-cyan/10 border-cyan/20'}`}>
+                              {l._source === 'autopilot' ? 'Autopilot' : 'API'}
+                            </span>
+                          </td>
                           <td className="px-4 py-3"><StatusBadge status={l.status || 'pending'} size="xs" /></td>
                         </tr>
                       );
