@@ -69,11 +69,7 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { opportunity_id, mode = 'hybrid', approve = false } = await req.json();
-
-    if (!approve) {
-      return Response.json({ ok: false, error: 'Approval required' }, { status: 403 });
-    }
+    const { opportunity_id, mode = 'hybrid', approve = false, auto_apply = false } = await req.json();
 
     // Carregar oportunidade
     const opportunities = await base44.asServiceRole.entities.OptimizationDecision.filter({
@@ -85,6 +81,14 @@ Deno.serve(async (req) => {
     }
 
     const opp = opportunities[0];
+
+    // Validar autorização: approve manual OU auto_apply com confidence >= 90
+    const confidenceScore = (opp as any).confidence_score || 0;
+    const isAutoEligible = auto_apply && confidenceScore >= 90;
+    if (!approve && !isAutoEligible) {
+      return Response.json({ ok: false, error: 'Approval required (confidence < 90% for auto-apply)' }, { status: 403 });
+    }
+
     const accountId = opp.amazon_account_id;
 
     // Carregar conta Amazon

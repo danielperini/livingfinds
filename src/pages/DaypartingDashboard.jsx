@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Clock, TrendingUp, TrendingDown, DollarSign, Activity, Loader2, Search, Filter, Calendar, Play, RotateCcw, CheckCircle, XCircle, AlertTriangle, ChevronRight, BarChart2 } from 'lucide-react';
+import { Clock, TrendingUp, TrendingDown, DollarSign, Activity, Loader2, Search, Filter, Calendar, Play, RotateCcw, CheckCircle, XCircle, AlertTriangle, ChevronRight, BarChart2, Zap } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
@@ -45,6 +45,8 @@ export default function DaypartingDashboard() {
   const [loading, setLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [executing, setExecuting] = useState(false);
+  const [autoApplying, setAutoApplying] = useState(false);
+  const [autoApplyMsg, setAutoApplyMsg] = useState(null);
   const [opportunities, setOpportunities] = useState([]);
   const [skipped, setSkipped] = useState([]);
   const [selectedOpp, setSelectedOpp] = useState(null);
@@ -88,7 +90,6 @@ export default function DaypartingDashboard() {
 
   const executeDayparting = async (opp, approve = true) => {
     if (!account) return;
-    
     setExecuting(true);
     try {
       const res = await base44.functions.invoke('applyDaypartingSchedule', {
@@ -96,20 +97,46 @@ export default function DaypartingDashboard() {
         mode: executionMode,
         approve,
       });
-      
       if (res.data?.ok) {
-        alert(`Dayparting aplicado com sucesso!\n\nRegras criadas: ${res.data.results.rules_created.length}\nModo: ${res.data.results.mode}`);
         setOpportunities(prev => prev.filter(o => o.id !== opp.id));
         setSelectedOpp(null);
       } else {
         alert('Erro: ' + (res.data?.error || 'Falha na execução'));
       }
     } catch (error) {
-      console.error('Erro na execução:', error);
       alert('Erro: ' + error.message);
     } finally {
       setExecuting(false);
     }
+  };
+
+  // Aplicar automaticamente todas as campanhas com confidence >= 90%
+  const applyAllAuto = async () => {
+    const autoOpps = opportunities.filter(o => o.auto_apply && (o.confidence_score || 0) >= 90);
+    if (!autoOpps.length) return;
+    setAutoApplying(true);
+    setAutoApplyMsg(null);
+    let applied = 0, errors = 0;
+    for (const opp of autoOpps) {
+      try {
+        const res = await base44.functions.invoke('applyDaypartingSchedule', {
+          opportunity_id: opp.id,
+          mode: executionMode,
+          auto_apply: true,
+        });
+        if (res.data?.ok) {
+          applied++;
+          setOpportunities(prev => prev.filter(o => o.id !== opp.id));
+        } else {
+          errors++;
+        }
+      } catch {
+        errors++;
+      }
+    }
+    setAutoApplying(false);
+    setAutoApplyMsg(`✓ ${applied} campanhas configuradas automaticamente${errors > 0 ? ` · ${errors} erros` : ''}`);
+    setTimeout(() => setAutoApplyMsg(null), 10000);
   };
 
   const daysOfWeek = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -163,8 +190,21 @@ export default function DaypartingDashboard() {
             {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
             {analyzing ? 'Analisando...' : 'Analisar Horários'}
           </Button>
+          {opportunities.filter(o => o.auto_apply).length > 0 && (
+            <button onClick={applyAllAuto} disabled={autoApplying}
+              className="flex items-center gap-2 px-3 py-2 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors">
+              {autoApplying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+              {autoApplying ? 'Aplicando...' : `Aplicar Automáticos (${opportunities.filter(o => o.auto_apply).length})`}
+            </button>
+          )}
         </div>
       </div>
+
+      {autoApplyMsg && (
+        <div className={`p-3 rounded-xl border text-sm font-medium ${autoApplyMsg.startsWith('✓') ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+          {autoApplyMsg}
+        </div>
+      )}
 
       {/* KPIs */}
       {opportunities.length > 0 && (
@@ -226,11 +266,25 @@ export default function DaypartingDashboard() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <p className="text-sm font-bold text-white truncate">{opp.campaign_name}</p>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-semibold">
                         {opp.days_running} dias
                       </span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-semibold ${
+                        (opp.confidence_score || 0) >= 90
+                          ? 'bg-cyan/15 border-cyan/30 text-cyan'
+                          : (opp.confidence_score || 0) >= 70
+                          ? 'bg-amber-400/10 border-amber-400/20 text-amber-400'
+                          : 'bg-slate-500/10 border-slate-500/20 text-slate-400'
+                      }`}>
+                        {(opp.confidence_score || 0) >= 90 ? '⚡ ' : ''}{opp.confidence_score || 0}% confiança
+                      </span>
+                      {opp.auto_apply && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold">
+                          ✓ Auto-aplicável
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-xs text-slate-400 flex-wrap">
                       <span>ASIN: <span className="font-mono text-cyan">{opp.asin}</span></span>

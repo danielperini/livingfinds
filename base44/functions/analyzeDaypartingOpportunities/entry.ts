@@ -369,6 +369,44 @@ Deno.serve(async (req) => {
 
         const estimatedRoasImprovement = ((avgRoas * 1.15) - avgRoas) / avgRoas * 100;
 
+        // === 9. CALCULAR CONFIDENCE_SCORE REAL ===
+        // Componentes: amostra de dados (cliques/vendas), maturidade (dias), estabilidade horária, cobertura de dias da semana
+        const highConfidenceHours = classifiedHours.filter(h => h.confidence >= 75 && h.sample_size !== 'insufficient').length;
+        const totalActiveHours    = classifiedHours.filter(h => h.clicks > 0).length;
+        const hoursWithAdequateSample = classifiedHours.filter(h => ['adequate', 'high'].includes(h.sample_size)).length;
+
+        // Cobertura de dias da semana com dados adequados
+        const daysWithAdequateData = new Set(
+          classifiedHours.filter(h => h.clicks >= 5).map(h => h.day_of_week)
+        ).size;
+
+        // Sample score: logarítmica — 50+ cliques = 0.5, 200+ = 0.85, 500+ = 1.0
+        const sampleScore = Math.min(1.0, Math.log10(Math.max(totalClicks, 1) + 1) / Math.log10(501));
+
+        // Maturity score: 30 dias = 0.5, 60 dias = 0.8, 90+ = 1.0
+        const maturityScore = Math.min(1.0, daysRunning / 90);
+
+        // Hour coverage score: proporção de horas ativas com amostra adequada
+        const hourCoverageScore = totalActiveHours > 0 ? Math.min(1.0, hoursWithAdequateSample / totalActiveHours) : 0;
+
+        // Day coverage score: 7 dias com dados = 1.0
+        const dayCoverageScore = daysWithAdequateData / 7;
+
+        // High confidence hours ratio
+        const highConfidenceRatio = totalActiveHours > 0 ? highConfidenceHours / totalActiveHours : 0;
+
+        // Score composto ponderado
+        const confidenceScore = Math.round(
+          sampleScore        * 0.30 +
+          maturityScore      * 0.25 +
+          hourCoverageScore  * 0.20 +
+          dayCoverageScore   * 0.15 +
+          highConfidenceRatio * 0.10
+        ) * 100;
+
+        // Elegível para auto-aplicação se confidence ≥ 90%
+        const autoApply = confidenceScore >= 90;
+
         opportunities.push({
           campaign_id: campaign.campaign_id,
           campaign_name: campaign.name,
@@ -418,8 +456,9 @@ Deno.serve(async (req) => {
           } : null,
           estimated_daily_savings: estimatedSavings / 30,
           estimated_roas_improvement_pct: estimatedRoasImprovement,
-          confidence_score: 85,
-          recommendation: 'approve',
+          confidence_score: confidenceScore,
+          auto_apply: autoApply,
+          recommendation: autoApply ? 'auto_apply' : 'approve',
           original_bid: currentAvgBid,
           suggested_strategy: 'dynamic_down_only',
         });
