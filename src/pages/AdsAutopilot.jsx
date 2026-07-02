@@ -1,18 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History, Zap, TrendingDown, ChevronDown, ChevronUp } from 'lucide-react';
+import { Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History, Zap, TrendingDown, Search, Unlock } from 'lucide-react';
 import AutopilotKPIBar from '@/components/autopilot/AutopilotKPIBar';
 import AutopilotConfigPanel from '@/components/autopilot/AutopilotConfigPanel';
 import AutopilotDecisionsTable from '@/components/autopilot/AutopilotDecisionsTable';
 import AutopilotAlertsPanel from '@/components/autopilot/AutopilotAlertsPanel';
 
 const TABS = [
-  { id: 'decisions', label: 'Decisões IA', icon: Zap },
-  { id: 'alerts', label: 'Alertas de Risco', icon: AlertTriangle },
-  { id: 'negatives', label: 'Sugestões Negativas', icon: TrendingDown },
+  { id: 'decisions', label: 'Decisões', icon: Zap },
+  { id: 'converted', label: 'Termos Convertidos', icon: Search },
+  { id: 'alerts', label: 'Alertas', icon: AlertTriangle },
+  { id: 'negatives', label: 'Negativas', icon: TrendingDown },
   { id: 'history', label: 'Histórico de Bids', icon: History },
   { id: 'config', label: 'Configuração', icon: Settings },
 ];
+
+const CLASSIFICATION_COLORS = {
+  FIRST_SALE: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
+  WINNER: 'text-cyan bg-cyan/10 border-cyan/20',
+  HIGH_ACOS: 'text-amber-400 bg-amber-400/10 border-amber-400/20',
+  WASTING: 'text-red-400 bg-red-400/10 border-red-400/20',
+  PROMOTED_EXACT: 'text-purple-400 bg-purple-400/10 border-purple-400/20',
+  NEGATED: 'text-slate-400 bg-slate-400/10 border-slate-400/20',
+  LEARNING: 'text-blue-400 bg-blue-400/10 border-blue-400/20',
+  INSUFFICIENT_DATA: 'text-slate-500 bg-slate-500/10 border-slate-500/20',
+};
 
 export default function AdsAutopilot() {
   const [account, setAccount] = useState(null);
@@ -23,6 +35,7 @@ export default function AdsAutopilot() {
   const [bidHistory, setBidHistory] = useState([]);
   const [runs, setRuns] = useState([]);
   const [config, setConfig] = useState(null);
+  const [searchTerms, setSearchTerms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState('');
@@ -30,6 +43,8 @@ export default function AdsAutopilot() {
   const [error, setError] = useState(null);
   const [showExecuteConfirm, setShowExecuteConfirm] = useState(false);
   const [executing, setExecuting] = useState(false);
+  const [unlocking, setUnlocking] = useState(false);
+  const [stTermFilter, setStTermFilter] = useState('all');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -41,14 +56,15 @@ export default function AdsAutopilot() {
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
       const aid = acc.id;
-      const [cams, decs, als, negs, hist, rs, cfgs] = await Promise.all([
+      const [cams, decs, als, negs, hist, rs, cfgs, sts] = await Promise.all([
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 200),
-        base44.entities.AutopilotDecision.filter({ amazon_account_id: aid }, '-created_date', 200),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 300),
         base44.entities.AutopilotAlert.filter({ amazon_account_id: aid, is_read: false }, '-created_date', 50),
         base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: aid, status: 'pending' }, '-spend', 100),
         base44.entities.BidHistory.filter({ amazon_account_id: aid }, '-created_date', 50),
         base44.entities.AutopilotRun.filter({ amazon_account_id: aid }, '-started_at', 10),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
+        base44.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders_14d', 500),
       ]);
       setCampaigns(cams);
       setDecisions(decs);
@@ -57,6 +73,7 @@ export default function AdsAutopilot() {
       setBidHistory(hist);
       setRuns(rs);
       setConfig(cfgs[0] || null);
+      setSearchTerms(sts);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -69,16 +86,19 @@ export default function AdsAutopilot() {
   const runAnalysis = async () => {
     if (!account) return;
     setRunning(true);
-    setRunMsg('Analisando campanhas e keywords...');
+    setRunMsg('Analisando campanhas, keywords e search terms...');
     try {
-      const res = await base44.functions.invoke('runAutopilot', {
+      const res = await base44.functions.invoke('runDailyAdsOptimization', {
         amazon_account_id: account.id,
         trigger: 'manual',
       });
       const d = res.data;
       if (d?.ok) {
-        setRunMsg(`✓ ${d.decisions_generated} decisões geradas · ${d.alerts} alertas · ${d.negative_suggestions} negativas sugeridas`);
+        const b = d.breakdown || {};
+        setRunMsg(`✓ ${d.decisions_created || 0} decisões geradas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids reduzidos · ${b.bid_increase || 0} bids aumentados`);
         await loadData();
+      } else if (d?.skipped) {
+        setRunMsg(`⚠ ${d.reason}`);
       } else {
         setRunMsg(`❌ ${d?.error || 'Erro desconhecido'}`);
       }
@@ -86,7 +106,7 @@ export default function AdsAutopilot() {
       setRunMsg(`❌ ${e.message}`);
     } finally {
       setRunning(false);
-      setTimeout(() => setRunMsg(''), 8000);
+      setTimeout(() => setRunMsg(''), 10000);
     }
   };
 
@@ -94,7 +114,7 @@ export default function AdsAutopilot() {
     const approvedIds = decisions.filter(d => d.status === 'approved').map(d => d.id);
     if (!approvedIds.length) return;
     setExecuting(true);
-    const res = await base44.functions.invoke('executeAutopilotDecision', { decision_ids: approvedIds });
+    await base44.functions.invoke('executeAutopilotDecision', { decision_ids: approvedIds });
     setShowExecuteConfirm(false);
     await loadData();
     setExecuting(false);
@@ -115,9 +135,45 @@ export default function AdsAutopilot() {
     setNegatives(prev => prev.filter(n => n.id !== id));
   };
 
+  const unlockStuck = async () => {
+    if (!account) return;
+    setUnlocking(true);
+    try {
+      const res = await base44.functions.invoke('unlockStuckSyncs', { amazon_account_id: account.id });
+      if (res.data?.ok) {
+        await loadData();
+      }
+    } catch {}
+    setUnlocking(false);
+  };
+
   const approvedCount = decisions.filter(d => d.status === 'approved').length;
   const lastRun = runs[0];
   const isRunning = lastRun?.status === 'running';
+  const currencySymbol = config?.currency_symbol || account?.currency_symbol || 'R$';
+
+  // Detectar run travado
+  const stuckRunAge = isRunning && lastRun?.started_at
+    ? Math.round((Date.now() - new Date(lastRun.started_at).getTime()) / 60000)
+    : 0;
+  const isStuck = isRunning && stuckRunAge > 60;
+
+  // Termos convertidos: agrupados por search_term + asin
+  const stMap = new Map();
+  for (const st of searchTerms) {
+    const key = `${st.search_term || st.keyword_text}|${st.advertised_asin}`;
+    const ex = stMap.get(key);
+    if (!ex || (st.orders_14d || 0) > (ex.orders_14d || 0)) stMap.set(key, st);
+  }
+  const allSearchTerms = Array.from(stMap.values());
+  const convertedTerms = allSearchTerms.filter(st =>
+    stTermFilter === 'all' ? true :
+    stTermFilter === 'promoted' ? st.promoted_to_manual :
+    stTermFilter === 'first_sale' ? st.classification === 'FIRST_SALE' :
+    stTermFilter === 'winner' ? st.classification === 'WINNER' :
+    stTermFilter === 'wasting' ? st.classification === 'WASTING' :
+    true
+  );
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -130,20 +186,28 @@ export default function AdsAutopilot() {
           <div>
             <h1 className="text-xl font-bold text-white">Ads Autopilot <span className="text-sm font-normal text-cyan">LivingFinds</span></h1>
             <p className="text-xs text-slate-400">
-              {isRunning ? <span className="text-amber-400 animate-pulse">⚡ Análise em andamento...</span> :
-                lastRun ? `Último ciclo: ${new Date(lastRun.started_at).toLocaleString('pt-BR')}` : 'Nenhuma análise executada'}
+              {isRunning && !isStuck ? <span className="text-amber-400 animate-pulse">⚡ Análise em andamento...</span> :
+               isStuck ? <span className="text-red-400">⚠ Run travado há {stuckRunAge} min</span> :
+               lastRun ? `Último ciclo: ${new Date(lastRun.started_at).toLocaleString('pt-BR')}` : 'Nenhuma análise executada'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {isStuck && (
+            <button onClick={unlockStuck} disabled={unlocking}
+              className="flex items-center gap-2 px-3 py-2 bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors">
+              {unlocking ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-4 h-4" />}
+              Liberar run travado
+            </button>
+          )}
           {approvedCount > 0 && (
             <button onClick={() => setShowExecuteConfirm(true)}
               className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition-colors">
               <Play className="w-4 h-4" /> Executar Aprovadas ({approvedCount})
             </button>
           )}
-          <button onClick={runAnalysis} disabled={running || isRunning}
+          <button onClick={runAnalysis} disabled={running || (isRunning && !isStuck)}
             className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             {running ? 'Analisando...' : 'Rodar Análise'}
@@ -155,9 +219,8 @@ export default function AdsAutopilot() {
         </div>
       </div>
 
-      {/* Mensagem do run */}
       {runMsg && (
-        <div className={`p-3 rounded-xl border text-sm font-medium ${runMsg.startsWith('✓') ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+        <div className={`p-3 rounded-xl border text-sm font-medium ${runMsg.startsWith('✓') ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : runMsg.startsWith('⚠') ? 'bg-amber-400/10 border-amber-400/20 text-amber-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
           {runMsg}
         </div>
       )}
@@ -166,7 +229,6 @@ export default function AdsAutopilot() {
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">{error}</div>
       )}
 
-      {/* Sem conta */}
       {!loading && !account && (
         <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-6 text-center">
           <p className="text-amber-400 font-semibold">Nenhuma conta Amazon conectada.</p>
@@ -176,8 +238,7 @@ export default function AdsAutopilot() {
 
       {account && (
         <>
-          {/* KPIs */}
-          <AutopilotKPIBar runs={runs} decisions={decisions} alerts={alerts} campaigns={campaigns} config={config} loading={loading} />
+          <AutopilotKPIBar runs={runs} decisions={decisions} alerts={alerts} campaigns={campaigns} config={config} loading={loading} searchTerms={searchTerms} />
 
           {/* Tabs */}
           <div className="flex border-b border-surface-2 overflow-x-auto">
@@ -196,14 +257,90 @@ export default function AdsAutopilot() {
             <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
           ) : (
             <>
+              {/* Decisões */}
               {tab === 'decisions' && (
                 <AutopilotDecisionsTable decisions={decisions} onRefresh={loadData} />
               )}
 
+              {/* Termos Convertidos */}
+              {tab === 'converted' && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                  <div className="px-5 py-3 border-b border-surface-2 flex items-center justify-between flex-wrap gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white">Search Terms com Performance</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">{allSearchTerms.length} termos únicos analisados</p>
+                    </div>
+                    <div className="flex gap-1 flex-wrap">
+                      {[
+                        { k: 'all', label: `Todos (${allSearchTerms.length})` },
+                        { k: 'first_sale', label: `1ª Venda (${allSearchTerms.filter(s => s.classification === 'FIRST_SALE').length})` },
+                        { k: 'winner', label: `Vencedores (${allSearchTerms.filter(s => s.classification === 'WINNER').length})` },
+                        { k: 'wasting', label: `Desperdiçando (${allSearchTerms.filter(s => s.classification === 'WASTING').length})` },
+                        { k: 'promoted', label: `Promovidos (${allSearchTerms.filter(s => s.promoted_to_manual).length})` },
+                      ].map(f => (
+                        <button key={f.k} onClick={() => setStTermFilter(f.k)}
+                          className={`px-2.5 py-1 text-xs rounded-lg transition-colors ${stTermFilter === f.k ? 'bg-cyan/20 text-cyan' : 'bg-surface-2 text-slate-500 hover:text-slate-300'}`}>
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/50">
+                          {['Search Term', 'ASIN', 'Classificação', 'Pedidos 14d', 'Vendas 14d', 'Spend', 'ACoS 14d', 'Promovido', 'Última Ação'].map(h => (
+                            <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {convertedTerms.length === 0 ? (
+                          <tr><td colSpan={9} className="px-5 py-10 text-center text-sm text-slate-500">Nenhum termo neste filtro</td></tr>
+                        ) : convertedTerms.slice(0, 200).map(st => {
+                          const acos = st.acos_14d || 0;
+                          const acosColor = acos > (config?.target_acos || 25) ? 'text-red-400' : acos > 0 ? 'text-emerald-400' : 'text-slate-500';
+                          return (
+                            <tr key={st.id} className="border-b border-surface-2/40 hover:bg-surface-2/50">
+                              <td className="px-4 py-2.5 font-mono text-xs text-white max-w-[200px] truncate">{st.search_term || st.keyword_text || '—'}</td>
+                              <td className="px-3 py-2.5 text-xs font-mono text-cyan">{st.advertised_asin || '—'}</td>
+                              <td className="px-3 py-2.5">
+                                {st.classification ? (
+                                  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${CLASSIFICATION_COLORS[st.classification] || 'text-slate-400 bg-slate-400/10 border-slate-400/20'}`}>
+                                    {st.classification}
+                                  </span>
+                                ) : <span className="text-xs text-slate-600">—</span>}
+                              </td>
+                              <td className="px-3 py-2.5 text-xs text-white font-semibold">{st.orders_14d || 0}</td>
+                              <td className="px-3 py-2.5 text-xs text-emerald-400">{currencySymbol}{(st.sales_14d || 0).toFixed(2)}</td>
+                              <td className="px-3 py-2.5 text-xs text-slate-400">{currencySymbol}{(st.spend || 0).toFixed(2)}</td>
+                              <td className={`px-3 py-2.5 text-xs font-semibold ${acosColor}`}>{acos > 0 ? `${acos.toFixed(1)}%` : '—'}</td>
+                              <td className="px-3 py-2.5">
+                                {st.promoted_to_manual ? (
+                                  <span className="text-xs text-purple-400">✓ {st.promoted_at ? new Date(st.promoted_at).toLocaleDateString('pt-BR') : 'Sim'}</span>
+                                ) : (
+                                  <span className="text-xs text-slate-600">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5 text-xs text-slate-500 max-w-[140px] truncate">
+                                {st.last_action || '—'}
+                                {st.last_action_at && <span className="text-slate-600 ml-1">{new Date(st.last_action_at).toLocaleDateString('pt-BR')}</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Alertas */}
               {tab === 'alerts' && (
                 <AutopilotAlertsPanel alerts={alerts} onDismiss={dismissAlert} />
               )}
 
+              {/* Negativas */}
               {tab === 'negatives' && (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
                   <div className="px-5 py-3 border-b border-surface-2">
@@ -227,8 +364,8 @@ export default function AdsAutopilot() {
                             <td className="px-4 py-3 font-mono text-xs text-white">{n.keyword_text}</td>
                             <td className="px-3 py-3 text-xs text-slate-400">{n.match_type}</td>
                             <td className="px-3 py-3 text-xs text-slate-300">{n.clicks}</td>
-                            <td className="px-3 py-3 text-xs text-red-400">${(n.spend || 0).toFixed(2)}</td>
-                            <td className="px-3 py-3 text-xs text-slate-400">${(n.sales || 0).toFixed(2)}</td>
+                            <td className="px-3 py-3 text-xs text-red-400">{currencySymbol}{(n.spend || 0).toFixed(2)}</td>
+                            <td className="px-3 py-3 text-xs text-slate-400">{currencySymbol}{(n.sales || 0).toFixed(2)}</td>
                             <td className="px-3 py-3 text-xs text-slate-500 max-w-[180px] truncate">{n.reason}</td>
                             <td className="px-4 py-3">
                               <div className="flex gap-1.5">
@@ -250,6 +387,7 @@ export default function AdsAutopilot() {
                 </div>
               )}
 
+              {/* Histórico */}
               {tab === 'history' && (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
                   <div className="px-5 py-3 border-b border-surface-2">
@@ -266,7 +404,7 @@ export default function AdsAutopilot() {
                       </thead>
                       <tbody>
                         {bidHistory.length === 0 ? (
-                          <tr><td colSpan={8} className="px-5 py-8 text-center text-sm text-slate-500">Nenhuma alteração de bid registada</td></tr>
+                          <tr><td colSpan={8} className="px-5 py-8 text-center text-sm text-slate-500">Nenhuma alteração de bid registrada</td></tr>
                         ) : bidHistory.map(h => {
                           const before = h.bid_before ?? h.budget_before;
                           const after = h.bid_after ?? h.budget_after;
@@ -275,8 +413,8 @@ export default function AdsAutopilot() {
                             <tr key={h.id} className="border-b border-surface-2/40 hover:bg-surface-2/50">
                               <td className="px-4 py-3 text-xs text-white font-medium truncate max-w-[160px]">{h.entity_name}</td>
                               <td className="px-3 py-3 text-xs text-slate-400">{h.entity_type}</td>
-                              <td className="px-3 py-3 font-mono text-xs text-slate-400">${(before || 0).toFixed(2)}</td>
-                              <td className="px-3 py-3 font-mono text-xs text-white">${(after || 0).toFixed(2)}</td>
+                              <td className="px-3 py-3 font-mono text-xs text-slate-400">{currencySymbol}{(before || 0).toFixed(2)}</td>
+                              <td className="px-3 py-3 font-mono text-xs text-white">{currencySymbol}{(after || 0).toFixed(2)}</td>
                               <td className="px-3 py-3">
                                 <span className={`text-xs font-semibold ${pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                                   {pct >= 0 ? '+' : ''}{pct.toFixed(1)}%

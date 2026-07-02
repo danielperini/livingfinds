@@ -147,7 +147,8 @@
         "executing",
         "executed",
         "failed",
-        "rolled_back"
+        "rolled_back",
+        "skipped"
       ],
       "default": "pending"
     },
@@ -174,6 +175,70 @@
       "format": "date-time"
     },
     "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "legacy_source": {
+      "type": "string"
+    },
+    "legacy_id": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "trigger": {
+      "type": "string"
+    },
+    "metrics_before": {
+      "type": "string"
+    },
+    "metrics_after": {
+      "type": "string"
+    },
+    "evaluation_due_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "neutral",
+        "negative",
+        "insufficient_data"
+      ]
+    },
+    "rollback_payload": {
+      "type": "string"
+    },
+    "rollback_status": {
+      "type": "string"
+    },
+    "source_search_term_id": {
+      "type": "string"
+    },
+    "source_campaign_id": {
+      "type": "string"
+    },
+    "source_keyword_id": {
+      "type": "string"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
+    "attempt_count": {
+      "type": "number",
+      "default": 0
+    },
+    "last_attempt_at": {
       "type": "string",
       "format": "date-time"
     }

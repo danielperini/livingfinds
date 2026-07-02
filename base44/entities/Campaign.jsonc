@@ -160,6 +160,22 @@
     "excluded_from_dashboard": {
       "type": "boolean",
       "default": false
+    },
+    "top_of_search_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "rest_of_search_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "product_pages_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_last_updated_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [

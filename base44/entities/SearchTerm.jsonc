@@ -142,6 +142,125 @@
     "synced_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "NEW",
+        "LEARNING",
+        "FIRST_SALE",
+        "WINNER",
+        "HIGH_ACOS",
+        "WASTING",
+        "IRRELEVANT",
+        "PROMOTED_EXACT",
+        "NEGATED",
+        "PAUSED",
+        "INSUFFICIENT_DATA"
+      ],
+      "default": "NEW"
+    },
+    "relevance_status": {
+      "type": "string",
+      "enum": [
+        "relevant",
+        "irrelevant",
+        "uncertain"
+      ],
+      "default": "uncertain"
+    },
+    "decision_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "skipped",
+        "failed"
+      ]
+    },
+    "first_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "promoted_to_manual": {
+      "type": "boolean",
+      "default": false
+    },
+    "promoted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manual_campaign_id": {
+      "type": "string"
+    },
+    "manual_ad_group_id": {
+      "type": "string"
+    },
+    "manual_keyword_id": {
+      "type": "string"
+    },
+    "manual_keyword_state": {
+      "type": "string"
+    },
+    "negated_in_source": {
+      "type": "boolean",
+      "default": false
+    },
+    "negated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_campaign_type": {
+      "type": "string"
+    },
+    "source_target_type": {
+      "type": "string"
+    },
+    "source_target_id": {
+      "type": "string"
+    },
+    "evaluation_count": {
+      "type": "number",
+      "default": 0
+    },
+    "last_evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_action": {
+      "type": "string"
+    },
+    "last_action_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "performance_window": {
+      "type": "string"
+    },
+    "profit_estimate": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "recommended_bid": {
+      "type": "number"
+    },
+    "maximum_profitable_cpc": {
+      "type": "number"
     }
   },
   "required": [

@@ -1,19 +1,50 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Save, Loader2, Shield, Zap, AlertTriangle } from 'lucide-react';
+import { Save, Loader2, Shield, AlertTriangle, Info } from 'lucide-react';
 
 const DEFAULTS = {
-  acos_target: 25,
-  roas_target: 4,
-  daily_budget_limit: 500,
+  enabled: true,
+  autonomy_level: 2,
+  objective: 'profitability',
+  target_acos: 25,
+  maximum_acos: 40,
+  target_roas: 4,
+  total_daily_budget: 500,
   max_bid_increase_pct: 15,
   max_bid_decrease_pct: 20,
+  max_budget_increase_pct: 20,
+  max_budget_decrease_pct: 20,
   min_bid: 0.10,
   max_bid: 5.00,
-  auto_apply_enabled: false,
-  approval_required: true,
-  emergency_pause_enabled: true,
-  learning_enabled: true,
+  min_clicks_for_decision: 8,
+  min_spend_for_decision: 5,
+  min_orders_for_scale: 2,
+  cooldown_hours: 24,
+  harvest_enabled: true,
+  harvest_after_orders: 1,
+  aggressive_harvesting: false,
+  auto_pause_zero_stock: true,
+  auto_reduce_low_stock: true,
+  placement_optimization_enabled: true,
+  dayparting_enabled: true,
+  budget_optimization_enabled: true,
+  search_term_optimization_enabled: true,
+  bid_optimization_enabled: true,
+  auto_create_manual_exact: true,
+  auto_apply_low_risk: true,
+  require_approval_medium_risk: true,
+  require_approval_high_risk: true,
+  currency_code: 'BRL',
+  currency_symbol: 'R$',
+  marketplace_timezone: 'America/Sao_Paulo',
+};
+
+const AUTONOMY_DESCRIPTIONS = {
+  0: 'Apenas observa e classifica. Não cria decisões executáveis.',
+  1: 'Cria recomendações pendentes. Nenhuma é executada automaticamente.',
+  2: 'Executa automaticamente: reduções de bid, colheita de termos, pausa por estoque zero.',
+  3: 'Executa também: aumento de bid, ajuste de budget, dayparting e placements.',
+  4: 'Reorganiza campanhas estrategicamente dentro dos limites financeiros configurados.',
 };
 
 export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved }) {
@@ -21,7 +52,6 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
   const [configId, setConfigId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [autoModeConfirm, setAutoModeConfirm] = useState(false);
 
   useEffect(() => {
     if (!amazonAccountId) return;
@@ -41,23 +71,7 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
       setSaved(true);
       onConfigSaved?.();
       setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleAutoMode = (val) => {
-    if (val && !autoModeConfirm) {
-      const ok = window.confirm(
-        '⚠️ MODO AUTOMÁTICO\n\n' +
-        'Ao ativar, o agente poderá alterar campanhas, bids e orçamentos via Amazon Ads API sem aprovação manual.\n\n' +
-        '"Entendo que o agente poderá alterar campanhas, bids e orçamentos via Amazon Ads API."\n\n' +
-        'Clique OK para confirmar.'
-      );
-      if (!ok) return;
-      setAutoModeConfirm(true);
-    }
-    set('auto_apply_enabled', val);
+    } finally { setSaving(false); }
   };
 
   const Field = ({ label, k, type = 'number', step = 1, min, max, hint }) => (
@@ -78,19 +92,19 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
         <p className="text-sm font-medium text-slate-300">{label}</p>
         {hint && <p className="text-xs text-slate-500">{hint}</p>}
       </div>
-      <button onClick={() => k === 'auto_apply_enabled' ? handleAutoMode(!form[k]) : set(k, !form[k])}
-        className={`relative w-11 h-6 rounded-full transition-colors ${form[k] ? (danger ? 'bg-amber-500' : 'bg-cyan') : 'bg-surface-3'}`}>
+      <button onClick={() => set(k, !form[k])}
+        className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${form[k] ? (danger ? 'bg-amber-500' : 'bg-cyan') : 'bg-surface-3'}`}>
         <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form[k] ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </button>
     </div>
   );
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield className="w-4 h-4 text-cyan" />
-          <h3 className="text-sm font-semibold text-white">Configuração Global do Autopilot</h3>
+          <h3 className="text-sm font-semibold text-white">Configuração do Autopilot</h3>
         </div>
         <button onClick={save} disabled={saving}
           className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors">
@@ -98,13 +112,36 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
         </button>
       </div>
 
+      {/* Habilitado */}
+      <Toggle label="Autopilot Ativo" k="enabled" hint="Habilita ou desabilita todo o sistema de otimização" />
+
+      {/* Nível de Autonomia */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Nível de Autonomia</p>
+        <div className="space-y-2">
+          {[0, 1, 2, 3, 4].map(level => (
+            <button key={level} onClick={() => set('autonomy_level', level)}
+              className={`w-full text-left p-3 rounded-xl border transition-all ${form.autonomy_level === level ? 'border-cyan/40 bg-cyan/10' : 'border-surface-2 bg-surface-1 hover:bg-surface-2'}`}>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center ${form.autonomy_level === level ? 'bg-cyan text-white' : 'bg-surface-3 text-slate-400'}`}>{level}</span>
+                <span className="text-sm font-medium text-white">
+                  {['Observador', 'Recomendações', 'Automação Segura', 'Autopilot Completo', 'Estratégico'][level]}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1 ml-7">{AUTONOMY_DESCRIPTIONS[level]}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Metas */}
       <div>
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Metas de Performance</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Field label="ACoS Alvo (%)" k="acos_target" min={1} max={100} hint="Ex: 25 = 25%" />
-          <Field label="ROAS Alvo (x)" k="roas_target" step={0.1} min={0.1} hint="Ex: 4 = 4x retorno" />
-          <Field label="Orçamento Máximo Diário ($)" k="daily_budget_limit" min={1} hint="Limite total da conta" />
+          <Field label="ACoS Alvo (%)" k="target_acos" min={1} max={100} hint="Ex: 25 = 25%" />
+          <Field label="ACoS Máximo (%)" k="maximum_acos" min={1} max={200} hint="Acima disso → reduzir" />
+          <Field label="ROAS Alvo (x)" k="target_roas" step={0.1} min={0.1} hint="Ex: 4 = 4x retorno" />
+          <Field label={`Budget Total Diário (${form.currency_symbol || 'R$'})`} k="total_daily_budget" min={1} hint="Limite total da conta" />
         </div>
       </div>
 
@@ -112,34 +149,68 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
       <div>
         <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Limites de Lance</p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Field label="Bid Mínimo ($)" k="min_bid" step={0.01} min={0.02} />
-          <Field label="Bid Máximo ($)" k="max_bid" step={0.10} min={0.10} />
+          <Field label={`Bid Mínimo (${form.currency_symbol || 'R$'})`} k="min_bid" step={0.01} min={0.02} />
+          <Field label={`Bid Máximo (${form.currency_symbol || 'R$'})`} k="max_bid" step={0.10} min={0.10} />
           <Field label="Aumento Máx. (%)" k="max_bid_increase_pct" min={1} max={50} />
           <Field label="Redução Máx. (%)" k="max_bid_decrease_pct" min={1} max={50} />
         </div>
       </div>
 
-      {/* Comportamento */}
+      {/* Thresholds */}
       <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Comportamento do Agente</p>
-        <div className="space-y-2">
-          <Toggle label="Aprovação Manual Obrigatória" k="approval_required" hint="Decisões precisam de aprovação antes de executar" />
-          <Toggle label="Pausa de Emergência" k="emergency_pause_enabled" hint="Pausar campanhas com gasto muito alto sem vendas" />
-          <Toggle label="Aprendizado Contínuo" k="learning_enabled" hint="Agente aprende com resultados anteriores" />
-          <Toggle
-            label="Modo Automático — Aplicar sem aprovação"
-            k="auto_apply_enabled"
-            danger
-            hint="Ação em bids de baixo risco aplicada automaticamente"
-          />
-          {form.auto_apply_enabled && (
-            <div className="flex items-start gap-2 p-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
-              <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-300">Modo Automático ATIVO. Bids de baixo risco serão alterados sem aprovação. Pausas, negativações e aumento de orçamento ainda requerem aprovação manual.</p>
-            </div>
-          )}
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Thresholds de Decisão</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <Field label="Cliques mínimos" k="min_clicks_for_decision" min={1} hint="Para tomar decisão" />
+          <Field label={`Spend mínimo (${form.currency_symbol || 'R$'})`} k="min_spend_for_decision" min={0.5} step={0.5} />
+          <Field label="Pedidos mínimos p/ escalar" k="min_orders_for_scale" min={1} />
+          <Field label="Cooldown (horas)" k="cooldown_hours" min={1} hint="Entre decisões no mesmo item" />
+          <Field label="Pedidos p/ colher termo" k="harvest_after_orders" min={1} />
         </div>
       </div>
+
+      {/* Módulos */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Módulos Ativos</p>
+        <div className="space-y-2">
+          <Toggle label="Otimização de Bids" k="bid_optimization_enabled" hint="Ajustar bids de keywords" />
+          <Toggle label="Colheita de Search Terms" k="search_term_optimization_enabled" hint="Promover termos com vendas para manual exact" />
+          <Toggle label="Otimização de Budget" k="budget_optimization_enabled" hint="Ajustar orçamentos de campanhas" />
+          <Toggle label="Dayparting (horários)" k="dayparting_enabled" hint="Ajustar bids por horário" />
+          <Toggle label="Otimização de Placements" k="placement_optimization_enabled" hint="Ajustar top/rest/product pages" />
+          <Toggle label="Criar Keyword Manual Exact" k="auto_create_manual_exact" hint="Ao colher termo, criar keyword exact automaticamente" />
+          <Toggle label="Harvesting Agressivo" k="aggressive_harvesting" danger hint="Negativar termo na AUTO após criar manual (sem aguardar impressões)" />
+        </div>
+      </div>
+
+      {/* Estoque */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Controle de Estoque</p>
+        <div className="space-y-2">
+          <Toggle label="Pausar campanha sem estoque" k="auto_pause_zero_stock" hint="Pausa automática quando FBA = 0" />
+          <Toggle label="Reduzir bid com estoque baixo" k="auto_reduce_low_stock" hint="Reduz investimento antes de pausar" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          <Field label="Estoque mínimo (un.)" k="minimum_stock_units" min={0} />
+          <Field label="Dias mínimos de estoque" k="minimum_stock_days" min={0} />
+        </div>
+      </div>
+
+      {/* Aprovações */}
+      <div>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Aprovações Obrigatórias</p>
+        <div className="space-y-2">
+          <Toggle label="Aplicar automaticamente baixo risco" k="auto_apply_low_risk" hint="Executa sem aprovação quando risco = baixo" />
+          <Toggle label="Exigir aprovação para risco médio" k="require_approval_medium_risk" hint="Aguarda aprovação humana" />
+          <Toggle label="Exigir aprovação para risco alto" k="require_approval_high_risk" hint="Obrigatório para ações críticas" />
+        </div>
+      </div>
+
+      {form.autonomy_level >= 2 && form.auto_apply_low_risk && (
+        <div className="flex items-start gap-2 p-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-amber-300">Nível {form.autonomy_level}: ações de baixo risco serão aplicadas automaticamente na Amazon Ads. Acompanhe os resultados diariamente.</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,6 @@
 /**
- * unlockStuckSyncs — Verifica e desbloqueia syncs travados
- *
- * Roda a cada 15 minutos via automação agendada.
- * Detecta SyncExecutionLog com status 'started' há mais de 30 minutos
- * e marca como erro para permitir novo sync.
+ * unlockStuckSyncs — Libera locks de sync e autopilot travados.
+ * Regra: started_at > 30 min → liberar. Apenas admins.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -12,70 +9,70 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    if (user.role !== 'admin') return Response.json({ error: 'Forbidden' }, { status: 403 });
 
-    // Verificar se é admin
-    if (user.role !== 'admin') {
-      return Response.json({ error: 'Admin only' }, { status: 403 });
+    const body = await req.json().catch(() => ({}));
+    const amazonAccountId = body.amazon_account_id;
+    const now = new Date().toISOString();
+    const LOCK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutos
+    const RUN_THRESHOLD_MS = 60 * 60 * 1000;  // 60 minutos
+
+    let syncReleased = 0;
+    let runReleased = 0;
+    const details = [];
+
+    // 1. Liberar SyncExecutionLog travados (> 30 min)
+    const stuckSyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter({ status: 'started' }, '-started_at', 50);
+    for (const s of stuckSyncs) {
+      if (amazonAccountId && s.amazon_account_id !== amazonAccountId) continue;
+      const ageMs = Date.now() - new Date(s.started_at || s.created_date).getTime();
+      if (ageMs >= LOCK_THRESHOLD_MS) {
+        await base44.asServiceRole.entities.SyncExecutionLog.update(s.id, {
+          status: 'error',
+          completed_at: now,
+          error_message: `Lock antigo liberado automaticamente após ${Math.round(ageMs / 60000)} minutos`,
+        });
+        syncReleased++;
+        details.push({ type: 'sync', id: s.id, operation: s.operation, age_minutes: Math.round(ageMs / 60000) });
+      }
     }
 
-    const now = new Date();
-    const thirtyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000);
-
-    // Buscar syncs travados (started há mais de 30 min) — sem filtro de data para pegar fins de semana
-    const allStuck = await base44.asServiceRole.entities.SyncExecutionLog.filter({
-      status: 'started',
-    }, '-started_at', 100);
-
-    const unlocked = [];
-    const stillRunning = [];
-
-    for (const sync of allStuck) {
-      const startedAt = sync.started_at ? new Date(sync.started_at) : null;
-      if (!startedAt) continue;
-
-      const minutesRunning = (now.getTime() - startedAt.getTime()) / (1000 * 60);
-
-      if (minutesRunning > 30) {
-        // Desbloquear — marcar como erro
-        await base44.asServiceRole.entities.SyncExecutionLog.update(sync.id, {
-          status: 'error',
-          error_message: `Sync travado por ${Math.round(minutesRunning)} min. Desbloqueado automaticamente.`,
-          completed_at: now.toISOString(),
-          duration_ms: now.getTime() - startedAt.getTime(),
+    // 2. Liberar AutopilotRun travados (> 60 min)
+    const stuckRuns = await base44.asServiceRole.entities.AutopilotRun.filter({ status: 'running' }, '-started_at', 20);
+    for (const r of stuckRuns) {
+      if (amazonAccountId && r.amazon_account_id !== amazonAccountId) continue;
+      const ageMs = Date.now() - new Date(r.started_at || r.created_date).getTime();
+      if (ageMs >= RUN_THRESHOLD_MS) {
+        await base44.asServiceRole.entities.AutopilotRun.update(r.id, {
+          status: 'failed',
+          completed_at: now,
+          error_message: `Run liberado automaticamente após ${Math.round(ageMs / 60000)} minutos`,
         });
+        runReleased++;
+        details.push({ type: 'autopilot_run', id: r.id, age_minutes: Math.round(ageMs / 60000) });
+      }
+    }
 
-        // Atualizar AmazonAccount se existir
-        if (sync.amazon_account_id) {
-          await base44.asServiceRole.entities.AmazonAccount.update(sync.amazon_account_id, {
-            status: 'error',
-            error_message: `Sync travado por ${Math.round(minutesRunning)} min. Desbloqueado automaticamente.`,
-          }).catch(() => {});
-        }
-
-        unlocked.push({
-          id: sync.id,
-          amazon_account_id: sync.amazon_account_id,
-          minutes_running: Math.round(minutesRunning),
-        });
-
-        console.log(`[unlockStuckSyncs] Desbloqueado sync ${sync.id} (${Math.round(minutesRunning)} min)`);
-      } else {
-        stillRunning.push({
-          id: sync.id,
-          minutes_running: Math.round(minutesRunning),
-        });
+    // 3. Liberar SyncRun antigos
+    const stuckSyncRuns = await base44.asServiceRole.entities.SyncRun.filter({ status: 'running' }, '-started_at', 20);
+    for (const sr of stuckSyncRuns) {
+      if (amazonAccountId && sr.amazon_account_id !== amazonAccountId) continue;
+      const ageMs = Date.now() - new Date(sr.started_at || sr.created_date).getTime();
+      if (ageMs >= LOCK_THRESHOLD_MS) {
+        await base44.asServiceRole.entities.SyncRun.update(sr.id, { status: 'error' });
+        syncReleased++;
+        details.push({ type: 'sync_run', id: sr.id, age_minutes: Math.round(ageMs / 60000) });
       }
     }
 
     return Response.json({
       ok: true,
-      unlocked,
-      still_running: stillRunning,
-      total_checked: allStuck.length,
-      message: `${unlocked.length} sync(s) desbloqueado(s). ${stillRunning.length} ainda rodando normalmente.`,
+      sync_released: syncReleased,
+      runs_released: runReleased,
+      total_released: syncReleased + runReleased,
+      details,
     });
   } catch (error) {
-    console.error('[unlockStuckSyncs] Erro:', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });

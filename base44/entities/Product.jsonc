@@ -148,6 +148,61 @@
     "synced_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "product_cost": {
+      "type": "number"
+    },
+    "amazon_fees": {
+      "type": "number"
+    },
+    "contribution_margin": {
+      "type": "number"
+    },
+    "profit_margin_pct": {
+      "type": "number"
+    },
+    "buy_box_status": {
+      "type": "string",
+      "enum": [
+        "owned",
+        "shared",
+        "lost",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "buy_box_price": {
+      "type": "number"
+    },
+    "stock_days": {
+      "type": "number"
+    },
+    "minimum_stock": {
+      "type": "number",
+      "default": 5
+    },
+    "organic_sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "ad_sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number"
+    },
+    "sessions_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate_30d": {
+      "type": "number",
+      "default": 0
     }
   },
   "required": [
