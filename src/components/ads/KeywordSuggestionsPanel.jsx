@@ -229,50 +229,53 @@ export default function KeywordSuggestionsPanel({ product, account, onCampaignsC
     if (!selected.size) return;
     setCreating(true);
     setBatchResult(null);
+    setError(null);
     try {
-      // Primeiro salvar sugestões no banco e obter seus IDs
-      // As sugestões já foram salvas pelo backend — buscar IDs por keyword
-      const savedRes = await base44.functions.invoke('suggestProductKeywordsWithAI', {
-        amazon_account_id: account.id,
-        asin: product.asin,
-        product_id: product.id,
-      });
+      // Coletar IDs e overrides das sugestões selecionadas (já persistidas pelo backend)
+      const allCards = [
+        ...(suggestions?.medium_tail || []),
+        ...(suggestions?.long_tail || []),
+      ];
+      const selectedCards = allCards.filter(s => selected.has(s.keyword) && s.status === 'suggested');
 
-      // Construir lista de IDs das sugestões selecionadas
-      // Buscar entidades salvas no banco
-      const entitiesRes = await base44.entities.KeywordSuggestion.filter({
-        amazon_account_id: account.id,
-        asin: product.asin,
-        status: 'suggested',
-      }, '-created_at', 100);
+      if (!selectedCards.length) {
+        setError('Nenhuma sugestão válida selecionada. Atualize as sugestões e tente novamente.');
+        return;
+      }
 
-      const selectedEntities = entitiesRes.filter(e => selected.has(e.keyword));
-      // Aplicar overrides
-      const suggestionIds = selectedEntities.map(e => {
-        const ov = overrides[e.keyword];
-        return e.id;
-      });
+      // Montar mapa de overrides por ID (bid/budget editados pelo usuário)
+      const overridesById = {};
+      for (const s of selectedCards) {
+        if (!s.id) continue;
+        const ov = overrides[s.keyword];
+        if (ov) overridesById[s.id] = ov;
+      }
 
+      const suggestionIds = selectedCards.map(s => s.id).filter(Boolean);
       if (!suggestionIds.length) {
-        setError('Nenhuma sugestão encontrada no banco para criar. Clique em "Sugerir palavras-chave" novamente.');
+        setError('Sugestões sem ID persistido. Clique em "Sugerir palavras-chave" novamente.');
         return;
       }
 
       const res = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
         amazon_account_id: account.id,
         suggestion_ids: suggestionIds,
+        overrides: overridesById,
       });
 
       if (res?.data) {
         setBatchResult(res.data);
-        // Atualizar status local das sugestões
+        // Atualizar status local das sugestões pelo ID (mais preciso)
         setSuggestions(prev => {
           if (!prev) return prev;
+          const resultById = new Map((res.data.results || []).map(r => [r.id, r]));
+          const resultByKeyword = new Map((res.data.results || []).map(r => [r.keyword, r]));
           const updateList = (list) => list.map(s => {
-            const r = res.data.results?.find(r => r.keyword === s.keyword);
+            const r = resultById.get(s.id) || resultByKeyword.get(s.keyword);
             if (!r) return s;
             if (r.ok) return { ...s, status: 'created' };
-            if (r.already_exists) return { ...s, status: 'duplicate', already_exists: true };
+            if (r.already_exists) return { ...s, status: 'duplicate', already_exists: true, block_reason: r.error };
+            if (r.blocked) return { ...s, status: 'blocked', block_reason: r.error };
             return { ...s, status: 'failed', error: r.error };
           });
           return { ...prev, medium_tail: updateList(prev.medium_tail || []), long_tail: updateList(prev.long_tail || []) };
