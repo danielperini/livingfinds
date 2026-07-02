@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
+import { appParams } from '@/lib/app-params';
 import { CheckCircle, XCircle, Loader2, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -40,9 +41,9 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // Após redirect OAuth o localStorage pode estar vazio — usar URL directa com appId fixo
-        const APP_ID = import.meta.env.VITE_BASE44_APP_ID || '6a40180bd8d170a6c59c8098';
-        const BASE_URL = import.meta.env.VITE_BASE44_BACKEND_URL || 'https://base44.app';
+        // Usar o appId do SDK (lido do localStorage via app-params, sempre disponível)
+        const APP_ID = appParams.appId || base44.getConfig().appId;
+        const BASE_URL = 'https://base44.app';
         const fnRes = await fetch(`${BASE_URL}/api/apps/${APP_ID}/functions/exchangeAmazonAdsCode`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
