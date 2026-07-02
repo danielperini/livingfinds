@@ -1,10 +1,111 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
-import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info, Settings, Package, History } from 'lucide-react';
+import {
+  Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
+  RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
+  Settings, Package, History, Zap, Bot, Sparkles
+} from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
+
+const NOW_MS = Date.now();
+const H24 = 24 * 60 * 60 * 1000;
+
+function isNew24h(campaign) {
+  const ts =
+    campaign.created_at ||
+    campaign.start_date ||
+    campaign.synced_at ||
+    campaign.last_sync_at;
+  if (!ts) return false;
+  return NOW_MS - new Date(ts).getTime() < H24;
+}
+
+function isAiManaged(campaign) {
+  // Gerido pela IA: criado pelo app OU learning_eligible não desativado explicitamente
+  return campaign.created_by_app === true || campaign.learning_eligible !== false;
+}
+
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading }) {
+  return (
+    <div className="flex-1 flex flex-col min-w-0 border-r border-surface-2 last:border-r-0">
+      {/* Column header */}
+      <div className={`px-3 py-2 border-b border-surface-2 flex items-center gap-2`}>
+        <Icon className={`w-3.5 h-3.5 ${color}`} />
+        <span className={`text-xs font-bold uppercase tracking-wider ${color}`}>{title}</span>
+        <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-4 h-4 text-cyan animate-spin" />
+          </div>
+        ) : campaigns.length === 0 ? (
+          <p className="text-[10px] text-slate-600 text-center py-6 px-2">Nenhuma campanha</p>
+        ) : (
+          campaigns.map((c, i) => {
+            const isSelected = selectedId === c.id;
+            const isNew = isNew24h(c);
+            const aiManaged = isAiManaged(c);
+            const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
+            const prod = c.asin ? products.find(p => p.asin === c.asin) : null;
+
+            return (
+              <div
+                key={c.id || i}
+                onClick={() => onSelect(c)}
+                className={`w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
+                  isSelected
+                    ? 'bg-surface-2 border-l-2 border-l-cyan'
+                    : 'hover:bg-surface-1/60 border-l-2 border-l-transparent'
+                }`}
+              >
+                {/* Name + badges */}
+                <div className="flex items-start gap-1.5 mb-1">
+                  <p className="text-[11px] font-medium text-white truncate flex-1 leading-tight">{c.name || c.campaign_name}</p>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {isNew && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+                        NEW
+                      </span>
+                    )}
+                    {aiManaged && (
+                      <span title="Gerido pela IA" className="text-[9px] font-bold px-1 py-0.5 rounded bg-cyan/15 text-cyan border border-cyan/25 leading-none flex items-center gap-0.5">
+                        <Bot className="w-2.5 h-2.5" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* ASIN/SKU */}
+                {prod ? (
+                  <p className="text-[9px] text-slate-500 truncate mb-1">
+                    <span className="text-cyan font-mono">{prod.asin}</span>
+                    {prod.sku ? <span className="ml-1">· {prod.sku}</span> : null}
+                  </p>
+                ) : c.asin ? (
+                  <p className="text-[9px] font-mono text-slate-600 mb-1">{c.asin}</p>
+                ) : null}
+
+                {/* Metrics row */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <StatusBadge status={c.state || c.status} size="xs" />
+                  <span className="text-[10px] text-slate-500">R${(c.spend || 0).toFixed(0)}</span>
+                  {(c.acos || 0) > 0 && (
+                    <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function AdsManagement() {
   const [account, setAccount] = useState(null);
@@ -18,7 +119,7 @@ export default function AdsManagement() {
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   const [stateFilter, setStateFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms' | 'config' | 'history'
+  const [activeTab, setActiveTab] = useState('keywords');
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
   const [syncing, setSyncing] = useState(false);
@@ -37,8 +138,17 @@ export default function AdsManagement() {
         loadAllCampaigns(acc.id),
         base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
       ]);
-      // Excluir arquivadas da visão operacional
       const operational = cams.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
+
+      // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
+      const toEnable = operational.filter(c => !c.created_by_app && c.learning_eligible === false);
+      if (toEnable.length > 0) {
+        await Promise.all(
+          toEnable.map(c => base44.entities.Campaign.update(c.id, { learning_eligible: true }).catch(() => {}))
+        );
+        toEnable.forEach(c => { c.learning_eligible = true; });
+      }
+
       setCampaigns(operational);
       setProducts(prods);
     } finally {
@@ -55,7 +165,7 @@ export default function AdsManagement() {
     try {
       const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
       if (res?.data?.ok) {
-        setSyncMsg({ type: 'success', text: `Dados atualizados — ${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
+        setSyncMsg({ type: 'success', text: `${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
         await loadCampaigns();
       } else {
         setSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
@@ -72,51 +182,27 @@ export default function AdsManagement() {
     setSelectedCampaign(campaign);
     setPendingBids({});
     setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
-
     setKwLoading(true);
     try {
       const [kws, st, negs] = await Promise.all([
-        base44.entities.Keyword.filter({
-          amazon_account_id: campaign.amazon_account_id,
-          campaign_id: campaign.campaign_id,
-        }, '-spend', 500),
-        base44.entities.Keyword.filter({
-          amazon_account_id: campaign.amazon_account_id,
-          campaign_id: campaign.campaign_id,
-          source: 'search_term',
-        }, '-spend', 200),
-        base44.entities.NegativeKeywordSuggestion.filter({
-          amazon_account_id: campaign.amazon_account_id,
-          campaign_id: campaign.campaign_id,
-          status: 'pending',
-        }, '-created_date', 50),
+        base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id }, '-spend', 500),
+        base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id, source: 'search_term' }, '-spend', 200),
+        base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id, status: 'pending' }, '-created_date', 50),
       ]);
       setKeywords(kws.filter(k => k.source !== 'search_term'));
       setSearchTerms(st);
       setNegSuggestions(negs);
-      
-      // Analisar desempenho horário se campanha tem 30+ dias
-      const campaignAge = campaign.days_running || 0;
-      if (campaignAge >= 30) {
-        try {
-          await base44.functions.invoke('analyzeKeywordHourlyPerformance', {
-            amazon_account_id: campaign.amazon_account_id,
-            campaign_id: campaign.campaign_id,
-          });
-          // Recarregar keywords com dados atualizados
-          const updatedKws = await base44.entities.Keyword.filter({
-            amazon_account_id: campaign.amazon_account_id,
-            campaign_id: campaign.campaign_id,
-          }, '-spend', 500);
-          setKeywords(updatedKws.filter(k => k.source !== 'search_term'));
-        } catch (e) {
-          console.warn('Erro ao analisar horário:', e.message);
-        }
+      if ((campaign.days_running || 0) >= 30) {
+        base44.functions.invoke('analyzeKeywordHourlyPerformance', {
+          amazon_account_id: campaign.amazon_account_id,
+          campaign_id: campaign.campaign_id,
+        }).then(async () => {
+          const updated = await base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id }, '-spend', 500);
+          setKeywords(updated.filter(k => k.source !== 'search_term'));
+        }).catch(() => {});
       }
     } catch {
-      setKeywords([]);
-      setSearchTerms([]);
-      setNegSuggestions([]);
+      setKeywords([]); setSearchTerms([]); setNegSuggestions([]);
     } finally {
       setKwLoading(false);
     }
@@ -124,18 +210,14 @@ export default function AdsManagement() {
 
   const applyBids = async () => {
     if (Object.keys(pendingBids).length === 0) return;
-    setSaveState('loading');
-    setSaveError(null);
+    setSaveState('loading'); setSaveError(null);
     try {
-      const updates = Object.entries(pendingBids).map(([id, bid]) => ({ id, bid }));
-      await base44.entities.Keyword.bulkUpdate(updates);
+      await base44.entities.Keyword.bulkUpdate(Object.entries(pendingBids).map(([id, bid]) => ({ id, bid })));
       setKeywords(prev => prev.map(kw => pendingBids[kw.id] !== undefined ? { ...kw, bid: pendingBids[kw.id] } : kw));
-      setSaveState('success');
-      setPendingBids({});
+      setSaveState('success'); setPendingBids({});
       setTimeout(() => setSaveState('idle'), 3000);
     } catch (err) {
-      setSaveState('error');
-      setSaveError(err.message || 'Erro ao aplicar bids');
+      setSaveState('error'); setSaveError(err.message || 'Erro ao aplicar bids');
       setTimeout(() => setSaveState('idle'), 4000);
     }
   };
@@ -144,176 +226,149 @@ export default function AdsManagement() {
     try {
       await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, { status: 'approved' });
       setNegSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
-      // Criar ação para execução via agente
       await base44.entities.AgentAction.create({
-        amazon_account_id: account.id,
-        action: 'negative_keyword',
-        campaign_id: suggestion.campaign_id,
-        keyword: suggestion.keyword_text,
+        amazon_account_id: account.id, action: 'negative_keyword',
+        campaign_id: suggestion.campaign_id, keyword: suggestion.keyword_text,
         reason: 'Negativação manual via dashboard',
-        evidence: `Search term: ${suggestion.keyword_text}, Spend: $${(suggestion.spend||0).toFixed(2)}, Clicks: ${suggestion.clicks||0}`,
-        risk_level: 'medium',
-        requires_approval: false,
-        status: 'pending',
+        evidence: `Search term: ${suggestion.keyword_text}, Spend: R$${(suggestion.spend||0).toFixed(2)}, Clicks: ${suggestion.clicks||0}`,
+        risk_level: 'medium', requires_approval: false, status: 'pending',
       });
-    } catch (err) {
-      console.error('Erro ao negativar:', err);
-    }
+    } catch (err) { console.error('Erro ao negativar:', err); }
   };
 
   const promoteKeyword = async (searchTerm) => {
     try {
-      // Verificar duplicidade antes de criar
-      const existingKws = await base44.entities.Keyword.filter({
-        amazon_account_id: account.id,
-        campaign_id: searchTerm.campaign_id,
-        keyword_text: searchTerm.keyword_text,
-        source: 'manual',
-      });
-      
-      if (existingKws.length > 0) {
-        alert(`Keyword "${searchTerm.keyword_text}" já existe nesta campanha.`);
-        return;
-      }
-      
-      // Criar keyword manual exact com bid sugerido de $0.30
+      const existing = await base44.entities.Keyword.filter({ amazon_account_id: account.id, campaign_id: searchTerm.campaign_id, keyword_text: searchTerm.keyword_text, source: 'manual' });
+      if (existing.length > 0) { alert(`Keyword "${searchTerm.keyword_text}" já existe nesta campanha.`); return; }
       await base44.entities.Keyword.create({
-        amazon_account_id: account.id,
-        campaign_id: searchTerm.campaign_id,
+        amazon_account_id: account.id, campaign_id: searchTerm.campaign_id,
         ad_group_id: searchTerm.ad_group_id || '',
         keyword_id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        keyword_text: searchTerm.keyword_text,
-        match_type: 'exact',
-        state: 'enabled',
-        status: 'enabled',
-        current_bid: 0.30,
-        bid: 0.30,
-        source: 'manual',
-        first_seen_at: new Date().toISOString(),
-        last_seen_at: new Date().toISOString(),
-        synced_at: new Date().toISOString(),
+        keyword_text: searchTerm.keyword_text, match_type: 'exact',
+        state: 'enabled', status: 'enabled', current_bid: 0.30, bid: 0.30, source: 'manual',
+        first_seen_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), synced_at: new Date().toISOString(),
       });
-
-      // ── Negativar automaticamente na campanha AUTO do mesmo produto ──────
       const asin = searchTerm.advertised_asin || selectedCampaign?.asin;
       if (asin && searchTerm.keyword_text) {
         base44.functions.invoke('negateKeywordInAutoCampaign', {
-          amazon_account_id: account.id,
-          asin,
+          amazon_account_id: account.id, asin,
           keyword_text: searchTerm.keyword_text,
           manual_campaign_id: searchTerm.campaign_id,
           triggered_by: 'user_promote',
-        }).catch(e => console.warn('Auto-negation skipped:', e.message));
+        }).catch(() => {});
       }
-
       setSearchTerms(prev => prev.filter(st => st.id !== searchTerm.id));
-    } catch (err) {
-      console.error('Erro ao promover:', err);
-      alert('Erro ao promover keyword: ' + err.message);
-    }
+    } catch (err) { console.error('Erro ao promover:', err); alert('Erro ao promover keyword: ' + err.message); }
   };
 
   const hasPending = Object.keys(pendingBids).length > 0;
 
-  const filtered = campaigns.filter(c => {
-    const matchSearch = (c.name || '').toLowerCase().includes(search.toLowerCase());
-    const matchState = stateFilter === 'all' || c.state === stateFilter;
+  // ── Separar AUTO / MANUAL ──────────────────────────────────────────────────
+  const applyFilters = (list) => list.filter(c => {
+    const matchSearch = !search || (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.campaign_name || '').toLowerCase().includes(search.toLowerCase());
+    const matchState = stateFilter === 'all' || c.state === stateFilter || c.status === stateFilter;
     return matchSearch && matchState;
   });
+
+  const autoCampaigns = applyFilters(campaigns.filter(c => (c.targeting_type || '').toUpperCase() === 'AUTO'));
+  const manualCampaigns = applyFilters(campaigns.filter(c => (c.targeting_type || '').toUpperCase() !== 'AUTO'));
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
   const { active_count: activeCount, paused_count: pausedCount, total_current } = classifyCampaigns(campaigns);
+  const newCount = campaigns.filter(isNew24h).length;
 
   return (
     <div className="flex h-full">
-      {/* Sidebar */}
-      <div className="w-72 flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
-        <div className="p-4 border-b border-surface-2">
-          <div className="flex items-center justify-between mb-1">
+
+      {/* ── Sidebar dupla coluna ──────────────────────────────────────────── */}
+      <div className="w-[480px] flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
+
+        {/* Header */}
+        <div className="p-3 border-b border-surface-2">
+          <div className="flex items-center justify-between mb-1.5">
             <h2 className="text-sm font-semibold text-white">Campanhas</h2>
             <button onClick={forceSync} disabled={syncing || !account}
-              title="Forçar atualização dos dados da Amazon"
               className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
               <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
               {syncing ? 'Atualizando...' : 'Atualizar'}
             </button>
           </div>
-          <p className="text-xs text-slate-500">{total_current} campanhas operacionais ({activeCount} ativas · {pausedCount} pausadas)</p>
+
+          {/* Stats row */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] text-slate-500">{total_current} operacionais · {activeCount} ativas · {pausedCount} pausadas</span>
+            {newCount > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                {newCount} NEW (24h)
+              </span>
+            )}
+          </div>
+
           {syncMsg && (
-            <p className={`text-xs mt-2 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+            <p className={`text-[10px] mt-1.5 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
           )}
         </div>
-        <div className="p-4 border-b border-surface-2">
-          {/* Filtros de estado */}
-          <div className="flex gap-1 mb-3">
+
+        {/* Filters */}
+        <div className="px-3 py-2 border-b border-surface-2 flex items-center gap-2">
+          <div className="flex gap-1">
             {[
               { key: 'all', label: 'Todas' },
-              { key: 'enabled', label: `Ativas (${activeCount})` },
-              { key: 'paused', label: `Pausadas (${pausedCount})` },
-              // archived excluídas da visão operacional
+              { key: 'enabled', label: 'Ativas' },
+              { key: 'paused', label: 'Pausadas' },
             ].map(f => (
               <button key={f.key} onClick={() => setStateFilter(f.key)}
-                className={`flex-1 text-xs py-1 rounded-lg transition-colors ${stateFilter === f.key ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-surface-2 text-slate-500 hover:text-slate-300'}`}>
+                className={`px-2 py-1 text-[10px] rounded transition-colors ${stateFilter === f.key ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-surface-2 text-slate-500 hover:text-slate-300'}`}>
                 {f.label}
               </button>
             ))}
           </div>
-
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar..."
-              className="w-full pl-8 pr-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
+              className="w-full pl-6 pr-2 py-1 bg-surface-2 border border-surface-3 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto scrollbar-thin">
-          {loading ? (
-            <div className="flex items-center justify-center py-12"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
-          ) : filtered.length === 0 ? (
-            <p className="text-xs text-slate-500 text-center py-8 px-4">Sem campanhas. Execute um Sync no Dashboard.</p>
-          ) : (
-            filtered.map((c, i) => {
-              const isSelected = selectedCampaign?.id === c.id;
-              const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
-              return (
-                <div key={c.id || i} onClick={() => selectCampaign(c)}
-                 className={`w-full text-left px-4 py-3 border-b border-surface-2/50 transition-all cursor-pointer ${isSelected ? 'bg-surface-2 border-l-2 border-l-cyan' : 'hover:bg-surface-1/50 border-l-2 border-l-transparent'}`}>
-                 <p className="text-xs font-medium text-white truncate">{c.name}</p>
-                 {(() => {
-                   const prod = c.asin ? products.find(p => p.asin === c.asin) : null;
-                   return prod ? (
-                     <p className="text-[10px] text-slate-500 truncate mt-0.5">
-                       <span className="text-cyan font-mono">{prod.asin}</span>
-                       {prod.sku ? <span className="ml-1">· SKU: {prod.sku}</span> : null}
-                     </p>
-                   ) : null;
-                 })()}
-                 <div className="flex items-center gap-2 mt-1">
-                   <StatusBadge status={c.state} size="xs" />
-                   <span className="text-xs text-slate-500">${(c.spend || 0).toFixed(0)}</span>
-                   <span className={`text-xs font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}% ACoS</span>
-                 </div>
-                </div>
-              );
-            })
-          )}
+        {/* Two-column campaign list */}
+        <div className="flex flex-1 min-h-0">
+          <CampaignColumn
+            title="Automáticas"
+            icon={Zap}
+            color="text-amber-400"
+            campaigns={autoCampaigns}
+            products={products}
+            selectedId={selectedCampaign?.id}
+            onSelect={selectCampaign}
+            loading={loading}
+          />
+          <CampaignColumn
+            title="Manuais"
+            icon={Sparkles}
+            color="text-cyan"
+            campaigns={manualCampaigns}
+            products={products}
+            selectedId={selectedCampaign?.id}
+            onSelect={selectCampaign}
+            loading={loading}
+          />
         </div>
 
-        {/* KPIs sidebar bottom */}
-        <div className="p-4 border-t border-surface-2 grid grid-cols-2 gap-2">
-          <div className="bg-surface-2 rounded-lg p-2.5">
-            <p className="text-xs text-slate-500 mb-0.5">Spend Total</p>
-            <p className="text-sm font-bold text-white">${totalSpend.toFixed(0)}</p>
+        {/* KPI bottom */}
+        <div className="p-3 border-t border-surface-2 grid grid-cols-2 gap-2">
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-[10px] text-slate-500 mb-0.5">Spend Total</p>
+            <p className="text-sm font-bold text-white">R${totalSpend.toFixed(0)}</p>
           </div>
-          <div className="bg-surface-2 rounded-lg p-2.5">
-            <p className="text-xs text-slate-500 mb-0.5">Vendas Total</p>
-            <p className="text-sm font-bold text-emerald-400">${totalSales.toFixed(0)}</p>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-[10px] text-slate-500 mb-0.5">Vendas Total</p>
+            <p className="text-sm font-bold text-emerald-400">R${totalSales.toFixed(0)}</p>
           </div>
         </div>
       </div>
 
-      {/* Painel de detalhes */}
+      {/* ── Painel de detalhes ────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
         {!selectedCampaign ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
@@ -322,57 +377,63 @@ export default function AdsManagement() {
             </div>
             <div>
               <p className="text-base font-semibold text-slate-300">Seleciona uma campanha</p>
-              <p className="text-sm text-slate-500 mt-1">Escolhe uma campanha à esquerda para ver keywords e gerir bids.</p>
+              <p className="text-sm text-slate-500 mt-1">Automáticas (AUTO) ou Manuais — todas geridas pela IA.</p>
             </div>
           </div>
         ) : (
           <>
-            {/* Header campanha */}
+            {/* Campaign header */}
             <div className="px-6 py-4 border-b border-surface-2 bg-surface-1 flex-shrink-0">
               <div className="flex items-start justify-between gap-4 flex-wrap">
-                <div>
-                  <h2 className="text-base font-bold text-white">{selectedCampaign.name}</h2>
-                  <div className="flex items-center gap-3 mt-2 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <h2 className="text-base font-bold text-white truncate">{selectedCampaign.name || selectedCampaign.campaign_name}</h2>
+                    {isNew24h(selectedCampaign) && (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">NEW</span>
+                    )}
+                    {(selectedCampaign.targeting_type || '').toUpperCase() === 'AUTO' ? (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/20 flex items-center gap-1">
+                        <Zap className="w-3 h-3" /> AUTO
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-cyan/10 text-cyan border border-cyan/20 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> MANUAL
+                      </span>
+                    )}
+                    {isAiManaged(selectedCampaign) && (
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 flex items-center gap-1">
+                        <Bot className="w-3 h-3" /> Gerida pela IA
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <StatusBadge status={selectedCampaign.state} />
-                    <span className="text-xs text-slate-400">Orçamento: <span className="text-white">${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span></span>
-                    <span className="text-xs text-slate-400">Spend: <span className="text-white">${(selectedCampaign.spend || 0).toFixed(2)}</span></span>
-                    <span className="text-xs text-slate-400">Vendas: <span className="text-emerald-400">${(selectedCampaign.sales || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">Orçamento: <span className="text-white">R${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span></span>
+                    <span className="text-xs text-slate-400">Spend: <span className="text-white">R${(selectedCampaign.spend || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">Vendas: <span className="text-emerald-400">R${(selectedCampaign.sales || 0).toFixed(2)}</span></span>
                     <span className="text-xs text-slate-400">ACoS: <span className={`font-semibold ${(selectedCampaign.acos || 0) > 40 ? 'text-red-400' : 'text-emerald-400'}`}>{(selectedCampaign.acos || 0).toFixed(1)}%</span></span>
                     <span className="text-xs text-slate-400">ROAS: <span className="text-cyan">{(selectedCampaign.roas || 0).toFixed(2)}x</span></span>
-                    <span className="text-xs text-slate-400">CPC: <span className="text-white">${(selectedCampaign.cpc || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">CPC: <span className="text-white">R${(selectedCampaign.cpc || 0).toFixed(2)}</span></span>
                     <span className="text-xs text-slate-400">Cliques: <span className="text-white">{(selectedCampaign.clicks || 0).toLocaleString()}</span></span>
                     <span className="text-xs text-slate-400">Pedidos: <span className="text-white">{selectedCampaign.orders || 0}</span></span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-shrink-0">
                   <button onClick={async () => {
-                    try {
-                      await base44.functions.invoke('monitorSearchTerms', { amazon_account_id: account.id });
-                    } catch (e) {
-                      console.error('Erro ao executar monitor:', e);
-                    }
-                }}
-                className="px-3 py-2 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5"
-                title="Executar análise de search terms agora"
-              >
-                <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
-              </button>
+                    try { await base44.functions.invoke('monitorSearchTerms', { amazon_account_id: account.id }); }
+                    catch (e) { console.error(e); }
+                  }} className="px-3 py-2 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5">
+                    <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
+                  </button>
                   {keywords.length > 0 && (
-                    <button
-                      onClick={() => {
-                        const bulk = {};
-                        keywords.forEach(kw => { bulk[kw.id] = 0.50; });
-                        setPendingBids(bulk);
-                      }}
-                      className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5"
-                      title="Definir bid de R$0,50 em todas as keywords"
-                    >
+                    <button onClick={() => { const b = {}; keywords.forEach(kw => { b[kw.id] = 0.50; }); setPendingBids(b); }}
+                      className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5">
                       <TrendingUp className="w-3.5 h-3.5" /> Bids → R$0,50
                     </button>
                   )}
                   {hasPending && (
                     <button onClick={applyBids} disabled={saveState === 'loading'}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex-shrink-0 ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
                       {saveState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : saveState === 'success' ? <CheckCircle className="w-4 h-4" /> : saveState === 'error' ? <AlertCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
                       {saveState === 'loading' ? 'Guardando...' : saveState === 'success' ? 'Bids guardados!' : saveState === 'error' ? (saveError || 'Erro') : `Guardar ${Object.keys(pendingBids).length} bid(s)`}
                     </button>
@@ -381,39 +442,27 @@ export default function AdsManagement() {
               </div>
             </div>
 
-            {/* Tab switcher */}
+            {/* Tabs */}
             <div className="flex border-b border-surface-2 bg-[#0D0F14] flex-shrink-0">
               {[
                 { key: 'keywords', label: `Keywords (${keywords.length})` },
-                { key: 'search-terms', label: `Search Terms ${searchTerms.length > 0 ? `(${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
-                { key: 'config', label: 'Configurações' },
+                { key: 'search-terms', label: `Search Terms${searchTerms.length > 0 ? ` (${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
+                { key: 'config', label: 'Configurações', icon: Settings },
                 { key: 'history', label: 'Histórico', icon: History },
               ].map(tab => (
                 <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                  className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
-                    activeTab === tab.key
-                      ? 'border-cyan text-cyan'
-                      : 'border-transparent text-slate-500 hover:text-slate-300'
-                  }`}>
-                  {tab.key === 'config' && <Settings className="w-3.5 h-3.5" />}
-                  {tab.key === 'history' && <History className="w-3.5 h-3.5" />}
+                  className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+                  {tab.icon && <tab.icon className="w-3.5 h-3.5" />}
                   {tab.label}
                 </button>
               ))}
             </div>
 
-            {/* Tabs content */}
+            {/* Tab content */}
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               {activeTab === 'config' ? (
-                <CampaignConfigPanel
-                  campaign={selectedCampaign}
-                  account={account}
-                  products={products}
-                  onSaved={(updated) => {
-                    setSelectedCampaign(updated);
-                    setCampaigns(prev => prev.map(c => c.id === updated.id ? updated : c));
-                  }}
-                />
+                <CampaignConfigPanel campaign={selectedCampaign} account={account} products={products}
+                  onSaved={(updated) => { setSelectedCampaign(updated); setCampaigns(prev => prev.map(c => c.id === updated.id ? updated : c)); }} />
               ) : activeTab === 'history' ? (
                 <CampaignHistoryTab campaign={selectedCampaign} account={account} />
               ) : activeTab === 'keywords' ? (
@@ -428,115 +477,72 @@ export default function AdsManagement() {
                     </div>
                   ) : (
                     <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-[#0D0F14] z-10">
-                    <tr className="border-b border-surface-2">
-                      {['Produto / SKU', 'Keyword / Search Term', 'Match', 'Estado', 'Melhor horário', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {keywords.map((kw, i) => {
-                      const changed = kw.id in pendingBids;
-                      const kwProduct = kw.asin
-                        ? products.find(p => p.asin === kw.asin) || products.find(p => p.asin === selectedCampaign?.asin)
-                        : products.find(p => p.asin === selectedCampaign?.asin);
-                      const acosColor = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
-                      
-                      // Renderizar melhor horário
-                      const renderBestHour = () => {
-                        if (!kw.hourly_data_mature || kw.best_hour_start == null) {
-                          return (
-                            <div className="flex items-center gap-1.5 text-slate-500">
-                              <Clock className="w-3.5 h-3.5" />
-                              <span className="text-xs">Em aprendizado</span>
-                            </div>
-                          );
-                        }
-                        
-                        const start = String(kw.best_hour_start).padStart(2, '0');
-                        const end = String(kw.best_hour_end).padStart(2, '0');
-                        const actionColors = {
-                          increase_peak: 'text-emerald-400',
-                          reduce_off_peak: 'text-amber-400',
-                          maintain: 'text-cyan',
-                          insufficient_data: 'text-slate-500',
-                        };
-                        const actionLabels = {
-                          increase_peak: 'Aumentar no pico',
-                          reduce_off_peak: 'Reduzir fora do pico',
-                          maintain: 'Manter',
-                          insufficient_data: 'Dados insuficientes',
-                        };
-                        
-                        return (
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-1.5">
-                              <Clock className="w-3.5 h-3.5 text-cyan" />
-                              <span className="text-xs font-semibold text-white">{start}h–{end}h</span>
-                            </div>
-                            {kw.best_hour_roas && (
-                              <div className="text-[10px] text-slate-400">
-                                ROAS {kw.best_hour_roas} · {kw.best_hour_sales} vendas
-                              </div>
-                            )}
-                            {kw.hourly_action_suggestion && kw.hourly_action_suggestion !== 'insufficient_data' && (
-                              <div className={`text-[10px] font-medium ${actionColors[kw.hourly_action_suggestion]}`}>
-                                {actionLabels[kw.hourly_action_suggestion]}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      };
-                      
-                      return (
-                        <tr key={kw.id || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5' : 'hover:bg-surface-2'}`}>
-                          <td className="px-4 py-2.5 min-w-[130px] max-w-[160px]">
-                            {kwProduct ? (
-                              <div className="flex items-center gap-2">
-                                {kwProduct.product_image_url ? (
-                                  <img src={kwProduct.product_image_url} alt={kwProduct.asin}
-                                    className="w-8 h-8 rounded object-cover bg-surface-3 flex-shrink-0" />
-                                ) : (
-                                  <div className="w-8 h-8 rounded bg-surface-3 flex items-center justify-center flex-shrink-0">
-                                    <Package className="w-3.5 h-3.5 text-slate-600" />
-                                  </div>
-                                )}
-                                <div className="min-w-0">
-                                  <p className="text-[10px] font-mono text-cyan truncate">{kwProduct.asin}</p>
-                                  {kwProduct.sku && <p className="text-[10px] text-slate-500 truncate">SKU: {kwProduct.sku}</p>}
-                                </div>
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-slate-600 font-mono">{kw.asin || selectedCampaign?.asin || '—'}</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || '—'}</td>
-                          <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
-                          <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
-                          <td className="px-4 py-2.5">{renderBestHour()}</td>
-                          <td className="px-4 py-2.5 text-slate-300">${(kw.bid || 0).toFixed(2)}</td>
-                          <td className="px-4 py-2.5">
-                            <input type="number" step="0.01" min="0.02"
-                              defaultValue={(kw.bid || 0).toFixed(2)}
-                              onChange={e => setPendingBids(prev => ({ ...prev, [kw.id]: parseFloat(e.target.value) || 0 }))}
-                              className="w-24 px-2 py-1.5 bg-surface-3 border border-surface-3 rounded text-xs text-white focus:outline-none focus:border-cyan/50" />
-                          </td>
-                          <td className="px-4 py-2.5"><span className={`font-semibold text-xs ${acosColor}`}>{(kw.acos || 0).toFixed(1)}%</span></td>
-                          <td className="px-4 py-2.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
-                          <td className="px-4 py-2.5 text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
+                      <thead className="sticky top-0 bg-[#0D0F14] z-10">
+                        <tr className="border-b border-surface-2">
+                          {['Produto / SKU', 'Keyword', 'Match', 'Estado', 'Melhor horário', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map(h => (
+                            <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
+                      </thead>
+                      <tbody>
+                        {keywords.map((kw, i) => {
+                          const changed = kw.id in pendingBids;
+                          const kwProduct = kw.asin
+                            ? products.find(p => p.asin === kw.asin) || products.find(p => p.asin === selectedCampaign?.asin)
+                            : products.find(p => p.asin === selectedCampaign?.asin);
+                          const acosColor = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
+                          const renderBestHour = () => {
+                            if (!kw.hourly_data_mature || kw.best_hour_start == null) {
+                              return <div className="flex items-center gap-1 text-slate-500"><Clock className="w-3 h-3" /><span className="text-[10px]">Aprendendo</span></div>;
+                            }
+                            const s = String(kw.best_hour_start).padStart(2, '0');
+                            const e = String(kw.best_hour_end).padStart(2, '0');
+                            return (
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1"><Clock className="w-3 h-3 text-cyan" /><span className="text-xs font-semibold text-white">{s}h–{e}h</span></div>
+                                {kw.best_hour_roas && <div className="text-[10px] text-slate-400">ROAS {kw.best_hour_roas} · {kw.best_hour_sales} vendas</div>}
+                              </div>
+                            );
+                          };
+                          return (
+                            <tr key={kw.id || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5' : 'hover:bg-surface-2'}`}>
+                              <td className="px-4 py-2.5 min-w-[120px]">
+                                {kwProduct ? (
+                                  <div className="flex items-center gap-2">
+                                    {kwProduct.product_image_url
+                                      ? <img src={kwProduct.product_image_url} alt="" className="w-7 h-7 rounded object-cover bg-surface-3 flex-shrink-0" />
+                                      : <div className="w-7 h-7 rounded bg-surface-3 flex items-center justify-center flex-shrink-0"><Package className="w-3 h-3 text-slate-600" /></div>}
+                                    <div className="min-w-0">
+                                      <p className="text-[10px] font-mono text-cyan truncate">{kwProduct.asin}</p>
+                                      {kwProduct.sku && <p className="text-[10px] text-slate-500 truncate">SKU: {kwProduct.sku}</p>}
+                                    </div>
+                                  </div>
+                                ) : <span className="text-[10px] text-slate-600 font-mono">{kw.asin || selectedCampaign?.asin || '—'}</span>}
+                              </td>
+                              <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || '—'}</td>
+                              <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || '—'}</span></td>
+                              <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
+                              <td className="px-4 py-2.5">{renderBestHour()}</td>
+                              <td className="px-4 py-2.5 text-slate-300">R${(kw.bid || 0).toFixed(2)}</td>
+                              <td className="px-4 py-2.5">
+                                <input type="number" step="0.01" min="0.02" defaultValue={(kw.bid || 0).toFixed(2)}
+                                  onChange={e => setPendingBids(prev => ({ ...prev, [kw.id]: parseFloat(e.target.value) || 0 }))}
+                                  className="w-20 px-2 py-1 bg-surface-3 border border-surface-3 rounded text-xs text-white focus:outline-none focus:border-cyan/50" />
+                              </td>
+                              <td className="px-4 py-2.5"><span className={`font-semibold text-xs ${acosColor}`}>{(kw.acos || 0).toFixed(1)}%</span></td>
+                              <td className="px-4 py-2.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
+                              <td className="px-4 py-2.5 text-slate-400">R${(kw.spend || 0).toFixed(2)}</td>
+                              <td className="px-4 py-2.5 text-emerald-400">R${(kw.sales || 0).toFixed(2)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
                 </>
               ) : (
                 /* Search Terms Tab */
                 <div className="p-4 space-y-4">
-                  {/* Sugestões de negativação */}
                   {negSuggestions.length > 0 && (
                     <div>
                       <h3 className="text-xs font-semibold text-red-400 mb-2 flex items-center gap-1.5">
@@ -548,10 +554,9 @@ export default function AdsManagement() {
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-white truncate">{neg.keyword_text}</p>
                               <p className="text-xs text-slate-400 mt-0.5">
-                                {(neg.clicks||0)} clicks · ${(neg.spend||0).toFixed(2)} spend · {neg.sales > 0 ? `$${(neg.sales||0).toFixed(2)} vendas` : 'zero vendas'}
-                                {neg.acos > 0 && ` · ${(neg.acos||0).toFixed(0)}% ACoS`}
+                                {neg.clicks||0} clicks · R${(neg.spend||0).toFixed(2)} · {neg.sales > 0 ? `R$${(neg.sales||0).toFixed(2)} vendas` : 'zero vendas'}
                               </p>
-                              <p className="text-xs text-red-400 mt-1">{neg.reason}</p>
+                              <p className="text-xs text-red-400 mt-0.5">{neg.reason}</p>
                             </div>
                             <button onClick={() => negateKeyword(neg)}
                               className="ml-3 px-3 py-1.5 text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors flex items-center gap-1.5">
@@ -562,14 +567,12 @@ export default function AdsManagement() {
                       </div>
                     </div>
                   )}
-
-                  {/* Search terms capturados */}
                   <div>
                     <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
                       <ListFilter className="w-3.5 h-3.5" /> {searchTerms.length} search terms capturados
                     </h3>
                     {searchTerms.length === 0 ? (
-                      <p className="text-sm text-slate-500 text-center py-8">Sem search terms capturados ainda.</p>
+                      <p className="text-sm text-slate-500 text-center py-8">Sem search terms ainda.</p>
                     ) : (
                       <table className="w-full text-sm">
                         <thead>
@@ -587,8 +590,8 @@ export default function AdsManagement() {
                               <tr key={st.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
                                 <td className="px-4 py-2.5 text-slate-300 max-w-[200px] truncate">{st.keyword_text || st.keyword || '—'}</td>
                                 <td className="px-4 py-2.5 text-slate-400">{(st.clicks||0).toLocaleString()}</td>
-                                <td className="px-4 py-2.5 text-slate-400">${(st.spend||0).toFixed(2)}</td>
-                                <td className="px-4 py-2.5 text-emerald-400">${(st.sales||0).toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-slate-400">R${(st.spend||0).toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-emerald-400">R${(st.sales||0).toFixed(2)}</td>
                                 <td className={`px-4 py-2.5 font-semibold ${(st.acos||0) > 50 ? 'text-red-400' : (st.acos||0) > 30 ? 'text-amber-400' : (st.acos||0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
                                   {(st.acos||0) > 0 ? `${(st.acos||0).toFixed(1)}%` : '—'}
                                 </td>
@@ -599,9 +602,7 @@ export default function AdsManagement() {
                                       <Plus className="w-3 h-3" /> Promover
                                     </button>
                                   ) : isWasting ? (
-                                    <span className="text-xs text-red-400 flex items-center gap-1">
-                                      <TrendingDown className="w-3 h-3" /> Desperdício
-                                    </span>
+                                    <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Desperdício</span>
                                   ) : (
                                     <span className="text-xs text-slate-500">Observar</span>
                                   )}
