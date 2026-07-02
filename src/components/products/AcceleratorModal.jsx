@@ -6,9 +6,11 @@ import {
   ChevronRight,
   Loader2,
   Rocket,
+  Sparkles,
   X,
   XCircle,
 } from 'lucide-react';
+import KeywordSuggestionsPanel from '@/components/ads/KeywordSuggestionsPanel';
 
 function parseKeywords(value) {
   const received = value
@@ -61,6 +63,7 @@ export default function AcceleratorModal({
   onClose,
   onDone,
 }) {
+  const [mode, setMode] = useState('manual'); // 'manual' | 'ai'
   const [step, setStep] = useState('keywords');
   const [keywordsRaw, setKeywordsRaw] = useState('');
   const [validation, setValidation] = useState(null);
@@ -307,6 +310,34 @@ export default function AcceleratorModal({
           </button>
         </div>
 
+        {/* Mode tabs */}
+        <div className="flex border-b border-surface-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setMode('manual')}
+            className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+              mode === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Rocket className="w-3.5 h-3.5" /> Manual
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('ai')}
+            className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+              mode === 'ai' ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Sugerir com IA
+          </button>
+        </div>
+
+        {mode === 'ai' ? (
+          <div className="flex-1 overflow-y-auto p-6">
+            <KeywordSuggestionsPanel product={product} account={account} onCampaignsCreated={onDone} />
+          </div>
+        ) : (
+        <>
         <div className="flex items-center gap-2 px-6 py-3 bg-surface-2/40 border-b border-surface-2 flex-shrink-0 overflow-x-auto">
           <StepBadge
             active={step === 'keywords'}
@@ -762,6 +793,8 @@ export default function AcceleratorModal({
             </div>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
