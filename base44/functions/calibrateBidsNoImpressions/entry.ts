@@ -6,11 +6,11 @@
  * 2. Keyword que voltou a ter impressão E tem CPC real → bid = 50% do CPC (smartBidFromCpc)
  * 3. Keyword que voltou a ter impressão sem CPC → reduz bid -R$0.05 (calibração suave)
  * 4. Keyword que perdeu impressão novamente → retoma ciclo de +R$0.10
- * 5. Teto máximo: R$5.00 | Piso mínimo: R$0.10
+ * 5. Teto máximo: R$1.20 | Piso mínimo: R$0.10
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MAX_BID = 5.00;
+const MAX_BID = 1.20;
 const MIN_BID = 0.10;
 const BOOST_AMOUNT = 0.10;   // +R$0.10 sem impressão
 const REDUCE_AMOUNT = 0.05;  // -R$0.05 ao ganhar impressão
