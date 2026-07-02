@@ -3,17 +3,18 @@
  * ║         LIVINGFINDS — AUTOMAÇÃO COMPLETA DE PRODUTOS (Manual §1–27)      ║
  * ╚══════════════════════════════════════════════════════════════════════════╝
  *
- * Orquestrador principal que implementa o Manual de Automação Amazon Ads em BRL.
+ * Orquestrador principal — Manual de Automação + Sistema de Conformidade (§1–27).
  *
- * Fluxo (§4 do manual):
- *  1. Carrega todos os produtos ativos (stock > 0, elegíveis, não arquivados)
- *  2. Para cada produto: garante campanha AUTO SP-AUTO-[SKU]
- *  3. Gera sugestões de keywords via Claude (suggestProductKeywordsWithAI)
- *  4. Filtra confiança >= 80%, máximo 10 termos por produto por ciclo (§8–9)
- *  5. Cria campanha manual SP-EXATA-[SKU] com grupo ADG-[SKU] se não existir
- *  6. Cria keywords exact com bid inicial R$ 0,50
- *  7. Agenda negativação na AUTO após confirmação de impressões (§12)
- *  8. Respeita controlo de budget e limites financeiros (§23)
+ * Fluxo (§12 do manual de conformidade):
+ *  1. Carrega todos os produtos ativos
+ *  2. validateProductCompliance → produto deve ser APPROVED
+ *  3. Garante campanha AUTO SP-AUTO-[SKU]
+ *  4. Gera sugestões via Claude (suggestProductKeywordsWithAI)
+ *  5. validateProductCompliance → filtros de política por termo (policy_confidence=100)
+ *  6. Filtra commercial_confidence >= 80% E policy_confidence = 100
+ *  7. Cria campanha manual SP-EXATA-[SKU], máx 10 termos, bid R$ 0,50
+ *  8. Agenda negativação na AUTO após impressões confirmadas
+ *  9. Regista auditoria completa por produto e termo (§23)
  *
  * Regras de bid (§14):
  *  - Inicial: R$ 0,50
@@ -297,6 +298,7 @@ Deno.serve(async (req) => {
     const summary = {
       products_found: allProducts.length,
       products_eligible: activeProducts.length,
+      products_blocked_policy: 0,      // produto PROHIBITED/RESTRICTED/REVIEW_REQUIRED
       auto_campaigns_created: 0,
       auto_campaigns_existing: 0,
       manual_campaigns_created: 0,
@@ -304,6 +306,7 @@ Deno.serve(async (req) => {
       keywords_created: 0,
       keywords_blocked_low_confidence: 0,
       keywords_blocked_duplicate: 0,
+      keywords_blocked_policy: 0,      // reprovados pela validação de conformidade
       products_skipped_budget: 0,
       products_processed: 0,
       errors: [],
@@ -345,7 +348,67 @@ Deno.serve(async (req) => {
         const autoCampaignName   = `SP-AUTO-${sku}`;
         const manualCampaignName = `SP-EXATA-${sku}`;
 
-        // ── A. Garantir campanha AUTO ────────────────────────────────────
+        // ── A. Validação de conformidade do produto (§4, §12) ────────────
+        // Produto ativo ≠ produto automaticamente elegível para publicidade
+        const productCompliance = await base44.asServiceRole.functions.invoke(
+          'validateProductCompliance',
+          { amazon_account_id: aid, asin, product_id: product.id, terms: [] }
+        ).catch(() => null);
+
+        const productStatus = productCompliance?.data?.product?.status || 'INSUFFICIENT_DATA';
+
+        if (productStatus === 'PROHIBITED') {
+          summary.products_blocked_policy++;
+          // Registrar motivo para auditoria (§23)
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: aid,
+            decision_type: 'pause',
+            entity_type: 'campaign',
+            entity_id: asin,
+            asin,
+            action: 'no_action',
+            rationale: `CONFORMIDADE §4: produto ${asin} classificado como PROHIBITED — ${productCompliance?.data?.product?.reason || 'categoria ou conteúdo proibido'}`,
+            risk: 'low',
+            requires_approval: false,
+            status: 'skipped',
+            confidence: 100,
+            objective: 'maintenance',
+            currency_code: CURRENCY, currency_symbol: SYMBOL,
+            idempotency_key: `${aid}|compliance_prohibited|${asin}`,
+            source_function: 'runFullProductAutomation',
+            created_at: now,
+          }).catch(() => {});
+          summary.products_processed++;
+          continue;
+        }
+
+        if (productStatus === 'RESTRICTED' || productStatus === 'REVIEW_REQUIRED' || productStatus === 'INSUFFICIENT_DATA') {
+          summary.products_blocked_policy++;
+          // Produto requer revisão humana — não criar campanha automaticamente
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: aid,
+            decision_type: 'pause',
+            entity_type: 'campaign',
+            entity_id: asin,
+            asin,
+            action: 'no_action',
+            rationale: `CONFORMIDADE §4: produto ${asin} requer revisão humana (${productStatus}) — ${productCompliance?.data?.product?.reason || 'verificação necessária antes de criar campanha'}`,
+            risk: 'medium',
+            requires_approval: true,
+            status: 'pending',
+            confidence: 50,
+            objective: 'maintenance',
+            currency_code: CURRENCY, currency_symbol: SYMBOL,
+            idempotency_key: `${aid}|compliance_review|${asin}`,
+            source_function: 'runFullProductAutomation',
+            created_at: now,
+          }).catch(() => {});
+          summary.products_processed++;
+          continue;
+        }
+        // productStatus === 'APPROVED' → pode continuar
+
+        // ── C. Garantir campanha AUTO ────────────────────────────────────
         const autoResult = await ensureCampaign(
           base44, account, refreshToken, profileId,
           autoCampaignName, 'AUTO', budgetPerProduct, now
@@ -366,14 +429,14 @@ Deno.serve(async (req) => {
           }
         }
 
-        // ── B. Verificar se já tem campanha manual ───────────────────────
+        // ── D. Verificar se já tem campanha manual ───────────────────────
         const allLocal = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-created_date', 500);
         const existingManual = allLocal.find(c =>
           (c.campaign_name === manualCampaignName || c.name === manualCampaignName) &&
           c.targeting_type === 'MANUAL' && c.state !== 'archived'
         );
 
-        // ── C. Obter sugestões de keywords via AI ────────────────────────
+        // ── E. Obter sugestões de keywords via AI + validação de conformidade ──
         // Invocar suggestProductKeywordsWithAI
         let suggestions = [];
         try {
@@ -399,12 +462,36 @@ Deno.serve(async (req) => {
             return (b.confidence || 0) - (a.confidence || 0);
           });
 
-          // Máximo 10 termos por ciclo (§9), sem duplicatas globais
+          // Validação de conformidade por termo (§8–10, §12)
+          // policy_confidence deve ser 100 para publicação automática
+          const termTexts = eligible.map(s => s.keyword).filter(Boolean);
+          let policyResults = new Map(); // term → { status, policy_confidence }
+          if (termTexts.length > 0) {
+            const policyCheck = await base44.asServiceRole.functions.invoke(
+              'validateProductCompliance',
+              { amazon_account_id: aid, asin, product_id: product.id, terms: termTexts }
+            ).catch(() => null);
+            if (policyCheck?.data?.terms) {
+              for (const tr of policyCheck.data.terms) {
+                policyResults.set(norm(tr.term), tr);
+              }
+            }
+          }
+
+          // Máximo 10 termos por ciclo (§9), sem duplicatas globais e com conformidade 100%
           const selected = [];
           for (const s of eligible) {
             if (selected.length >= MAX_KEYWORDS_CYCLE) break;
             const nk = norm(s.keyword || '');
             if (!nk) continue;
+
+            // Verificar conformidade de política (§10): policy_confidence deve ser 100
+            const policyResult = policyResults.get(nk);
+            if (policyResult && policyResult.status !== 'APPROVED') {
+              summary.keywords_blocked_policy++;
+              continue; // bloqueado por política — não criar
+            }
+
             // Verificar duplicata global
             if (kwIndex.has(nk)) {
               summary.keywords_blocked_duplicate++;
@@ -432,7 +519,7 @@ Deno.serve(async (req) => {
           continue; // sem termos elegíveis, pular criação da campanha manual
         }
 
-        // ── D. Criar campanha manual se não existir ──────────────────────
+        // ── F. Criar campanha manual se não existir ──────────────────────
         let manualCampaignId = existingManual?.campaign_id || null;
         let manualAdGroupId = null;
 
@@ -467,7 +554,7 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // ── E. Criar keywords exact com bid R$ 0,50 ──────────────────────
+        // ── G. Criar keywords exact com bid R$ 0,50 ──────────────────────
         const keywordTexts = suggestions.map(s => s.keyword.toLowerCase().trim());
         const kwResult = await createKeywords(refreshToken, profileId, manualCampaignId, manualAdGroupId, keywordTexts);
         summary.keywords_created += kwResult.created;
@@ -475,7 +562,7 @@ Deno.serve(async (req) => {
         // Atualizar índice para evitar duplicatas no próximo produto
         for (const kw of keywordTexts) kwIndex.set(norm(kw), manualCampaignId);
 
-        // ── F. Registrar keywords localmente + marcar sugestão como "created" ──
+        // ── H. Registrar keywords localmente + marcar sugestão como "created" ──
         for (const s of suggestions) {
           const kn = norm(s.keyword);
           // Atualizar KeywordSuggestion status
@@ -508,7 +595,7 @@ Deno.serve(async (req) => {
           }).catch(() => {});
         }
 
-        // ── G. Negativação na AUTO (§12) — agendar após confirmar impressões ──
+        // ── I. Negativação na AUTO (§12) — agendar após confirmar impressões ──
         // Criamos uma OptimizationDecision pendente para ser executada quando
         // a campanha manual tiver impressões (verificado pela calibração diária)
         for (const s of suggestions) {
@@ -536,7 +623,7 @@ Deno.serve(async (req) => {
           }).catch(() => {}); // idempotente — ignora duplicata
         }
 
-        // ── H. Atualizar estado do produto ───────────────────────────────
+        // ── J. Atualizar estado do produto ───────────────────────────────
         await base44.asServiceRole.entities.Product.update(product.id, {
           has_campaign: true,
           campaign_status: 'active',
@@ -545,7 +632,7 @@ Deno.serve(async (req) => {
           last_sync_at: now,
         }).catch(() => {});
 
-        // ── I. LearningEvent ──────────────────────────────────────────────
+        // ── K. LearningEvent ──────────────────────────────────────────────
         await base44.asServiceRole.entities.LearningEvent.create({
           amazon_account_id: aid,
           event_type: 'campaign_created',
