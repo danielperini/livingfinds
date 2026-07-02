@@ -12,6 +12,8 @@ export default function Settings() {
   const [syncResult, setSyncResult] = useState(null);
   const [authStatus, setAuthStatus] = useState(null);
   const [authChecking, setAuthChecking] = useState(false);
+  const [secretsPreview, setSecretsPreview] = useState(null);
+  const [secretsLoading, setSecretsLoading] = useState(false);
   const [form, setForm] = useState({
     seller_name: '',
     marketplace_id: '',
@@ -59,6 +61,18 @@ export default function Settings() {
       alert(`Erro: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const loadSecretsPreview = async () => {
+    setSecretsLoading(true);
+    try {
+      const res = await base44.functions.invoke('getAdsSecretsPreview', {});
+      setSecretsPreview(res?.data || null);
+    } catch (e) {
+      setSecretsPreview({ ok: false, error: e.message });
+    } finally {
+      setSecretsLoading(false);
     }
   };
 
@@ -261,15 +275,37 @@ export default function Settings() {
 
       {/* Secrets Info */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
-        <h2 className="text-sm font-semibold text-white mb-3">Credenciais Amazon (Environment Variables)</h2>
-        <p className="text-xs text-slate-400 mb-4">Configuradas como secrets no painel do Base44 → Settings → Environment Variables.</p>
-        <div className="grid grid-cols-2 gap-2">
-          {['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_REGION'].map(s => (
-            <div key={s} className="flex items-center gap-2 p-2.5 bg-surface-2 rounded-lg border border-surface-3">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
-              <code className="text-xs font-mono text-slate-300">{s}</code>
-            </div>
-          ))}
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Credenciais Amazon (Environment Variables)</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Configuradas em Base44 → Settings → Environment Variables.</p>
+          </div>
+          <button onClick={loadSecretsPreview} disabled={secretsLoading}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-60">
+            {secretsLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {secretsLoading ? 'Carregando...' : 'Ver Valores'}
+          </button>
+        </div>
+        <div className="space-y-2">
+          {['ADS_CLIENT_ID', 'ADS_CLIENT_SECRET', 'ADS_REFRESH_TOKEN', 'ADS_PROFILE_ID', 'ADS_REGION'].map(s => {
+            const isSet = secretsPreview?.set?.[s];
+            const val   = secretsPreview?.values?.[s];
+            return (
+              <div key={s} className="flex items-center justify-between p-3 bg-surface-2 rounded-lg border border-surface-3">
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${secretsPreview ? (isSet ? 'bg-emerald-400' : 'bg-red-400') : 'bg-slate-600'}`} />
+                  <code className="text-xs font-mono text-slate-300">{s}</code>
+                </div>
+                <div className="text-right">
+                  {!secretsPreview && <span className="text-xs text-slate-600">—</span>}
+                  {secretsPreview && !isSet && <span className="text-xs text-red-400 font-semibold">NÃO CONFIGURADO</span>}
+                  {secretsPreview && isSet && (
+                    <code className="text-xs font-mono text-slate-400">{val || '(configurado)'}</code>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
