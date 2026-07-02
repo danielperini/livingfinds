@@ -131,7 +131,7 @@ export default function InventorySales() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2">
-                  {['ASIN', 'Título do Produto', 'SKU', 'Preço', 'FBA Stock', 'Receita 30d', 'Unidades 30d', 'Alerta'].map(h => (
+                  {['ASIN', 'Título do Produto', 'SKU', 'Disponível desde', 'Preço', 'FBA Stock', 'Receita 30d', 'Unidades 30d', 'Alerta'].map(h => (
                     <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -152,6 +152,13 @@ export default function InventorySales() {
                         )}
                       </td>
                       <td className="px-5 py-3 text-xs text-slate-400 font-mono">{p.sku || '—'}</td>
+                      <td className="px-5 py-3 text-xs text-slate-400 whitespace-nowrap">
+                        {p.first_available_date
+                          ? new Date(p.first_available_date).toLocaleDateString('pt-BR')
+                          : p.created_date
+                            ? new Date(p.created_date).toLocaleDateString('pt-BR')
+                            : '—'}
+                      </td>
                       <td className="px-5 py-3 text-slate-300">{p.price ? `$${p.price.toFixed(2)}` : '—'}</td>
                       <td className="px-5 py-3">
                         <span className={`font-bold ${stockAlert === 'out' ? 'text-red-400' : stockAlert === 'low' ? 'text-amber-400' : 'text-white'}`}>
