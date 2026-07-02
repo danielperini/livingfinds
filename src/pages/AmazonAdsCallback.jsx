@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { base44 } from '@/api/base44Client';
 import { CheckCircle, XCircle, Loader2, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -33,10 +34,9 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // Chamar directamente via fetch — sem necessidade de sessão após redirect OAuth
-        const appId = import.meta.env.VITE_BASE44_APP_ID;
-        const appBaseUrl = import.meta.env.VITE_BASE44_APP_BASE_URL || 'https://api.base44.com';
-        const fnRes = await fetch(`${appBaseUrl}/api/apps/${appId}/functions/exchangeAmazonAdsCode`, {
+        // Usar fetch directo — base44.functions.invoke falha após redirect OAuth
+        // porque o appId não está no localStorage (nova sessão)
+        const fnRes = await fetch('https://api.base44.com/api/apps/6a40180bd8d170a6c59c8098/functions/exchangeAmazonAdsCode', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: finalCode }),
