@@ -45,6 +45,7 @@ import Alerts from '@/pages/Alerts';
 import OptimizerPipeline from '@/pages/OptimizerPipeline';
 import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
+import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -102,6 +103,7 @@ const AuthenticatedApp = () => {
           <Route path="/optimizer" element={<OptimizerPipeline />} />
           <Route path="/currency-audit" element={<CurrencyAudit />} />
           <Route path="/keyword-management" element={<KeywordManagement />} />
+          <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           {/* Redirects de rotas fundidas */}
           <Route path="/bid-logs" element={<Navigate to="/bids-log" replace />} />
           <Route path="/metrics" element={<Navigate to="/" replace />} />
