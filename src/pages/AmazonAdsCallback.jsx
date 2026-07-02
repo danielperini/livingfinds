@@ -32,15 +32,19 @@ export default function AmazonAdsCallback() {
       try {
         const isAuth = await base44.auth.isAuthenticated();
         if (!isAuth) {
-          // Salvar code na sessão e redirecionar para login
           sessionStorage.setItem('amazon_ads_pending_code', code);
-          window.location.href = `/login?next=/amazon-ads-callback?code=${encodeURIComponent(code)}`;
+          window.location.href = `/login?next=${encodeURIComponent(`/amazon-ads-callback?code=${code}`)}`;
           return;
         }
       } catch (_) {}
 
+      // Recuperar code pendente do sessionStorage (se veio do redirect pós-login)
+      const pendingCode = sessionStorage.getItem('amazon_ads_pending_code');
+      const finalCode = code || pendingCode;
+      if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
+
       try {
-        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code });
+        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
         const data = res.data;
 
         if (!data?.ok) {
