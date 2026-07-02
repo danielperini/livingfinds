@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
+import { Link } from 'react-router-dom';
 import {
   Link2, CheckCircle, XCircle, Loader2, AlertCircle,
-  ShieldCheck, RefreshCw, Activity, BookOpen, ExternalLink
+  ShieldCheck, RefreshCw, Activity, BookOpen, ExternalLink, KeyRound
 } from 'lucide-react';
 
 function statusIcon(s) {
@@ -250,6 +251,21 @@ export default function AmazonIntegracao() {
           Documentação oficial: Self-Authorization
         </a>
       </div>
+
+      {/* Atalho self-auth */}
+      <Link
+        to="/sp-api-self-auth"
+        className="flex items-center justify-between px-4 py-3 bg-surface-1 border border-cyan/20 rounded-xl hover:bg-surface-2 transition-colors group"
+      >
+        <div className="flex items-center gap-3">
+          <KeyRound className="w-4 h-4 text-cyan" />
+          <div>
+            <p className="text-sm font-semibold text-white">Gerar token via Self-Authorization</p>
+            <p className="text-xs text-slate-400">Cola o token do Seller Central e valida aqui sem OAuth público</p>
+          </div>
+        </div>
+        <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-cyan transition-colors" />
+      </Link>
 
       {/* Nota separação SP-API vs Ads */}
       <div className="flex items-start gap-3 px-4 py-3 bg-surface-1 border border-amber-500/20 rounded-xl">

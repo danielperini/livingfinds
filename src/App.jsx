@@ -36,6 +36,7 @@ import Recommendations from '@/pages/Recommendations';
 import SearchTerms from '@/pages/SearchTerms';
 import MetricsDashboard from '@/pages/MetricsDashboard';
 import SpApiSetup from '@/pages/SpApiSetup';
+import SpApiSelfAuth from '@/pages/SpApiSelfAuth';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
 import CampaignConfig from '@/pages/CampaignConfig';
@@ -94,6 +95,7 @@ const AuthenticatedApp = () => {
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/sp-api-setup" element={<SpApiSetup />} />
+          <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
           <Route path="/saude-do-sistema" element={<SystemHealth />} />
           <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
