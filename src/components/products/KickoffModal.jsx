@@ -133,7 +133,25 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
           match_type: kw.matchType,
           bid: parseFloat(kw.bid) || 0.50,
         });
-        results.push({ keyword: kw.text.trim(), ok: res.data?.ok, name: res.data?.campaign_name, error: res.data?.error });
+        const ok = res.data?.ok;
+        // Gravar no TermBank independentemente da origem (input manual, sugestão IA, etc.)
+        if (ok) {
+          base44.functions.invoke('recordTermPerformance', {
+            amazon_account_id: account.id,
+            term: kw.text.trim(),
+            asin: product.asin,
+            product_name: product.product_name || product.display_name || '',
+            source: kw._source === 'search_term_converted' ? 'search_term_auto'
+              : kw._source === 'cross_asin_validated' ? 'cross_asin'
+              : kw._from_term_bank ? 'manual_kickoff'
+              : 'user_input',
+            match_type: kw.matchType || 'exact',
+            bid_initial: parseFloat(kw.bid) || 0.50,
+            bid_current: parseFloat(kw.bid) || 0.50,
+            amazon_campaign_id: res.data?.amazon_campaign_id || '',
+          }).catch(() => {});
+        }
+        results.push({ keyword: kw.text.trim(), ok, name: res.data?.campaign_name, error: res.data?.error });
       } catch (e) {
         results.push({ keyword: kw.text.trim(), ok: false, error: e.message });
       }

@@ -115,6 +115,54 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 3.5. TermBank — banco de termos com performance comprovada ────────────
+    // Busca termos do banco que: (a) vieram deste ASIN, ou (b) têm este ASIN
+    // em compatible_asins, ou (c) têm título de produto ≥80% similar
+    const termBankEntries = await base44.asServiceRole.entities.TermBank.filter(
+      { amazon_account_id: aid }, '-performance_score', 500
+    );
+
+    for (const entry of termBankEntries) {
+      const term = (entry.term || '').trim().toLowerCase();
+      if (!term || term.length < 3) continue;
+      const n = norm(term);
+      if (suggestions.has(n)) continue; // já temos de fonte melhor
+
+      const isOwnAsin = entry.asin === asin;
+      const isCrossAsin = (entry.compatible_asins || []).includes(asin);
+      const titleSim = product_name
+        ? titleSimilarity(entry.product_name || '', product_name)
+        : 0;
+
+      // Incluir se: mesmo ASIN, ou compatível, ou título ≥80% similar E performance positiva
+      if (isOwnAsin || isCrossAsin || (titleSim >= 0.80 && (entry.orders || 0) > 0)) {
+        const confidence = isOwnAsin
+          ? Math.min(0.97, 0.70 + (entry.performance_score || 0) / 100 * 0.27)
+          : isCrossAsin
+            ? Math.min(0.92, 0.65 + (entry.performance_score || 0) / 100 * 0.27)
+            : Math.min(0.88, 0.60 + titleSim * 0.28);
+
+        suggestions.set(n, {
+          keyword: term,
+          source: isOwnAsin ? 'search_term_converted' : 'cross_asin_validated',
+          source_label: isOwnAsin
+            ? `Banco de termos — ${entry.orders || 0} pedidos`
+            : isCrossAsin
+              ? `Cross-ASIN comprovado — ${entry.orders || 0} pedidos`
+              : `Produto similar (${Math.round(titleSim * 100)}% compat.)`,
+          confidence,
+          bid: entry.bid_current || entry.cpc
+            ? parseFloat(((entry.bid_current || entry.cpc || 0.50) * 1.05).toFixed(2))
+            : 0.50,
+          match_type: entry.match_type || 'exact',
+          reason: entry.orders > 0
+            ? `${entry.orders} pedidos · ACoS ${(entry.acos || 0).toFixed(0)}% · Score ${entry.performance_score || 0}/100`
+            : `No banco de termos — ${entry.classification || 'novo'}`,
+          _from_term_bank: true,
+        });
+      }
+    }
+
     // ── 4. SearchTerms convertidos de outros ASINs com título similar ─────────
     // Só executar se o produto tem nome e se temos poucas sugestões da fonte 1
     if ((suggestions.size < 5) && product_name) {

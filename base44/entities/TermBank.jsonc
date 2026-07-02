@@ -1,0 +1,158 @@
+{
+  "name": "TermBank",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "term": {
+      "type": "string"
+    },
+    "term_normalized": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "auto"
+      ],
+      "default": "exact"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "search_term_auto",
+        "manual_kickoff",
+        "user_input",
+        "cross_asin",
+        "ai_suggestion",
+        "csv_import"
+      ],
+      "default": "search_term_auto"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "negative",
+        "archived"
+      ],
+      "default": "active"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "amazon_campaign_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "bid_initial": {
+      "type": "number",
+      "default": 0.5
+    },
+    "bid_current": {
+      "type": "number",
+      "default": 0.5
+    },
+    "performance_score": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "winner",
+        "learning",
+        "wasting",
+        "negative",
+        "new",
+        "insufficient_data"
+      ],
+      "default": "new"
+    },
+    "compatible_asins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "compatibility_notes": {
+      "type": "string"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_performance_update": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "term",
+    "asin"
+  ]
+}

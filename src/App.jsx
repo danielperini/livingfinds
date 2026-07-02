@@ -47,6 +47,7 @@ import OptimizerPipeline from '@/pages/OptimizerPipeline';
 import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
+import TermBankPage from '@/pages/TermBankPage';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -106,6 +107,7 @@ const AuthenticatedApp = () => {
           <Route path="/currency-audit" element={<CurrencyAudit />} />
           <Route path="/keyword-management" element={<KeywordManagement />} />
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
+          <Route path="/term-bank" element={<TermBankPage />} />
           {/* Redirects de rotas fundidas */}
           <Route path="/bid-logs" element={<Navigate to="/bids-log" replace />} />
           <Route path="/metrics" element={<Navigate to="/" replace />} />

@@ -357,8 +357,22 @@ Deno.serve(async (req) => {
           }),
         ]);
 
-        // PASSO 6: Marcar sugestão como criada + registrar decisão
+        // PASSO 6: Marcar sugestão como criada + registrar decisão + gravar no TermBank
         await Promise.all([
+          // Gravar no TermBank para consulta futura em kickoffs
+          base44.functions.invoke('recordTermPerformance', {
+            amazon_account_id: aid,
+            term: keyword,
+            asin,
+            product_name: product?.product_name || product?.display_name || '',
+            source: 'manual_kickoff',
+            match_type: 'exact',
+            campaign_id: campaignRecord.id,
+            amazon_campaign_id: String(amazonCampaignId),
+            keyword_id: keywordRecord.id,
+            bid_initial: bid,
+            bid_current: bid,
+          }),
           base44.asServiceRole.entities.KeywordSuggestion.update(sid, {
             status: 'created',
             created_campaign_id: campaignRecord.id,
