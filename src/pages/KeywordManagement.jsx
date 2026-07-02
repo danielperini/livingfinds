@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
-  Search, Filter, RefreshCw, Loader2, TrendingUp, X, CheckCircle,
-  Brain, Upload, Shield, Check, Square
+  Search, RefreshCw, Loader2, X,
+  Brain, Upload, Check, Square, Download, Zap
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -43,6 +43,8 @@ export default function KeywordManagement() {
   const [selectedNegatives, setSelectedNegatives] = useState(new Set());
   const [bulkApplying, setBulkApplying] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [fetchingApi, setFetchingApi] = useState(false);
+  const [harvesting, setHarvesting] = useState(false);
   const [acosTarget, setAcosTarget] = useState(30);
   const fileInputRef = useRef(null);
 
@@ -58,11 +60,11 @@ export default function KeywordManagement() {
       const rules = await base44.entities.BudgetRule.filter({ amazon_account_id: acc.id });
       if (rules[0]?.target_acos) setAcosTarget(rules[0].target_acos);
 
-      const [kws, negs] = await Promise.all([
-        base44.entities.Keyword.filter({ amazon_account_id: acc.id, source: 'search_term' }, '-spend', 1000),
+      const [searchTerms, negs] = await Promise.all([
+        base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-clicks', 2000),
         base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_date', 500),
       ]);
-      setKeywords(kws);
+      setKeywords(searchTerms);
       setNegatives(negs);
     } finally {
       setLoading(false);
@@ -144,6 +146,54 @@ export default function KeywordManagement() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
+  const fetchFromApi = async () => {
+    if (!account || fetchingApi) return;
+    setFetchingApi(true);
+    try {
+      const res = await base44.functions.invoke('fetchSearchTermsFromApi', {
+        amazon_account_id: account.id,
+        days: 30,
+        manual: true,
+      });
+      const d = res.data;
+      if (d?.skipped) {
+        setActionMsg({ type: 'info', text: '✓ Busca já realizada hoje. Use reimportação para forçar.' });
+      } else if (d?.pending) {
+        setActionMsg({ type: 'info', text: `⏳ Relatório em processamento (ID: ${d.report_id}). Tente novamente em 1–2 min.` });
+      } else if (d?.ok) {
+        setActionMsg({ type: 'success', text: `✓ ${d.imported} novos termos · ${d.updated} atualizados · Período: ${d.period}` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: d?.error || d?.message || 'Falha ao buscar termos' });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setFetchingApi(false);
+      setTimeout(() => setActionMsg(null), 15000);
+    }
+  };
+
+  const runHarvest = async () => {
+    if (!account || harvesting) return;
+    setHarvesting(true);
+    try {
+      const res = await base44.functions.invoke('harvestConvertedSearchTerms', { amazon_account_id: account.id });
+      const d = res.data;
+      if (d?.ok) {
+        setActionMsg({ type: 'success', text: `🌾 ${d.harvested} termos colhidos para campanha manual · Safe cutoff: ${d.safe_cutoff}` });
+        await load();
+      } else {
+        setActionMsg({ type: 'error', text: d?.error || 'Falha na colheita' });
+      }
+    } catch (e) {
+      setActionMsg({ type: 'error', text: e.message });
+    } finally {
+      setHarvesting(false);
+      setTimeout(() => setActionMsg(null), 12000);
+    }
+  };
+
   const handleImportFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file || !account) return;
@@ -169,9 +219,21 @@ export default function KeywordManagement() {
 
   const classifiedKeywords = keywords.map(kw => ({
     ...kw,
-    _class: classifyTerm(kw, acosTarget),
+    // SearchTerm usa search_term, Keyword usa keyword_text
+    _displayTerm: kw.search_term || kw.keyword_text || kw.keyword || '',
+    // Normalizar campos de métricas: SearchTerm usa orders_14d, Keyword usa orders
+    _orders: kw.orders_14d ?? kw.orders ?? 0,
+    _sales: kw.sales_14d ?? kw.sales ?? 0,
+    _acos: kw.acos_14d ?? kw.acos ?? 0,
+    _class: classifyTerm({
+      clicks: kw.clicks,
+      orders: kw.orders_14d ?? kw.orders ?? 0,
+      spend: kw.spend,
+      sales: kw.sales_14d ?? kw.sales ?? 0,
+      acos: kw.acos_14d ?? kw.acos ?? 0,
+    }, acosTarget),
   })).filter(kw => {
-    const matchSearch = !search || (kw.keyword_text || '').toLowerCase().includes(search.toLowerCase());
+    const matchSearch = !search || kw._displayTerm.toLowerCase().includes(search.toLowerCase());
     return matchSearch;
   });
 
@@ -198,7 +260,23 @@ export default function KeywordManagement() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={fetchFromApi}
+            disabled={fetchingApi || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Download className={`w-4 h-4 ${fetchingApi ? 'animate-spin' : ''}`} />
+            {fetchingApi ? 'Buscando...' : 'Buscar Termos via API'}
+          </button>
+          <button
+            onClick={runHarvest}
+            disabled={harvesting || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-emerald-400/10 border border-emerald-400/20 text-emerald-400 hover:bg-emerald-400/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+          >
+            <Zap className={`w-4 h-4 ${harvesting ? 'animate-spin' : ''}`} />
+            {harvesting ? 'Analisando...' : 'Analisar → Campanha Manual'}
+          </button>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="hidden" />
           <Button onClick={() => fileInputRef.current?.click()} disabled={importing} variant="outline" size="sm">
             <Upload className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
@@ -270,25 +348,30 @@ export default function KeywordManagement() {
                     </tr>
                   </thead>
                   <tbody>
-                    {classifiedKeywords.map(kw => {
+                    {classifiedKeywords.length === 0 ? (
+                      <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-500">
+                        Nenhum search term encontrado. Use "Buscar Termos via API" para importar dados da Amazon.
+                      </td></tr>
+                    ) : classifiedKeywords.map(kw => {
                       const cfg = CLASSIFICATION_CONFIG[kw._class];
                       const isLoading = actionLoading === kw.id;
                       const canNegate = kw._class === 'negate_candidate' || kw._class === 'inefficient';
 
                       return (
                         <tr key={kw.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
-                          <td className="px-4 py-2.5 max-w-[200px]">
-                            <p className="text-xs text-slate-200 truncate font-medium">{kw.keyword_text || kw.keyword}</p>
+                          <td className="px-4 py-2.5 max-w-[220px]">
+                            <p className="text-xs text-slate-200 truncate font-medium">{kw._displayTerm}</p>
+                            {kw.campaign_name && <p className="text-[10px] text-slate-500 truncate">{kw.campaign_name}</p>}
                           </td>
                           <td className="px-4 py-2.5">
                             <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${cfg.color}`}>{cfg.label}</span>
                           </td>
                           <td className="px-4 py-2.5 text-xs text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-xs text-slate-400">${(kw.spend || 0).toFixed(2)}</td>
-                          <td className="px-4 py-2.5 text-xs text-emerald-400">${(kw.sales || 0).toFixed(2)}</td>
+                          <td className="px-4 py-2.5 text-xs text-slate-400">R${(kw.spend || 0).toFixed(2)}</td>
+                          <td className="px-4 py-2.5 text-xs text-emerald-400">R${(kw._sales || 0).toFixed(2)}</td>
                           <td className="px-4 py-2.5">
-                            <span className={`text-xs font-semibold ${(kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : (kw.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
-                              {(kw.acos || 0) > 0 ? `${(kw.acos || 0).toFixed(1)}%` : '—'}
+                            <span className={`text-xs font-semibold ${(kw._acos || 0) > 50 ? 'text-red-400' : (kw._acos || 0) > 30 ? 'text-amber-400' : (kw._acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                              {(kw._acos || 0) > 0 ? `${(kw._acos || 0).toFixed(1)}%` : '—'}
                             </span>
                           </td>
                           <td className="px-4 py-2.5">
