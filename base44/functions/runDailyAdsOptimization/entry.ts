@@ -321,7 +321,14 @@ Deno.serve(async (req) => {
         if (page.length < PAGE) break;
         offset += PAGE;
       }
-      return all.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
+      // Considera ativa: state enabled/paused, OU (state archived mas status enabled — inconsistência de sync)
+      return all.filter(c => {
+        if (c.archived === true) return false;
+        const st = (c.state || '').toLowerCase();
+        const su = (c.status || '').toLowerCase();
+        if (st === 'archived' && su !== 'enabled') return false; // arquivada de verdade
+        return true; // enabled, paused, ou state-archived com status-enabled (inconsistente mas ativa)
+      });
     }
 
     const [campaigns, keywords, products, searchTerms, recentDecisions] = await Promise.all([
@@ -715,8 +722,10 @@ Deno.serve(async (req) => {
 
         // Pré-condição 2: maturidade
         const maturity = calcMaturity({
-          createdAt: kw.first_seen_at || kw.created_date,
-          lastSyncAt: kw.synced_at || account.last_sync_at,
+          // Usar apenas first_seen_at (data real Amazon). created_date é inserção no banco — não representa idade real.
+          // Sem first_seen_at: assume keyword madura (60 dias) para não bloquear por dados de importação.
+          createdAt: kw.first_seen_at || new Date(Date.now() - 60 * 86400000).toISOString(),
+          lastSyncAt: [kw.synced_at, account.last_sync_at].filter(Boolean).sort().pop(),
           impressions, clicks, spend,
           minDays: MIN_DAYS,
         });
@@ -726,8 +735,11 @@ Deno.serve(async (req) => {
 
         // Pré-condição 4: confiança composta
         const confidence = calcConfidence({
-          clicks, orders, lastSyncAt: kw.synced_at || account.last_sync_at,
-          maturity, attrSafetyHours: ATTR_HOURS, product, daysWindow: 14,
+          clicks, orders, lastSyncAt: [kw.synced_at, account.last_sync_at].filter(Boolean).sort().pop(),
+          maturity, attrSafetyHours: ATTR_HOURS,
+          // não penalizar por produto ausente — keyword sem ASIN ainda é otimizável
+          product: kw.asin ? product : null,
+          daysWindow: 14,
           historicalSuccessRate: histRate, evalCount,
         });
 
@@ -800,6 +812,7 @@ Deno.serve(async (req) => {
         }
 
         // ── C2. Bloqueadores impedem qualquer otimização de bid ───────────
+        // PRODUCT_NOT_FOUND (sem asin) não bloqueia — keyword ainda pode ser otimizada
         if (productBlockerList.includes('OUT_OF_STOCK') || productBlockerList.includes('PRODUCT_INACTIVE')) continue;
 
         // ── C3. Dados insuficientes ───────────────────────────────────────
@@ -1013,7 +1026,7 @@ Deno.serve(async (req) => {
 
         const maturity = calcMaturity({
           createdAt: c.created_at || c.start_date,
-          lastSyncAt: c.synced_at || c.last_sync_at || account.last_sync_at,
+          lastSyncAt: [c.synced_at, c.last_sync_at, account.last_sync_at].filter(Boolean).sort().pop(),
           impressions: c.impressions, clicks: c.clicks, spend: c.spend,
         });
 
@@ -1021,7 +1034,7 @@ Deno.serve(async (req) => {
 
         const campConfidence = calcConfidence({
           clicks: c.clicks || 0, orders: campOrders,
-          lastSyncAt: c.synced_at || c.last_sync_at || account.last_sync_at,
+          lastSyncAt: [c.synced_at, c.last_sync_at, account.last_sync_at].filter(Boolean).sort().pop(),
           maturity, attrSafetyHours: ATTR_HOURS, product, daysWindow: 14,
           historicalSuccessRate: histRate,
         });

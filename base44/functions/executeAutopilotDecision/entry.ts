@@ -88,7 +88,12 @@ async function executeDecision(d, account, base44) {
         const newValue = d.value_after;
         if (!newValue || newValue <= 0) throw new Error('Bid inválido: ' + newValue);
         if (d.entity_type === 'keyword') {
-          result = await adsCall(account, 'PUT', '/v2/sp/keywords', [{ keywordId: d.entity_id || d.keyword_id, bid: newValue }]);
+          // Buscar keyword_id real (campo 'keyword_id' na entidade = ID da Amazon)
+          const kwRecs = await base44.asServiceRole.entities.Keyword.filter(
+            { amazon_account_id: d.amazon_account_id, keyword_id: d.entity_id || d.keyword_id }, null, 1
+          );
+          const amazonKwId = kwRecs[0]?.keyword_id || d.entity_id || d.keyword_id;
+          result = await adsCall(account, 'PUT', '/v2/sp/keywords', [{ keywordId: String(amazonKwId), bid: newValue }]);
         } else if (d.entity_type === 'ad_group') {
           result = await adsCall(account, 'PUT', '/v2/sp/adGroups', [{ adGroupId: d.entity_id, defaultBid: newValue }]);
         } else {
@@ -102,17 +107,30 @@ async function executeDecision(d, account, base44) {
       case 'increase_budget': {
         const newBudget = d.value_after;
         if (!newBudget || newBudget <= 0) throw new Error('Budget inválido: ' + newBudget);
-        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: d.campaign_id || d.entity_id, dailyBudget: newBudget }]);
+        const camBudRecs = await base44.asServiceRole.entities.Campaign.filter(
+          { campaign_id: d.campaign_id || d.entity_id }, null, 1
+        );
+        const amazonCamBudId = camBudRecs[0]?.amazon_campaign_id || d.campaign_id || d.entity_id;
+        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: String(amazonCamBudId), dailyBudget: newBudget }]);
         break;
       }
 
       case 'pause_campaign': {
-        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: d.campaign_id || d.entity_id, state: 'paused' }]);
+        // Buscar amazon_campaign_id real da entidade Campaign
+        const camRecs = await base44.asServiceRole.entities.Campaign.filter(
+          { campaign_id: d.campaign_id || d.entity_id }, null, 1
+        );
+        const amazonCamId = camRecs[0]?.amazon_campaign_id || d.campaign_id || d.entity_id;
+        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: String(amazonCamId), state: 'paused' }]);
         break;
       }
 
       case 'enable_campaign': {
-        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: d.campaign_id || d.entity_id, state: 'enabled' }]);
+        const camRecs2 = await base44.asServiceRole.entities.Campaign.filter(
+          { campaign_id: d.campaign_id || d.entity_id }, null, 1
+        );
+        const amazonCamId2 = camRecs2[0]?.amazon_campaign_id || d.campaign_id || d.entity_id;
+        result = await adsCall(account, 'PUT', '/v2/sp/campaigns', [{ campaignId: String(amazonCamId2), state: 'enabled' }]);
         break;
       }
 
