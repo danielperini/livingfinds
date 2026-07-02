@@ -363,28 +363,38 @@ export default function Dashboard() {
   }, {});
   const heatMapArray = Object.values(heatMapData);
 
-  // Budget suggestion - baseado em 14 dias, mas só calcula após 20 dias de aprendizado
-  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
-  const metricsTwoWeeks = metricsDaily.filter(m => m.date >= twoWeeksAgo);
-  const avgDailySpend = metricsTwoWeeks.length > 0 
-    ? metricsTwoWeeks.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsTwoWeeks.length 
+  // Budget: agrupar spend por dia (deduplicando campanhas) para obter spend diário real
+  const twentyDaysAgo = new Date(Date.now() - 20 * 86400000).toISOString().slice(0, 10);
+  const spendByDay = metricsDaily
+    .filter(m => m.date >= twentyDaysAgo)
+    .reduce((acc, m) => {
+      // Deduplicar: somar apenas registros únicos por campanha+dia
+      const key = `${m.campaign_id || 'no-camp'}-${m.date}`;
+      if (!acc._seen) acc._seen = new Set();
+      if (acc._seen.has(key)) return acc;
+      acc._seen.add(key);
+      acc[m.date] = (acc[m.date] || 0) + (m.spend || 0);
+      return acc;
+    }, {});
+  delete spendByDay._seen;
+  const spendDays = Object.values(spendByDay);
+  const avgDailySpend = spendDays.length > 0
+    ? spendDays.reduce((s, v) => s + v, 0) / spendDays.length
     : 0;
-  
-  // Verificar se tem dados suficientes (mínimo 14 dias para sair do modo aprendizado)
-  // Usar todos os metricsDaily carregados (não só os filtrados dos últimos 30d)
+
+  // Dias únicos com dados reais — base para o modo aprendizado
   const uniqueDaysWithDataAll = new Set(metricsDaily.map(m => m.date)).size;
-  const isLearningMode = uniqueDaysWithDataAll < 14;
-  
+  // Threshold: 20 dias para garantir dados maduros
+  const isLearningMode = uniqueDaysWithDataAll < 20;
+
   const totalProducts = products.length;
-  const totalKeywords = 0; // placeholder — não usado na fórmula de budget
-  // Budget sugerido: baseado no spend médio real + 20% de margem de crescimento
-  // Mínimo R$10, máximo 2x o budget atual das campanhas ativas
+  // Budget sugerido = média real dos últimos 20 dias + 20%, sem exceder 2× o total de budgets ativos
   const activeCampaignsBudget = campaigns.filter(c => c.state === 'enabled').reduce((s, c) => s + (c.daily_budget || 0), 0);
   const suggestedBudget = isLearningMode
     ? 0
     : avgDailySpend > 0
-      ? Math.min(Math.max(avgDailySpend * 1.2, 10), activeCampaignsBudget * 2 || avgDailySpend * 2)
-      : Math.max(activeCampaignsBudget || 10, 10);
+      ? Math.min(avgDailySpend * 1.2, Math.max(activeCampaignsBudget, avgDailySpend * 1.5))
+      : activeCampaignsBudget || 0;
 
   // Alterações diárias
   const changesByDay = bidChanges.reduce((acc, change) => {
@@ -590,16 +600,16 @@ export default function Dashboard() {
                 <Brain className="w-8 h-8 text-cyan mx-auto mb-2" />
                 <p className="text-lg font-bold text-cyan mb-1">Em aprendizado</p>
                 <p className="text-xs text-slate-400">
-                  {Math.max(0, 14 - uniqueDaysWithDataAll)} dias restantes para calcular
+                  {Math.max(0, 20 - uniqueDaysWithDataAll)} dias restantes para calcular
                 </p>
                 <p className="text-[10px] text-slate-500 mt-2">
-                  Coletando dados de {uniqueDaysWithDataAll}/14 dias
+                  Coletando dados de {uniqueDaysWithDataAll}/20 dias
                 </p>
               </div>
               
               <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
                 <p className="font-semibold mb-1">📊 Fase de aprendizado</p>
-                <p>O sistema precisa de pelo menos 20 dias de dados históricos para fornecer uma sugestão de budget precisa e segura.</p>
+                <p>O sistema precisa de 20 dias de dados históricos para calcular o budget ideal com base no spend médio real deduplificado.</p>
               </div>
             </div>
           ) : (
@@ -612,16 +622,16 @@ export default function Dashboard() {
               
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between py-1.5 border-b border-surface-2">
-                  <span className="text-slate-500">Média diária (14d)</span>
-                  <span className="text-white font-semibold">${avgDailySpend.toFixed(2)}</span>
+                 <span className="text-slate-500">Spend médio real (20d)</span>
+                 <span className="text-white font-semibold">R${avgDailySpend.toFixed(2)}/dia</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-surface-2">
-                  <span className="text-slate-500">Produtos (SKUs)</span>
-                  <span className="text-white font-semibold">{totalProducts}</span>
+                 <span className="text-slate-500">Dias com dados</span>
+                 <span className="text-white font-semibold">{uniqueDaysWithDataAll} dias</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-surface-2">
-                  <span className="text-slate-500">Keywords estimadas</span>
-                  <span className="text-white font-semibold">{totalKeywords}</span>
+                 <span className="text-slate-500">Budget total ativo</span>
+                 <span className="text-white font-semibold">R${activeCampaignsBudget.toFixed(2)}/dia</span>
                 </div>
                 <div className="flex justify-between py-1.5">
                   <span className="text-slate-500">Campanhas ativas</span>
@@ -631,7 +641,7 @@ export default function Dashboard() {
 
               <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
                 <p className="font-semibold mb-1">Como calculamos:</p>
-                <p>Média dos últimos 14 dias + margem de 20%, considerando R$2/SKU e R$0,50/keyword.</p>
+                <p>Spend médio real dos últimos 20 dias (deduplicado por campanha/dia) + 20% de margem de crescimento, limitado ao budget total ativo atual.</p>
               </div>
             </div>
           )}
