@@ -34,8 +34,15 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        const fnRes = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
-        const data = fnRes.data;
+        // Após redirect OAuth o localStorage pode estar vazio — usar URL directa com appId fixo
+        const APP_ID = import.meta.env.VITE_BASE44_APP_ID || '6a40180bd8d170a6c59c8098';
+        const BASE_URL = import.meta.env.VITE_BASE44_BACKEND_URL || 'https://api.base44.com';
+        const fnRes = await fetch(`${BASE_URL}/api/apps/${APP_ID}/functions/exchangeAmazonAdsCode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: finalCode }),
+        });
+        const data = await fnRes.json();
 
         if (!data?.ok) {
           setStatus('error');
