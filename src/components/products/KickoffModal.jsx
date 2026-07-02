@@ -1,8 +1,15 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Loader2, Plus, Trash2, Rocket, CheckCircle, XCircle, ChevronRight } from 'lucide-react';
+import { Loader2, Plus, Trash2, Rocket, CheckCircle, XCircle, ChevronRight, Sparkles, Info } from 'lucide-react';
 
 const MATCH_TYPES = ['exact', 'phrase', 'broad'];
+
+const SOURCE_COLORS = {
+  search_term_converted: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
+  existing_keyword:      'text-cyan bg-cyan/10 border-cyan/20',
+  ai_suggestion:         'text-violet-400 bg-violet-400/10 border-violet-400/20',
+  cross_asin_validated:  'text-amber-400 bg-amber-400/10 border-amber-400/20',
+};
 
 export default function KickoffModal({ product, account, onClose, onDone }) {
   const [step, setStep] = useState('auto');
@@ -13,10 +20,57 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
   const [lastErrorDetails, setLastErrorDetails] = useState(null);
 
   // Keywords para campanhas manuais
-  const [keywords, setKeywords] = useState([{ text: '', matchType: 'exact', bid: '0.30' }]);
+  const [keywords, setKeywords] = useState([{ text: '', matchType: 'exact', bid: '0.50' }]);
   const [manualLoading, setManualLoading] = useState(false);
   const [manualResults, setManualResults] = useState([]);
   const [manualError, setManualError] = useState(null);
+
+  // Sugestões da IA
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsLoaded, setSuggestionsLoaded] = useState(false);
+
+  // Ao entrar no step manual, buscar sugestões automaticamente
+  useEffect(() => {
+    if (step === 'manual' && !suggestionsLoaded) {
+      fetchSuggestions();
+    }
+  }, [step]);
+
+  const fetchSuggestions = async () => {
+    setLoadingSuggestions(true);
+    try {
+      const res = await base44.functions.invoke('suggestKeywordsForKickoff', {
+        amazon_account_id: account.id,
+        asin: product.asin,
+        product_name: product.product_name || product.display_name || '',
+      });
+      const data = res?.data;
+      if (data?.ok && data.suggestions?.length > 0) {
+        setSuggestions(data.suggestions);
+        // Pré-popular keywords com as sugestões (sem sobrescrever se o user já editou)
+        const hasUserInput = keywords.some(k => k.text.trim());
+        if (!hasUserInput) {
+          setKeywords(
+            data.suggestions.slice(0, 10).map(s => ({
+              text: s.keyword,
+              matchType: s.match_type || 'exact',
+              bid: String((s.bid || 0.50).toFixed(2)),
+              _source: s.source,
+              _source_label: s.source_label,
+              _reason: s.reason,
+              _confidence: s.confidence,
+            }))
+          );
+        }
+      }
+      setSuggestionsLoaded(true);
+    } catch {
+      setSuggestionsLoaded(true);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
 
   const runAuto = async () => {
     setAutoLoading(true);
@@ -58,7 +112,7 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
     }
   };
 
-  const addKeyword = () => setKeywords(prev => [...prev, { text: '', matchType: 'exact', bid: '0.30' }]);
+  const addKeyword = () => setKeywords(prev => [...prev, { text: '', matchType: 'exact', bid: '0.50' }]);
   const removeKeyword = (i) => setKeywords(prev => prev.filter((_, idx) => idx !== i));
   const updateKeyword = (i, field, val) => setKeywords(prev => prev.map((k, idx) => idx === i ? { ...k, [field]: val } : k));
 
@@ -70,15 +124,14 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
     const results = [];
     for (const kw of valid) {
       try {
-        const res = await base44.functions.invoke('createAutoCampaignForAsin', {
+        const res = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
           amazon_account_id: account.id,
           asin: product.asin,
           sku: product.sku,
           product_name: product.product_name,
           keyword: kw.text.trim(),
           match_type: kw.matchType,
-          bid: parseFloat(kw.bid) || 0.30,
-          campaign_type: 'MANUAL',
+          bid: parseFloat(kw.bid) || 0.50,
         });
         results.push({ keyword: kw.text.trim(), ok: res.data?.ok, name: res.data?.campaign_name, error: res.data?.error });
       } catch (e) {
@@ -185,38 +238,75 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                 <div className="flex items-center gap-2 px-3 py-2 bg-emerald-400/10 border border-emerald-400/20 rounded-lg">
                   <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
                   <p className="text-xs text-emerald-300">
-                    Campanha AUTO criada: <span className="font-semibold">{autoResult.campaign_name}</span> — Budget ${ autoResult.daily_budget}/dia
+                    Campanha AUTO criada: <span className="font-semibold">{autoResult.campaign_name}</span> — Budget R${autoResult.daily_budget}/dia
                   </p>
                 </div>
               )}
+
+              {/* Banner de sugestões IA */}
+              {loadingSuggestions ? (
+                <div className="flex items-center gap-2.5 px-4 py-3 bg-violet-500/10 border border-violet-500/20 rounded-xl">
+                  <Loader2 className="w-4 h-4 text-violet-400 animate-spin flex-shrink-0" />
+                  <p className="text-xs text-violet-300">A IA está a analisar termos e histórico compatíveis com este produto...</p>
+                </div>
+              ) : suggestions.length > 0 ? (
+                <div className="flex items-start gap-2.5 px-4 py-3 bg-violet-500/10 border border-violet-500/20 rounded-xl">
+                  <Sparkles className="w-4 h-4 text-violet-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-violet-300">
+                      {suggestions.length} palavra(s)-chave pré-selecionada(s) pela IA
+                    </p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Baseadas em termos convertidos, keywords históricas e análise de produtos similares. Edite ou remova conforme necessário.
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
               <div>
-                <p className="text-sm text-slate-300 mb-1">Agora adicione <span className="text-white font-semibold">palavras-chave</span> — será criada uma campanha manual por keyword.</p>
+                <p className="text-sm text-slate-300 mb-1">
+                  Palavras-chave para <span className="text-white font-semibold">campanhas manuais</span> — uma campanha por keyword.
+                </p>
                 <p className="text-xs text-slate-500">Deixe em branco para saltar esta etapa.</p>
               </div>
 
-              <div className="space-y-2 max-h-56 overflow-y-auto scrollbar-thin pr-1">
+              <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin pr-1">
                 {keywords.map((kw, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <input
-                      value={kw.text}
-                      onChange={e => updateKeyword(i, 'text', e.target.value)}
-                      placeholder={`Palavra-chave ${i + 1}`}
-                      className="flex-1 min-w-0 px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
-                    />
-                    <select value={kw.matchType} onChange={e => updateKeyword(i, 'matchType', e.target.value)}
-                      className="px-2 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs rounded-lg focus:outline-none w-24">
-                      {MATCH_TYPES.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                    <input
-                      value={kw.bid}
-                      onChange={e => updateKeyword(i, 'bid', e.target.value)}
-                      placeholder="Bid"
-                      className="w-20 px-2 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan/50 text-center"
-                    />
-                    <button onClick={() => removeKeyword(i)} disabled={keywords.length === 1}
-                      className="p-1.5 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-30">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={kw.text}
+                        onChange={e => updateKeyword(i, 'text', e.target.value)}
+                        placeholder={`Palavra-chave ${i + 1}`}
+                        className="flex-1 min-w-0 px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+                      />
+                      <select value={kw.matchType} onChange={e => updateKeyword(i, 'matchType', e.target.value)}
+                        className="px-2 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs rounded-lg focus:outline-none w-24">
+                        {MATCH_TYPES.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                      <input
+                        value={kw.bid}
+                        onChange={e => updateKeyword(i, 'bid', e.target.value)}
+                        placeholder="Bid"
+                        className="w-20 px-2 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan/50 text-center"
+                      />
+                      <button onClick={() => removeKeyword(i)} disabled={keywords.length === 1}
+                        className="p-1.5 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-30">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    {/* Badge de origem da sugestão */}
+                    {kw._source && (
+                      <div className="flex items-center gap-1.5 pl-1">
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${SOURCE_COLORS[kw._source] || 'text-slate-500 bg-surface-3 border-surface-3'}`}>
+                          <Sparkles className="w-2.5 h-2.5" />
+                          {kw._source_label}
+                        </span>
+                        {kw._reason && (
+                          <span className="text-[10px] text-slate-500 truncate max-w-[220px]">{kw._reason}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -232,7 +322,7 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                 <button onClick={skipManual} className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors">
                   Saltar etapa
                 </button>
-                <button onClick={runManual} disabled={manualLoading}
+                <button onClick={runManual} disabled={manualLoading || loadingSuggestions}
                   className="flex items-center gap-2 px-5 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
                   {manualLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
                   {manualLoading ? 'Criando campanhas...' : `Criar ${keywords.filter(k => k.text.trim()).length || ''} Campanha(s) Manual`}
@@ -256,7 +346,7 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                 <div className="px-4 py-3 bg-surface-2 rounded-xl">
                   <p className="text-xs text-slate-500 mb-1 font-semibold">Campanha AUTO</p>
                   <p className="text-sm text-white">{autoResult.campaign_name}</p>
-                  <p className="text-xs text-slate-400">Budget ${autoResult.daily_budget}/dia · Bid $0.30</p>
+                  <p className="text-xs text-slate-400">Budget R${autoResult.daily_budget}/dia · Bid R$0.50</p>
                 </div>
               )}
 
