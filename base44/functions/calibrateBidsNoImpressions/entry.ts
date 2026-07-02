@@ -3,9 +3,10 @@
  *
  * Regras:
  * 1. Keyword sem impressão nas últimas 48h → cria alerta + aumenta bid +R$0.10 a cada 24h
- * 2. Keyword que voltou a ter impressão → reduz bid -R$0.05 (calibração suave)
- * 3. Keyword que perdeu impressão novamente → retoma ciclo de +R$0.10
- * 4. Teto máximo: R$5.00 | Piso mínimo: R$0.10
+ * 2. Keyword que voltou a ter impressão E tem CPC real → bid = 50% do CPC (smartBidFromCpc)
+ * 3. Keyword que voltou a ter impressão sem CPC → reduz bid -R$0.05 (calibração suave)
+ * 4. Keyword que perdeu impressão novamente → retoma ciclo de +R$0.10
+ * 5. Teto máximo: R$5.00 | Piso mínimo: R$0.10
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -224,13 +225,26 @@ Deno.serve(async (req) => {
 
           } else {
             // ─── TEM IMPRESSÃO ────────────────────────────────────────────
-            // Calibrar para baixo -R$0.05 (voltou a aparecer)
-            if (currentBid > MIN_BID + REDUCE_AMOUNT) {
-              const newBid = parseFloat(Math.max(currentBid - REDUCE_AMOUNT, MIN_BID).toFixed(2));
+            // Se tem CPC real → bid = 50% do CPC (mínimo eficiente)
+            // Se não tem CPC → reduzir -R$0.05 (calibração suave)
+            const cpc = kw.cpc || 0;
+            const CPC_BID_RATIO = 0.50;
+            let targetBid;
+            let reduceReason;
+
+            if (cpc > 0 && (kw.spend || 0) > 0 && (kw.clicks || 0) >= 2) {
+              targetBid = parseFloat(Math.min(Math.max(cpc * CPC_BID_RATIO, MIN_BID), MAX_BID).toFixed(2));
+              reduceReason = `Impressão restaurada. CPC real R$${cpc.toFixed(2)} → bid alvo ${(CPC_BID_RATIO * 100).toFixed(0)}% do CPC = R$${targetBid.toFixed(2)}`;
+            } else {
+              targetBid = parseFloat(Math.max(currentBid - REDUCE_AMOUNT, MIN_BID).toFixed(2));
+              reduceReason = `Impressão restaurada — calibração suave -R$${REDUCE_AMOUNT.toFixed(2)}`;
+            }
+
+            if (Math.abs(targetBid - currentBid) >= 0.05) {
               const result = await updateKeywordBid(
-                base44, account, kw, newBid,
-                'decrease',
-                `Primeira impressão detectada — calibração -R$${REDUCE_AMOUNT.toFixed(2)}`,
+                base44, account, kw, targetBid,
+                targetBid > currentBid ? 'increase' : 'decrease',
+                reduceReason,
                 refreshToken, profileId, now
               );
               if (result.ok) summary.keywords_reduced++;
