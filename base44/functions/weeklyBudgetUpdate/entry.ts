@@ -92,13 +92,15 @@ Deno.serve(async (req) => {
       const newBudget = Math.ceil(rawSuggested);
 
       const oldBudget = account.max_daily_budget_limit || 0;
+      const now = new Date().toISOString();
+      const MIN_CAMPAIGN_BUDGET = 15; // R$15 mínimo por campanha
 
-      // Atualizar conta
+      // Atualizar conta (budget geral máximo)
       await base44.asServiceRole.entities.AmazonAccount.update(aid, {
         max_daily_budget_limit: newBudget,
       });
 
-      // Registrar no histórico de mudanças
+      // Registrar histórico da conta
       await base44.asServiceRole.entities.CampaignChangeHistory.create({
         amazon_account_id: aid,
         campaign_id: 'account_level',
@@ -111,9 +113,47 @@ Deno.serve(async (req) => {
         source: 'SCHEDULE_RULE',
         source_function: 'weeklyBudgetUpdate',
         reason: `Atualização semanal automática (sexta-feira). Spend médio ${avgDailySpend.toFixed(2)} × 1.2 = ${rawSuggested.toFixed(2)} → arredondado para cima: ${newBudget}.`,
-        changed_at: new Date().toISOString(),
+        changed_at: now,
         changed_by: 'autopilot',
       });
+
+      // ── Garantir budget mínimo de R$15 em todas as campanhas ativas/pausadas ──
+      const activeCampaigns = campaigns.filter(
+        c => c.state !== 'archived' && c.status !== 'archived' && !c.archived
+      );
+
+      let campaignsUpdated = 0;
+      const campaignUpdates = [];
+
+      for (const c of activeCampaigns) {
+        const currentCampBudget = c.daily_budget || 0;
+        if (currentCampBudget < MIN_CAMPAIGN_BUDGET) {
+          campaignUpdates.push({ id: c.id, daily_budget: MIN_CAMPAIGN_BUDGET });
+
+          await base44.asServiceRole.entities.CampaignChangeHistory.create({
+            amazon_account_id: aid,
+            campaign_id: c.campaign_id,
+            change_type: 'CAMPAIGN_BUDGET',
+            entity_type: 'campaign',
+            entity_id: c.campaign_id,
+            field_name: 'daily_budget',
+            old_value: String(currentCampBudget),
+            new_value: String(MIN_CAMPAIGN_BUDGET),
+            source: 'SCHEDULE_RULE',
+            source_function: 'weeklyBudgetUpdate',
+            reason: `Budget mínimo R$${MIN_CAMPAIGN_BUDGET} aplicado na atualização semanal. Era R$${currentCampBudget.toFixed(2)}.`,
+            changed_at: now,
+            changed_by: 'autopilot',
+          });
+
+          campaignsUpdated++;
+        }
+      }
+
+      // Atualizar campanhas em lotes de 50
+      for (let i = 0; i < campaignUpdates.length; i += 50) {
+        await base44.asServiceRole.entities.Campaign.bulkUpdate(campaignUpdates.slice(i, i + 50));
+      }
 
       results.push({
         account_id: aid,
@@ -122,6 +162,7 @@ Deno.serve(async (req) => {
         avg_daily_spend: Number(avgDailySpend.toFixed(2)),
         raw_suggested: Number(rawSuggested.toFixed(2)),
         days_analyzed: spendDays.length,
+        campaigns_enforced_min_budget: campaignsUpdated,
       });
     }
 
