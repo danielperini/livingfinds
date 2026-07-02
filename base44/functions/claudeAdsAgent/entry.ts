@@ -177,6 +177,160 @@ RESPONSE SCHEMA — valid JSON only, nothing outside
   "rollback_payload": <{"action":"...","value":...} or null>
 }`;
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// POLICY ENGINE — valida limites financeiros e operacionais ANTES de executar
+// Retorna: { allowed: true } | { allowed: false, reason, override_status, policy_violations[] }
+// ═══════════════════════════════════════════════════════════════════════════════
+function runPolicyEngine(decision, cfg, account) {
+  if (!decision || typeof decision !== 'object') return { allowed: true };
+
+  const violations = [];
+  const status     = decision.status;
+  const action     = decision.action || '';
+  const risk       = decision.rationale?.risk || 'high';
+  const confidence = decision.rationale?.confidence ?? 0;
+  const valueBefore = decision.value_before ?? null;
+  const valueAfter  = decision.value_after  ?? null;
+  const entityType  = decision.entity_type  || '';
+  const ctx         = cfg || {};
+
+  // ── Limites financeiros da conta ─────────────────────────────────────────
+  const minBid        = ctx.min_bid              || 0.10;
+  const maxBid        = ctx.max_bid              || 5.00;
+  const maxBidIncPct  = (ctx.max_bid_increase_pct  || 15)  / 100;
+  const maxBidDecPct  = (ctx.max_bid_decrease_pct  || 20)  / 100;
+  const maxBudIncPct  = (ctx.max_budget_increase_pct || 20) / 100;
+  const maxBudDecPct  = (ctx.max_budget_decrease_pct || 20) / 100;
+  const maxCampBudget = ctx.maximum_campaign_budget || 100;
+  const autonomyLevel = ctx.autonomy_level ?? 2;
+  const targetAcos    = ctx.target_acos || ctx.acos_target || 25;
+  const maxAcos       = ctx.maximum_acos || 40;
+  const cooldownH     = ctx.cooldown_hours          || 24;
+  const cooldownIncH  = ctx.cooldown_increase_hours || 72;
+  const attrSafetyH   = ctx.attribution_safety_hours || 72;
+  const sym           = account?.currency_symbol || 'R$';
+
+  // ── P1. Confiança mínima ──────────────────────────────────────────────────
+  if (status === 'EXECUTE_NOW' && confidence < 60) {
+    violations.push(`Confiança ${confidence}% abaixo do mínimo de 60% para execução automática.`);
+  }
+
+  // ── P2. Limites de bid ────────────────────────────────────────────────────
+  if (entityType === 'keyword' && valueAfter !== null) {
+    if (valueAfter < minBid) {
+      violations.push(`Bid proposto ${sym}${valueAfter} abaixo do mínimo permitido ${sym}${minBid}.`);
+    }
+    if (valueAfter > maxBid) {
+      violations.push(`Bid proposto ${sym}${valueAfter} acima do máximo permitido ${sym}${maxBid}.`);
+    }
+    if (valueBefore !== null && valueAfter > valueBefore) {
+      const incPct = (valueAfter - valueBefore) / valueBefore;
+      if (incPct > maxBidIncPct + 0.02) { // +2% tolerância
+        violations.push(`Aumento de bid ${(incPct * 100).toFixed(1)}% excede o limite máximo de ${(maxBidIncPct * 100).toFixed(0)}%.`);
+      }
+    }
+    if (valueBefore !== null && valueAfter < valueBefore) {
+      const decPct = (valueBefore - valueAfter) / valueBefore;
+      if (decPct > maxBidDecPct + 0.02) {
+        violations.push(`Redução de bid ${(decPct * 100).toFixed(1)}% excede o limite máximo de ${(maxBidDecPct * 100).toFixed(0)}%.`);
+      }
+    }
+  }
+
+  // ── P3. Limites de budget ─────────────────────────────────────────────────
+  if (entityType === 'campaign' && (action === 'update_budget' || action === 'increase_budget' || action === 'reduce_budget') && valueAfter !== null) {
+    if (valueAfter > maxCampBudget) {
+      violations.push(`Orçamento proposto ${sym}${valueAfter} excede o máximo por campanha ${sym}${maxCampBudget}.`);
+    }
+    if (valueBefore !== null && valueAfter > valueBefore) {
+      const incPct = (valueAfter - valueBefore) / valueBefore;
+      if (incPct > maxBudIncPct + 0.02) {
+        violations.push(`Aumento de orçamento ${(incPct * 100).toFixed(1)}% excede o limite máximo de ${(maxBudIncPct * 100).toFixed(0)}%.`);
+      }
+    }
+    if (valueBefore !== null && valueAfter < valueBefore) {
+      const decPct = (valueBefore - valueAfter) / valueBefore;
+      if (decPct > maxBudDecPct + 0.02) {
+        violations.push(`Redução de orçamento ${(decPct * 100).toFixed(1)}% excede o limite máximo de ${(maxBudDecPct * 100).toFixed(0)}%.`);
+      }
+    }
+    if (valueAfter < 1.00) {
+      violations.push(`Orçamento proposto ${sym}${valueAfter} abaixo do mínimo absoluto de ${sym}1.00.`);
+    }
+  }
+
+  // ── P4. Bloqueios de estoque/produto via contexto ─────────────────────────
+  const ctxData = cfg?._context_data || {};
+  const inventoryStatus = ctxData.inventory_status || '';
+  const buyBoxStatus    = ctxData.buy_box_status    || '';
+  const isIncrease = valueAfter !== null && valueBefore !== null && valueAfter > valueBefore;
+
+  if (inventoryStatus === 'out_of_stock' && isIncrease) {
+    violations.push('Produto sem estoque (out_of_stock): aumentos de bid/budget bloqueados.');
+  }
+  if (buyBoxStatus === 'lost' && isIncrease && entityType === 'keyword') {
+    violations.push('Buy Box perdido: aumentos de bid bloqueados até recuperação.');
+  }
+  if (['inactive', 'archived'].includes(ctxData.product_status || '') && status === 'EXECUTE_NOW') {
+    violations.push('Produto inativo ou arquivado: execução automática bloqueada.');
+  }
+
+  // ── P5. Cooldown via contexto ─────────────────────────────────────────────
+  if (ctxData.cooldown_active === true && status === 'EXECUTE_NOW') {
+    violations.push(`Cooldown ativo (${isIncrease ? cooldownIncH : cooldownH}h): decisão não pode ser executada agora.`);
+  }
+  if (ctxData.last_change_at) {
+    const ageH = (Date.now() - new Date(ctxData.last_change_at).getTime()) / 3600000;
+    const requiredH = isIncrease ? cooldownIncH : cooldownH;
+    if (ageH < requiredH) {
+      violations.push(`Última alteração há ${ageH.toFixed(1)}h. Cooldown mínimo: ${requiredH}h. Restam ${(requiredH - ageH).toFixed(1)}h.`);
+    }
+  }
+
+  // ── P6. Janela de atribuição ──────────────────────────────────────────────
+  if (ctxData.data_date && ctxData.safe_cutoff) {
+    const isNegativeAction = ['negative_exact', 'negative_phrase', 'pause_keyword', 'reduce_bid'].includes(action);
+    if (isNegativeAction && ctxData.data_date >= ctxData.safe_cutoff) {
+      violations.push(`Dados de ${ctxData.data_date} ainda dentro da janela de atribuição de ${attrSafetyH}h (safe_cutoff: ${ctxData.safe_cutoff}). Decisão negativa bloqueada.`);
+    }
+  }
+
+  // ── P7. Autonomia ─────────────────────────────────────────────────────────
+  if (status === 'EXECUTE_NOW') {
+    if (risk === 'high') {
+      violations.push(`Risco alto: execução automática nunca permitida. Requer aprovação humana.`);
+    }
+    if (risk === 'medium' && autonomyLevel < 3) {
+      violations.push(`Risco médio requer autonomy_level≥3. Configurado: ${autonomyLevel}.`);
+    }
+    if (risk === 'low' && autonomyLevel < 1) {
+      violations.push(`Risco baixo requer autonomy_level≥1. Configurado: ${autonomyLevel}.`);
+    }
+  }
+
+  // ── P8. Negativação com venda histórica ───────────────────────────────────
+  const isNegation = ['negative_exact', 'negative_phrase', 'negative_keyword'].includes(action);
+  if (isNegation && ctxData.has_historical_sales && status === 'EXECUTE_NOW') {
+    violations.push('Termo com venda histórica: negativação automática bloqueada. Requer aprovação humana.');
+  }
+
+  // ── Resultado ─────────────────────────────────────────────────────────────
+  if (!violations.length) return { allowed: true };
+
+  // Determinar status de override
+  const isHardBlock = violations.some(v =>
+    v.includes('out_of_stock') || v.includes('janela de atribuição') ||
+    v.includes('Risco alto') || v.includes('venda histórica') ||
+    v.includes('inativo ou arquivado')
+  );
+
+  return {
+    allowed: false,
+    override_status: isHardBlock ? 'BLOCK' : 'RECOMMEND_APPROVAL',
+    policy_violations: violations,
+  };
+}
+
 async function callClaude(prompt, context = null) {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY não configurada.');
@@ -259,7 +413,55 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error: 'prompt obrigatório para mode=analyze' }, { status: 400 });
     }
 
+    // Enriquecer contexto com dados da conta para a Policy Engine
+    let cfg = null;
+    let account = null;
+    if (context?.amazon_account_id) {
+      const [accounts, configs] = await Promise.all([
+        base44.asServiceRole.entities.AmazonAccount.filter({ id: context.amazon_account_id }),
+        base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: context.amazon_account_id }),
+      ]);
+      account = accounts[0] || null;
+      cfg = configs[0] ? {
+        ...configs[0],
+        _context_data: {
+          inventory_status:  context.inventory_status  || '',
+          buy_box_status:    context.buy_box_status    || '',
+          product_status:    context.product_status    || '',
+          cooldown_active:   context.cooldown_active   ?? false,
+          last_change_at:    context.last_change_at    || null,
+          data_date:         context.data_date         || null,
+          safe_cutoff:       context.safe_cutoff       || null,
+          has_historical_sales: context.has_historical_sales ?? false,
+        }
+      } : null;
+    }
+
     const result = await callClaude(prompt, context || null);
+
+    // ── Policy Engine: validar decisão ANTES de retornar ─────────────────
+    if (result.ok && result.response && typeof result.response === 'object') {
+      const policy = runPolicyEngine(result.response, cfg, account);
+      if (!policy.allowed) {
+        // Sobrescrever status mantendo toda a rationale original do Claude
+        result.response = {
+          ...result.response,
+          status: policy.override_status,
+          requires_approval: true,
+          policy_blocked: true,
+          policy_violations: policy.policy_violations,
+          original_status: result.response.status,
+          rationale: {
+            ...result.response.rationale,
+            diagnosis: `[POLICY ENGINE] ${policy.policy_violations.join(' | ')} — Diagnóstico original: ${result.response.rationale?.diagnosis || ''}`,
+          },
+        };
+        result.policy_engine = { blocked: true, violations: policy.policy_violations, override_status: policy.override_status };
+      } else {
+        result.policy_engine = { blocked: false, violations: [] };
+      }
+    }
+
     return Response.json(result);
 
   } catch (error) {
