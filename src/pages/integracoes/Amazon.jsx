@@ -267,6 +267,53 @@ export default function AmazonIntegracao() {
         <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-cyan transition-colors" />
       </Link>
 
+      {/* Referência rápida SP-API */}
+      <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5 space-y-3">
+        <div className="flex items-center gap-2">
+          <BookOpen className="w-4 h-4 text-cyan" />
+          <p className="text-sm font-semibold text-white">APIs SP-API disponíveis</p>
+          <a
+            href="https://developer-docs.amazon.com/sp-api/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-cyan transition-colors"
+          >
+            <ExternalLink className="w-3 h-3" /> Docs oficiais
+          </a>
+        </div>
+        <p className="text-xs text-slate-500">APIs usadas ou disponíveis nesta integração. Clique para ver a especificação.</p>
+        <div className="grid grid-cols-1 gap-1">
+          {[
+            { name: 'Catalog Items',        version: 'v2022-04-01', path: 'catalog-items-api-v2022-04-01-reference', used: true,  desc: 'Títulos, imagens, categorias e atributos de produtos' },
+            { name: 'FBA Inventory',        version: 'v1',          path: 'fba-inventory-api-v1-reference',          used: true,  desc: 'Estoque FBA, reservas e inventário inbound' },
+            { name: 'Orders',               version: 'v0',          path: 'orders-api-v0-reference',                 used: true,  desc: 'Pedidos, status e detalhes de compra' },
+            { name: 'Reports',              version: 'v2021-06-30', path: 'reports-api-v2021-06-30-reference',       used: true,  desc: 'Relatórios assíncronos de vendas, inventário e anúncios' },
+            { name: 'Product Fees',         version: 'v0',          path: 'product-fees-api-v0-reference',           used: false, desc: 'Estimativa de taxas FBA por produto' },
+            { name: 'Product Pricing',      version: 'v2022-05-01', path: 'product-price-api-v2022-05-01-reference', used: false, desc: 'Buy Box, preços competitivos e ofertas' },
+            { name: 'Finances',             version: 'v0',          path: 'finances-api-v0-reference',               used: false, desc: 'Eventos financeiros, reembolsos e pagamentos' },
+            { name: 'Listings Items',       version: 'v2021-08-01', path: 'listings-items-api-v2021-08-01-reference',used: false, desc: 'Criar e atualizar listings de produtos' },
+            { name: 'Notifications',        version: 'v1',          path: 'notifications-api-v1-reference',          used: false, desc: 'Webhooks para eventos de estoque, pedidos e preços' },
+            { name: 'Sales',                version: 'v1',          path: 'sales-api-v1-reference',                  used: false, desc: 'Métricas de vendas agregadas por período' },
+          ].map(api => (
+            <a
+              key={api.name}
+              href={`https://developer-docs.amazon.com/sp-api/docs/${api.path}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface-2 hover:bg-surface-3 transition-colors group"
+            >
+              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${api.used ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+              <span className="text-xs font-semibold text-slate-200 min-w-[130px]">{api.name}</span>
+              <span className="text-xs font-mono text-slate-500">{api.version}</span>
+              <span className="text-xs text-slate-500 flex-1 truncate hidden sm:block">{api.desc}</span>
+              {api.used && <span className="text-xs text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-1.5 py-0.5 rounded-full flex-shrink-0">em uso</span>}
+              <ExternalLink className="w-3 h-3 text-slate-600 group-hover:text-cyan transition-colors flex-shrink-0" />
+            </a>
+          ))}
+        </div>
+        <p className="text-xs text-slate-600">● verde = integrado na plataforma · ● cinza = disponível para implementação futura</p>
+      </div>
+
       {/* Nota separação SP-API vs Ads */}
       <div className="flex items-start gap-3 px-4 py-3 bg-surface-1 border border-amber-500/20 rounded-xl">
         <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
