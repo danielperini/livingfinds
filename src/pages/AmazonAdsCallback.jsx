@@ -36,7 +36,7 @@ export default function AmazonAdsCallback() {
       try {
         // Após redirect OAuth o localStorage pode estar vazio — usar URL directa com appId fixo
         const APP_ID = import.meta.env.VITE_BASE44_APP_ID || '6a40180bd8d170a6c59c8098';
-        const BASE_URL = import.meta.env.VITE_BASE44_BACKEND_URL || 'https://api.base44.app';
+        const BASE_URL = import.meta.env.VITE_BASE44_BACKEND_URL || 'https://base44.app';
         const fnRes = await fetch(`${BASE_URL}/api/apps/${APP_ID}/functions/exchangeAmazonAdsCode`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
