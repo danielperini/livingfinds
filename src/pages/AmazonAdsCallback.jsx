@@ -36,7 +36,7 @@ export default function AmazonAdsCallback() {
       try {
         // Usar fetch directo — base44.functions.invoke falha após redirect OAuth
         // porque o appId não está no localStorage (nova sessão)
-        const fnRes = await fetch('https://api.base44.com/api/apps/6a40180bd8d170a6c59c8098/functions/exchangeAmazonAdsCode', {
+        const fnRes = await fetch('https://livingfinds-app.base44.app/functions/exchangeAmazonAdsCode', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: finalCode }),
