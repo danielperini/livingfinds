@@ -16,7 +16,7 @@ Deno.serve(async (req) => {
     const profileId = (Deno.env.get('ADS_PROFILE_ID') || '').trim();
     const region = (Deno.env.get('ADS_REGION') || 'NA').trim();
 
-    const redirectUri = 'https://livingfinds-app.base44.app/amazon-ads-callback';
+    const redirectUri = 'https://living-finds-flow.base44.app/amazon-ads-callback';
     const scope = 'advertising::campaign_management';
 
     // Construir URL manualmente com encodeURIComponent para evitar encoding de espaços como '+'
