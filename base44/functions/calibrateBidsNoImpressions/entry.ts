@@ -11,7 +11,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MAX_BID = 1.20;
-const MIN_BID = 0.10;
+const MIN_BID = 0.25; // piso mínimo — bid nunca cai abaixo de R$0.25
 const BOOST_AMOUNT = 0.10;   // +R$0.10 sem impressão
 const REDUCE_AMOUNT = 0.05;  // -R$0.05 ao ganhar impressão
 

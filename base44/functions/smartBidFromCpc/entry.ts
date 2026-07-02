@@ -14,7 +14,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MAX_BID = 5.00;
-const MIN_BID = 0.10;
+const MIN_BID = 0.25; // piso mínimo — bid nunca cai abaixo de R$0.25
 const CPC_BID_RATIO = 0.50;   // bid = 50% do CPC real
 const MIN_DELTA = 0.05;        // só ajusta se diferença > R$0.05
 

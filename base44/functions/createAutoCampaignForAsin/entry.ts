@@ -253,7 +253,7 @@ Deno.serve(async (req) => {
         adGroups: [{
           name: `AdGroup | ${asin}`,
           campaignId,
-          defaultBid: budgetRule.min_auto_campaign_bid || 0.30,
+          defaultBid: 0.50, // bid inicial padrão — ajustado automaticamente pelo smartBidFromCpc/calibrateBidsNoImpressions
           state: 'ENABLED',
         }],
       };
@@ -326,7 +326,7 @@ Deno.serve(async (req) => {
         ad_group_id: adGroupId,
         ad_group_name: `AdGroup | ${asin}`,
         name: `AdGroup | ${asin}`,
-        default_bid: budgetRule.min_auto_campaign_bid || 0.30,
+        default_bid: 0.50,
         state: 'enabled',
         status: 'enabled',
         synced_at: now,
@@ -373,7 +373,7 @@ Deno.serve(async (req) => {
       product_ad_id: productAdId || null,
       campaign_name: campaignName,
       daily_budget: campaignBudget,
-      initial_bid: budgetRule.min_auto_campaign_bid || 0.30,
+      initial_bid: 0.50,
       http_status: campaignResult.status,
       request_id: campaignResult.headers.requestId,
       ad_confirmed: !!adGroupId,

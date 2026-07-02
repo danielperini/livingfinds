@@ -201,8 +201,10 @@ Deno.serve(async (req) => {
 
       // Aplicar overrides de bid/budget do frontend
       const ov = overrides[sid] || {};
+      // Bid inicial padrão R$0.50 — ajustado pelo smartBidFromCpc/calibrateBidsNoImpressions após primeiros dados
+      const INITIAL_BID = 0.50;
       const bid = Math.max(Math.min(
-        parseFloat(ov.bid) || suggestion.recommended_bid || 0.30,
+        parseFloat(ov.bid) || INITIAL_BID,
         maxBid
       ), minBid);
       const budget = Math.max(
