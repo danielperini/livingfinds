@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
@@ -231,17 +231,21 @@ export default function Settings() {
               );
             })}
 
-            {(!authStatus?.services?.ads?.ok || !authStatus?.services?.sp?.ok) && (
+            {!authStatus?.services?.ads?.ok && (
               <div className="flex items-start gap-2 p-3 bg-amber-400/5 border border-amber-400/20 rounded-lg">
                 <WifiOff className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-amber-300 space-y-1">
-                  <p className="font-semibold">Como renovar o token de Ads:</p>
-                  <ol className="list-decimal list-inside space-y-0.5 text-amber-200/80">
-                    <li>Acesse sellercentral.amazon.com.br</li>
-                    <li>Vá em Apps & Services → Manage Your Apps</li>
-                    <li>Clique na aplicação LWA e gere um novo refresh token</li>
-                    <li>Atualize o secret <code className="font-mono bg-surface-3 px-1 rounded">ADS_REFRESH_TOKEN</code> no Base44 → Settings → Environment Variables</li>
-                  </ol>
+                <div className="text-xs text-amber-300 space-y-2 flex-1">
+                  <p className="font-semibold">Reconectar Amazon Ads via OAuth</p>
+                  <p className="text-amber-200/80">Clique no botão abaixo para autorizar o acesso. Você será redirecionado para a Amazon e depois de volta para a plataforma automaticamente.</p>
+                  <a
+                    href={`https://www.amazon.com/ap/oa?client_id=amzn1.application-oa2-client.a30fb7e08c524463acb3611c8d7f71e4&scope=advertising::campaign_management&response_type=code&redirect_uri=https://livingfinds-app.base44.app/amazon-ads-callback`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg font-semibold transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Autorizar Amazon Ads →
+                  </a>
                 </div>
               </div>
             )}
