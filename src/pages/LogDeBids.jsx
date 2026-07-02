@@ -26,22 +26,23 @@ export default function LogDeBids() {
       setAccount(acc);
       if (!acc) return;
 
-      // Buscar de AdsBidChangeLog (alterações detectadas via API)
-      // E de OptimizationDecision (bids do Autopilot executados/aprovados)
-      const [apiLogs, autopilotDecs] = await Promise.all([
-        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: acc.id }, '-created_at', 500),
+      // Buscar de 3 fontes: AdsBidChangeLog, OptimizationDecision e CampaignChangeHistory
+      const [apiLogs, autopilotDecs, campaignHistory] = await Promise.all([
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: acc.id }, '-created_at', 300),
         base44.entities.OptimizationDecision.filter(
-          { amazon_account_id: acc.id, decision_type: 'bid_change' }, '-created_at', 500
+          { amazon_account_id: acc.id, decision_type: 'bid_change' }, '-created_at', 300
+        ),
+        base44.entities.CampaignChangeHistory.filter(
+          { amazon_account_id: acc.id, change_type: 'BASE_BID' }, '-changed_at', 300
         ),
       ]);
 
-      // Normalizar OptimizationDecision para o mesmo formato de AdsBidChangeLog
+      // Normalizar OptimizationDecision
       const decLogs = autopilotDecs.map(d => ({
         id: `dec_${d.id}`,
         date: d.executed_at?.slice(0, 10) || d.created_at?.slice(0, 10) || '',
         campaign_id: d.campaign_id || '',
         campaign_name: '',
-        ad_group_id: d.ad_group_id || '',
         keyword_id: d.keyword_id || d.entity_id || '',
         keyword: d.keyword_text || '',
         asin: d.asin || '',
@@ -58,12 +59,43 @@ export default function LogDeBids() {
         _source: 'autopilot',
       }));
 
-      // Unir e ordenar por data desc, deduplicar por keyword_id+date
+      // Normalizar CampaignChangeHistory (BASE_BID)
+      const histLogs = campaignHistory.map(h => {
+        const oldVal = parseFloat(h.old_value) || 0;
+        const newVal = parseFloat(h.new_value) || 0;
+        const diff = newVal - oldVal;
+        return {
+          id: `hist_${h.id}`,
+          date: h.changed_at?.slice(0, 10) || h.created_date?.slice(0, 10) || '',
+          campaign_id: h.campaign_id || '',
+          campaign_name: h.campaign_id || '',
+          keyword_id: h.keyword_id || '',
+          keyword: h.keyword_id || '',
+          asin: '',
+          old_bid: oldVal,
+          new_bid: newVal,
+          change_amount: diff,
+          change_percent: oldVal > 0 ? ((diff / oldVal) * 100) : 0,
+          direction: diff > 0.001 ? 'increase' : diff < -0.001 ? 'decrease' : 'unchanged',
+          reason: h.reason || h.source || '',
+          ai_confidence: 0,
+          risk_level: 'low',
+          status: h.status === 'executed' ? 'executed' : h.status || 'executed',
+          created_at: h.changed_at || h.created_date || '',
+          _source: 'history',
+        };
+      });
+
+      // Unir e ordenar por data desc, deduplicar por keyword_id+date+direction
       const seen = new Set();
-      const allLogs = [...apiLogs.map(l => ({ ...l, _source: 'api' })), ...decLogs]
+      const allLogs = [
+        ...apiLogs.map(l => ({ ...l, _source: 'api' })),
+        ...decLogs,
+        ...histLogs,
+      ]
         .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
         .filter(l => {
-          const key = `${l.keyword_id}|${l.date}|${l.direction}`;
+          const key = `${l.keyword_id}|${l.date}|${l.direction}|${l._source}`;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
@@ -226,8 +258,8 @@ export default function LogDeBids() {
             ))}
             {[
               { label: 'Executadas', value: executed, color: 'text-emerald-400' },
-              { label: 'Aumento total (bid)', value: `$${increaseEstimate.toFixed(2)}`, color: 'text-emerald-400' },
-              { label: 'Redução total (bid)', value: `$${savingsEstimate.toFixed(2)}`, color: 'text-red-400' },
+              { label: 'Aumento total (bid)', value: `R$${increaseEstimate.toFixed(2)}`, color: 'text-emerald-400' },
+              { label: 'Redução total (bid)', value: `R$${savingsEstimate.toFixed(2)}`, color: 'text-red-400' },
             ].map(k => (
               <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                 <p className="text-xs text-slate-500 mb-1">{k.label}</p>
@@ -280,8 +312,12 @@ export default function LogDeBids() {
                           </td>
                           <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={l.reason}>{l.reason || '—'}</td>
                           <td className="px-4 py-3">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${l._source === 'autopilot' ? 'text-purple-400 bg-purple-400/10 border-purple-400/20' : 'text-cyan bg-cyan/10 border-cyan/20'}`}>
-                              {l._source === 'autopilot' ? 'Autopilot' : 'API'}
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                              l._source === 'autopilot' ? 'text-purple-400 bg-purple-400/10 border-purple-400/20' :
+                              l._source === 'history'   ? 'text-amber-400 bg-amber-400/10 border-amber-400/20' :
+                                                          'text-cyan bg-cyan/10 border-cyan/20'
+                            }`}>
+                              {l._source === 'autopilot' ? 'Autopilot' : l._source === 'history' ? 'Histórico' : 'API'}
                             </span>
                           </td>
                           <td className="px-4 py-3"><StatusBadge status={l.status || 'pending'} size="xs" /></td>
