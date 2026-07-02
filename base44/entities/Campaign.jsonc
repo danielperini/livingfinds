@@ -5,7 +5,16 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "ads_profile_id": {
+      "type": "string"
+    },
+    "marketplace": {
+      "type": "string"
+    },
     "campaign_id": {
+      "type": "string"
+    },
+    "amazon_campaign_id": {
       "type": "string"
     },
     "asin": {
@@ -39,7 +48,8 @@
       "enum": [
         "enabled",
         "paused",
-        "archived"
+        "archived",
+        "incomplete"
       ],
       "default": "enabled"
     },
@@ -48,13 +58,70 @@
       "enum": [
         "enabled",
         "paused",
-        "archived"
+        "archived",
+        "incomplete"
       ],
       "default": "enabled"
+    },
+    "amazon_status": {
+      "type": "string"
+    },
+    "is_operational": {
+      "type": "boolean",
+      "default": true
+    },
+    "requires_attention": {
+      "type": "boolean",
+      "default": false
+    },
+    "api_missing": {
+      "type": "boolean",
+      "default": false
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "api",
+        "csv",
+        "manual",
+        "app"
+      ],
+      "default": "api"
+    },
+    "reconciliation_status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "review_required",
+        "ambiguous",
+        "missing_in_api",
+        "missing_in_csv"
+      ],
+      "default": "ok"
+    },
+    "reconciliation_notes": {
+      "type": "string"
+    },
+    "metrics_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing"
+      ],
+      "default": "missing"
     },
     "daily_budget": {
       "type": "number",
       "default": 10
+    },
+    "currency_code": {
+      "type": "string",
+      "default": "BRL"
+    },
+    "currency_symbol": {
+      "type": "string",
+      "default": "R$"
     },
     "current_spend": {
       "type": "number",
@@ -105,6 +172,25 @@
     "bidding_strategy": {
       "type": "string"
     },
+    "portfolio_id": {
+      "type": "string"
+    },
+    "top_of_search_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "rest_of_search_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "product_pages_adjustment": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_last_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "created_by_app": {
       "type": "boolean",
       "default": false
@@ -128,6 +214,14 @@
       "format": "date-time"
     },
     "last_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_api_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_csv_import_at": {
       "type": "string",
       "format": "date-time"
     },
@@ -160,22 +254,6 @@
     "excluded_from_dashboard": {
       "type": "boolean",
       "default": false
-    },
-    "top_of_search_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "rest_of_search_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "product_pages_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "placement_last_updated_at": {
-      "type": "string",
-      "format": "date-time"
     }
   },
   "required": [

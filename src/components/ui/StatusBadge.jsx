@@ -6,6 +6,8 @@ export default function StatusBadge({ status, size = 'sm' }) {
     paused: { label: 'Pausado', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
     pending: { label: 'Pendente', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
     archived: { label: 'Arquivado', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' },
+    incomplete: { label: 'Incompleta', color: 'text-orange-400 bg-orange-400/10 border-orange-400/20' },
+    review_required: { label: 'Revisão', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
     error: { label: 'Erro', color: 'text-red-400 bg-red-400/10 border-red-400/20' },
     running: { label: 'Sincronizando', color: 'text-cyan bg-cyan/10 border-cyan/20' },
     success: { label: 'Concluído', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' },

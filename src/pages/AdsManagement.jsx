@@ -9,6 +9,7 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
+import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
@@ -138,7 +139,13 @@ export default function AdsManagement() {
         loadAllCampaigns(acc.id),
         base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
       ]);
-      const operational = cams.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
+      // is_operational=false exclui arquivadas e incompletas do painel operacional
+      const operational = cams.filter(c =>
+        c.is_operational !== false &&
+        c.state !== 'archived' && c.status !== 'archived' &&
+        c.state !== 'incomplete' &&
+        !c.archived
+      );
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
       const toEnable = operational.filter(c => !c.created_by_app && c.learning_eligible === false);
@@ -365,6 +372,11 @@ export default function AdsManagement() {
             <p className="text-[10px] text-slate-500 mb-0.5">Vendas Total</p>
             <p className="text-sm font-bold text-emerald-400">R${totalSales.toFixed(0)}</p>
           </div>
+        </div>
+
+        {/* Reconciliation Panel */}
+        <div className="p-3 border-t border-surface-2">
+          <ReconciliationPanel account={account} onDone={loadCampaigns} />
         </div>
       </div>
 
