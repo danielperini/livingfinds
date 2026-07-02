@@ -41,8 +41,8 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // Usar o appId do SDK (lido do localStorage via app-params, sempre disponível)
-        const APP_ID = appParams.appId || base44.getConfig().appId;
+        // APP_ID fixo — confirmado via base44.getConfig() e não depende de localStorage
+        const APP_ID = '6a40180bd8d170a6c59c8098';
         const BASE_URL = 'https://base44.app';
         const fnRes = await fetch(`${BASE_URL}/api/apps/${APP_ID}/functions/exchangeAmazonAdsCode`, {
           method: 'POST',
