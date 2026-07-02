@@ -220,12 +220,23 @@ export default function LearnerEngine() {
       const acc = accounts[0];
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
-      const [pending, done] = await Promise.all([
-        base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 200),
-        base44.entities.Decision.filter({ amazon_account_id: acc.id }, '-created_date', 100),
+      const [optPending, legacyPending, done] = await Promise.all([
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_at', 200),
+        base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 100),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id }, '-created_at', 100),
       ]);
-      setDecisions(pending);
-      setHistory(done.filter(d => d.status !== 'pending'));
+      const normalize = d => ({
+        ...d,
+        entity_name: d.keyword_text || d.entity_id || d.entity_name,
+        current_value: d.value_before ?? d.current_value,
+        proposed_value: d.value_after ?? d.proposed_value,
+        decision_type: d.action || d.decision_type,
+        confidence: d.confidence != null ? (d.confidence > 1 ? d.confidence / 100 : d.confidence) : null,
+        priority: (d.risk === 'high' || d.risk === 'very_high') ? 'high' : d.risk === 'medium' ? 'medium' : 'low',
+      });
+      const allPending = [...optPending.map(normalize), ...legacyPending.filter(l => !optPending.find(o => o.legacy_id === l.id))];
+      setDecisions(allPending);
+      setHistory(done.filter(d => d.status !== 'pending').map(normalize));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -238,7 +249,11 @@ export default function LearnerEngine() {
   const handleDecision = async (decisionId, action, proposedValue) => {
     setActionStates(prev => ({ ...prev, [decisionId]: 'loading' }));
     try {
-      await base44.functions.invoke('approveDecision', { decision_id: decisionId, action, proposed_value: proposedValue });
+      try {
+        await base44.entities.OptimizationDecision.update(decisionId, { status: action === 'approve' ? 'approved' : 'rejected' });
+      } catch {
+        await base44.functions.invoke('approveDecision', { decision_id: decisionId, action, proposed_value: proposedValue });
+      }
       setActionStates(prev => ({ ...prev, [decisionId]: action }));
       setTimeout(() => {
         setDecisions(prev => prev.filter(d => d.id !== decisionId));

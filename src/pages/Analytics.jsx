@@ -83,6 +83,11 @@ export default function Analytics() {
       setProducts(prods);
       setMetrics(mets);
       setCampaigns(camps);
+      // KPI de decisões pendentes do Autopilot
+      const pendingDecs = await base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 5);
+      if (pendingDecs.length > 0) {
+        console.info(`📋 ${pendingDecs.length} decisões Autopilot pendentes de revisão.`);
+      }
     } finally {
       setLoading(false);
     }

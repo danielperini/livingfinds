@@ -149,6 +149,16 @@ export default function DaypartingDashboard() {
             <option value={60}>60 dias</option>
           </select>
           
+          <button onClick={async () => {
+              if (!account) return;
+              try {
+                const res = await base44.functions.invoke('analyzeCampaignStrategy', { amazon_account_id: account.id });
+                alert(`Análise concluída: ${res.data?.analyzed || 0} campanhas analisadas.`);
+              } catch(e) { alert('Erro: ' + e.message); }
+            }}
+            className="text-xs px-3 py-2 bg-purple-400/10 border border-purple-400/20 text-purple-400 hover:bg-purple-400/20 rounded-lg transition-colors">
+            🤖 Motor SP
+          </button>
           <Button onClick={runAnalysis} disabled={analyzing} size="sm">
             {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />}
             {analyzing ? 'Analisando...' : 'Analisar Horários'}

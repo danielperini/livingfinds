@@ -1,0 +1,196 @@
+{
+  "name": "CampaignChangeHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "amazon_campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "search_term_id": {
+      "type": "string"
+    },
+    "change_type": {
+      "type": "string",
+      "enum": [
+        "CAMPAIGN_STATUS",
+        "CAMPAIGN_BUDGET",
+        "BUDGET_RULE",
+        "BIDDING_STRATEGY",
+        "BASE_BID",
+        "PLACEMENT_ADJUSTMENT",
+        "SCHEDULE_RULE",
+        "KEYWORD_CREATED",
+        "KEYWORD_PAUSED",
+        "KEYWORD_ENABLED",
+        "NEGATIVE_CREATED",
+        "TARGET_CREATED",
+        "TARGET_PAUSED",
+        "PRODUCT_AD_STATUS",
+        "AUTOPILOT_DECISION",
+        "ROLLBACK",
+        "SYNC_CORRECTION"
+      ]
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "keyword",
+        "ad_group",
+        "target",
+        "search_term",
+        "account",
+        "budget_rule"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "field_name": {
+      "type": "string"
+    },
+    "old_value": {
+      "type": "string"
+    },
+    "new_value": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "AMAZON_CONSOLE",
+        "USER",
+        "AUTOPILOT",
+        "SCHEDULE_RULE",
+        "PERFORMANCE_RULE",
+        "SYNC",
+        "API",
+        "ROLLBACK"
+      ],
+      "default": "AUTOPILOT"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "metrics_before": {
+      "type": "string"
+    },
+    "metrics_after": {
+      "type": "string"
+    },
+    "amazon_request": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "failed",
+        "rolled_back",
+        "detected"
+      ],
+      "default": "executed"
+    },
+    "error": {
+      "type": "string"
+    },
+    "changed_by": {
+      "type": "string",
+      "default": "autopilot"
+    },
+    "changed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_due_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "neutral",
+        "negative",
+        "insufficient_data"
+      ]
+    },
+    "rollback_available": {
+      "type": "boolean",
+      "default": false
+    },
+    "rollback_status": {
+      "type": "string"
+    },
+    "campaign_objective": {
+      "type": "string",
+      "enum": [
+        "DISCOVERY",
+        "LAUNCH",
+        "PROFITABILITY",
+        "GROWTH",
+        "ROAS_TARGET",
+        "ACOS_TARGET",
+        "INVENTORY_CLEARANCE",
+        "BRAND_DEFENSE",
+        "BUDGET_CONTROL"
+      ]
+    },
+    "campaign_maturity": {
+      "type": "string"
+    },
+    "pause_reason": {
+      "type": "string",
+      "enum": [
+        "MANUAL_PAUSE",
+        "OUT_OF_STOCK",
+        "PERFORMANCE",
+        "DUPLICATE",
+        "BUDGET",
+        "ERROR",
+        "ARCHIVED_REPLACEMENT",
+        "UNKNOWN"
+      ]
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "change_type",
+    "entity_type"
+  ]
+}

@@ -224,9 +224,9 @@ function RunEnginePanel({ accountId, onDone }) {
     setRunning(true);
     setResult(null);
     try {
-      const res = await base44.functions.invoke('runDailyAIAdsAnalysis', { amazon_account_id: accountId });
+      const res = await base44.functions.invoke('runDailyAdsOptimization', { amazon_account_id: accountId, trigger: 'manual' });
       const d = res.data;
-      setResult({ ok: d?.ok !== false, msg: d?.message || `${d?.decisions_created || 0} recomendações geradas` });
+      setResult({ ok: d?.ok !== false, msg: d?.message || `${d?.decisions_created || 0} recomendações geradas · ${d?.breakdown?.harvest || 0} termos colhidos` });
       if (d?.ok !== false) onDone?.();
     } catch (e) {
       setResult({ ok: false, msg: e.message });
@@ -273,12 +273,26 @@ export default function Recommendations() {
       const acc = accounts[0] || (await base44.entities.AmazonAccount.list())[0];
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
-      const [pending, done] = await Promise.all([
-        base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 300),
-        base44.entities.Decision.filter({ amazon_account_id: acc.id }, '-created_date', 100),
+      // Ler de OptimizationDecision (fonte canônica) + Decision (legado)
+      const [optPending, optDone, legacyPending] = await Promise.all([
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_at', 200),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: acc.id }, '-created_at', 100),
+        base44.entities.Decision.filter({ amazon_account_id: acc.id, status: 'pending' }, '-created_date', 100),
       ]);
-      setDecisions(pending);
-      setHistory(done.filter(d => d.status !== 'pending'));
+      // Normalizar campos para compatibilidade com DecisionRow
+      const normalize = d => ({
+        ...d,
+        entity_name: d.keyword_text || d.entity_id || d.entity_name,
+        current_value: d.value_before ?? d.current_value,
+        proposed_value: d.value_after ?? d.proposed_value,
+        decision_type: d.action || d.decision_type,
+        confidence: d.confidence != null ? d.confidence / 100 : null,
+        asin: d.asin,
+      });
+      const allPending = [...optPending.map(normalize), ...legacyPending.filter(l => !optPending.find(o => o.legacy_id === l.id))];
+      const allDone    = optDone.filter(d => d.status !== 'pending').map(normalize);
+      setDecisions(allPending);
+      setHistory(allDone);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -291,7 +305,12 @@ export default function Recommendations() {
   const handleDecision = async (decisionId, action, proposedValue) => {
     setActionStates(prev => ({ ...prev, [decisionId]: 'loading' }));
     try {
-      await base44.functions.invoke('approveDecision', { decision_id: decisionId, action, proposed_value: proposedValue });
+      // Tentar OptimizationDecision primeiro, fallback para Decision
+      try {
+        await base44.entities.OptimizationDecision.update(decisionId, { status: action === 'approve' ? 'approved' : 'rejected' });
+      } catch {
+        await base44.functions.invoke('approveDecision', { decision_id: decisionId, action, proposed_value: proposedValue });
+      }
       setActionStates(prev => ({ ...prev, [decisionId]: action }));
       setTimeout(() => {
         setDecisions(prev => prev.filter(d => d.id !== decisionId));

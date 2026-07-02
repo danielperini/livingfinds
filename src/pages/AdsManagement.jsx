@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info, Settings, Package } from 'lucide-react';
+import { Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Pause, Play, Brain, RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock, Info, Settings, Package, History } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
+import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
 
 export default function AdsManagement() {
   const [account, setAccount] = useState(null);
@@ -16,7 +17,7 @@ export default function AdsManagement() {
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   const [stateFilter, setStateFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms' | 'config'
+  const [activeTab, setActiveTab] = useState('keywords'); // 'keywords' | 'search-terms' | 'config' | 'history'
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
   const [syncing, setSyncing] = useState(false);
@@ -67,7 +68,7 @@ export default function AdsManagement() {
   const selectCampaign = async (campaign) => {
     setSelectedCampaign(campaign);
     setPendingBids({});
-    setActiveTab('keywords');
+    setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
 
     setKwLoading(true);
     try {
@@ -370,6 +371,7 @@ export default function AdsManagement() {
                 { key: 'keywords', label: `Keywords (${keywords.length})` },
                 { key: 'search-terms', label: `Search Terms ${searchTerms.length > 0 ? `(${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
                 { key: 'config', label: 'Configurações' },
+                { key: 'history', label: 'Histórico', icon: History },
               ].map(tab => (
                 <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                   className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${
@@ -378,6 +380,7 @@ export default function AdsManagement() {
                       : 'border-transparent text-slate-500 hover:text-slate-300'
                   }`}>
                   {tab.key === 'config' && <Settings className="w-3.5 h-3.5" />}
+                  {tab.key === 'history' && <History className="w-3.5 h-3.5" />}
                   {tab.label}
                 </button>
               ))}
@@ -395,6 +398,8 @@ export default function AdsManagement() {
                     setCampaigns(prev => prev.map(c => c.id === updated.id ? updated : c));
                   }}
                 />
+              ) : activeTab === 'history' ? (
+                <CampaignHistoryTab campaign={selectedCampaign} account={account} />
               ) : activeTab === 'keywords' ? (
                 <>
                   {kwLoading ? (
