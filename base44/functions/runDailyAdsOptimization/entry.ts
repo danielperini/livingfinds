@@ -324,16 +324,15 @@ Deno.serve(async (req) => {
       return all.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived);
     }
 
-    const [campaigns, keywords, products, searchTerms, recentDecisions, changeHistory] = await Promise.all([
+    const [campaigns, keywords, products, searchTerms, recentDecisions] = await Promise.all([
       loadAllCampaigns(),
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: amazonAccountId }, '-spend', 1000),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId }, null, 500),
-      base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: amazonAccountId }, '-orders_14d', 2000),
-      base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: amazonAccountId }, '-created_at', 1000),
-      base44.asServiceRole.entities.CampaignChangeHistory.filter({ amazon_account_id: amazonAccountId }, '-changed_at', 500),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: amazonAccountId }, '-spend', 500),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId }, null, 300),
+      base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: amazonAccountId }, '-orders_14d', 800),
+      base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: amazonAccountId }, '-created_at', 300),
     ]);
 
-    const productMap  = new Map(products.map(p => [p.asin, p]));
+    const productMap  = new Map(products.map(p  => [p.asin, p]));
     const campaignMap = new Map(campaigns.map(c => [c.campaign_id, c]));
 
     // Índice idempotência
