@@ -10,22 +10,24 @@ const tokenCache = {};
 async function getSpApiToken() {
   const cached = tokenCache['spapi'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  // Usar credenciais SP-API (não Ads)
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
+    refresh_token: Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN'),
+    client_id: Deno.env.get('SP_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CLIENT_ID'),
+    client_secret: Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET'),
   });
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || 'SP-API token failed');
+  if (!res.ok) throw new Error(data.error_description || `SP-API token failed: ${JSON.stringify(data)}`);
   tokenCache['spapi'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
   return data.access_token;
 }
 
 async function fetchFbaInventory(token, marketplaceId) {
+  // Brasil (A2Q3Y263D00KWC) usa endpoint NA
   const endpoint = `https://sellingpartnerapi-na.amazon.com/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`;
   const res = await fetch(endpoint, {
     headers: {

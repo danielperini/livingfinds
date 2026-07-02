@@ -53,11 +53,43 @@ async function spGet(path, marketplaceId) {
 async function getCatalogItem(asin, marketplaceId) {
   const token = await getSPToken();
   const url = `${getSPBaseUrl()}/catalog/2022-04-01/items/${asin}?marketplaceIds=${marketplaceId}&includedData=summaries,images,attributes`;
+  // Pequeno delay para respeitar rate limit (1 req/s no Catalog Items API)
+  await new Promise(r => setTimeout(r, 300));
   const res = await fetch(url, {
     headers: { 'x-amz-access-token': token, 'Content-Type': 'application/json' },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    if (res.status === 429) throw new Error('Rate limit exceeded');
+    return null;
+  }
   return await res.json();
+}
+
+// Busca todos os ASINs do seller via Listings Items API (paginada)
+async function fetchAllListings(marketplaceId, sellerId) {
+  const token = await getSPToken();
+  const baseUrl = getSPBaseUrl();
+  const allItems = [];
+  let nextToken = null;
+
+  do {
+    let url = `${baseUrl}/listings/2021-08-01/items/${sellerId}?marketplaceIds=${marketplaceId}&includedData=summaries&pageSize=10`;
+    if (nextToken) url += `&pageToken=${encodeURIComponent(nextToken)}`;
+
+    const res = await fetch(url, {
+      headers: { 'x-amz-access-token': token, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Listings API ${res.status}: ${err.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const items = data?.items || [];
+    allItems.push(...items);
+    nextToken = data?.pagination?.nextToken || null;
+  } while (nextToken);
+
+  return allItems;
 }
 
 Deno.serve(async (req) => {
@@ -76,11 +108,13 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
 
     const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC'; // BR
+    const sellerId = account.seller_id || Deno.env.get('AMAZON_SELLER_ID');
 
     let totalUpdated = 0;
+    let newCreated = 0;
     const errors = [];
 
-    // ── 1. FBA Inventory ──
+    // ── 1. FBA Inventory (estoque atual) ──
     let inventoryMap = {};
     try {
       const invData = await spGet(
@@ -102,14 +136,71 @@ Deno.serve(async (req) => {
       errors.push(`Inventory: ${e.message}`);
     }
 
-    // ── 2. Buscar produtos existentes no banco ──
+    // ── 2. Listings Items API — todos os ASINs do seller (inclusive sem estoque FBA) ──
+    let listingsMap = {}; // asin -> sku
+    if (sellerId) {
+      try {
+        const allListings = await fetchAllListings(marketplaceId, sellerId);
+        for (const item of allListings) {
+          const asin = item.summaries?.[0]?.asin || item.asin;
+          const sku = item.sellerSku;
+          if (asin) listingsMap[asin] = sku || null;
+        }
+      } catch (e) {
+        errors.push(`Listings: ${e.message}`);
+      }
+    }
+
+    // Union de todos os ASINs conhecidos (FBA inventory + Listings)
+    const allKnownAsins = new Set([...Object.keys(inventoryMap), ...Object.keys(listingsMap)]);
+
+    // ── 3. Buscar produtos existentes no banco ──
     const existingProducts = await base44.asServiceRole.entities.Product.filter(
       { amazon_account_id },
       '-created_date',
-      500
+      2000
     );
+    const existingAsinMap = new Map(existingProducts.map(p => [p.asin, p]));
 
-    // ── 3. Para cada produto, buscar título via Catalog Items SP-API ──
+    // ── 4. Criar produtos que estão na Amazon mas não na base ──
+    for (const asin of allKnownAsins) {
+      if (existingAsinMap.has(asin)) continue;
+      const inv = inventoryMap[asin] || {};
+      const sku = inv.sku || listingsMap[asin] || null;
+      const newProduct = {
+        amazon_account_id,
+        asin,
+        sku,
+        fba_inventory: inv.fba_inventory || 0,
+        reserved_inventory: inv.reserved_inventory || 0,
+        inbound_inventory: inv.inbound_inventory || 0,
+        inventory_status: (inv.fba_inventory || 0) > 5 ? 'in_stock' : (inv.fba_inventory || 0) > 0 ? 'low_stock' : 'out_of_stock',
+        status: 'active',
+        catalog_sync_status: 'pending',
+        synced_at: new Date().toISOString(),
+      };
+      // Tentar obter título
+      try {
+        const catalogItem = await getCatalogItem(asin, marketplaceId);
+        if (catalogItem) {
+          const summary = catalogItem.summaries?.[0] || {};
+          if (summary.itemName) newProduct.product_name = summary.itemName.trim();
+          const image = catalogItem.images?.[0]?.images?.find(i => i.variant === 'MAIN')?.link
+            || catalogItem.images?.[0]?.images?.[0]?.link;
+          if (image) newProduct.product_image_url = image;
+          newProduct.catalog_sync_status = 'success';
+        }
+      } catch {}
+      try {
+        await base44.asServiceRole.entities.Product.create(newProduct);
+        newCreated++;
+        existingAsinMap.set(asin, newProduct); // evitar duplicata
+      } catch (e) {
+        errors.push(`CreateASIN ${asin}: ${e.message}`);
+      }
+    }
+
+    // ── 5. Atualizar produtos existentes (inventário + título) ──
     for (const product of existingProducts) {
       try {
         const asin = product.asin;
@@ -120,39 +211,34 @@ Deno.serve(async (req) => {
           last_catalog_sync_at: new Date().toISOString(),
         };
 
-        // Inventário
         if (inv.fba_inventory !== undefined) {
           updateData.fba_inventory = inv.fba_inventory;
           updateData.reserved_inventory = inv.reserved_inventory || 0;
           updateData.inbound_inventory = inv.inbound_inventory || 0;
-          updateData.sku = inv.sku || product.sku;
+          updateData.sku = inv.sku || listingsMap[asin] || product.sku;
           updateData.inventory_status = inv.fba_inventory > 5 ? 'in_stock' : inv.fba_inventory > 0 ? 'low_stock' : 'out_of_stock';
+        } else if (listingsMap[asin] !== undefined) {
+          // Produto existe nos listings mas sem estoque FBA — manter out_of_stock
+          updateData.sku = listingsMap[asin] || product.sku;
+          updateData.inventory_status = product.inventory_status || 'out_of_stock';
         }
 
-        // Título via SP-API Catalog Items
-        try {
-          const catalogItem = await getCatalogItem(asin, marketplaceId);
-          if (catalogItem) {
-            const summary = catalogItem.summaries?.[0] || {};
-            const title = summary.itemName || null;
-            const image = catalogItem.images?.[0]?.images?.find(i => i.variant === 'MAIN')?.link
-              || catalogItem.images?.[0]?.images?.[0]?.link
-              || null;
-
-            if (title && title.trim()) {
-              updateData.product_name = title.trim();
+        // Título via SP-API Catalog Items (só se ainda não tem nome)
+        if (!product.product_name || product.catalog_sync_status !== 'success') {
+          try {
+            const catalogItem = await getCatalogItem(asin, marketplaceId);
+            if (catalogItem) {
+              const summary = catalogItem.summaries?.[0] || {};
+              if (summary.itemName?.trim()) updateData.product_name = summary.itemName.trim();
+              const image = catalogItem.images?.[0]?.images?.find(i => i.variant === 'MAIN')?.link
+                || catalogItem.images?.[0]?.images?.[0]?.link;
+              if (image) updateData.product_image_url = image;
+              if (summary.productType) updateData.category = summary.productType;
             }
-            if (image) {
-              updateData.product_image_url = image;
-            }
-            if (summary.productType) {
-              updateData.category = summary.productType;
-            }
+          } catch (e) {
+            updateData.catalog_sync_status = 'error';
+            updateData.catalog_sync_error = e.message?.slice(0, 200);
           }
-        } catch (e) {
-          // título não crítico — continua
-          updateData.catalog_sync_status = 'error';
-          updateData.catalog_sync_error = e.message?.slice(0, 200);
         }
 
         await base44.asServiceRole.entities.Product.update(product.id, updateData);
@@ -162,49 +248,15 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 4. Criar produtos do inventário que não existem ainda ──
-    for (const [asin, inv] of Object.entries(inventoryMap)) {
-      const exists = existingProducts.find(p => p.asin === asin);
-      if (!exists) {
-        try {
-          const newProduct = {
-            amazon_account_id,
-            asin,
-            sku: inv.sku,
-            fba_inventory: inv.fba_inventory,
-            reserved_inventory: inv.reserved_inventory,
-            inbound_inventory: inv.inbound_inventory,
-            inventory_status: inv.fba_inventory > 5 ? 'in_stock' : inv.fba_inventory > 0 ? 'low_stock' : 'out_of_stock',
-            status: 'active',
-            catalog_sync_status: 'pending',
-            synced_at: new Date().toISOString(),
-          };
-
-          // Tentar obter título
-          try {
-            const catalogItem = await getCatalogItem(asin, marketplaceId);
-            if (catalogItem) {
-              const summary = catalogItem.summaries?.[0] || {};
-              if (summary.itemName) newProduct.product_name = summary.itemName.trim();
-              const image = catalogItem.images?.[0]?.images?.[0]?.link;
-              if (image) newProduct.product_image_url = image;
-              newProduct.catalog_sync_status = 'success';
-            }
-          } catch {}
-
-          await base44.asServiceRole.entities.Product.create(newProduct);
-          totalUpdated++;
-        } catch (e) {
-          errors.push(`CreateASIN ${asin}: ${e.message}`);
-        }
-      }
-    }
-
     return Response.json({
       ok: true,
       total_updated: totalUpdated,
+      new_created: newCreated,
       inventory_asins: Object.keys(inventoryMap).length,
+      listings_asins: Object.keys(listingsMap).length,
+      total_known_asins: allKnownAsins.size,
       marketplace_id: marketplaceId,
+      seller_id: sellerId,
       duration_ms: Date.now() - startTime,
       errors: errors.slice(0, 10),
     });
