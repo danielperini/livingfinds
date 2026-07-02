@@ -85,10 +85,10 @@ export default function AdsAutopilot() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const runAnalysis = async () => {
+  const runAnalysis = async (autoExecute = false) => {
     if (!account) return;
     setRunning(true);
-    setRunMsg('Analisando campanhas, keywords e search terms...');
+    setRunMsg(autoExecute ? '⚡ Analisando e executando decisões automáticas...' : 'Analisando campanhas, keywords e search terms...');
     try {
       const res = await base44.functions.invoke('runDailyAdsOptimization', {
         amazon_account_id: account.id,
@@ -97,7 +97,25 @@ export default function AdsAutopilot() {
       const d = res.data;
       if (d?.ok) {
         const b = d.breakdown || {};
-        setRunMsg(`✓ ${d.decisions_created || 0} decisões geradas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids reduzidos · ${b.bid_increase || 0} bids aumentados`);
+        const created = d.decisions_created || 0;
+
+        if (autoExecute && created > 0) {
+          setRunMsg(`✓ ${created} decisões geradas — executando aprovadas...`);
+          // Buscar as decisões approved recém-criadas e executar
+          const freshDecs = await base44.entities.OptimizationDecision.filter(
+            { amazon_account_id: account.id, status: 'approved' }, '-created_at', 100
+          );
+          const approvedIds = freshDecs.map(d => d.id);
+          if (approvedIds.length > 0) {
+            const execRes = await base44.functions.invoke('executeAutopilotDecision', { decision_ids: approvedIds });
+            const ex = execRes.data || {};
+            setRunMsg(`✓ ${created} decisões geradas · ${ex.executed || 0} executadas · ${ex.failed || 0} falhas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids ↓ · ${b.bid_increase || 0} bids ↑`);
+          } else {
+            setRunMsg(`✓ ${created} decisões geradas · 0 aprovadas para execução automática neste ciclo`);
+          }
+        } else {
+          setRunMsg(`✓ ${created} decisões geradas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids ↓ · ${b.bid_increase || 0} bids ↑`);
+        }
         await loadData();
       } else if (d?.skipped) {
         setRunMsg(`⚠ ${d.reason}`);
@@ -108,7 +126,7 @@ export default function AdsAutopilot() {
       setRunMsg(`❌ ${e.message}`);
     } finally {
       setRunning(false);
-      setTimeout(() => setRunMsg(''), 10000);
+      setTimeout(() => setRunMsg(''), 15000);
     }
   };
 
@@ -209,13 +227,18 @@ export default function AdsAutopilot() {
               <Play className="w-4 h-4" /> Executar Aprovadas ({approvedCount})
             </button>
           )}
-          <button onClick={runAnalysis} disabled={running || (isRunning && !isStuck)}
-            className="flex items-center gap-2 px-4 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
+          <button onClick={() => runAnalysis(true)} disabled={running || (isRunning && !isStuck)}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-            {running ? 'Analisando...' : 'Rodar Análise'}
+            {running ? 'Executando...' : 'Analisar & Executar'}
           </button>
-          <button onClick={loadData} disabled={loading}
-            className="p-2.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
+          <button onClick={() => runAnalysis(false)} disabled={running || (isRunning && !isStuck)}
+            className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
+            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Só Analisar
+          </button>
+          <button onClick={loadData} disabled={loading || running}
+            className="p-2.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
