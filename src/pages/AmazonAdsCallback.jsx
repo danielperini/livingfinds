@@ -34,9 +34,8 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // Usar fetch directo — base44.functions.invoke falha após redirect OAuth
-        // porque o appId não está no localStorage (nova sessão)
-        const fnRes = await fetch('https://livingfinds-app.base44.app/functions/exchangeAmazonAdsCode', {
+        // Usar o origin actual da app — evita hardcode de domínio
+        const fnRes = await fetch(`${window.location.origin}/functions/exchangeAmazonAdsCode`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: finalCode }),
