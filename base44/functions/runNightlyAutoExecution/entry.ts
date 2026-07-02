@@ -16,7 +16,6 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MIN_CONFIDENCE = 80;
 const MAX_DECISIONS_PER_RUN = 100;
-const BATCH_SIZE = 10; // executar em lotes para não sobrecarregar a API
 
 Deno.serve(async (req) => {
   const startTime = Date.now();
@@ -138,46 +137,39 @@ Deno.serve(async (req) => {
 
     console.log(`[runNightlyAutoExecution] ${toExecute.length} decisões elegíveis para execução.`);
 
-    // ── 7. Executar em lotes via executeAutopilotDecision ─────────────────
+    // ── 7. Executar uma decisão por vez ──────────────────────────────────
     const results = { executed: 0, failed: 0, skipped: 0, details: [] };
 
-    for (let i = 0; i < toExecute.length; i += BATCH_SIZE) {
-      const batch = toExecute.slice(i, i + BATCH_SIZE);
-      const batchIds = batch.map(d => d.id);
-
-      console.log(`[runNightlyAutoExecution] Lote ${Math.floor(i / BATCH_SIZE) + 1}: ${batchIds.length} decisões`);
+    for (const d of toExecute) {
+      console.log(`[runNightlyAutoExecution] Executando decisão ${d.id} (${d.action}, confiança ${d.confidence}%)`);
 
       try {
-        const batchResult = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
-          decision_ids: batchIds,
+        const r = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
+          decision_ids: [d.id],
         });
 
-        if (batchResult?.results) {
-          for (const r of batchResult.results) {
-            if (r.ok) results.executed++;
-            else results.failed++;
-            results.details.push({
-              id: r.id,
-              ok: r.ok,
-              action: r.action,
-              status: r.status,
-              error: r.error || null,
-            });
-          }
+        const result = r?.results?.[0];
+        if (result?.ok) {
+          results.executed++;
         } else {
-          // Falha no lote inteiro
-          results.failed += batch.length;
-          console.error(`[runNightlyAutoExecution] Lote ${Math.floor(i / BATCH_SIZE) + 1} falhou:`, batchResult);
+          results.failed++;
         }
-      } catch (batchErr) {
-        results.failed += batch.length;
-        console.error(`[runNightlyAutoExecution] Erro no lote ${Math.floor(i / BATCH_SIZE) + 1}: ${batchErr.message}`);
+        results.details.push({
+          id: d.id,
+          ok: result?.ok ?? false,
+          action: d.action,
+          confidence: d.confidence,
+          status: result?.status || 'unknown',
+          error: result?.error || null,
+        });
+      } catch (err) {
+        results.failed++;
+        results.details.push({ id: d.id, ok: false, action: d.action, error: err.message });
+        console.error(`[runNightlyAutoExecution] Erro na decisão ${d.id}: ${err.message}`);
       }
 
-      // Pequeno delay entre lotes para não sobrecarregar a API Amazon
-      if (i + BATCH_SIZE < toExecute.length) {
-        await new Promise(r => setTimeout(r, 2000));
-      }
+      // 1s entre chamadas para respeitar rate limit Amazon
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     // ── 8. Registrar resumo no Claude para análise pós-execução ──────────
