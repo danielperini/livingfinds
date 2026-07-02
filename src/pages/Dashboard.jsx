@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign } from 'lucide-react';
+import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -536,6 +536,57 @@ export default function Dashboard() {
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
+
+      {/* Painel 48h */}
+      {(() => {
+        const cutoff48h = new Date(Date.now() - 48 * 3600000).toISOString().slice(0, 10);
+        const metrics48h = uniqueMetrics.filter(m => m.date >= cutoff48h);
+        const kpi48 = metrics48h.reduce((acc, m) => ({
+          spend: acc.spend + (m.spend || 0),
+          impressions: acc.impressions + (m.impressions || 0),
+          clicks: acc.clicks + (m.clicks || 0),
+        }), { spend: 0, impressions: 0, clicks: 0 });
+        const ctr48 = kpi48.impressions > 0 ? (kpi48.clicks / kpi48.impressions * 100) : 0;
+        const cpc48 = kpi48.clicks > 0 ? (kpi48.spend / kpi48.clicks) : 0;
+        const sym = account?.currency_symbol || 'R$';
+        return (
+          <div className="bg-surface-1 border border-cyan/20 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan animate-pulse" />
+                <h3 className="text-xs font-semibold text-cyan">Últimas 48 horas</h3>
+              </div>
+              <span className="text-[10px] text-slate-500">{metrics48h.length} registros</span>
+            </div>
+            {loading ? (
+              <div className="flex items-center gap-2"><Loader2 className="w-4 h-4 text-cyan animate-spin" /><span className="text-xs text-slate-500">Carregando...</span></div>
+            ) : (
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><DollarSign className="w-3 h-3 text-cyan" /><p className="text-[10px] text-slate-400">Gasto</p></div>
+                  <p className="text-lg font-bold text-white">{sym}{kpi48.spend.toFixed(2)}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><Eye className="w-3 h-3 text-purple-400" /><p className="text-[10px] text-slate-400">Impressões</p></div>
+                  <p className="text-lg font-bold text-white">{kpi48.impressions.toLocaleString('pt-BR')}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><MousePointer className="w-3 h-3 text-emerald-400" /><p className="text-[10px] text-slate-400">Cliques</p></div>
+                  <p className="text-lg font-bold text-white">{kpi48.clicks.toLocaleString('pt-BR')}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-[10px] text-slate-400 mb-1">CTR</p>
+                  <p className="text-lg font-bold text-amber-400">{ctr48.toFixed(2)}%</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-[10px] text-slate-400 mb-1">CPC Médio</p>
+                  <p className="text-lg font-bold text-slate-300">{sym}{cpc48.toFixed(2)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Cards de Análise Avançada */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
