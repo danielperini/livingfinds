@@ -10,17 +10,18 @@ Deno.serve(async (req) => {
     const isAuth = await base44.auth.isAuthenticated();
     if (!isAuth) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-    const refreshToken = Deno.env.get('ADS_REFRESH_TOKEN') || '';
-    const profileId = Deno.env.get('ADS_PROFILE_ID') || '';
-    const region = Deno.env.get('ADS_REGION') || 'NA';
+    const clientId = (Deno.env.get('ADS_CLIENT_ID') || '').trim();
+    const clientSecret = (Deno.env.get('ADS_CLIENT_SECRET') || '').trim();
+    const refreshToken = (Deno.env.get('ADS_REFRESH_TOKEN') || '').trim();
+    const profileId = (Deno.env.get('ADS_PROFILE_ID') || '').trim();
+    const region = (Deno.env.get('ADS_REGION') || 'NA').trim();
 
     const redirectUri = 'https://livingfinds-app.base44.app/amazon-ads-callback';
     const scope = 'advertising::campaign_management';
 
+    // Construir URL manualmente com encodeURIComponent para evitar encoding de espaços como '+'
     const authUrl = clientId
-      ? `https://www.amazon.com/ap/oa?client_id=${clientId}&scope=${scope}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`
+      ? `https://www.amazon.com/ap/oa?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`
       : null;
 
     // Testar token atual
