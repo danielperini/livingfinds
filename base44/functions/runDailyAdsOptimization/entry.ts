@@ -131,9 +131,9 @@ function resolveOutcome(confidence, maturity, blockers, autonomyLevel, risk, has
     return 'RECOMMEND_APPROVAL';
   }
 
-  // confidence >= 0.90 → executar baixo e médio risco conforme autonomia
+  // confidence >= 0.90 → executar automaticamente (baixo e médio risco) a partir de autonomy >= 1
   if (risk === 'low' && autonomyLevel >= 1) return 'EXECUTE_NOW';
-  if (risk === 'medium' && autonomyLevel >= 3) return 'EXECUTE_NOW';
+  if (risk === 'medium' && autonomyLevel >= 1) return 'EXECUTE_NOW';
   return 'RECOMMEND_APPROVAL';
 }
 
