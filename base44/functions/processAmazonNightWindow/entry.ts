@@ -20,8 +20,8 @@ Deno.serve(async (req) => {
 
     const output = [];
     for (const account of accounts) {
-      const suggestions = Number(hour) === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_hour: Number(hour) }, 'approved_at', 5);
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_hour: Number(hour) }, 'created_at', 5);
+      const suggestions = Number(hour) === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: Number(hour) }, 'approved_at', 5);
+      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: Number(hour) }, 'created_at', 5);
       const result = { amazon_account_id: account.id, hour: Number(hour), suggestions: [], decisions: [] };
 
       for (const s of suggestions) {
