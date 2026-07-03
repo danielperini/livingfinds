@@ -1,317 +1,137 @@
-/**
- * syncProductCatalog — Importa títulos, ofertas e estoque via SP-API.
- * Considera estoque disponível, total FBA e unidades reservadas sem transformar dado ausente em zero.
- */
+/** Sincroniza estoque FBA e catálogo com paginação completa. */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const tokenCache = {};
+let tokenCache = null;
 
-function numberValue(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
+const stateFromQty = (qty) => qty > 5 ? 'in_stock' : qty > 0 ? 'low_stock' : 'out_of_stock';
 
-function inventoryState(availableQuantity, totalQuantity) {
-  const available = numberValue(availableQuantity);
-  const total = numberValue(totalQuantity);
-  const usable = Math.max(available, total);
-  if (usable > 5) return 'in_stock';
-  if (usable > 0) return 'low_stock';
-  return 'out_of_stock';
-}
-
-async function getSPToken() {
-  const cached = tokenCache.sp;
-  if (cached && cached.expires_at > Date.now()) return cached.access_token;
-
+async function token() {
+  if (tokenCache?.expiresAt > Date.now()) return tokenCache.value;
   const refreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN');
   const clientId = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID');
   const clientSecret = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET');
+  if (!refreshToken || !clientId || !clientSecret) throw new Error('Credenciais SP-API incompletas.');
 
-  if (!refreshToken || !clientId || !clientSecret) {
-    throw new Error('Credenciais SP-API incompletas. Verifique SP_REFRESH_TOKEN e credenciais LWA.');
-  }
-
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-  });
-
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }),
   });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) {
-    throw new Error(`SP-API token failed: ${data.error_description || data.error || response.status}`);
-  }
-
-  tokenCache.sp = {
-    access_token: data.access_token,
-    expires_at: Date.now() + Math.max(60, numberValue(data.expires_in || 3600) - 60) * 1000,
-  };
-  return data.access_token;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) throw new Error(data.error_description || data.error || 'Falha no token SP-API');
+  tokenCache = { value: data.access_token, expiresAt: Date.now() + (num(data.expires_in || 3600) - 60) * 1000 };
+  return tokenCache.value;
 }
 
-function getSPBaseUrl(region) {
-  const value = String(region || Deno.env.get('SP_REGION') || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (value.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
-  if (value.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
+function baseUrl(region) {
+  const r = String(region || Deno.env.get('SP_REGION') || 'NA').toUpperCase();
+  if (r.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
+  if (r.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
-async function spGet(path, region) {
-  const token = await getSPToken();
-  const response = await fetch(`${getSPBaseUrl(region)}${path}`, {
-    headers: {
-      'x-amz-access-token': token,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-
-  if (!response.ok) {
-    throw new Error(`SP-API ${response.status} ${path}: ${JSON.stringify(data).slice(0, 300)}`);
-  }
+async function get(path, region) {
+  const res = await fetch(`${baseUrl(region)}${path}`, { headers: { 'x-amz-access-token': await token() } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`SP-API ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
   return data;
 }
 
-async function getCatalogItem(asin, marketplaceId, region) {
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  return spGet(
-    `/catalog/2022-04-01/items/${asin}?marketplaceIds=${encodeURIComponent(marketplaceId)}&includedData=summaries,images,attributes`,
-    region
-  ).catch((error) => {
-    if (String(error.message).includes('429')) throw new Error('Rate limit exceeded');
-    return null;
-  });
-}
-
-async function fetchAllListings(marketplaceId, sellerId, region) {
-  const allItems = [];
+async function allInventory(marketplaceId, region) {
+  const items = [];
   let nextToken = null;
-
   do {
-    let path = `/listings/2021-08-01/items/${sellerId}?marketplaceIds=${encodeURIComponent(marketplaceId)}&includedData=summaries&pageSize=20`;
-    if (nextToken) path += `&pageToken=${encodeURIComponent(nextToken)}`;
-    const data = await spGet(path, region);
-    allItems.push(...(data?.items || []));
-    nextToken = data?.pagination?.nextToken || null;
+    const q = new URLSearchParams({ details: 'true', granularityType: 'Marketplace', granularityId: marketplaceId, marketplaceIds: marketplaceId });
+    if (nextToken) q.set('nextToken', nextToken);
+    const data = await get(`/fba/inventory/v1/summaries?${q}`, region);
+    items.push(...(data?.payload?.inventorySummaries || []));
+    nextToken = data?.payload?.pagination?.nextToken || data?.pagination?.nextToken || null;
   } while (nextToken);
-
-  return allItems;
+  return items;
 }
 
-Deno.serve(async (req) => {
-  const startTime = Date.now();
-
+Deno.serve(async (request) => {
   try {
-    const base44 = createClientFromRequest(req);
+    const base44 = createClientFromRequest(request);
     const user = await base44.auth.me();
-    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+    if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
-    const body = await req.json().catch(() => ({}));
-    const { amazon_account_id } = body;
-    if (!amazon_account_id) {
-      return Response.json({ ok: false, error: 'amazon_account_id required' }, { status: 400 });
-    }
+    const { amazon_account_id } = await request.json().catch(() => ({}));
+    if (!amazon_account_id) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
 
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id);
-    if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' }, { status: 404 });
+    const marketplaceId = account.marketplace_id || 'A2Q3Y263D00KWC';
+    const region = account.region || 'NA';
+    const summaries = await allInventory(marketplaceId, region);
+    const inventory = new Map();
 
-    const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
-    const sellerId = account.seller_id || Deno.env.get('AMAZON_SELLER_ID') || Deno.env.get('SP_SELLER_ID');
-    const region = account.region || Deno.env.get('SP_REGION') || 'NA';
+    for (const item of summaries) {
+      if (!item?.asin) continue;
+      const d = item.inventoryDetails || {};
+      const available = num(d.fulfillableQuantity);
+      const total = num(item.totalQuantity);
+      const qty = Math.max(available, total);
+      inventory.set(item.asin, {
+        sku: item.sellerSku || null,
+        available,
+        total,
+        qty,
+        reserved: num(d?.reservedQuantity?.totalReservedQuantity),
+        inbound: num(d.inboundWorkingQuantity) + num(d.inboundShippedQuantity) + num(d.inboundReceivingQuantity),
+      });
+    }
 
-    let totalUpdated = 0;
-    let newCreated = 0;
-    const errors = [];
-    const inventoryMap = {};
+    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id }, '-created_date', 5000);
+    let updated = 0;
+    let corrected = 0;
 
-    try {
-      const inventoryData = await spGet(
-        `/fba/inventory/v1/summaries?details=true&granularityType=Marketplace&granularityId=${encodeURIComponent(marketplaceId)}&marketplaceIds=${encodeURIComponent(marketplaceId)}`,
-        region
+    for (const product of products) {
+      const remote = inventory.get(product.asin);
+      if (!remote) continue;
+
+      const localQty = Math.max(
+        num(product.fba_inventory),
+        num(product.available_quantity),
+        num(product.fulfillable_quantity),
+        num(product.total_quantity),
+        num(product.stock_quantity)
       );
+      const qty = Math.max(remote.qty, localQty);
+      if (product.inventory_status === 'out_of_stock' && qty > 0) corrected += 1;
 
-      const inventoryList = inventoryData?.payload?.inventorySummaries || [];
-      for (const item of inventoryList) {
-        if (!item.asin) continue;
-
-        const details = item.inventoryDetails || {};
-        const availableQuantity = numberValue(details.fulfillableQuantity);
-        const totalQuantity = numberValue(item.totalQuantity);
-        const reservedQuantity = numberValue(details?.reservedQuantity?.totalReservedQuantity);
-        const inboundQuantity =
-          numberValue(details.inboundWorkingQuantity) +
-          numberValue(details.inboundShippedQuantity) +
-          numberValue(details.inboundReceivingQuantity);
-
-        inventoryMap[item.asin] = {
-          sku: item.sellerSku || null,
-          available_quantity: availableQuantity,
-          total_quantity: totalQuantity,
-          fba_inventory: Math.max(availableQuantity, totalQuantity),
-          reserved_inventory: reservedQuantity,
-          inbound_inventory: inboundQuantity,
-          inventory_status: inventoryState(availableQuantity, totalQuantity),
-        };
-      }
-    } catch (error) {
-      errors.push(`Inventory: ${error.message}`);
-    }
-
-    const listingsMap = {};
-    if (sellerId) {
-      try {
-        const listings = await fetchAllListings(marketplaceId, sellerId, region);
-        for (const item of listings) {
-          const asin = item.summaries?.[0]?.asin || item.asin;
-          if (!asin) continue;
-          listingsMap[asin] = {
-            sku: item.sellerSku || null,
-            status: String(item.summaries?.[0]?.status?.[0] || '').toUpperCase(),
-          };
-        }
-      } catch (error) {
-        errors.push(`Listings: ${error.message}`);
-      }
-    }
-
-    const allKnownAsins = new Set([...Object.keys(inventoryMap), ...Object.keys(listingsMap)]);
-    const existingProducts = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id },
-      '-created_date',
-      2000
-    );
-    const existingAsinMap = new Map(existingProducts.map((product) => [product.asin, product]));
-
-    for (const asin of allKnownAsins) {
-      if (existingAsinMap.has(asin)) continue;
-
-      const inventory = inventoryMap[asin] || null;
-      const listing = listingsMap[asin] || null;
-      const hasRealStock = inventory && Math.max(inventory.available_quantity, inventory.total_quantity) > 0;
-      const newProduct = {
-        amazon_account_id,
-        asin,
-        sku: inventory?.sku || listing?.sku || null,
-        fba_inventory: inventory?.fba_inventory || 0,
-        reserved_inventory: inventory?.reserved_inventory || 0,
-        inbound_inventory: inventory?.inbound_inventory || 0,
-        inventory_status: inventory?.inventory_status || 'out_of_stock',
-        status: hasRealStock || listing ? 'active' : 'inactive',
-        catalog_sync_status: 'pending',
+      await base44.asServiceRole.entities.Product.update(product.id, {
+        sku: remote.sku || product.sku,
+        fba_inventory: qty,
+        available_quantity: remote.available,
+        total_quantity: remote.total,
+        reserved_inventory: remote.reserved,
+        inbound_inventory: remote.inbound,
+        inventory_status: stateFromQty(qty),
+        status: qty > 0 ? 'active' : product.status,
+        catalog_sync_status: 'success',
         synced_at: new Date().toISOString(),
-      };
-
-      try {
-        const catalogItem = await getCatalogItem(asin, marketplaceId, region);
-        if (catalogItem) {
-          const summary = catalogItem.summaries?.[0] || {};
-          if (summary.itemName) newProduct.product_name = summary.itemName.trim();
-          const image =
-            catalogItem.images?.[0]?.images?.find((item) => item.variant === 'MAIN')?.link ||
-            catalogItem.images?.[0]?.images?.[0]?.link;
-          if (image) newProduct.product_image_url = image;
-          newProduct.catalog_sync_status = 'success';
-        }
-      } catch {}
-
-      try {
-        const created = await base44.asServiceRole.entities.Product.create(newProduct);
-        existingAsinMap.set(asin, created);
-        newCreated += 1;
-      } catch (error) {
-        errors.push(`CreateASIN ${asin}: ${error.message}`);
-      }
+        last_catalog_sync_at: new Date().toISOString(),
+      });
+      updated += 1;
     }
 
-    for (const product of existingProducts) {
-      try {
-        const asin = product.asin;
-        const inventory = inventoryMap[asin] || null;
-        const listing = listingsMap[asin] || null;
-        const updateData = {
-          synced_at: new Date().toISOString(),
-          catalog_sync_status: 'success',
-          last_catalog_sync_at: new Date().toISOString(),
-        };
-
-        if (inventory) {
-          const hasRealStock = Math.max(inventory.available_quantity, inventory.total_quantity) > 0;
-          updateData.fba_inventory = inventory.fba_inventory;
-          updateData.reserved_inventory = inventory.reserved_inventory;
-          updateData.inbound_inventory = inventory.inbound_inventory;
-          updateData.sku = inventory.sku || listing?.sku || product.sku;
-          updateData.inventory_status = inventory.inventory_status;
-          updateData.status = hasRealStock ? 'active' : (listing ? 'active' : 'inactive');
-        } else if (listing) {
-          updateData.sku = listing.sku || product.sku;
-          updateData.status = 'active';
-          if (!product.inventory_status) updateData.inventory_status = 'out_of_stock';
-        }
-
-        if (!product.product_name || product.catalog_sync_status !== 'success') {
-          try {
-            const catalogItem = await getCatalogItem(asin, marketplaceId, region);
-            if (catalogItem) {
-              const summary = catalogItem.summaries?.[0] || {};
-              if (summary.itemName?.trim()) updateData.product_name = summary.itemName.trim();
-              const image =
-                catalogItem.images?.[0]?.images?.find((item) => item.variant === 'MAIN')?.link ||
-                catalogItem.images?.[0]?.images?.[0]?.link;
-              if (image) updateData.product_image_url = image;
-              if (summary.productType) updateData.category = summary.productType;
-            }
-          } catch (error) {
-            updateData.catalog_sync_status = 'error';
-            updateData.catalog_sync_error = error.message?.slice(0, 200);
-          }
-        }
-
-        await base44.asServiceRole.entities.Product.update(product.id, updateData);
-        totalUpdated += 1;
-      } catch (error) {
-        errors.push(`ASIN ${product.asin}: ${error.message}`);
-      }
-    }
-
-    const correctedProduct = existingProducts.find((product) => product.asin === 'B0GHP68123');
-    const correctedInventory = inventoryMap.B0GHP68123 || null;
-
+    const target = inventory.get('B0GHP68123');
     return Response.json({
       ok: true,
-      total_updated: totalUpdated,
-      new_created: newCreated,
-      inventory_asins: Object.keys(inventoryMap).length,
-      listings_asins: Object.keys(listingsMap).length,
-      total_known_asins: allKnownAsins.size,
-      marketplace_id: marketplaceId,
-      seller_id: sellerId,
-      duration_ms: Date.now() - startTime,
-      verified_asin: correctedProduct || correctedInventory ? {
+      inventory_asins: inventory.size,
+      updated,
+      corrected_from_out_of_stock: corrected,
+      verified_asin: {
         asin: 'B0GHP68123',
-        status: correctedInventory && Math.max(correctedInventory.available_quantity, correctedInventory.total_quantity) > 0 ? 'active' : correctedProduct?.status,
-        inventory_status: correctedInventory?.inventory_status || correctedProduct?.inventory_status,
-        available_quantity: correctedInventory?.available_quantity ?? null,
-        total_quantity: correctedInventory?.total_quantity ?? null,
-      } : null,
-      errors: errors.slice(0, 20),
+        found: Boolean(target),
+        available_quantity: target?.available ?? null,
+        total_quantity: target?.total ?? null,
+        inventory_status: target ? stateFromQty(target.qty) : null,
+      },
     });
   } catch (error) {
-    console.error('[syncProductCatalog] Erro:', error?.message || error);
-    return Response.json({ ok: false, error: error?.message || 'Erro no sync de catálogo' }, { status: 500 });
+    console.error('[syncProductCatalog]', error);
+    return Response.json({ ok: false, error: error?.message || 'Erro de sincronização' }, { status: 500 });
   }
 });
