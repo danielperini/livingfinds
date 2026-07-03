@@ -4,6 +4,7 @@ import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
 import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
+import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import { Button } from '@/components/ui/button';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { Link } from 'react-router-dom';
@@ -344,6 +345,7 @@ export default function Dashboard() {
       <div className="flex border-b border-surface-2">
         {[
           { id: 'dashboard', label: 'Dashboard' },
+          { id: 'budget14d', label: '💰 Budget 14d' },
           { id: 'analytics', label: '📊 Analytics' },
         ].map(t => (
           <button key={t.id} onClick={() => setMainTab(t.id)}
@@ -354,7 +356,15 @@ export default function Dashboard() {
       </div>
 
       {mainTab === 'analytics' && <Analytics />}
-      {mainTab !== 'analytics' && <>
+      {mainTab === 'budget14d' && (
+        <BudgetReport14d
+          metricsDaily={metricsDaily}
+          campaigns={campaigns}
+          loading={loading}
+          sym={account?.currency_symbol || 'R$'}
+        />
+      )}
+      {mainTab !== 'analytics' && mainTab !== 'budget14d' && <>
 
       {/* Painel de Auditoria de Dados */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
