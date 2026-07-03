@@ -1,0 +1,22 @@
+{
+  "name": "ProductKickoffQueue",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "product_name": { "type": "string" },
+    "mode": { "type": "string", "enum": ["auto_plus_four", "manual_only"] },
+    "keyword": { "type": "string" },
+    "status": { "type": "string", "enum": ["scheduled", "processing", "completed", "failed", "cancelled"], "default": "scheduled" },
+    "queue_hour": { "type": "number" },
+    "queue_window": { "type": "string" },
+    "scheduled_at": { "type": "string", "format": "date-time" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "max_attempts": { "type": "number", "default": 5 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "last_error": { "type": "string" }
+  },
+  "required": ["amazon_account_id", "asin", "mode", "status", "queue_hour", "queue_window", "scheduled_at"]
+}
