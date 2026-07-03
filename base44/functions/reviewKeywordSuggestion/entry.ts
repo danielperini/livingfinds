@@ -1,5 +1,35 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRateLimit(value) {
+  const text = JSON.stringify(value || '').toLowerCase();
+  return text.includes('rate limit') || text.includes('too many requests') || text.includes('throttl') || text.includes('429');
+}
+
+async function createWithRetry(base44, payload) {
+  const waits = [0, 2500, 7000, 15000];
+  let last = null;
+
+  for (let attempt = 0; attempt < waits.length; attempt += 1) {
+    if (waits[attempt]) await sleep(waits[attempt]);
+
+    try {
+      const response = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', payload);
+      const item = response?.data?.results?.[0];
+      last = { response, item };
+
+      if (item?.ok || item?.already_exists) return last;
+      if (!isRateLimit(item?.error || response?.data?.error)) return last;
+    } catch (error) {
+      last = { error };
+      if (!isRateLimit(error?.response?.data || error?.message)) throw error;
+    }
+  }
+
+  return last;
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -25,13 +55,23 @@ Deno.serve(async (req) => {
     const sku = suggestion.sku || product?.sku || null;
 
     if (action === 'approve') {
-      const creation = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+      const creation = await createWithRetry(base44, {
         amazon_account_id: suggestion.amazon_account_id,
         suggestion_ids: [suggestion.id],
       });
-      const item = creation?.data?.results?.[0];
+
+      const item = creation?.item;
+      const rawError = item?.error || creation?.response?.data?.error || creation?.error?.response?.data?.error || creation?.error?.message;
+
       if (!item?.ok && !item?.already_exists) {
-        return Response.json({ ok: false, error: item?.error || creation?.data?.error || 'Falha ao criar campanha' }, { status: 422 });
+        const limited = isRateLimit(rawError);
+        return Response.json({
+          ok: false,
+          retryable: limited,
+          error: limited
+            ? 'A Amazon limitou temporariamente as chamadas. Aguarde cerca de 1 minuto e tente novamente.'
+            : rawError || 'Falha ao criar campanha',
+        }, { status: limited ? 429 : 422 });
       }
 
       const key = String(suggestion.keyword || '').trim().toLowerCase();
@@ -94,6 +134,11 @@ Deno.serve(async (req) => {
 
     return Response.json({ ok: true, action, product_name: productName, sku });
   } catch (error) {
-    return Response.json({ ok: false, error: error?.message || 'Erro ao revisar sugestão' }, { status: 500 });
+    const limited = isRateLimit(error?.response?.data || error?.message);
+    return Response.json({
+      ok: false,
+      retryable: limited,
+      error: limited ? 'A Amazon limitou temporariamente as chamadas. Aguarde cerca de 1 minuto e tente novamente.' : error?.message || 'Erro ao revisar sugestão',
+    }, { status: limited ? 429 : 500 });
   }
 });
