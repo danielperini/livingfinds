@@ -24,6 +24,23 @@ Deno.serve(async (req) => {
     const suggestion = found[0];
     if (!suggestion) return Response.json({ ok: false, error: 'Sugestão não encontrada' }, { status: 404 });
 
+    const alreadyApproved = action === 'approve' && (
+      ['approved', 'created'].includes(suggestion.status) ||
+      ['scheduled', 'processing', 'completed'].includes(suggestion.queue_status)
+    );
+    const alreadyDeleted = action === 'delete' && (
+      suggestion.status === 'rejected' || suggestion.deleted_by_user === true
+    );
+    if (alreadyApproved || alreadyDeleted) {
+      return Response.json({
+        ok: true,
+        action,
+        already_processed: true,
+        completed_ui: true,
+        queue_hour: action === 'approve' ? suggestion.queue_hour ?? slotFromId(suggestion.id) : null,
+      });
+    }
+
     const products = suggestion.asin
       ? await base44.asServiceRole.entities.Product.filter({ amazon_account_id: suggestion.amazon_account_id, asin: suggestion.asin }, '-updated_at', 1)
       : [];
