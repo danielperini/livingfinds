@@ -61,13 +61,18 @@ Deno.serve(async (req) => {
 
     const totalSpend = spendDays.reduce((s, v) => s + v, 0);
     const avgDailySpend = totalSpend / numDays;
-    const suggestedBudget = Math.round(avgDailySpend * 1.25 * 100) / 100;
+
+    // Budget sugerido = média real × 1.25 — pode subir ou descer livremente
+    // Mínimo absoluto: R$1,00 para evitar zerar campanhas por acidente
+    const suggestedBudget = Math.max(1, Math.round(avgDailySpend * 1.25 * 100) / 100);
 
     // Ontem para referência
-    const yesterday = Object.keys(spendByDay).sort().slice(-1)[0];
+    const sortedDays = Object.keys(spendByDay).sort();
+    const yesterday = sortedDays[sortedDays.length - 1];
     const yesterdaySpend = spendByDay[yesterday] || 0;
 
-    const reasoning = `Média de gasto dos últimos ${numDays} dias: ${sym}${avgDailySpend.toFixed(2)}/dia. Ontem (${yesterday}): ${sym}${yesterdaySpend.toFixed(2)}. Budget sugerido = média × 1.25 = ${sym}${suggestedBudget.toFixed(2)}.`;
+    const direction = suggestedBudget > avgDailySpend ? '↑ crescimento' : suggestedBudget < avgDailySpend ? '↓ redução' : '→ estável';
+    const reasoning = `Média real dos últimos ${numDays} dias: ${sym}${avgDailySpend.toFixed(2)}/dia (${direction}). Ontem (${yesterday}): ${sym}${yesterdaySpend.toFixed(2)}. Sugerido = média × 1.25 = ${sym}${suggestedBudget.toFixed(2)}.`;
 
     // Atualizar AutopilotConfig
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
