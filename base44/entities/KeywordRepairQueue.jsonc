@@ -1,0 +1,16 @@
+{
+  "name": "KeywordRepairQueue",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "status": { "type": "string", "default": "scheduled" },
+    "queue_hour": { "type": "number" },
+    "queue_window": { "type": "string" },
+    "scheduled_at": { "type": "string" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "last_error": { "type": "string" }
+  }
+}
