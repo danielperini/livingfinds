@@ -1065,7 +1065,9 @@ Deno.serve(async (req) => {
                 sym,
               }),
               data_used: JSON.stringify({ acos: campAcos, max_acos: MAX_ACOS, spend: campSpend, maturity }),
-              risk: 'medium', requires_approval: true, status: 'pending',
+              risk: 'medium',
+              requires_approval: campConfidence < 0.90,
+              status: resolveOutcome(campConfidence, maturity, [], autonomyLevel, 'medium') === 'EXECUTE_NOW' ? 'approved' : 'pending',
               confidence: Math.round(campConfidence * 100),
               objective: objective.toLowerCase(),
               country_code: cc, currency_code: code, currency_symbol: sym,
@@ -1118,7 +1120,9 @@ Deno.serve(async (req) => {
                   sym,
                 }),
                 data_used: JSON.stringify({ acos: campAcos, roas: campRoas, spend: campSpend, budget: currentBudget, utilization_pct: (campSpend / currentBudget * 100).toFixed(0) }),
-                risk: 'medium', requires_approval: true, status: 'pending',
+                risk: 'medium',
+                requires_approval: campConfidence < 0.90,
+                status: resolveOutcome(campConfidence, maturity, [], autonomyLevel, 'medium') === 'EXECUTE_NOW' ? 'approved' : 'pending',
                 confidence: Math.round(campConfidence * 100),
                 objective: objective.toLowerCase(),
                 country_code: cc, currency_code: code, currency_symbol: sym,
@@ -1137,10 +1141,45 @@ Deno.serve(async (req) => {
 
     // ── Gravar decisões em lotes de 50 ───────────────────────────────────
     let decisionsCreated = 0;
+    const approvedIds = [];
     for (let i = 0; i < decisionsToCreate.length; i += 50) {
       const batch = decisionsToCreate.slice(i, i + 50);
-      await base44.asServiceRole.entities.OptimizationDecision.bulkCreate(batch);
+      const created = await base44.asServiceRole.entities.OptimizationDecision.bulkCreate(batch);
       decisionsCreated += batch.length;
+      // Coletar IDs aprovados para execução imediata
+      if (Array.isArray(created)) {
+        for (const d of created) {
+          if (d?.id && d?.status === 'approved') approvedIds.push(d.id);
+        }
+      } else {
+        // bulkCreate pode não retornar IDs — buscar aprovadas após o loop
+      }
+    }
+
+    // ── Auto-executar decisões aprovadas (confiança >= 90%) ──────────────
+    let executed = 0, execFailed = 0;
+    if (autonomyLevel >= 2) {
+      // Se bulkCreate não retornou IDs, buscar as recém criadas aprovadas
+      let idsToExec = approvedIds;
+      if (!idsToExec.length) {
+        const freshApproved = await base44.asServiceRole.entities.OptimizationDecision.filter(
+          { amazon_account_id: amazonAccountId, status: 'approved' }, '-created_at', 200
+        );
+        // Só executar as criadas neste ciclo (últimos 2 min)
+        const cutoff = Date.now() - 2 * 60000;
+        idsToExec = freshApproved
+          .filter(d => new Date(d.created_at || d.created_date || 0).getTime() > cutoff)
+          .map(d => d.id);
+      }
+
+      if (idsToExec.length > 0) {
+        const execRes = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
+          decision_ids: idsToExec,
+          _service_role: true,
+        }).catch(e => ({ data: { ok: false, error: e.message } }));
+        executed = execRes?.data?.executed || 0;
+        execFailed = execRes?.data?.failed || 0;
+      }
     }
 
     // ── Finalizar run record ──────────────────────────────────────────────
@@ -1156,6 +1195,8 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: true,
       decisions_created: decisionsCreated,
+      decisions_executed: executed,
+      decisions_exec_failed: execFailed,
       breakdown: stats,
       blocked: blocked.length,
       wait_for_data: waitForData.length,

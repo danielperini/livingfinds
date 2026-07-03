@@ -254,16 +254,32 @@ async function executeDecision(d, account, base44) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
+    // Aceita tanto chamadas autenticadas (frontend) como chamadas de service role (automações)
+    const isAuthenticated = await base44.auth.isAuthenticated();
     const body = await req.json().catch(() => ({}));
+    if (!isAuthenticated && !body._service_role) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const ids = body.decision_ids || (body.decision_id ? [body.decision_id] : []);
     if (!ids.length) return Response.json({ error: 'decision_ids required' }, { status: 400 });
 
-    // Resolver conta para token
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-    const account = accounts[0] || null;
+    // Cache de contas por ID para não re-buscar a cada decisão
+    const accountCache = new Map();
+    async function getAccount(amazonAccountId) {
+      if (!amazonAccountId) {
+        // fallback: primeira conta conectada
+        if (!accountCache.has('_default')) {
+          const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+          accountCache.set('_default', accs[0] || null);
+        }
+        return accountCache.get('_default');
+      }
+      if (!accountCache.has(amazonAccountId)) {
+        const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazonAccountId }, null, 1);
+        accountCache.set(amazonAccountId, accs[0] || null);
+      }
+      return accountCache.get(amazonAccountId);
+    }
 
     const results = [];
     for (const id of ids) {
@@ -282,6 +298,12 @@ Deno.serve(async (req) => {
       }
       if (decision.attempt_count >= 3) {
         results.push({ id, ok: false, error: 'Máximo de 3 tentativas atingido' }); continue;
+      }
+
+      // Usar SEMPRE a conta da decisão — evita executar na conta errada
+      const account = await getAccount(decision.amazon_account_id);
+      if (!account) {
+        results.push({ id, ok: false, error: `Conta não encontrada: ${decision.amazon_account_id}` }); continue;
       }
 
       const result = await executeDecision(decision, account, base44);

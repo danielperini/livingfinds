@@ -298,22 +298,11 @@ export default function AdsAutopilot() {
       if (d?.ok) {
         const b = d.breakdown || {};
         const created = d.decisions_created || 0;
-        if (autoExecute && created > 0) {
-          setRunMsg(`✓ ${created} decisões geradas — executando aprovadas...`);
-          const freshDecs = await base44.entities.OptimizationDecision.filter(
-            { amazon_account_id: account.id, status: 'approved' }, '-created_at', 100
-          );
-          const approvedIds = freshDecs.map(d => d.id);
-          if (approvedIds.length > 0) {
-            const execRes = await base44.functions.invoke('executeAutopilotDecision', { decision_ids: approvedIds });
-            const ex = execRes.data || {};
-            setRunMsg(`✓ ${created} decisões geradas · ${ex.executed || 0} executadas · ${ex.failed || 0} falhas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids ↓ · ${b.bid_increase || 0} bids ↑`);
-          } else {
-            setRunMsg(`✓ ${created} decisões geradas · 0 aprovadas para execução automática neste ciclo`);
-          }
-        } else {
-          setRunMsg(`✓ ${created} decisões geradas · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids ↓ · ${b.bid_increase || 0} bids ↑`);
-        }
+        const executed = d.decisions_executed || 0;
+        const execFailed = d.decisions_exec_failed || 0;
+        setRunMsg(
+          `✓ ${created} decisões geradas · ${executed} executadas automaticamente${execFailed > 0 ? ` · ${execFailed} falhas` : ''} · ${b.harvest || 0} termos colhidos · ${b.bid_decrease || 0} bids ↓ · ${b.bid_increase || 0} bids ↑`
+        );
         await loadData();
       } else if (d?.skipped) {
         setRunMsg(`⚠ ${d.reason}`);

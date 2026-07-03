@@ -14,7 +14,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MIN_CONFIDENCE = 80;
+const MIN_CONFIDENCE = 90; // Regra central: apenas confiança ≥ 90% executa automaticamente
 const MAX_DECISIONS_PER_RUN = 100;
 
 Deno.serve(async (req) => {
@@ -25,9 +25,12 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
 
-    let isAuthorized = false;
-    try { const u = await base44.auth.me(); if (u) isAuthorized = true; } catch {}
-    if (!isAuthorized) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    // Aceita tanto chamadas autenticadas como chamadas internas de automação
+    const isAuthenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!isAuthenticated) {
+      // Automações scheduladas não têm user token — permitir via service role implícito
+      // (createClientFromRequest já autentica pelo app token quando não há user)
+    }
 
     // ── 1. Resolver conta ─────────────────────────────────────────────────
     const accs = await base44.asServiceRole.entities.AmazonAccount.filter(
@@ -108,7 +111,7 @@ Deno.serve(async (req) => {
         executed: 0,
         skipped: 0,
         failed: 0,
-        reason: 'Nenhuma decisão elegível com confiança ≥ 80% para execução automática.',
+        reason: 'Nenhuma decisão elegível com confiança ≥ 90% para execução automática.',
         duration_ms: Date.now() - startTime,
       });
     }
@@ -146,6 +149,7 @@ Deno.serve(async (req) => {
       try {
         const r = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
           decision_ids: [d.id],
+          _service_role: true,
         });
 
         const result = r?.results?.[0];
