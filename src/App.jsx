@@ -8,16 +8,13 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import ScrollToTop from './components/ScrollToTop';
 import ProtectedRoute from '@/components/ProtectedRoute';
 
-// Layout
 import AppLayout from '@/components/layout/AppLayout';
 
-// Auth Pages
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 
-// Pages
 import Dashboard from '@/pages/Dashboard';
 import AdsAutopilot from '@/pages/AdsAutopilot';
 import AdsManagement from '@/pages/AdsManagement';
@@ -50,7 +47,7 @@ import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
 
 const AuthenticatedApp = () => {
-  const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
+  const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
 
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
@@ -59,15 +56,14 @@ const AuthenticatedApp = () => {
           <div className="w-10 h-10 rounded-xl bg-cyan/20 border border-cyan/30 flex items-center justify-center">
             <div className="w-5 h-5 border-2 border-cyan/40 border-t-cyan rounded-full animate-spin" />
           </div>
-          <p className="text-sm text-slate-500">A carregar LivingFinds...</p>
+          <p className="text-sm text-slate-500">Carregando o Living Finds...</p>
         </div>
       </div>
     );
   }
 
-  if (authError) {
-    if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
-    // auth_required é tratado pelo ProtectedRoute em cada rota — não bloquear o app globalmente
+  if (authError?.type === 'user_not_registered') {
+    return <UserNotRegisteredError />;
   }
 
   return (
@@ -108,15 +104,7 @@ const AuthenticatedApp = () => {
           <Route path="/keyword-management" element={<KeywordManagement />} />
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
-          {/* Redirects de rotas fundidas */}
-          <Route path="/bid-logs" element={<Navigate to="/bids-log" replace />} />
-          <Route path="/metrics" element={<Navigate to="/" replace />} />
-          <Route path="/recommendations" element={<Navigate to="/learner" replace />} />
-          <Route path="/dayparting" element={<Navigate to="/learner" replace />} />
-          <Route path="/keyword-management" element={<Navigate to="/ads" replace />} />
-          <Route path="/configuracao-de-campanhas" element={<Navigate to="/ads" replace />} />
-          <Route path="/optimizer" element={<Navigate to="/learner" replace />} />
-          {/* Redirects de rotas obsoletas */}
+
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
         </Route>
