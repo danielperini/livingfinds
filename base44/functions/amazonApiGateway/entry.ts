@@ -12,20 +12,11 @@ const ALLOWED_HOSTS = new Set([
   'sellingpartnerapi-eu.amazon.com',
   'sellingpartnerapi-fe.amazon.com',
 ]);
-const limiter = new Map<string, { nextAt: number; rate: number }>();
 
 function retryDelay(attempt: number, retryAfter: number | null): number {
   if (retryAfter && retryAfter > 0) return Math.min(retryAfter * 1000, 60000);
   const base = Math.min(1000 * Math.pow(2, attempt), 30000);
   return Math.min(base + Math.floor(Math.random() * Math.max(500, base)), 60000);
-}
-
-async function acquire(key: string, requestedRate: number) {
-  const current = limiter.get(key) || { nextAt: 0, rate: Math.max(0.1, requestedRate || 1) };
-  const delay = Math.max(0, current.nextAt - Date.now());
-  if (delay > 0) await wait(delay);
-  current.nextAt = Date.now() + Math.ceil(1000 / Math.max(0.1, current.rate));
-  limiter.set(key, current);
 }
 
 Deno.serve(async (request) => {
@@ -58,9 +49,6 @@ Deno.serve(async (request) => {
     }
 
     const operationName = String(body.operation || url.pathname);
-    const limiterKey = `${body.amazon_account_id || 'global'}:${url.hostname}:${operationName}`;
-    if (!limiter.has(limiterKey)) limiter.set(limiterKey, { nextAt: 0, rate: Math.max(0.1, Number(body.configured_rate_limit || 1)) });
-
     if (body.amazon_account_id) {
       const previous = await base44.asServiceRole.entities.SyncExecutionLog.filter({
         amazon_account_id: body.amazon_account_id,
@@ -89,7 +77,6 @@ Deno.serve(async (request) => {
     let parsed: any = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       attemptsUsed = attempt + 1;
-      await acquire(limiterKey, Number(body.configured_rate_limit || 1));
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), Math.max(5000, Number(body.timeout_ms || 30000)));
@@ -100,10 +87,6 @@ Deno.serve(async (request) => {
           body: payload == null || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
         }).finally(() => clearTimeout(timeout));
         parsed = await parseAmazonApiResponse(response);
-        if (parsed.rate_limit && parsed.rate_limit > 0) {
-          const state = limiter.get(limiterKey);
-          if (state) state.rate = parsed.rate_limit;
-        }
         if (parsed.ok || !parsed.retryable || attempt === maxAttempts - 1) break;
         await wait(retryDelay(attempt, parsed.retry_after));
       } catch (error) {
@@ -127,7 +110,6 @@ Deno.serve(async (request) => {
     }
 
     const completedAt = new Date().toISOString();
-    const effectiveRate = limiter.get(limiterKey)?.rate || 1;
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: body.amazon_account_id || null,
       operation: `amazon_api:${operationName}`,
@@ -136,11 +118,11 @@ Deno.serve(async (request) => {
       started_at: startedAt,
       completed_at: completedAt,
       records_processed: parsed?.ok ? 1 : 0,
-      result_summary: JSON.stringify({ status: parsed?.status, request_id: parsed?.request_id, rate_limit: parsed?.rate_limit || effectiveRate, attempts: attemptsUsed, duration_ms: Date.now() - startedMs }),
+      result_summary: JSON.stringify({ status: parsed?.status, request_id: parsed?.request_id, rate_limit: parsed?.rate_limit, attempts: attemptsUsed, duration_ms: Date.now() - startedMs }),
       error_message: parsed?.ok ? null : String(parsed?.errors?.[0]?.message || 'Falha Amazon').slice(0, 1000),
     }).catch(() => {});
 
-    return Response.json({ ...parsed, attempts: attemptsUsed, effective_rate_limit: effectiveRate, started_at: startedAt, completed_at: completedAt }, { status: parsed?.ok ? 200 : parsed?.status || 500 });
+    return Response.json({ ...parsed, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt }, { status: parsed?.ok ? 200 : parsed?.status || 500 });
   } catch (error) {
     return Response.json({ ok: false, error: error?.message || 'Erro no gateway Amazon', attempts: attemptsUsed, started_at: startedAt, completed_at: new Date().toISOString() }, { status: 500 });
   }
