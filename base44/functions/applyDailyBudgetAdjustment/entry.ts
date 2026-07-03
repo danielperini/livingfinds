@@ -2,7 +2,9 @@
  * applyDailyBudgetAdjustment
  *
  * Ajusta o daily_budget de cada campanha ativa com base no gasto real
- * dos últimos 14 dias (média × 1.25), distribuído proporcionalmente.
+ * dos últimos 30 dias (média × 1.25), distribuído proporcionalmente.
+ * Também aplica o novo budget via Amazon Ads API (v3) para garantir
+ * que o erro de falta de budget não ocorra.
  *
  * Guardrails:
  *  - Budget mínimo por campanha: R$5,00
@@ -10,14 +12,88 @@
  *  - Variação máxima por execução: ±30% do atual (evita choques bruscos)
  *  - Só aplica se novo valor diferir > 5% do atual (evita micro-ajustes)
  *  - Salva histórico em CampaignChangeHistory
+ *  - Envia atualização para Amazon Ads API (v3)
  *
  * Payload:
  *   amazon_account_id — obrigatório
- *   dry_run           — opcional (default false) — lista o que seria feito sem aplicar
+ *   dry_run           — opcional (default false)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const PAGE = 200;
+const MIN_CAMPAIGN_BUDGET = 5;
+const MAX_CHANGE_PCT = 0.30;
+
+// Cache de token LWA
+const tokenCache: Record<string, { access_token: string; expires_at: number }> = {};
+
+async function getAdsToken(refreshToken: string): Promise<string> {
+  const cached = tokenCache['ads'];
+  if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
+    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
+  });
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || 'Falha ao obter token LWA');
+  tokenCache['ads'] = {
+    access_token: data.access_token,
+    expires_at: Date.now() + (data.expires_in - 60) * 1000,
+  };
+  return data.access_token;
+}
+
+function getAdsBaseUrl(account: any): string {
+  const r = (account?.region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+  return 'https://advertising-api.amazon.com';
+}
+
+async function updateCampaignBudgetOnAmazon(
+  account: any,
+  amazonCampaignId: string,
+  newBudget: number
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+    if (!refreshToken) return { ok: false, error: 'Sem refresh token' };
+    const token = await getAdsToken(refreshToken);
+    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+    const baseUrl = getAdsBaseUrl(account);
+
+    const res = await fetch(`${baseUrl}/sp/campaigns`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+        'Amazon-Advertising-API-Scope': String(profileId),
+        'Content-Type': 'application/vnd.spCampaign.v3+json',
+        'Accept': 'application/vnd.spCampaign.v3+json',
+      },
+      body: JSON.stringify({
+        campaigns: [{
+          campaignId: amazonCampaignId,
+          budget: { budgetType: 'DAILY', budget: newBudget },
+        }],
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    const success = data?.campaigns?.success?.[0] || data?.success?.[0];
+    if (success) return { ok: true };
+    const err = data?.campaigns?.error?.[0]?.description || data?.error || JSON.stringify(data).slice(0, 100);
+    return { ok: false, error: err };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+}
 
 async function loadAll(entity: any, query: any, sort: string, limit: number) {
   const all: any[] = [];
@@ -52,38 +128,47 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
     const sym = account.currency_symbol || 'R$';
 
-    // ── Carregar AutopilotConfig para guardrails ─────────────────────────────
+    // ── AutopilotConfig ──────────────────────────────────────────────────────
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
     const cfg = configs[0] || {};
     const MAX_CAMPAIGN_BUDGET = cfg.maximum_campaign_budget || 200;
-    const MIN_CAMPAIGN_BUDGET = 5;
-    const MAX_CHANGE_PCT = 0.30; // ±30% por execução
 
-    // ── Janela: últimos 14 dias (excluindo hoje) ─────────────────────────────
+    // ── Janela: últimos 30 dias (excluindo hoje) ─────────────────────────────
     const today = now.slice(0, 10);
-    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-    // ── Carregar gasto real por campanha nos últimos 14 dias ─────────────────
-    // Fonte 1: CampaignMetricsDaily
+    // ── Carregar métricas diárias dos últimos 30 dias ────────────────────────
     const metricsRaw = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
       { amazon_account_id: aid },
       '-date',
-      3000
+      5000
     );
 
-    // Spend total por campaign_id nos últimos 14 dias
+    // Spend por campanha nos últimos 30 dias (deduplicado por campaign_id+date)
     const spendByCampaign: Record<string, { total: number; days: Set<string> }> = {};
+    const seenDayKeys = new Set<string>();
+    const spendByDay: Record<string, number> = {};
+
     for (const m of metricsRaw) {
-      if (!m.date || m.date < fourteenDaysAgo || m.date >= today) continue;
+      if (!m.date || m.date < thirtyDaysAgo || m.date >= today) continue;
       const cid = m.campaign_id;
-      if (!cid) continue;
-      if (!spendByCampaign[cid]) spendByCampaign[cid] = { total: 0, days: new Set() };
-      spendByCampaign[cid].total += m.spend || 0;
-      spendByCampaign[cid].days.add(m.date);
+      const key = `${cid || ''}-${m.date}`;
+      if (seenDayKeys.has(key)) continue;
+      seenDayKeys.add(key);
+
+      // Por campanha
+      if (cid) {
+        if (!spendByCampaign[cid]) spendByCampaign[cid] = { total: 0, days: new Set() };
+        spendByCampaign[cid].total += m.spend || 0;
+        spendByCampaign[cid].days.add(m.date);
+      }
+
+      // Por dia (conta total)
+      spendByDay[m.date] = (spendByDay[m.date] || 0) + (m.spend || 0);
     }
 
-    // Fonte 2: Campaign.spend como fallback quando não há métricas diárias
-    // (campo spend = acumulado 30d, usado apenas quando não há métricas)
+    const spendDays = Object.values(spendByDay);
+    const numDays = spendDays.length;
 
     // ── Carregar campanhas ativas ────────────────────────────────────────────
     const allCampaigns = await loadAll(
@@ -103,30 +188,15 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, message: 'Nenhuma campanha ativa encontrada.', adjustments: [] });
     }
 
-    // ── Calcular spend médio diário total da conta nos últimos 14 dias ───────
-    // Deduplica por (campaign_id + date)
-    const seenDayKeys = new Set<string>();
-    const spendByDay: Record<string, number> = {};
-    for (const m of metricsRaw) {
-      if (!m.date || m.date < fourteenDaysAgo || m.date >= today) continue;
-      const key = `${m.campaign_id || ''}-${m.date}`;
-      if (seenDayKeys.has(key)) continue;
-      seenDayKeys.add(key);
-      spendByDay[m.date] = (spendByDay[m.date] || 0) + (m.spend || 0);
-    }
-
-    const spendDays = Object.values(spendByDay);
-    const numDays = spendDays.length;
-
-    // Fallback: usar campaign.spend (acumulado) / 30 se sem métricas diárias
+    // ── Spend médio diário da conta nos últimos 30 dias ──────────────────────
     let avgDailySpendAccount: number;
     let dataSource: string;
 
     if (numDays >= 3) {
       avgDailySpendAccount = spendDays.reduce((s, v) => s + v, 0) / numDays;
-      dataSource = `CampaignMetricsDaily (${numDays} dias)`;
+      dataSource = `CampaignMetricsDaily (${numDays} dias, janela 30d)`;
     } else {
-      // Fallback: soma de campaign.spend / 30
+      // Fallback: campaign.spend / 30
       const totalCampSpend = activeCampaigns.reduce((s: number, c: any) => s + (c.spend || 0), 0);
       avgDailySpendAccount = totalCampSpend / 30;
       dataSource = 'Campaign.spend (fallback 30d)';
@@ -135,56 +205,50 @@ Deno.serve(async (req) => {
     if (avgDailySpendAccount <= 0) {
       return Response.json({
         ok: false,
-        message: 'Sem dados de spend suficientes para ajuste. Execute um sync primeiro.',
+        message: 'Sem dados de spend suficientes. Execute um sync primeiro.',
         data_source: dataSource,
       });
     }
 
-    // ── Budget total alvo = média 14d × 1.25 ────────────────────────────────
+    // ── Budget total alvo = média 30d × 1.25 ─────────────────────────────────
     const targetTotalBudget = Math.max(MIN_CAMPAIGN_BUDGET * activeCampaigns.length, avgDailySpendAccount * 1.25);
-
-    // ── Distribuir proporcionalmente por campanha ────────────────────────────
-    // Peso de cada campanha = média de spend próprio / total médio
-    // Se campanha não tem dados históricos, usa peso médio
     const totalBudgetCurrent = activeCampaigns.reduce((s: number, c: any) => s + (c.daily_budget || 0), 0);
 
+    // ── Calcular ajuste por campanha ─────────────────────────────────────────
     const adjustments: any[] = [];
-    const updates: any[] = [];
+    const dbUpdates: any[] = [];
+    const amazonUpdates: Array<{ campaign: any; newBudget: number }> = [];
 
     for (const campaign of activeCampaigns) {
       const cid = campaign.campaign_id;
       const currentBudget = campaign.daily_budget || MIN_CAMPAIGN_BUDGET;
 
-      // Peso proporcional: gasto médio desta campanha / gasto médio total
+      // Spend médio desta campanha
       const campData = spendByCampaign[cid];
       let campAvgSpend: number;
 
       if (campData && campData.days.size >= 2) {
         campAvgSpend = campData.total / campData.days.size;
       } else if (totalBudgetCurrent > 0) {
-        // Sem histórico: usa peso proporcional pelo budget atual
         campAvgSpend = (currentBudget / totalBudgetCurrent) * avgDailySpendAccount;
       } else {
         campAvgSpend = avgDailySpendAccount / activeCampaigns.length;
       }
 
-      // Budget alvo para esta campanha = seu spend médio × 1.25
+      // Budget alvo: spend médio × 1.25
       let targetBudget = campAvgSpend * 1.25;
 
-      // Guardrail 1: mínimo R$5
+      // Guardrail: mínimo R$5
       targetBudget = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET);
-
-      // Guardrail 2: máximo configurado
+      // Guardrail: máximo configurado
       targetBudget = Math.min(targetBudget, MAX_CAMPAIGN_BUDGET);
-
-      // Guardrail 3: variação máxima ±30% do atual
+      // Guardrail: variação máxima ±30% por execução
       const maxUp   = currentBudget * (1 + MAX_CHANGE_PCT);
       const maxDown = currentBudget * (1 - MAX_CHANGE_PCT);
-      targetBudget = Math.min(targetBudget, maxUp);
-      targetBudget = Math.max(targetBudget, maxDown);
-      targetBudget = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET); // re-apply min after clamp
-
-      // Arredondar para 2 casas
+      targetBudget  = Math.min(targetBudget, maxUp);
+      targetBudget  = Math.max(targetBudget, maxDown);
+      targetBudget  = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET);
+      // Arredondar 2 casas
       targetBudget = Math.round(targetBudget * 100) / 100;
 
       // Só ajusta se diferença > 5%
@@ -195,7 +259,7 @@ Deno.serve(async (req) => {
           campaign_name: campaign.name || campaign.campaign_name,
           current_budget: currentBudget,
           target_budget: targetBudget,
-          change_pct: Number((changePct * 100).toFixed(1)),
+          change_pct: 0,
           action: 'skipped_no_change',
         });
         continue;
@@ -204,29 +268,59 @@ Deno.serve(async (req) => {
       const direction = targetBudget > currentBudget ? '↑' : '↓';
       adjustments.push({
         campaign_id: cid,
+        amazon_campaign_id: campaign.campaign_id,
         campaign_name: campaign.name || campaign.campaign_name,
         current_budget: currentBudget,
         target_budget: targetBudget,
         change_pct: Number(((targetBudget - currentBudget) / currentBudget * 100).toFixed(1)),
-        camp_avg_spend: Number(campAvgSpend.toFixed(2)),
+        camp_avg_spend_30d: Number(campAvgSpend.toFixed(2)),
         action: dry_run ? 'dry_run' : `applied_${direction}`,
       });
 
       if (!dry_run) {
-        updates.push({ id: campaign.id, daily_budget: targetBudget });
+        dbUpdates.push({ id: campaign.id, daily_budget: targetBudget });
+        // Só envia para Amazon se a campanha tem ID Amazon
+        if (campaign.campaign_id) {
+          amazonUpdates.push({ campaign, newBudget: targetBudget });
+        }
       }
     }
 
-    // ── Aplicar atualizações em lotes ────────────────────────────────────────
-    let applied = 0;
-    if (!dry_run && updates.length > 0) {
-      for (let i = 0; i < updates.length; i += 50) {
-        await base44.asServiceRole.entities.Campaign.bulkUpdate(updates.slice(i, i + 50));
-      }
-      applied = updates.length;
+    // ── Aplicar no banco local ───────────────────────────────────────────────
+    let appliedDb = 0;
+    let appliedAmazon = 0;
+    let amazonErrors = 0;
 
-      // Registrar no histórico
-      const accountBudgetBefore = totalBudgetCurrent;
+    if (!dry_run) {
+      if (dbUpdates.length > 0) {
+        for (let i = 0; i < dbUpdates.length; i += 50) {
+          await base44.asServiceRole.entities.Campaign.bulkUpdate(dbUpdates.slice(i, i + 50));
+        }
+        appliedDb = dbUpdates.length;
+      }
+
+      // ── Aplicar na Amazon Ads API (com backoff) ──────────────────────────
+      // Processar em lotes de 10 para não sobrecarregar a API
+      for (let i = 0; i < amazonUpdates.length; i += 10) {
+        const batch = amazonUpdates.slice(i, i + 10);
+        await Promise.all(batch.map(async ({ campaign, newBudget }) => {
+          const amazonId = campaign.campaign_id; // campo campaign_id = amazon campaign id
+          const result = await updateCampaignBudgetOnAmazon(account, amazonId, newBudget);
+          if (result.ok) {
+            appliedAmazon++;
+          } else {
+            amazonErrors++;
+            console.warn(`[applyDailyBudgetAdjustment] Amazon API erro campanha ${amazonId}: ${result.error}`);
+            // Marcar na decisão mas não reverter o banco — banco é source of truth local
+          }
+        }));
+        // Backoff entre lotes para evitar rate limit
+        if (i + 10 < amazonUpdates.length) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+
+      // ── Registrar histórico ──────────────────────────────────────────────
       const accountBudgetAfter = activeCampaigns.reduce((s: number, c: any) => {
         const adj = adjustments.find(a => a.campaign_id === c.campaign_id && a.action?.startsWith('applied'));
         return s + (adj ? adj.target_budget : (c.daily_budget || 0));
@@ -238,23 +332,33 @@ Deno.serve(async (req) => {
         change_type: 'BUDGET_RULE',
         entity_type: 'account',
         entity_id: aid,
-        field_name: 'daily_budget_adjustment',
-        old_value: String(Number(accountBudgetBefore.toFixed(2))),
+        field_name: 'daily_budget_adjustment_30d',
+        old_value: String(Number(totalBudgetCurrent.toFixed(2))),
         new_value: String(Number(accountBudgetAfter.toFixed(2))),
         source: 'PERFORMANCE_RULE',
         source_function: 'applyDailyBudgetAdjustment',
-        reason: `Ajuste automático diário: média ${numDays > 0 ? numDays : '30'}d ${sym}${avgDailySpendAccount.toFixed(2)}/dia × 1.25 = alvo ${sym}${targetTotalBudget.toFixed(2)}. Fonte: ${dataSource}. ${applied} campanhas ajustadas.`,
+        reason: `Ajuste automático 30d: média ${sym}${avgDailySpendAccount.toFixed(2)}/dia × 1.25 = alvo ${sym}${targetTotalBudget.toFixed(2)}. Fonte: ${dataSource}. DB: ${appliedDb} ajustadas. Amazon: ${appliedAmazon} OK, ${amazonErrors} erros.`,
         changed_at: now,
         changed_by: 'autopilot',
       }).catch(() => {});
 
-      // Atualizar AutopilotConfig com o budget sugerido calculado
+      // ── Atualizar AutopilotConfig ────────────────────────────────────────
       if (configs.length > 0) {
         await base44.asServiceRole.entities.AutopilotConfig.update(configs[0].id, {
           ai_suggested_daily_budget: Number(targetTotalBudget.toFixed(2)),
-          ai_budget_reasoning: `Média real ${dataSource}: ${sym}${avgDailySpendAccount.toFixed(2)}/dia × 1.25 = ${sym}${targetTotalBudget.toFixed(2)}. ${applied} de ${activeCampaigns.length} campanhas ajustadas.`,
-          ai_budget_confidence: numDays >= 7 ? 90 : numDays >= 3 ? 75 : 50,
+          ai_budget_reasoning: `Média real ${dataSource}: ${sym}${avgDailySpendAccount.toFixed(2)}/dia × 1.25 = ${sym}${targetTotalBudget.toFixed(2)}. ${appliedDb} de ${activeCampaigns.length} campanhas ajustadas (${appliedAmazon} aplicadas na Amazon API).`,
+          ai_budget_confidence: numDays >= 14 ? 92 : numDays >= 7 ? 80 : numDays >= 3 ? 65 : 50,
           ai_budget_generated_at: now,
+          ai_budget_breakdown: JSON.stringify({
+            avg_spend_30d: Number(avgDailySpendAccount.toFixed(2)),
+            num_days_sampled: numDays,
+            multiplier: 1.25,
+            target_total: Number(targetTotalBudget.toFixed(2)),
+            campaigns_adjusted_db: appliedDb,
+            campaigns_applied_amazon: appliedAmazon,
+            amazon_errors: amazonErrors,
+            data_source: dataSource,
+          }),
         }).catch(() => {});
       }
     }
@@ -262,17 +366,20 @@ Deno.serve(async (req) => {
     const appliedCount = adjustments.filter(a => a.action?.startsWith('applied')).length;
     const skippedCount = adjustments.filter(a => a.action === 'skipped_no_change').length;
 
-    console.log(`[applyDailyBudgetAdjustment] avg=${sym}${avgDailySpendAccount.toFixed(2)}/dia target_total=${sym}${targetTotalBudget.toFixed(2)} applied=${appliedCount} skipped=${skippedCount} dry_run=${dry_run}`);
+    console.log(`[applyDailyBudgetAdjustment] janela=30d avg=${sym}${avgDailySpendAccount.toFixed(2)}/dia target=${sym}${targetTotalBudget.toFixed(2)} db=${appliedDb} amazon=${appliedAmazon} errors=${amazonErrors} skipped=${skippedCount} dry_run=${dry_run}`);
 
     return Response.json({
       ok: true,
       dry_run,
       data_source: dataSource,
-      num_days_analyzed: numDays,
-      avg_daily_spend: Number(avgDailySpendAccount.toFixed(2)),
+      window_days: 30,
+      num_days_with_data: numDays,
+      avg_daily_spend_30d: Number(avgDailySpendAccount.toFixed(2)),
       target_total_budget: Number(targetTotalBudget.toFixed(2)),
       active_campaigns: activeCampaigns.length,
       campaigns_adjusted: appliedCount,
+      campaigns_applied_amazon: appliedAmazon,
+      amazon_errors: amazonErrors,
       campaigns_skipped: skippedCount,
       adjustments,
     });
