@@ -109,31 +109,28 @@ function calcConfidence({ clicks = 0, orders = 0, lastSyncAt, maturity, attrSafe
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RESOLUÇÃO DE OUTCOME
-// Retorna: EXECUTE_NOW | RECOMMEND_APPROVAL | WAIT_FOR_DATA | BLOCK | NO_ACTION
+// Regra principal: confidence >= 0.90 → EXECUTE_NOW (qualquer risco, exceto very_high)
+//                  confidence < 0.90  → RECOMMEND_APPROVAL (revisão humana)
+// Retorna: EXECUTE_NOW | RECOMMEND_APPROVAL | WAIT_FOR_DATA | BLOCK
 // ═══════════════════════════════════════════════════════════════════════════════
 function resolveOutcome(confidence, maturity, blockers, autonomyLevel, risk, hasCooldown = false) {
   // BLOCK tem prioridade máxima
   if (blockers.length > 0) return 'BLOCK';
   if (maturity === 'STALE' || maturity === 'NEW') return 'BLOCK';
 
-  // WAIT_FOR_DATA
+  // WAIT_FOR_DATA — dados insuficientes
   if (confidence < 0.60 || maturity === 'INSUFFICIENT_DATA') return 'WAIT_FOR_DATA';
 
-  // Cooldown → SCHEDULE (aguardar)
-  if (hasCooldown) return 'RECOMMEND_APPROVAL';
+  // Autopilot desabilitado (nível 0 ou 1) → sempre recomendação
+  if (autonomyLevel < 2) return 'RECOMMEND_APPROVAL';
 
-  // confidence 0.60–0.74 → sempre aprovação humana
-  if (confidence < 0.75) return 'RECOMMEND_APPROVAL';
+  // Risco muito alto → sempre exige aprovação humana independente de confiança
+  if (risk === 'very_high') return 'RECOMMEND_APPROVAL';
 
-  // confidence 0.75–0.89 → executar apenas baixo risco com autonomy >= 2
-  if (confidence < 0.90) {
-    if (risk === 'low' && autonomyLevel >= 2) return 'EXECUTE_NOW';
-    return 'RECOMMEND_APPROVAL';
-  }
+  // REGRA CENTRAL: confidence >= 90% → executa automaticamente
+  if (confidence >= 0.90) return 'EXECUTE_NOW';
 
-  // confidence >= 0.90 → executar automaticamente (baixo e médio risco) a partir de autonomy >= 1
-  if (risk === 'low' && autonomyLevel >= 1) return 'EXECUTE_NOW';
-  if (risk === 'medium' && autonomyLevel >= 1) return 'EXECUTE_NOW';
+  // confidence < 90% → fica para aprovação humana
   return 'RECOMMEND_APPROVAL';
 }
 
@@ -280,7 +277,7 @@ Deno.serve(async (req) => {
     // ── 3. Carregar configuração ──────────────────────────────────────────
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: amazonAccountId });
     const cfg = configs[0] || {};
-    const autonomyLevel = cfg.autonomy_level ?? 2;
+    const autonomyLevel = cfg.autonomy_level ?? 3; // padrão: Autopilot Completo
     if (cfg.enabled === false) return Response.json({ ok: true, skipped: true, reason: 'Autopilot desabilitado' });
 
     const ATTR_HOURS   = cfg.attribution_safety_hours   || DEFAULT_ATTRIBUTION_HOURS;

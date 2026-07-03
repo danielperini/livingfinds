@@ -4,7 +4,7 @@ import { Save, Loader2, Shield, AlertTriangle, Info } from 'lucide-react';
 
 const DEFAULTS = {
   enabled: true,
-  autonomy_level: 2,
+  autonomy_level: 3, // Autopilot Completo por padrão
   objective: 'profitability',
   target_acos: 25,
   maximum_acos: 40,
@@ -32,8 +32,8 @@ const DEFAULTS = {
   bid_optimization_enabled: true,
   auto_create_manual_exact: true,
   auto_apply_low_risk: true,
-  require_approval_medium_risk: true,
-  require_approval_high_risk: true,
+  require_approval_medium_risk: false, // confiança >= 90% executa automaticamente
+  require_approval_high_risk: true,    // risco very_high sempre exige humano
   currency_code: 'BRL',
   currency_symbol: 'R$',
   marketplace_timezone: 'America/Sao_Paulo',
@@ -42,9 +42,9 @@ const DEFAULTS = {
 const AUTONOMY_DESCRIPTIONS = {
   0: 'Apenas observa e classifica. Não cria decisões executáveis.',
   1: 'Cria recomendações pendentes. Nenhuma é executada automaticamente.',
-  2: 'Executa automaticamente: reduções de bid, colheita de termos, pausa por estoque zero.',
-  3: 'Executa também: aumento de bid, ajuste de budget, dayparting e placements.',
-  4: 'Reorganiza campanhas estrategicamente dentro dos limites financeiros configurados.',
+  2: 'Executa automaticamente decisões com confiança ≥ 90% (exceto risco muito alto).',
+  3: 'Recomendado: executa tudo com confiança ≥ 90% — bids, budgets, harvest, dayparting.',
+  4: 'Máxima autonomia: reorganiza campanhas estrategicamente dentro dos limites configurados.',
 };
 
 export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved }) {
@@ -197,18 +197,26 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
 
       {/* Aprovações */}
       <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Aprovações Obrigatórias</p>
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Política de Aprovação</p>
+        <div className="p-3 bg-surface-1 border border-surface-2 rounded-xl mb-3">
+          <p className="text-xs text-slate-400 leading-relaxed">
+            <span className="text-white font-semibold">Regra ativa:</span> decisões com <span className="text-cyan font-semibold">confiança ≥ 90%</span> são executadas automaticamente.
+            Abaixo de 90% ficam pendentes para revisão. Risco <span className="text-red-400 font-semibold">muito alto</span> sempre exige aprovação humana.
+          </p>
+        </div>
         <div className="space-y-2">
-          <Toggle label="Aplicar automaticamente baixo risco" k="auto_apply_low_risk" hint="Executa sem aprovação quando risco = baixo" />
-          <Toggle label="Exigir aprovação para risco médio" k="require_approval_medium_risk" hint="Aguarda aprovação humana" />
-          <Toggle label="Exigir aprovação para risco alto" k="require_approval_high_risk" hint="Obrigatório para ações críticas" />
+          <Toggle label="Exigir aprovação para risco muito alto" k="require_approval_high_risk" hint="Ações críticas (negativar termos com venda histórica, pausar campanha rentável)" />
         </div>
       </div>
 
-      {form.autonomy_level >= 2 && form.auto_apply_low_risk && (
-        <div className="flex items-start gap-2 p-3 bg-amber-400/10 border border-amber-400/20 rounded-xl">
-          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-amber-300">Nível {form.autonomy_level}: ações de baixo risco serão aplicadas automaticamente na Amazon Ads. Acompanhe os resultados diariamente.</p>
+      {form.autonomy_level >= 2 && (
+        <div className="flex items-start gap-2 p-3 bg-cyan/10 border border-cyan/20 rounded-xl">
+          <Info className="w-4 h-4 text-cyan flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-cyan/80">
+            <span className="font-semibold text-cyan">Modo Autopilot ativo (Nível {form.autonomy_level}):</span>{' '}
+            Decisões com <span className="font-semibold">confiança ≥ 90%</span> são executadas automaticamente na Amazon Ads — aumentos e reduções de bid, colheita de termos, ajuste de budget e pausa por estoque.
+            Decisões com confiança &lt; 90% ficam pendentes para revisão humana.
+          </p>
         </div>
       )}
     </div>
