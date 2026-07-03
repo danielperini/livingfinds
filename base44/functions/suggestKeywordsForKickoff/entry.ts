@@ -166,8 +166,74 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 4. SearchTerms convertidos de outros ASINs com título similar ─────────
-    // Só executar se o produto tem nome e se temos poucas sugestões da fonte 1
+    // ── 4. IA pura baseada no título real do produto ──────────────────────────
+    // Sempre executa se temos poucas sugestões de dados reais (< 8)
+    // Gera termos que correspondem ao produto de verdade (ex: "lixeira automática com sensor")
+    if (product_name && suggestions.size < 8) {
+      const anthropic = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') });
+
+      // Extrair features-chave do título para guiar a IA
+      const existingTermsList = [...suggestions.values()]
+        .map(s => `"${s.keyword}"`)
+        .join(', ');
+
+      const aiPrompt = `Você é um especialista em Amazon Ads para o marketplace brasileiro (Amazon.com.br).
+
+Produto: "${product_name}" (ASIN: ${asin})
+
+Gere 12 palavras-chave de alta intenção de compra para este produto no Amazon.com.br.
+
+REGRAS OBRIGATÓRIAS:
+1. Baseie os termos EXCLUSIVAMENTE nas características reais do produto descritas no nome
+2. Use linguagem natural que brasileiros digitam ao buscar este produto (português BR)
+3. NUNCA inclua marcas registradas (nomes de empresas, marcas conhecidas)
+4. Inclua variações descritivas: tipo do produto + características específicas (ex: "lixeira automática com sensor infravermelho", "microfone lapela usb-c android")
+5. Inclua termos de cauda média (2-3 palavras) E cauda longa (4-5 palavras)
+6. Evite termos genéricos demais (ex: "produto", "item", "comprar") 
+7. Priorize intenção de compra direta
+
+Termos já cobertos por dados reais (não repetir): ${existingTermsList || 'nenhum'}
+
+Responda SOMENTE com JSON:
+{
+  "keywords": [
+    { "keyword": "...", "confidence": 0.88, "reason": "...", "tail": "medium|long" }
+  ]
+}`;
+
+      const aiResp = await anthropic.messages.create({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: aiPrompt }],
+      });
+
+      const aiText = aiResp.content[0]?.text || '{}';
+      let aiParsed: any = {};
+      try {
+        const m = aiText.match(/\{[\s\S]*\}/);
+        if (m) aiParsed = JSON.parse(m[0]);
+      } catch {}
+
+      for (const item of (aiParsed.keywords || [])) {
+        const term = (item.keyword || '').trim().toLowerCase();
+        if (!term || term.length < 5) continue;
+        const n = norm(term);
+        if (suggestions.has(n)) continue;
+        // Filtro de segurança: não incluir termos com apenas 1 palavra
+        if (!term.includes(' ')) continue;
+        suggestions.set(n, {
+          keyword: term,
+          source: 'ai_suggestion',
+          source_label: 'IA — título do produto',
+          confidence: item.confidence || 0.82,
+          bid: 0.50,
+          match_type: 'exact',
+          reason: item.reason || 'Gerado pela IA baseado nas características do produto',
+        });
+      }
+    }
+
+    // ── 5. SearchTerms convertidos de outros ASINs com título similar ─────────
     if ((suggestions.size < 5) && product_name) {
       // Carregar todos os produtos para encontrar ASINs similares
       const allProducts = await base44.asServiceRole.entities.Product.filter(
@@ -254,8 +320,8 @@ Inclua apenas termos com alta probabilidade de relevância (confidence >= 0.75).
     const SOURCE_PRIORITY = {
       search_term_converted: 1,
       existing_keyword: 2,
-      ai_suggestion: 3,
-      cross_asin_validated: 4,
+      cross_asin_validated: 3,
+      ai_suggestion: 4,
     };
 
     const result = [...suggestions.values()]
@@ -265,7 +331,7 @@ Inclua apenas termos com alta probabilidade de relevância (confidence >= 0.75).
         if (pa !== pb) return pa - pb;
         return (b.confidence || 0) - (a.confidence || 0);
       })
-      .slice(0, 15);
+      .slice(0, 20);
 
     return Response.json({
       ok: true,

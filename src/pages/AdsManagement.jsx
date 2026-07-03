@@ -4,12 +4,14 @@ import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
-  Settings, Package, History, Zap, Bot, Sparkles, Wand2, ChevronDown, ChevronUp
+  Settings, Package, History, Zap, Bot, Sparkles, Wand2, ChevronDown, ChevronUp,
+  Pause, Trash2, Rocket, Play
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
 import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
+import KickoffModal from '@/components/products/KickoffModal';
 
 function ManualCreationResult({ result, onClose }) {
   const [expanded, setExpanded] = useState(false);
@@ -196,6 +198,9 @@ export default function AdsManagement() {
   const [products, setProducts] = useState([]);
   const [creatingManuals, setCreatingManuals] = useState(false);
   const [manualResult, setManualResult] = useState(null);
+  const [campaignAction, setCampaignAction] = useState(null); // 'pausing' | 'removing' | null
+  const [campaignActionMsg, setCampaignActionMsg] = useState(null);
+  const [kickoffProduct, setKickoffProduct] = useState(null); // produto para re-kickoff
 
   const loadCampaigns = async () => {
     setLoading(true);
@@ -353,6 +358,42 @@ export default function AdsManagement() {
       }
       setSearchTerms(prev => prev.filter(st => st.id !== searchTerm.id));
     } catch (err) { console.error('Erro ao promover:', err); alert('Erro ao promover keyword: ' + err.message); }
+  };
+
+  const pauseCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    setCampaignAction('pausing');
+    setCampaignActionMsg(null);
+    try {
+      await base44.functions.invoke('pauseCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: selectedCampaign.campaign_id,
+      });
+      await base44.entities.Campaign.update(selectedCampaign.id, { state: 'paused', status: 'paused' });
+      setSelectedCampaign(prev => ({ ...prev, state: 'paused', status: 'paused' }));
+      setCampaigns(prev => prev.map(c => c.id === selectedCampaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
+      setCampaignActionMsg({ type: 'success', text: 'Campanha pausada.' });
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+      setTimeout(() => setCampaignActionMsg(null), 5000);
+    }
+  };
+
+  const removeCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    if (!window.confirm(`Remover a campanha "${selectedCampaign.name || selectedCampaign.campaign_name}" do painel? Ela será marcada como arquivada localmente.`)) return;
+    setCampaignAction('removing');
+    try {
+      await base44.entities.Campaign.update(selectedCampaign.id, { archived: true, state: 'archived', status: 'archived' });
+      setCampaigns(prev => prev.filter(c => c.id !== selectedCampaign.id));
+      setSelectedCampaign(null);
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao remover: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+    }
   };
 
   const hasPending = Object.keys(pendingBids).length > 0;
@@ -528,7 +569,37 @@ export default function AdsManagement() {
                     <span className="text-xs text-slate-400">Pedidos: <span className="text-white">{selectedCampaign.orders || 0}</span></span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                  {campaignActionMsg && (
+                    <span className={`text-xs px-2 py-1 rounded ${campaignActionMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {campaignActionMsg.text}
+                    </span>
+                  )}
+                  {/* Kick-off manual para a campanha selecionada */}
+                  {(() => {
+                    const prod = selectedCampaign.asin ? products.find(p => p.asin === selectedCampaign.asin) : null;
+                    if (!prod) return null;
+                    return (
+                      <button onClick={() => setKickoffProduct(prod)}
+                        className="px-3 py-2 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors flex items-center gap-1.5">
+                        <Rocket className="w-3.5 h-3.5" /> Kick-off
+                      </button>
+                    );
+                  })()}
+                  {/* Pausar */}
+                  {(selectedCampaign.state === 'enabled' || selectedCampaign.status === 'enabled') && (
+                    <button onClick={pauseCampaign} disabled={!!campaignAction}
+                      className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                      {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pause className="w-3.5 h-3.5" />}
+                      Pausar
+                    </button>
+                  )}
+                  {/* Remover do painel */}
+                  <button onClick={removeCampaign} disabled={!!campaignAction}
+                    className="px-3 py-2 text-xs font-semibold bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                    {campaignAction === 'removing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    Remover
+                  </button>
                   <button onClick={async () => {
                     try { await base44.functions.invoke('monitorSearchTerms', { amazon_account_id: account.id }); }
                     catch (e) { console.error(e); }
@@ -730,6 +801,15 @@ export default function AdsManagement() {
           </>
         )}
       </div>
+
+      {kickoffProduct && account && (
+        <KickoffModal
+          product={kickoffProduct}
+          account={account}
+          onClose={() => setKickoffProduct(null)}
+          onDone={() => { setKickoffProduct(null); loadCampaigns(); }}
+        />
+      )}
     </div>
   );
 }
