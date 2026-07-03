@@ -76,7 +76,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: results.every((item) => item.ok),
       trigger_type: triggerType,
-      amazon_write_policy: 'queued_00_04_except_pause',
+      amazon_write_policy: 'queued_00_04_and_13_14_except_pause',
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - startedMs,
