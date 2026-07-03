@@ -27,26 +27,27 @@ Deno.serve(async (request) => {
     if (mode === 'manual_only' && !String(body.keyword || '').trim()) return Response.json({ ok: false, error: 'Informe o termo exato' }, { status: 400 });
 
     const slot = nextSlot();
-    const functionName = mode === 'manual_only' ? 'createManualCampaignFromKeywordSuggestion' : 'autoKickoffProduct';
-    const payload = mode === 'manual_only'
-      ? { amazon_account_id: body.amazon_account_id, asin: body.asin, sku: body.sku || null, product_name: body.product_name || body.asin, keyword: String(body.keyword).trim(), match_type: 'exact', bid: 0.5, _window_execution: true, _service_role: true }
-      : { amazon_account_id: body.amazon_account_id, asin: body.asin, sku: body.sku || null, product_name: body.product_name || body.asin, max_keywords: 4, minimum_ai_confidence: 0.95, _window_execution: true, _service_role: true };
+    const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
+      amazon_account_id: body.amazon_account_id,
+      asin: body.asin,
+      mode,
+      status: 'scheduled',
+    }, '-created_date', 1).catch(() => []);
 
-    const payloadJson = JSON.stringify(payload);
-    const existing = await base44.asServiceRole.entities.AmazonDeferredCommand.filter({ function_name: functionName, payload_json: payloadJson, status: 'scheduled' }, '-created_date', 1).catch(() => []);
     if (!existing.length) {
-      await base44.asServiceRole.entities.AmazonDeferredCommand.create({
+      await base44.asServiceRole.entities.ProductKickoffQueue.create({
         amazon_account_id: body.amazon_account_id,
-        function_name: functionName,
-        payload_json: payloadJson,
+        asin: body.asin,
+        sku: body.sku || null,
+        product_name: body.product_name || body.asin,
+        mode,
+        keyword: mode === 'manual_only' ? String(body.keyword || '').trim() : null,
         status: 'scheduled',
         queue_hour: slot.hour,
         queue_window: slot.window,
-        priority: 'normal',
+        scheduled_at: slot.at.toISOString(),
         attempt_count: 0,
         max_attempts: 5,
-        scheduled_at: slot.at.toISOString(),
-        source: 'product_kickoff',
       });
     }
 
