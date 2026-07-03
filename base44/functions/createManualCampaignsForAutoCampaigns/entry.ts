@@ -177,7 +177,11 @@ Deno.serve(async (req) => {
     const aid = account.id;
     const now = new Date().toISOString();
     const BID = 0.50;
-    const BUDGET = 5.00;
+
+    // ── Formatação R$ brasileira ──────────────────────────────────────────
+    function brl(value: number): string {
+      return 'R$ ' + value.toFixed(2).replace('.', ',').replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    }
 
     // ── Carregar todas as campanhas ativas ────────────────────────────────
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
@@ -227,6 +231,34 @@ Deno.serve(async (req) => {
         would_process: missingManualAsins,
       });
     }
+
+    // ── Cálculo de budget dinâmico por ASIN ───────────────────────────────
+    // Fórmula:
+    //   valor_diario_previsto = soma dos daily_budget das campanhas ativas
+    //   total_campanhas_ativas = qtd de campanhas ativas
+    //   valor_medio_diario = valor_diario_previsto / total_campanhas_ativas
+    //   valor_margem_30 = valor_medio_diario × 0.30
+    //   budget_sugerido = valor_medio_diario + valor_margem_30 (= valor_medio_diario × 1.30)
+    //   novo_total_daily_budget = total_daily_budget_atual + budget_sugerido
+    const total_daily_budget_atual = activeCampaigns.reduce((s: number, c: any) => s + (c.daily_budget || 0), 0);
+    const valor_diario_previsto = total_daily_budget_atual;
+    const total_campanhas_ativas = activeCampaigns.length || 1;
+    const valor_medio_diario = Math.round((valor_diario_previsto / total_campanhas_ativas) * 100) / 100;
+    const valor_margem_30 = Math.round(valor_medio_diario * 0.30 * 100) / 100;
+    const budget_sugerido = Math.round((valor_medio_diario + valor_margem_30) * 100) / 100;
+    const novo_total_daily_budget = Math.round((total_daily_budget_atual + budget_sugerido) * 100) / 100;
+
+    // Garantir budget mínimo de R$ 5,00
+    const BUDGET = Math.max(budget_sugerido, 5.00);
+
+    const mensagem_confirmacao = (keyword: string): string =>
+      `Campanha criada com sucesso para keyword "${keyword}". ` +
+      `O orçamento diário geral foi aumentado de ${brl(total_daily_budget_atual)} para ${brl(novo_total_daily_budget)}. ` +
+      `Foi adicionada uma margem de segurança de 30%, correspondente a ${brl(valor_margem_30)}. ` +
+      `O budget diário sugerido para esta campanha é ${brl(BUDGET)}.`;
+
+    console.log(`[Budget] total_atual=${brl(total_daily_budget_atual)} | medio=${brl(valor_medio_diario)} | margem=${brl(valor_margem_30)} | sugerido=${brl(BUDGET)} | novo_total=${brl(novo_total_daily_budget)}`);
+
 
     // ── Carregar produtos e keywords existentes ────────────────────────────
     const products = await base44.asServiceRole.entities.Product.filter(
@@ -302,6 +334,8 @@ Deno.serve(async (req) => {
         try {
           await new Promise(r => setTimeout(r, 300)); // rate limit entre keywords
           const created = await createOneCampaign(account, asin, keyword, sku, BUDGET, BID, now);
+          const msg = mensagem_confirmacao(keyword);
+          console.log(`[createManualCampaignsForAutoCampaigns] ${msg}`);
 
           // Persistir no banco
           const [campRecord, kwRecord] = await Promise.all([
@@ -360,7 +394,15 @@ Deno.serve(async (req) => {
           }).catch(() => {});
 
           usedKws.add(norm(keyword));
-          asinResult.campaigns.push({ keyword, ok: true, campaign_id: String(created.amazonCampaignId), campaign_name: created.campaignName });
+          asinResult.campaigns.push({
+            keyword, ok: true,
+            campaign_id: String(created.amazonCampaignId),
+            campaign_name: created.campaignName,
+            budget_sugerido: brl(BUDGET),
+            margem_seguranca: brl(valor_margem_30),
+            novo_total_daily_budget: brl(novo_total_daily_budget),
+            mensagem: msg,
+          });
         } catch (err: any) {
           asinResult.campaigns.push({ keyword, ok: false, error: String(err?.message || err).slice(0, 200) });
           asinResult.errors.push(String(err?.message || err).slice(0, 100));
@@ -379,6 +421,13 @@ Deno.serve(async (req) => {
       asins_processed: results.length,
       campaigns_created: totalCreated,
       asins_failed: totalFailed,
+      budget_calculado: {
+        total_daily_budget_anterior: brl(total_daily_budget_atual),
+        valor_medio_diario: brl(valor_medio_diario),
+        margem_seguranca_30pct: brl(valor_margem_30),
+        budget_sugerido_por_campanha: brl(BUDGET),
+        novo_total_daily_budget: brl(novo_total_daily_budget),
+      },
       results,
     });
 
