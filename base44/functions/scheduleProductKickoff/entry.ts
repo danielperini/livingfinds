@@ -8,7 +8,7 @@ function nextSlot() {
   const hour = Number(p.hour || 0);
   const day = `${p.year}-${p.month}-${p.day}`;
   if (hour < 3) return { hour: hour + 1, window: `${String(hour + 1).padStart(2, '0')}:00-${String(hour + 2).padStart(2, '0')}:00`, at: new Date(`${day}T${String(hour + 1).padStart(2, '0')}:00:00-03:00`) };
-  if (hour < 14) return { hour: 13, window: '13:00-14:00', at: new Date(`${day}T13:00:00-03:00`) };
+  if (hour < 13) return { hour: 13, window: '13:00-14:00', at: new Date(`${day}T13:00:00-03:00`) };
   const tomorrow = new Date(`${day}T12:00:00-03:00`);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const nextDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
