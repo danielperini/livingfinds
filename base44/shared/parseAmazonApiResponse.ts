@@ -23,10 +23,16 @@ function headerNumber(headers: Headers, name: string): number | null {
 }
 
 export async function parseAmazonApiResponse(response: Response): Promise<ParsedAmazonResponse> {
-  const raw = await response.json().catch(async () => {
-    const text = await response.text().catch(() => '');
-    return text ? { message: text } : {};
-  });
+  const text = await response.text().catch(() => '');
+  let raw: unknown = {};
+
+  if (text) {
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      raw = { message: text };
+    }
+  }
 
   const root = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const rawErrors = Array.isArray(root.errors)
@@ -53,7 +59,7 @@ export async function parseAmazonApiResponse(response: Response): Promise<Parsed
   }
 
   const payload = Object.prototype.hasOwnProperty.call(root, 'payload') ? root.payload : raw;
-  const partial = response.status === 207 || errors.length > 0 && response.ok;
+  const partial = response.status === 207 || (errors.length > 0 && response.ok);
 
   return {
     ok: response.ok && !partial,
