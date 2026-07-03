@@ -9,11 +9,23 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
-    const query = body.amazon_account_id
+    const approvedQuery = body.amazon_account_id
       ? { amazon_account_id: body.amazon_account_id, status: 'approved' }
       : { status: 'approved' };
-    const approved = await base44.asServiceRole.entities.OptimizationDecision.filter(query, 'created_at', 50);
-    const pauses = approved.filter((x) => x.action === 'pause_campaign');
+    const failedPauseQuery = body.amazon_account_id
+      ? { amazon_account_id: body.amazon_account_id, status: 'failed', action: 'pause_campaign' }
+      : { status: 'failed', action: 'pause_campaign' };
+
+    const [approved, failedPauses] = await Promise.all([
+      base44.asServiceRole.entities.OptimizationDecision.filter(approvedQuery, 'created_at', 50),
+      base44.asServiceRole.entities.OptimizationDecision.filter(failedPauseQuery, '-created_at', 50).catch(() => []),
+    ]);
+
+    const pauseMap = new Map();
+    for (const item of [...approved.filter((x) => x.action === 'pause_campaign'), ...failedPauses]) {
+      pauseMap.set(item.id, item);
+    }
+    const pauses = [...pauseMap.values()];
     const queued = approved.filter((x) => x.action !== 'pause_campaign');
 
     for (const item of queued) {
@@ -43,6 +55,7 @@ Deno.serve(async (request) => {
       executed: Number(result.executed || 0),
       failed: Number(result.failed || 0),
       immediate_pause_count: pauses.length,
+      retried_failed_pauses: failedPauses.length,
       policy: '00:00-04:00 and 13:00-14:00; pause_campaign immediate',
       results: result.results || [],
     });
