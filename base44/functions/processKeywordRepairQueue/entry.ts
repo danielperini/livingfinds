@@ -14,12 +14,12 @@ Deno.serve(async(req)=>{try{
     if(item.scheduled_at&&new Date(item.scheduled_at).getTime()>Date.now())continue;
     await b.asServiceRole.entities.KeywordRepairQueue.update(item.id,{status:'processing',attempt_count:Number(item.attempt_count||0)+1});
     try{
-      const r=await b.asServiceRole.functions.invoke('repairExactAdGroupKeywords',{amazon_account_id:item.amazon_account_id,asins:[item.asin],_window_execution:true,_service_role:true});
+      const r=await b.asServiceRole.functions.invoke('repairExactAdGroupIntegrity',{amazon_account_id:item.amazon_account_id,asin:item.asin,_service_role:true});
       const data=r?.data||r||{};
       const ok=data?.results?.some((x:any)=>x.asin===item.asin&&x.complete===true)===true;
       const attempts=Number(item.attempt_count||0)+1;
       const retry=!ok&&attempts<5;
-      await b.asServiceRole.entities.KeywordRepairQueue.update(item.id,{status:ok?'completed':retry?'scheduled':'failed',attempt_count:attempts,last_error:ok?null:String(data?.error||data?.results?.[0]?.error||'Grupo ainda sem keyword').slice(0,500)});
+      await b.asServiceRole.entities.KeywordRepairQueue.update(item.id,{status:ok?'completed':retry?'scheduled':'failed',attempt_count:attempts,last_error:ok?null:String(data?.error||data?.results?.[0]?.error||'Grupo ainda sem anúncio ou keyword').slice(0,500)});
       results.push({id:item.id,asin:item.asin,ok,retry_scheduled:retry});
     }catch(e){
       const attempts=Number(item.attempt_count||0)+1,retry=attempts<5;
@@ -28,5 +28,5 @@ Deno.serve(async(req)=>{try{
     }
     await wait(14000);
   }
-  return Response.json({ok:true,hour,processed:results.length,spacing_seconds:14,results});
-}catch(e){return Response.json({ok:false,error:e?.message||'Erro na fila de keywords'},{status:500});}});
+  return Response.json({ok:true,hour,processed:results.length,spacing_seconds:14,integrity_required:['enabled_product_ad','enabled_exact_keyword'],results});
+}catch(e){return Response.json({ok:false,error:e?.message||'Erro na fila de integridade EXACT'},{status:500});}});
