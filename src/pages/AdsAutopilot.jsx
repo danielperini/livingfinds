@@ -421,6 +421,29 @@ export default function AdsAutopilot() {
     rejected: decHistory.filter(d => d.status === 'rejected').length,
   };
 
+  // ── Verificar se dados do dia anterior estão analisados ──────────────────────
+  const now = new Date();
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const todayStr = now.toISOString().slice(0, 10);
+
+  const lastSuccessRun = runs.find(r => r.status === 'completed');
+  const lastRunDate = lastSuccessRun?.started_at ? new Date(lastSuccessRun.started_at).toISOString().slice(0, 10) : null;
+  const lastSyncDate = account?.last_sync_at ? new Date(account.last_sync_at).toISOString().slice(0, 10) : null;
+
+  // Dados frescos = sync do dia anterior ou hoje; análise = run do dia anterior ou hoje
+  const syncFresh = lastSyncDate && (lastSyncDate >= yesterdayStr);
+  const analysisFresh = lastRunDate && (lastRunDate >= yesterdayStr);
+
+  let dataWarning = null;
+  if (!syncFresh && !analysisFresh) {
+    dataWarning = { level: 'critical', msg: `⚠️ Dados não sincronizados e nenhuma análise do dia anterior. Último sync: ${lastSyncDate || 'nunca'}. Execute o sync antes de usar o Autopilot.` };
+  } else if (!syncFresh) {
+    dataWarning = { level: 'warn', msg: `🔄 Sincronização pendente — último sync: ${lastSyncDate || 'nunca'}. Os dados podem estar desatualizados.` };
+  } else if (!analysisFresh) {
+    dataWarning = { level: 'warn', msg: `🤖 Análise do dia anterior ainda não executada (último ciclo: ${lastRunDate || 'nunca'}). Clique em "Analisar & Executar" para consolidar as decisões.` };
+  }
+
   return (
     <div className="p-6 space-y-5 animate-fade-in">
       {/* Header */}
@@ -487,6 +510,27 @@ export default function AdsAutopilot() {
       {runMsg && (
         <div className={`p-3 rounded-xl border text-sm font-medium ${runMsg.startsWith('✓') ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : runMsg.startsWith('⚠') ? 'bg-amber-400/10 border-amber-400/20 text-amber-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
           {runMsg}
+        </div>
+      )}
+
+      {/* Banner de aviso de dados desatualizados */}
+      {!loading && account && dataWarning && (
+        <div className={`flex items-start gap-3 p-4 rounded-xl border text-sm ${dataWarning.level === 'critical' ? 'bg-red-500/10 border-red-500/25 text-red-300' : 'bg-amber-500/10 border-amber-500/25 text-amber-300'}`}>
+          <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${dataWarning.level === 'critical' ? 'text-red-400' : 'text-amber-400'}`} />
+          <div className="flex-1 min-w-0">
+            <p className="font-medium">{dataWarning.msg}</p>
+            {!analysisFresh && syncFresh && (
+              <button onClick={() => runAnalysis(true)} disabled={running}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50">
+                {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Executar análise agora
+              </button>
+            )}
+          </div>
+          <div className="text-xs text-slate-500 whitespace-nowrap flex-shrink-0">
+            <p>Sync: {lastSyncDate || '—'}</p>
+            <p>Análise: {lastRunDate || '—'}</p>
+          </div>
         </div>
       )}
 
