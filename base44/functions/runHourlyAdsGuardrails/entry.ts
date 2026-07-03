@@ -70,7 +70,8 @@ Deno.serve(async (req) => {
     const cfg = configs[0] || {};
     if (cfg.enabled === false) return Response.json({ ok: true, skipped: true, reason: 'Autopilot desabilitado' });
 
-    const globalBudgetLimit = cfg.total_daily_budget || cfg.daily_budget_limit || 0;
+    // Limite diário global: prioridade AutopilotConfig > AmazonAccount.max_daily_budget_limit
+    const globalBudgetLimit = cfg.total_daily_budget || cfg.daily_budget_limit || account.max_daily_budget_limit || 0;
     const actions = [];
     const alerts = [];
 

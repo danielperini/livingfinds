@@ -22,7 +22,7 @@ export default function BudgetSuggestionCard({ metricsDaily, campaigns, products
   const totalProducts = products.length;
   const activeCampaigns = campaigns.filter(c => c.state === 'enabled' && !c.archived).length;
   const fallbackBudget = avgDailySpend > 0
-    ? Math.max(avgDailySpend * 1.2, totalProducts * 2)
+    ? Math.max(avgDailySpend * 1.25, totalProducts * 2)
     : totalProducts * 2;
 
   const suggestedBudget = (isAiFresh && aiSuggested > 0) ? aiSuggested : fallbackBudget;
@@ -104,7 +104,7 @@ export default function BudgetSuggestionCard({ metricsDaily, campaigns, products
           {!isAI && (
             <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
               <p className="font-semibold mb-1">Como calculamos:</p>
-              <p>Média dos últimos 14 dias + margem de 20%. A IA irá analisar os relatórios e gerar uma sugestão personalizada.</p>
+              <p>Média dos últimos 14 dias + 25% de margem de crescimento. A IA irá analisar os relatórios e gerar uma sugestão personalizada.</p>
             </div>
           )}
         </div>
