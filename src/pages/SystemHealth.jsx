@@ -1,1 +1,1 @@
-export { default } from './SystemHealthV2';
+export { default } from './SystemHealthV3';
