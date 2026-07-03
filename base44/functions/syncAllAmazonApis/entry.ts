@@ -6,6 +6,7 @@ const STEPS = [
   ['catalog_inventory', 'syncProductCatalogV2'],
   ['product_campaign_links', 'fixProductCampaignLinks'],
   ['night_amazon_queue', 'processAmazonNightWindow'],
+  ['bid_outcomes', 'evaluateBidChangeOutcomesV2'],
   ['learner', 'runLearnerCycle'],
   ['auto_vs_manual', 'evaluateAutoVsManualCampaigns'],
 ];
