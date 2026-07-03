@@ -5,7 +5,7 @@ const STEPS = [
   ['reports', 'requestProductReports'],
   ['catalog_inventory', 'syncProductCatalog'],
   ['product_campaign_links', 'fixProductCampaignLinks'],
-  ['approved_decisions', 'executeApprovedDecisionQueue'],
+  ['night_amazon_queue', 'processAmazonNightWindow'],
   ['learner', 'runLearnerCycle'],
   ['auto_vs_manual', 'evaluateAutoVsManualCampaigns'],
 ];
@@ -24,19 +24,11 @@ Deno.serve(async (request) => {
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: targetAccountId })
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
 
-    if (!accounts.length) {
-      return Response.json({ ok: true, accounts_processed: 0, message: 'Nenhuma conta Amazon conectada.' });
-    }
+    if (!accounts.length) return Response.json({ ok: true, accounts_processed: 0, message: 'Nenhuma conta Amazon conectada.' });
 
     const results = [];
-
     for (const account of accounts) {
-      const accountResult = {
-        amazon_account_id: account.id,
-        started_at: new Date().toISOString(),
-        steps: [],
-        ok: true,
-      };
+      const accountResult = { amazon_account_id: account.id, started_at: new Date().toISOString(), steps: [], ok: true };
 
       for (const [stepName, functionName] of STEPS) {
         const stepStarted = Date.now();
@@ -48,23 +40,11 @@ Deno.serve(async (request) => {
           });
           const data = response?.data || response || {};
           const stepOk = data?.ok !== false;
-          accountResult.steps.push({
-            step: stepName,
-            function: functionName,
-            ok: stepOk,
-            duration_ms: Date.now() - stepStarted,
-            summary: data,
-          });
+          accountResult.steps.push({ step: stepName, function: functionName, ok: stepOk, duration_ms: Date.now() - stepStarted, summary: data });
           if (!stepOk) accountResult.ok = false;
         } catch (error) {
           accountResult.ok = false;
-          accountResult.steps.push({
-            step: stepName,
-            function: functionName,
-            ok: false,
-            duration_ms: Date.now() - stepStarted,
-            error: error?.message || String(error),
-          });
+          accountResult.steps.push({ step: stepName, function: functionName, ok: false, duration_ms: Date.now() - stepStarted, error: error?.message || String(error) });
         }
       }
 
@@ -95,6 +75,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: results.every((item) => item.ok),
       trigger_type: triggerType,
+      amazon_write_policy: 'queued_00_04_except_pause',
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - startedMs,
@@ -102,11 +83,6 @@ Deno.serve(async (request) => {
       results,
     });
   } catch (error) {
-    return Response.json({
-      ok: false,
-      error: error?.message || 'Erro no sincronizador geral Amazon',
-      started_at: startedAt,
-      duration_ms: Date.now() - startedMs,
-    }, { status: 500 });
+    return Response.json({ ok: false, error: error?.message || 'Erro no sincronizador geral Amazon', started_at: startedAt, duration_ms: Date.now() - startedMs }, { status: 500 });
   }
 });
