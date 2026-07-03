@@ -346,9 +346,17 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                         {autoFullResult.auto_campaign.already_exists && <span className="text-[10px] text-amber-400">(já existia)</span>}
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2">
-                        <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-                        <p className="text-xs text-red-400">{autoFullResult.errors?.[0] || 'Falhou'}</p>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <XCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                          <p className="text-xs text-amber-400 font-medium">Não foi possível criar a campanha AUTO</p>
+                        </div>
+                        {autoFullResult.errors?.[0] && (
+                          <p className="text-[10px] text-slate-400 pl-5 leading-relaxed">
+                            {autoFullResult.errors[0].replace(/^AUTO:\s*/i, '')}
+                          </p>
+                        )}
+                        <p className="text-[10px] text-slate-500 pl-5">As campanhas manuais foram criadas normalmente.</p>
                       </div>
                     )}
                   </div>
