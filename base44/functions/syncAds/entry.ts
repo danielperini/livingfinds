@@ -1,7 +1,6 @@
 /**
- * syncAds — Sincroniza campanhas SP via Amazon Ads API diretamente
+ * syncAds — Sincroniza campanhas SP via Amazon Ads API.
  * Payload: { amazon_account_id }
- * Nota: usa as credenciais ADS_* (não Xano). Prefira syncAll para delegar ao Xano.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -26,7 +25,10 @@ async function getAdsToken(refreshTokenOverride = null) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
     });
-    if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500)); continue; }
+    if (res.status === 429 || res.status >= 500) {
+      await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 500));
+      continue;
+    }
     const data = await res.json();
     if (!res.ok) throw new Error(data.error_description || `Token refresh failed (${res.status})`);
     tokenCache[cacheKey] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
@@ -36,9 +38,9 @@ async function getAdsToken(refreshTokenOverride = null) {
 }
 
 function getAdsBaseUrl() {
-  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+  const region = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+  if (region.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (region.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
@@ -49,19 +51,13 @@ Deno.serve(async (req) => {
 
   try {
     base44 = createClientFromRequest(req);
-
-    // Aceitar chamadas autenticadas (usuário) e internas (service role / automação)
     const isAuthenticated = await base44.auth.isAuthenticated().catch(() => false);
-    if (!isAuthenticated) {
-      // Permite chamadas internas de automação sem sessão de usuário
-      console.log('[syncAds] Chamada sem sessão de usuário — modo service role');
-    }
+    if (!isAuthenticated) console.log('[syncAds] Chamada sem sessão de usuário — modo service role');
 
     const body = await req.json().catch(() => ({}));
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
-    // Carregar refresh token da entidade (fallback ao secret de ambiente)
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId);
     const entityRefreshToken = account?.ads_refresh_token || null;
 
@@ -75,47 +71,56 @@ Deno.serve(async (req) => {
 
     const token = await getAdsToken(entityRefreshToken);
     const adsBase = getAdsBaseUrl();
-    // Usar profile_id da conta (fallback ao secret de ambiente)
     const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
 
-    const res = await fetch(`${adsBase}/sp/campaigns/list`, {
+    const gatewayResponse = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
+      amazon_account_id: amazonAccountId,
+      api_family: 'ADS',
+      operation: 'listSponsoredProductsCampaigns',
+      endpoint: `${adsBase}/sp/campaigns/list`,
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
         'Amazon-Advertising-API-Scope': String(profileId),
         'Content-Type': 'application/vnd.spCampaign.v3+json',
-        'Accept': 'application/vnd.spCampaign.v3+json',
+        Accept: 'application/vnd.spCampaign.v3+json',
       },
-      body: JSON.stringify({ stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 500 }),
+      payload: { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 500 },
+      max_attempts: 5,
+      _service_role: true,
     });
 
-    const data = await res.json();
-    if (!res.ok) throw new Error(`ADS ${res.status}: ${JSON.stringify(data).slice(0, 200)}`);
+    const gatewayData = gatewayResponse?.data || gatewayResponse || {};
+    if (!gatewayData.ok) {
+      const firstError = gatewayData.errors?.[0];
+      throw new Error(`ADS ${gatewayData.status || 500}: ${firstError?.message || firstError?.code || 'Falha ao listar campanhas'}`);
+    }
 
+    const data = gatewayData.payload || {};
     const campaignList = data?.campaigns || [];
     let upserted = 0;
 
-    for (const c of campaignList) {
-      const existing = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: amazonAccountId, campaign_id: String(c.campaignId) });
+    for (const campaign of campaignList) {
+      const existing = await base44.asServiceRole.entities.Campaign.filter({
+        amazon_account_id: amazonAccountId,
+        campaign_id: String(campaign.campaignId),
+      });
       const record = {
         amazon_account_id: amazonAccountId,
-        campaign_id: String(c.campaignId),
-        name: c.name,
+        campaign_id: String(campaign.campaignId),
+        name: campaign.name,
         campaign_type: 'SP',
-        targeting_type: c.targetingType,
-        state: (c.state || 'ENABLED').toLowerCase(),
-        daily_budget: c.budget?.budget || c.dailyBudget || 0,
-        start_date: c.startDate,
-        end_date: c.endDate || null,
-        bidding_strategy: c.dynamicBidding?.strategy || c.bidding?.strategy || null,
+        targeting_type: campaign.targetingType,
+        state: (campaign.state || 'ENABLED').toLowerCase(),
+        daily_budget: campaign.budget?.budget || campaign.dailyBudget || 0,
+        start_date: campaign.startDate,
+        end_date: campaign.endDate || null,
+        bidding_strategy: campaign.dynamicBidding?.strategy || campaign.bidding?.strategy || null,
         synced_at: new Date().toISOString(),
       };
-      if (existing.length > 0) {
-        await base44.asServiceRole.entities.Campaign.update(existing[0].id, record);
-      } else {
-        await base44.asServiceRole.entities.Campaign.create(record);
-      }
+      if (existing.length > 0) await base44.asServiceRole.entities.Campaign.update(existing[0].id, record);
+      else await base44.asServiceRole.entities.Campaign.create(record);
       upserted++;
     }
 
@@ -127,12 +132,20 @@ Deno.serve(async (req) => {
       completed_at: new Date().toISOString(),
     });
 
-    return Response.json({ ok: true, records_received: campaignList.length, records_upserted: upserted });
+    return Response.json({
+      ok: true,
+      records_received: campaignList.length,
+      records_upserted: upserted,
+      amazon_request_id: gatewayData.request_id || null,
+      rate_limit_observed: gatewayData.rate_limit || null,
+    });
   } catch (error) {
     if (syncRunId && base44) {
       await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
-        status: 'error', error_message: error.message,
-        duration_ms: Date.now() - startTime, completed_at: new Date().toISOString(),
+        status: 'error',
+        error_message: error.message,
+        duration_ms: Date.now() - startTime,
+        completed_at: new Date().toISOString(),
       }).catch(() => {});
     }
     return Response.json({ ok: false, error: error.message }, { status: 500 });
