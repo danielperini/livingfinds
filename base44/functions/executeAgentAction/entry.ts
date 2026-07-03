@@ -1,72 +1,159 @@
 /**
- * executeAgentAction — Executa uma ação aprovada do Amazon Ads Operator via Amazon Ads API v3.
- * SEGURANÇA: Só executa ações com status='approved' ou não-críticas com requires_approval=false.
- * MIGRADO PARA API v3 (endpoints /sp/*)
+ * executeAgentAction — Executa uma ação aprovada via Amazon Ads API v3.
+ * Usa as credenciais da AmazonAccount da própria ação, com fallback nos secrets.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const tokenCache = {};
 
-async function getAdsToken() {
-  const cached = tokenCache['ads'];
+async function getAdsToken(refreshToken) {
+  const cacheKey = String(refreshToken).slice(-16);
+  const cached = tokenCache[cacheKey];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
+
+  const clientId = Deno.env.get('ADS_CLIENT_ID');
+  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET');
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new Error('Credenciais Amazon Ads incompletas.');
+  }
+
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
+    refresh_token: refreshToken,
+    client_id: clientId,
+    client_secret: clientSecret,
   });
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
+
+  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || 'Token failed');
-  tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || 'Falha ao gerar token Amazon Ads.');
+  }
+
+  tokenCache[cacheKey] = {
+    access_token: data.access_token,
+    expires_at: Date.now() + Math.max(60, Number(data.expires_in || 3600) - 60) * 1000,
+  };
+
   return data.access_token;
 }
 
-function getAdsBaseUrl() {
-  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+function getAdsBaseUrl(region) {
+  const normalized = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+  if (normalized.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (normalized.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsRequestV3(method, path, body, contentType = 'application/json') {
-  const token = await getAdsToken();
-  const res = await fetch(`${getAdsBaseUrl()}${path}`, {
+async function adsRequestV3(account, method, path, body, contentType) {
+  const refreshToken = account?.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+  const profileId = account?.ads_profile_id || account?.profile_id || Deno.env.get('ADS_PROFILE_ID');
+  const clientId = Deno.env.get('ADS_CLIENT_ID');
+
+  if (!refreshToken || !profileId || !clientId) {
+    throw new Error('ADS_REFRESH_TOKEN, ADS_PROFILE_ID ou ADS_CLIENT_ID não configurado.');
+  }
+
+  const token = await getAdsToken(refreshToken);
+  const response = await fetch(`${getAdsBaseUrl(account?.region)}${path}`, {
     method,
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+      Authorization: `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': clientId,
+      'Amazon-Advertising-API-Scope': String(profileId),
       'Content-Type': contentType,
-      'Accept': contentType,
+      Accept: contentType,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  return { status: res.status, data, requestId: res.headers.get('x-amzn-requestid') || '' };
+
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  const requestId = response.headers.get('x-amzn-requestid') || '';
+  const successes = data?.campaigns?.success || data?.keywords?.success || data?.negativeKeywords?.success || data?.success || [];
+  const errors = data?.campaigns?.error || data?.campaigns?.errors || data?.keywords?.error || data?.negativeKeywords?.error || data?.errors || data?.error || [];
+  const hasSuccess = Array.isArray(successes) ? successes.length > 0 : Boolean(successes);
+  const hasErrors = Array.isArray(errors) ? errors.length > 0 : Boolean(errors);
+
+  if (!response.ok || (!hasSuccess && hasErrors)) {
+    const error = new Error(`Amazon Ads recusou a operação (HTTP ${response.status}).`);
+    error.http_status = response.status;
+    error.amazon_response = data;
+    error.request_id = requestId;
+    throw error;
+  }
+
+  return { status: response.status, data, requestId };
 }
 
-Deno.serve(async (req) => {
-  try {
-    const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+async function updateCampaignLocal(base44, action, state, now) {
+  const campaigns = await base44.asServiceRole.entities.Campaign.filter({
+    amazon_account_id: action.amazon_account_id,
+    campaign_id: String(action.campaign_id),
+  });
 
-    const body = await req.json().catch(() => ({}));
+  for (const campaign of campaigns) {
+    await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+      state,
+      status: state,
+      archived: false,
+      synced_at: now,
+      last_sync_at: now,
+      last_activity_at: now,
+    });
+  }
+
+  const linked = await base44.asServiceRole.entities.Product.filter({
+    amazon_account_id: action.amazon_account_id,
+    linked_campaign_id: String(action.campaign_id),
+  });
+
+  for (const product of linked) {
+    await base44.asServiceRole.entities.Product.update(product.id, {
+      has_campaign: true,
+      linked_campaign_id: String(action.campaign_id),
+      campaign_status: state === 'enabled' ? 'active' : 'paused',
+    });
+  }
+}
+
+Deno.serve(async (request) => {
+  try {
+    const base44 = createClientFromRequest(request);
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json().catch(() => ({}));
     const { action_id, approve, reject } = body;
-    if (!action_id) return Response.json({ error: 'action_id required' }, { status: 400 });
+    if (!action_id) {
+      return Response.json({ ok: false, error: 'action_id required' }, { status: 400 });
+    }
 
     const action = await base44.asServiceRole.entities.AgentAction.get(action_id);
-    if (!action) return Response.json({ error: 'Action not found' }, { status: 404 });
+    if (!action) {
+      return Response.json({ ok: false, error: 'Action not found' }, { status: 404 });
+    }
+
+    const account = await base44.asServiceRole.entities.AmazonAccount
+      .get(action.amazon_account_id)
+      .catch(() => null);
+    if (!account) {
+      return Response.json({ ok: false, error: 'AmazonAccount não encontrada' }, { status: 404 });
+    }
 
     const now = new Date().toISOString();
 
-    // Rejeitar
     if (reject) {
       await base44.asServiceRole.entities.AgentAction.update(action_id, {
         status: 'rejected',
@@ -76,9 +163,8 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, status: 'rejected' });
     }
 
-    // Só executa se aprovado ou não requer aprovação
     if (action.requires_approval && !approve && action.status !== 'approved') {
-      return Response.json({ error: 'Ação requer aprovação antes de executar' }, { status: 403 });
+      return Response.json({ ok: false, error: 'Ação requer aprovação antes de executar' }, { status: 403 });
     }
 
     if (approve) {
@@ -89,190 +175,120 @@ Deno.serve(async (req) => {
       });
     }
 
-    let apiResult = null;
-    let requestId = '';
+    await base44.asServiceRole.entities.AgentAction.update(action_id, {
+      status: 'executing',
+      last_attempt_at: now,
+    }).catch(() => {});
+
+    let result;
 
     switch (action.action) {
-      case 'update_bid': {
-        // API v3: PUT /sp/keywords com content-type específico
-        const result = await adsRequestV3('PUT', '/sp/keywords', [{
-          keywordId: action.keyword_id,
-          bid: action.new_value,
-        }], 'application/vnd.spKeyword.v3+json');
-        apiResult = result.data;
-        requestId = result.requestId;
-        
-        // Salvar no BidHistory
-        await base44.asServiceRole.entities.BidHistory.create({
-          amazon_account_id: action.amazon_account_id,
-          entity_type: 'keyword',
-          entity_id: action.keyword_id,
-          keyword: action.keyword,
-          asin: action.asin,
-          old_bid: action.current_value,
-          new_bid: action.new_value,
-          reason: action.reason,
-          status: 'executed',
-          applied_by: 'agent',
-          created_at: now,
-          executed_at: now,
-          amazon_response: JSON.stringify(apiResult).slice(0, 500),
-        });
-        
-        // Atualizar bid na keyword
-        const kws = await base44.asServiceRole.entities.Keyword.filter({
-          amazon_account_id: action.amazon_account_id,
-          keyword_id: action.keyword_id,
-        });
-        if (kws.length > 0) {
-          await base44.asServiceRole.entities.Keyword.update(kws[0].id, {
-            current_bid: action.new_value,
-            bid: action.new_value,
-          });
-        }
+      case 'update_bid':
+        result = await adsRequestV3(account, 'PUT', '/sp/keywords', {
+          keywords: [{ keywordId: String(action.keyword_id), bid: Number(action.new_value) }],
+        }, 'application/vnd.spKeyword.v3+json');
         break;
-      }
 
-      case 'update_budget': {
-        // API v3: PUT /sp/campaigns
-        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
-          campaignId: action.campaign_id,
-          budget: { budgetType: 'DAILY', budget: action.new_value },
-        }], 'application/vnd.spCampaign.v3+json');
-        apiResult = result.data;
-        requestId = result.requestId;
-        
-        await base44.asServiceRole.entities.BidHistory.create({
-          amazon_account_id: action.amazon_account_id,
-          entity_type: 'campaign',
-          entity_id: action.campaign_id,
-          asin: action.asin,
-          old_bid: action.current_value,
-          new_bid: action.new_value,
-          budget_before: action.current_value,
-          budget_after: action.new_value,
-          reason: action.reason,
-          status: 'executed',
-          applied_by: 'agent',
-          created_at: now,
-          executed_at: now,
-          amazon_response: JSON.stringify(apiResult).slice(0, 500),
-        });
-        
-        const campaigns = await base44.asServiceRole.entities.Campaign.filter({
-          amazon_account_id: action.amazon_account_id,
-          campaign_id: action.campaign_id,
-        });
-        if (campaigns.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campaigns[0].id, { 
-            daily_budget: action.new_value,
-            synced_at: now,
-          });
-        }
+      case 'update_budget':
+        result = await adsRequestV3(account, 'PUT', '/sp/campaigns', {
+          campaigns: [{
+            campaignId: String(action.campaign_id),
+            budget: { budgetType: 'DAILY', budget: Number(action.new_value) },
+          }],
+        }, 'application/vnd.spCampaign.v3+json');
         break;
-      }
 
-      case 'pause_campaign': {
-        // API v3: PUT /sp/campaigns
-        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
-          campaignId: action.campaign_id,
-          state: 'PAUSED',
-        }], 'application/vnd.spCampaign.v3+json');
-        apiResult = result.data;
-        requestId = result.requestId;
-        
-        const campsToPause = await base44.asServiceRole.entities.Campaign.filter({
-          amazon_account_id: action.amazon_account_id,
-          campaign_id: action.campaign_id,
-        });
-        if (campsToPause.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campsToPause[0].id, { 
-            state: 'paused', 
-            status: 'paused',
-            synced_at: now,
-          });
-        }
-        await base44.asServiceRole.entities.LearningEvent.create({
-          amazon_account_id: action.amazon_account_id,
-          event_type: 'campaign_paused',
-          entity_type: 'campaign',
-          entity_id: action.campaign_id,
-          observation: `Campanha pausada: ${action.reason}`,
-          recorded_at: now,
-        });
+      case 'pause_campaign':
+        result = await adsRequestV3(account, 'PUT', '/sp/campaigns', {
+          campaigns: [{ campaignId: String(action.campaign_id), state: 'PAUSED' }],
+        }, 'application/vnd.spCampaign.v3+json');
+        await updateCampaignLocal(base44, action, 'paused', now);
         break;
-      }
 
-      case 'enable_campaign': {
-        // API v3: PUT /sp/campaigns
-        const result = await adsRequestV3('PUT', '/sp/campaigns', [{
-          campaignId: action.campaign_id,
-          state: 'ENABLED',
-        }], 'application/vnd.spCampaign.v3+json');
-        apiResult = result.data;
-        requestId = result.requestId;
-        
-        const campsToEnable = await base44.asServiceRole.entities.Campaign.filter({
-          amazon_account_id: action.amazon_account_id,
-          campaign_id: action.campaign_id,
-        });
-        if (campsToEnable.length > 0) {
-          await base44.asServiceRole.entities.Campaign.update(campsToEnable[0].id, { 
-            state: 'enabled', 
-            status: 'enabled',
-            synced_at: now,
-          });
-        }
+      case 'enable_campaign':
+        result = await adsRequestV3(account, 'PUT', '/sp/campaigns', {
+          campaigns: [{ campaignId: String(action.campaign_id), state: 'ENABLED' }],
+        }, 'application/vnd.spCampaign.v3+json');
+        await updateCampaignLocal(base44, action, 'enabled', now);
         break;
-      }
 
-      case 'negative_keyword': {
-        // API v3: POST /sp/negativeKeywords
-        const result = await adsRequestV3('POST', '/sp/negativeKeywords', {
+      case 'negative_keyword':
+        result = await adsRequestV3(account, 'POST', '/sp/negativeKeywords', {
           negativeKeywords: [{
-            campaignId: action.campaign_id,
-            adGroupId: action.ad_group_id,
+            campaignId: String(action.campaign_id),
+            adGroupId: String(action.ad_group_id),
             keywordText: action.keyword,
             matchType: 'NEGATIVE_EXACT',
             state: 'ENABLED',
           }],
         }, 'application/vnd.spNegativeKeyword.v3+json');
-        apiResult = result.data;
-        requestId = result.requestId;
-        
-        // Extrair negativeKeywordId se criado
-        const negId = apiResult?.negativeKeywords?.success?.[0]?.negativeKeywordId || 
-                      apiResult?.success?.[0]?.negativeKeywordId || '';
-        
-        await base44.asServiceRole.entities.LearningEvent.create({
-          amazon_account_id: action.amazon_account_id,
-          event_type: 'keyword_negativated',
-          entity_type: 'keyword',
-          entity_id: action.keyword_id || action.keyword,
-          observation: `Keyword negativada: "${action.keyword}". Motivo: ${action.reason}${negId ? ` (ID: ${negId})` : ''}`,
-          recorded_at: now,
-        });
         break;
-      }
 
       default:
-        return Response.json({ error: `Ação '${action.action}' não mapeada para execução direta` }, { status: 400 });
+        return Response.json({
+          ok: false,
+          error: `Ação '${action.action}' não mapeada para execução direta`,
+        }, { status: 400 });
+    }
+
+    if (action.action === 'update_bid') {
+      const keywords = await base44.asServiceRole.entities.Keyword.filter({
+        amazon_account_id: action.amazon_account_id,
+        keyword_id: String(action.keyword_id),
+      });
+      for (const keyword of keywords) {
+        await base44.asServiceRole.entities.Keyword.update(keyword.id, {
+          current_bid: Number(action.new_value),
+          bid: Number(action.new_value),
+          last_bid_change_at: now,
+        });
+      }
+    }
+
+    if (action.action === 'update_budget') {
+      const campaigns = await base44.asServiceRole.entities.Campaign.filter({
+        amazon_account_id: action.amazon_account_id,
+        campaign_id: String(action.campaign_id),
+      });
+      for (const campaign of campaigns) {
+        await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+          daily_budget: Number(action.new_value),
+          synced_at: now,
+          last_sync_at: now,
+        });
+      }
     }
 
     await base44.asServiceRole.entities.AgentAction.update(action_id, {
       status: 'executed',
       executed_at: now,
-      execution_response: JSON.stringify(apiResult).slice(0, 500),
+      execution_response: JSON.stringify(result.data).slice(0, 2000),
+      amazon_request_id: result.requestId,
     });
 
-    return Response.json({ 
-      ok: true, 
-      status: 'executed', 
-      api_result: apiResult,
-      request_id: requestId,
-    });
+    await base44.asServiceRole.entities.LearningEvent.create({
+      amazon_account_id: action.amazon_account_id,
+      event_type: action.action,
+      entity_type: action.campaign_id ? 'campaign' : 'keyword',
+      entity_id: String(action.campaign_id || action.keyword_id || action_id),
+      observation: `${action.action} executada via Amazon Ads API. ${action.reason || ''}`,
+      recorded_at: now,
+    }).catch(() => {});
 
+    return Response.json({
+      ok: true,
+      status: 'executed',
+      api_result: result.data,
+      request_id: result.requestId,
+    });
   } catch (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+    console.error('[executeAgentAction]', error);
+    return Response.json({
+      ok: false,
+      error: error?.message || 'Erro ao executar ação.',
+      http_status: error?.http_status || 500,
+      request_id: error?.request_id || null,
+      amazon_response: error?.amazon_response || null,
+    }, { status: 500 });
   }
 });
