@@ -13,6 +13,7 @@ import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
   Zap, TrendingDown, Search, Unlock, Brain, CheckCircle, XCircle,
   Filter, ChevronDown, ChevronUp, TrendingUp, Clock, Rocket, Shield,
+  Square, PauseCircle,
 } from 'lucide-react';
 
 // ── Tabs consolidadas ──────────────────────────────────────────────────────────
@@ -226,6 +227,8 @@ export default function AdsAutopilot() {
   const [fullAutoRunning, setFullAutoRunning] = useState(false);
   const [fullAutoSteps, setFullAutoSteps] = useState([]);
   const [stTermFilter, setStTermFilter] = useState('all');
+  const [autoEnabled, setAutoEnabled] = useState(false);
+  const [stoppingAuto, setStoppingAuto] = useState(false);
 
   // Aprovação individual (DecisionRow)
   const [actionStates, setActionStates] = useState({});
@@ -538,7 +541,38 @@ export default function AdsAutopilot() {
     }
 
     setFullAutoRunning(false);
+    setAutoEnabled(true);
     await loadData();
+  };
+
+  // ── Parar Automação: pausar campanhas ativas + rejeitar decisões pendentes ────
+  const stopAutomation = async () => {
+    if (!account) return;
+    setStoppingAuto(true);
+    try {
+      // 1. Rejeitar todas as decisões pendentes
+      const pendingIds = decisions.map(d => d.id);
+      for (const id of pendingIds) {
+        await base44.entities.OptimizationDecision.update(id, { status: 'rejected' }).catch(() => {});
+      }
+
+      // 2. Pausar todas as campanhas ativas
+      const activeCampaigns = campaigns.filter(c =>
+        (c.state === 'enabled' || c.status === 'enabled') && !c.archived
+      );
+      for (const c of activeCampaigns) {
+        await base44.entities.Campaign.update(c.id, { state: 'paused', status: 'paused' }).catch(() => {});
+      }
+
+      setAutoEnabled(false);
+      setRunMsg(`⏹ Automação pausada — ${activeCampaigns.length} campanhas pausadas · ${pendingIds.length} decisões rejeitadas`);
+      await loadData();
+    } catch (e) {
+      setRunMsg(`❌ Erro ao parar: ${e.message}`);
+    } finally {
+      setStoppingAuto(false);
+      setTimeout(() => setRunMsg(''), 15000);
+    }
   };
 
   const unlockStuck = async () => {
@@ -655,12 +689,20 @@ export default function AdsAutopilot() {
               </button>
             </>
           )}
-          <button onClick={() => { setShowFullAuto(true); runFullAutomation(); }}
-            disabled={fullAutoRunning || running || (isRunning && !isStuck)}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition-all shadow-lg shadow-violet-500/20">
-            {fullAutoRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-            {fullAutoRunning ? 'Automação...' : 'Automação Total'}
-          </button>
+          {autoEnabled ? (
+            <button onClick={stopAutomation} disabled={stoppingAuto}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition-all shadow-lg shadow-red-500/20 animate-pulse">
+              {stoppingAuto ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-4 h-4" />}
+              {stoppingAuto ? 'Parando...' : 'Parar Automação'}
+            </button>
+          ) : (
+            <button onClick={() => { setShowFullAuto(true); runFullAutomation(); }}
+              disabled={fullAutoRunning || running || (isRunning && !isStuck)}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition-all shadow-lg shadow-violet-500/20">
+              {fullAutoRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+              {fullAutoRunning ? 'Automação...' : 'Automação Total'}
+            </button>
+          )}
           <button onClick={() => runAnalysis(true)} disabled={running || fullAutoRunning || (isRunning && !isStuck)}
             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
