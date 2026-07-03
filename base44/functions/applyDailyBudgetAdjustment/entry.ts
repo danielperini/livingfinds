@@ -7,7 +7,7 @@
  * que o erro de falta de budget não ocorra.
  *
  * Guardrails:
- *  - Budget mínimo por campanha: R$5,00
+ *  - Budget mínimo por campanha: R$15,00 (mesmo que ultrapasse o limite geral)
  *  - Budget máximo por campanha: AutopilotConfig.maximum_campaign_budget (default R$200)
  *  - Variação máxima por execução: ±30% do atual (evita choques bruscos)
  *  - Só aplica se novo valor diferir > 5% do atual (evita micro-ajustes)
@@ -21,7 +21,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const PAGE = 200;
-const MIN_CAMPAIGN_BUDGET = 5;
+const MIN_CAMPAIGN_BUDGET = 15;
 const MAX_CHANGE_PCT = 0.30;
 
 // Cache de token LWA
@@ -238,16 +238,20 @@ Deno.serve(async (req) => {
       // Budget alvo: spend médio × 1.25
       let targetBudget = campAvgSpend * 1.25;
 
-      // Guardrail: mínimo R$5
+      // Guardrail: mínimo R$15 (sempre, independente do limite geral)
       targetBudget = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET);
       // Guardrail: máximo configurado
       targetBudget = Math.min(targetBudget, MAX_CAMPAIGN_BUDGET);
       // Guardrail: variação máxima ±30% por execução
-      const maxUp   = currentBudget * (1 + MAX_CHANGE_PCT);
+      // Exceto quando o budget atual está abaixo do mínimo — nesse caso sobe direto para R$15
+      const maxUp = currentBudget * (1 + MAX_CHANGE_PCT);
       const maxDown = currentBudget * (1 - MAX_CHANGE_PCT);
-      targetBudget  = Math.min(targetBudget, maxUp);
-      targetBudget  = Math.max(targetBudget, maxDown);
-      targetBudget  = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET);
+      targetBudget = Math.min(targetBudget, maxUp);
+      if (currentBudget >= MIN_CAMPAIGN_BUDGET) {
+        targetBudget = Math.max(targetBudget, maxDown);
+      }
+      // Garantir mínimo R$15 sempre (sem cap de variação para chegar lá)
+      targetBudget = Math.max(targetBudget, MIN_CAMPAIGN_BUDGET);
       // Arredondar 2 casas
       targetBudget = Math.round(targetBudget * 100) / 100;
 
