@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-// AppLayout — sidebar navigation
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
@@ -9,17 +8,17 @@ import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 
 const navItems = [
-  { path: '/', icon: LayoutDashboard, label: 'Dashboard & Analytics' },
+  { path: '/', icon: LayoutDashboard, label: 'Painel e análises' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
-  { path: '/ads', icon: Megaphone, label: 'Gestão Ads' },
-  { path: '/autopilot', icon: Bot, label: 'Autopilot & IA' },
-  { path: '/inventory', icon: Package, label: 'Estoque & Vendas' },
-  { path: '/bids-log', icon: FileText, label: 'Log de Bids' },
-  { path: '/term-bank', icon: BookOpen, label: 'Banco de Termos' },
+  { path: '/ads', icon: Megaphone, label: 'Gestão de anúncios' },
+  { path: '/autopilot', icon: Bot, label: 'Automação e IA' },
+  { path: '/inventory', icon: Package, label: 'Estoque e vendas' },
+  { path: '/bids-log', icon: FileText, label: 'Histórico de lances' },
+  { path: '/term-bank', icon: BookOpen, label: 'Banco de termos' },
   { path: '/alerts', icon: AlertTriangle, label: 'Alertas' },
   { path: '/manual', icon: Book, label: 'Manual' },
-  { path: '/integracoes/amazon', icon: Link2, label: 'Integração Amazon' },
-  { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do Sistema' },
+  { path: '/integracoes/amazon', icon: Link2, label: 'Integração com a Amazon' },
+  { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do sistema' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
 
@@ -30,6 +29,9 @@ export default function AppLayout() {
   const location = useLocation();
 
   useEffect(() => {
+    document.documentElement.lang = 'pt-BR';
+    document.title = 'Living Finds — Gestão Amazon';
+
     base44.auth.me().then(me => {
       return base44.entities.AmazonAccount.filter({ user_id: me.id });
     }).then(accounts => {
@@ -39,12 +41,10 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
-      {/* Mobile overlay */}
       {mobileOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <aside
         className={`
           fixed lg:relative z-50 h-full flex flex-col
@@ -54,14 +54,13 @@ export default function AppLayout() {
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}
       >
-        {/* Logo */}
         <div className={`flex items-center h-14 border-b border-surface-2 px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           {!collapsed && (
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
                 <Zap className="w-4 h-4 text-white" />
               </div>
-              <span className="font-heading font-bold text-white text-base">LivingFinds</span>
+              <span className="font-heading font-bold text-white text-base">Living Finds</span>
             </div>
           )}
           {collapsed && (
@@ -70,15 +69,17 @@ export default function AppLayout() {
             </div>
           )}
           <button
+            type="button"
             onClick={() => setCollapsed(!collapsed)}
             className="hidden lg:flex items-center justify-center w-6 h-6 text-slate-500 hover:text-slate-300 transition-colors"
+            aria-label={collapsed ? 'Expandir menu' : 'Recolher menu'}
+            title={collapsed ? 'Expandir menu' : 'Recolher menu'}
           >
             {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 py-4 overflow-y-auto scrollbar-thin">
+        <nav className="flex-1 py-4 overflow-y-auto scrollbar-thin" aria-label="Navegação principal">
           {navItems.map(({ path, icon: Icon, label }) => {
             const active = location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
             return (
@@ -103,7 +104,6 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {/* Bottom: mode badge */}
         {!collapsed && (
           <div className="p-4 border-t border-surface-2">
             <ModeBadge mode={accountMode} />
@@ -111,29 +111,34 @@ export default function AppLayout() {
         )}
       </aside>
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar */}
         <header className="h-14 flex items-center justify-between px-4 border-b border-surface-2 bg-surface-1 flex-shrink-0">
           <button
+            type="button"
             className="lg:hidden p-2 text-slate-400 hover:text-slate-200"
             onClick={() => setMobileOpen(true)}
+            aria-label="Abrir menu"
+            title="Abrir menu"
           >
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
             <ModeBadge mode={accountMode} className="hidden sm:flex" />
-            <button className="relative p-2 text-slate-400 hover:text-slate-200 transition-colors">
+            <button
+              type="button"
+              className="relative p-2 text-slate-400 hover:text-slate-200 transition-colors"
+              aria-label="Notificações"
+              title="Notificações"
+            >
               <Bell className="w-4 h-4" />
             </button>
-            <div className="w-8 h-8 rounded-full bg-cyan/20 border border-cyan/30 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-full bg-cyan/20 border border-cyan/30 flex items-center justify-center" title="Living Finds">
               <span className="text-xs font-semibold text-cyan">LF</span>
             </div>
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto scrollbar-thin">
           <Outlet />
         </main>
