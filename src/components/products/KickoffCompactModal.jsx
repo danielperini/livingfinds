@@ -15,7 +15,7 @@ export default function KickoffCompactModal({ product, account, onClose, onDone 
     setMessage('');
 
     try {
-      const auto = await base44.functions.invoke('createAutoCampaignForAsin', {
+      const auto = await base44.functions.invoke('createAutoCampaignForAsinSafe', {
         amazon_account_id: account.id,
         asin: product.asin,
         sku: product.sku || null,
@@ -23,7 +23,12 @@ export default function KickoffCompactModal({ product, account, onClose, onDone 
       });
 
       if (!auto?.data?.ok) {
-        throw new Error(auto?.data?.error || 'Falha ao criar ou localizar a campanha automática.');
+        const parts = [
+          auto?.data?.error,
+          auto?.data?.amazon_error,
+          auto?.data?.request_id ? `Request ID: ${auto.data.request_id}` : '',
+        ].filter(Boolean);
+        throw new Error(parts.join(' — ') || 'Falha ao criar ou localizar a campanha automática.');
       }
 
       let manualCreated = 0;
@@ -68,7 +73,7 @@ export default function KickoffCompactModal({ product, account, onClose, onDone 
         <label className="block rounded-xl border border-surface-3 p-3 text-sm text-white"><input className="mr-2" type="radio" checked={mode === 'auto_only'} onChange={() => setMode('auto_only')} />Somente campanha automática</label>
         <label className="block rounded-xl border border-surface-3 p-3 text-sm text-white"><input className="mr-2" type="radio" checked={mode === 'auto_plus_manual'} onChange={() => setMode('auto_plus_manual')} />Automática + um termo manual</label>
         {mode === 'auto_plus_manual' && <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Novo termo exato" className="w-full rounded-lg border border-surface-3 bg-surface-2 px-3 py-2 text-sm text-white" />}
-        <p className="rounded-lg bg-cyan/5 p-3 text-xs text-slate-300">O Kick-off usa a função de campanha automática já validada. Campanhas existentes são reconhecidas sem duplicação.</p>
+        <p className="rounded-lg bg-cyan/5 p-3 text-xs text-slate-300">Campanhas AUTO existentes são reconciliadas sem duplicação. Campanhas manuais não são confundidas com o Kick-off automático.</p>
         {message && <p className="rounded-lg bg-emerald-400/10 p-3 text-xs text-emerald-300">{message}</p>}
         {error && <p className="rounded-lg bg-red-400/10 p-3 text-xs text-red-300">{error}</p>}
         <div className="flex justify-end gap-2"><button onClick={onClose} disabled={loading} className="rounded-lg border border-surface-3 px-4 py-2 text-sm text-slate-300">Fechar</button>{!message && <button onClick={send} disabled={loading || !account || (mode === 'auto_plus_manual' && !term.trim())} className="flex items-center gap-2 rounded-lg bg-cyan px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}{loading ? 'Enviando...' : 'Enviar Kick-off'}</button>}</div>
