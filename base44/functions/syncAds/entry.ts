@@ -70,13 +70,15 @@ Deno.serve(async (req) => {
 
     const token = await getAdsToken(entityRefreshToken);
     const adsBase = getAdsBaseUrl();
+    // Usar profile_id da conta (fallback ao secret de ambiente)
+    const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
 
     const res = await fetch(`${adsBase}/sp/campaigns/list`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-        'Amazon-Advertising-API-Scope': String(Deno.env.get('ADS_PROFILE_ID')),
+        'Amazon-Advertising-API-Scope': String(profileId),
         'Content-Type': 'application/vnd.spCampaign.v3+json',
         'Accept': 'application/vnd.spCampaign.v3+json',
       },

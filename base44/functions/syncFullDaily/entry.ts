@@ -10,8 +10,12 @@ Deno.serve(async (req) => {
     // Use service role for scheduled operations
     const base44 = createClientFromRequest(req);
 
-    // For scheduled runs, use service role
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
+    const body2 = await req.json().catch(() => ({}));
+    const targetAccountId = body2.amazon_account_id;
+
+    // Filtrar por conta específica se passado, senão todas as conectadas
+    const accountFilter = targetAccountId ? { id: targetAccountId, status: 'connected' } : { status: 'connected' };
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(accountFilter);
 
     if (accounts.length === 0) {
       return Response.json({ ok: true, message: 'No connected accounts to sync', accounts: 0 });

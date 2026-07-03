@@ -408,14 +408,27 @@ export default function AdsAutopilot() {
     const updateStep = (id, status, detail) =>
       setFullAutoSteps(prev => prev.map(s => s.id === id ? { ...s, status, detail } : s));
 
-    const safeInvoke = async (fn, payload) => {
-      try {
-        const r = await base44.functions.invoke(fn, payload);
-        return { ok: true, data: r?.data || {} };
-      } catch (e) {
-        const msg = e?.response?.data?.error || e?.response?.data?.message || e?.message || 'Erro desconhecido';
-        return { ok: false, error: msg };
+    const safeInvoke = async (fn, payload, retries = 1) => {
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const r = await base44.functions.invoke(fn, payload);
+          const data = r?.data || {};
+          // Rate limit → esperar e tentar novamente
+          if (data?.error === 'Rate limit exceeded' && attempt < retries) {
+            await new Promise(res => setTimeout(res, 3000 + attempt * 2000));
+            continue;
+          }
+          return { ok: true, data };
+        } catch (e) {
+          const msg = e?.response?.data?.error || e?.response?.data?.message || e?.message || 'Erro desconhecido';
+          if (msg === 'Rate limit exceeded' && attempt < retries) {
+            await new Promise(res => setTimeout(res, 3000 + attempt * 2000));
+            continue;
+          }
+          return { ok: false, error: msg };
+        }
       }
+      return { ok: false, error: 'Rate limit — tente novamente em alguns minutos' };
     };
 
     // PASSO 0: Liberar TODOS os locks (syncs e runs em andamento) — ação manual, sem threshold
@@ -440,24 +453,29 @@ export default function AdsAutopilot() {
     }
     await new Promise(r => setTimeout(r, 500));
 
-    // PASSO 1: Sync
+    // PASSO 1: Sync (usa syncFullDaily que tem controle de rate limit e SyncExecutionLog correto)
     updateStep('sync', 'running');
     {
-      const { ok, data, error } = await safeInvoke('syncAds', { amazon_account_id: aid, trigger_type: 'manual' });
-      if (ok && (data?.ok || data?.skipped)) {
-        const d = data;
+      const { ok, data, error } = await safeInvoke('syncFullDaily', { amazon_account_id: aid }, 2);
+      if (ok && (data?.ok !== false)) {
+        const r = data?.results?.[aid] || {};
+        const skipped = data?.results?.[aid]?.skipped;
         updateStep('sync', 'done',
-          d?.skipped ? 'Já sincronizado recentemente' :
-          `${d.campaigns_synced || d.results?.campaigns || 0} campanhas · ${d.keywords_synced || d.results?.keywords || 0} keywords`);
+          skipped ? `Ignorado: ${skipped}` :
+          `${data.accounts_processed || 1} conta(s) · ${data.syncs_executed || 0} syncs executados`);
       } else {
-        updateStep('sync', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+        // Sync com erro por rate limit não bloqueia os próximos passos — apenas avisa
+        const errMsg = ok ? (data?.error || data?.message || 'Falhou') : error;
+        const isRateLimit = errMsg?.includes('Rate limit') || errMsg?.includes('rate limit');
+        updateStep('sync', isRateLimit ? 'done' : 'error',
+          isRateLimit ? '⚠ Rate limit Amazon — usando dados existentes' : errMsg);
       }
     }
 
     // PASSO 2: Otimização
     updateStep('optimize', 'running');
     {
-      const { ok, data, error } = await safeInvoke('runDailyAdsOptimization', { amazon_account_id: aid, trigger: 'full_auto' });
+      const { ok, data, error } = await safeInvoke('runDailyAdsOptimization', { amazon_account_id: aid, trigger: 'full_auto' }, 2);
       if (ok && (data?.ok || data?.skipped)) {
         const b = data?.breakdown || {};
         updateStep('optimize', 'done',
@@ -471,7 +489,7 @@ export default function AdsAutopilot() {
     // PASSO 3: Executar aprovadas
     updateStep('execute', 'running');
     {
-      const { ok, data, error } = await safeInvoke('runNightlyAutoExecution', { amazon_account_id: aid, trigger: 'full_auto' });
+      const { ok, data, error } = await safeInvoke('runNightlyAutoExecution', { amazon_account_id: aid, trigger: 'full_auto' }, 2);
       if (ok && (data?.ok || data?.skipped)) {
         updateStep('execute', 'done',
           data?.skipped ? (data.reason || 'Sem decisões pendentes') :
