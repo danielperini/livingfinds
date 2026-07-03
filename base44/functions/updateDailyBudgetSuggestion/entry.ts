@@ -27,19 +27,19 @@ Deno.serve(async (req) => {
     const sym = account.currency_symbol || 'R$';
     const now = new Date().toISOString();
 
-    // Janela: últimos 14 dias (excluindo hoje para ter dados completos)
+    // Janela: últimos 30 dias (excluindo hoje para ter dados completos)
     const today = now.slice(0, 10);
-    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
 
-    // Buscar métricas diárias de campanhas nos últimos 14 dias
+    // Buscar métricas diárias de campanhas nos últimos 30 dias
     const metrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid }, '-date', 500
+      { amazon_account_id: aid }, '-date', 1000
     );
 
     // Filtrar janela e deduplificar por (campaign_id, date)
     const seen = new Set();
     const filtered = metrics.filter(m => {
-      if (!m.date || m.date < fourteenDaysAgo || m.date >= today) return false;
+      if (!m.date || m.date < thirtyDaysAgo || m.date >= today) return false;
       const key = `${m.campaign_id || 'no'}-${m.date}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -72,7 +72,7 @@ Deno.serve(async (req) => {
     const yesterdaySpend = spendByDay[yesterday] || 0;
 
     const direction = suggestedBudget > avgDailySpend ? '↑ crescimento' : suggestedBudget < avgDailySpend ? '↓ redução' : '→ estável';
-    const reasoning = `Média real dos últimos ${numDays} dias: ${sym}${avgDailySpend.toFixed(2)}/dia (${direction}). Ontem (${yesterday}): ${sym}${yesterdaySpend.toFixed(2)}. Sugerido = média × 1.25 = ${sym}${suggestedBudget.toFixed(2)}.`;
+    const reasoning = `Média real dos últimos ${numDays} dias (janela 30d): ${sym}${avgDailySpend.toFixed(2)}/dia (${direction}). Ontem (${yesterday}): ${sym}${yesterdaySpend.toFixed(2)}. Sugerido = média × 1.25 = ${sym}${suggestedBudget.toFixed(2)}.`;
 
     // Atualizar AutopilotConfig
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
@@ -83,7 +83,7 @@ Deno.serve(async (req) => {
         ai_budget_confidence: 85,
         ai_budget_generated_at: now,
         ai_budget_breakdown: JSON.stringify({
-          avg_spend_14d: avgDailySpend,
+          avg_spend_30d: avgDailySpend,
           yesterday_spend: yesterdaySpend,
           num_days_sampled: numDays,
           multiplier: 1.25,
@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
         ai_budget_confidence: 85,
         ai_budget_generated_at: now,
         ai_budget_breakdown: JSON.stringify({
-          avg_spend_14d: avgDailySpend,
+          avg_spend_30d: avgDailySpend,
           yesterday_spend: yesterdaySpend,
           num_days_sampled: numDays,
           multiplier: 1.25,

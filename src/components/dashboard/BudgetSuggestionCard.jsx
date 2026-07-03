@@ -13,11 +13,11 @@ export default function BudgetSuggestionCard({ metricsDaily, campaigns, products
     ? (Date.now() - new Date(aiGeneratedAt).getTime()) < 48 * 3600000
     : false;
 
-  // Fallback: cálculo estático por 14 dias
-  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
-  const metricsTwoWeeks = metricsDaily.filter(m => m.date >= twoWeeksAgo);
-  const avgDailySpend = metricsTwoWeeks.length > 0
-    ? metricsTwoWeeks.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsTwoWeeks.length
+  // Fallback: cálculo estático por 30 dias
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const metricsThirtyDays = metricsDaily.filter(m => m.date >= thirtyDaysAgo);
+  const avgDailySpend = metricsThirtyDays.length > 0
+    ? metricsThirtyDays.reduce((sum, m) => sum + (m.spend || 0), 0) / metricsThirtyDays.length
     : 0;
   const totalProducts = products.length;
   const activeCampaigns = campaigns.filter(c => c.state === 'enabled' && !c.archived).length;
@@ -60,15 +60,15 @@ export default function BudgetSuggestionCard({ metricsDaily, campaigns, products
           </div>
 
           <div className="space-y-2 text-xs">
-            {isAI && aiBreakdown?.avg_spend_14d != null && (
+            {isAI && (aiBreakdown?.avg_spend_30d != null || aiBreakdown?.avg_spend_14d != null) && (
               <div className="flex justify-between py-1.5 border-b border-surface-2">
-                <span className="text-slate-500">Média diária (14d)</span>
-                <span className="text-white font-semibold">R${(aiBreakdown.avg_spend_14d || 0).toFixed(2)}</span>
+                <span className="text-slate-500">Média diária (30d)</span>
+                <span className="text-white font-semibold">R${(aiBreakdown.avg_spend_30d || aiBreakdown.avg_spend_14d || 0).toFixed(2)}</span>
               </div>
             )}
             {!isAI && (
               <div className="flex justify-between py-1.5 border-b border-surface-2">
-                <span className="text-slate-500">Média diária (14d)</span>
+                <span className="text-slate-500">Média diária (30d)</span>
                 <span className="text-white font-semibold">R${avgDailySpend.toFixed(2)}</span>
               </div>
             )}
@@ -104,7 +104,7 @@ export default function BudgetSuggestionCard({ metricsDaily, campaigns, products
           {!isAI && (
             <div className="bg-cyan/5 border border-cyan/20 rounded-lg p-3 text-[10px] text-cyan">
               <p className="font-semibold mb-1">Como calculamos:</p>
-              <p>Média dos últimos 14 dias + 25% de margem de crescimento. A IA irá analisar os relatórios e gerar uma sugestão personalizada.</p>
+              <p>Média real dos últimos 30 dias × 1.25. Ajustado automaticamente todo dia — sobe ou desce conforme o gasto real.</p>
             </div>
           )}
         </div>
