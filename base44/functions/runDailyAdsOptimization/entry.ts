@@ -53,7 +53,9 @@ function calcMaturity({ createdAt, lastSyncAt, impressions = 0, clicks = 0, spen
   if (ageDays < minDays) return 'NEW';
   if (impressions === 0 && clicks === 0 && spend === 0) return 'INSUFFICIENT_DATA';
   if (ageDays < 14) return 'LEARNING';
-  return (clicks >= 10 || spend >= 5) ? 'MATURE' : 'INSUFFICIENT_DATA';
+  // Threshold realista: qualquer entrega (>= 1 clique ou >= R$0,25) é suficiente para MATURE
+  // Keywords de baixo volume são válidas para otimização de bids
+  return (clicks >= 1 || spend >= 0.25) ? 'MATURE' : 'INSUFFICIENT_DATA';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -749,7 +751,9 @@ Deno.serve(async (req) => {
         const inIncCooldown = inCooldown(lastChange, COOLDOWN_INC);
 
         // Pré-condição 6: campanha já alterada neste ciclo
-        const campAlreadyChanged = campaignChangedThisCycle.has(kw.campaign_id);
+        // Usar a chave composta campaign_id (Amazon ID) para controle de ciclo
+        const campKey = kw.campaign_id || kw.ad_group_id || kw.keyword_id;
+        const campAlreadyChanged = campaignChangedThisCycle.has(campKey);
 
         // ── C0. BUY BOX AUSENTE → BLOCK (não aumentar bid) ──────────────
         if (productBlockerList.includes('BUY_BOX_LOST')) {
@@ -831,7 +835,10 @@ Deno.serve(async (req) => {
         if (campAlreadyChanged) continue; // uma variável por ciclo
 
         // ── C4. WASTING: zero vendas com dados maduros ───────────────────
-        if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND && maturity === 'MATURE') {
+        // Critério: gasto real >= MIN_SPEND (R$5) OU cliques >= MIN_CLICKS,
+        // não ambos obrigatórios — muitas keywords BR têm CPC alto e poucos cliques
+        console.log(`[C4-CHECK] kw="${kw.keyword_text}" orders=${orders} spend=${spend} clicks=${clicks} maturity=${maturity} campAlreadyChanged=${campAlreadyChanged} MIN_SPEND=${MIN_SPEND} MIN_CLICKS=${MIN_CLICKS}`);
+        if (orders === 0 && (spend >= MIN_SPEND || clicks >= MIN_CLICKS) && maturity === 'MATURE') {
           if (inDecCooldown) { stats.skipped_cooldown++; continue; }
 
           const reducePct = evalCount >= 2 ? Math.min(MAX_DEC_PCT, 0.20) : Math.min(MAX_DEC_PCT, 0.15);
@@ -878,7 +885,7 @@ Deno.serve(async (req) => {
                 rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
                 created_at: now,
               });
-              campaignChangedThisCycle.set(kw.campaign_id, 'bid');
+              campaignChangedThisCycle.set(campKey, 'bid');
               stats.bid_decrease++;
             } else { stats.skipped_dup++; }
           }
@@ -936,7 +943,7 @@ Deno.serve(async (req) => {
                 rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
                 created_at: now,
               });
-              campaignChangedThisCycle.set(kw.campaign_id, 'bid');
+              campaignChangedThisCycle.set(campKey, 'bid');
               stats.bid_decrease++;
             } else { stats.skipped_dup++; }
           }
@@ -995,7 +1002,7 @@ Deno.serve(async (req) => {
                 rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
                 created_at: now,
               });
-              campaignChangedThisCycle.set(kw.campaign_id, 'bid');
+              campaignChangedThisCycle.set(campKey, 'bid');
               stats.bid_increase++;
             } else { stats.skipped_dup++; }
           } else {
@@ -1216,6 +1223,8 @@ Deno.serve(async (req) => {
         decisions_to_create_before_save: decisionsToCreate.length,
         wait_for_data_sample: waitForData.slice(0, 3),
         blocked_sample: blocked.slice(0, 3),
+        stats_detail: stats,
+        campaign_changed_count: campaignChangedThisCycle.size,
       },
     });
 
