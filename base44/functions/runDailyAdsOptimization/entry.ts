@@ -718,11 +718,12 @@ Deno.serve(async (req) => {
         const productBlockerList = getProductBlockers(product);
 
         // Pré-condição 2: maturidade
+        // Usar account.last_sync_at como referência de freshness no calcMaturity também,
+        // evitando que keywords com synced_at antigo (>3d) sejam marcadas como STALE
+        // quando a conta foi sincronizada recentemente.
         const maturity = calcMaturity({
-          // Usar apenas first_seen_at (data real Amazon). created_date é inserção no banco — não representa idade real.
-          // Sem first_seen_at: assume keyword madura (60 dias) para não bloquear por dados de importação.
           createdAt: kw.first_seen_at || new Date(Date.now() - 60 * 86400000).toISOString(),
-          lastSyncAt: [kw.synced_at, account.last_sync_at].filter(Boolean).sort().pop(),
+          lastSyncAt: account.last_sync_at || kw.synced_at,
           impressions, clicks, spend,
           minDays: MIN_DAYS,
         });
@@ -731,10 +732,12 @@ Deno.serve(async (req) => {
         const histRate = calcHistoricalSuccessRate(recentDecisions, kw.campaign_id, 'bid_change');
 
         // Pré-condição 4: confiança composta
+        // Usar account.last_sync_at como referência de freshness — é a data do último sync real da conta,
+        // independente de quando o registro da keyword foi atualizado no banco.
         const confidence = calcConfidence({
-          clicks, orders, lastSyncAt: [kw.synced_at, account.last_sync_at].filter(Boolean).sort().pop(),
+          clicks, orders,
+          lastSyncAt: account.last_sync_at || kw.synced_at,
           maturity, attrSafetyHours: ATTR_HOURS,
-          // não penalizar por produto ausente — keyword sem ASIN ainda é otimizável
           product: kw.asin ? product : null,
           daysWindow: 14,
           historicalSuccessRate: histRate, evalCount,
@@ -747,11 +750,6 @@ Deno.serve(async (req) => {
 
         // Pré-condição 6: campanha já alterada neste ciclo
         const campAlreadyChanged = campaignChangedThisCycle.has(kw.campaign_id);
-
-        // Debug: rastrear keywords wasting
-        if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
-          console.log(`[WASTING-TRACK] ${kw.keyword_text} | impressions=${impressions} state=${state} maturity=? blockers=${productBlockerList.join(',')} campChanged=${campaignChangedThisCycle.has(kw.campaign_id)}`);
-        }
 
         // ── C0. BUY BOX AUSENTE → BLOCK (não aumentar bid) ──────────────
         if (productBlockerList.includes('BUY_BOX_LOST')) {
@@ -819,18 +817,12 @@ Deno.serve(async (req) => {
 
         // ── C3. Dados insuficientes ───────────────────────────────────────
         if (['STALE', 'NEW', 'INSUFFICIENT_DATA'].includes(maturity)) {
-          if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
-            console.log(`[C3-BLOCK] wasting keyword blocked: ${kw.keyword_text} reason=${maturity} clicks=${clicks} spend=${spend}`);
-          }
           waitForData.push({ entity: kw.keyword_id, reason: maturity, text: kw.keyword_text });
           stats.wait_for_data++;
           continue;
         }
 
         if (confidence < 0.60) {
-          if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
-            console.log(`[C3-CONF] wasting keyword blocked: ${kw.keyword_text} confidence=${confidence} maturity=${maturity}`);
-          }
           waitForData.push({ entity: kw.keyword_id, reason: `confidence=${confidence}`, text: kw.keyword_text });
           stats.wait_for_data++;
           continue;
@@ -840,7 +832,6 @@ Deno.serve(async (req) => {
 
         // ── C4. WASTING: zero vendas com dados maduros ───────────────────
         if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND && maturity === 'MATURE') {
-          console.log(`[C4-WASTING] keyword=${kw.keyword_text} clicks=${clicks} spend=${spend} maturity=${maturity} confidence=${confidence} campChanged=${campAlreadyChanged}`);
           if (inDecCooldown) { stats.skipped_cooldown++; continue; }
 
           const reducePct = evalCount >= 2 ? Math.min(MAX_DEC_PCT, 0.20) : Math.min(MAX_DEC_PCT, 0.15);
