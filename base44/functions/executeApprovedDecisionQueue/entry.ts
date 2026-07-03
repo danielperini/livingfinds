@@ -17,12 +17,14 @@ Deno.serve(async (request) => {
     const queued = approved.filter((x) => x.action !== 'pause_campaign');
 
     for (const item of queued) {
-      const hour = slot(item.id);
+      const isDayparting = item.action === 'apply_dayparting' || item.decision_type === 'dayparting_rule';
+      const hour = isDayparting ? 13 : slot(item.id);
       await base44.asServiceRole.entities.OptimizationDecision.update(item.id, {
         queue_status: 'scheduled',
         queue_hour: hour,
-        queue_window: `${hour}:00-${hour + 1}:00`,
+        queue_window: isDayparting ? '13:00-14:00' : `${hour}:00-${hour + 1}:00`,
         queued_at: new Date().toISOString(),
+        execution_channel: isDayparting ? 'amazon_api_dayparting' : 'amazon_api_queue',
       });
     }
 
@@ -41,7 +43,7 @@ Deno.serve(async (request) => {
       executed: Number(result.executed || 0),
       failed: Number(result.failed || 0),
       immediate_pause_count: pauses.length,
-      policy: '00:00-04:00 except pause_campaign',
+      policy: '00:00-04:00 and 13:00-14:00; pause_campaign immediate',
       results: result.results || [],
     });
   } catch (error) {
