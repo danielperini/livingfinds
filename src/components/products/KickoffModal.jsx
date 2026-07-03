@@ -5,7 +5,7 @@ import {
   ChevronRight, Sparkles, Zap, Database, Bot, AlertTriangle
 } from 'lucide-react';
 
-const MATCH_TYPES = ['exact', 'phrase', 'broad'];
+const MATCH_TYPES = ['exact'];
 
 const SOURCE_COLORS = {
   search_term_converted: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
@@ -517,10 +517,7 @@ export default function KickoffModal({ product, account, onClose, onDone }) {
                             placeholder={`Palavra-chave ${i + 1}`}
                             className="flex-1 min-w-0 px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
                           />
-                          <select value={kw.matchType} onChange={e => updateKeyword(i, 'matchType', e.target.value)}
-                            className="px-2 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs rounded-lg focus:outline-none w-24">
-                            {MATCH_TYPES.map(m => <option key={m} value={m}>{m}</option>)}
-                          </select>
+                          <span className="px-2 py-2 bg-surface-2/50 border border-surface-3 text-slate-500 text-xs rounded-lg w-20 text-center select-none">exact</span>
                           <input
                             value={kw.bid}
                             onChange={e => updateKeyword(i, 'bid', e.target.value)}
