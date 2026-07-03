@@ -11,8 +11,8 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
-    const hour = body.hour ?? brazilHour();
-    if (![0, 1, 2, 3, 13].includes(Number(hour))) return Response.json({ ok: true, skipped: true, hour });
+    const hour = Number(body.hour ?? brazilHour());
+    if (![0, 1, 2, 3, 13].includes(hour)) return Response.json({ ok: true, skipped: true, hour });
 
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id })
@@ -20,9 +20,50 @@ Deno.serve(async (req) => {
 
     const output = [];
     for (const account of accounts) {
-      const suggestions = Number(hour) === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: Number(hour) }, 'approved_at', 5);
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: Number(hour) }, 'created_at', 5);
-      const result = { amazon_account_id: account.id, hour: Number(hour), suggestions: [], decisions: [] };
+      const suggestions = hour === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: hour }, 'approved_at', 5);
+      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: hour }, 'created_at', 5);
+      const kickoffs = await base44.asServiceRole.entities.ProductKickoffQueue.filter({ amazon_account_id: account.id, status: 'scheduled', queue_hour: hour }, 'scheduled_at', 5).catch(() => []);
+      const result = { amazon_account_id: account.id, hour, suggestions: [], decisions: [], kickoffs: [] };
+
+      for (const item of kickoffs) {
+        if (item.scheduled_at && new Date(item.scheduled_at).getTime() > Date.now()) continue;
+        try {
+          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, { status: 'processing', started_at: new Date().toISOString(), attempt_count: Number(item.attempt_count || 0) + 1 });
+          let response;
+          if (item.mode === 'manual_only') {
+            response = await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+              amazon_account_id: item.amazon_account_id,
+              asin: item.asin,
+              sku: item.sku || null,
+              product_name: item.product_name || item.asin,
+              keyword: item.keyword,
+              match_type: 'exact',
+              bid: 0.5,
+              _window_execution: true,
+              _service_role: true,
+            });
+          } else {
+            response = await base44.asServiceRole.functions.invoke('autoKickoffProduct', {
+              amazon_account_id: item.amazon_account_id,
+              asin: item.asin,
+              sku: item.sku || null,
+              product_name: item.product_name || item.asin,
+              max_keywords: 4,
+              minimum_ai_confidence: 0.95,
+              _window_execution: true,
+              _service_role: true,
+            });
+          }
+          const data = response?.data || response || {};
+          const success = data?.ok !== false;
+          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, { status: success ? 'completed' : 'failed', completed_at: new Date().toISOString(), last_error: success ? null : data?.error || data?.message || 'Falha no Kick-off' });
+          result.kickoffs.push({ id: item.id, asin: item.asin, ok: success });
+        } catch (error) {
+          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, { status: 'failed', completed_at: new Date().toISOString(), last_error: error?.message || String(error) }).catch(() => {});
+          result.kickoffs.push({ id: item.id, asin: item.asin, ok: false, error: error?.message || String(error) });
+        }
+        await wait(14000);
+      }
 
       for (const s of suggestions) {
         try {
@@ -49,7 +90,7 @@ Deno.serve(async (req) => {
       output.push(result);
     }
 
-    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 14, max_items_per_account: 10, results: output });
+    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 14, max_items_per_account: 15, results: output });
   } catch (e) {
     return Response.json({ ok: false, error: e?.message || 'Erro na fila Amazon' }, { status: 500 });
   }
