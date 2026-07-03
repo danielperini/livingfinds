@@ -577,27 +577,25 @@ export default function AdsAutopilot() {
     rejected: decHistory.filter(d => d.status === 'rejected').length,
   };
 
-  // ── Verificar se dados do dia anterior estão analisados ──────────────────────
-  const now = new Date();
-  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = yesterday.toISOString().slice(0, 10);
-  const todayStr = now.toISOString().slice(0, 10);
-
+  // ── Verificar se dados estão frescos (últimas 48h = janela generosa) ─────────
   const lastSuccessRun = runs.find(r => r.status === 'completed');
   const lastRunDate = lastSuccessRun?.started_at ? new Date(lastSuccessRun.started_at).toISOString().slice(0, 10) : null;
   const lastSyncDate = account?.last_sync_at ? new Date(account.last_sync_at).toISOString().slice(0, 10) : null;
 
-  // Dados frescos = sync do dia anterior ou hoje; análise = run do dia anterior ou hoje
-  const syncFresh = lastSyncDate && (lastSyncDate >= yesterdayStr);
-  const analysisFresh = lastRunDate && (lastRunDate >= yesterdayStr);
+  // Dados frescos = sincronizado nas últimas 48h
+  const twoDaysAgoStr = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  const syncFresh = lastSyncDate && lastSyncDate >= twoDaysAgoStr;
+  // Análise fresca = algum run nas últimas 48h
+  const analysisFresh = lastRunDate && lastRunDate >= twoDaysAgoStr;
 
+  // Só mostrar aviso crítico se NUNCA sincronizou; análise pendente é apenas warn
   let dataWarning = null;
-  if (!syncFresh && !analysisFresh) {
-    dataWarning = { level: 'critical', msg: `⚠️ Dados não sincronizados e nenhuma análise do dia anterior. Último sync: ${lastSyncDate || 'nunca'}. Execute o sync antes de usar o Autopilot.` };
+  if (!lastSyncDate) {
+    dataWarning = { level: 'critical', msg: `⚠️ Conta ainda não sincronizada. Execute a "Automação Total" ou "Analisar & Executar" para iniciar.` };
   } else if (!syncFresh) {
-    dataWarning = { level: 'warn', msg: `🔄 Sincronização pendente — último sync: ${lastSyncDate || 'nunca'}. Os dados podem estar desatualizados.` };
+    dataWarning = { level: 'warn', msg: `🔄 Último sync: ${lastSyncDate}. Os dados podem estar desatualizados — considere executar um novo sync.` };
   } else if (!analysisFresh) {
-    dataWarning = { level: 'warn', msg: `🤖 Análise do dia anterior ainda não executada (último ciclo: ${lastRunDate || 'nunca'}). Clique em "Analisar & Executar" para consolidar as decisões.` };
+    dataWarning = { level: 'warn', msg: `🤖 Nenhuma análise recente (último ciclo: ${lastRunDate || 'nunca'}). Clique em "Analisar & Executar" para gerar novas decisões.` };
   }
 
   return (
