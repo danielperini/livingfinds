@@ -12,7 +12,7 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
   Zap, TrendingDown, Search, Unlock, Brain, CheckCircle, XCircle,
-  Filter, ChevronDown, ChevronUp, TrendingUp, Clock,
+  Filter, ChevronDown, ChevronUp, TrendingUp, Clock, Rocket, Shield,
 } from 'lucide-react';
 
 // ── Tabs consolidadas ──────────────────────────────────────────────────────────
@@ -222,6 +222,9 @@ export default function AdsAutopilot() {
   const [showExecuteConfirm, setShowExecuteConfirm] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [showFullAuto, setShowFullAuto] = useState(false);
+  const [fullAutoRunning, setFullAutoRunning] = useState(false);
+  const [fullAutoSteps, setFullAutoSteps] = useState([]);
   const [stTermFilter, setStTermFilter] = useState('all');
 
   // Aprovação individual (DecisionRow)
@@ -374,6 +377,93 @@ export default function AdsAutopilot() {
     setNegatives(prev => prev.filter(n => n.id !== id));
   };
 
+  // ── Automação Total ───────────────────────────────────────────────────────────
+  const runFullAutomation = async () => {
+    if (!account) return;
+    setFullAutoRunning(true);
+    const steps = [
+      { id: 'sync',      label: 'Sincronizar dados da Amazon (sync completo)',  status: 'pending' },
+      { id: 'optimize',  label: 'Analisar campanhas e gerar decisões IA',        status: 'pending' },
+      { id: 'execute',   label: 'Executar decisões aprovadas automaticamente',   status: 'pending' },
+      { id: 'dayparting',label: 'Calcular e aplicar regras de dayparting',       status: 'pending' },
+      { id: 'guardrails',label: 'Executar guardrails e proteções horárias',      status: 'pending' },
+    ];
+    setFullAutoSteps(steps.map(s => ({ ...s })));
+
+    const updateStep = (id, status, detail) =>
+      setFullAutoSteps(prev => prev.map(s => s.id === id ? { ...s, status, detail } : s));
+
+    // PASSO 1: Sync
+    updateStep('sync', 'running');
+    try {
+      const r = await base44.functions.invoke('syncFullDaily', { amazon_account_id: account.id });
+      const d = r?.data;
+      updateStep('sync', d?.ok || d?.skipped ? 'done' : 'error',
+        d?.ok ? `${d.campaigns_synced || 0} campanhas · ${d.keywords_synced || 0} keywords`
+              : d?.skipped ? 'Já sincronizado hoje'
+              : d?.error || 'Erro no sync');
+    } catch (e) {
+      updateStep('sync', 'error', e.message);
+    }
+
+    // PASSO 2: Otimização
+    updateStep('optimize', 'running');
+    try {
+      const r = await base44.functions.invoke('runDailyAdsOptimization', { amazon_account_id: account.id, trigger: 'full_auto' });
+      const d = r?.data;
+      const b = d?.breakdown || {};
+      updateStep('optimize', d?.ok ? 'done' : d?.skipped ? 'done' : 'error',
+        d?.ok ? `${d.decisions_created || 0} decisões · ${b.harvest || 0} termos · ${b.bid_decrease || 0} bids↓ · ${b.bid_increase || 0} bids↑`
+              : d?.skipped ? d.reason
+              : d?.error || 'Erro');
+    } catch (e) {
+      updateStep('optimize', 'error', e.message);
+    }
+
+    // PASSO 3: Executar aprovadas
+    updateStep('execute', 'running');
+    try {
+      const r = await base44.functions.invoke('runNightlyAutoExecution', { amazon_account_id: account.id, trigger: 'full_auto' });
+      const d = r?.data;
+      updateStep('execute', d?.ok || d?.skipped ? 'done' : 'error',
+        d?.ok ? `${d.executed || 0} executadas · ${d.failed || 0} falhas`
+              : d?.skipped ? d.reason || 'Sem decisões pendentes'
+              : d?.error || 'Erro');
+    } catch (e) {
+      updateStep('execute', 'error', e.message);
+    }
+
+    // PASSO 4: Dayparting
+    updateStep('dayparting', 'running');
+    try {
+      const r = await base44.functions.invoke('runDailyDayparting', { amazon_account_id: account.id });
+      const d = r?.data;
+      const s = d?.stats || {};
+      updateStep('dayparting', d?.ok || d?.skipped ? 'done' : 'error',
+        d?.ok ? `${s.auto_applied || 0} regras aplicadas · ${s.pending_review || 0} aguardam revisão`
+              : d?.skipped ? d.reason || 'Sem dados suficientes'
+              : d?.error || 'Erro');
+    } catch (e) {
+      updateStep('dayparting', 'error', e.message);
+    }
+
+    // PASSO 5: Guardrails
+    updateStep('guardrails', 'running');
+    try {
+      const r = await base44.functions.invoke('runHourlyAdsGuardrails', { amazon_account_id: account.id });
+      const d = r?.data;
+      updateStep('guardrails', d?.ok || d?.skipped ? 'done' : 'error',
+        d?.ok ? `${d.actions || 0} proteções aplicadas`
+              : d?.skipped ? 'Sem alterações necessárias'
+              : d?.error || 'Erro');
+    } catch (e) {
+      updateStep('guardrails', 'error', e.message);
+    }
+
+    setFullAutoRunning(false);
+    await loadData();
+  };
+
   const unlockStuck = async () => {
     if (!account) return;
     setUnlocking(true);
@@ -490,12 +580,18 @@ export default function AdsAutopilot() {
               </button>
             </>
           )}
-          <button onClick={() => runAnalysis(true)} disabled={running || (isRunning && !isStuck)}
+          <button onClick={() => { setShowFullAuto(true); runFullAutomation(); }}
+            disabled={fullAutoRunning || running || (isRunning && !isStuck)}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition-all shadow-lg shadow-violet-500/20">
+            {fullAutoRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+            {fullAutoRunning ? 'Automação...' : 'Automação Total'}
+          </button>
+          <button onClick={() => runAnalysis(true)} disabled={running || fullAutoRunning || (isRunning && !isStuck)}
             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             {running ? 'Executando...' : 'Analisar & Executar'}
           </button>
-          <button onClick={() => runAnalysis(false)} disabled={running || (isRunning && !isStuck)}
+          <button onClick={() => runAnalysis(false)} disabled={running || fullAutoRunning || (isRunning && !isStuck)}
             className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors">
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Só Analisar
@@ -841,6 +937,74 @@ export default function AdsAutopilot() {
             </div>
            ) : null}
         </>
+      )}
+
+      {/* Modal Automação Total */}
+      {showFullAuto && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-surface-1 border border-surface-2 rounded-2xl p-6 max-w-lg w-full space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500/30 to-cyan-500/30 border border-violet-500/30 flex items-center justify-center">
+                <Rocket className="w-5 h-5 text-violet-300" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Automação Total em Andamento</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Sync · Otimização · Execução · Dayparting · Guardrails</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {fullAutoSteps.map((step, i) => (
+                <div key={step.id} className={`flex items-start gap-3 p-3 rounded-xl border transition-all ${
+                  step.status === 'running' ? 'bg-cyan/5 border-cyan/20' :
+                  step.status === 'done'    ? 'bg-emerald-500/5 border-emerald-500/20' :
+                  step.status === 'error'   ? 'bg-red-500/5 border-red-500/20' :
+                  'bg-surface-2/30 border-surface-2'
+                }`}>
+                  <div className="flex-shrink-0 mt-0.5">
+                    {step.status === 'running' ? <Loader2 className="w-4 h-4 text-cyan animate-spin" /> :
+                     step.status === 'done'    ? <CheckCircle className="w-4 h-4 text-emerald-400" /> :
+                     step.status === 'error'   ? <XCircle className="w-4 h-4 text-red-400" /> :
+                     <div className="w-4 h-4 rounded-full border-2 border-slate-600" />}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className={`text-xs font-semibold ${
+                      step.status === 'running' ? 'text-cyan' :
+                      step.status === 'done'    ? 'text-emerald-300' :
+                      step.status === 'error'   ? 'text-red-400' : 'text-slate-500'
+                    }`}>{step.label}</p>
+                    {step.detail && (
+                      <p className={`text-[10px] mt-0.5 ${step.status === 'error' ? 'text-red-400/70' : 'text-slate-500'}`}>{step.detail}</p>
+                    )}
+                  </div>
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border flex-shrink-0 ${
+                    step.status === 'running' ? 'text-cyan bg-cyan/10 border-cyan/20' :
+                    step.status === 'done'    ? 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' :
+                    step.status === 'error'   ? 'text-red-400 bg-red-400/10 border-red-400/20' :
+                    'text-slate-600 bg-surface-3 border-surface-3'
+                  }`}>
+                    {step.status === 'pending' ? `${i+1}` : step.status === 'running' ? '...' : step.status === 'done' ? '✓' : '✗'}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {!fullAutoRunning && (
+              <div className="flex items-center justify-between pt-1">
+                <div className="flex items-center gap-2 text-xs text-slate-500">
+                  <Shield className="w-3.5 h-3.5" />
+                  {fullAutoSteps.filter(s => s.status === 'error').length === 0
+                    ? 'Todos os passos concluídos com sucesso.'
+                    : `${fullAutoSteps.filter(s => s.status === 'error').length} passo(s) com erro — verifique os logs.`}
+                </div>
+                <button onClick={() => setShowFullAuto(false)}
+                  className="px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors">
+                  Fechar
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Modal confirmar execução */}
