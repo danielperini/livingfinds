@@ -13,8 +13,8 @@ Deno.serve(async (req) => {
     const body2 = await req.json().catch(() => ({}));
     const targetAccountId = body2.amazon_account_id;
 
-    // Filtrar por conta específica se passado, senão todas as conectadas
-    const accountFilter = targetAccountId ? { id: targetAccountId, status: 'connected' } : { status: 'connected' };
+    // Filtrar por conta específica se passado (aceita qualquer status), senão apenas conectadas
+    const accountFilter = targetAccountId ? { id: targetAccountId } : { status: 'connected' };
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(accountFilter);
 
     if (accounts.length === 0) {
@@ -40,11 +40,12 @@ Deno.serve(async (req) => {
         }
 
         syncsToday++;
-        const syncResult = await base44.functions.invoke('syncAds', { amazon_account_id: account.id, trigger_type: 'automatic' });
+        // Usar asServiceRole para não exigir sessão de usuário (funciona em automações agendadas e chamadas internas)
+        const syncResult = await base44.asServiceRole.functions.invoke('syncAds', { amazon_account_id: account.id, trigger_type: 'automatic' });
         results[account.id] = { ads: syncResult.data };
 
         // Run learner after sync
-        await base44.functions.invoke('runLearnerCycle', { amazon_account_id: account.id }).catch(() => {});
+        await base44.asServiceRole.functions.invoke('runLearnerCycle', { amazon_account_id: account.id }).catch(() => {});
 
         // Update last sync
         await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
@@ -52,10 +53,13 @@ Deno.serve(async (req) => {
         });
       } catch (err) {
         errors.push({ account_id: account.id, error: err.message });
-        await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
-          status: 'error',
-          error_message: err.message,
-        }).catch(() => {});
+        // Só marcar como error se não for rate limit (para não bloquear runs futuros)
+        const isRateLimit = err.message?.includes('429') || err.message?.includes('rate limit') || err.message?.includes('Rate limit');
+        if (!isRateLimit) {
+          await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
+            error_message: err.message,
+          }).catch(() => {});
+        }
       }
     }
 

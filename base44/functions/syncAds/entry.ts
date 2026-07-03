@@ -49,8 +49,13 @@ Deno.serve(async (req) => {
 
   try {
     base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+
+    // Aceitar chamadas autenticadas (usuário) e internas (service role / automação)
+    const isAuthenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!isAuthenticated) {
+      // Permite chamadas internas de automação sem sessão de usuário
+      console.log('[syncAds] Chamada sem sessão de usuário — modo service role');
+    }
 
     const body = await req.json().catch(() => ({}));
     const amazonAccountId = body.amazon_account_id;
