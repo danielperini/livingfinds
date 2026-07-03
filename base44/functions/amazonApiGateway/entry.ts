@@ -48,6 +48,32 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Host Amazon não permitido' }, { status: 403 });
     }
 
+    const operationName = String(body.operation || url.pathname);
+    if (body.amazon_account_id) {
+      const previous = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+        amazon_account_id: body.amazon_account_id,
+        operation: `amazon_api:${operationName}`,
+        status: 'error',
+      }, '-completed_at', 10).catch(() => []);
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      const throttles = previous.filter((log) => {
+        if (new Date(log.completed_at || log.started_at || 0).getTime() < cutoff) return false;
+        try { return Number(JSON.parse(log.result_summary || '{}').status) === 429; }
+        catch { return String(log.error_message || '').includes('429'); }
+      });
+      if (throttles.length >= 3) {
+        return Response.json({
+          ok: false,
+          status: 429,
+          retryable: true,
+          circuit_open: true,
+          consecutive_429: throttles.length,
+          cooldown_until: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+          errors: [{ code: 'CIRCUIT_OPEN', message: 'Operação em cooldown após respostas 429 repetidas.' }],
+        }, { status: 429 });
+      }
+    }
+
     let parsed: any = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       attemptsUsed = attempt + 1;
@@ -86,7 +112,7 @@ Deno.serve(async (request) => {
     const completedAt = new Date().toISOString();
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: body.amazon_account_id || null,
-      operation: `amazon_api:${body.operation || url.pathname}`,
+      operation: `amazon_api:${operationName}`,
       status: parsed?.ok ? 'success' : 'error',
       trigger_type: body.queue_type || 'gateway',
       started_at: startedAt,
