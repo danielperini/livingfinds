@@ -179,6 +179,18 @@ async function executeDecision(d, account, base44) {
         break;
       }
 
+      // apply_dayparting: delega para applyDaypartingSchedule
+      case 'apply_dayparting': {
+        const daypartingRes = await base44.asServiceRole.functions.invoke('applyDaypartingSchedule', {
+          opportunity_id: d.id,
+          mode: 'hybrid',
+          approve: true,
+          auto_apply: true,
+        });
+        result = { ok: !!daypartingRes?.data?.ok, status: daypartingRes?.data?.ok ? 200 : 500, data: daypartingRes?.data || {} };
+        break;
+      }
+
       default:
         throw new Error(`Ação não suportada: ${d.action}`);
     }
