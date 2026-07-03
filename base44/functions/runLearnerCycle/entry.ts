@@ -15,13 +15,15 @@ Deno.serve(async (req) => {
     const { amazon_account_id } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
-    // Carregar dados de campanhas, keywords e histórico de decisões
-    const [campaigns, keywords, existingDecisions, learningHistory] = await Promise.all([
+    // Carregar dados de campanhas, keywords, histórico e MLModel
+    const [campaigns, keywords, existingDecisions, learningHistory, mlModels] = await Promise.all([
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, '-spend', 300),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id }, '-spend', 500),
       base44.asServiceRole.entities.Decision.filter({ amazon_account_id, status: 'pending' }, '-created_date', 100),
       base44.asServiceRole.entities.LearningEvent.filter({ amazon_account_id }, '-recorded_at', 20),
+      base44.asServiceRole.entities.MLModel.filter({ amazon_account_id }, '-trained_at', 1),
     ]);
+    const mlModel = mlModels[0] || null;
 
     // IDs já em análise — evitar duplicatas
     const pendingEntityIds = new Set(existingDecisions.map(d => d.entity_id));
@@ -66,6 +68,17 @@ Deno.serve(async (req) => {
       .map(e => `[${e.event_type}] ${e.observation}`)
       .join('\n');
 
+    // Parâmetros do MLModel (aprendidos) ou defaults
+    const ML_TARGET_ACOS  = mlModel?.target_acos       || 25;
+    const ML_MAX_BID_INC  = mlModel?.max_bid_increase_pct || 15;
+    const ML_MAX_BID_DEC  = mlModel?.max_bid_decrease_pct || 20;
+    const ML_MIN_CLICKS   = mlModel?.min_clicks_for_decision || 8;
+    const ML_HARVEST_ORD  = mlModel?.harvest_after_orders || 1;
+    const ML_CONF         = mlModel?.confidence_score   || 0;
+    const mlContext = mlModel
+      ? `ML v${mlModel.model_version} (${mlModel.training_samples} amostras, conf ${(ML_CONF*100).toFixed(1)}%): target_acos=${ML_TARGET_ACOS}%, max_bid_inc=${ML_MAX_BID_INC}%, max_bid_dec=${ML_MAX_BID_DEC}%, min_clicks=${ML_MIN_CLICKS}, harvest_orders=${ML_HARVEST_ORD}`
+      : 'ML: sem modelo treinado ainda — usando defaults.';
+
     // ── Análise IA com InvokeLLM ──
     const prompt = `Você é um especialista em Amazon Ads com foco em e-commerce brasileiro.
 Analise os dados abaixo e gere decisões de otimização CONCRETAS e ACIONÁVEIS.
@@ -79,13 +92,19 @@ ${JSON.stringify(campaignSummary, null, 2)}
 KEYWORDS (top 30 por spend, mínimo 5 cliques):
 ${JSON.stringify(keywordSummary, null, 2)}
 
+PARÂMETROS APRENDIDOS PELO ML (use estes, não os defaults):
+${mlContext}
+
 REGRAS DE NEGÓCIO:
-- ACoS meta: 25% | ROAS meta: 4x
-- Redução máxima de bid: 20% | Aumento máximo: 15%
-- Bid mínimo: $0.10 | Bid máximo: $5.00
+- ACoS meta: ${ML_TARGET_ACOS}% | ROAS meta: 4x
+- Redução máxima de bid: ${ML_MAX_BID_DEC}% | Aumento máximo: ${ML_MAX_BID_INC}%
+- Bid mínimo: R$0.10 | Bid máximo: R$5.00
+- Harvest de search terms: a partir de ${ML_HARVEST_ORD} pedido(s) confirmados
+- Mínimo de cliques para decisão: ${ML_MIN_CLICKS}
 - Não gerar decisão para entidades com has_pending=true
-- Pausas de campanha exigem evidência forte (ACoS > 80% ou spend > $30 sem venda)
-- Sugerir negativação para keywords com ≥10 cliques, spend > $3 e zero vendas
+- Pausas de campanha exigem evidência forte (ACoS > 80% ou spend > R$30 sem venda)
+- Sugerir negativação para keywords com ≥${ML_MIN_CLICKS} cliques, spend > R$3 e zero vendas
+- Priorizar termos de cauda média (2-3 palavras) e longa (4+ palavras) no harvest
 
 Gere 5 a 15 decisões otimizadas priorizando alto impacto e baixo risco.
 Para cada decisão, calcule os valores exatos com base nos dados fornecidos.`;
