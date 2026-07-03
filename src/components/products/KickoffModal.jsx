@@ -1,3 +1,3 @@
-import KickoffCompactModal from './KickoffCompactModal';
+import KickoffScheduledModal from './KickoffScheduledModal';
 
-export default KickoffCompactModal;
+export default KickoffScheduledModal;
