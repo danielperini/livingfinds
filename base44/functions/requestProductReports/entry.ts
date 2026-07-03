@@ -31,10 +31,13 @@ function apiBase(region) {
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+    const body = await request.json().catch(() => ({}));
+    const authenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!authenticated && !body._service_role) {
+      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+    }
 
-    const { amazon_account_id } = await request.json().catch(() => ({}));
+    const amazon_account_id = body.amazon_account_id;
     if (!amazon_account_id) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
 
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id);
@@ -42,10 +45,7 @@ Deno.serve(async (request) => {
 
     const accessToken = await getToken();
     const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
-    const reportTypes = [
-      'GET_MERCHANT_LISTINGS_ALL_DATA',
-      'GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA',
-    ];
+    const reportTypes = ['GET_MERCHANT_LISTINGS_ALL_DATA', 'GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA'];
     const requested = [];
     const errors = [];
 
@@ -54,6 +54,8 @@ Deno.serve(async (request) => {
         method: 'POST',
         headers: {
           'x-amz-access-token': accessToken,
+          'x-amz-date': new Date().toISOString().replace(/[:-]|\.\d{3}/g, ''),
+          'user-agent': 'LivingFinds/1.0 (Language=TypeScript)',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ reportType, marketplaceIds: [marketplaceId] }),
@@ -74,12 +76,7 @@ Deno.serve(async (request) => {
       result_summary: JSON.stringify({ requested, errors }).slice(0, 4000),
     }).catch(() => {});
 
-    return Response.json({
-      ok: requested.length > 0,
-      requested,
-      errors,
-      requested_at: now,
-    }, { status: requested.length > 0 ? 200 : 502 });
+    return Response.json({ ok: requested.length > 0, requested, errors, requested_at: now }, { status: requested.length > 0 ? 200 : 502 });
   } catch (error) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao solicitar relatórios' }, { status: 500 });
   }
