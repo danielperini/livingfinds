@@ -12,7 +12,7 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
     const hour = body.hour ?? brazilHour();
-    if (hour < 0 || hour > 3) return Response.json({ ok: true, skipped: true, hour });
+    if (![0, 1, 2, 3, 13].includes(Number(hour))) return Response.json({ ok: true, skipped: true, hour });
 
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id })
@@ -20,9 +20,9 @@ Deno.serve(async (req) => {
 
     const output = [];
     for (const account of accounts) {
-      const suggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_hour: hour }, 'approved_at', 5);
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved' }, 'created_at', 5);
-      const result = { amazon_account_id: account.id, suggestions: [], decisions: [] };
+      const suggestions = Number(hour) === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_hour: Number(hour) }, 'approved_at', 5);
+      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_hour: Number(hour) }, 'created_at', 5);
+      const result = { amazon_account_id: account.id, hour: Number(hour), suggestions: [], decisions: [] };
 
       for (const s of suggestions) {
         try {
@@ -39,9 +39,9 @@ Deno.serve(async (req) => {
       for (const d of decisions.filter((x) => x.action !== 'pause_campaign')) {
         try {
           const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', { decision_id: d.id, _window_execution: true, _service_role: true });
-          result.decisions.push({ id: d.id, ok: (res?.data?.executed || 0) > 0 });
+          result.decisions.push({ id: d.id, ok: (res?.data?.executed || 0) > 0, action: d.action });
         } catch (e) {
-          result.decisions.push({ id: d.id, ok: false, error: e?.message || String(e) });
+          result.decisions.push({ id: d.id, ok: false, action: d.action, error: e?.message || String(e) });
         }
         await wait(12000);
       }
@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
       output.push(result);
     }
 
-    return Response.json({ ok: true, hour, spacing_seconds: 12, max_items_per_account: 10, results: output });
+    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 12, max_items_per_account: 10, results: output });
   } catch (e) {
     return Response.json({ ok: false, error: e?.message || 'Erro na fila Amazon' }, { status: 500 });
   }
