@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw, Sparkles } from 'lucide-react';
+import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw, Sparkles, BarChart2 } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 
 export default function InventorySales() {
   const [account, setAccount] = useState(null);
@@ -62,6 +63,29 @@ export default function InventorySales() {
   const totalUnits = products.reduce((s, p) => s + (p.units_sold_30d || p.total_units_30d || 0), 0);
   const lowStock = products.filter(p => (p.fba_inventory || 0) < 10 && (p.fba_inventory || 0) > 0).length;
   const outOfStock = products.filter(p => (p.fba_inventory || 0) === 0).length;
+
+  // Agregar vendas por data para o gráfico (últimos 30 dias, de mais antigo para mais recente)
+  const salesByDate = (() => {
+    const map = new Map();
+    for (const s of sales) {
+      const prev = map.get(s.date) || { date: s.date, receita: 0, unidades: 0, sessoes: 0 };
+      prev.receita += s.ordered_product_sales || 0;
+      prev.unidades += s.units_ordered || 0;
+      prev.sessoes += s.sessions || 0;
+      map.set(s.date, prev);
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-30)
+      .map(d => ({ ...d, date: d.date.slice(5), receita: parseFloat(d.receita.toFixed(2)) }));
+  })();
+
+  const totalSalesRevenue = sales.reduce((s, r) => s + (r.ordered_product_sales || 0), 0);
+  const totalSalesUnits = sales.reduce((s, r) => s + (r.units_ordered || 0), 0);
+  const totalSalesSessions = sales.reduce((s, r) => s + (r.sessions || 0), 0);
+  const avgConversion = sales.length > 0
+    ? sales.reduce((s, r) => s + (r.conversion_rate || 0), 0) / sales.length
+    : 0;
 
   return (
     <div className="p-6 space-y-6 animate-fade-in">
@@ -186,37 +210,98 @@ export default function InventorySales() {
         sales.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
             <TrendingUp className="w-10 h-10 text-slate-600" />
-            <p className="text-sm text-slate-400">Sem dados de vendas diárias.</p>
+            <p className="text-sm text-slate-400">Sem dados de vendas diárias. Certifique-se que o Sync SP-API está ativo.</p>
           </div>
         ) : (
-          <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-surface-2">
-                  {['Data', 'ASIN', 'Unidades', 'Receita', 'Sessões', 'Page Views', 'Buy Box', 'Conversão'].map(h => (
-                    <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {sales.map(s => (
-                  <tr key={s.id} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
-                    <td className="px-5 py-3 text-slate-300 whitespace-nowrap">{s.date}</td>
-                    <td className="px-5 py-3 font-mono text-xs text-cyan">{s.asin || '—'}</td>
-                    <td className="px-5 py-3 text-slate-300">{s.units_ordered || 0}</td>
-                    <td className="px-5 py-3 text-emerald-400">R${(s.ordered_product_sales || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-slate-400">{(s.sessions || 0).toLocaleString()}</td>
-                    <td className="px-5 py-3 text-slate-400">{(s.page_views || 0).toLocaleString()}</td>
-                    <td className="px-5 py-3 text-slate-300">{(s.buy_box_pct || 0).toFixed(1)}%</td>
-                    <td className="px-5 py-3">
-                      <span className={`font-semibold text-xs ${(s.conversion_rate || 0) > 10 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                        {(s.conversion_rate || 0).toFixed(2)}%
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-5">
+            {/* KPIs de vendas reais */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                { label: 'Receita Total', value: `R$${totalSalesRevenue.toFixed(2)}`, color: 'text-emerald-400' },
+                { label: 'Unidades Vendidas', value: totalSalesUnits.toLocaleString(), color: 'text-cyan' },
+                { label: 'Sessões', value: totalSalesSessions.toLocaleString(), color: 'text-slate-200' },
+                { label: 'Conversão Média', value: `${avgConversion.toFixed(2)}%`, color: avgConversion > 10 ? 'text-emerald-400' : 'text-amber-400' },
+              ].map(k => (
+                <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                  <p className="text-xs text-slate-500 mb-1">{k.label}</p>
+                  <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Gráfico de tendência */}
+            {salesByDate.length > 1 && (
+              <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <BarChart2 className="w-4 h-4 text-cyan" />
+                  <h3 className="text-sm font-semibold text-white">Tendência de Vendas (últimos {salesByDate.length} dias)</h3>
+                </div>
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={salesByDate} margin={{ top: 4, right: 10, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gradReceita" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gradUnidades" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                    <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} />
+                    <YAxis yAxisId="receita" orientation="left" tick={{ fill: '#64748b', fontSize: 11 }}
+                      tickFormatter={v => `R$${v}`} width={60} />
+                    <YAxis yAxisId="unidades" orientation="right" tick={{ fill: '#64748b', fontSize: 11 }} width={35} />
+                    <Tooltip
+                      contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8 }}
+                      labelStyle={{ color: '#94a3b8', fontSize: 11 }}
+                      formatter={(value, name) => name === 'receita'
+                        ? [`R$${Number(value).toFixed(2)}`, 'Receita']
+                        : [value, 'Unidades']}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12, color: '#64748b' }} />
+                    <Area yAxisId="receita" type="monotone" dataKey="receita" stroke="#10B981"
+                      fill="url(#gradReceita)" strokeWidth={2} name="Receita (R$)" />
+                    <Area yAxisId="unidades" type="monotone" dataKey="unidades" stroke="#3B82F6"
+                      fill="url(#gradUnidades)" strokeWidth={2} name="Unidades" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Tabela detalhada */}
+            <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-surface-2">
+                      {['Data', 'ASIN', 'Unidades', 'Receita', 'Sessões', 'Page Views', 'Buy Box', 'Conversão'].map(h => (
+                        <th key={h} className="px-5 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sales.map(s => (
+                      <tr key={s.id} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
+                        <td className="px-5 py-3 text-slate-300 whitespace-nowrap">{s.date}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-cyan">{s.asin || '—'}</td>
+                        <td className="px-5 py-3 text-slate-300">{s.units_ordered || 0}</td>
+                        <td className="px-5 py-3 text-emerald-400">R${(s.ordered_product_sales || 0).toFixed(2)}</td>
+                        <td className="px-5 py-3 text-slate-400">{(s.sessions || 0).toLocaleString()}</td>
+                        <td className="px-5 py-3 text-slate-400">{(s.page_views || 0).toLocaleString()}</td>
+                        <td className="px-5 py-3 text-slate-300">{(s.buy_box_pct || 0).toFixed(1)}%</td>
+                        <td className="px-5 py-3">
+                          <span className={`font-semibold text-xs ${(s.conversion_rate || 0) > 10 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                            {(s.conversion_rate || 0).toFixed(2)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )
       )}

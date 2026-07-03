@@ -5,6 +5,7 @@ import {
   Minus, XCircle, Filter, TrendingUp, TrendingDown, Download
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function LogDeBids() {
   const [account, setAccount] = useState(null);
@@ -149,6 +150,24 @@ export default function LogDeBids() {
   const executed = filtered.filter(l => l.status === 'executed').length;
   const pctChange = total > 0 ? ((aumento - reducao) / total * 100).toFixed(1) : 0;
 
+  // Gráfico de tendência: agrupa aumentos/reduções por data (últimos 30 dias)
+  const trendData = (() => {
+    const map = new Map();
+    for (const l of logs) {
+      const date = l.date || l.created_at?.slice(0, 10);
+      if (!date) continue;
+      const prev = map.get(date) || { date, aumentos: 0, reducoes: 0, total: 0 };
+      if (l.direction === 'increase') prev.aumentos++;
+      else if (l.direction === 'decrease') prev.reducoes++;
+      prev.total++;
+      map.set(date, prev);
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-30)
+      .map(d => ({ ...d, date: d.date.slice(5) }));
+  })();
+
   // Filtrar apenas as alterações executadas para impacto em ACOS
   const executedChanges = filtered.filter(l => l.status === 'executed' && l.direction !== 'unchanged');
   const savingsEstimate = executedChanges.reduce((s, l) => {
@@ -267,6 +286,27 @@ export default function LogDeBids() {
               </div>
             ))}
           </div>
+
+          {/* Gráfico de tendência */}
+          {trendData.length > 1 && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <h3 className="text-sm font-semibold text-white mb-4">Tendência de Alterações de Bid (últimos {trendData.length} dias)</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={trendData} margin={{ top: 4, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                  <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 11 }} width={28} />
+                  <Tooltip
+                    contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8 }}
+                    labelStyle={{ color: '#94a3b8', fontSize: 11 }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12, color: '#64748b' }} />
+                  <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="reducoes" name="Reduções" fill="#EF4444" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Tabela */}
           {filtered.length === 0 ? (
