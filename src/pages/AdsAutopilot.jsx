@@ -8,6 +8,7 @@ import AutopilotConfigPanel from '@/components/autopilot/AutopilotConfigPanel';
 import AutopilotDecisionsTable from '@/components/autopilot/AutopilotDecisionsTable';
 import AutopilotAlertsPanel from '@/components/autopilot/AutopilotAlertsPanel';
 import BiddingRulesPanel from '@/components/learner/BiddingRulesPanel';
+import MLLearningPanel from '@/components/learner/MLLearningPanel';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
@@ -25,6 +26,7 @@ const TABS = [
   { id: 'history',    label: 'Histórico de Bids',   icon: History },
   { id: 'recommendations', label: '🎯 Recomendações', icon: null },
   { id: 'dayparting', label: '🕐 Dayparting',        icon: null },
+  { id: 'ml_learning', label: '🧠 Motor ML',          icon: null },
   { id: 'rules',      label: 'Regras Automáticas',  icon: Settings },
   { id: 'config',     label: 'Configuração',        icon: Settings },
 ];
@@ -791,6 +793,7 @@ export default function AdsAutopilot() {
           {/* Conteúdo das abas sem loading para dayparting/recommendations/rules */}
           {tab === 'recommendations' ? <Recommendations /> :
            tab === 'dayparting'      ? <DaypartingDashboard /> :
+           tab === 'ml_learning'     ? <MLLearningPanel amazonAccountId={account?.id} currencySymbol={currencySymbol} /> :
            loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
            ) : tab === 'rules' ? (
