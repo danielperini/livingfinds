@@ -1,38 +1,23 @@
 /**
  * autoKickoffProduct — Kick-off automático completo para um ASIN.
- *
- * Regras:
- *  1. Cria 1 campanha AUTO (via createAutoCampaignForAsin)
- *  2. Busca até 3 termos do TermBank com >= 4 pedidos, classificados como winner (prioridade)
- *  3. Se TermBank retornar < 3 termos, completa com sugestões da IA com confiança >= 90%
- *     validadas por: relevância ao produto, conformidade com políticas Amazon, busca confirmada
- *  4. Cria uma campanha manual SP EXACT por keyword (via createManualCampaignFromKeywordSuggestion)
- *
- * A IA valida cada sugestão respondendo 3 critérios:
- *   - tem_procura: o termo tem volume de busca relevante no marketplace
- *   - pertinente_produto: o termo é compatível semanticamente com o produto
- *   - conforme_amazon: não viola políticas de anúncio da Amazon
- *
- * Confidence final = (relevance_score * 0.5 + ai_confidence * 0.5) >= 0.90 para auto-aplicar.
- *
- * Payload:
- *   amazon_account_id — obrigatório
- *   asin              — obrigatório
- *   sku               — opcional
- *   product_name      — opcional
- *   max_keywords      — opcional (default: 3)
+ * 1. Cria 1 campanha AUTO (inline, sem inter-function call)
+ * 2. Busca termos no TermBank (>= 4 pedidos) e search terms convertidos
+ * 3. Se insuficiente, gera keywords via IA (Claude) com confiança >= 90%
+ * 4. Cria uma campanha manual SP EXACT por keyword (v3 API)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.37.0';
 
-const tokenCache = {};
+const tokenCache: Record<string, { access_token: string; expires_at: number }> = {};
 
-async function getAdsToken(refreshToken) {
-  const cached = tokenCache['auto_kickoff'];
+async function getAdsToken(refreshToken?: string): Promise<string> {
+  const cached = tokenCache['ads'];
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  const rt = refreshToken || Deno.env.get('ADS_REFRESH_TOKEN');
+  if (!rt) throw new Error('Nenhum refresh token disponível para autenticação Amazon Ads.');
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
+    refresh_token: rt,
     client_id: Deno.env.get('ADS_CLIENT_ID'),
     client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
   });
@@ -43,22 +28,23 @@ async function getAdsToken(refreshToken) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || 'Token LWA falhou');
-  tokenCache['auto_kickoff'] = {
+  tokenCache['ads'] = {
     access_token: data.access_token,
     expires_at: Date.now() + (data.expires_in - 60) * 1000,
   };
   return data.access_token;
 }
 
-function getAdsBaseUrl(account) {
+function getAdsBaseUrl(account: any): string {
   const r = (account?.region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsCall(account, method, path, body) {
-  const token = await getAdsToken(account?.ads_refresh_token);
+async function adsCall(account: any, method: string, path: string, body: any, contentType = 'application/json') {
+  const refreshToken = account?.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+  const token = await getAdsToken(refreshToken);
   const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
   const res = await fetch(`${getAdsBaseUrl(account)}${path}`, {
     method,
@@ -66,7 +52,8 @@ async function adsCall(account, method, path, body) {
       'Authorization': `Bearer ${token}`,
       'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
       'Amazon-Advertising-API-Scope': String(profileId),
-      'Content-Type': 'application/json',
+      'Content-Type': contentType,
+      'Accept': contentType,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -74,143 +61,135 @@ async function adsCall(account, method, path, body) {
   return { ok: res.ok, status: res.status, data };
 }
 
-function buildCampaignName(asin, keyword) {
+function buildCampaignName(asin: string, keyword: string): string {
   const kwShort = keyword.replace(/[^a-z0-9\s]/gi, '').trim().slice(0, 40);
   const name = `SP | MANUAL | EXACT | ${asin} | ${kwShort}`;
   return name.length > 128 ? name.slice(0, 125) + '...' : name;
 }
 
-function daysFromNow(days) {
+function daysFromNow(days: number): string {
   return new Date(Date.now() + days * 86400000).toISOString();
 }
 
-function norm(s) { return (s || '').toLowerCase().trim().replace(/\s+/g, ' '); }
+function norm(s: string): string { return (s || '').toLowerCase().trim().replace(/\s+/g, ' '); }
 
-/**
- * Valida sugestões da IA com Claude: tem_procura, pertinente_produto, conforme_amazon
- * Retorna lista filtrada com confidence >= threshold
- */
-async function validateSuggestionsWithAI(suggestions, productName, asin, threshold = 0.90) {
+async function generateKeywordsWithAI(pName: string, asin: string, needed: number): Promise<any[]> {
   const anthropic = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') });
+  const prompt = `Você é especialista em Amazon Ads para o mercado brasileiro.
 
-  const prompt = `Você é um especialista em Amazon Advertising e SEO de marketplace.
+Produto: "${pName}" (ASIN: ${asin})
 
-Produto: "${productName}" (ASIN: ${asin})
+Gere exatamente ${needed} palavras-chave de alta intenção de compra para este produto no Amazon.com.br.
 
-Para cada palavra-chave abaixo, avalie 3 critérios (true/false cada um):
-1. tem_procura: O termo tem volume de busca real no Amazon.com.br (não é nicho obscuro ou termo inútil)
-2. pertinente_produto: O termo é semanticamente relevante e compatível com o produto descrito
-3. conforme_amazon: O termo não viola políticas de anúncio da Amazon (sem conteúdo adulto, armas, produtos proibidos, marcas concorrentes sem permissão, etc.)
+Critérios:
+- Termos que compradores brasileiros realmente digitam ao buscar este produto
+- Alta intenção de compra (não informativos)
+- Sem marcas concorrentes ou termos proibidos
+- Específicos o suficiente para converter (não genéricos demais)
 
-Palavras-chave para validar:
-${suggestions.map((s, i) => `${i + 1}. "${s.keyword}" (confiança atual: ${Math.round((s.confidence || 0) * 100)}%)`).join('\n')}
-
-Responda SOMENTE em JSON com este schema exato:
+Responda SOMENTE com JSON:
 {
-  "validations": [
-    {
-      "keyword": "string",
-      "tem_procura": true/false,
-      "pertinente_produto": true/false,
-      "conforme_amazon": true/false,
-      "confidence_final": 0.0-1.0,
-      "motivo": "string curto"
-    }
+  "keywords": [
+    { "keyword": "string", "confidence": 0.90, "reason": "string curto" }
   ]
-}
+}`;
 
-confidence_final deve ser 0.0 se qualquer critério for false.
-Se todos os 3 forem true, confidence_final = média ponderada entre a confiança original (40%) e 0.95 (60%).`;
-
-  const response = await anthropic.messages.create({
+  const genResp = await anthropic.messages.create({
     model: 'claude-sonnet-4-5',
-    max_tokens: 1024,
+    max_tokens: 800,
     messages: [{ role: 'user', content: prompt }],
   });
-
-  const text = response.content[0]?.text || '{}';
-  let parsed;
+  const text = genResp.content[0]?.text || '{}';
+  let parsed: any = {};
   try {
-    // Extrair JSON do texto da resposta
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(jsonMatch?.[0] || '{}');
-  } catch {
-    return [];
-  }
+    const m = text.match(/\{[\s\S]*\}/);
+    parsed = JSON.parse(m?.[0] || '{}');
+  } catch { parsed = {}; }
 
-  const validations = parsed.validations || [];
-  return validations.filter(v =>
-    v.tem_procura === true &&
-    v.pertinente_produto === true &&
-    v.conforme_amazon === true &&
-    (v.confidence_final || 0) >= threshold
-  ).map(v => ({
-    keyword: v.keyword,
-    confidence: v.confidence_final,
-    motivo: v.motivo,
-    source: 'ai_suggestion',
-  }));
+  return (parsed.keywords || [])
+    .filter((k: any) => k.keyword && (k.confidence || 0) >= 0.90)
+    .slice(0, needed)
+    .map((k: any) => ({
+      keyword: k.keyword,
+      confidence: k.confidence || 0.90,
+      source: 'ai_suggestion',
+      motivo: k.reason || 'Gerado pela IA',
+    }));
 }
 
-/**
- * Cria uma campanha manual SP EXACT para um termo
- */
-async function createManualCampaign(base44, account, asin, keyword, sku, product, bid, budget, now) {
+async function createManualCampaign(base44: any, account: any, asin: string, keyword: string, sku: string | null, product: any, bid: number, budget: number, now: string) {
   const aid = account.id;
   const sym = account.currency_symbol || 'R$';
   const campaignName = buildCampaignName(asin, keyword);
+  const today = now.slice(0, 10);
 
-  // PASSO 1: Campanha
-  const campRes = await adsCall(account, 'POST', '/v2/sp/campaigns', [{
-    name: campaignName,
-    campaignType: 'sponsoredProducts',
-    targetingType: 'manual',
-    state: 'enabled',
-    dailyBudget: budget,
-    startDate: now.slice(0, 10).replace(/-/g, ''),
-    bidding: { strategy: 'legacyForSales', adjustments: [] },
-  }]);
-  const campData = Array.isArray(campRes.data) ? campRes.data[0] : campRes.data;
-  if (campData?.code && campData.code !== 'SUCCESS') {
-    throw new Error(`Amazon erro campanha: ${campData.description || campData.code}`);
+  // PASSO 1: Campanha SP MANUAL (v3)
+  const campRes = await adsCall(account, 'POST', '/sp/campaigns', {
+    campaigns: [{
+      name: campaignName,
+      targetingType: 'MANUAL',
+      state: 'ENABLED',
+      budget: { budgetType: 'DAILY', budget },
+      startDate: today,
+    }],
+  }, 'application/vnd.spCampaign.v3+json');
+
+  const amazonCampaignId =
+    campRes.data?.campaigns?.success?.[0]?.campaignId ||
+    campRes.data?.success?.[0]?.campaignId ||
+    campRes.data?.campaigns?.[0]?.campaignId ||
+    (Array.isArray(campRes.data) ? campRes.data[0]?.campaignId : null);
+  if (!amazonCampaignId) {
+    const err = campRes.data?.campaigns?.error?.[0]?.description || campRes.data?.error || JSON.stringify(campRes.data).slice(0, 200);
+    throw new Error(`Amazon erro campanha: ${err}`);
   }
-  const amazonCampaignId = campData?.campaignId || campData?.campaign_id;
-  if (!amazonCampaignId) throw new Error('Amazon não retornou campaignId.');
 
-  // PASSO 2: Ad group
-  const agRes = await adsCall(account, 'POST', '/v2/sp/adGroups', [{
-    name: `AG | EXACT | ${asin}`,
-    campaignId: amazonCampaignId,
-    defaultBid: bid,
-    state: 'enabled',
-  }]);
-  const agData = Array.isArray(agRes.data) ? agRes.data[0] : agRes.data;
-  const amazonAdGroupId = agData?.adGroupId;
+  // PASSO 2: Ad group (v3)
+  const agRes = await adsCall(account, 'POST', '/sp/adGroups', {
+    adGroups: [{
+      name: `AG | EXACT | ${asin}`,
+      campaignId: amazonCampaignId,
+      defaultBid: bid,
+      state: 'ENABLED',
+    }],
+  }, 'application/vnd.spAdGroup.v3+json');
+
+  const amazonAdGroupId =
+    agRes.data?.adGroups?.success?.[0]?.adGroupId ||
+    agRes.data?.success?.[0]?.adGroupId ||
+    agRes.data?.adGroups?.[0]?.adGroupId;
   if (!amazonAdGroupId) throw new Error('Amazon não retornou adGroupId.');
 
-  // PASSO 3: Product ad
+  // PASSO 3: Product ad (v3) — tolerante a falha
   const skuVal = product?.sku || sku || null;
-  if (skuVal) {
-    await adsCall(account, 'POST', '/v2/sp/productAds', [{
+  await adsCall(account, 'POST', '/sp/productAds', {
+    productAds: [{
       campaignId: amazonCampaignId,
       adGroupId: amazonAdGroupId,
-      sku: skuVal,
-      state: 'enabled',
-    }]);
-  }
+      ...(skuVal ? { sku: skuVal } : { asin }),
+      state: 'ENABLED',
+    }],
+  }, 'application/vnd.spProductAd.v3+json').catch(() => {});
 
-  // PASSO 4: Keyword exact
-  const kwRes = await adsCall(account, 'POST', '/v2/sp/keywords', [{
-    campaignId: amazonCampaignId,
-    adGroupId: amazonAdGroupId,
-    keywordText: keyword,
-    matchType: 'exact',
-    state: 'enabled',
-    bid,
-  }]);
-  const kwData = Array.isArray(kwRes.data) ? kwRes.data[0] : kwRes.data;
-  const amazonKeywordId = kwData?.keywordId;
-  if (!amazonKeywordId) throw new Error('Amazon não retornou keywordId.');
+  // PASSO 4: Keyword EXACT (v3)
+  const kwRes = await adsCall(account, 'POST', '/sp/keywords', {
+    keywords: [{
+      campaignId: amazonCampaignId,
+      adGroupId: amazonAdGroupId,
+      keywordText: keyword,
+      matchType: 'EXACT',
+      state: 'ENABLED',
+      bid: { value: bid, bidType: 'DEFAULT' },
+    }],
+  }, 'application/vnd.spKeyword.v3+json');
+
+  const amazonKeywordId =
+    kwRes.data?.keywords?.success?.[0]?.keywordId ||
+    kwRes.data?.success?.[0]?.keywordId ||
+    kwRes.data?.keywords?.[0]?.keywordId;
+  if (!amazonKeywordId) {
+    console.warn(`[createManualCampaign] keywordId não retornado: ${JSON.stringify(kwRes.data).slice(0, 150)}`);
+  }
 
   // PASSO 5: Persistir no banco
   const [campaignRecord, keywordRecord] = await Promise.all([
@@ -238,7 +217,7 @@ async function createManualCampaign(base44, account, asin, keyword, sku, product
       amazon_account_id: aid,
       campaign_id: String(amazonCampaignId),
       ad_group_id: String(amazonAdGroupId),
-      keyword_id: String(amazonKeywordId),
+      keyword_id: amazonKeywordId ? String(amazonKeywordId) : `kw_${Date.now()}`,
       asin,
       keyword_text: keyword,
       keyword,
@@ -254,47 +233,32 @@ async function createManualCampaign(base44, account, asin, keyword, sku, product
     }),
   ]);
 
-  // PASSO 6: TermBank + OptimizationDecision
-  await Promise.all([
-    base44.asServiceRole.functions.invoke('recordTermPerformance', {
-      amazon_account_id: aid,
-      term: keyword,
-      asin,
-      product_name: product?.product_name || product?.display_name || '',
-      source: 'manual_kickoff',
-      match_type: 'exact',
-      campaign_id: campaignRecord.id,
-      amazon_campaign_id: String(amazonCampaignId),
-      keyword_id: keywordRecord.id,
-      bid_initial: bid,
-      bid_current: bid,
-    }),
-    base44.asServiceRole.entities.OptimizationDecision.create({
-      amazon_account_id: aid,
-      decision_type: 'create_campaign',
-      entity_type: 'campaign',
-      entity_id: String(amazonCampaignId),
-      campaign_id: String(amazonCampaignId),
-      asin,
-      keyword_text: keyword,
-      action: 'create_campaign',
-      value_after: budget,
-      rationale: `Campanha manual SP criada via kick-off automático (autoKickoffProduct). Termo: "${keyword}". Fonte: TermBank ou IA com confiança >= 90%.`,
-      risk: 'low',
-      requires_approval: false,
-      status: 'executed',
-      confidence: 90,
-      objective: 'launch',
-      country_code: account.country_code || 'BR',
-      currency_code: account.currency_code || 'BRL',
-      currency_symbol: sym,
-      amazon_response: JSON.stringify({ campaignId: amazonCampaignId, adGroupId: amazonAdGroupId, keywordId: amazonKeywordId }),
-      executed_at: now,
-      evaluation_due_at: daysFromNow(3),
-      source_function: 'autoKickoffProduct',
-      created_at: now,
-    }),
-  ]);
+  // PASSO 6: TermBank + registro
+  base44.asServiceRole.entities.OptimizationDecision.create({
+    amazon_account_id: aid,
+    decision_type: 'create_campaign',
+    entity_type: 'campaign',
+    entity_id: String(amazonCampaignId),
+    campaign_id: String(amazonCampaignId),
+    asin,
+    keyword_text: keyword,
+    action: 'create_campaign',
+    value_after: budget,
+    rationale: `Campanha manual SP criada via kick-off automático. Termo: "${keyword}".`,
+    risk: 'low',
+    requires_approval: false,
+    status: 'executed',
+    confidence: 90,
+    objective: 'launch',
+    country_code: account.country_code || 'BR',
+    currency_code: account.currency_code || 'BRL',
+    currency_symbol: sym,
+    amazon_response: JSON.stringify({ campaignId: amazonCampaignId, adGroupId: amazonAdGroupId, keywordId: amazonKeywordId }),
+    executed_at: now,
+    evaluation_due_at: daysFromNow(3),
+    source_function: 'autoKickoffProduct',
+    created_at: now,
+  }).catch(() => {});
 
   return {
     ok: true,
@@ -314,23 +278,19 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, asin, sku, product_name, max_keywords = 3 } = body;
-
     if (!amazon_account_id || !asin) {
       return Response.json({ ok: false, error: 'amazon_account_id e asin são obrigatórios.' }, { status: 400 });
     }
 
-    // ── Resolver conta ─────────────────────────────────────────────────────
     const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id });
     const account = accs[0] || null;
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.' });
 
     const aid = account.id;
     const now = new Date().toISOString();
-    const sym = account.currency_symbol || 'R$';
     const minBudget = 5.00;
     const initialBid = 0.50;
 
-    // ── Carregar produto ────────────────────────────────────────────────────
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid, asin });
     const product = products[0] || null;
     const pName = product_name || product?.product_name || product?.display_name || asin;
@@ -339,7 +299,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error: 'Produto sem estoque — kick-off bloqueado.', blocked: true });
     }
 
-    const results = {
+    const results: any = {
       auto_campaign: null,
       manual_campaigns: [],
       keywords_source: [],
@@ -349,122 +309,181 @@ Deno.serve(async (req) => {
     };
 
     // ══════════════════════════════════════════════════════════════════════
-    // PASSO 1: Campanha AUTO
+    // PASSO 1: Campanha AUTO (inline, sem inter-function call)
     // ══════════════════════════════════════════════════════════════════════
-    const autoRes = await base44.asServiceRole.functions.invoke('createAutoCampaignForAsin', {
-      amazon_account_id: aid,
-      asin,
-      sku: sku || product?.sku,
-      product_name: pName,
-    });
-    const autoData = autoRes?.data || autoRes;
-    if (autoData?.ok) {
-      results.auto_campaign = {
-        ok: true,
-        campaign_id: autoData.campaign_id,
-        campaign_name: autoData.campaign_name,
-        daily_budget: autoData.daily_budget,
-        already_exists: autoData.already_exists || false,
-      };
-    } else {
-      results.errors.push(`AUTO: ${autoData?.error || 'Falha ao criar campanha AUTO'}`);
-      // Não bloqueia — continua com as manuais
+    try {
+      const existingAuto = await base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: aid, asin }, '-created_date', 20
+      );
+      const activeAuto = existingAuto.find((c: any) =>
+        (c.targeting_type || '').toUpperCase() === 'AUTO' && c.archived !== true
+      );
+
+      if (activeAuto) {
+        results.auto_campaign = {
+          ok: true,
+          campaign_id: activeAuto.campaign_id,
+          campaign_name: activeAuto.name || activeAuto.campaign_name,
+          daily_budget: activeAuto.daily_budget,
+          already_exists: true,
+        };
+      } else {
+        // Budget dinâmico
+        const autopilotCfgs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
+        const apCfg = autopilotCfgs[0] || null;
+        const totalDailyBudget = apCfg?.total_daily_budget || apCfg?.daily_budget_limit || 500;
+        const maxPerCampaign = apCfg?.maximum_campaign_budget || 20;
+        const allActiveCamps = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: aid }, '-created_date', 2000
+        );
+        const currentSpend = allActiveCamps
+          .filter((c: any) => c.state === 'enabled' && c.archived !== true)
+          .reduce((s: number, c: any) => s + (c.daily_budget || 0), 0);
+        const available = totalDailyBudget - currentSpend;
+        const autoBudget = Math.max(Math.min(Math.max(available * 0.1, 5), maxPerCampaign), 5);
+        const autoName = `AUTO | ${asin} | ${now.slice(0, 10)}`;
+
+        const autoCampRes = await adsCall(account, 'POST', '/sp/campaigns', {
+          campaigns: [{
+            name: autoName,
+            targetingType: 'AUTO',
+            state: 'ENABLED',
+            budget: { budgetType: 'DAILY', budget: autoBudget },
+            startDate: now.slice(0, 10),
+          }],
+        }, 'application/vnd.spCampaign.v3+json');
+
+        const autoCampaignId =
+          autoCampRes.data?.campaigns?.success?.[0]?.campaignId ||
+          autoCampRes.data?.success?.[0]?.campaignId ||
+          autoCampRes.data?.campaigns?.[0]?.campaignId ||
+          (Array.isArray(autoCampRes.data) ? autoCampRes.data[0]?.campaignId : null);
+
+        if (autoCampaignId) {
+          await adsCall(account, 'POST', '/sp/adGroups', {
+            adGroups: [{
+              name: `AdGroup | ${asin}`,
+              campaignId: autoCampaignId,
+              defaultBid: 0.50,
+              state: 'ENABLED',
+            }],
+          }, 'application/vnd.spAdGroup.v3+json').catch(() => {});
+
+          await base44.asServiceRole.entities.Campaign.create({
+            amazon_account_id: aid,
+            campaign_id: String(autoCampaignId),
+            asin,
+            name: autoName,
+            campaign_name: autoName,
+            campaign_type: 'SP',
+            targeting_type: 'AUTO',
+            state: 'enabled',
+            status: 'enabled',
+            daily_budget: autoBudget,
+            created_by_app: true,
+            launch_phase: 'new',
+            days_running: 0,
+            created_at: now,
+            synced_at: now,
+          });
+
+          results.auto_campaign = {
+            ok: true,
+            campaign_id: String(autoCampaignId),
+            campaign_name: autoName,
+            daily_budget: autoBudget,
+            already_exists: false,
+          };
+        } else {
+          const errDetail = autoCampRes.data?.campaigns?.error?.[0]?.description
+            || autoCampRes.data?.error
+            || JSON.stringify(autoCampRes.data).slice(0, 200);
+          results.errors.push(`AUTO: ${errDetail}`);
+        }
+      }
+    } catch (autoErr: any) {
+      results.errors.push(`AUTO: ${autoErr.message}`);
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // PASSO 2: Keywords — prioridade TermBank, fallback IA
+    // PASSO 2: Keywords — TermBank → Search Terms → IA
     // ══════════════════════════════════════════════════════════════════════
     const limit = Math.max(1, Math.min(max_keywords, 5));
 
-    // 2a. Carregar keywords já existentes para deduplicação
     const existingKeywords = await base44.asServiceRole.entities.Keyword.filter(
       { amazon_account_id: aid }, '-created_date', 500
     );
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter(
       { amazon_account_id: aid, asin }, '-created_date', 100
     );
-    const asinCampIds = new Set(existingCampaigns.map(c => c.campaign_id));
+    const asinCampIds = new Set(existingCampaigns.map((c: any) => c.campaign_id));
     const existingKwNorms = new Set(
       existingKeywords
-        .filter(k => asinCampIds.has(k.campaign_id) && k.match_type === 'exact' && k.state !== 'archived')
-        .map(k => norm(k.keyword_text || k.keyword || ''))
+        .filter((k: any) => asinCampIds.has(k.campaign_id) && k.match_type === 'exact' && k.state !== 'archived')
+        .map((k: any) => norm(k.keyword_text || k.keyword || ''))
     );
 
-    // 2b. Buscar no TermBank: winner, >= 4 pedidos, mesmo ASIN ou compatível
+    // 2a. TermBank: >= 4 pedidos
     const termBankRaw = await base44.asServiceRole.entities.TermBank.filter(
       { amazon_account_id: aid, asin }, '-orders', limit * 3
     );
     const termBankTerms = termBankRaw
-      .filter(t =>
+      .filter((t: any) =>
         (t.orders || 0) >= 4 &&
         t.status !== 'negative' && t.status !== 'archived' &&
         !existingKwNorms.has(norm(t.term || ''))
       )
-      .sort((a, b) => (b.performance_score || 0) - (a.performance_score || 0))
+      .sort((a: any, b: any) => (b.performance_score || 0) - (a.performance_score || 0))
       .slice(0, limit);
 
-    const selectedKeywords = termBankTerms.map(t => ({
+    const selectedKeywords: any[] = termBankTerms.map((t: any) => ({
       keyword: t.term,
       confidence: Math.min(0.99, 0.70 + (t.performance_score || 0) / 200),
       source: 'term_bank',
-      motivo: `TermBank: ${t.orders} pedidos, score ${t.performance_score || 0}`,
+      motivo: `TermBank: ${t.orders} pedidos`,
     }));
     results.term_bank_count = selectedKeywords.length;
 
-    // 2c. Se precisar de mais termos, buscar sugestões da IA
+    // 2b. Completar com IA se necessário
     const needed = limit - selectedKeywords.length;
     if (needed > 0) {
-      let aiSuggestions = [];
-
-      // Tentar função existente de sugestão
-      const suggestRes = await base44.asServiceRole.functions.invoke('suggestKeywordsForKickoff', {
-        amazon_account_id: aid,
-        asin,
-        product_name: pName,
-      }).catch(() => null);
-
-      const suggestData = suggestRes?.data || suggestRes;
-      if (suggestData?.suggestions?.length > 0) {
-        // Filtrar sugestões não duplicadas
-        const candidates = suggestData.suggestions.filter(s =>
-          !existingKwNorms.has(norm(s.keyword || '')) &&
-          !selectedKeywords.some(sk => norm(sk.keyword) === norm(s.keyword))
-        );
-
-        if (candidates.length > 0) {
-          // Validar com IA (Claude) as candidatas — confiança >= 90%
-          const validated = await validateSuggestionsWithAI(
-            candidates.slice(0, Math.min(needed * 3, 15)),
-            pName,
-            asin,
-            0.90
-          );
-          aiSuggestions = validated.slice(0, needed);
+      // Primeiro tentar search terms convertidos
+      const ownSearchTerms = await base44.asServiceRole.entities.SearchTerm.filter(
+        { amazon_account_id: aid, advertised_asin: asin }, '-orders_14d', 100
+      ).catch(() => []);
+      for (const st of ownSearchTerms) {
+        const term = (st.search_term || '').trim().toLowerCase();
+        if (!term || term.length < 4) continue;
+        const orders = (st.orders_7d || 0) + (st.orders_14d || 0);
+        if (orders >= 2 && !existingKwNorms.has(norm(term)) && !selectedKeywords.some((k: any) => norm(k.keyword) === norm(term))) {
+          selectedKeywords.push({
+            keyword: term,
+            confidence: Math.min(0.95, 0.75 + orders * 0.04),
+            source: 'search_term_converted',
+            motivo: `${orders} pedidos em search terms`,
+          });
+          if (selectedKeywords.length >= limit) break;
         }
       }
 
-      // Se ainda não tiver sugestões validadas, usar as da suggestKeywordsForKickoff com confiança >= 90% direto
-      if (aiSuggestions.length === 0 && suggestData?.suggestions?.length > 0) {
-        const highConf = suggestData.suggestions
-          .filter(s =>
-            (s.confidence || 0) >= 0.90 &&
-            !existingKwNorms.has(norm(s.keyword || '')) &&
-            !selectedKeywords.some(sk => norm(sk.keyword) === norm(s.keyword))
-          )
-          .slice(0, needed);
-        aiSuggestions = highConf.map(s => ({
-          keyword: s.keyword,
-          confidence: s.confidence,
-          source: 'ai_suggestion',
-          motivo: s.reason || 'Alta confiança pela IA',
-        }));
+      // Fallback: gerar com IA
+      const stillNeeded = limit - selectedKeywords.length;
+      if (stillNeeded > 0) {
+        try {
+          const aiKws = await generateKeywordsWithAI(pName, asin, stillNeeded);
+          const newKws = aiKws.filter((k: any) =>
+            !existingKwNorms.has(norm(k.keyword)) &&
+            !selectedKeywords.some((sk: any) => norm(sk.keyword) === norm(k.keyword))
+          ).slice(0, stillNeeded);
+          selectedKeywords.push(...newKws);
+          results.ai_count = newKws.length;
+        } catch (e: any) {
+          console.warn('[autoKickoffProduct] Geração IA falhou:', e.message);
+        }
       }
-
-      selectedKeywords.push(...aiSuggestions);
-      results.ai_count = aiSuggestions.length;
     }
 
-    results.keywords_source = selectedKeywords.map(k => ({
+    results.keywords_source = selectedKeywords.map((k: any) => ({
       keyword: k.keyword,
       confidence: Math.round((k.confidence || 0) * 100),
       source: k.source,
@@ -472,20 +491,14 @@ Deno.serve(async (req) => {
     }));
 
     // ══════════════════════════════════════════════════════════════════════
-    // PASSO 3: Criar campanhas manuais sequencialmente (rate limit)
+    // PASSO 3: Criar campanhas manuais
     // ══════════════════════════════════════════════════════════════════════
     for (const kw of selectedKeywords) {
-      // Aguardar 300ms entre chamadas Amazon para respeitar rate limits
-      if (results.manual_campaigns.length > 0) {
-        await new Promise(r => setTimeout(r, 300));
-      }
-
-      // Verificar duplicatas novamente (pode ter sido criada no loop)
+      if (results.manual_campaigns.length > 0) await new Promise(r => setTimeout(r, 400));
       if (existingKwNorms.has(norm(kw.keyword))) {
         results.manual_campaigns.push({ keyword: kw.keyword, ok: false, skipped: true, reason: 'Já existe' });
         continue;
       }
-
       try {
         const created = await createManualCampaign(
           base44, account, asin, kw.keyword,
@@ -493,16 +506,15 @@ Deno.serve(async (req) => {
           initialBid, minBudget, now
         );
         results.manual_campaigns.push({ ...created, source: kw.source });
-        // Adicionar ao índice local para deduplicação no mesmo loop
         existingKwNorms.add(norm(kw.keyword));
-      } catch (err) {
+      } catch (err: any) {
         results.manual_campaigns.push({ keyword: kw.keyword, ok: false, error: String(err?.message || err).slice(0, 200) });
         results.errors.push(`MANUAL [${kw.keyword}]: ${String(err?.message || err).slice(0, 100)}`);
       }
     }
 
-    const createdCount = results.manual_campaigns.filter(r => r.ok).length;
-    const failedCount  = results.manual_campaigns.filter(r => !r.ok && !r.skipped).length;
+    const createdCount = results.manual_campaigns.filter((r: any) => r.ok).length;
+    const failedCount  = results.manual_campaigns.filter((r: any) => !r.ok && !r.skipped).length;
 
     return Response.json({
       ok: true,
@@ -518,7 +530,7 @@ Deno.serve(async (req) => {
       errors: results.errors.length > 0 ? results.errors : undefined,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });

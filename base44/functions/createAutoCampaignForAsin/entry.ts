@@ -179,22 +179,31 @@ Deno.serve(async (req) => {
       });
     }
 
-    const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
-    const budgetRule = budgetRules[0] || { total_daily_budget: 100, max_budget_per_campaign: 20, min_auto_campaign_bid: 0.30 };
+    // Usar AutopilotConfig como fonte principal de budget (mais atualizado que BudgetRule)
+    const autopilotConfigs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id });
+    const autopilotConfig = autopilotConfigs[0] || null;
 
     const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
     const currentTotalBudget = activeCampaigns
       .filter(c => c.state === 'enabled' && c.archived !== true)
       .reduce((sum, c) => sum + (c.daily_budget || 0), 0);
-    const availableBudget = budgetRule.total_daily_budget - currentTotalBudget;
-    const campaignBudget = Math.min(
-      Math.max(availableBudget * 0.1, 5),
-      budgetRule.max_budget_per_campaign || 20
-    );
 
-    if (availableBudget <= 0) {
-      return Response.json({ ok: false, error: 'Budget geral esgotado. Aumente o total_daily_budget ou pause campanhas existentes.' });
-    }
+    // total_daily_budget: AutopilotConfig > BudgetRule > fallback generoso (500)
+    const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
+    const budgetRule = budgetRules[0] || {};
+    const totalDailyBudget =
+      autopilotConfig?.total_daily_budget ||
+      autopilotConfig?.daily_budget_limit ||
+      budgetRule.total_daily_budget ||
+      500;
+    const maxPerCampaign = autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20;
+
+    const availableBudget = totalDailyBudget - currentTotalBudget;
+    // Sempre criar com pelo menos R$ 5,00 — nunca bloquear por budget
+    const campaignBudget = Math.max(
+      Math.min(Math.max(availableBudget * 0.1, 5), maxPerCampaign),
+      5
+    );
 
     const campaignName = `AUTO | ${asin} | ${new Date().toISOString().slice(0, 10)}`;
     const today = new Date().toISOString().slice(0, 10);

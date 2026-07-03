@@ -217,7 +217,7 @@ Responda APENAS com JSON no formato:
 Inclua apenas termos com alta probabilidade de relevância (confidence >= 0.75). Máximo 10 termos.`;
 
           const response = await anthropic.messages.create({
-            model: 'claude-3-5-haiku-20241022',
+            model: 'claude-sonnet-4-5',
             max_tokens: 1000,
             messages: [{ role: 'user', content: prompt }],
           });
