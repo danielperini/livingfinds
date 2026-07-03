@@ -33,10 +33,18 @@ Deno.serve(async (req) => {
     }
 
     // ── 1. Resolver conta ─────────────────────────────────────────────────
-    const accs = await base44.asServiceRole.entities.AmazonAccount.filter(
-      { status: 'connected' }, '-created_date', 1
-    );
-    const account = accs[0] || null;
+    const body = await req.json().catch(() => ({}));
+    const amazonAccountId = body.amazon_account_id;
+    let account = null;
+    if (amazonAccountId) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazonAccountId });
+      account = accs[0] || null;
+    } else {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter(
+        { status: 'connected' }, '-created_date', 1
+      );
+      account = accs[0] || null;
+    }
     if (!account) return Response.json({ ok: false, skipped: true, reason: 'Nenhuma conta conectada.' });
 
     const aid = account.id;

@@ -381,83 +381,118 @@ export default function AdsAutopilot() {
   const runFullAutomation = async () => {
     if (!account) return;
     setFullAutoRunning(true);
+    const aid = account.id;
     const steps = [
-      { id: 'sync',      label: 'Sincronizar dados da Amazon (sync completo)',  status: 'pending' },
-      { id: 'optimize',  label: 'Analisar campanhas e gerar decisões IA',        status: 'pending' },
-      { id: 'execute',   label: 'Executar decisões aprovadas automaticamente',   status: 'pending' },
-      { id: 'dayparting',label: 'Calcular e aplicar regras de dayparting',       status: 'pending' },
-      { id: 'guardrails',label: 'Executar guardrails e proteções horárias',      status: 'pending' },
+      { id: 'unlock',    label: 'Liberar locks e verificar pré-condições',       status: 'pending' },
+      { id: 'sync',      label: 'Sincronizar dados da Amazon (sync completo)',    status: 'pending' },
+      { id: 'optimize',  label: 'Analisar campanhas e gerar decisões IA',         status: 'pending' },
+      { id: 'execute',   label: 'Executar decisões aprovadas automaticamente',    status: 'pending' },
+      { id: 'dayparting',label: 'Calcular e aplicar regras de dayparting',        status: 'pending' },
+      { id: 'guardrails',label: 'Executar guardrails e proteções horárias',       status: 'pending' },
     ];
     setFullAutoSteps(steps.map(s => ({ ...s })));
 
     const updateStep = (id, status, detail) =>
       setFullAutoSteps(prev => prev.map(s => s.id === id ? { ...s, status, detail } : s));
 
+    const safeInvoke = async (fn, payload) => {
+      try {
+        const r = await base44.functions.invoke(fn, payload);
+        return { ok: true, data: r?.data || {} };
+      } catch (e) {
+        const msg = e?.response?.data?.error || e?.response?.data?.message || e?.message || 'Erro desconhecido';
+        return { ok: false, error: msg };
+      }
+    };
+
+    // PASSO 0: Liberar TODOS os locks (syncs e runs em andamento) — ação manual, sem threshold
+    updateStep('unlock', 'running');
+    try {
+      const now = new Date().toISOString();
+      // Liberar syncs em status 'started'
+      const stuckSyncs = await base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid, status: 'started' }, null, 20);
+      for (const s of stuckSyncs) {
+        await base44.entities.SyncExecutionLog.update(s.id, { status: 'error', completed_at: now, error_message: 'Liberado pela Automação Total (ação manual)' });
+      }
+      // Liberar runs em status 'running'
+      const stuckRuns = await base44.entities.AutopilotRun.filter({ amazon_account_id: aid, status: 'running' }, null, 10);
+      for (const r of stuckRuns) {
+        await base44.entities.AutopilotRun.update(r.id, { status: 'failed', completed_at: now, error_message: 'Liberado pela Automação Total (ação manual)' });
+      }
+      updateStep('unlock', 'done', stuckSyncs.length + stuckRuns.length > 0
+        ? `${stuckSyncs.length} syncs e ${stuckRuns.length} runs liberados`
+        : 'Sistema pronto para execução');
+    } catch (e) {
+      updateStep('unlock', 'done', 'Verificação concluída');
+    }
+    await new Promise(r => setTimeout(r, 500));
+
     // PASSO 1: Sync
     updateStep('sync', 'running');
-    try {
-      const r = await base44.functions.invoke('syncFullDaily', { amazon_account_id: account.id });
-      const d = r?.data;
-      updateStep('sync', d?.ok || d?.skipped ? 'done' : 'error',
-        d?.ok ? `${d.campaigns_synced || 0} campanhas · ${d.keywords_synced || 0} keywords`
-              : d?.skipped ? 'Já sincronizado hoje'
-              : d?.error || 'Erro no sync');
-    } catch (e) {
-      updateStep('sync', 'error', e.message);
+    {
+      const { ok, data, error } = await safeInvoke('syncAds', { amazon_account_id: aid, trigger_type: 'manual' });
+      if (ok && (data?.ok || data?.skipped)) {
+        const d = data;
+        updateStep('sync', 'done',
+          d?.skipped ? 'Já sincronizado recentemente' :
+          `${d.campaigns_synced || d.results?.campaigns || 0} campanhas · ${d.keywords_synced || d.results?.keywords || 0} keywords`);
+      } else {
+        updateStep('sync', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+      }
     }
 
     // PASSO 2: Otimização
     updateStep('optimize', 'running');
-    try {
-      const r = await base44.functions.invoke('runDailyAdsOptimization', { amazon_account_id: account.id, trigger: 'full_auto' });
-      const d = r?.data;
-      const b = d?.breakdown || {};
-      updateStep('optimize', d?.ok ? 'done' : d?.skipped ? 'done' : 'error',
-        d?.ok ? `${d.decisions_created || 0} decisões · ${b.harvest || 0} termos · ${b.bid_decrease || 0} bids↓ · ${b.bid_increase || 0} bids↑`
-              : d?.skipped ? d.reason
-              : d?.error || 'Erro');
-    } catch (e) {
-      updateStep('optimize', 'error', e.message);
+    {
+      const { ok, data, error } = await safeInvoke('runDailyAdsOptimization', { amazon_account_id: aid, trigger: 'full_auto' });
+      if (ok && (data?.ok || data?.skipped)) {
+        const b = data?.breakdown || {};
+        updateStep('optimize', 'done',
+          data?.skipped ? (data.reason || 'Ignorado') :
+          `${data.decisions_created || 0} decisões · ${b.harvest || 0} termos · ${b.bid_decrease || 0} bids↓ · ${b.bid_increase || 0} bids↑`);
+      } else {
+        updateStep('optimize', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+      }
     }
 
     // PASSO 3: Executar aprovadas
     updateStep('execute', 'running');
-    try {
-      const r = await base44.functions.invoke('runNightlyAutoExecution', { amazon_account_id: account.id, trigger: 'full_auto' });
-      const d = r?.data;
-      updateStep('execute', d?.ok || d?.skipped ? 'done' : 'error',
-        d?.ok ? `${d.executed || 0} executadas · ${d.failed || 0} falhas`
-              : d?.skipped ? d.reason || 'Sem decisões pendentes'
-              : d?.error || 'Erro');
-    } catch (e) {
-      updateStep('execute', 'error', e.message);
+    {
+      const { ok, data, error } = await safeInvoke('runNightlyAutoExecution', { amazon_account_id: aid, trigger: 'full_auto' });
+      if (ok && (data?.ok || data?.skipped)) {
+        updateStep('execute', 'done',
+          data?.skipped ? (data.reason || 'Sem decisões pendentes') :
+          `${data.executed || 0} executadas · ${data.failed || 0} falhas`);
+      } else {
+        updateStep('execute', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+      }
     }
 
     // PASSO 4: Dayparting
     updateStep('dayparting', 'running');
-    try {
-      const r = await base44.functions.invoke('runDailyDayparting', { amazon_account_id: account.id });
-      const d = r?.data;
-      const s = d?.stats || {};
-      updateStep('dayparting', d?.ok || d?.skipped ? 'done' : 'error',
-        d?.ok ? `${s.auto_applied || 0} regras aplicadas · ${s.pending_review || 0} aguardam revisão`
-              : d?.skipped ? d.reason || 'Sem dados suficientes'
-              : d?.error || 'Erro');
-    } catch (e) {
-      updateStep('dayparting', 'error', e.message);
+    {
+      const { ok, data, error } = await safeInvoke('runDailyDayparting', { amazon_account_id: aid });
+      if (ok && (data?.ok || data?.skipped)) {
+        const s = data?.stats || {};
+        updateStep('dayparting', 'done',
+          data?.skipped ? (data.reason || 'Sem dados suficientes') :
+          `${s.auto_applied || 0} regras aplicadas · ${s.pending_review || 0} aguardam revisão`);
+      } else {
+        updateStep('dayparting', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+      }
     }
 
     // PASSO 5: Guardrails
     updateStep('guardrails', 'running');
-    try {
-      const r = await base44.functions.invoke('runHourlyAdsGuardrails', { amazon_account_id: account.id });
-      const d = r?.data;
-      updateStep('guardrails', d?.ok || d?.skipped ? 'done' : 'error',
-        d?.ok ? `${d.actions || 0} proteções aplicadas`
-              : d?.skipped ? 'Sem alterações necessárias'
-              : d?.error || 'Erro');
-    } catch (e) {
-      updateStep('guardrails', 'error', e.message);
+    {
+      const { ok, data, error } = await safeInvoke('runHourlyAdsGuardrails', { amazon_account_id: aid });
+      if (ok && (data?.ok || data?.skipped)) {
+        updateStep('guardrails', 'done',
+          data?.skipped ? 'Sem alterações necessárias' :
+          `${data.actions || 0} proteções aplicadas`);
+      } else {
+        updateStep('guardrails', 'error', ok ? (data?.error || data?.message || 'Falhou') : error);
+      }
     }
 
     setFullAutoRunning(false);

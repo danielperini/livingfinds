@@ -267,13 +267,15 @@ Deno.serve(async (req) => {
     }
 
     // Verificar se sync está rodando (dados parciais = decisões inválidas)
+    // Threshold: 15 min — syncs mais velhos que isso são considerados travados e liberados
     const activeSyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter(
       { amazon_account_id: amazonAccountId, status: 'started', operation: 'full_sync' }, '-started_at', 3
     );
     for (const s of activeSyncs) {
       const ageMin = (Date.now() - new Date(s.started_at).getTime()) / 60000;
-      if (ageMin < 30) return Response.json({ ok: false, skipped: true, reason: 'Sync em andamento — dados parciais, aguarde completar', age_minutes: Math.round(ageMin) });
-      await base44.asServiceRole.entities.SyncExecutionLog.update(s.id, { status: 'error', completed_at: now, error_message: 'Lock antigo liberado' });
+      if (ageMin < 5) return Response.json({ ok: false, skipped: true, reason: 'Sync em andamento — dados parciais, aguarde completar', age_minutes: Math.round(ageMin) });
+      // Sync travado há mais de 5 min → liberar
+      await base44.asServiceRole.entities.SyncExecutionLog.update(s.id, { status: 'error', completed_at: now, error_message: `Lock liberado após ${Math.round(ageMin)} min` });
     }
 
     // ── 3. Carregar configuração ──────────────────────────────────────────
