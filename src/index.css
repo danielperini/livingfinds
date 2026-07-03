@@ -29,8 +29,6 @@
     --font-heading: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
-
-    /* LivingFinds custom tokens */
     --canvas: #0A0B0F;
     --surface-1: #111318;
     --surface-2: #1A1D26;
@@ -59,29 +57,32 @@
   .surface-2 { background-color: var(--surface-2); }
   .surface-3 { background-color: var(--surface-3); }
   .canvas { background-color: var(--canvas); }
-
   .metric-positive { @apply text-emerald-400; }
   .metric-negative { @apply text-red-400; }
   .metric-neutral { @apply text-slate-400; }
-
-  .glow-cyan {
-    box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
-  }
-  .glow-green {
-    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
-  }
-
+  .glow-cyan { box-shadow: 0 0 20px rgba(59, 130, 246, 0.15); }
+  .glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.15); }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-slate-700 rounded-full; }
 }
 
-button[title='Criar campanha para este produto'] {
+button[title="Criar campanha para este produto"] {
   font-size: 0;
 }
 
-button[title='Criar campanha para este produto']::after {
-  content: 'Realizar Kick-off';
+button[title="Criar campanha para este produto"]::after {
+  content: "Realizar Kick-off";
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+button[title="Pausar campanha"] {
+  font-size: 0;
+}
+
+button[title="Pausar campanha"]::after {
+  content: "Pausar todas";
   font-size: 0.75rem;
   line-height: 1rem;
 }
