@@ -116,12 +116,17 @@ Deno.serve(async (request) => {
       updated += 1;
     }
 
+    const campaignEvaluation = await base44.functions.invoke('evaluateAutoVsManualCampaigns', {
+      amazon_account_id,
+    }).then((res) => res?.data).catch((error) => ({ ok: false, error: error?.message || 'Falha na avaliação AUTO x manual' }));
+
     const target = inventory.get('B0GHP68123');
     return Response.json({
       ok: true,
       inventory_asins: inventory.size,
       updated,
       corrected_from_out_of_stock: corrected,
+      campaign_evaluation: campaignEvaluation,
       verified_asin: {
         asin: 'B0GHP68123',
         found: Boolean(target),
