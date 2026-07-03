@@ -67,7 +67,7 @@ const AuthenticatedApp = () => {
 
   if (authError) {
     if (authError.type === 'user_not_registered') return <UserNotRegisteredError />;
-    if (authError.type === 'auth_required') { navigateToLogin(); return null; }
+    // auth_required é tratado pelo ProtectedRoute em cada rota — não bloquear o app globalmente
   }
 
   return (
