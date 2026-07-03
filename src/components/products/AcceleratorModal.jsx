@@ -1,924 +1,239 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import {
-  AlertTriangle,
-  CheckCircle,
-  ChevronRight,
-  Loader2,
-  Rocket,
-  Sparkles,
-  X,
-  XCircle,
-} from 'lucide-react';
-import KeywordSuggestionsPanel from '@/components/ads/KeywordSuggestionsPanel';
+import { AlertTriangle, CheckCircle, Loader2, Rocket, Sparkles, X } from 'lucide-react';
 
-function parseKeywords(value) {
-  const received = value
-    .split(/[\n,;]+/)
-    .map(item => item.trim())
-    .filter(Boolean);
+const cents = (value) => Math.round(Number(value || 0) * 100) / 100;
 
-  const valid = [];
-  const duplicates = [];
-  const invalid = [];
-  const seen = new Set();
-
-  for (const rawItem of received) {
-    const text = rawItem
-      .replace(/^[\s\d.\-*\u2022+\u2023\u25E6]+/, '')
-      .trim();
-
-    if (!text || text.length > 100) {
-      if (text) invalid.push(text);
-      continue;
-    }
-
-    const normalized = text
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
-
-    if (seen.has(normalized)) {
-      duplicates.push(text);
-      continue;
-    }
-
-    seen.add(normalized);
-    valid.push(text);
-  }
-
-  return {
-    original_count: received.length,
-    valid_count: valid.length,
-    duplicate_count: duplicates.length,
-    invalid_count: invalid.length,
-    valid,
-    duplicates,
-    invalid,
-  };
+function allSuggestions(data) {
+  return [...(data?.medium_tail || []), ...(data?.long_tail || [])]
+    .filter((item) => item?.status === 'suggested' && item?.id)
+    .sort((a, b) => {
+      const scoreA = Number(a.confidence || 0) * Number(a.relevance_score || 0);
+      const scoreB = Number(b.confidence || 0) * Number(b.relevance_score || 0);
+      return scoreB - scoreA;
+    });
 }
 
-export default function AcceleratorModal({
-  product,
-  account,
-  onClose,
-  onDone,
-}) {
-  const [mode, setMode] = useState('manual'); // 'manual' | 'ai'
-  const [step, setStep] = useState('keywords');
-  const [keywordsRaw, setKeywordsRaw] = useState('');
-  const [validation, setValidation] = useState(null);
-  const [creating, setCreating] = useState(false);
+export default function AcceleratorModal({ product, account, onClose, onDone }) {
+  const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [progress, setProgress] = useState('');
 
-  const parsed = useMemo(() => {
-    if (!keywordsRaw.trim()) return null;
+  const accelerate = async () => {
+    if (!account?.id || !product?.asin || running) return;
 
-    return parseKeywords(keywordsRaw);
-  }, [keywordsRaw]);
-
-  const validating =
-    step === 'validate' &&
-    validation?.loading === true;
-
-  const canValidate =
-    Boolean(parsed?.valid_count) &&
-    Boolean(account?.id) &&
-    Boolean(product?.asin) &&
-    !validating;
-
-  const validate = async () => {
-    if (validating) return;
-
-    if (!parsed || parsed.valid_count === 0) {
-      setError('Insira pelo menos uma palavra-chave válida.');
-      return;
-    }
-
-    if (!account?.id) {
-      setError(
-        'Conta Amazon não identificada. Atualize a página e tente novamente.'
-      );
-      return;
-    }
-
-    if (!product?.asin) {
-      setError('Produto sem ASIN válido.');
-      return;
-    }
-
+    setRunning(true);
     setError(null);
-    setValidation({
-      loading: true,
-      passed: false,
-      blocks: [],
-      alerts: [],
-      warnings: [],
-    });
-
-    /*
-     * Correção principal:
-     * muda imediatamente para a etapa de validação.
-     */
-    setStep('validate');
+    setResult(null);
 
     try {
-      const response = await base44.functions.invoke(
-        'validateAdGroupCreation',
-        {
-          amazon_account_id: account.id,
-          asin: product.asin,
-          sku: product.sku || null,
-          keywords: parsed.valid,
-          match_type: 'exact',
-          campaign_type: 'SP',
-          targeting_type: 'MANUAL',
-        }
-      );
+      setProgress('Gerando palavras-chave de alta intenção com IA...');
+      const suggestionResponse = await base44.functions.invoke('suggestProductKeywordsWithAI', {
+        amazon_account_id: account.id,
+        asin: product.asin,
+        product_id: product.id,
+        requested_count: 4,
+        minimum_confidence: 0.95,
+        acceleration_mode: true,
+      });
 
-      const data = response?.data;
-
-      if (!data?.ok) {
-        setValidation({
-          loading: false,
-          passed: false,
-          blocks: [],
-          alerts: [],
-          warnings: [],
-          error:
-            data?.error ||
-            data?.message ||
-            'A validação não pôde ser concluída.',
-        });
-
-        return;
+      if (!suggestionResponse?.data?.ok) {
+        throw new Error(suggestionResponse?.data?.error || 'Não foi possível gerar palavras-chave com IA.');
       }
 
-      const blocks =
-        data.validations?.blocks || [];
+      const candidates = allSuggestions(suggestionResponse.data);
+      const highConfidence = candidates.filter((item) => Number(item.confidence || 0) >= 0.95);
+      const selected = highConfidence.slice(0, 4);
 
-      const alerts =
-        data.validations?.alerts || [];
-
-      const warnings =
-        data.validations?.warnings || [];
-
-      setValidation({
-        loading: false,
-        passed: blocks.length === 0,
-        blocks,
-        alerts,
-        warnings,
-        checks:
-          data.validations?.checks || {},
-        duplicate:
-          data.validations?.existing_campaign || null,
-        sku_conflict:
-          data.validations?.sku_conflict || null,
-      });
-    } catch (requestError) {
-      setValidation({
-        loading: false,
-        passed: false,
-        blocks: [],
-        alerts: [],
-        warnings: [],
-        error:
-          requestError?.message ||
-          'Falha ao validar as palavras-chave.',
-      });
-    }
-  };
-
-  const createCampaign = async () => {
-    if (creating) return;
-
-    if (!account?.id) {
-      setError('Conta Amazon não identificada.');
-      return;
-    }
-
-    if (!product?.asin) {
-      setError('Produto sem ASIN válido.');
-      return;
-    }
-
-    if (!parsed?.valid_count) {
-      setError('Nenhuma palavra-chave válida foi encontrada.');
-      return;
-    }
-
-    setCreating(true);
-    setError(null);
-    setStep('creating');
-
-    try {
-      const response = await base44.functions.invoke(
-        'createAcceleratorCampaign',
-        {
-          amazon_account_id: account.id,
-          asin: product.asin,
-          sku: product.sku || null,
-          product_name:
-            product.product_name ||
-            product.display_name ||
-            product.asin,
-          keywords_raw: parsed.valid.join('\n'),
-          keywords: parsed.valid,
-          mode: 'assisted',
-        }
-      );
-
-      const data = response?.data;
-
-      if (!data?.ok) {
-        setError(
-          data?.error ||
-          data?.message ||
-          'Não foi possível criar a campanha.'
-        );
-
-        setStep('preview');
-        return;
+      if (selected.length < 4) {
+        throw new Error(`A IA encontrou apenas ${selected.length} palavra(s) com confiança estimada mínima de 95%. Nenhuma alteração foi aplicada.`);
       }
 
-      setResult(data);
-      setStep('done');
+      setProgress('Criando 4 palavras-chave manuais exatas...');
+      const createResponse = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+        amazon_account_id: account.id,
+        suggestion_ids: selected.map((item) => item.id),
+        overrides: Object.fromEntries(selected.map((item) => [item.id, {
+          bid: cents(item.recommended_bid || 0.30),
+          budget: Number(item.recommended_budget || 5),
+        }])),
+      });
 
+      const creationResults = createResponse?.data?.results || [];
+      const createdCount = creationResults.filter((item) => item.ok || item.already_exists).length;
+      if (createdCount < 4) {
+        throw new Error(`Somente ${createdCount} das 4 palavras-chave foram criadas ou já existiam.`);
+      }
+
+      setProgress('Aumentando os bids relacionados em R$ 0,10 por 48 horas...');
+      const campaigns = await base44.entities.Campaign.filter({
+        amazon_account_id: account.id,
+        asin: product.asin,
+      });
+      const campaignIds = new Set(campaigns.map((campaign) => String(campaign.campaign_id)));
+      const keywords = await base44.entities.Keyword.filter({ amazon_account_id: account.id });
+      const eligibleKeywords = keywords.filter((keyword) =>
+        campaignIds.has(String(keyword.campaign_id)) &&
+        String(keyword.state || keyword.status || 'enabled').toLowerCase() !== 'archived' &&
+        keyword.keyword_id
+      );
+
+      const sessionId = `ACCELERATOR_48H:${product.asin}:${Date.now()}`;
+      const startedAt = new Date();
+      const dueAt = new Date(startedAt.getTime() + 48 * 60 * 60 * 1000).toISOString();
+      let bidsUpdated = 0;
+      const failures = [];
+
+      for (const keyword of eligibleKeywords) {
+        const originalBid = cents(keyword.current_bid ?? keyword.bid ?? keyword.default_bid ?? 0.30);
+        const newBid = cents(originalBid + 0.10);
+        const campaign = campaigns.find((item) => String(item.campaign_id) === String(keyword.campaign_id));
+
+        try {
+          const action = await base44.entities.AgentAction.create({
+            amazon_account_id: account.id,
+            action: 'update_bid',
+            asin: product.asin,
+            campaign_id: keyword.campaign_id,
+            keyword_id: keyword.keyword_id,
+            keyword: keyword.keyword_text,
+            old_value: originalBid,
+            new_value: newBid,
+            reason: sessionId,
+            evidence: JSON.stringify({
+              acceleration_session: sessionId,
+              started_at: startedAt.toISOString(),
+              evaluation_due_at: dueAt,
+              original_bid: originalBid,
+              accelerated_bid: newBid,
+              baseline_spend: Number(campaign?.spend_30d ?? campaign?.spend ?? 0),
+              baseline_sales: Number(campaign?.sales_30d ?? campaign?.sales ?? 0),
+              baseline_orders: Number(campaign?.orders_30d ?? campaign?.orders ?? 0),
+              baseline_roas: Number(campaign?.roas_30d ?? campaign?.roas ?? 0),
+              baseline_acos: Number(campaign?.acos_30d ?? campaign?.acos ?? 0),
+              confidence_is_estimated: true,
+            }),
+            risk_level: 'medium',
+            requires_approval: false,
+          });
+
+          const execution = await base44.functions.invoke('executeAgentAction', {
+            action_id: action.id,
+            approve: true,
+          });
+          if (!execution?.data?.ok) throw new Error(execution?.data?.error || 'Amazon recusou o novo bid.');
+          bidsUpdated += 1;
+        } catch (actionError) {
+          failures.push(`${keyword.keyword_text || keyword.keyword_id}: ${actionError.message}`);
+        }
+      }
+
+      await base44.entities.LearningEvent.create({
+        amazon_account_id: account.id,
+        event_type: 'product_acceleration_started',
+        entity_type: 'product',
+        entity_id: product.asin,
+        observation: JSON.stringify({
+          session_id: sessionId,
+          asin: product.asin,
+          started_at: startedAt.toISOString(),
+          evaluation_due_at: dueAt,
+          keyword_suggestions: selected.map((item) => ({
+            keyword: item.keyword,
+            confidence: item.confidence,
+            relevance_score: item.relevance_score,
+          })),
+          bids_updated: bidsUpdated,
+        }),
+        recorded_at: startedAt.toISOString(),
+      }).catch(() => {});
+
+      setResult({
+        keywords: selected,
+        bidsUpdated,
+        dueAt,
+        failures,
+      });
+      setProgress('');
       onDone?.();
-    } catch (requestError) {
-      setError(
-        requestError?.message ||
-        'Falha ao criar a campanha.'
-      );
-
-      setStep('preview');
+    } catch (runError) {
+      setError(runError?.message || 'Falha ao acelerar o produto.');
+      setProgress('');
     } finally {
-      setCreating(false);
+      setRunning(false);
     }
   };
 
-  const returnToKeywords = () => {
-    setValidation(null);
-    setError(null);
-    setStep('keywords');
-  };
-
-  const proceedToPreview = () => {
-    setError(null);
-    setStep('preview');
-  };
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      onClick={(event) => {
-        if (event.target === event.currentTarget && !creating) {
-          onClose();
-        }
-      }}
-    >
-      <div className="bg-surface-1 border border-surface-2 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-2 flex-shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={(event) => {
+      if (event.target === event.currentTarget && !running) onClose();
+    }}>
+      <div className="w-full max-w-xl rounded-2xl border border-surface-2 bg-surface-1 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-surface-2 px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
-              <Rocket className="w-5 h-5 text-cyan" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-400/10">
+              <Rocket className="h-5 w-5 text-violet-400" />
             </div>
-
             <div>
-              <h2 className="text-sm font-bold text-white">
-                Acelerador de Campanhas
-              </h2>
-
-              <p className="text-xs text-slate-400 font-mono">
-                {product?.asin || 'Sem ASIN'}
-                {product?.sku
-                  ? ` · ${product.sku}`
-                  : ''}
-              </p>
+              <h2 className="text-sm font-bold text-white">Aceleração inteligente por 48 horas</h2>
+              <p className="font-mono text-xs text-slate-400">{product?.asin} {product?.sku ? `· ${product.sku}` : ''}</p>
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={creating}
-            aria-label="Fechar"
-            className="text-slate-500 hover:text-white transition-colors disabled:opacity-40"
-          >
-            <X className="w-5 h-5" />
+          <button type="button" onClick={onClose} disabled={running} className="text-slate-500 hover:text-white disabled:opacity-40" aria-label="Fechar">
+            <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Mode tabs */}
-        <div className="flex border-b border-surface-2 flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => setMode('manual')}
-            className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
-              mode === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <Rocket className="w-3.5 h-3.5" /> Manual
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('ai')}
-            className={`flex-1 py-2.5 text-xs font-semibold flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
-              mode === 'ai' ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" /> Sugerir com IA
-          </button>
-        </div>
-
-        {mode === 'ai' ? (
-          <div className="flex-1 overflow-y-auto p-6">
-            <KeywordSuggestionsPanel product={product} account={account} onCampaignsCreated={onDone} />
+        <div className="space-y-4 p-6">
+          <div className="rounded-xl border border-violet-400/20 bg-violet-400/5 p-4 text-sm text-slate-300">
+            <div className="mb-2 flex items-center gap-2 font-semibold text-violet-300">
+              <Sparkles className="h-4 w-4" /> Experimento controlado
+            </div>
+            <p>Cria 4 palavras-chave exatas de alta intenção, com confiança estimada mínima de 95%, e aumenta em R$ 0,10 os bids das campanhas relacionadas durante 48 horas.</p>
           </div>
-        ) : (
-        <>
-        <div className="flex items-center gap-2 px-6 py-3 bg-surface-2/40 border-b border-surface-2 flex-shrink-0 overflow-x-auto">
-          <StepBadge
-            active={step === 'keywords'}
-            completed={[
-              'validate',
-              'preview',
-              'creating',
-              'done',
-            ].includes(step)}
-            label="1. Keywords"
-          />
 
-          <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />
+          <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-relaxed text-amber-200">
+            <div className="mb-1 flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" /> Regras após 48 horas</div>
+            Campanhas que apenas gastarem e não venderem serão pausadas. Bids que reduzirem ROAS ou aumentarem excessivamente o custo voltarão ao valor original. Campanhas com resultado positivo seguirão a gestão normal de anúncios.
+          </div>
 
-          <StepBadge
-            active={step === 'validate'}
-            completed={[
-              'preview',
-              'creating',
-              'done',
-            ].includes(step)}
-            label="2. Validar"
-          />
-
-          <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />
-
-          <StepBadge
-            active={step === 'preview'}
-            completed={[
-              'creating',
-              'done',
-            ].includes(step)}
-            label="3. Prévia"
-          />
-
-          <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />
-
-          <StepBadge
-            active={step === 'creating'}
-            completed={step === 'done'}
-            label="4. Criar"
-          />
-
-          <ChevronRight className="w-3 h-3 text-slate-600 flex-shrink-0" />
-
-          <StepBadge
-            active={step === 'done'}
-            completed={false}
-            label="5. Concluído"
-          />
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          {step === 'keywords' && (
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-semibold text-white mb-1">
-                  Palavras-chave
-                </h3>
-
-                <p className="text-xs text-slate-500">
-                  Cole uma palavra-chave por linha ou separe por
-                  vírgula ou ponto e vírgula.
-                </p>
-              </div>
-
-              <textarea
-                value={keywordsRaw}
-                onChange={(event) => {
-                  setKeywordsRaw(event.target.value);
-                  setError(null);
-                  setValidation(null);
-                }}
-                placeholder={
-                  'lixeira automática\n' +
-                  'lixeira inteligente 13 litros\n' +
-                  'lixeira com sensor de aproximação'
-                }
-                className="w-full h-48 px-4 py-3 bg-surface-2 border border-surface-3 rounded-xl text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:border-cyan/50 resize-none font-mono"
-              />
-
-              {parsed && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <MetricCard
-                    label="Recebidas"
-                    value={parsed.original_count}
-                    variant="default"
-                  />
-
-                  <MetricCard
-                    label="Válidas"
-                    value={parsed.valid_count}
-                    variant="success"
-                  />
-
-                  <MetricCard
-                    label="Duplicadas"
-                    value={parsed.duplicate_count}
-                    variant="warning"
-                  />
-
-                  <MetricCard
-                    label="Inválidas"
-                    value={parsed.invalid_count}
-                    variant="error"
-                  />
-                </div>
-              )}
-
-              {error && (
-                <Notice
-                  type="error"
-                  title="Não foi possível validar"
-                  message={error}
-                />
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-                >
-                  Cancelar
-                </button>
-
-                <button
-                  type="button"
-                  onClick={validate}
-                  disabled={!canValidate}
-                  className="flex items-center gap-2 px-5 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Validar
-
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
+          {progress && (
+            <div className="flex items-center gap-2 rounded-lg bg-cyan/10 px-3 py-2 text-xs text-cyan">
+              <Loader2 className="h-4 w-4 animate-spin" /> {progress}
             </div>
           )}
 
-          {step === 'validate' &&
-            validation?.loading && (
-              <div className="flex flex-col items-center justify-center py-16 gap-3">
-                <Loader2 className="w-9 h-9 text-cyan animate-spin" />
+          {error && <div className="rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-300">{error}</div>}
 
-                <p className="text-sm font-semibold text-white">
-                  Validando palavras-chave
-                </p>
-
-                <p className="text-xs text-slate-500">
-                  Verificando conta, produto, estrutura e possíveis
-                  duplicações.
-                </p>
+          {result && (
+            <div className="space-y-3 rounded-xl border border-emerald-400/20 bg-emerald-400/5 p-4">
+              <div className="flex items-center gap-2 text-sm font-semibold text-emerald-300"><CheckCircle className="h-4 w-4" /> Aceleração iniciada</div>
+              <p className="text-xs text-slate-300">4 palavras-chave processadas · {result.bidsUpdated} bids aumentados.</p>
+              <div className="space-y-1">
+                {result.keywords.map((item) => (
+                  <div key={item.id} className="flex justify-between gap-3 text-xs text-slate-400">
+                    <span>{item.keyword}</span><span>{Math.round(Number(item.confidence) * 100)}%</span>
+                  </div>
+                ))}
               </div>
+              <p className="text-[11px] text-slate-500">Avaliação automática: {new Date(result.dueAt).toLocaleString('pt-BR')}</p>
+              {result.failures.length > 0 && <p className="text-[11px] text-amber-300">{result.failures.length} bid(s) não puderam ser alterados.</p>}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} disabled={running} className="rounded-lg border border-surface-3 px-4 py-2 text-sm text-slate-300 hover:text-white disabled:opacity-50">
+              {result ? 'Fechar' : 'Cancelar'}
+            </button>
+            {!result && (
+              <button type="button" onClick={accelerate} disabled={running || !account} className="flex items-center gap-2 rounded-lg bg-violet-500 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-400 disabled:opacity-50">
+                {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                {running ? 'Acelerando...' : 'Acelerar por 48 horas'}
+              </button>
             )}
-
-          {step === 'validate' &&
-            validation &&
-            !validation.loading && (
-              <div className="space-y-4">
-                {validation.error && (
-                  <Notice
-                    type="error"
-                    title="Erro na validação"
-                    message={validation.error}
-                  />
-                )}
-
-                {validation.blocks?.map(
-                  (block, index) => (
-                    <Notice
-                      key={`block-${index}`}
-                      type="error"
-                      title={`Bloqueio${
-                        block?.field
-                          ? `: ${block.field}`
-                          : ''
-                      }`}
-                      message={
-                        block?.message ||
-                        String(block)
-                      }
-                    />
-                  )
-                )}
-
-                {validation.alerts?.map(
-                  (alert, index) => (
-                    <Notice
-                      key={`alert-${index}`}
-                      type="warning"
-                      title={`Alerta${
-                        alert?.field
-                          ? `: ${alert.field}`
-                          : ''
-                      }`}
-                      message={
-                        alert?.message ||
-                        String(alert)
-                      }
-                    />
-                  )
-                )}
-
-                {validation.warnings?.map(
-                  (warning, index) => (
-                    <Notice
-                      key={`warning-${index}`}
-                      type="warning"
-                      title="Aviso"
-                      message={
-                        warning?.message ||
-                        String(warning)
-                      }
-                    />
-                  )
-                )}
-
-                {validation.duplicate && (
-                  <Notice
-                    type="warning"
-                    title="Campanha já existente"
-                    message={
-                      validation.duplicate
-                        ?.campaign_name
-                        ? `Já existe a campanha ${validation.duplicate.campaign_name}.`
-                        : 'Foi encontrada uma campanha equivalente para este produto.'
-                    }
-                  />
-                )}
-
-                {validation.sku_conflict && (
-                  <Notice
-                    type="warning"
-                    title="Conflito de SKU"
-                    message="O ASIN possui mais de um SKU associado. Revise o SKU antes de continuar."
-                  />
-                )}
-
-                {validation.passed && (
-                  <Notice
-                    type="success"
-                    title="Validação concluída"
-                    message={`${parsed.valid_count} palavras-chave estão prontas para a próxima etapa.`}
-                  />
-                )}
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={returnToKeywords}
-                    className="px-4 py-2 text-sm text-slate-400 hover:text-white transition-colors"
-                  >
-                    Voltar
-                  </button>
-
-                  {validation.passed && (
-                    <button
-                      type="button"
-                      onClick={proceedToPreview}
-                      className="flex items-center gap-2 px-5 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg"
-                    >
-                      Continuar
-
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-          {step === 'preview' && (
-            <div className="space-y-4">
-              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                <h3 className="text-sm font-semibold text-white mb-4">
-                  Prévia da campanha
-                </h3>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                  <PreviewField
-                    label="Produto"
-                    value={
-                      product?.product_name ||
-                      product?.display_name ||
-                      product?.asin
-                    }
-                  />
-
-                  <PreviewField
-                    label="ASIN"
-                    value={product?.asin || 'N/A'}
-                  />
-
-                  <PreviewField
-                    label="SKU"
-                    value={product?.sku || 'N/A'}
-                  />
-
-                  <PreviewField
-                    label="Correspondência"
-                    value="Exata"
-                  />
-
-                  <PreviewField
-                    label="Palavras-chave"
-                    value={String(
-                      parsed?.valid_count || 0
-                    )}
-                  />
-
-                  <PreviewField
-                    label="Moeda"
-                    value="BRL — Real brasileiro"
-                  />
-                </div>
-              </div>
-
-              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                <p className="text-xs text-slate-500 font-semibold mb-3">
-                  Palavras-chave que serão processadas
-                </p>
-
-                <div className="max-h-48 overflow-y-auto space-y-1.5">
-                  {parsed?.valid.map(
-                    (keyword) => (
-                      <div
-                        key={keyword}
-                        className="flex items-center gap-2 bg-surface-3 rounded-lg px-3 py-2"
-                      >
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-
-                        <span className="text-xs text-slate-300">
-                          {keyword}
-                        </span>
-                      </div>
-                    )
-                  )}
-                </div>
-              </div>
-
-              {error && (
-                <Notice
-                  type="error"
-                  title="Erro"
-                  message={error}
-                />
-              )}
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={returnToKeywords}
-                  className="px-4 py-2 text-sm text-slate-400 hover:text-white"
-                >
-                  Voltar
-                </button>
-
-                <button
-                  type="button"
-                  onClick={createCampaign}
-                  disabled={creating}
-                  className="flex items-center gap-2 px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
-                >
-                  {creating ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Rocket className="w-4 h-4" />
-                  )}
-
-                  {creating
-                    ? 'Criando...'
-                    : 'Criar campanha'}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {step === 'creating' && (
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
-              <Loader2 className="w-10 h-10 text-cyan animate-spin" />
-
-              <p className="text-sm font-semibold text-white">
-                Processando campanha
-              </p>
-
-              <p className="text-xs text-slate-500 text-center">
-                A criação está sendo enviada ao backend do Base44.
-              </p>
-            </div>
-          )}
-
-          {step === 'done' && result && (
-            <div className="space-y-4">
-              <Notice
-                type="success"
-                title="Campanha processada"
-                message={`${
-                  result.keywords_created ||
-                  parsed?.valid_count ||
-                  0
-                } palavras-chave foram processadas.`}
-              />
-
-              <div className="bg-surface-2 border border-surface-3 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-                <PreviewField
-                  label="Campanha"
-                  value={
-                    result.campaign_name ||
-                    'Campanha criada'
-                  }
-                />
-
-                <PreviewField
-                  label="Campaign ID"
-                  value={
-                    result.campaign_id ||
-                    'Aguardando sincronização'
-                  }
-                />
-
-                <PreviewField
-                  label="Orçamento"
-                  value={
-                    result.daily_budget
-                      ? `R$ ${Number(
-                          result.daily_budget
-                        ).toFixed(2)}`
-                      : 'Conforme configuração'
-                  }
-                />
-
-                <PreviewField
-                  label="Bid inicial"
-                  value={
-                    result.initial_bid
-                      ? `R$ ${Number(
-                          result.initial_bid
-                        ).toFixed(2)}`
-                      : 'Conforme configuração'
-                  }
-                />
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-5 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg"
-                >
-                  Fechar
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
-        </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StepBadge({
-  label,
-  active,
-  completed,
-}) {
-  return (
-    <span
-      className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${
-        active
-          ? 'bg-cyan text-white'
-          : completed
-            ? 'bg-emerald-500/20 text-emerald-400'
-            : 'bg-surface-3 text-slate-500'
-      }`}
-    >
-      {label}
-    </span>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  variant,
-}) {
-  const styles = {
-    default:
-      'bg-surface-2 border-surface-3 text-white',
-    success:
-      'bg-emerald-400/10 border-emerald-400/20 text-emerald-400',
-    warning:
-      'bg-amber-400/10 border-amber-400/20 text-amber-400',
-    error:
-      'bg-red-400/10 border-red-400/20 text-red-400',
-  };
-
-  return (
-    <div
-      className={`rounded-xl p-3 border ${styles[variant]}`}
-    >
-      <p className="text-xs opacity-80">
-        {label}
-      </p>
-
-      <p className="text-lg font-bold">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function PreviewField({
-  label,
-  value,
-}) {
-  return (
-    <div className="bg-surface-3 rounded-lg px-3 py-2">
-      <p className="text-[10px] text-slate-500 mb-1">
-        {label}
-      </p>
-
-      <p className="text-xs text-slate-200 break-words">
-        {value || '—'}
-      </p>
-    </div>
-  );
-}
-
-function Notice({
-  type,
-  title,
-  message,
-}) {
-  const config = {
-    error: {
-      wrapper:
-        'bg-red-400/10 border-red-400/20',
-      title: 'text-red-300',
-      text: 'text-red-400/80',
-      icon: XCircle,
-    },
-    warning: {
-      wrapper:
-        'bg-amber-400/10 border-amber-400/20',
-      title: 'text-amber-300',
-      text: 'text-amber-400/80',
-      icon: AlertTriangle,
-    },
-    success: {
-      wrapper:
-        'bg-emerald-400/10 border-emerald-400/20',
-      title: 'text-emerald-300',
-      text: 'text-emerald-400/80',
-      icon: CheckCircle,
-    },
-  }[type];
-
-  const Icon = config.icon;
-
-  return (
-    <div
-      className={`flex items-start gap-3 px-4 py-3 border rounded-xl ${config.wrapper}`}
-    >
-      <Icon
-        className={`w-5 h-5 flex-shrink-0 mt-0.5 ${config.title}`}
-      />
-
-      <div>
-        <p
-          className={`text-sm font-semibold ${config.title}`}
-        >
-          {title}
-        </p>
-
-        <p
-          className={`text-xs mt-1 ${config.text}`}
-        >
-          {message}
-        </p>
       </div>
     </div>
   );
