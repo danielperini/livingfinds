@@ -748,6 +748,11 @@ Deno.serve(async (req) => {
         // Pré-condição 6: campanha já alterada neste ciclo
         const campAlreadyChanged = campaignChangedThisCycle.has(kw.campaign_id);
 
+        // Debug: rastrear keywords wasting
+        if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
+          console.log(`[WASTING-TRACK] ${kw.keyword_text} | impressions=${impressions} state=${state} maturity=? blockers=${productBlockerList.join(',')} campChanged=${campaignChangedThisCycle.has(kw.campaign_id)}`);
+        }
+
         // ── C0. BUY BOX AUSENTE → BLOCK (não aumentar bid) ──────────────
         if (productBlockerList.includes('BUY_BOX_LOST')) {
           blocked.push({ entity: kw.keyword_id, reason: 'BUY_BOX_LOST', text: kw.keyword_text, campaign_id: kw.campaign_id });
@@ -814,12 +819,18 @@ Deno.serve(async (req) => {
 
         // ── C3. Dados insuficientes ───────────────────────────────────────
         if (['STALE', 'NEW', 'INSUFFICIENT_DATA'].includes(maturity)) {
+          if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
+            console.log(`[C3-BLOCK] wasting keyword blocked: ${kw.keyword_text} reason=${maturity} clicks=${clicks} spend=${spend}`);
+          }
           waitForData.push({ entity: kw.keyword_id, reason: maturity, text: kw.keyword_text });
           stats.wait_for_data++;
           continue;
         }
 
         if (confidence < 0.60) {
+          if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND) {
+            console.log(`[C3-CONF] wasting keyword blocked: ${kw.keyword_text} confidence=${confidence} maturity=${maturity}`);
+          }
           waitForData.push({ entity: kw.keyword_id, reason: `confidence=${confidence}`, text: kw.keyword_text });
           stats.wait_for_data++;
           continue;
@@ -829,6 +840,7 @@ Deno.serve(async (req) => {
 
         // ── C4. WASTING: zero vendas com dados maduros ───────────────────
         if (orders === 0 && clicks >= MIN_CLICKS && spend >= MIN_SPEND && maturity === 'MATURE') {
+          console.log(`[C4-WASTING] keyword=${kw.keyword_text} clicks=${clicks} spend=${spend} maturity=${maturity} confidence=${confidence} campChanged=${campAlreadyChanged}`);
           if (inDecCooldown) { stats.skipped_cooldown++; continue; }
 
           const reducePct = evalCount >= 2 ? Math.min(MAX_DEC_PCT, 0.20) : Math.min(MAX_DEC_PCT, 0.15);
@@ -1205,6 +1217,15 @@ Deno.serve(async (req) => {
       safe_cutoff: safeCutoff,
       attribution_safety_hours: ATTR_HOURS,
       duration_ms: Date.now() - startTime,
+      // debug
+      _debug: {
+        keywords_loaded: keywords.length,
+        campaigns_loaded: campaigns.length,
+        account_last_sync: account.last_sync_at,
+        decisions_to_create_before_save: decisionsToCreate.length,
+        wait_for_data_sample: waitForData.slice(0, 3),
+        blocked_sample: blocked.slice(0, 3),
+      },
     });
 
   } catch (error) {
