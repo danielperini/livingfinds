@@ -512,8 +512,7 @@ export default function Products() {
 
       const records = await base44.entities.Product.filter(
         { amazon_account_id: currentAccount.id },
-        `-${sortBy}`,
-        500
+        `-${sortBy}`
       );
 
       setProducts(records || []);
