@@ -1,0 +1,15 @@
+{
+  "name": "AmazonSchedulerLock",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "lock_key": { "type": "string" },
+    "owner_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["candidate", "acquired", "released", "expired"], "default": "candidate" },
+    "acquired_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "released_at": { "type": "string", "format": "date-time" },
+    "heartbeat_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "lock_key", "owner_id", "status", "expires_at"]
+}
