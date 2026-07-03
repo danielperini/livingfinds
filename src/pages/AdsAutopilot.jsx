@@ -263,16 +263,29 @@ export default function AdsAutopilot() {
       setConfig(cfgs[0] || null);
       setSearchTerms(sts);
 
+      // Mapa de campaign_id → nome da campanha para resolver IDs numéricos
+      const campNameMap = new Map(cams.map(c => [c.campaign_id, c.name || c.campaign_name]));
+
       // Normalizar decisões para formato unificado
-      const normalize = d => ({
-        ...d,
-        entity_name: d.keyword_text || d.entity_id || d.entity_name,
-        current_value: d.value_before ?? d.current_value,
-        proposed_value: d.value_after ?? d.proposed_value,
-        decision_type: d.action || d.decision_type,
-        confidence: d.confidence != null ? (d.confidence > 1 ? d.confidence / 100 : d.confidence) : null,
-        priority: (d.risk === 'high' || d.risk === 'very_high') ? 'high' : d.risk === 'medium' ? 'medium' : 'low',
-      });
+      const normalize = d => {
+        // Tentar resolver nome legível: keyword > campaign_name > entity_name > ID truncado
+        const resolvedName =
+          d.keyword_text ||
+          (d.campaign_id && campNameMap.get(d.campaign_id)) ||
+          d.campaign_name ||
+          d.entity_name ||
+          (d.entity_id && String(d.entity_id).length > 10 ? `ID …${String(d.entity_id).slice(-6)}` : d.entity_id) ||
+          '—';
+        return {
+          ...d,
+          entity_name: resolvedName,
+          current_value: d.value_before ?? d.current_value,
+          proposed_value: d.value_after ?? d.proposed_value,
+          decision_type: d.action || d.decision_type,
+          confidence: d.confidence != null ? (d.confidence > 1 ? d.confidence / 100 : d.confidence) : null,
+          priority: (d.risk === 'high' || d.risk === 'very_high') ? 'high' : d.risk === 'medium' ? 'medium' : 'low',
+        };
+      };
 
       const pending = allDecs.filter(d => d.status === 'pending').map(normalize);
       const done    = allDecs.filter(d => d.status !== 'pending').map(normalize);
