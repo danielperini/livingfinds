@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Loader2, Rocket, X } from 'lucide-react';
+import { amazonScheduledMessage } from '@/lib/amazonCommandStatus';
 
 export default function KickoffCompactModal({ product, account, onClose, onDone }) {
   const [mode, setMode] = useState('auto_plus_four');
@@ -79,12 +80,17 @@ export default function KickoffCompactModal({ product, account, onClose, onDone 
       onDone?.();
     } catch (requestError) {
       const details = requestError?.response?.data;
-      setError(
-        details?.error ||
-        details?.message ||
-        requestError?.message ||
-        'Falha ao executar o Kick-off.'
-      );
+      const raw = details?.error || details?.message || requestError?.message || 'Falha ao executar o Kick-off.';
+      const scheduled = amazonScheduledMessage(raw, {
+        action: 'Kick-off',
+        window: 'a próxima janela entre 00:00–04:00 ou 13:00–14:00',
+      });
+      if (scheduled) {
+        setMessage(scheduled);
+        onDone?.();
+      } else {
+        setError(raw);
+      }
     } finally {
       setLoading(false);
     }
