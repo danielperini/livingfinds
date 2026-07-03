@@ -72,35 +72,57 @@ Deno.serve(async (req) => {
     const token = await getAdsToken(entityRefreshToken);
     const adsBase = getAdsBaseUrl();
     const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': 'application/vnd.spCampaign.v3+json',
+      Accept: 'application/vnd.spCampaign.v3+json',
+    };
 
-    const gatewayResponse = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
-      amazon_account_id: amazonAccountId,
-      api_family: 'ADS',
-      operation: 'listSponsoredProductsCampaigns',
-      endpoint: `${adsBase}/sp/campaigns/list`,
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-        'Amazon-Advertising-API-Scope': String(profileId),
-        'Content-Type': 'application/vnd.spCampaign.v3+json',
-        Accept: 'application/vnd.spCampaign.v3+json',
-      },
-      payload: { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 500 },
-      max_attempts: 5,
-      _service_role: true,
-    });
+    const campaignList = [];
+    const requestIds = [];
+    const seenTokens = new Set();
+    let nextToken = null;
+    let pages = 0;
 
-    const gatewayData = gatewayResponse?.data || gatewayResponse || {};
-    if (!gatewayData.ok) {
-      const firstError = gatewayData.errors?.[0];
-      throw new Error(`ADS ${gatewayData.status || 500}: ${firstError?.message || firstError?.code || 'Falha ao listar campanhas'}`);
-    }
+    do {
+      const payload = {
+        stateFilter: { include: ['ENABLED', 'PAUSED'] },
+        maxResults: 500,
+        ...(nextToken ? { nextToken } : {}),
+      };
 
-    const data = gatewayData.payload || {};
-    const campaignList = data?.campaigns || [];
+      const gatewayResponse = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
+        amazon_account_id: amazonAccountId,
+        api_family: 'ADS',
+        operation: 'listSponsoredProductsCampaigns',
+        endpoint: `${adsBase}/sp/campaigns/list`,
+        method: 'POST',
+        headers,
+        payload,
+        max_attempts: 5,
+        _service_role: true,
+      });
+
+      const gatewayData = gatewayResponse?.data || gatewayResponse || {};
+      if (!gatewayData.ok) {
+        const firstError = gatewayData.errors?.[0];
+        throw new Error(`ADS ${gatewayData.status || 500}: ${firstError?.message || firstError?.code || 'Falha ao listar campanhas'}`);
+      }
+
+      const data = gatewayData.payload || {};
+      campaignList.push(...(data?.campaigns || []));
+      if (gatewayData.request_id) requestIds.push(gatewayData.request_id);
+      pages++;
+
+      nextToken = data?.nextToken || null;
+      if (nextToken && seenTokens.has(nextToken)) throw new Error('Paginação Ads retornou nextToken repetido');
+      if (nextToken) seenTokens.add(nextToken);
+      if (pages >= 100 && nextToken) throw new Error('Paginação Ads excedeu o limite de segurança de 100 páginas');
+    } while (nextToken);
+
     let upserted = 0;
-
     for (const campaign of campaignList) {
       const existing = await base44.asServiceRole.entities.Campaign.filter({
         amazon_account_id: amazonAccountId,
@@ -134,10 +156,10 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
+      pages,
       records_received: campaignList.length,
       records_upserted: upserted,
-      amazon_request_id: gatewayData.request_id || null,
-      rate_limit_observed: gatewayData.rate_limit || null,
+      amazon_request_ids: requestIds,
     });
   } catch (error) {
     if (syncRunId && base44) {
