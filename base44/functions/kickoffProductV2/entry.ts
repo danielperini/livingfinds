@@ -40,12 +40,17 @@ Deno.serve(async (req) => {
       manualCreated = 1;
     }
 
-    const suggestions = await base44.functions.invoke('suggestAcceleratorKeywords', {
+    const suggestions = await base44.functions.invoke('suggestProductKeywordsWithAI', {
       amazon_account_id,
       asin,
     }).catch(() => null);
-    const all = [...(suggestions?.data?.long_tail || []), ...(suggestions?.data?.medium_tail || [])];
-    const autoCreate = all.filter((s) => Number(s.confidence || 0) >= 0.95).slice(0, Math.max(0, 25 - active.length - manualCreated - 1));
+    const all = [...(suggestions?.data?.long_tail || []), ...(suggestions?.data?.medium_tail || [])]
+      .filter((s) => s?.status === 'suggested' && s?.id);
+
+    const remainingSlots = Math.max(0, 25 - active.length - manualCreated - 1);
+    const autoCreate = all
+      .filter((s) => Number(s.confidence || 0) >= 0.95)
+      .slice(0, remainingSlots);
     const pending = all.filter((s) => Number(s.confidence || 0) < 0.95);
 
     for (const suggestion of pending) {
