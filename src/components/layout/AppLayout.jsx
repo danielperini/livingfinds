@@ -7,6 +7,10 @@ import {
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 
+const INVENTORY_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const INVENTORY_SYNC_STORAGE_KEY = 'livingfinds:lastAutomaticInventorySync';
+const INVENTORY_SYNC_SESSION_KEY = 'livingfinds:inventorySyncReloaded';
+
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Painel e análises' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
@@ -22,21 +26,92 @@ const navItems = [
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
 
+function shouldRunAutomaticInventorySync() {
+  const lastSync = Number(localStorage.getItem(INVENTORY_SYNC_STORAGE_KEY) || 0);
+  return !lastSync || Date.now() - lastSync >= INVENTORY_SYNC_INTERVAL_MS;
+}
+
+async function runAutomaticInventorySync(account) {
+  if (!account?.id || !shouldRunAutomaticInventorySync()) return null;
+
+  // Grava antes da chamada para impedir execuções duplicadas em abas simultâneas.
+  localStorage.setItem(INVENTORY_SYNC_STORAGE_KEY, String(Date.now()));
+
+  try {
+    const response = await base44.functions.invoke('syncProductCatalog', {
+      amazon_account_id: account.id,
+      trigger: 'automatic_app_start',
+    });
+
+    const result = response?.data;
+    if (!result?.ok) {
+      localStorage.removeItem(INVENTORY_SYNC_STORAGE_KEY);
+      throw new Error(result?.error || 'Falha na sincronização automática de estoque.');
+    }
+
+    window.dispatchEvent(new CustomEvent('livingfinds:catalog-synced', {
+      detail: result,
+    }));
+
+    return result;
+  } catch (error) {
+    localStorage.removeItem(INVENTORY_SYNC_STORAGE_KEY);
+    console.error('[Estoque automático]', error?.message || error);
+    return null;
+  }
+}
+
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountMode, setAccountMode] = useState('mock');
+  const [inventorySyncing, setInventorySyncing] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
+    let mounted = true;
+
     document.documentElement.lang = 'pt-BR';
     document.title = 'Living Finds — Gestão Amazon';
 
-    base44.auth.me().then(me => {
-      return base44.entities.AmazonAccount.filter({ user_id: me.id });
-    }).then(accounts => {
-      if (accounts.length > 0) setAccountMode(accounts[0].mode || 'real');
-    }).catch(() => {});
+    const initializeAccountAndInventory = async () => {
+      try {
+        const me = await base44.auth.me();
+        let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+        if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
+
+        const account = accounts[0] || null;
+        if (!account || !mounted) return;
+
+        setAccountMode(account.mode || 'real');
+
+        if (!shouldRunAutomaticInventorySync()) return;
+        setInventorySyncing(true);
+        const result = await runAutomaticInventorySync(account);
+        if (!mounted) return;
+        setInventorySyncing(false);
+
+        // Na página de produtos, recarrega uma única vez para mostrar imediatamente
+        // o estoque recém-sincronizado de todos os ASINs.
+        if (
+          result?.ok &&
+          window.location.pathname === '/products' &&
+          sessionStorage.getItem(INVENTORY_SYNC_SESSION_KEY) !== '1'
+        ) {
+          sessionStorage.setItem(INVENTORY_SYNC_SESSION_KEY, '1');
+          window.location.reload();
+        }
+      } catch (error) {
+        if (mounted) setInventorySyncing(false);
+        console.error('[Inicialização Amazon]', error?.message || error);
+      }
+    };
+
+    initializeAccountAndInventory();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   return (
@@ -105,7 +180,13 @@ export default function AppLayout() {
         </nav>
 
         {!collapsed && (
-          <div className="p-4 border-t border-surface-2">
+          <div className="p-4 border-t border-surface-2 space-y-2">
+            {inventorySyncing && (
+              <div className="flex items-center gap-2 text-[11px] text-cyan">
+                <Activity className="w-3 h-3 animate-pulse" />
+                Sincronizando estoque...
+              </div>
+            )}
             <ModeBadge mode={accountMode} />
           </div>
         )}
@@ -124,6 +205,9 @@ export default function AppLayout() {
           </button>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
+            {inventorySyncing && (
+              <span className="hidden md:inline text-xs text-cyan">Sincronizando estoque...</span>
+            )}
             <ModeBadge mode={accountMode} className="hidden sm:flex" />
             <button
               type="button"
