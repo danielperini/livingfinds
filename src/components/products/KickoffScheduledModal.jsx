@@ -2,6 +2,42 @@ import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Loader2, Rocket, X } from 'lucide-react';
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRateLimit(error) {
+  const text = JSON.stringify(error || '').toLowerCase();
+  return text.includes('429') || text.includes('rate limit') || text.includes('too many requests') || text.includes('throttl');
+}
+
+function nextSlot() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const p = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const hour = Number(p.hour || 0);
+  const day = `${p.year}-${p.month}-${p.day}`;
+
+  if (hour < 3) {
+    const nextHour = hour + 1;
+    return {
+      hour: nextHour,
+      window: `${String(nextHour).padStart(2, '0')}:00-${String(nextHour + 1).padStart(2, '0')}:00`,
+      at: new Date(`${day}T${String(nextHour).padStart(2, '0')}:00:00-03:00`),
+    };
+  }
+
+  if (hour < 13) {
+    return { hour: 13, window: '13:00-14:00', at: new Date(`${day}T13:00:00-03:00`) };
+  }
+
+  const tomorrow = new Date(`${day}T12:00:00-03:00`);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const nextDay = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(tomorrow);
+  return { hour: 0, window: '00:00-01:00', at: new Date(`${nextDay}T00:00:00-03:00`) };
+}
+
 export default function KickoffScheduledModal({ product, account, onClose, onDone }) {
   const [mode, setMode] = useState('auto_plus_four');
   const [term, setTerm] = useState('');
@@ -9,24 +45,91 @@ export default function KickoffScheduledModal({ product, account, onClose, onDon
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
-  async function schedule() {
-    setLoading(true);
-    setError('');
-    try {
-      const response = await base44.functions.invoke('scheduleProductKickoff', {
+  async function queueDirectly() {
+    const slot = nextSlot();
+    const existing = await base44.entities.ProductKickoffQueue.filter({
+      amazon_account_id: account.id,
+      asin: product.asin,
+      mode,
+      status: 'scheduled',
+    }, '-created_date', 1).catch(() => []);
+
+    if (!existing.length) {
+      await base44.entities.ProductKickoffQueue.create({
         amazon_account_id: account.id,
         asin: product.asin,
         sku: product.sku || null,
         product_name: product.product_name || product.display_name || product.asin,
         mode,
         keyword: mode === 'manual_only' ? term.trim() : null,
+        status: 'scheduled',
+        queue_hour: slot.hour,
+        queue_window: slot.window,
+        scheduled_at: slot.at.toISOString(),
+        attempt_count: 0,
+        max_attempts: 5,
       });
+    }
+
+    return slot;
+  }
+
+  async function schedule() {
+    setLoading(true);
+    setError('');
+
+    try {
+      const payload = {
+        amazon_account_id: account.id,
+        asin: product.asin,
+        sku: product.sku || null,
+        product_name: product.product_name || product.display_name || product.asin,
+        mode,
+        keyword: mode === 'manual_only' ? term.trim() : null,
+      };
+
+      let response;
+      try {
+        response = await base44.functions.invoke('scheduleProductKickoff', payload);
+      } catch (firstError) {
+        if (!isRateLimit(firstError)) throw firstError;
+        await wait(14000);
+        try {
+          response = await base44.functions.invoke('scheduleProductKickoff', payload);
+        } catch (secondError) {
+          if (!isRateLimit(secondError)) throw secondError;
+          const slot = await queueDirectly();
+          setMessage(`Kick-off programado para ${slot.window}. A execução ocorrerá automaticamente com intervalo de 14 segundos.`);
+          onDone?.();
+          return;
+        }
+      }
+
       const data = response?.data || {};
-      if (!data.ok) throw new Error(data.error || 'Falha ao programar o Kick-off.');
+      if (!data.ok) {
+        if (isRateLimit(data)) {
+          const slot = await queueDirectly();
+          setMessage(`Kick-off programado para ${slot.window}. A execução ocorrerá automaticamente com intervalo de 14 segundos.`);
+          onDone?.();
+          return;
+        }
+        throw new Error(data.error || 'Falha ao programar o Kick-off.');
+      }
+
       setMessage(data.message || `Kick-off programado para ${data.queue_window || 'a próxima janela'}.`);
       onDone?.();
-    } catch (e) {
-      setError(e?.response?.data?.error || e?.message || 'Falha ao programar o Kick-off.');
+    } catch (error) {
+      if (isRateLimit(error)) {
+        try {
+          const slot = await queueDirectly();
+          setMessage(`Kick-off programado para ${slot.window}. A execução ocorrerá automaticamente com intervalo de 14 segundos.`);
+          onDone?.();
+        } catch {
+          setError('A Amazon limitou temporariamente as chamadas. Aguarde 14 segundos e tente novamente.');
+        }
+      } else {
+        setError(error?.response?.data?.error || error?.message || 'Falha ao programar o Kick-off.');
+      }
     } finally {
       setLoading(false);
     }
