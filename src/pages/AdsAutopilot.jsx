@@ -311,7 +311,10 @@ export default function AdsAutopilot() {
         trigger: 'manual',
       });
       const d = res.data;
-      if (d?.ok) {
+      if (d?.rate_limited) {
+        setRunMsg(`⚠ Rate limit Amazon Ads — aguarde 1-2 minutos e tente novamente. As decisões geradas foram salvas para execução posterior.`);
+        await loadData();
+      } else if (d?.ok) {
         const b = d.breakdown || {};
         const created = d.decisions_created || 0;
         const executed = d.decisions_executed || 0;

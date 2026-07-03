@@ -1185,12 +1185,34 @@ Deno.serve(async (req) => {
       }
 
       if (idsToExec.length > 0) {
-        const execRes = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
-          decision_ids: idsToExec,
-          _service_role: true,
-        }).catch(e => ({ data: { ok: false, error: e.message } }));
+        // Retry com backoff em caso de rate limit
+        let execRes = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt > 0) await new Promise(r => setTimeout(r, 3000 + attempt * 2000));
+          try {
+            execRes = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
+              decision_ids: idsToExec,
+              _service_role: true,
+            });
+            const isRateLimit = execRes?.data?.error?.includes?.('Rate limit') || execRes?.data?.error?.includes?.('rate limit');
+            if (!isRateLimit) break; // sucesso ou erro não-rate-limit → parar
+          } catch (e) {
+            const msg = e?.response?.data?.error || e?.message || '';
+            const isRateLimit = msg.includes('Rate limit') || msg.includes('rate limit') || msg.includes('429');
+            if (!isRateLimit || attempt === 2) {
+              execRes = { data: { ok: false, error: msg, rate_limited: isRateLimit } };
+              break;
+            }
+            // rate limit → continuar retry
+          }
+        }
         executed = execRes?.data?.executed || 0;
         execFailed = execRes?.data?.failed || 0;
+        // Se rate limited, decisões ficam como 'approved' para execução no próximo ciclo — não é erro fatal
+        if (execRes?.data?.rate_limited || execRes?.data?.error?.includes?.('Rate limit')) {
+          console.warn('[runDailyAdsOptimization] Rate limit na execução — decisões mantidas como approved para próximo ciclo');
+          execFailed = 0; // não contar como falha
+        }
       }
     }
 
@@ -1231,11 +1253,25 @@ Deno.serve(async (req) => {
     });
 
   } catch (error) {
+    const isRateLimit = error?.message?.includes('Rate limit') || error?.message?.includes('rate limit') || error?.message?.includes('429');
     if (runRecord?.id) {
       const b44 = createClientFromRequest(req);
       await b44.asServiceRole.entities.AutopilotRun.update(runRecord.id, {
-        status: 'failed', completed_at: new Date().toISOString(), error_message: error.message,
+        status: isRateLimit ? 'completed' : 'failed',
+        completed_at: new Date().toISOString(),
+        error_message: error.message,
       }).catch(() => {});
+    }
+    if (isRateLimit) {
+      // Rate limit não é erro fatal — retornar ok com aviso para o frontend não mostrar erro vermelho
+      return Response.json({
+        ok: true,
+        rate_limited: true,
+        decisions_created: 0,
+        decisions_executed: 0,
+        message: 'Rate limit da Amazon Ads atingido. Tente novamente em 1-2 minutos.',
+        duration_ms: Date.now() - startTime,
+      });
     }
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
