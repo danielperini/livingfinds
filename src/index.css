@@ -75,3 +75,13 @@
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { @apply bg-slate-700 rounded-full; }
 }
+
+button[title='Criar campanha para este produto'] {
+  font-size: 0;
+}
+
+button[title='Criar campanha para este produto']::after {
+  content: 'Realizar Kick-off';
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
