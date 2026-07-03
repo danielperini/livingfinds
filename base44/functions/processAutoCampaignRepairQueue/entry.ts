@@ -2,13 +2,18 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function brazilHour() {
+  const parts = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).formatToParts(new Date());
+  return Number(parts.find((part) => part.type === 'hour')?.value || 0);
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
-    const hour = Number(body.hour);
+    const hour = Number.isFinite(Number(body.hour)) ? Number(body.hour) : brazilHour();
     if (![0, 1, 2, 3, 13].includes(hour)) return Response.json({ ok: true, skipped: true, hour });
 
     const queue = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
@@ -62,7 +67,7 @@ Deno.serve(async (request) => {
       await wait(14000);
     }
 
-    return Response.json({ ok: true, processed: results.length, spacing_seconds: 14, results });
+    return Response.json({ ok: true, hour, processed: results.length, spacing_seconds: 14, results });
   } catch (error) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao processar reparos AUTO' }, { status: 500 });
   }
