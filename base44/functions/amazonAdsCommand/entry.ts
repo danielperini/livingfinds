@@ -3,9 +3,13 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 let tokenCache: { value: string; expiresAt: number; key: string } | null = null;
 
 const ALLOWED_PATHS = [
-  '/sp/campaigns', '/sp/campaigns/list', '/sp/adGroups', '/sp/productAds', '/sp/keywords',
+  '/sp/campaigns', '/sp/campaigns/list',
+  '/sp/adGroups', '/sp/adGroups/list',
+  '/sp/productAds', '/sp/productAds/list',
+  '/sp/keywords', '/sp/keywords/list',
   '/v2/sp/campaigns', '/v2/sp/adGroups', '/v2/sp/keywords', '/v2/sp/negativeKeywords',
-  '/sp/negativeKeywords', '/sp/targets', '/v2/sp/targets',
+  '/sp/negativeKeywords', '/sp/negativeKeywords/list',
+  '/sp/targets', '/sp/targets/list', '/v2/sp/targets',
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
