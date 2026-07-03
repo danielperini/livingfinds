@@ -4,12 +4,80 @@ import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
-  Settings, Package, History, Zap, Bot, Sparkles
+  Settings, Package, History, Zap, Bot, Sparkles, Wand2, ChevronDown, ChevronUp
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
 import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
+
+function ManualCreationResult({ result, onClose }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!result) return null;
+
+  const { ok, message, campaigns_created, asins_processed, asins_failed, results, error, dry_run, would_process } = result;
+
+  if (dry_run) return (
+    <div className="mt-2 p-2.5 bg-violet-500/10 border border-violet-500/20 rounded-lg text-[10px]">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-violet-300 font-semibold">Dry run — {would_process?.length || 0} ASINs seriam processados</span>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X className="w-3 h-3" /></button>
+      </div>
+      <p className="text-slate-400">{would_process?.join(', ')}</p>
+    </div>
+  );
+
+  if (!ok && error) return (
+    <div className="mt-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-[10px] flex items-start justify-between gap-2">
+      <p className="text-red-400">{error}</p>
+      <button onClick={onClose} className="text-slate-500 hover:text-slate-300 flex-shrink-0"><X className="w-3 h-3" /></button>
+    </div>
+  );
+
+  if (message) return (
+    <div className="mt-2 p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-[10px] flex items-start justify-between gap-2">
+      <p className="text-emerald-400">✓ {message}</p>
+      <button onClick={onClose} className="text-slate-500 hover:text-slate-300 flex-shrink-0"><X className="w-3 h-3" /></button>
+    </div>
+  );
+
+  return (
+    <div className="mt-2 bg-violet-500/8 border border-violet-500/20 rounded-lg overflow-hidden text-[10px]">
+      <div className="p-2.5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+          <span className="text-emerald-300 font-semibold">
+            {campaigns_created} campanha(s) manual criada(s) · {asins_processed} ASIN(s)
+            {asins_failed > 0 && <span className="text-red-400 ml-1">· {asins_failed} falha(s)</span>}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          {results?.length > 0 && (
+            <button onClick={() => setExpanded(v => !v)} className="text-slate-500 hover:text-slate-300">
+              {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+          )}
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300"><X className="w-3 h-3" /></button>
+        </div>
+      </div>
+      {expanded && results?.length > 0 && (
+        <div className="border-t border-violet-500/15 px-2.5 pb-2.5 space-y-1.5 max-h-40 overflow-y-auto scrollbar-thin">
+          {results.map((r, i) => (
+            <div key={i} className={`p-1.5 rounded border ${r.ok ? 'bg-emerald-500/5 border-emerald-500/15' : 'bg-red-500/5 border-red-500/15'}`}>
+              <p className="font-mono text-[9px] text-cyan">{r.asin}</p>
+              <p className="text-slate-400 truncate">{r.product_name}</p>
+              {r.campaigns?.map((c, j) => (
+                <p key={j} className={`text-[9px] mt-0.5 ${c.ok ? 'text-emerald-400' : c.skipped ? 'text-slate-500' : 'text-red-400'}`}>
+                  {c.ok ? '✓' : c.skipped ? '–' : '✗'} {c.keyword} {c.error ? `(${c.error.slice(0, 50)})` : ''}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
@@ -126,6 +194,8 @@ export default function AdsManagement() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
   const [products, setProducts] = useState([]);
+  const [creatingManuals, setCreatingManuals] = useState(false);
+  const [manualResult, setManualResult] = useState(null);
 
   const loadCampaigns = async () => {
     setLoading(true);
@@ -164,6 +234,23 @@ export default function AdsManagement() {
   };
 
   useEffect(() => { loadCampaigns(); }, []);
+
+  const createManualsForAutos = async () => {
+    if (!account || creatingManuals) return;
+    setCreatingManuals(true);
+    setManualResult(null);
+    try {
+      const res = await base44.functions.invoke('createManualCampaignsForAutoCampaigns', {
+        amazon_account_id: account.id,
+      });
+      setManualResult(res?.data || { ok: false, error: 'Sem resposta' });
+      if (res?.data?.ok) await loadCampaigns();
+    } catch (e) {
+      setManualResult({ ok: false, error: e.message });
+    } finally {
+      setCreatingManuals(false);
+    }
+  };
 
   const forceSync = async () => {
     if (!account || syncing) return;
@@ -295,11 +382,19 @@ export default function AdsManagement() {
         <div className="p-3 border-b border-surface-2">
           <div className="flex items-center justify-between mb-1.5">
             <h2 className="text-sm font-semibold text-white">Campanhas</h2>
-            <button onClick={forceSync} disabled={syncing || !account}
-              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
-              <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-              {syncing ? 'Atualizando...' : 'Atualizar'}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button onClick={createManualsForAutos} disabled={creatingManuals || !account}
+                title="Criar campanha MANUAL para cada AUTO ativa sem par"
+                className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-violet-500/15 border border-violet-500/25 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors disabled:opacity-50">
+                {creatingManuals ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                {creatingManuals ? 'Criando...' : 'Criar Manuais'}
+              </button>
+              <button onClick={forceSync} disabled={syncing || !account}
+                className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
+                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Atualizando...' : 'Atualizar'}
+              </button>
+            </div>
           </div>
 
           {/* Stats row */}
@@ -314,6 +409,9 @@ export default function AdsManagement() {
 
           {syncMsg && (
             <p className={`text-[10px] mt-1.5 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+          )}
+          {manualResult && (
+            <ManualCreationResult result={manualResult} onClose={() => setManualResult(null)} />
           )}
         </div>
 
