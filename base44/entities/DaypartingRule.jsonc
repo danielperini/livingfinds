@@ -8,6 +8,9 @@
     "campaign_id": {
       "type": "string"
     },
+    "campaign_name": {
+      "type": "string"
+    },
     "asin": {
       "type": "string"
     },
@@ -42,7 +45,8 @@
       "type": "string",
       "enum": [
         "percentage",
-        "fixed"
+        "fixed",
+        "floor"
       ],
       "default": "percentage"
     },
@@ -51,6 +55,40 @@
     },
     "bid_base_before": {
       "type": "number"
+    },
+    "bid_floor": {
+      "type": "number",
+      "default": 0.25
+    },
+    "recommended_bid": {
+      "type": "number"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "peak_high_profit",
+        "peak_conversion",
+        "efficient",
+        "low_efficiency",
+        "deficit",
+        "discovery",
+        "insufficient_data"
+      ],
+      "default": "efficient"
+    },
+    "roas_at_creation": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_freq_index": {
+      "type": "number",
+      "default": 0,
+      "description": "\u00cdndice de frequ\u00eancia de vendas nesta hora vs m\u00e9dia (>1 = acima da m\u00e9dia)"
+    },
+    "roas_index": {
+      "type": "number",
+      "default": 0,
+      "description": "ROAS desta hora / ROAS m\u00e9dio da campanha"
     },
     "placement_top_before": {
       "type": "number"
@@ -90,7 +128,7 @@
       "type": "integer",
       "default": 0
     },
-    "sample_sales": {
+    "sample_orders": {
       "type": "integer",
       "default": 0
     },
@@ -113,7 +151,8 @@
       "type": "string",
       "enum": [
         "ai",
-        "manual"
+        "manual",
+        "autopilot"
       ],
       "default": "ai"
     },
@@ -131,6 +170,15 @@
     "expires_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "last_applied_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "apply_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Quantas vezes esta regra foi aplicada pelo ciclo hor\u00e1rio"
     },
     "created_at": {
       "type": "string",
