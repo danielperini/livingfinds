@@ -51,14 +51,36 @@ Deno.serve(async (request) => {
     let parsed: any = null;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       attemptsUsed = attempt + 1;
-      const response = await fetch(url.toString(), {
-        method,
-        headers,
-        body: payload == null || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
-      });
-      parsed = await parseAmazonApiResponse(response);
-      if (parsed.ok || !parsed.retryable || attempt === maxAttempts - 1) break;
-      await wait(retryDelay(attempt, parsed.retry_after));
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), Math.max(5000, Number(body.timeout_ms || 30000)));
+        const response = await fetch(url.toString(), {
+          method,
+          headers,
+          signal: controller.signal,
+          body: payload == null || method === 'GET' || method === 'HEAD' ? undefined : JSON.stringify(payload),
+        }).finally(() => clearTimeout(timeout));
+        parsed = await parseAmazonApiResponse(response);
+        if (parsed.ok || !parsed.retryable || attempt === maxAttempts - 1) break;
+        await wait(retryDelay(attempt, parsed.retry_after));
+      } catch (error) {
+        parsed = {
+          ok: false,
+          status: 0,
+          payload: null,
+          errors: [{ code: error?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR', message: error?.message || String(error) }],
+          request_id: null,
+          trace_id: null,
+          error_type: null,
+          rate_limit: null,
+          retry_after: null,
+          retryable: true,
+          partial: false,
+          raw: null,
+        };
+        if (attempt === maxAttempts - 1) break;
+        await wait(retryDelay(attempt, null));
+      }
     }
 
     const completedAt = new Date().toISOString();
