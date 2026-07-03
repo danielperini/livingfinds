@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
         } catch (e) {
           result.suggestions.push({ id: s.id, ok: false, error: e?.message || String(e) });
         }
-        await wait(12000);
+        await wait(14000);
       }
 
       for (const d of decisions.filter((x) => x.action !== 'pause_campaign')) {
@@ -43,13 +43,13 @@ Deno.serve(async (req) => {
         } catch (e) {
           result.decisions.push({ id: d.id, ok: false, action: d.action, error: e?.message || String(e) });
         }
-        await wait(12000);
+        await wait(14000);
       }
 
       output.push(result);
     }
 
-    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 12, max_items_per_account: 10, results: output });
+    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 14, max_items_per_account: 10, results: output });
   } catch (e) {
     return Response.json({ ok: false, error: e?.message || 'Erro na fila Amazon' }, { status: 500 });
   }
