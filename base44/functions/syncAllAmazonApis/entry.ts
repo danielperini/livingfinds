@@ -3,7 +3,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 const STEPS = [
   ['ads', 'syncAds'],
   ['reports', 'requestProductReports'],
-  ['catalog_inventory', 'syncProductCatalog'],
+  ['catalog_inventory', 'syncProductCatalogV2'],
   ['product_campaign_links', 'fixProductCampaignLinks'],
   ['night_amazon_queue', 'processAmazonNightWindow'],
   ['learner', 'runLearnerCycle'],
