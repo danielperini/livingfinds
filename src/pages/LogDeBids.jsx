@@ -5,7 +5,10 @@ import {
   Minus, XCircle, Filter, TrendingUp, TrendingDown, Download
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, AreaChart, Area, ReferenceLine,
+} from 'recharts';
 
 export default function LogDeBids() {
   const [account, setAccount] = useState(null);
@@ -168,6 +171,51 @@ export default function LogDeBids() {
       .map(d => ({ ...d, date: d.date.slice(5) }));
   })();
 
+  // Gráfico de evolução de bid médio por dia (apenas executed)
+  const bidEvolutionData = (() => {
+    const map = new Map();
+    for (const l of logs) {
+      if (l.status !== 'executed' || !l.new_bid) continue;
+      const date = l.date || l.created_at?.slice(0, 10);
+      if (!date) continue;
+      const prev = map.get(date) || { date, bids: [], increases: 0, decreases: 0 };
+      prev.bids.push(l.new_bid);
+      if (l.direction === 'increase') prev.increases++;
+      else if (l.direction === 'decrease') prev.decreases++;
+      map.set(date, prev);
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-30)
+      .map(d => ({
+        date: d.date.slice(5),
+        bid_medio: Number((d.bids.reduce((s, v) => s + v, 0) / d.bids.length).toFixed(2)),
+        aumentos: d.increases,
+        reducoes: d.decreases,
+        total: d.bids.length,
+      }));
+  })();
+
+  // Gráfico de confiança IA: distribuição em faixas
+  const confidenceData = (() => {
+    const faixas = [
+      { label: '0–50%', min: 0, max: 50, count: 0 },
+      { label: '50–70%', min: 50, max: 70, count: 0 },
+      { label: '70–85%', min: 70, max: 85, count: 0 },
+      { label: '85–95%', min: 85, max: 95, count: 0 },
+      { label: '95–100%', min: 95, max: 100, count: 0 },
+    ];
+    for (const l of logs) {
+      const conf = (l.ai_confidence || 0) * 100;
+      if (conf === 0) continue;
+      for (const f of faixas) {
+        if (conf >= f.min && conf < f.max) { f.count++; break; }
+        if (conf === 100 && f.max === 100) { f.count++; break; }
+      }
+    }
+    return faixas.filter(f => f.count > 0);
+  })();
+
   // Filtrar apenas as alterações executadas para impacto em ACOS
   const executedChanges = filtered.filter(l => l.status === 'executed' && l.direction !== 'unchanged');
   const savingsEstimate = executedChanges.reduce((s, l) => {
@@ -287,24 +335,105 @@ export default function LogDeBids() {
             ))}
           </div>
 
-          {/* Gráfico de tendência */}
-          {trendData.length > 1 && (
-            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-              <h3 className="text-sm font-semibold text-white mb-4">Tendência de Alterações de Bid (últimos {trendData.length} dias)</h3>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={trendData} margin={{ top: 4, right: 10, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                  <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} />
-                  <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 11 }} width={28} />
-                  <Tooltip
-                    contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8 }}
-                    labelStyle={{ color: '#94a3b8', fontSize: 11 }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 12, color: '#64748b' }} />
-                  <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="reducoes" name="Reduções" fill="#EF4444" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+          {/* Gráficos de tendência */}
+          {(trendData.length > 1 || bidEvolutionData.length > 1) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+              {/* Gráfico 1: Volume de alterações por dia */}
+              {trendData.length > 1 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-white mb-1">Volume de Ajustes por Dia</h3>
+                  <p className="text-xs text-slate-500 mb-4">Aumentos vs. reduções de bid realizados pelo motor</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <BarChart data={trendData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} width={24} />
+                      <Tooltip
+                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#94a3b8' }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11, color: '#64748b' }} />
+                      <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[3, 3, 0, 0]} stackId="a" />
+                      <Bar dataKey="reducoes" name="Reduções" fill="#EF4444" radius={[3, 3, 0, 0]} stackId="a" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Gráfico 2: Evolução do bid médio (linha) */}
+              {bidEvolutionData.length > 1 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-white mb-1">Evolução do Bid Médio</h3>
+                  <p className="text-xs text-slate-500 mb-4">Bid médio das alterações executadas pelo Autopilot</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <AreaChart data={bidEvolutionData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="bidGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
+                      <YAxis tick={{ fill: '#64748b', fontSize: 10 }} width={36} tickFormatter={v => `R$${v}`} />
+                      <Tooltip
+                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#94a3b8' }}
+                        formatter={(v, name) => [`R$${v}`, name]}
+                      />
+                      <Area type="monotone" dataKey="bid_medio" name="Bid Médio" stroke="#3B82F6" strokeWidth={2} fill="url(#bidGrad)" dot={{ r: 3, fill: '#3B82F6' }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Gráfico 3: Volume e confiança IA */}
+              {confidenceData.length > 0 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-white mb-1">Distribuição de Confiança da IA</h3>
+                  <p className="text-xs text-slate-500 mb-4">Quantas decisões foram tomadas por faixa de confiança</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <BarChart data={confidenceData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" horizontal={false} />
+                      <XAxis type="number" allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} />
+                      <YAxis type="category" dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} width={56} />
+                      <Tooltip
+                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#94a3b8' }}
+                      />
+                      <Bar dataKey="count" name="Decisões" radius={[0, 4, 4, 0]}
+                        fill="#3B82F6"
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Gráfico 4: Acumulado de Aumentos vs Reduções (linha) */}
+              {bidEvolutionData.length > 1 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h3 className="text-sm font-semibold text-white mb-1">Balanço Diário de Ajustes</h3>
+                  <p className="text-xs text-slate-500 mb-4">Aumentos e reduções como linhas separadas por dia</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={bidEvolutionData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
+                      <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} width={24} />
+                      <Tooltip
+                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
+                        labelStyle={{ color: '#94a3b8' }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11, color: '#64748b' }} />
+                      <ReferenceLine y={0} stroke="#22263A" />
+                      <Line type="monotone" dataKey="aumentos" name="Aumentos" stroke="#10B981" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="reducoes" name="Reduções" stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} />
+                      <Line type="monotone" dataKey="total" name="Total" stroke="#64748b" strokeWidth={1} strokeDasharray="4 2" dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
             </div>
           )}
 
