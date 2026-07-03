@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
@@ -26,139 +26,7 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
   );
 }
 
-const SYNC_KEY = 'lf_sync_state';
 
-function saveSyncState(data) {
-  try { localStorage.setItem(SYNC_KEY, JSON.stringify(data)); } catch {}
-}
-function loadSyncState() {
-  try { return JSON.parse(localStorage.getItem(SYNC_KEY) || 'null'); } catch { return null; }
-}
-function clearSyncState() {
-  try { localStorage.removeItem(SYNC_KEY); } catch {}
-}
-
-function ReportSyncWidget({ amazonAccountId, onDone }) {
-  const [state, setState] = useState('idle');
-  const [msg, setMsg] = useState('');
-  const [elapsed, setElapsed] = useState(0);
-  const pollRef = useRef(null);
-  const timerRef = useRef(null);
-  const pendingRef = useRef(null);
-  const startTimeRef = useRef(null);
-
-  const stopAll = () => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
-  };
-
-  const startElapsedTimer = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      setElapsed(startTimeRef.current ? Math.round((Date.now() - startTimeRef.current) / 1000) : 0);
-    }, 1000);
-  };
-
-  const startPolling = (pending, campaigns_imported, report_errors) => {
-    pendingRef.current = pending;
-    setState('polling');
-    setMsg(`✓ ${campaigns_imported} campanhas importadas. A aguardar relatórios Amazon...`);
-    if (report_errors?.length > 0) setMsg(prev => prev + ` ⚠ ${report_errors.join(', ')}`);
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const r2 = await base44.functions.invoke('runFullSync', {
-          amazon_account_id: amazonAccountId,
-          action: 'download',
-          ...pendingRef.current,
-        });
-        const d2 = r2.data;
-        if (!d2?.ok && !d2?.ready) {
-          stopAll(); clearSyncState();
-          setState('error');
-          setMsg(d2?.message || JSON.stringify(d2).slice(0, 200));
-          setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-          return;
-        }
-        if (d2.ready) {
-          stopAll(); clearSyncState();
-          setState('done');
-          const sum = d2.summary || {};
-          setMsg(`✓ Concluído — ${d2.campaigns_metrics || 0} camp. · ${d2.products || 0} prod. · ${d2.keywords || 0} kws · $${(sum.total_spend || 0).toFixed(2)} spend · $${(sum.total_sales || 0).toFixed(2)} vendas`);
-          onDone?.();
-        } else {
-          const pend = Object.entries(d2.pending || {}).map(([k, v]) => `${k}:${v}`).join(', ');
-          const fail = Object.keys(d2.failed || {}).length > 0 ? ` ⚠ falhou: ${Object.keys(d2.failed).join(',')}` : '';
-          setMsg(`A aguardar Amazon... ${pend}${fail}`);
-          saveSyncState({ reportIds: pendingRef.current.reportIds, syncRunId: pendingRef.current.syncRunId, startedAt: startTimeRef.current, campaigns_imported });
-        }
-      } catch (e) {
-        stopAll(); clearSyncState();
-        setState('error');
-        setMsg(e.message);
-        setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-      }
-    }, 30000);
-  };
-
-  useEffect(() => {
-    const saved = loadSyncState();
-    if (saved?.reportIds && amazonAccountId) {
-      startTimeRef.current = saved.startedAt || Date.now();
-      setElapsed(Math.round((Date.now() - startTimeRef.current) / 1000));
-      startElapsedTimer();
-      startPolling({ reportIds: saved.reportIds, syncRunId: saved.syncRunId }, saved.campaigns_imported || '?', []);
-    }
-    return stopAll;
-  }, [amazonAccountId]);
-
-  const request = async () => {
-    stopAll();
-    setState('requesting');
-    startTimeRef.current = Date.now();
-    setElapsed(0);
-    setMsg('A importar campanhas e solicitar relatórios 30d...');
-    try {
-      const r1 = await base44.functions.invoke('runFullSync', { amazon_account_id: amazonAccountId, action: 'request' });
-      const d1 = r1.data;
-      if (!d1?.ok) {
-        setState('error');
-        setMsg(d1?.message || d1?.amazon_error || JSON.stringify(d1).slice(0, 200));
-        setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-        return;
-      }
-      startElapsedTimer();
-      saveSyncState({ reportIds: d1.reportIds, syncRunId: d1.syncRunId, startedAt: startTimeRef.current, campaigns_imported: d1.campaigns_imported });
-      startPolling({ reportIds: d1.reportIds, syncRunId: d1.syncRunId }, d1.campaigns_imported, d1.report_errors);
-    } catch (e) {
-      stopAll(); clearSyncState();
-      setState('error');
-      setMsg(e.message);
-      setTimeout(() => { setState('idle'); setMsg(''); }, 15000);
-    }
-  };
-
-  const isLoading = state === 'requesting' || state === 'polling';
-  const color = state === 'done' ? 'border-emerald-400/30 text-emerald-400 bg-emerald-400/5'
-    : state === 'error' ? 'border-red-400/30 text-red-400 bg-red-400/5'
-    : 'border-cyan/20 text-cyan bg-cyan/5 hover:bg-cyan/10';
-
-  const label = state === 'requesting' ? 'A solicitar...'
-    : state === 'polling' ? `A aguardar Amazon... (${elapsed}s)`
-    : state === 'done' ? 'Sync Concluído!'
-    : 'Sync Amazon Ads 30d';
-
-  return (
-    <div className="flex flex-col gap-2">
-      <button onClick={request} disabled={isLoading}
-        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition-all disabled:opacity-60 ${color}`}>
-        {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-        {label}
-      </button>
-      {msg && <p className={`text-xs max-w-xs ${state === 'error' ? 'text-red-400' : 'text-slate-400'}`}>{msg}</p>}
-    </div>
-  );
-}
 
 export default function Dashboard() {
   const [user, setUser] = useState(null);
@@ -178,6 +46,7 @@ export default function Dashboard() {
   const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [forcingSyncAds, setForcingSyncAds] = useState(false);
   const [forceSyncMsg, setForceSyncMsg] = useState(null);
+  const [lastSyncInfo, setLastSyncInfo] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -211,6 +80,19 @@ export default function Dashboard() {
       setSyncRuns(runs);
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
+
+      // Última sincronização (manual ou automática)
+      const lastSuccessRun = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
+      if (lastSuccessRun) {
+        setLastSyncInfo({
+          at: lastSuccessRun.completed_at || lastSuccessRun.started_at,
+          trigger: lastSuccessRun.trigger_type,
+        });
+      } else if (acc?.last_sync_at) {
+        setLastSyncInfo({ at: acc.last_sync_at, trigger: 'automatic' });
+      } else {
+        setLastSyncInfo(null);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -277,47 +159,25 @@ export default function Dashboard() {
     return Number(num.toFixed(decimals));
   }
 
-  const forceAdsSync = async () => {
+  const triggerSync = async () => {
     if (!account || forcingSyncAds) return;
     setForcingSyncAds(true);
     setForceSyncMsg(null);
     try {
-      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
+      const res = await base44.functions.invoke('runDailyMasterSync', { amazon_account_id: account.id });
       if (res?.data?.ok) {
-        setForceSyncMsg({ type: 'success', text: `✓ ${res.data.campaigns_updated || 0} campanhas atualizadas` });
+        const s = res.data.summary || {};
+        setForceSyncMsg({ type: 'success', text: `✓ ${s.campaigns_updated || 0} camp. · ${s.keywords_updated || 0} kws · ${s.products_updated || 0} prod.` });
+        setLastSyncInfo({ at: new Date().toISOString(), trigger: 'manual' });
         await loadData();
       } else {
-        setForceSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar' });
+        setForceSyncMsg({ type: 'error', text: res?.data?.error || res?.data?.message || 'Falha no sync' });
       }
     } catch (e) {
       setForceSyncMsg({ type: 'error', text: e.message });
     } finally {
       setForcingSyncAds(false);
-      setTimeout(() => setForceSyncMsg(null), 8000);
-    }
-  };
-
-  const [forcingMasterSync, setForcingMasterSync] = useState(false);
-  const [masterSyncMsg, setMasterSyncMsg] = useState(null);
-
-  const forceMasterSync = async () => {
-    if (!account || forcingMasterSync) return;
-    setForcingMasterSync(true);
-    setMasterSyncMsg({ type: 'info', text: 'Buscando dados da Amazon... pode levar alguns minutos.' });
-    try {
-      const res = await base44.functions.invoke('runDailyMasterSync', { amazon_account_id: account.id });
-      if (res?.data?.ok) {
-        const s = res.data.summary || {};
-        setMasterSyncMsg({ type: 'success', text: `✓ Sync completo — ${s.campaigns_updated || 0} camp. · ${s.keywords_updated || 0} kws · ${s.products_updated || 0} prod.` });
-        await loadData();
-      } else {
-        setMasterSyncMsg({ type: 'error', text: res?.data?.error || res?.data?.message || 'Falha no sync' });
-      }
-    } catch (e) {
-      setMasterSyncMsg({ type: 'error', text: e.message });
-    } finally {
-      setForcingMasterSync(false);
-      setTimeout(() => setMasterSyncMsg(null), 12000);
+      setTimeout(() => setForceSyncMsg(null), 10000);
     }
   };
 
@@ -437,27 +297,28 @@ export default function Dashboard() {
             {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {account && <ReportSyncWidget amazonAccountId={account.id} onDone={loadData} />}
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Sync unificado */}
           <div className="flex flex-col items-end gap-1">
             <div className="flex items-center gap-2">
-              <button onClick={forceAdsSync} disabled={forcingSyncAds || forcingMasterSync || !account}
-                className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
+              <button onClick={triggerSync} disabled={forcingSyncAds || !account}
+                className="flex items-center gap-2 px-4 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
                 <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
-                {forcingSyncAds ? 'Atualizando...' : 'Atualizar Ads'}
-              </button>
-              <button onClick={forceMasterSync} disabled={forcingMasterSync || forcingSyncAds || !account}
-                className="flex items-center gap-2 px-3 py-2 bg-purple-500/10 border border-purple-500/20 text-purple-400 hover:bg-purple-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50"
-                title="Busca dados completos de vendas e gastos diretamente da Amazon (demora ~2 min)">
-                <Zap className={`w-4 h-4 ${forcingMasterSync ? 'animate-spin' : ''}`} />
-                {forcingMasterSync ? 'Sincronizando...' : 'Sync Completo'}
+                {forcingSyncAds ? 'Sincronizando...' : 'Sincronizar Ads'}
               </button>
             </div>
+            {/* Última atualização */}
+            {lastSyncInfo && !forceSyncMsg && (
+              <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                <span className={`px-1 py-0.5 rounded text-[9px] font-semibold border ${lastSyncInfo.trigger === 'manual' ? 'bg-cyan/10 text-cyan border-cyan/20' : 'bg-slate-500/10 text-slate-400 border-slate-500/20'}`}>
+                  {lastSyncInfo.trigger === 'manual' ? 'Manual' : 'Auto'}
+                </span>
+              </p>
+            )}
             {forceSyncMsg && (
               <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
-            )}
-            {masterSyncMsg && (
-              <p className={`text-xs ${masterSyncMsg.type === 'success' ? 'text-emerald-400' : masterSyncMsg.type === 'error' ? 'text-red-400' : 'text-purple-400'}`}>{masterSyncMsg.text}</p>
             )}
           </div>
           <button onClick={loadData} disabled={loading}
@@ -465,7 +326,7 @@ export default function Dashboard() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button onClick={runAudit} disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm rounded-lg transition-colors">
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors">
             <Activity className="w-4 h-4" />
             Auditoria
           </button>
