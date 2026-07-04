@@ -69,7 +69,7 @@ export default function Dashboard() {
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8),
-        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 5000),
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
       ]);
 
@@ -264,104 +264,225 @@ export default function Dashboard() {
       ? Math.min(avgDailySpend * 1.2, Math.max(activeCampaignsBudget, avgDailySpend * 1.5))
       : activeCampaignsBudget || 0;
 
-  // Alterações enviadas à Amazon — últimos 90 dias, com acumulado diário.
-  // Todos os dias são exibidos no eixo X, inclusive os que não tiveram alterações.
-  const changesChartData = (() => {
-    const DAY_MS = 86400000;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const firstDay = new Date(today.getTime() - 89 * DAY_MS);
-    const dailyCounts = new Map();
-
-    bidChanges.forEach((change) => {
-      if (!change.created_at) return;
-      const createdAt = new Date(change.created_at);
-      if (Number.isNaN(createdAt.getTime())) return;
-      createdAt.setHours(0, 0, 0, 0);
-      if (createdAt < firstDay || createdAt > today) return;
-      const key = createdAt.toISOString().slice(0, 10);
-      dailyCounts.set(key, (dailyCounts.get(key) || 0) + 1);
-    });
-
-    let cumulative = 0;
-    return Array.from({ length: 90 }, (_, index) => {
-      const day = new Date(firstDay.getTime() + index * DAY_MS);
-      const key = day.toISOString().slice(0, 10);
-      const changes = dailyCounts.get(key) || 0;
-      cumulative += changes;
-      return {
-        dateKey: key,
-        date: day.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-        fullDate: day.toLocaleDateString('pt-BR'),
-        changes,
-        cumulative,
-      };
-    });
-  })();
-  const totalChanges = changesChartData.at(-1)?.cumulative || 0;
+  // Alterações diárias
+  const changesByDay = bidChanges.reduce((acc, change) => {
+    const date = change.created_at ? new Date(change.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : 'N/A';
+    if (!acc[date]) acc[date] = { date, changes: 0 };
+    acc[date].changes++;
+    return acc;
+  }, {});
+  const changesChartData = Object.values(changesByDay).sort((a, b) => {
+    const [d1, m1] = a.date.split('/');
+    const [d2, m2] = b.date.split('/');
+    return new Date(2026, m1-1, d1) - new Date(2026, m2-1, d2);
+  });
+  const totalChanges = bidChanges.length;
 
   const [mainTab, setMainTab] = useState('dashboard');
 
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
-
-  if (mainTab === 'analytics') {
-    return (
-      <div className="p-6 space-y-5">
-        <div className="flex items-center gap-2">
-          <button onClick={() => setMainTab('dashboard')} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-surface-2 text-slate-400 hover:text-white">← Dashboard</button>
-        </div>
-        <Analytics embedded />
-      </div>
-    );
-  }
+  const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : null;
 
   return (
-    <div className="p-6 space-y-5 animate-fade-in">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="p-6 space-y-6 animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-heading font-bold text-white">{greeting}, {firstName}</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <span className={`w-1.5 h-1.5 rounded-full ${error ? 'bg-red-400' : 'bg-emerald-400'}`} />
-            <span className="text-xs text-slate-500">{error ? 'Erro ao carregar dados' : 'Amazon Ads conectado'}</span>
-            {lastSyncInfo && <><span className="text-slate-700">·</span><span className="text-xs text-slate-500">Último sync: {new Date(lastSyncInfo.at).toLocaleString('pt-BR')}</span></>}
+          <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
+          <p className="text-sm text-slate-400 mt-0.5">
+            {decisions.length > 0
+              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes · </>
+              : 'Sem decisões pendentes · '}
+            {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Sync unificado */}
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2">
+              <button onClick={triggerSync} disabled={forcingSyncAds || !account}
+                className="flex items-center gap-2 px-4 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
+                <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
+                {forcingSyncAds ? 'Sincronizando...' : 'Sincronizar Ads'}
+              </button>
+            </div>
+            {/* Última atualização */}
+            {lastSyncInfo && !forceSyncMsg && (
+              <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                <span className={`px-1 py-0.5 rounded text-[9px] font-semibold border ${lastSyncInfo.trigger === 'manual' ? 'bg-cyan/10 text-cyan border-cyan/20' : 'bg-slate-500/10 text-slate-400 border-slate-500/20'}`}>
+                  {lastSyncInfo.trigger === 'manual' ? 'Manual' : 'Auto'}
+                </span>
+              </p>
+            )}
+            {forceSyncMsg && (
+              <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
+            )}
+          </div>
+          <button onClick={loadData} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={runAudit} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors">
+            <Activity className="w-4 h-4" />
+            Auditoria
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* Tabs Dashboard / Analytics */}
+      <div className="flex border-b border-surface-2">
+        {[
+          { id: 'dashboard', label: 'Dashboard' },
+          { id: 'budget14d', label: '💰 Budget 14d' },
+          { id: 'analytics', label: '📊 Analytics' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setMainTab(t.id)}
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${mainTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {mainTab === 'analytics' && <Analytics />}
+      {mainTab === 'budget14d' && (
+        <BudgetReport14d
+          metricsDaily={metricsDaily}
+          campaigns={campaigns}
+          loading={loading}
+          sym={account?.currency_symbol || 'R$'}
+        />
+      )}
+      {mainTab !== 'analytics' && mainTab !== 'budget14d' && <>
+
+      {/* Painel de Auditoria de Dados */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-semibold text-slate-400">📊 Auditoria de Dados (30 dias)</h3>
+          <span className="text-[10px] text-slate-500">Fontes: CampaignMetricsDaily</span>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Registros diários</p>
+            <p className="text-white font-semibold">{metricsDaily.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Registros únicos</p>
+            <p className="text-white font-semibold">{uniqueMetrics.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Duplicatas removidas</p>
+            <p className="text-amber-400 font-semibold">{metricsDaily.length - uniqueMetrics.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Campanhas ativas</p>
+            <p className="text-emerald-400 font-semibold">{active_count}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Operacionais / Total</p>
+            <p className="text-white font-semibold">{total_current} / {campaigns.length}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-slate-500 mb-0.5">Data corte</p>
+            <p className="text-cyan font-mono text-[10px]">{cutoffDate}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={() => setMainTab('analytics')} variant="outline" size="sm"><BarChart2 className="w-4 h-4 mr-2" />Análises</Button>
-          <Button onClick={runAudit} variant="outline" size="sm"><Activity className="w-4 h-4 mr-2" />Auditar</Button>
-          <Button onClick={triggerSync} disabled={forcingSyncAds} size="sm"><RefreshCw className={`w-4 h-4 mr-2 ${forcingSyncAds ? 'animate-spin' : ''}`} />Sincronizar</Button>
-        </div>
       </div>
 
-      {forceSyncMsg && <div className={`px-4 py-3 rounded-xl border text-sm ${forceSyncMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-300'}`}>{forceSyncMsg.text}</div>}
-
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <KPICard label="Ad Spend 30d" value={`R$ ${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
-        <KPICard label="Vendas Ads 30d" value={`R$ ${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard label="Ad Spend 30d" value={`R$${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
+        <KPICard label="Vendas Ads 30d" value={`R$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
-        <KPICard label="CPC Médio" value={`R$ ${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
-        <KPICard label="Produtos" value={totalProducts} sub={`${products.filter(p => p.inventory_status !== 'out_of_stock').length} com estoque`} loading={loading} />
+        <KPICard label="CPC Médio" value={`R$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      {/* Painel 48h */}
+      {(() => {
+        const cutoff48h = new Date(Date.now() - 48 * 3600000).toISOString().slice(0, 10);
+        const metrics48h = uniqueMetrics.filter(m => m.date >= cutoff48h);
+        const kpi48 = metrics48h.reduce((acc, m) => ({
+          spend: acc.spend + (m.spend || 0),
+          impressions: acc.impressions + (m.impressions || 0),
+          clicks: acc.clicks + (m.clicks || 0),
+        }), { spend: 0, impressions: 0, clicks: 0 });
+        const ctr48 = kpi48.impressions > 0 ? (kpi48.clicks / kpi48.impressions * 100) : 0;
+        const cpc48 = kpi48.clicks > 0 ? (kpi48.spend / kpi48.clicks) : 0;
+        const sym = account?.currency_symbol || 'R$';
+        return (
+          <div className="bg-surface-1 border border-cyan/20 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-cyan animate-pulse" />
+                <h3 className="text-xs font-semibold text-cyan">Últimas 48 horas</h3>
+              </div>
+              <span className="text-[10px] text-slate-500">{metrics48h.length} registros</span>
+            </div>
+            {loading ? (
+              <div className="flex items-center gap-2"><Loader2 className="w-4 h-4 text-cyan animate-spin" /><span className="text-xs text-slate-500">Carregando...</span></div>
+            ) : (
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><DollarSign className="w-3 h-3 text-cyan" /><p className="text-[10px] text-slate-400">Gasto</p></div>
+                  <p className="text-lg font-bold text-white">{sym}{kpi48.spend.toFixed(2)}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><Eye className="w-3 h-3 text-purple-400" /><p className="text-[10px] text-slate-400">Impressões</p></div>
+                  <p className="text-lg font-bold text-white">{kpi48.impressions.toLocaleString('pt-BR')}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1"><MousePointer className="w-3 h-3 text-emerald-400" /><p className="text-[10px] text-slate-400">Cliques</p></div>
+                  <p className="text-lg font-bold text-white">{kpi48.clicks.toLocaleString('pt-BR')}</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-[10px] text-slate-400 mb-1">CTR</p>
+                  <p className="text-lg font-bold text-amber-400">{ctr48.toFixed(2)}%</p>
+                </div>
+                <div className="bg-surface-2 rounded-lg p-3">
+                  <p className="text-[10px] text-slate-400 mb-1">CPC Médio</p>
+                  <p className="text-lg font-bold text-slate-300">{sym}{cpc48.toFixed(2)}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Cards de Análise Avançada */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Heat Map - Horário de Veiculação */}
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 lg:col-span-2">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-cyan" /><h2 className="text-sm font-semibold text-slate-300">Desempenho por Hora</h2></div>
+            <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-cyan" />
+              Horário de Veiculação dos Ads
+            </h2>
             <span className="text-xs text-slate-500">Últimos 30 dias</span>
           </div>
-          {loading ? <div className="h-64 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : hourlyData.length > 0 ? (
-            <div className="space-y-4">
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={hourlyData}><CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" /><XAxis dataKey="hour" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} /><Bar dataKey="sales" fill="#10B981" name="Vendas" radius={[3,3,0,0]} /><Bar dataKey="spend" fill="#3B82F6" name="Spend" radius={[3,3,0,0]} /></BarChart>
-              </ResponsiveContainer>
-              <div className="overflow-x-auto">
-                <div className="grid gap-1 min-w-[800px]" style={{ gridTemplateColumns: '36px repeat(24, 1fr)' }}>
+          {loading ? (
+            <div className="h-64 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+          ) : heatMapArray.length > 0 ? (
+            <div className="overflow-x-auto">
+              <div className="min-w-[600px]">
+                <div className="grid gap-1" style={{ gridTemplateColumns: '40px repeat(24, 1fr)' }}>
+                  {/* Header - Horas */}
                   <div className="text-[9px] text-slate-500 font-semibold">Dia</div>
                   {Array.from({ length: 24 }, (_, h) => (
                     <div key={h} className="text-[9px] text-slate-500 text-center font-semibold">{h}</div>
                   ))}
+                  
+                  {/* Dias */}
                   {Array.from({ length: 30 }, (_, d) => (
                     <React.Fragment key={d}>
                       <div className="text-[9px] text-slate-400 text-right pr-2">{d + 1}</div>
@@ -386,72 +507,256 @@ export default function Dashboard() {
                   ))}
                 </div>
                 <div className="flex items-center gap-4 mt-3 text-[10px] text-slate-500">
-                  <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-surface-2" /> Sem veiculação</div>
-                  <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-cyan/20" /> Baixo spend</div>
-                  <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-cyan/40" /> Médio spend</div>
-                  <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm bg-cyan/60" /> Alto spend</div>
-                  <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-sm ring-1 ring-amber-400/50" /> Budget excedido</div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-surface-2" /> Sem veiculação
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/20" /> Baixo spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/40" /> Médio spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm bg-cyan/60" /> Alto spend
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-3 h-3 rounded-sm ring-1 ring-amber-400/50" /> Budget excedido
+                  </div>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="h-64 flex flex-col items-center justify-center text-sm text-slate-500"><Clock className="w-8 h-8 text-slate-600 mb-2" />Sem dados horários. Execute um Sync completo.</div>
+            <div className="h-64 flex flex-col items-center justify-center text-sm text-slate-500">
+              <Clock className="w-8 h-8 text-slate-600 mb-2" />
+              Sem dados horários. Execute um Sync completo.
+            </div>
           )}
         </div>
 
-        <BudgetSuggestionCard metricsDaily={metricsDaily} campaigns={campaigns} products={products} loading={loading} autopilotConfig={autopilotConfig} />
+        {/* Sugestão de Budget — IA */}
+        <BudgetSuggestionCard
+          metricsDaily={metricsDaily}
+          campaigns={campaigns}
+          products={products}
+          loading={loading}
+          autopilotConfig={autopilotConfig}
+        />
 
+        {/* Gráfico de Alterações Enviadas */}
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 lg:col-span-3">
           <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2"><Send className="w-4 h-4 text-amber-400" /><h2 className="text-sm font-semibold text-slate-300">Alterações Enviadas para Amazon</h2></div>
-            <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Total: </span><span className="text-sm font-bold text-amber-400">{totalChanges}</span></div>
+            <div className="flex items-center gap-2">
+              <Send className="w-4 h-4 text-amber-400" />
+              <h2 className="text-sm font-semibold text-slate-300">Alterações Enviadas para Amazon</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">Total: </span>
+              <span className="text-sm font-bold text-amber-400">{totalChanges}</span>
+            </div>
           </div>
           {loading ? (
             <div className="h-40 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
           ) : changesChartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <AreaChart data={changesChartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gAmazonChanges" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.30} />
-                    <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={changesChartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="date" interval={14} minTickGap={18} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis dataKey="cumulative" domain={[0, 'dataMax']} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip 
                   contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }}
-                  labelFormatter={(_, payload) => payload?.[0]?.payload?.fullDate || ''}
-                  formatter={(value, name, item) => name === 'Acumulado'
-                    ? [`${value} alterações`, 'Acumulado em 90 dias']
-                    : [`${item?.payload?.changes || 0} alterações`, 'Alterações no dia']}
+                  formatter={(v) => [`${v} alterações`, 'Envios']}
                 />
-                <Area type="monotone" dataKey="cumulative" name="Acumulado" stroke="#F59E0B" fill="url(#gAmazonChanges)" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-              </AreaChart>
+                <Bar dataKey="changes" fill="#F59E0B" radius={[4, 4, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-40 flex flex-col items-center justify-center text-sm text-slate-500"><Send className="w-8 h-8 text-slate-600 mb-2" />Nenhuma alteração enviada ainda.</div>
+            <div className="h-40 flex flex-col items-center justify-center text-sm text-slate-500">
+              <Send className="w-8 h-8 text-slate-600 mb-2" />
+              Nenhuma alteração enviada ainda.
+            </div>
           )}
         </div>
       </div>
 
+      {/* Gráfico Spend vs Vendas */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <h2 className="text-sm font-semibold text-slate-300 mb-4">Spend vs Vendas — 30 dias</h2>
         {loading ? <div className="h-52 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> : chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={210}><AreaChart data={chartData}><defs><linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient><linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" /><XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} /><YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} /><Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `R$${Number(v).toFixed(2)}`} /><Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" /><Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" /></AreaChart></ResponsiveContainer>
+          <ResponsiveContainer width="100%" height={210}>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="gSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
+                <linearGradient id="gSales" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+              <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 12 }} formatter={(v) => `R$${Number(v).toFixed(2)}`} />
+              <Area type="monotone" dataKey="spend" stroke="#3B82F6" fill="url(#gSpend)" strokeWidth={2} name="Spend" />
+              <Area type="monotone" dataKey="sales" stroke="#10B981" fill="url(#gSales)" strokeWidth={2} name="Vendas" />
+            </AreaChart>
+          </ResponsiveContainer>
         ) : <div className="h-52 flex items-center justify-center text-sm text-slate-500">Sem dados. Execute um Sync.</div>}
       </div>
 
+      {/* Campanhas */}
       {(() => {
         const activeCamps = activeCampaignsList;
         const pausedCamps = pausedCampaignsList;
         const archivedCamps = archivedCampaignsList;
-        const filtered = campFilter === 'active' ? activeCamps : campFilter === 'paused' ? pausedCamps : campFilter === 'archived' ? archivedCamps : campaigns;
-        return <div className="bg-surface-1 border border-surface-2 rounded-xl p-5"><div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold text-slate-300">Campanhas</h2><div className="flex gap-1">{[['all','Todas'],['active','Ativas'],['paused','Pausadas'],['archived','Arquivadas']].map(([k,l]) => <button key={k} onClick={() => setCampFilter(k)} className={`px-2.5 py-1 rounded text-xs ${campFilter === k ? 'bg-cyan/20 text-cyan' : 'text-slate-500 hover:text-white'}`}>{l}</button>)}</div></div><div className="space-y-2">{filtered.slice(0,10).map(c => <div key={c.id} className="flex items-center justify-between py-2 border-b border-surface-2"><div><p className="text-sm text-white">{c.name || c.campaign_name}</p><p className="text-xs text-slate-500">{c.asin || c.sku}</p></div><StatusBadge status={c.state || c.status} /></div>)}</div></div>;
+
+        const filtered = campFilter === 'active' ? activeCamps
+          : campFilter === 'paused' ? pausedCamps
+          : campFilter === 'archived' ? archivedCamps
+          : campaigns;
+
+        const sorted = [...filtered].sort((a, b) => (b.spend || 0) - (a.spend || 0) || new Date(b.created_date || 0) - new Date(a.created_date || 0)).slice(0, 25);
+
+        function CampStatusBadge({ c }) {
+          if (c.archived || c.state === 'archived' || c.status === 'archived') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/20">Encerrada</span>;
+          }
+          if (c.state === 'paused' || c.status === 'paused') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/20">Pausada</span>;
+          }
+          if (c.state === 'enabled' || c.status === 'enabled') {
+            return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"><span className="w-1 h-1 rounded-full bg-emerald-400" />Ativa</span>;
+          }
+          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">Indisponível</span>;
+        }
+
+        return (
+          <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-surface-2 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: 'all', label: `Todas (${campaigns.length})` },
+                    { key: 'active', label: `Ativas (${activeCamps.length})` },
+                    { key: 'paused', label: `Pausadas (${pausedCamps.length})` },
+                    { key: 'archived', label: `Encerradas (${archivedCamps.length})` },
+                  ].map(f => (
+                    <button key={f.key} onClick={() => setCampFilter(f.key)}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap ${campFilter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Link to="/ads" className="text-xs text-cyan hover:underline">Ver todas →</Link>
+            </div>
+            {loading ? (
+              <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
+            ) : sorted.length === 0 ? (
+              <div className="p-8 text-center text-sm text-slate-500">Nenhuma campanha encontrada</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-surface-2">
+                      {['Status', 'Nome', 'Spend', 'Vendas', 'ACoS', 'ROAS'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map(c => {
+                      const isInactive = c.archived || c.state === 'archived' || c.state === 'paused' || c.status === 'paused' || c.status === 'archived';
+                      return (
+                        <tr key={c.id} className={`border-b border-surface-2/50 hover:bg-surface-2 transition-colors ${isInactive ? 'opacity-60' : ''}`}>
+                          <td className="px-4 py-3"><CampStatusBadge c={c} /></td>
+                          <td className="px-4 py-3 text-white font-medium truncate max-w-[200px]">{c.name || c.campaign_name || '—'}</td>
+                          <td className="px-4 py-3 text-slate-300">R${(c.spend || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-emerald-400">R${(c.sales || 0).toFixed(2)}</td>
+                          <td className={`px-4 py-3 font-semibold ${(c.acos || 0) > 50 ? 'text-red-400' : (c.acos || 0) > 30 ? 'text-amber-400' : (c.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>{(c.acos || 0).toFixed(1)}%</td>
+                          <td className="px-4 py-3 text-slate-300">{(c.roas || 0).toFixed(2)}x</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
       })()}
 
-      {showAudit && auditData && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="w-full max-w-xl rounded-2xl border border-surface-2 bg-surface-1 p-6"><div className="flex justify-between mb-4"><h2 className="font-bold text-white">Auditoria de dados</h2><button onClick={() => setShowAudit(false)}><XCircle className="w-5 h-5 text-slate-500" /></button></div><div className="space-y-2 text-sm"><div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Total:</span><span className="text-white font-semibold">{auditData.metrics?.total_records}</span></div><div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Únicos:</span><span className="text-white font-semibold">{auditData.metrics?.unique_records}</span></div><div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Duplicados:</span><span className="text-white font-semibold">{auditData.metrics?.duplicates}</span></div></div></div></div>}
+      </>}
+
+      {/* Modal de Auditoria */}
+      {showAudit && auditData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={e => e.target === e.currentTarget && setShowAudit(false)}>
+          <div className="bg-surface-1 border border-surface-2 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-surface-2">
+              <div>
+                <h2 className="text-sm font-bold text-white">📊 Auditoria de Dados Amazon</h2>
+                <p className="text-xs text-slate-400 font-mono">{auditData.account?.seller_name || auditData.account?.id}</p>
+              </div>
+              <button onClick={() => setShowAudit(false)} className="text-slate-500 hover:text-white">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Totais */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">Spend</p>
+                  <p className="text-lg font-bold text-white">{auditData.formatted?.spend}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">Vendas</p>
+                  <p className="text-lg font-bold text-emerald-400">{auditData.formatted?.sales}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">ACoS</p>
+                  <p className="text-lg font-bold text-amber-400">{auditData.formatted?.acos}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">ROAS</p>
+                  <p className="text-lg font-bold text-cyan">{auditData.formatted?.roas}</p>
+                </div>
+                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                  <p className="text-xs text-slate-500 mb-1">CPC</p>
+                  <p className="text-lg font-bold text-slate-300">{auditData.formatted?.cpc}</p>
+                </div>
+              </div>
+
+              {/* Qualidade */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-xs font-semibold text-slate-400 mb-3">Qualidade dos Dados</h3>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Total:</span><span className="text-white font-semibold">{auditData.metrics?.total_records}</span></div>
+                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Únicos:</span><span className="text-emerald-400 font-semibold">{auditData.metrics?.unique_records}</span></div>
+                  <div className="flex items-center justify-between py-1.5"><span className="text-slate-500">Duplicatas:</span><span className={`font-semibold ${auditData.metrics?.duplicates_removed > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{auditData.metrics?.duplicates_removed}</span></div>
+                </div>
+              </div>
+
+              {/* Campanhas */}
+              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
+                <h3 className="text-xs font-semibold text-slate-400 mb-3">Campanhas</h3>
+                <div className="grid grid-cols-4 gap-3 text-center">
+                  <div><p className="text-xs text-slate-500">Total</p><p className="text-lg font-bold text-white">{auditData.campaigns?.total}</p></div>
+                  <div><p className="text-xs text-slate-500">Ativas</p><p className="text-lg font-bold text-emerald-400">{auditData.campaigns?.active}</p></div>
+                  <div><p className="text-xs text-slate-500">Pausadas</p><p className="text-lg font-bold text-amber-400">{auditData.campaigns?.paused}</p></div>
+                  <div><p className="text-xs text-slate-500">Arquivadas</p><p className="text-lg font-bold text-slate-400">{auditData.campaigns?.archived}</p></div>
+                </div>
+              </div>
+
+              {/* Nota */}
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+                <p className="text-xs text-amber-300"><strong>⚠️ Nota:</strong> Divergências podem indicar necessidade de novo sync. Dados Amazon levam 48h para atribuição completa.</p>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-surface-2 flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowAudit(false)}>Fechar</Button>
+              <Button onClick={() => { setShowAudit(false); loadData(); }}>Atualizar</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
