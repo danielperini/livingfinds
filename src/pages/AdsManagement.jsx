@@ -5,13 +5,14 @@ import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
   Settings, Package, History, Zap, Bot, Sparkles, Wand2, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Play
+  Pause, Trash2, Rocket, Play, AlertTriangle
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
 import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
 import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
 import KickoffModal from '@/components/products/KickoffModal';
+import IncompleteCampaignsPanel from '@/components/ads/IncompleteCampaignsPanel';
 
 function ManualCreationResult({ result, onClose }) {
   const [expanded, setExpanded] = useState(false);
@@ -201,6 +202,7 @@ export default function AdsManagement() {
   const [campaignAction, setCampaignAction] = useState(null); // 'pausing' | 'removing' | null
   const [campaignActionMsg, setCampaignActionMsg] = useState(null);
   const [kickoffProduct, setKickoffProduct] = useState(null); // produto para re-kickoff
+  const [mainView, setMainView] = useState('campaigns'); // 'campaigns' | 'incomplete'
 
   const loadCampaigns = async () => {
     setLoading(true);
@@ -422,7 +424,21 @@ export default function AdsManagement() {
         {/* Header */}
         <div className="p-3 border-b border-surface-2">
           <div className="flex items-center justify-between mb-1.5">
-            <h2 className="text-sm font-semibold text-white">Campanhas</h2>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setMainView('campaigns')}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${mainView === 'campaigns' ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                Campanhas
+              </button>
+              <button
+                onClick={() => setMainView('incomplete')}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${mainView === 'incomplete' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                <AlertTriangle className="w-3 h-3" />
+                Incompletas
+              </button>
+            </div>
             <div className="flex items-center gap-1.5">
               <button onClick={createManualsForAutos} disabled={creatingManuals || !account}
                 title="Criar campanha MANUAL para cada AUTO ativa sem par"
@@ -477,29 +493,35 @@ export default function AdsManagement() {
           </div>
         </div>
 
-        {/* Two-column campaign list */}
-        <div className="flex flex-1 min-h-0">
-          <CampaignColumn
-            title="Automáticas"
-            icon={Zap}
-            color="text-amber-400"
-            campaigns={autoCampaigns}
-            products={products}
-            selectedId={selectedCampaign?.id}
-            onSelect={selectCampaign}
-            loading={loading}
-          />
-          <CampaignColumn
-            title="Manuais"
-            icon={Sparkles}
-            color="text-cyan"
-            campaigns={manualCampaigns}
-            products={products}
-            selectedId={selectedCampaign?.id}
-            onSelect={selectCampaign}
-            loading={loading}
-          />
-        </div>
+        {/* Two-column campaign list OR incomplete panel */}
+        {mainView === 'incomplete' ? (
+          <div className="flex-1 overflow-y-auto scrollbar-thin">
+            <IncompleteCampaignsPanel account={account} onDone={loadCampaigns} />
+          </div>
+        ) : (
+          <div className="flex flex-1 min-h-0">
+            <CampaignColumn
+              title="Automáticas"
+              icon={Zap}
+              color="text-amber-400"
+              campaigns={autoCampaigns}
+              products={products}
+              selectedId={selectedCampaign?.id}
+              onSelect={selectCampaign}
+              loading={loading}
+            />
+            <CampaignColumn
+              title="Manuais"
+              icon={Sparkles}
+              color="text-cyan"
+              campaigns={manualCampaigns}
+              products={products}
+              selectedId={selectedCampaign?.id}
+              onSelect={selectCampaign}
+              loading={loading}
+            />
+          </div>
+        )}
 
         {/* KPI bottom */}
         <div className="p-3 border-t border-surface-2 grid grid-cols-2 gap-2">
