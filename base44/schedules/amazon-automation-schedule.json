@@ -1,0 +1,47 @@
+{
+  "timezone": "America/Sao_Paulo",
+  "jobs": [
+    {
+      "name": "Amazon Action Queue - 00:00 BRT",
+      "function": "runAmazonQueue0000",
+      "cron": "0 0 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Action Queue - 01:00 BRT",
+      "function": "runAmazonQueue0100",
+      "cron": "0 1 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Action Queue - 02:00 BRT",
+      "function": "runAmazonQueue0200",
+      "cron": "0 2 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Action Queue - 03:00 BRT",
+      "function": "runAmazonQueue0300",
+      "cron": "0 3 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Recovery - 06:00 BRT",
+      "function": "runAmazonRecovery0600Scheduled",
+      "cron": "0 6 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Reports Audit ML - 06:40 BRT",
+      "function": "runAmazonReports0640Scheduled",
+      "cron": "40 6 * * *",
+      "payload": {}
+    },
+    {
+      "name": "Amazon Action Queue - 13:00 BRT",
+      "function": "runAmazonQueue1300",
+      "cron": "0 13 * * *",
+      "payload": {}
+    }
+  ]
+}
