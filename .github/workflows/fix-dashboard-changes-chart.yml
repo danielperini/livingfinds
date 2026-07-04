@@ -1,0 +1,125 @@
+name: Fix dashboard changes chart
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-dashboard-changes-chart.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Patch Dashboard
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/pages/Dashboard.jsx')
+          text = path.read_text()
+
+          helper = """async function loadAllBidChanges(amazonAccountId) {
+            const rows = [];
+            const pageSize = 200;
+            let offset = 0;
+
+            while (true) {
+              const page = await base44.entities.AdsBidChangeLog.filter(
+                { amazon_account_id: amazonAccountId },
+                '-created_at',
+                pageSize,
+                offset
+              );
+              rows.push(...page);
+              if (page.length < pageSize) break;
+              offset += pageSize;
+            }
+
+            return rows;
+          }
+
+          """
+
+          if 'async function loadAllBidChanges' not in text:
+            text = text.replace('export default function Dashboard() {', helper + 'export default function Dashboard() {', 1)
+
+          text = text.replace(
+            "base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),",
+            'loadAllBidChanges(aid),'
+          )
+
+          start = text.index('  // Alterações diárias')
+          end = text.index("  const [mainTab, setMainTab]", start)
+          replacement = """  // Alterações enviadas à Amazon — 30 dias consecutivos, uma barra independente por dia.
+          const changesChartData = (() => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const firstDay = new Date(today);
+            firstDay.setDate(today.getDate() - 29);
+
+            const dateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            const dailyCounts = new Map();
+
+            bidChanges.forEach((change) => {
+              if (!change.created_at) return;
+              const createdAt = new Date(change.created_at);
+              if (Number.isNaN(createdAt.getTime())) return;
+              createdAt.setHours(0, 0, 0, 0);
+              if (createdAt < firstDay || createdAt > today) return;
+              const key = dateKey(createdAt);
+              dailyCounts.set(key, (dailyCounts.get(key) || 0) + 1);
+            });
+
+            return Array.from({ length: 30 }, (_, index) => {
+              const day = new Date(firstDay);
+              day.setDate(firstDay.getDate() + index);
+              const key = dateKey(day);
+              return {
+                dateKey: key,
+                date: day.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+                fullDate: day.toLocaleDateString('pt-BR'),
+                changes: dailyCounts.get(key) || 0,
+              };
+            });
+          })();
+          const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0);
+
+          """
+          text = text[:start] + replacement + text[end:]
+
+          text = text.replace(
+            '                  interval={1}\n                  minTickGap={4}',
+            '                  interval={0}\n                  minTickGap={0}\n                  angle={-45}\n                  textAnchor="end"\n                  height={48}'
+          )
+
+          text = text.replace('barCategoryGap="12%"', 'barCategoryGap="8%"')
+          text = text.replace('maxBarSize={32}', 'maxBarSize={24}')
+          path.write_text(text)
+          PY
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pages/Dashboard.jsx
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: mostrar alterações Amazon dos últimos 30 dias"
+          git push origin main
