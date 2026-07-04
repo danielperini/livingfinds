@@ -20,8 +20,7 @@ function saoPauloNow() {
 }
 
 function nextSlot() {
-  const now = saoPauloNow();
-  const { hour, day } = now;
+  const { hour, day } = saoPauloNow();
 
   if ([0, 1, 2, 3, 13].includes(hour)) {
     return {
@@ -62,9 +61,7 @@ Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const user = await base44.auth.me();
-    if (!user) {
-      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
-    }
+    if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const body = await request.json().catch(() => ({}));
     const mode = body.mode === 'manual_only' ? 'manual_only' : 'auto_plus_four';
@@ -72,14 +69,11 @@ Deno.serve(async (request) => {
     if (!body.amazon_account_id || !body.asin) {
       return Response.json({ ok: false, error: 'Conta e ASIN são obrigatórios' }, { status: 400 });
     }
-
     if (mode === 'manual_only' && !String(body.keyword || '').trim()) {
       return Response.json({ ok: false, error: 'Informe o termo exato' }, { status: 400 });
     }
 
     const slot = nextSlot();
-    let queueItem = null;
-
     const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
       {
         amazon_account_id: body.amazon_account_id,
@@ -91,17 +85,15 @@ Deno.serve(async (request) => {
       1,
     ).catch(() => []);
 
-    if (existing.length) {
-      queueItem = existing[0];
-
-      if (slot.execute_now) {
-        await base44.asServiceRole.entities.ProductKickoffQueue.update(queueItem.id, {
-          queue_hour: slot.hour,
-          queue_window: slot.window,
-          scheduled_at: new Date().toISOString(),
-          last_error: null,
-        });
-      }
+    let queueItem = existing[0] || null;
+    if (queueItem) {
+      queueItem = await base44.asServiceRole.entities.ProductKickoffQueue.update(queueItem.id, {
+        queue_hour: slot.hour,
+        queue_window: slot.window,
+        scheduled_at: slot.at.toISOString(),
+        status: 'scheduled',
+        last_error: null,
+      });
     } else {
       queueItem = await base44.asServiceRole.entities.ProductKickoffQueue.create({
         amazon_account_id: body.amazon_account_id,
@@ -120,33 +112,51 @@ Deno.serve(async (request) => {
     }
 
     let execution = null;
+    let executionDeferred = false;
+    let executionError = null;
+
     if (slot.execute_now) {
-      const response = await base44.asServiceRole.functions.invoke('processProductKickoffQueueV2', {
-        amazon_account_id: body.amazon_account_id,
-        hour: slot.hour,
-        _service_role: true,
-      });
-      execution = response?.data || response || null;
+      try {
+        const response = await base44.asServiceRole.functions.invoke('processProductKickoffQueueV2', {
+          amazon_account_id: body.amazon_account_id,
+          hour: slot.hour,
+          _service_role: true,
+        });
+        execution = response?.data || response || null;
+        executionDeferred = !(execution?.processed > 0);
+      } catch (error) {
+        executionDeferred = true;
+        executionError = String(error?.message || error).slice(0, 300);
+        await base44.asServiceRole.entities.ProductKickoffQueue.update(queueItem.id, {
+          status: 'scheduled',
+          queue_hour: slot.hour,
+          queue_window: slot.window,
+          scheduled_at: new Date().toISOString(),
+          last_error: executionError,
+        }).catch(() => null);
+      }
     }
 
     const executed = Boolean(slot.execute_now && execution?.processed > 0);
     return Response.json({
       ok: true,
+      queued: true,
       scheduled: !executed,
       executed,
+      execution_deferred: executionDeferred,
+      execution_error: executionError,
       queue_id: queueItem?.id || null,
       queue_hour: slot.hour,
       queue_window: slot.window,
       scheduled_at: slot.at.toISOString(),
       execution,
       message: executed
-        ? `Kick-off executado para ${body.asin}. A campanha foi enviada para processamento.`
-        : `Kick-off programado para ${slot.window}. As campanhas serão criadas automaticamente com intervalo de 14 segundos.`,
+        ? `Kick-off enviado para execução para ${body.asin}.`
+        : executionDeferred
+          ? `Kick-off salvo na fila para ${body.asin}. A Amazon limitou a execução imediata; nova tentativa ocorrerá automaticamente nesta janela.`
+          : `Kick-off programado para ${slot.window}.`,
     });
   } catch (error) {
-    return Response.json(
-      { ok: false, error: error?.message || 'Erro ao programar o Kick-off' },
-      { status: 500 },
-    );
+    return Response.json({ ok: false, error: error?.message || 'Erro ao programar o Kick-off' }, { status: 500 });
   }
 });
