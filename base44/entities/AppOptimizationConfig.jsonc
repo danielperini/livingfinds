@@ -1,0 +1,27 @@
+{
+  "name": "AppOptimizationConfig",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "primary_goal": { "type": "string", "enum": ["acos", "tacos", "roas", "sales", "profit", "orders"], "default": "acos" },
+    "target_acos": { "type": "number", "default": 25 },
+    "target_tacos": { "type": "number", "default": 10 },
+    "target_roas": { "type": "number", "default": 4 },
+    "target_daily_sales": { "type": "number", "default": 0 },
+    "target_daily_orders": { "type": "number", "default": 0 },
+    "min_auto_bid": { "type": "number", "default": 0.30 },
+    "max_auto_bid": { "type": "number", "default": 1.50 },
+    "min_manual_bid": { "type": "number", "default": 0.30 },
+    "max_manual_bid": { "type": "number", "default": 1.50 },
+    "bid_step": { "type": "number", "default": 0.10 },
+    "max_daily_budget_limit": { "type": "number", "default": 100 },
+    "max_budget_per_campaign": { "type": "number", "default": 20 },
+    "max_spend_without_sale": { "type": "number", "default": 20 },
+    "minimum_data_hours": { "type": "number", "default": 24 },
+    "minimum_change_interval_hours": { "type": "number", "default": 36 },
+    "minimum_confidence": { "type": "number", "default": 85 },
+    "automation_mode": { "type": "string", "enum": ["analysis", "approval", "execution"], "default": "approval" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id"]
+}
