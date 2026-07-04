@@ -45,6 +45,7 @@ import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
+import IncompleteCampaigns from '@/pages/IncompleteCampaigns';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -104,6 +105,7 @@ const AuthenticatedApp = () => {
           <Route path="/keyword-management" element={<KeywordManagement />} />
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
+          <Route path="/incomplete-campaigns" element={<IncompleteCampaigns />} />
 
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
