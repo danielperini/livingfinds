@@ -29,6 +29,26 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 
 
 
+async function loadAllBidChanges(amazonAccountId) {
+  const rows = [];
+  const pageSize = 200;
+  let offset = 0;
+
+  while (true) {
+    const page = await base44.entities.AdsBidChangeLog.filter(
+      { amazon_account_id: amazonAccountId },
+      '-created_at',
+      pageSize,
+      offset
+    );
+    rows.push(...page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return rows;
+}
+
 export default function Dashboard() {
   const [user, setUser] = useState(null);
   const [account, setAccount] = useState(null);
@@ -69,7 +89,7 @@ export default function Dashboard() {
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8),
-        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500),
+        loadAllBidChanges(aid),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
       ]);
 
@@ -264,19 +284,39 @@ export default function Dashboard() {
       ? Math.min(avgDailySpend * 1.2, Math.max(activeCampaignsBudget, avgDailySpend * 1.5))
       : activeCampaignsBudget || 0;
 
-  // Alterações diárias
-  const changesByDay = bidChanges.reduce((acc, change) => {
-    const date = change.created_at ? new Date(change.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) : 'N/A';
-    if (!acc[date]) acc[date] = { date, changes: 0 };
-    acc[date].changes++;
-    return acc;
-  }, {});
-  const changesChartData = Object.values(changesByDay).sort((a, b) => {
-    const [d1, m1] = a.date.split('/');
-    const [d2, m2] = b.date.split('/');
-    return new Date(2026, m1-1, d1) - new Date(2026, m2-1, d2);
+  // Alterações enviadas à Amazon — 30 dias consecutivos, uma barra independente por dia.
+const changesChartData = (() => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const firstDay = new Date(today);
+  firstDay.setDate(today.getDate() - 29);
+
+  const dateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const dailyCounts = new Map();
+
+  bidChanges.forEach((change) => {
+    if (!change.created_at) return;
+    const createdAt = new Date(change.created_at);
+    if (Number.isNaN(createdAt.getTime())) return;
+    createdAt.setHours(0, 0, 0, 0);
+    if (createdAt < firstDay || createdAt > today) return;
+    const key = dateKey(createdAt);
+    dailyCounts.set(key, (dailyCounts.get(key) || 0) + 1);
   });
-  const totalChanges = bidChanges.length;
+
+  return Array.from({ length: 30 }, (_, index) => {
+    const day = new Date(firstDay);
+    day.setDate(firstDay.getDate() + index);
+    const key = dateKey(day);
+    return {
+      dateKey: key,
+      date: day.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+      fullDate: day.toLocaleDateString('pt-BR'),
+      changes: dailyCounts.get(key) || 0,
+    };
+  });
+})();
+const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0);
 
   const [mainTab, setMainTab] = useState('dashboard');
 
