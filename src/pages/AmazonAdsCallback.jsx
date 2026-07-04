@@ -61,6 +61,10 @@ export default function AmazonAdsCallback() {
         setStatus('success');
         setMessage(data.message || 'Amazon Ads conectada com sucesso.');
         setDetails(data);
+        // Redireciona para a página de setup após 3 segundos para confirmar o token
+        setTimeout(() => {
+          window.location.href = '/amazon-oauth-setup';
+        }, 3000);
       } catch (e) {
         setStatus('error');
         setMessage(e.message || 'Erro ao conectar com a Amazon Ads.');
