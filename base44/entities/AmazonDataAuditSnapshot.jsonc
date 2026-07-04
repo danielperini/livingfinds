@@ -1,0 +1,27 @@
+{
+  "name": "AmazonDataAuditSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "status": { "type": "string", "enum": ["healthy", "warning", "error"], "default": "warning" },
+    "checked_at": { "type": "string", "format": "date-time" },
+    "last_ads_report_at": { "type": "string", "format": "date-time" },
+    "last_products_report_at": { "type": "string", "format": "date-time" },
+    "last_metrics_at": { "type": "string", "format": "date-time" },
+    "last_hourly_metrics_at": { "type": "string", "format": "date-time" },
+    "campaigns_total": { "type": "number" },
+    "campaigns_active": { "type": "number" },
+    "campaigns_paused": { "type": "number" },
+    "campaigns_archived": { "type": "number" },
+    "products_total": { "type": "number" },
+    "products_with_campaign": { "type": "number" },
+    "metrics_rows_30d": { "type": "number" },
+    "metrics_unique_30d": { "type": "number" },
+    "metrics_duplicates_30d": { "type": "number" },
+    "hourly_rows_30d": { "type": "number" },
+    "ml_rows_30d": { "type": "number" },
+    "issues": { "type": "array", "items": { "type": "string" } },
+    "summary_json": { "type": "string" }
+  },
+  "required": ["amazon_account_id", "checked_at"]
+}
