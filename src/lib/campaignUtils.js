@@ -33,32 +33,65 @@ export async function loadAllCampaigns(amazonAccountId, extraFilter = {}) {
   return allCampaigns;
 }
 
+function booleanTrue(value) {
+  if (value === true || value === 1) return true;
+  return ['true', '1', 'yes', 'sim'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+/**
+ * Normaliza todos os campos de estado usados pelas diferentes rotas de sync.
+ * Prioridade: state → status → campaign_status → serving_status.
+ */
+export function campaignState(campaign = {}) {
+  const rawState =
+    campaign.state ??
+    campaign.status ??
+    campaign.campaign_status ??
+    campaign.serving_status ??
+    '';
+
+  return normalizeState(String(rawState));
+}
+
+export function campaignIsArchived(campaign = {}) {
+  return booleanTrue(campaign.archived) || campaignState(campaign) === 'archived';
+}
+
 /**
  * Classifica campanhas em grupos operacionais.
  * archived = estado Amazon 'archived' OU campo archived=true.
  * total_current = active + paused (NÃO inclui archived).
  */
-export function classifyCampaigns(campaigns) {
-  const active = campaigns.filter(c =>
-    (c.state === 'enabled' || c.status === 'enabled') &&
-    !c.archived && c.state !== 'archived' && c.status !== 'archived'
-  );
-  const paused = campaigns.filter(c =>
-    (c.state === 'paused' || c.status === 'paused') &&
-    !c.archived && c.state !== 'archived' && c.status !== 'archived'
-  );
-  const archived = campaigns.filter(c =>
-    c.archived || c.state === 'archived' || c.status === 'archived'
-  );
+export function classifyCampaigns(campaigns = []) {
+  const active = [];
+  const paused = [];
+  const archived = [];
+  const other = [];
+
+  campaigns.forEach((campaign) => {
+    const state = campaignState(campaign);
+
+    if (campaignIsArchived(campaign)) {
+      archived.push(campaign);
+    } else if (state === 'enabled') {
+      active.push(campaign);
+    } else if (state === 'paused') {
+      paused.push(campaign);
+    } else {
+      other.push(campaign);
+    }
+  });
 
   return {
     active,
     paused,
     archived,
-    total_current: active.length + paused.length, // operacional — sem archived
+    other,
+    total_current: active.length + paused.length,
     active_count: active.length,
     paused_count: paused.length,
     archived_count: archived.length,
+    other_count: other.length,
     total_all: campaigns.length,
   };
 }
@@ -66,20 +99,20 @@ export function classifyCampaigns(campaigns) {
 /**
  * Filtra campanhas elegíveis para Autopilot (nunca arquivadas).
  */
-export function getAutopilotEligible(campaigns) {
-  return campaigns.filter(c =>
-    c.state !== 'archived' && c.status !== 'archived' && !c.archived
-  );
+export function getAutopilotEligible(campaigns = []) {
+  return campaigns.filter((campaign) => !campaignIsArchived(campaign));
 }
 
 /**
  * Normaliza o estado Amazon para padrão interno.
- * ENABLED → enabled | PAUSED → paused | ARCHIVED → archived
+ * ENABLED/ACTIVE/ATIVA → enabled | PAUSED/PAUSADA → paused | ARCHIVED → archived
  */
 export function normalizeState(rawState = '') {
-  const s = rawState.toLowerCase();
-  if (s === 'enabled' || s === 'active') return 'enabled';
-  if (s === 'paused') return 'paused';
-  if (s === 'archived') return 'archived';
-  return s;
+  const state = String(rawState ?? '').trim().toLowerCase();
+
+  if (['enabled', 'active', 'ativa', 'ativada', 'running', 'live'].includes(state)) return 'enabled';
+  if (['paused', 'pausada', 'inactive', 'inativa'].includes(state)) return 'paused';
+  if (['archived', 'ended', 'deleted', 'encerrada'].includes(state)) return 'archived';
+
+  return state;
 }
