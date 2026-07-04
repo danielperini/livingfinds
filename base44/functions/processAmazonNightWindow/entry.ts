@@ -20,10 +20,22 @@ Deno.serve(async (req) => {
 
     const output = [];
     for (const account of accounts) {
+      const result = { amazon_account_id: account.id, hour, products_ads_sync: null, suggestions: [], decisions: [], kickoffs: [] };
+
+      try {
+        const syncResponse = await base44.asServiceRole.functions.invoke('syncProductsAdsWindow', {
+          amazon_account_id: account.id,
+          _window_execution: true,
+          _service_role: true,
+        });
+        result.products_ads_sync = syncResponse?.data || syncResponse || {};
+      } catch (error) {
+        result.products_ads_sync = { ok: false, error: error?.message || String(error) };
+      }
+
       const suggestions = hour === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: hour }, 'approved_at', 5);
       const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled', queue_hour: hour }, 'created_at', 5);
       const kickoffs = await base44.asServiceRole.entities.ProductKickoffQueue.filter({ amazon_account_id: account.id, status: 'scheduled', queue_hour: hour }, 'scheduled_at', 5).catch(() => []);
-      const result = { amazon_account_id: account.id, hour, suggestions: [], decisions: [], kickoffs: [] };
 
       for (const item of kickoffs) {
         if (item.scheduled_at && new Date(item.scheduled_at).getTime() > Date.now()) continue;
@@ -90,7 +102,7 @@ Deno.serve(async (req) => {
       output.push(result);
     }
 
-    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 14, max_items_per_account: 15, results: output });
+    return Response.json({ ok: true, hour, windows: ['00:00-04:00', '13:00-14:00'], spacing_seconds: 14, products_ads_auto_sync: true, max_items_per_account: 15, results: output });
   } catch (e) {
     return Response.json({ ok: false, error: e?.message || 'Erro na fila Amazon' }, { status: 500 });
   }
