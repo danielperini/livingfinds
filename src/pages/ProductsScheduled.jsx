@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import Products from '@/pages/Products';
 import { CheckCircle2, Clock, RefreshCw } from 'lucide-react';
@@ -40,7 +40,21 @@ export default function ProductsScheduled() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [status, setStatus] = useState('waiting');
   const [refreshKey, setRefreshKey] = useState(0);
+  const linkedAccountRef = useRef(null);
   const windowInfo = useMemo(() => nextWindow(), [lastUpdate]);
+
+  const refreshCampaignLinks = useCallback(async (accountId) => {
+    if (!accountId || linkedAccountRef.current === accountId) return;
+    linkedAccountRef.current = accountId;
+    try {
+      const response = await base44.functions.invoke('fixProductCampaignLinks', {
+        amazon_account_id: accountId,
+      });
+      if (response?.data?.ok) setRefreshKey((key) => key + 1);
+    } catch {
+      linkedAccountRef.current = null;
+    }
+  }, []);
 
   const readStatus = useCallback(async () => {
     try {
@@ -51,6 +65,8 @@ export default function ProductsScheduled() {
       const current = accounts[0] || null;
       setAccount(current);
       if (!current) return;
+
+      await refreshCampaignLinks(current.id);
 
       const logs = await base44.entities.SyncExecutionLog.filter({
         amazon_account_id: current.id,
@@ -67,7 +83,7 @@ export default function ProductsScheduled() {
     } catch {
       setStatus('error');
     }
-  }, []);
+  }, [refreshCampaignLinks]);
 
   useEffect(() => {
     readStatus();
@@ -90,7 +106,7 @@ export default function ProductsScheduled() {
             </div>
           </div>
         </div>
-        <button type="button" onClick={readStatus} className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-surface-3 bg-surface-2 text-xs font-semibold text-slate-300 hover:text-white">
+        <button type="button" onClick={() => { linkedAccountRef.current = null; readStatus(); }} className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-surface-3 bg-surface-2 text-xs font-semibold text-slate-300 hover:text-white">
           <RefreshCw className="w-4 h-4" />
           Atualizar status
         </button>
