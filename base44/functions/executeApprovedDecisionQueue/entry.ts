@@ -9,6 +9,15 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
+    let reconciliation = null;
+    if (body.amazon_account_id) {
+      const response = await base44.asServiceRole.functions.invoke('reconcilePendingBidDecisions', {
+        amazon_account_id: body.amazon_account_id,
+        _service_role: true,
+      });
+      reconciliation = response?.data || response || null;
+    }
+
     const approvedQuery = body.amazon_account_id
       ? { amazon_account_id: body.amazon_account_id, status: 'approved' }
       : { status: 'approved' };
@@ -17,7 +26,7 @@ Deno.serve(async (request) => {
       : { status: 'failed', action: 'pause_campaign' };
 
     const [approved, failedPauses] = await Promise.all([
-      base44.asServiceRole.entities.OptimizationDecision.filter(approvedQuery, 'created_at', 50),
+      base44.asServiceRole.entities.OptimizationDecision.filter(approvedQuery, 'created_at', 200),
       base44.asServiceRole.entities.OptimizationDecision.filter(failedPauseQuery, '-created_at', 50).catch(() => []),
     ]);
 
@@ -51,6 +60,7 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: true,
+      reconciliation,
       queued: queued.length,
       executed: Number(result.executed || 0),
       failed: Number(result.failed || 0),
