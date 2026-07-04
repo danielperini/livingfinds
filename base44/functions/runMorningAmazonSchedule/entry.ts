@@ -14,10 +14,12 @@ Deno.serve(async(req)=>{try{
   for(const account of accounts){
    const sync=await b.asServiceRole.functions.invoke('syncAdsCampaignStatesV2',{amazon_account_id:account.id,trigger_type:'scheduled_0640',_service_role:true});
    const links=await b.asServiceRole.functions.invoke('fixProductCampaignLinks',{amazon_account_id:account.id,_service_role:true});
+   const signals=await b.asServiceRole.functions.invoke('buildKeywordLearningSignals',{amazon_account_id:account.id,_service_role:true});
+   const learner=await b.asServiceRole.functions.invoke('runLearnerCycle',{amazon_account_id:account.id,_service_role:true});
    const audit=await b.asServiceRole.functions.invoke('auditAmazonDataConsistency',{amazon_account_id:account.id,trigger_type:'scheduled_0640_post_reports',_service_role:true});
-   audits.push({amazon_account_id:account.id,sync:sync?.data||sync||{},links:links?.data||links||{},audit:audit?.data||audit||{}});
+   audits.push({amazon_account_id:account.id,sync:sync?.data||sync||{},links:links?.data||links||{},signals:signals?.data||signals||{},learner:learner?.data||learner||{},audit:audit?.data||audit||{}});
   }
   return Response.json({ok:true,cycle:'06:40',reports:reports?.data||reports||{},audits});
  }
- return Response.json({ok:true,skipped:true,brazil_time:`${t.hour}:${t.minute}`,next_cycles:['06:00 repescagem','06:40 relatórios, reconciliação e análise']});
+ return Response.json({ok:true,skipped:true,brazil_time:`${t.hour}:${t.minute}`,next_cycles:['06:00 repescagem','06:40 relatórios, sinais ML, reconciliação e análise']});
 }catch(e){return Response.json({ok:false,error:e?.message||'Erro no despachante matinal'},{status:500});}});
