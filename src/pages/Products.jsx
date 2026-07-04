@@ -3,6 +3,7 @@ import { base44 } from '@/api/base44Client';
 import {
   AlertCircle,
   Check,
+  CheckSquare,
   ExternalLink,
   Filter,
   Loader2,
@@ -15,6 +16,7 @@ import {
   Rocket,
   Search,
   ShoppingBag,
+  Square,
   Tag,
   X,
   XCircle,
@@ -278,6 +280,8 @@ function ProductRow({
   onAccelerator,
   actionLoading,
   onNameUpdate,
+  selected,
+  onToggleSelect,
 }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -316,7 +320,16 @@ function ProductRow({
   };
 
   return (
-    <tr className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
+    <tr className={`border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors ${selected ? 'bg-cyan/5' : ''}`}>
+      <td className="px-3 py-3 w-10">
+        <button
+          type="button"
+          onClick={() => onToggleSelect(product.id)}
+          className={`p-0.5 rounded transition-colors ${selected ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}
+        >
+          {selected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+        </button>
+      </td>
       <td className="px-4 py-3 min-w-[340px] max-w-[440px]">
         <div className="flex items-start gap-3">
           {product?.product_image_url ? (
@@ -483,6 +496,8 @@ export default function Products() {
   const [page, setPage] = useState(1);
   const [actionLoading, setActionLoading] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
   const [fixingLinks, setFixingLinks] = useState(false);
   const [syncingTitles, setSyncingTitles] = useState(false);
@@ -740,6 +755,87 @@ export default function Products() {
     safePage * PAGE_SIZE
   );
 
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === paginated.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(paginated.map((p) => p.id)));
+    }
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const selectedProducts = paginated.filter((p) => selectedIds.has(p.id));
+
+  const bulkKickoffSelected = async () => {
+    if (!account || !selectedProducts.length) return;
+    const targets = selectedProducts.filter((p) => !productHasCampaign(p));
+    if (!targets.length) {
+      setActionMsg({ type: 'error', text: 'Nenhum produto selecionado sem campanha.' });
+      setTimeout(() => setActionMsg(null), 5000);
+      return;
+    }
+    setBulkActionLoading('kickoff');
+    setActionMsg({ type: 'info', text: `Agendando Kick-off para ${targets.length} produtos...` });
+    let success = 0, failed = 0;
+    for (const product of targets) {
+      try {
+        const response = await base44.functions.invoke('scheduleProductKickoff', {
+          amazon_account_id: account.id,
+          asin: product.asin,
+          sku: product.sku,
+          product_name: product.product_name,
+          mode: 'auto_plus_four',
+        });
+        if (response?.data?.ok) success++;
+        else failed++;
+      } catch { failed++; }
+    }
+    setBulkActionLoading(null);
+    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} kick-offs agendados${failed > 0 ? ` · ${failed} falharam` : ''}` });
+    clearSelection();
+    await load();
+    setTimeout(() => setActionMsg(null), 10000);
+  };
+
+  const bulkPause = async () => {
+    if (!account || !selectedProducts.length) return;
+    const targets = selectedProducts.filter((p) => productHasCampaign(p) && isCampaignActive(p));
+    if (!targets.length) {
+      setActionMsg({ type: 'error', text: 'Nenhum produto selecionado com campanha ativa.' });
+      setTimeout(() => setActionMsg(null), 5000);
+      return;
+    }
+    setBulkActionLoading('pause');
+    setActionMsg({ type: 'info', text: `Pausando ${targets.length} campanhas...` });
+    let success = 0, failed = 0;
+    for (const product of targets) {
+      try {
+        const campaignId = campaignIdOf(product);
+        const response = await base44.functions.invoke('pauseCampaign', {
+          amazon_account_id: account.id,
+          campaign_id: campaignId,
+        });
+        if (response?.data?.ok) success++;
+        else failed++;
+      } catch { failed++; }
+    }
+    setBulkActionLoading(null);
+    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} campanhas pausadas${failed > 0 ? ` · ${failed} falharam` : ''}` });
+    clearSelection();
+    await load();
+    setTimeout(() => setActionMsg(null), 10000);
+  };
+
   const bulkKickoff = async () => {
     if (!account) return;
 
@@ -981,6 +1077,9 @@ export default function Products() {
           <div className="px-4 py-3 border-b border-surface-2 flex items-center justify-between">
             <p className="text-xs text-slate-500">
               {filtered.length} produtos · página {safePage} de {totalPages}
+              {selectedIds.size > 0 && (
+                <span className="ml-2 text-cyan font-semibold">{selectedIds.size} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
+              )}
             </p>
 
             <select
@@ -994,20 +1093,56 @@ export default function Products() {
             </select>
           </div>
 
+          {selectedIds.size > 0 && (
+            <div className="px-4 py-2.5 bg-cyan/10 border-b border-cyan/20 flex items-center gap-3 flex-wrap">
+              <span className="text-xs font-semibold text-cyan">{selectedIds.size} produto{selectedIds.size > 1 ? 's' : ''} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={bulkKickoffSelected}
+                  disabled={!!bulkActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 disabled:opacity-50 transition-colors"
+                >
+                  {bulkActionLoading === 'kickoff' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
+                  Kick-off em massa
+                </button>
+                <button
+                  type="button"
+                  onClick={bulkPause}
+                  disabled={!!bulkActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25 disabled:opacity-50 transition-colors"
+                >
+                  {bulkActionLoading === 'pause' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
+                  Pausar campanhas
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  Limpar seleção
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {[
-                    'Produto',
-                    'Oferta',
-                    'Status Ads',
-                    'Vendas 30d',
-                    'Spend 30d',
-                    'ACoS',
-                    'Units 30d',
-                    'Ações',
-                  ].map((heading) => (
+                  <th className="px-3 py-3 w-10">
+                    <button
+                      type="button"
+                      onClick={toggleSelectAll}
+                      className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}
+                    >
+                      {selectedIds.size === paginated.length && paginated.length > 0
+                        ? <CheckSquare className="w-4 h-4" />
+                        : <Square className="w-4 h-4" />}
+                    </button>
+                  </th>
+                  {['Produto', 'Oferta', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map((heading) => (
                     <th
                       key={heading}
                       className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap"
@@ -1028,6 +1163,8 @@ export default function Products() {
                     onKickoff={setKickoffProduct}
                     onAccelerator={setAcceleratorProduct}
                     actionLoading={actionLoading}
+                    selected={selectedIds.has(product.id)}
+                    onToggleSelect={toggleSelect}
                     onNameUpdate={(id, name) =>
                       setProducts((current) =>
                         current.map((item) =>
