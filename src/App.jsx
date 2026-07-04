@@ -22,7 +22,7 @@ import LearnerEngine from '@/pages/LearnerEngine';
 import InventorySales from '@/pages/InventorySales';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
-import Products from '@/pages/Products';
+import Products from '@/pages/ProductsScheduled';
 import Report from '@/pages/Report';
 import LogDeBids from '@/pages/LogDeBids';
 import Diagnostico from '@/pages/Diagnostico';
