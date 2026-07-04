@@ -3,45 +3,45 @@
   "jobs": [
     {
       "name": "Amazon Action Queue - 00:00 BRT",
-      "function": "runAmazonQueue0000",
+      "function": "processAmazonNightWindow",
       "cron": "0 0 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "hour": 0 }
     },
     {
       "name": "Amazon Action Queue - 01:00 BRT",
-      "function": "runAmazonQueue0100",
+      "function": "processAmazonNightWindow",
       "cron": "0 1 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "hour": 1 }
     },
     {
       "name": "Amazon Action Queue - 02:00 BRT",
-      "function": "runAmazonQueue0200",
+      "function": "processAmazonNightWindow",
       "cron": "0 2 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "hour": 2 }
     },
     {
       "name": "Amazon Action Queue - 03:00 BRT",
-      "function": "runAmazonQueue0300",
+      "function": "processAmazonNightWindow",
       "cron": "0 3 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "hour": 3 }
     },
     {
       "name": "Amazon Recovery - 06:00 BRT",
-      "function": "runAmazonRecovery0600Scheduled",
+      "function": "runMorningRecovery0600",
       "cron": "0 6 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "force": true }
     },
     {
       "name": "Amazon Reports Audit ML - 06:40 BRT",
-      "function": "runAmazonReports0640Scheduled",
+      "function": "runMorningAmazonSchedule",
       "cron": "40 6 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "force": true }
     },
     {
       "name": "Amazon Action Queue - 13:00 BRT",
-      "function": "runAmazonQueue1300",
+      "function": "processAmazonNightWindow",
       "cron": "0 13 * * *",
-      "payload": {}
+      "payload": { "_service_role": true, "hour": 13 }
     }
   ]
 }
