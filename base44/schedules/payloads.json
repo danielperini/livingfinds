@@ -1,0 +1,9 @@
+{
+  "amazon_queue_0000": { "_service_role": true, "hour": 0 },
+  "amazon_queue_0100": { "_service_role": true, "hour": 1 },
+  "amazon_queue_0200": { "_service_role": true, "hour": 2 },
+  "amazon_queue_0300": { "_service_role": true, "hour": 3 },
+  "amazon_recovery_0600": { "_service_role": true, "force": true },
+  "amazon_reports_audit_ml_0640": { "_service_role": true },
+  "amazon_queue_1300": { "_service_role": true, "hour": 13 }
+}
