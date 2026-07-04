@@ -1,41 +1,109 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-function nextSlot() {
+function saoPauloNow() {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
   }).formatToParts(new Date());
+
   const p = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const hour = Number(p.hour || 0);
-  const day = `${p.year}-${p.month}-${p.day}`;
-  if (hour < 3) return { hour: hour + 1, window: `${String(hour + 1).padStart(2, '0')}:00-${String(hour + 2).padStart(2, '0')}:00`, at: new Date(`${day}T${String(hour + 1).padStart(2, '0')}:00:00-03:00`) };
-  if (hour < 13) return { hour: 13, window: '13:00-14:00', at: new Date(`${day}T13:00:00-03:00`) };
+  return {
+    hour: Number(p.hour || 0),
+    minute: Number(p.minute || 0),
+    day: `${p.year}-${p.month}-${p.day}`,
+  };
+}
+
+function nextSlot() {
+  const now = saoPauloNow();
+  const { hour, day } = now;
+
+  if ([0, 1, 2, 3, 13].includes(hour)) {
+    return {
+      hour,
+      window: hour === 13 ? '13:00-14:00' : `${String(hour).padStart(2, '0')}:00-${String(hour + 1).padStart(2, '0')}:00`,
+      at: new Date(),
+      execute_now: true,
+    };
+  }
+
+  if (hour < 13) {
+    return {
+      hour: 13,
+      window: '13:00-14:00',
+      at: new Date(`${day}T13:00:00-03:00`),
+      execute_now: false,
+    };
+  }
+
   const tomorrow = new Date(`${day}T12:00:00-03:00`);
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const nextDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
-  return { hour: 0, window: '00:00-01:00', at: new Date(`${nextDay}T00:00:00-03:00`) };
+  const nextDay = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(tomorrow);
+
+  return {
+    hour: 0,
+    window: '00:00-01:00',
+    at: new Date(`${nextDay}T00:00:00-03:00`),
+    execute_now: false,
+  };
 }
 
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const user = await base44.auth.me();
-    if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+    if (!user) {
+      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
+    }
 
     const body = await request.json().catch(() => ({}));
     const mode = body.mode === 'manual_only' ? 'manual_only' : 'auto_plus_four';
-    if (!body.amazon_account_id || !body.asin) return Response.json({ ok: false, error: 'Conta e ASIN são obrigatórios' }, { status: 400 });
-    if (mode === 'manual_only' && !String(body.keyword || '').trim()) return Response.json({ ok: false, error: 'Informe o termo exato' }, { status: 400 });
+
+    if (!body.amazon_account_id || !body.asin) {
+      return Response.json({ ok: false, error: 'Conta e ASIN são obrigatórios' }, { status: 400 });
+    }
+
+    if (mode === 'manual_only' && !String(body.keyword || '').trim()) {
+      return Response.json({ ok: false, error: 'Informe o termo exato' }, { status: 400 });
+    }
 
     const slot = nextSlot();
-    const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
-      amazon_account_id: body.amazon_account_id,
-      asin: body.asin,
-      mode,
-      status: 'scheduled',
-    }, '-created_date', 1).catch(() => []);
+    let queueItem = null;
 
-    if (!existing.length) {
-      await base44.asServiceRole.entities.ProductKickoffQueue.create({
+    const existing = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
+      {
+        amazon_account_id: body.amazon_account_id,
+        asin: body.asin,
+        mode,
+        status: 'scheduled',
+      },
+      '-created_date',
+      1,
+    ).catch(() => []);
+
+    if (existing.length) {
+      queueItem = existing[0];
+
+      if (slot.execute_now) {
+        await base44.asServiceRole.entities.ProductKickoffQueue.update(queueItem.id, {
+          queue_hour: slot.hour,
+          queue_window: slot.window,
+          scheduled_at: new Date().toISOString(),
+          last_error: null,
+        });
+      }
+    } else {
+      queueItem = await base44.asServiceRole.entities.ProductKickoffQueue.create({
         amazon_account_id: body.amazon_account_id,
         asin: body.asin,
         sku: body.sku || null,
@@ -51,15 +119,34 @@ Deno.serve(async (request) => {
       });
     }
 
+    let execution = null;
+    if (slot.execute_now) {
+      const response = await base44.asServiceRole.functions.invoke('processProductKickoffQueueV2', {
+        amazon_account_id: body.amazon_account_id,
+        hour: slot.hour,
+        _service_role: true,
+      });
+      execution = response?.data || response || null;
+    }
+
+    const executed = Boolean(slot.execute_now && execution?.processed > 0);
     return Response.json({
       ok: true,
-      scheduled: true,
+      scheduled: !executed,
+      executed,
+      queue_id: queueItem?.id || null,
       queue_hour: slot.hour,
       queue_window: slot.window,
       scheduled_at: slot.at.toISOString(),
-      message: `Kick-off programado para ${slot.window}. As campanhas serão criadas automaticamente com intervalo de 14 segundos.`,
+      execution,
+      message: executed
+        ? `Kick-off executado para ${body.asin}. A campanha foi enviada para processamento.`
+        : `Kick-off programado para ${slot.window}. As campanhas serão criadas automaticamente com intervalo de 14 segundos.`,
     });
   } catch (error) {
-    return Response.json({ ok: false, error: error?.message || 'Erro ao programar o Kick-off' }, { status: 500 });
+    return Response.json(
+      { ok: false, error: error?.message || 'Erro ao programar o Kick-off' },
+      { status: 500 },
+    );
   }
 });
