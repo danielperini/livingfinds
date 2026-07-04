@@ -12,7 +12,7 @@ import {
   Clock,
   RefreshCw,
 } from 'lucide-react';
-import KickoffQueuePanel from '@/components/products/KickoffQueuePanel';
+import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 
 function getSaoPauloParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -1156,8 +1156,8 @@ export default function ProductsScheduled() {
         </button>
       </div>
 
-      <KickoffQueuePanel
-        queueByAsin={queueByAsin}
+      <KickoffControlPanel
+        accountId={account?.id}
         onRetry={retryKickoff}
       />
 
