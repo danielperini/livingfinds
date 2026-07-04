@@ -15,7 +15,7 @@ import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 
-import Dashboard from '@/pages/Dashboard';
+import Dashboard from '@/pages/DashboardScheduled';
 import AdsAutopilot from '@/pages/AdsAutopilotScheduled';
 import AdsManagement from '@/pages/AdsManagement';
 import LearnerEngine from '@/pages/LearnerEngine';
