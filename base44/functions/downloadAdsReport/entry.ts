@@ -99,7 +99,7 @@ Deno.serve(async (req) => {
         { amazon_account_id: amazonAccountId, status: 'running' }, '-started_at', 5
       );
       const pending = runs.find(r => r.operation?.startsWith('adsReports:'));
-      if (!pending) return Response.json({ ok: false, error: 'Nenhum relatório pendente. Execute requestAdsReport primeiro.' }, { status: 404 });
+      if (!pending) return Response.json({ ok: false, error: 'Nenhum relatório pendente. Clique em "Solicitar Reports" primeiro e aguarde 5-10 min antes de verificar.' });
       const match = pending.operation.match(/adsReports:[^:]+:(.+)/);
       if (!reportIds) reportIds = match ? JSON.parse(match[1]) : {};
       if (!syncRunId) syncRunId = pending.id;

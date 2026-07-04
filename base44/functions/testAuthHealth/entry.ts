@@ -33,7 +33,12 @@ async function testService(service) {
   const data = await res.json();
 
   if (!res.ok) {
-    return { ok: false, service, status: 'error', error_code: data.error || `http_${res.status}`, message: data.error_description || 'Token fetch failed' };
+    const code = data.error || `http_${res.status}`;
+    let hint = data.error_description || 'Token fetch failed';
+    if (code === 'unauthorized_client') hint = 'Refresh token revogado — reautorize em /amazon-oauth-setup';
+    if (code === 'invalid_client') hint = 'Client ID ou Client Secret incorretos — verifique os secrets SP_CLIENT_ID / SP_CLIENT_SECRET';
+    if (code === 'invalid_grant') hint = 'Refresh token expirado ou inválido — gere um novo token';
+    return { ok: false, service, status: 'error', error_code: code, message: hint };
   }
 
   tokenCache[service] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
