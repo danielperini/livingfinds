@@ -1,5 +1,5 @@
-export default function AutopilotKPIBar({ runs, decisions, alerts, campaigns, config, loading, searchTerms = [] }) {
-  const lastRun = runs[0];
+export default function AutopilotKPIBar({ runs = [], decisions = [], alerts = [], campaigns = [], config = null, loading = false, searchTerms = [] }) {
+  const lastRun = runs?.[0] || null;
   const pending = decisions.filter(d => d.status === 'pending').length;
   const approved = decisions.filter(d => d.status === 'approved').length;
   const executed = decisions.filter(d => d.status === 'executed').length;
