@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   KeyRound, CheckCircle, XCircle, Loader2, AlertCircle,
-  ExternalLink, ChevronRight, Copy, Check, ShieldCheck
+  ExternalLink, ChevronRight, Copy, Check, ShieldCheck, Activity
 } from 'lucide-react';
 
 function CopyButton({ text }) {
@@ -66,6 +66,21 @@ export default function SpApiSelfAuth() {
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
+  const [spStatus, setSpStatus] = useState(null);
+  const [checkingStatus, setCheckingStatus] = useState(false);
+
+  const checkCurrentStatus = async () => {
+    setCheckingStatus(true);
+    setSpStatus(null);
+    try {
+      const res = await base44.functions.invoke('testSpApiAuth', {});
+      setSpStatus(res.data);
+    } catch (e) {
+      setSpStatus({ error: e.message });
+    } finally {
+      setCheckingStatus(false);
+    }
+  };
 
   const validate = async () => {
     const t = token.trim();
@@ -96,6 +111,54 @@ export default function SpApiSelfAuth() {
           <h1 className="text-lg font-bold text-white">Self-Authorization SP-API</h1>
           <p className="text-xs text-slate-400">Gera o refresh token manualmente sem publicar a aplicação</p>
         </div>
+      </div>
+
+      {/* Verificar status atual */}
+      <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-cyan" />
+            <p className="text-sm font-semibold text-white">Status atual da SP-API</p>
+          </div>
+          <button
+            onClick={checkCurrentStatus}
+            disabled={checkingStatus}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg transition-colors disabled:opacity-60"
+          >
+            {checkingStatus ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+            {checkingStatus ? 'A verificar...' : 'Verificar agora'}
+          </button>
+        </div>
+
+        {!spStatus && !checkingStatus && (
+          <p className="text-xs text-slate-500">Clica em "Verificar agora" para testar se a SP-API já está a funcionar antes de gerar um novo token.</p>
+        )}
+
+        {spStatus && (
+          <>
+            {spStatus.error && <p className="text-xs text-red-400">{spStatus.error}</p>}
+            {spStatus.tests && (
+              <div className="space-y-1.5">
+                {Object.entries(spStatus.tests).map(([key, t]) => {
+                  const labels = { lwa_authentication: 'Autenticação LWA', sp_api_authorization: 'Autorização SP-API', marketplace_configuration: 'Marketplace', endpoint_access: 'Acesso ao Catálogo' };
+                  return (
+                    <div key={key} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs ${t.status === 'PASSED' ? 'bg-emerald-400/5 border border-emerald-400/20 text-emerald-300' : t.status === 'FAILED' ? 'bg-red-400/5 border border-red-400/20 text-red-400' : 'bg-surface-2 border border-surface-3 text-slate-500'}`}>
+                      {t.status === 'PASSED' ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : t.status === 'FAILED' ? <XCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />}
+                      <span className="font-semibold">{labels[key] || key}:</span>
+                      <span>{t.message}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {spStatus.tests && Object.values(spStatus.tests).every(t => t.status === 'PASSED') && (
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-emerald-400/10 border border-emerald-400/20 rounded-lg">
+                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-emerald-300"><strong>SP-API já está a funcionar!</strong> Não precisas de gerar um novo token. Se recebeste um erro "unauthorized_client" ao validar um token aqui, significa que esse token foi gerado com credenciais diferentes — mas as credenciais actuais estão correctas.</p>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Contexto */}
