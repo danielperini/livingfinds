@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
       const errMap: Record<string, string> = {
         invalid_client: 'Client ID ou Client Secret inválidos. Verifique AMAZON_LWA_CLIENT_ID e AMAZON_LWA_CLIENT_SECRET.',
         invalid_grant: 'Refresh token inválido ou revogado. Gere um novo token via self-authorization no Seller Central.',
-        unauthorized_client: 'Aplicação não autorizada para este fluxo.',
+        unauthorized_client: 'Este token foi gerado por uma aplicação diferente das credenciais SP-API configuradas (AMAZON_LWA_CLIENT_ID). Certifique-se de que está a copiar o token gerado especificamente para esta aplicação SP-API no Seller Central — e não um token Amazon Ads.',
       };
       return Response.json({
         error: errMap[tokenData.error] || tokenData.error_description || tokenData.error || 'Erro ao validar token',

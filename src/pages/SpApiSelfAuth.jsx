@@ -176,6 +176,21 @@ export default function SpApiSelfAuth() {
               </p>
             </div>
             <p className="text-xs text-slate-400">{result.message || result.error}</p>
+            {result.amazon_error === 'unauthorized_client' && (
+              <div className="mt-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-1.5">
+                <p className="text-xs font-semibold text-amber-300">⚠️ Token de aplicação errada</p>
+                <p className="text-xs text-amber-200">
+                  Este erro acontece quando o token foi gerado por uma aplicação diferente.
+                  Confirme que no Seller Central está a autorizar a aplicação com o App ID:
+                </p>
+                <code className="block text-xs font-mono text-cyan bg-surface-2 px-2 py-1 rounded break-all">
+                  amzn1.sp.solution.7c15f6b8-cfdd-4530-a25a-4c90edafe425
+                </code>
+                <p className="text-xs text-amber-200">
+                  <strong>Atenção:</strong> O token SP-API é diferente do token Amazon Ads. Não use um token Ads aqui.
+                </p>
+              </div>
+            )}
             {result.seller_id && (
               <p className="text-xs text-slate-300">Seller ID confirmado: <code className="font-mono text-cyan">{result.seller_id}</code></p>
             )}
