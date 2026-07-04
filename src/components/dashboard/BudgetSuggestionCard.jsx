@@ -1,19 +1,12 @@
 import React from 'react';
 import { DollarSign, Loader2, Sparkles, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { classifyCampaigns } from '@/lib/campaignUtils';
 
 const DAY_MS = 86400000;
 
 function number(value) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function campaignState(campaign) {
-  const value = String(campaign?.state || campaign?.status || campaign?.campaign_status || '').toLowerCase();
-  if (['enabled', 'active', 'ativa', 'ativada'].includes(value)) return 'enabled';
-  if (['paused', 'pausada'].includes(value)) return 'paused';
-  if (['archived', 'ended', 'deleted', 'encerrada'].includes(value)) return 'archived';
-  return value;
 }
 
 function productIsActive(product) {
@@ -51,8 +44,10 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const latestMetricTimestamp = metricsThirtyDays.reduce((latest, metric) => Math.max(latest, metricTimestamp(metric)), 0);
   const latestMetricDate = dailyEntries.length ? dailyEntries[dailyEntries.length - 1][0] : null;
 
-  const activeCampaignList = campaigns.filter((campaign) => campaignState(campaign) === 'enabled' && !campaign?.archived);
-  const activeCampaigns = activeCampaignList.length;
+  // Usa a mesma classificação consolidada do Dashboard para não divergir a contagem.
+  const campaignSummary = classifyCampaigns(campaigns);
+  const activeCampaignList = campaignSummary.active;
+  const activeCampaigns = campaignSummary.active_count;
   const activeCampaignBudget = activeCampaignList.reduce((sum, campaign) => sum + number(campaign.daily_budget || campaign.budget), 0);
   const activeProducts = products.filter(productIsActive).length;
 
@@ -91,8 +86,8 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const trendColor = acosTrend === 'improving' ? 'text-emerald-400' : acosTrend === 'worsening' ? 'text-red-400' : 'text-slate-400';
 
   const currentReasoning = daysWithData > 0
-    ? `Média real de ${daysWithData} dia(s) com dados: R$${avgDailySpend.toFixed(2)}/dia. Reserva operacional de 30%: R$${(avgDailySpend * reserveRate).toFixed(2)}. Último dia (${latestMetricDate}): R$${latestDaySpend.toFixed(2)}. Tendência: ${trend === 'growth' ? 'crescimento' : trend === 'decline' ? 'queda' : 'estável'}.`
-    : 'Ainda não há dias com gasto registrado para calcular uma sugestão diária confiável.';
+    ? `Média real de ${daysWithData} dia(s) com dados: R$${avgDailySpend.toFixed(2)}/dia. Reserva operacional de 30%: R$${(avgDailySpend * reserveRate).toFixed(2)}. Último dia (${latestMetricDate}): R$${latestDaySpend.toFixed(2)}. Tendência: ${trend === 'growth' ? 'crescimento' : trend === 'decline' ? 'queda' : 'estável'}. Campanhas ativas consideradas: ${activeCampaigns}.`
+    : `Ainda não há dias com gasto registrado para calcular uma sugestão diária confiável. Campanhas ativas consideradas: ${activeCampaigns}.`;
 
   const updatedAt = usePersistedAI ? aiGeneratedAt : latestMetricTimestamp || null;
 
