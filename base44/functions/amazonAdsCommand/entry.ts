@@ -57,7 +57,13 @@ Deno.serve(async (request) => {
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
-    const token = await accessToken(account.ads_refresh_token);
+    // Preferir o refresh token do secret (mais recente); fallback para o da entidade
+    const refreshTokenToUse = Deno.env.get('ADS_REFRESH_TOKEN') || account.ads_refresh_token;
+    const token = await accessToken(refreshTokenToUse);
+    // Sincronizar entidade se o token do secret for diferente do armazenado
+    if (refreshTokenToUse !== account.ads_refresh_token && refreshTokenToUse) {
+      base44.asServiceRole.entities.AmazonAccount.update(account.id, { ads_refresh_token: refreshTokenToUse }).catch(() => {});
+    }
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) throw new Error('ADS_PROFILE_ID ausente');
 
