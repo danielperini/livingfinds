@@ -39,6 +39,14 @@ export default function Settings() {
     max_bid_increase_pct: 15,
     max_bid_decrease_pct: 20,
     objective: 'profitability',
+    // CPC
+    target_cpc: 0,
+    maximum_cpc: 0,
+    cpc_enforcement: false,
+    // Budget Diário
+    daily_budget_target: 0,
+    daily_budget_locked: false,
+    daily_budget_source: 'auto',
   });
   const [goalsSaving, setGoalsSaving] = useState(false);
   const [goalsSaved, setGoalsSaved] = useState(false);
@@ -77,6 +85,12 @@ export default function Settings() {
               max_bid_increase_pct: cfg.max_bid_increase_pct ?? 15,
               max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? 20,
               objective: cfg.objective ?? 'profitability',
+              target_cpc: cfg.target_cpc ?? 0,
+              maximum_cpc: cfg.maximum_cpc ?? 0,
+              cpc_enforcement: cfg.cpc_enforcement ?? false,
+              daily_budget_target: cfg.daily_budget_target ?? 0,
+              daily_budget_locked: cfg.daily_budget_locked ?? false,
+              daily_budget_source: cfg.daily_budget_source ?? 'auto',
             });
           }
         }).catch(() => {});
@@ -382,8 +396,80 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Meta de CPC */}
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3 mt-1">Meta de CPC</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">CPC Alvo (R$)</label>
+            <input type="number" min="0" step="0.01" value={goalsForm.target_cpc}
+              onChange={e => setGoalsForm(p => ({ ...p, target_cpc: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">A IA ajusta bids para manter o CPC próximo deste valor</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">CPC Máximo (R$)</label>
+            <input type="number" min="0" step="0.01" value={goalsForm.maximum_cpc}
+              onChange={e => setGoalsForm(p => ({ ...p, maximum_cpc: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Acima disso: bid reduzido automaticamente</p>
+          </div>
+          <div className="flex flex-col justify-between">
+            <label className="block text-xs text-slate-400 mb-1.5">Enforçar CPC Máximo</label>
+            <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg border border-surface-3 h-[42px]">
+              <span className="text-xs text-slate-300">{goalsForm.cpc_enforcement ? 'Ativo' : 'Inativo'}</span>
+              <button onClick={() => setGoalsForm(p => ({ ...p, cpc_enforcement: !p.cpc_enforcement }))}
+                className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${goalsForm.cpc_enforcement ? 'bg-cyan' : 'bg-surface-3'}`}>
+                <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${goalsForm.cpc_enforcement ? 'left-5' : 'left-0.5'}`} />
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-600 mt-1">Bloqueia aumentos de bid acima do CPC máx.</p>
+          </div>
+        </div>
+
+        {/* Orçamento Diário Gerenciado */}
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3 mt-1">Orçamento Diário Gerenciado</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Budget Diário Alvo (R$)</label>
+            <div className="flex gap-2">
+              <input type="number" min="0" step="10" value={goalsForm.daily_budget_target}
+                onChange={e => setGoalsForm(p => ({ ...p, daily_budget_target: parseFloat(e.target.value) || 0 }))}
+                className="flex-1 px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+              {autopilotConfig?.ai_suggested_daily_budget > 0 && (
+                <button
+                  onClick={() => setGoalsForm(p => ({ ...p, daily_budget_target: autopilotConfig.ai_suggested_daily_budget, daily_budget_source: 'ai_suggestion' }))}
+                  className="px-2.5 py-2 bg-violet-500/15 border border-violet-500/25 text-violet-300 hover:bg-violet-500/25 text-[10px] rounded-lg whitespace-nowrap transition-colors">
+                  Usar sugestão IA<br/>R${autopilotConfig.ai_suggested_daily_budget.toFixed(2)}
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-600 mt-1">Define o teto de gasto diário que a IA perseguirá</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Modo de Controle</label>
+            <select value={goalsForm.daily_budget_source}
+              onChange={e => setGoalsForm(p => ({ ...p, daily_budget_source: e.target.value }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50">
+              <option value="auto">Automático — calculado pela IA</option>
+              <option value="ai_suggestion">Sugestão da IA — aprovada pelo gestor</option>
+              <option value="manager_fixed">Fixado pelo Gestor — valor acima é obrigatório</option>
+            </select>
+            <p className="text-[10px] text-slate-600 mt-1">
+              {goalsForm.daily_budget_source === 'manager_fixed' ? '⚠️ A IA usará exatamente este valor — sugestões serão ignoradas.' :
+               goalsForm.daily_budget_source === 'ai_suggestion' ? 'A IA pode sugerir atualizações, mas o valor foi revisado por você.' :
+               'A IA calcula automaticamente com base no histórico.'}
+            </p>
+          </div>
+        </div>
+        {goalsForm.daily_budget_source === 'manager_fixed' && goalsForm.daily_budget_target > 0 && (
+          <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/25 rounded-lg text-xs text-amber-300 mb-4">
+            <span>🔒</span>
+            <span><strong>Budget fixado:</strong> R${goalsForm.daily_budget_target.toFixed(2)}/dia. A IA ajustará bids para otimizar o uso deste orçamento sem ultrapassá-lo.</span>
+          </div>
+        )}
+
         {/* Indicadores de referência */}
-        <div className="grid grid-cols-3 gap-3 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5">
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5">
           <div className="text-center">
             <p className="text-[10px] text-slate-500 mb-1">ACoS Alvo</p>
             <p className="text-lg font-bold text-cyan">{goalsForm.target_acos}%</p>
@@ -395,6 +481,18 @@ export default function Settings() {
           <div className="text-center">
             <p className="text-[10px] text-slate-500 mb-1">TACoS Alvo</p>
             <p className="text-lg font-bold text-amber-400">{goalsForm.target_tacos}%</p>
+          </div>
+          <div className="text-center">
+            <p className="text-[10px] text-slate-500 mb-1">CPC Alvo</p>
+            <p className="text-lg font-bold text-violet-400">{goalsForm.target_cpc > 0 ? `R$${goalsForm.target_cpc.toFixed(2)}` : '—'}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-[10px] text-slate-500 mb-1">Budget/dia</p>
+            <p className="text-lg font-bold text-slate-300">
+              {goalsForm.daily_budget_target > 0 ? `R$${goalsForm.daily_budget_target.toFixed(0)}` : '—'}
+              {goalsForm.daily_budget_source === 'manager_fixed' && <span className="text-[9px] text-amber-400 block">🔒 fixo</span>}
+              {goalsForm.daily_budget_source === 'ai_suggestion' && <span className="text-[9px] text-violet-400 block">✓ IA</span>}
+            </p>
           </div>
         </div>
 

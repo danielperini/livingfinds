@@ -54,6 +54,41 @@
       "default": 10,
       "description": "TACoS alvo \u2014 meta da IA para percentual de gastos sobre vendas totais"
     },
+    "target_cpc": {
+      "type": "number",
+      "default": 0,
+      "description": "CPC alvo em R$. Quando > 0, a IA ajusta bids para manter o CPC m\u00e9dio pr\u00f3ximo deste valor."
+    },
+    "maximum_cpc": {
+      "type": "number",
+      "default": 0,
+      "description": "CPC m\u00e1ximo tolerado. Acima disso, a IA reduz bid da keyword automaticamente."
+    },
+    "cpc_enforcement": {
+      "type": "boolean",
+      "default": false,
+      "description": "Quando ativo, a IA bloqueia aumentos de bid que ultrapassariam o maximum_cpc."
+    },
+    "daily_budget_target": {
+      "type": "number",
+      "default": 0,
+      "description": "Or\u00e7amento di\u00e1rio alvo fixado pelo gestor em R$. Tem prioridade sobre a sugest\u00e3o da IA quando > 0."
+    },
+    "daily_budget_locked": {
+      "type": "boolean",
+      "default": false,
+      "description": "Quando true, a IA usa daily_budget_target como valor fixo e ignora a sugest\u00e3o autom\u00e1tica."
+    },
+    "daily_budget_source": {
+      "type": "string",
+      "enum": [
+        "ai_suggestion",
+        "manager_fixed",
+        "auto"
+      ],
+      "default": "auto",
+      "description": "Origem do or\u00e7amento di\u00e1rio ativo: ai_suggestion = sugerido pela IA, manager_fixed = fixado pelo gestor, auto = calculado automaticamente."
+    },
     "total_daily_budget": {
       "type": "number",
       "default": 500
@@ -72,10 +107,11 @@
         "acos_first",
         "roas_first",
         "tacos_first",
-        "budget_first"
+        "budget_first",
+        "cpc_first"
       ],
       "default": "acos_first",
-      "description": "Define qual meta a IA prioriza ao ajustar bids: acos_first = reduzir ACoS, roas_first = maximizar ROAS, tacos_first = controlar TACoS, budget_first = gastar o or\u00e7amento definido sem ultrapassar"
+      "description": "Define qual meta a IA prioriza ao ajustar bids: acos_first = reduzir ACoS, roas_first = maximizar ROAS, tacos_first = controlar TACoS, budget_first = gastar o or\u00e7amento definido sem ultrapassar, cpc_first = manter CPC no alvo."
     },
     "ai_daily_budget_target": {
       "type": "number",

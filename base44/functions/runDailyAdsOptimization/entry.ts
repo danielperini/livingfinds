@@ -309,6 +309,12 @@ Deno.serve(async (req) => {
     const AI_PRIORITY_MODE      = cfg.ai_budget_priority_mode || 'acos_first';
     const AI_BUDGET_ENFORCEMENT = cfg.ai_budget_enforcement === true;
     const AI_DAILY_BUDGET_TARGET = cfg.ai_daily_budget_target || 0;
+    // Novos parâmetros: CPC e Budget Gerenciado
+    const TARGET_CPC     = cfg.target_cpc || 0;
+    const MAXIMUM_CPC    = cfg.maximum_cpc || 0;
+    const CPC_ENFORCE    = cfg.cpc_enforcement === true && MAXIMUM_CPC > 0;
+    const BUDGET_TARGET  = cfg.daily_budget_locked ? (cfg.daily_budget_target || 0) : (cfg.daily_budget_target || cfg.ai_daily_budget_target || 0);
+    const BUDGET_LOCKED  = cfg.daily_budget_locked === true && BUDGET_TARGET > 0;
 
     // ── 4. Criar registro do run ──────────────────────────────────────────
     runRecord = await base44.asServiceRole.entities.AutopilotRun.create({
@@ -856,6 +862,54 @@ Deno.serve(async (req) => {
         const productRoas = (product && product.roas) ? product.roas : (kw.sales > 0 && kw.spend > 0 ? kw.sales / kw.spend : 0);
         const roasInsufficient = AI_PRIORITY_MODE === 'roas_first' && productRoas > 0 && productRoas < TARGET_ROAS;
 
+        // CPC enforcement: bloquear aumentos se CPC atual já está acima do máximo configurado
+        const kwCpc = kw.cpc || (clicks > 0 ? spend / clicks : 0);
+        const cpcOverMax = CPC_ENFORCE && kwCpc > 0 && kwCpc > MAXIMUM_CPC;
+        // CPC_first: ajustar bid para aproximar CPC do alvo via proporção bid × (target_cpc / cpc_atual)
+        const cpcFirst = AI_PRIORITY_MODE === 'cpc_first' && TARGET_CPC > 0 && kwCpc > 0;
+
+        // Budget diário locked: bloquear aumentos se gasto total já está próximo do teto fixado
+        const totalSpendAllCamps = campaigns.reduce((s, c) => s + (c.current_spend || c.spend || 0), 0);
+        const budgetLockedCapReached = BUDGET_LOCKED && BUDGET_TARGET > 0 && totalSpendAllCamps >= BUDGET_TARGET * 0.95;
+
+        // ── C3b. CPC_FIRST: ajustar bid para perseguir CPC alvo ─────────
+        if (cpcFirst && clicks >= MIN_CLICKS && !campAlreadyChanged) {
+          const proposedBidByCpc = currentBid * (TARGET_CPC / kwCpc);
+          const cappedBid = Math.min(Math.max(proposedBidByCpc, MIN_BID), MAX_BID);
+          const changePctCpc = (cappedBid / currentBid - 1) * 100;
+          if (Math.abs(changePctCpc) >= 3) { // só agir se diferença > 3%
+            const iKey = makeKey(amazonAccountId, 'bid_change', kw.keyword_id, 'cpc_target', today);
+            if (!existingKeys.has(iKey)) {
+              const dir = changePctCpc > 0 ? 'increase' : 'reduce';
+              const outcome = resolveOutcome(confidence, maturity, [], autonomyLevel, 'low', false);
+              decisionsToCreate.push({
+                amazon_account_id: amazonAccountId,
+                decision_type: 'bid_change', entity_type: 'keyword',
+                entity_id: kw.keyword_id, campaign_id: kw.campaign_id, ad_group_id: kw.ad_group_id,
+                keyword_id: kw.keyword_id, keyword_text: kw.keyword_text || kw.keyword, asin: kw.asin,
+                action: `${dir}_bid`,
+                value_before: currentBid, value_after: Number(cappedBid.toFixed(2)),
+                change_pct: Number(changePctCpc.toFixed(1)),
+                rationale: `CPC_FIRST: CPC atual ${sym}${kwCpc.toFixed(2)} vs alvo ${sym}${TARGET_CPC.toFixed(2)}. Ajuste proporcional: bid ${sym}${currentBid.toFixed(2)} → ${sym}${cappedBid.toFixed(2)} (${changePctCpc.toFixed(1)}%).`,
+                data_used: JSON.stringify({ cpc_atual: kwCpc, target_cpc: TARGET_CPC, bid_antes: currentBid, bid_depois: cappedBid }),
+                risk: 'low',
+                requires_approval: autonomyLevel < 2,
+                status: outcome === 'EXECUTE_NOW' ? 'approved' : 'pending',
+                confidence: Math.round(confidence * 100),
+                objective: 'maintenance',
+                country_code: cc, currency_code: code, currency_symbol: sym,
+                idempotency_key: iKey, source_function: 'runDailyAdsOptimization',
+                evaluation_due_at: daysFromNow(3),
+                rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
+                created_at: now,
+              });
+              campaignChangedThisCycle.set(campKey, 'bid');
+              changePctCpc > 0 ? stats.bid_increase++ : stats.bid_decrease++;
+            } else { stats.skipped_dup++; }
+            continue; // cpc_first tratado — não avaliar outras regras neste ciclo
+          }
+        }
+
         // ── C4. WASTING: zero vendas com dados maduros ───────────────────
         if (orders === 0 && (spend >= MIN_SPEND || clicks >= MIN_CLICKS) && maturity === 'MATURE') {
           if (inDecCooldown) { stats.skipped_cooldown++; continue; }
@@ -976,8 +1030,10 @@ Deno.serve(async (req) => {
           }
           // Respeitar prioridades da IA: bloquear aumento se orçamento/tacos/roas não permitem
           if (budgetCapReached) { blocked.push({ entity: kw.keyword_id, reason: 'BUDGET_CAP_REACHED', text: kw.keyword_text }); continue; }
+          if (budgetLockedCapReached) { blocked.push({ entity: kw.keyword_id, reason: 'BUDGET_LOCKED_CAP', text: kw.keyword_text }); continue; }
           if (tacosOverTarget) { blocked.push({ entity: kw.keyword_id, reason: 'TACOS_OVER_TARGET', text: kw.keyword_text }); continue; }
           if (roasInsufficient) { blocked.push({ entity: kw.keyword_id, reason: 'ROAS_INSUFFICIENT', text: kw.keyword_text }); continue; }
+          if (cpcOverMax) { blocked.push({ entity: kw.keyword_id, reason: 'CPC_OVER_MAX', text: kw.keyword_text }); continue; }
           if (inIncCooldown) { stats.skipped_cooldown++; continue; }
 
           const isStrongWinner = orders >= 3 && acos <= TARGET_ACOS * 0.70;
