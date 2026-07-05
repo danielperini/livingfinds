@@ -7,6 +7,7 @@ import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
 import SpendRevenueBarChart from '@/components/dashboard/SpendRevenueBarChart';
+import GoalsComparisonPanel from '@/components/dashboard/GoalsComparisonPanel';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -374,6 +375,14 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`R$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
+
+      {/* Metas vs Realidade */}
+      <GoalsComparisonPanel
+        acos={acos}
+        roas={roas}
+        autopilotConfig={autopilotConfig}
+        loading={loading}
+      />
 
       {/* Painel Orçamento em Risco */}
       <BudgetOverrunPanel
