@@ -43,7 +43,7 @@ Deno.serve(async (req) => {
 
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id })
-      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
+      : await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 10);
 
     if (!accounts.length) {
       return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada', started_at: startedAt }, { status: 409 });
@@ -56,18 +56,10 @@ Deno.serve(async (req) => {
       const basePayload = { amazon_account_id: aid };
       const steps: any[] = [];
 
-      // ── 1. Validar token LWA ────────────────────────────────────────────
-      const tokenStep = await step(base44, 'lwaTokenManager', basePayload);
+      // ── 1. Validar token LWA (via getLWAAccessToken) ───────────────────
+      const tokenStep = await step(base44, 'getLWAAccessToken', { service: 'ads' });
       steps.push({ ...tokenStep, step: 'lwa_token_validate' });
-      if (!tokenStep.ok) {
-        // Token inválido = reautorização necessária; não processar esta conta
-        await base44.asServiceRole.entities.AmazonAccount.update(aid, {
-          status: 'error',
-          error_message: 'Token LWA inválido — reautorização necessária',
-        }).catch(() => {});
-        allResults.push({ amazon_account_id: aid, ok: false, reason: 'token_invalid', steps });
-        continue;
-      }
+      // Token inválido é avisado mas não bloqueia — as chamadas individuais irão falhar com mensagem clara
 
       // ── 2. Sync estados de campanhas (rápido) ──────────────────────────
       steps.push(await step(base44, 'syncAdsCampaignStatesV2', basePayload));
