@@ -24,7 +24,8 @@ Deno.serve(async (request) => {
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
     const hour = Number.isFinite(Number(body.hour)) ? Number(body.hour) : hourBR();
-    if (![0, 1, 2, 3, 13].includes(hour)) {
+    const forceRun = body.force === true;
+    if (!forceRun && ![0, 1, 2, 3, 13].includes(hour)) {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela Amazon' });
     }
 

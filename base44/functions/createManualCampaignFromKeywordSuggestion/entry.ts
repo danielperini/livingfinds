@@ -185,7 +185,7 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Só processa status 'suggested' — idempotência
+      // Só processa status 'suggested' ou 'approved' — idempotência
       if (suggestion.status === 'created') {
         results.push({ id: sid, ok: false, already_exists: true, error: 'Campanha já criada para esta sugestão.', keyword: suggestion.keyword });
         continue;
@@ -196,6 +196,10 @@ Deno.serve(async (req) => {
       }
       if (suggestion.status === 'creating') {
         results.push({ id: sid, ok: false, error: 'Criação já em andamento para esta sugestão.', keyword: suggestion.keyword });
+        continue;
+      }
+      if (!['suggested', 'approved', 'failed'].includes(suggestion.status)) {
+        results.push({ id: sid, ok: false, error: `Status não processável: ${suggestion.status}`, keyword: suggestion.keyword });
         continue;
       }
 
