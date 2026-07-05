@@ -22,9 +22,10 @@ function adsBase(region?: string) {
 }
 
 async function accessToken(refreshToken?: string) {
-  const refresh = refreshToken || Deno.env.get('ADS_REFRESH_TOKEN') || '';
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const secret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+  // Usar exclusivamente o token passado (da entidade); nunca usar o secret ADS_REFRESH_TOKEN pois pode estar revogado
+  const refresh = refreshToken || '';
   const cacheKey = `${refresh.slice(-12)}:${clientId}`;
   if (tokenCache?.key === cacheKey && tokenCache.expiresAt > Date.now()) return tokenCache.value;
   if (!refresh || !clientId || !secret) throw new Error('Credenciais Amazon Ads incompletas');
@@ -58,13 +59,13 @@ Deno.serve(async (request) => {
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
-    // Preferir o refresh token do secret (mais recente); fallback para o da entidade
-    const refreshTokenToUse = Deno.env.get('ADS_REFRESH_TOKEN') || account.ads_refresh_token;
-    const token = await accessToken(refreshTokenToUse);
-    // Sincronizar entidade se o token do secret for diferente do armazenado
-    if (refreshTokenToUse !== account.ads_refresh_token && refreshTokenToUse) {
-      base44.asServiceRole.entities.AmazonAccount.update(account.id, { ads_refresh_token: refreshTokenToUse }).catch(() => {});
+    // Usar SEMPRE o token da entidade (fonte de verdade do OAuth gerado via callback)
+    // O secret ADS_REFRESH_TOKEN pode estar desactualizado/revogado
+    const entityToken = account.ads_refresh_token;
+    if (!entityToken || !entityToken.startsWith('Atzr|')) {
+      return Response.json({ ok: false, error: 'Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.' }, { status: 401 });
     }
+    const token = await accessToken(entityToken);
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) throw new Error('ADS_PROFILE_ID ausente');
 

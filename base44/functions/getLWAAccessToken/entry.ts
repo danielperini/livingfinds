@@ -42,7 +42,7 @@ async function fetchNewToken(clientId, clientSecret, refreshToken, service) {
   throw { code: 'max_retries', message: 'Max retry attempts reached', status: 503 };
 }
 
-async function getToken(service) {
+async function getToken(service, base44Client = null, accountId = null) {
   const cached = tokenCache[service];
   if (cached && cached.expires_at > Date.now()) {
     return cached.access_token;
@@ -51,7 +51,18 @@ async function getToken(service) {
   const isAds = service === 'ads';
   const clientId = isAds ? Deno.env.get('ADS_CLIENT_ID') : Deno.env.get('SP_CLIENT_ID');
   const clientSecret = isAds ? Deno.env.get('ADS_CLIENT_SECRET') : Deno.env.get('SP_CLIENT_SECRET');
-  const refreshToken = isAds ? Deno.env.get('ADS_REFRESH_TOKEN') : Deno.env.get('SP_REFRESH_TOKEN');
+
+  // Preferir token da entidade (fonte de verdade do OAuth) sobre o secret
+  let refreshToken = isAds ? Deno.env.get('ADS_REFRESH_TOKEN') : Deno.env.get('SP_REFRESH_TOKEN');
+  if (isAds && base44Client && accountId) {
+    try {
+      const accounts = await base44Client.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
+      const entityToken = accounts[0]?.ads_refresh_token;
+      if (entityToken && entityToken.startsWith('Atzr|') && entityToken.length > 100) {
+        refreshToken = entityToken;
+      }
+    } catch (_) {}
+  }
 
   if (!clientId || !clientSecret || !refreshToken) {
     throw { code: 'missing_credentials', message: `Missing credentials for service: ${service}`, status: 400 };
@@ -67,14 +78,15 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
-    const service = body.service || 'ads'; // 'ads' or 'sp'
+    const service = body.token_type || body.service || 'ads'; // 'ads' or 'sp'
+    const accountId = body.amazon_account_id || null;
 
     if (!['ads', 'sp'].includes(service)) {
       return Response.json({ error: 'Invalid service. Use ads or sp.' }, { status: 400 });
     }
 
     // Test-only: return health status, never the token itself
-    const token = await getToken(service);
+    const token = await getToken(service, base44, accountId);
     const cached = tokenCache[service];
 
     return Response.json({
