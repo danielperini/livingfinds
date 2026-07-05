@@ -94,6 +94,21 @@ Deno.serve(async (req) => {
         const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
         if (!refreshToken || !profileId) continue;
 
+        // Carregar configuração de metas da IA
+        const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1);
+        const cfg = configs[0] || {};
+        const effectiveMinBid = cfg.min_bid || MIN_BID;
+        const effectiveMaxBid = cfg.max_bid || MAX_BID;
+        const targetAcos = cfg.target_acos || cfg.acos_target || 25;
+        const targetRoas = cfg.target_roas || cfg.roas_target || 4;
+        const priorityMode = cfg.ai_budget_priority_mode || 'acos_first';
+        const budgetEnforcement = cfg.ai_budget_enforcement === true;
+        const dailyBudgetTarget = cfg.ai_daily_budget_target || 0;
+        const targetTacos = cfg.target_tacos || 10;
+
+        // Calcular TACoS da conta se modo tacos_first
+        const accountTacos = account.tacos || 0;
+
         // Buscar keywords ativas com gasto (cpc > 0 e spend > 0)
         const keywords = await base44.asServiceRole.entities.Keyword.filter(
           { amazon_account_id: account.id, state: 'enabled' },
@@ -115,9 +130,32 @@ Deno.serve(async (req) => {
           }
 
           const currentBid = kw.current_bid || kw.bid || 0.25;
-          // Bid alvo = 50% do CPC real, respeitando piso e teto
+
+          // Ajustar ratio baseado na prioridade da IA configurada
+          let dynamicRatio = CPC_BID_RATIO; // padrão 50%
+          if (priorityMode === 'roas_first') {
+            // ROAS-first: bid mais agressivo se ROAS do keyword está abaixo do alvo
+            const kwRoas = kw.sales > 0 && kw.spend > 0 ? kw.sales / kw.spend : 0;
+            dynamicRatio = kwRoas > 0 && kwRoas >= targetRoas ? 0.55 : 0.45;
+          } else if (priorityMode === 'acos_first') {
+            // ACoS-first: bid baseado em target_acos / acos_atual
+            const kwAcos = kw.acos || 0;
+            if (kwAcos > 0 && kwAcos > targetAcos) {
+              dynamicRatio = Math.max(0.35, CPC_BID_RATIO * (targetAcos / kwAcos));
+            }
+          } else if (priorityMode === 'tacos_first') {
+            // TACoS-first: reduzir ratio se TACoS da conta está acima do alvo
+            dynamicRatio = accountTacos > targetTacos ? 0.40 : 0.55;
+          } else if (priorityMode === 'budget_first' && budgetEnforcement && dailyBudgetTarget > 0) {
+            // Budget-first: ratio inversamente proporcional ao consumo de orçamento
+            const totalSpend = keywords.reduce((s, k) => s + (k.spend || 0), 0);
+            const budgetUsagePct = totalSpend / dailyBudgetTarget;
+            dynamicRatio = budgetUsagePct >= 0.90 ? 0.35 : budgetUsagePct >= 0.70 ? 0.45 : 0.55;
+          }
+
+          // Bid alvo com ratio dinâmico, respeitando piso e teto configurados
           const targetBid = parseFloat(
-            Math.min(Math.max(cpc * CPC_BID_RATIO, MIN_BID), MAX_BID).toFixed(2)
+            Math.min(Math.max(cpc * dynamicRatio, effectiveMinBid), effectiveMaxBid).toFixed(2)
           );
 
           // Só ajusta se a diferença for relevante (> R$0.05)
@@ -127,7 +165,16 @@ Deno.serve(async (req) => {
           }
 
           const direction = targetBid > currentBid ? 'increase' : 'decrease';
-          const reason = `CPC real R$${cpc.toFixed(2)} → bid alvo ${(CPC_BID_RATIO * 100).toFixed(0)}% do CPC = R$${targetBid.toFixed(2)} (era R$${currentBid.toFixed(2)})`;
+          const reason = `CPC real R$${cpc.toFixed(2)} → bid alvo ${(dynamicRatio * 100).toFixed(0)}% do CPC (modo=${priorityMode}) = R$${targetBid.toFixed(2)} (era R$${currentBid.toFixed(2)})`;
+
+          // budget_first enforcement: bloquear aumentos se orçamento atingido
+          if (priorityMode === 'budget_first' && budgetEnforcement && dailyBudgetTarget > 0 && direction === 'increase') {
+            const totalSpend = keywords.reduce((s, k) => s + (k.spend || 0), 0);
+            if (totalSpend >= dailyBudgetTarget * 0.95) {
+              summary.keywords_skipped_small_delta++;
+              continue;
+            }
+          }
 
           // Enviar para Amazon
           const resp = await adsRequest(
@@ -185,7 +232,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      rule: 'smart_bid_50pct_cpc',
+      rule: 'smart_bid_dynamic_cpc',
       cpc_bid_ratio: CPC_BID_RATIO,
       summary,
       executed_at: now.toISOString(),

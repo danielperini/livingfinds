@@ -289,6 +289,8 @@ Deno.serve(async (req) => {
     const TARGET_ACOS  = cfg.target_acos  || cfg.acos_target || 25;
     const MAX_ACOS     = cfg.maximum_acos || 40;
     const TARGET_ROAS  = cfg.target_roas  || cfg.roas_target || 4;
+    const TARGET_TACOS = cfg.target_tacos || 10;
+    const MAX_TACOS    = cfg.maximum_tacos || 12;
     const MIN_BID      = cfg.min_bid      || 0.10;
     const MAX_BID      = cfg.max_bid      || 5.0;
     const MIN_CLICKS   = cfg.min_clicks_for_decision || 8;
@@ -302,6 +304,11 @@ Deno.serve(async (req) => {
     const MAX_BUD_DEC  = (cfg.max_budget_decrease_pct || 20) / 100;
     const AUTO_APPLY   = cfg.auto_apply_low_risk !== false;
     const safeCutoff   = daysAgo(Math.ceil(ATTR_HOURS / 24));
+
+    // Metas da IA configuradas pelo usuário
+    const AI_PRIORITY_MODE      = cfg.ai_budget_priority_mode || 'acos_first';
+    const AI_BUDGET_ENFORCEMENT = cfg.ai_budget_enforcement === true;
+    const AI_DAILY_BUDGET_TARGET = cfg.ai_daily_budget_target || 0;
 
     // ── 4. Criar registro do run ──────────────────────────────────────────
     runRecord = await base44.asServiceRole.entities.AutopilotRun.create({
@@ -836,10 +843,20 @@ Deno.serve(async (req) => {
 
         if (campAlreadyChanged) continue; // uma variável por ciclo
 
+        // ── PRIORIDADE DE META: ajusta limiares de decisão conforme AI_PRIORITY_MODE ──
+        // budget_first: se enforcement ativo e gasto total já atingiu o alvo, bloquear aumentos
+        const totalSpendToday = campaigns.reduce((s, c) => s + (c.current_spend || c.spend || 0), 0);
+        const budgetCapReached = AI_BUDGET_ENFORCEMENT && AI_DAILY_BUDGET_TARGET > 0 && totalSpendToday >= AI_DAILY_BUDGET_TARGET * 0.95;
+
+        // tacos_first: bloquear aumentos de bid se TACoS da conta está acima do alvo
+        const accountTacos = account.tacos || 0;
+        const tacosOverTarget = (AI_PRIORITY_MODE === 'tacos_first' || AI_PRIORITY_MODE === 'budget_first') && accountTacos > 0 && accountTacos > TARGET_TACOS;
+
+        // roas_first: só aumenta bid se ROAS do produto >= TARGET_ROAS
+        const productRoas = (product && product.roas) ? product.roas : (kw.sales > 0 && kw.spend > 0 ? kw.sales / kw.spend : 0);
+        const roasInsufficient = AI_PRIORITY_MODE === 'roas_first' && productRoas > 0 && productRoas < TARGET_ROAS;
+
         // ── C4. WASTING: zero vendas com dados maduros ───────────────────
-        // Critério: gasto real >= MIN_SPEND (R$5) OU cliques >= MIN_CLICKS,
-        // não ambos obrigatórios — muitas keywords BR têm CPC alto e poucos cliques
-        console.log(`[C4-CHECK] kw="${kw.keyword_text}" orders=${orders} spend=${spend} clicks=${clicks} maturity=${maturity} campAlreadyChanged=${campAlreadyChanged} MIN_SPEND=${MIN_SPEND} MIN_CLICKS=${MIN_CLICKS}`);
         if (orders === 0 && (spend >= MIN_SPEND || clicks >= MIN_CLICKS) && maturity === 'MATURE') {
           if (inDecCooldown) { stats.skipped_cooldown++; continue; }
 
@@ -957,6 +974,10 @@ Deno.serve(async (req) => {
             blocked.push({ entity: kw.keyword_id, reason: 'LOW_STOCK_BLOCKS_INCREASE', text: kw.keyword_text });
             continue;
           }
+          // Respeitar prioridades da IA: bloquear aumento se orçamento/tacos/roas não permitem
+          if (budgetCapReached) { blocked.push({ entity: kw.keyword_id, reason: 'BUDGET_CAP_REACHED', text: kw.keyword_text }); continue; }
+          if (tacosOverTarget) { blocked.push({ entity: kw.keyword_id, reason: 'TACOS_OVER_TARGET', text: kw.keyword_text }); continue; }
+          if (roasInsufficient) { blocked.push({ entity: kw.keyword_id, reason: 'ROAS_INSUFFICIENT', text: kw.keyword_text }); continue; }
           if (inIncCooldown) { stats.skipped_cooldown++; continue; }
 
           const isStrongWinner = orders >= 3 && acos <= TARGET_ACOS * 0.70;
