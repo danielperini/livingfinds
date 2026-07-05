@@ -9,6 +9,7 @@ import AutopilotDecisionsTable from '@/components/autopilot/AutopilotDecisionsTa
 import AutopilotAlertsPanel from '@/components/autopilot/AutopilotAlertsPanel';
 import BiddingRulesPanel from '@/components/learner/BiddingRulesPanel';
 import MLLearningPanel from '@/components/learner/MLLearningPanel';
+import BudgetValidationPanel from '@/components/autopilot/BudgetValidationPanel';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'recommendations', label: '🎯 Recomendações', icon: null },
   { id: 'dayparting', label: '🕐 Dayparting', icon: null },
   { id: 'ml_learning', label: '🧠 Motor ML', icon: null },
+  { id: 'budget_validation', label: '💰 Budget 30d', icon: null },
   { id: 'rules', label: 'Regras Automáticas', icon: Settings },
   { id: 'config', label: 'Configuração', icon: Settings },
 ];
@@ -280,6 +282,7 @@ export default function AdsAutopilot() {
     {tab === 'recommendations' && <Recommendations />}
     {tab === 'dayparting' && <DaypartingDashboard />}
     {tab === 'ml_learning' && <MLLearningPanel amazonAccountId={account.id} />}
+    {tab === 'budget_validation' && <BudgetValidationPanel account={account} />}
     {tab === 'rules' && <BiddingRulesPanel amazonAccountId={account.id} />}
     {tab === 'config' && <AutopilotConfigPanel account={account} config={config} onSaved={loadData} />}
     {tab === 'alerts' && <AutopilotAlertsPanel alerts={alerts} onDismiss={dismissAlert} />}
