@@ -72,13 +72,16 @@ Deno.serve(async (request) => {
         const data = response?.data || response || {};
         const success = data?.ok === true;
         const text = String(data?.error || data?.message || '').toLowerCase();
-        const retryable = Boolean(data?.retryable || data?.status === 429 || data?.circuit_open || text.includes('rate limit') || text.includes('throttl'));
+        const is403 = data?.status === 403 || text.includes('403') || text.includes('forbidden') || text.includes('unauthorized');
+        const retryable = Boolean(data?.retryable || data?.status === 429 || data?.circuit_open || is403 || text.includes('rate limit') || text.includes('throttl') || text.includes('time limit') || text.includes('timeout'));
+        // 403: backoff maior (10 min) para dar tempo ao token ser renovado
+        const backoffMs = is403 ? 10 * 60000 : 60000;
         const retry = !success && retryable && attempts < Number(item.max_attempts || 5);
 
         await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
           status: success ? 'completed' : retry ? 'scheduled' : 'failed',
           completed_at: success || !retry ? new Date().toISOString() : null,
-          scheduled_at: retry ? new Date(Date.now() + 60000).toISOString() : item.scheduled_at,
+          scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
           last_error: success ? null : String(data?.errors?.[0]?.message || data?.error || data?.message || 'Falha no Kick-off').slice(0, 500),
         });
 
@@ -87,7 +90,7 @@ Deno.serve(async (request) => {
         const retry = attempts < Number(item.max_attempts || 5);
         await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
           status: retry ? 'scheduled' : 'failed',
-          scheduled_at: retry ? new Date(Date.now() + 60000).toISOString() : item.scheduled_at,
+          scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
           completed_at: retry ? null : new Date().toISOString(),
           last_error: String(error?.message || error).slice(0, 500),
         });
