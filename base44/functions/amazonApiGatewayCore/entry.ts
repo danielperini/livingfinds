@@ -139,7 +139,9 @@ Deno.serve(async (request) => {
       error_message: parsed?.ok ? null : String(parsed?.errors?.[0]?.message || 'Falha Amazon').slice(0, 1000),
     }).catch(() => {});
 
-    return Response.json({ ...parsed, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt }, { status: parsed?.ok ? 200 : parsed?.status || 500 });
+    // Sempre retorna HTTP 200 para evitar que o SDK lance exceção por status não-2xx.
+    // O status real da Amazon fica em parsed.status para que o chamador decida.
+    return Response.json({ ...parsed, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro no gateway Amazon', attempts: attemptsUsed, started_at: startedAt, completed_at: new Date().toISOString() }, { status: 500 });
   }

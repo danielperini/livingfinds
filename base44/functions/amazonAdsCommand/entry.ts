@@ -1,3 +1,4 @@
+// v2 — gateway retorna sempre HTTP 200; trata ok:false no body
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const ALLOWED_PATHS = [
