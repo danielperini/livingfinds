@@ -32,6 +32,7 @@ export default function AmazonIntegracao() {
   const [checkingAds, setCheckingAds] = useState(false);
 
   useEffect(() => {
+    // Apenas carrega dados locais (sem chamadas de API externa)
     (async () => {
       try {
         const me = await base44.auth.me();
@@ -43,20 +44,19 @@ export default function AmazonIntegracao() {
         setLoadingAccount(false);
       }
     })();
-
-    // Verifica status do token Ads silenciosamente
-    (async () => {
-      setCheckingAds(true);
-      try {
-        const res = await base44.functions.invoke('getOAuthSetupInfo', {});
-        setAdsStatus(res.data);
-      } catch {
-        setAdsStatus(null);
-      } finally {
-        setCheckingAds(false);
-      }
-    })();
   }, []);
+
+  const checkAdsToken = async () => {
+    setCheckingAds(true);
+    try {
+      const res = await base44.functions.invoke('getOAuthSetupInfo', {});
+      setAdsStatus(res.data);
+    } catch {
+      setAdsStatus(null);
+    } finally {
+      setCheckingAds(false);
+    }
+  };
 
   const testConnection = async () => {
     setTesting(true);
@@ -92,7 +92,27 @@ export default function AmazonIntegracao() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6 animate-fade-in">
-      {/* Banner de alerta Amazon Ads */}
+      {/* Banner de status Amazon Ads — carrega só ao clicar */}
+      {!adsStatus && !checkingAds && (
+        <div className="flex items-center justify-between p-3 bg-surface-1 border border-surface-2 rounded-xl">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-slate-500" />
+            <p className="text-xs text-slate-500">Status do token Amazon Ads não verificado</p>
+          </div>
+          <button onClick={checkAdsToken}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors">
+            <Activity className="w-3.5 h-3.5" /> Verificar token
+          </button>
+        </div>
+      )}
+
+      {checkingAds && (
+        <div className="flex items-center gap-2 p-3 bg-surface-1 border border-surface-2 rounded-xl">
+          <Loader2 className="w-3.5 h-3.5 text-slate-500 animate-spin" />
+          <p className="text-xs text-slate-500">A verificar token Amazon Ads...</p>
+        </div>
+      )}
+
       {!checkingAds && adsStatus && adsStatus.token_status !== 'valid' && (
         <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/30 rounded-2xl">
           <ShieldAlert className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
@@ -102,14 +122,13 @@ export default function AmazonIntegracao() {
               {adsStatus.token_error || 'O refresh token da Amazon Ads foi revogado — todas as operações de campanhas estão a falhar com 403.'}
             </p>
             <div className="mt-3 flex items-center gap-2 flex-wrap">
-              <Link
-                to="/amazon-oauth-setup"
-                className="flex items-center gap-1.5 px-4 py-2 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded-lg transition-colors"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                Reautorizar Amazon Ads agora →
+              <Link to="/amazon-oauth-setup"
+                className="flex items-center gap-1.5 px-4 py-2 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded-lg transition-colors">
+                <Zap className="w-3.5 h-3.5" /> Reautorizar Amazon Ads agora →
               </Link>
-              <span className="text-[10px] text-red-400/60">Clique para iniciar o fluxo OAuth e renovar o token</span>
+              <button onClick={checkAdsToken} className="text-[10px] text-red-400/60 hover:text-red-300">
+                Verificar novamente
+              </button>
             </div>
           </div>
         </div>
@@ -119,16 +138,14 @@ export default function AmazonIntegracao() {
         <div className="flex items-center gap-3 p-3 bg-emerald-500/8 border border-emerald-500/20 rounded-xl">
           <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
           <p className="text-xs text-emerald-300 font-semibold">Token Amazon Ads válido — {adsStatus.profiles?.length || 0} profile(s) encontrado(s)</p>
-          <Link to="/amazon-oauth-setup" className="ml-auto text-[10px] text-slate-500 hover:text-cyan transition-colors flex items-center gap-1">
-            <ExternalLink className="w-3 h-3" /> Detalhes
-          </Link>
-        </div>
-      )}
-
-      {checkingAds && (
-        <div className="flex items-center gap-2 p-3 bg-surface-1 border border-surface-2 rounded-xl">
-          <Loader2 className="w-3.5 h-3.5 text-slate-500 animate-spin" />
-          <p className="text-xs text-slate-500">A verificar token Amazon Ads...</p>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={checkAdsToken} className="text-[10px] text-slate-600 hover:text-slate-400 transition-colors">
+              <RefreshCw className="w-3 h-3" />
+            </button>
+            <Link to="/amazon-oauth-setup" className="text-[10px] text-slate-500 hover:text-cyan transition-colors flex items-center gap-1">
+              <ExternalLink className="w-3 h-3" /> Detalhes
+            </Link>
+          </div>
         </div>
       )}
 
