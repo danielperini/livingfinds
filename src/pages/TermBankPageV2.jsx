@@ -80,8 +80,25 @@ export default function TermBankPageV2() {
     setMessage(null);
     try {
       const res = await base44.functions.invoke('reviewKeywordSuggestion', { suggestion_id: suggestion.id, action });
-      if (!res?.data?.ok) throw new Error(res?.data?.error || 'Falha ao processar sugestão');
-      setMessage({ type: 'success', text: action === 'approve' ? `Campanha criada e termo ativado para ${res.data.product_name || suggestion.asin}.` : 'Sugestão removida e enviada ao aprendizado do ML.' });
+      const data = res?.data || {};
+      if (!data.ok) throw new Error(data.error || 'Falha ao processar sugestão');
+
+      if (action === 'approve') {
+        const campStatus = data.campaign_status;
+        const statusLabels = {
+          enabled: '✅ Campanha ativa',
+          active: '✅ Campanha ativa',
+          created: '✅ Campanha criada',
+          incomplete: '⚠️ Campanha incompleta (reparo agendado)',
+          paused: '⏸ Campanha pausada',
+          archived: '📦 Campanha arquivada',
+          failed: '❌ Falha ao criar campanha',
+        };
+        const statusText = statusLabels[campStatus] || '✅ Campanha criada';
+        setMessage({ type: campStatus === 'failed' ? 'error' : 'success', text: `${statusText} para "${suggestion.keyword}" (${data.product_name || suggestion.asin}). Termo adicionado ao TermBank.` });
+      } else {
+        setMessage({ type: 'success', text: 'Sugestão removida.' });
+      }
       await load();
     } catch (e) {
       setMessage({ type: 'error', text: e?.response?.data?.error || e.message });
