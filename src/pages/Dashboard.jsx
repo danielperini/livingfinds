@@ -382,7 +382,6 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         roas={roas}
         autopilotConfig={autopilotConfig}
         loading={loading}
-        amazonAccountId={account?.id}
       />
 
       {/* Painel Orçamento em Risco */}
