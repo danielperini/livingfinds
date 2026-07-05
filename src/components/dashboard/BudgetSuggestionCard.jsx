@@ -29,13 +29,25 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const thirtyDaysAgo = new Date(Date.now() - 30 * DAY_MS).toISOString().slice(0, 10);
   const metricsThirtyDays = metricsDaily.filter((metric) => metric?.date && metric.date >= thirtyDaysAgo);
 
-  // Consolida todos os registros do mesmo dia antes de calcular a média.
-  const spendByDay = metricsThirtyDays.reduce((acc, metric) => {
+  // Deduplica por campaign_id + date para evitar contar o mesmo gasto em múltiplos
+  // relatórios (searchTerms, products e campaigns cobrem as mesmas campanhas).
+  // Prioriza o report_type "campaigns" que tem o valor mais preciso; se não existir,
+  // usa o primeiro registro encontrado para aquele par campanha+dia.
+  const seenCampDay = new Map();
+  for (const metric of metricsThirtyDays) {
+    if (!metric.campaign_id || !metric.date) continue;
+    const key = `${metric.campaign_id}|${metric.date}`;
+    const existing = seenCampDay.get(key);
+    if (!existing || metric.report_type === 'campaigns') {
+      seenCampDay.set(key, metric);
+    }
+  }
+  const spendByDay = {};
+  for (const metric of seenCampDay.values()) {
     const date = metric.date;
-    if (!acc[date]) acc[date] = 0;
-    acc[date] += number(metric.spend);
-    return acc;
-  }, {});
+    if (!spendByDay[date]) spendByDay[date] = 0;
+    spendByDay[date] += number(metric.spend);
+  }
 
   const dailyEntries = Object.entries(spendByDay).sort(([dateA], [dateB]) => dateA.localeCompare(dateB));
   const daysWithData = dailyEntries.length;
@@ -51,10 +63,10 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const activeCampaignBudget = activeCampaignList.reduce((sum, campaign) => sum + number(campaign.daily_budget || campaign.budget), 0); // exibição apenas
   const activeProducts = products.filter(productIsActive).length;
 
-  // Regra vigente: média diária real + reserva operacional de 30%.
+  // Regra: média diária real deduplificada + reserva operacional de 10%.
   // NÃO usar soma de daily_budget das campanhas como mínimo — esse valor é configurado
   // e pode divergir muito do gasto real, inflando artificialmente a sugestão.
-  const reserveRate = 0.30;
+  const reserveRate = 0.10;
   const recalculatedBudget = avgDailySpend > 0 ? avgDailySpend * (1 + reserveRate) : 0;
 
   const aiSuggested = number(autopilotConfig?.ai_suggested_daily_budget);
@@ -120,7 +132,7 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
             </div>
             <div className="flex justify-between py-1.5 border-b border-surface-2">
               <span className="text-slate-500">Reserva operacional</span>
-              <span className="text-emerald-400 font-semibold">30% · R${(avgDailySpend * reserveRate).toFixed(2)}</span>
+              <span className="text-emerald-400 font-semibold">+10% · R${(avgDailySpend * reserveRate).toFixed(2)}</span>
             </div>
             {usePersistedAI && acosTrend && (
               <div className="flex justify-between py-1.5 border-b border-surface-2">
