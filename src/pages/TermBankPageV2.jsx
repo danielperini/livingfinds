@@ -42,8 +42,20 @@ export default function TermBankPageV2() {
     try {
       const keepIds = new Set(top10Suggestions.map(s => s.id));
       const toDelete = suggestions.filter(s => !keepIds.has(s.id));
-      await Promise.all(toDelete.map(s => base44.entities.KeywordSuggestion.delete(s.id)));
-      setMessage({ type: 'success', text: `✓ ${toDelete.length} sugestões excedentes removidas. Mantidas as top 10 por produto.` });
+
+      // Deletar em lotes de 10 com pausa de 300ms para não exceder rate limit
+      const BATCH = 10;
+      let deleted = 0;
+      for (let i = 0; i < toDelete.length; i += BATCH) {
+        const batch = toDelete.slice(i, i + BATCH);
+        await Promise.all(batch.map(s => base44.entities.KeywordSuggestion.delete(s.id)));
+        deleted += batch.length;
+        if (i + BATCH < toDelete.length) {
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+
+      setMessage({ type: 'success', text: `✓ ${deleted} sugestões excedentes removidas. Mantidas as top 10 por produto.` });
       await load();
     } catch (e) {
       setMessage({ type: 'error', text: e.message });
