@@ -67,10 +67,9 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
     catch { return {}; }
   })();
 
-  // A sugestão persistida só pode ser usada quando foi gerada depois do relatório mais recente.
-  const aiMatchesLatestReport = aiGeneratedTimestamp > 0 && aiGeneratedTimestamp >= latestMetricTimestamp;
-  const isAiFresh = aiGeneratedTimestamp > 0 && Date.now() - aiGeneratedTimestamp < 48 * 3600000;
-  const usePersistedAI = aiSuggested > 0 && isAiFresh && aiMatchesLatestReport;
+  // Análise semanal: sugestão é válida por 7 dias a partir da geração
+  const isAiFresh = aiGeneratedTimestamp > 0 && Date.now() - aiGeneratedTimestamp < 7 * 24 * 3600000;
+  const usePersistedAI = aiSuggested > 0 && isAiFresh;
 
   const suggestedBudget = usePersistedAI ? aiSuggested : recalculatedBudget;
   const confidence = usePersistedAI
