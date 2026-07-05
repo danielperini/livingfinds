@@ -139,9 +139,10 @@ Deno.serve(async (request) => {
       if (!existingByKey.has(key)) existingByKey.set(key, row);
     }
 
-    let createdCount = 0;
-    let updatedCount = 0;
+    const toCreate: any[] = [];
+    const toUpdate: any[] = [];
     const seen = new Set<string>();
+    const now2 = new Date().toISOString();
 
     for (const row of rows) {
       const campaignId = String(row.campaignId || row.campaign_id || '');
@@ -151,7 +152,7 @@ Deno.serve(async (request) => {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      const record = {
+      const record: any = {
         amazon_account_id: accountId,
         campaign_id: campaignId,
         campaign_name: row.campaignName || row.campaign_name || null,
@@ -164,20 +165,28 @@ Deno.serve(async (request) => {
         daily_budget: numberValue(row.campaignBudgetAmount ?? row.budget),
         campaign_status: String(row.campaignStatus || '').toLowerCase() || null,
         source: 'amazon_ads_api',
-        synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        synced_at: now2,
+        updated_at: now2,
       };
 
       const current = existingByKey.get(key);
       if (current) {
-        await base44.asServiceRole.entities.CampaignMetricsDaily.update(current.id, record);
-        updatedCount += 1;
+        toUpdate.push({ id: current.id, ...record });
       } else {
-        const createdRow = await base44.asServiceRole.entities.CampaignMetricsDaily.create(record);
-        existingByKey.set(key, createdRow);
-        createdCount += 1;
+        toCreate.push(record);
       }
     }
+
+    const BATCH = 100;
+    for (let i = 0; i < toCreate.length; i += BATCH) {
+      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(toCreate.slice(i, i + BATCH));
+    }
+    for (let i = 0; i < toUpdate.length; i += BATCH) {
+      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkUpdate(toUpdate.slice(i, i + BATCH));
+    }
+
+    const createdCount = toCreate.length;
+    const updatedCount = toUpdate.length;
 
     const now = new Date().toISOString();
     const summary = {
