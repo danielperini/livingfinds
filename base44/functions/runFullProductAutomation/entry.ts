@@ -440,16 +440,27 @@ Deno.serve(async (req) => {
         // Invocar suggestProductKeywordsWithAI
         let suggestions = [];
         try {
-          const suggestRes = await base44.asServiceRole.functions.invoke('suggestProductKeywordsWithAI', {
+          await base44.asServiceRole.functions.invoke('suggestProductKeywordsWithAI', {
             amazon_account_id: aid,
             asin,
             product_id: product.id,
-          });
-          const suggestData = suggestRes?.data || suggestRes;
-          const allTerms = [
-            ...(suggestData?.medium_tail || []),
-            ...(suggestData?.long_tail   || []),
-          ];
+            _service_role: true,
+          }).catch(() => {});
+
+          // Buscar sugestões salvas no banco (a função agora persiste e não retorna arrays diretos)
+          const savedSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter(
+            { amazon_account_id: aid, asin, status: 'suggested' }, '-created_at', 50
+          ).catch(() => []);
+          const allTerms = savedSuggestions.map((s: any) => ({
+            keyword: s.keyword,
+            confidence: s.confidence || 0,
+            relevance_score: s.relevance_score || 0,
+            match_type: s.match_type || 'exact',
+            intent: s.intent || 'commercial',
+            reason: s.reason || '',
+            source: s.source || 'AUTOMATIC_SEARCH_TERM',
+            id: s.id,
+          }));
 
           // Filtrar confiança >= 80% (§8)
           const eligible = allTerms.filter(s => (s.confidence || 0) >= MIN_CONFIDENCE && s.status !== 'duplicate');
