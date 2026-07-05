@@ -183,20 +183,36 @@ export default function Dashboard() {
     setForcingSyncAds(true);
     setForceSyncMsg(null);
     try {
-      const res = await base44.functions.invoke('runDailyMasterSync', { amazon_account_id: account.id });
-      if (res?.data?.ok) {
-        const s = res.data.summary || {};
-        setForceSyncMsg({ type: 'success', text: `✓ ${s.campaigns_updated || 0} camp. · ${s.keywords_updated || 0} kws · ${s.products_updated || 0} prod.` });
+      // Sync leve: apenas estados das campanhas + métricas de performance
+      const [statesRes, metricsRes] = await Promise.allSettled([
+        base44.functions.invoke('syncAds', { amazon_account_id: account.id, trigger_type: 'manual' }),
+        base44.functions.invoke('syncAdsPerformanceMetricsV2', { amazon_account_id: account.id, trigger_type: 'manual' }),
+      ]);
+
+      const statesData = statesRes.status === 'fulfilled' ? statesRes.value?.data : null;
+      const metricsData = metricsRes.status === 'fulfilled' ? metricsRes.value?.data : null;
+
+      const rateLimited =
+        String(statesData?.error || '').toLowerCase().includes('rate limit') ||
+        String(metricsData?.error || '').toLowerCase().includes('rate limit');
+
+      if (rateLimited) {
+        setForceSyncMsg({ type: 'warn', text: 'Amazon em rate limit — dados atualizados na janela 00:00–04:00.' });
+      } else if (statesData?.ok || metricsData?.ok) {
+        const camps = statesData?.campaigns_synced ?? statesData?.updated ?? 0;
+        const metrics = metricsData?.records_processed ?? metricsData?.updated ?? 0;
+        setForceSyncMsg({ type: 'success', text: `✓ ${camps} camp. · ${metrics} registros de métricas` });
         setLastSyncInfo({ at: new Date().toISOString(), trigger: 'manual' });
         await loadData();
       } else {
-        setForceSyncMsg({ type: 'error', text: res?.data?.error || res?.data?.message || 'Falha no sync' });
+        const errMsg = statesData?.error || metricsData?.error || 'Falha no sync';
+        setForceSyncMsg({ type: 'error', text: errMsg });
       }
     } catch (e) {
       setForceSyncMsg({ type: 'error', text: e.message });
     } finally {
       setForcingSyncAds(false);
-      setTimeout(() => setForceSyncMsg(null), 10000);
+      setTimeout(() => setForceSyncMsg(null), 12000);
     }
   };
 
@@ -328,7 +344,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
               </p>
             )}
             {forceSyncMsg && (
-              <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
+              <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : forceSyncMsg.type === 'warn' ? 'text-amber-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
             )}
           </div>
           <button onClick={loadData} disabled={loading}
