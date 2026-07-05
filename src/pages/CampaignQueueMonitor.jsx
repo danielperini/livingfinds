@@ -174,6 +174,30 @@ function QueueSection({ title, icon: Icon, color, items, queueType, loading, onD
   );
 }
 
+function QueueSectionWithRun({ onRunNow, isRunning, runMsg, ...props }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <div />
+        <div className="flex items-center gap-2">
+          {runMsg && (
+            <span className={`text-xs ${runMsg.type === 'error' ? 'text-red-400' : 'text-emerald-400'}`}>{runMsg.text}</span>
+          )}
+          <button
+            onClick={onRunNow}
+            disabled={isRunning || props.items.filter(i => i.status === 'scheduled').length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed font-semibold"
+          >
+            {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            {isRunning ? 'Executando...' : 'Executar Agora'}
+          </button>
+        </div>
+      </div>
+      <QueueSection loading={false} {...props} />
+    </div>
+  );
+}
+
 export default function CampaignQueueMonitor() {
   const [account, setAccount] = useState(null);
   const [kickoffQueue, setKickoffQueue] = useState([]);
@@ -183,6 +207,8 @@ export default function CampaignQueueMonitor() {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const intervalRef = useRef(null);
+  const [running, setRunning] = useState({ kickoff: false, repair: false, keyword: false });
+  const [runMsg, setRunMsg] = useState({ kickoff: null, repair: null, keyword: null });
 
   const loadQueues = async (isFirst = false) => {
     if (isFirst) setLoading(true);
@@ -224,6 +250,29 @@ export default function CampaignQueueMonitor() {
   const deleteItem = async (entityName, id) => {
     await base44.entities[entityName].delete(id);
     loadQueues(false);
+  };
+
+  const runNow = async (key, fnName) => {
+    if (!account || running[key]) return;
+    setRunning(r => ({ ...r, [key]: true }));
+    setRunMsg(m => ({ ...m, [key]: null }));
+    try {
+      const res = await base44.functions.invoke(fnName, { amazon_account_id: account.id, _service_role: true, trigger_type: 'manual' });
+      const d = res?.data || {};
+      const msg = d.processed != null
+        ? `✓ ${d.processed} processados`
+        : d.ok === false
+        ? `Erro: ${d.error || 'falhou'}`
+        : '✓ Executado';
+      setRunMsg(m => ({ ...m, [key]: { type: d.ok === false ? 'error' : 'success', text: msg } }));
+      setTimeout(() => setRunMsg(m => ({ ...m, [key]: null })), 8000);
+      loadQueues(false);
+    } catch (e) {
+      setRunMsg(m => ({ ...m, [key]: { type: 'error', text: e.message } }));
+      setTimeout(() => setRunMsg(m => ({ ...m, [key]: null })), 8000);
+    } finally {
+      setRunning(r => ({ ...r, [key]: false }));
+    }
   };
 
   const clearDone = async (entityName, items) => {
@@ -324,35 +373,41 @@ export default function CampaignQueueMonitor() {
         </div>
       ) : (
         <div className="space-y-4">
-          <QueueSection
+          <QueueSectionWithRun
             title="Kickoff de Produtos"
             icon={Rocket}
             color="violet"
             items={kickoffQueue}
             queueType="ProductKickoffQueue"
-            loading={false}
             onDelete={id => deleteItem('ProductKickoffQueue', id)}
             onClearDone={() => clearDone('ProductKickoffQueue', kickoffQueue)}
+            onRunNow={() => runNow('kickoff', 'processProductKickoffQueueV2')}
+            isRunning={running.kickoff}
+            runMsg={runMsg.kickoff}
           />
-          <QueueSection
+          <QueueSectionWithRun
             title="Reparo de Campanhas AUTO"
             icon={Zap}
             color="amber"
             items={repairQueue}
             queueType="AutoCampaignRepairQueue"
-            loading={false}
             onDelete={id => deleteItem('AutoCampaignRepairQueue', id)}
             onClearDone={() => clearDone('AutoCampaignRepairQueue', repairQueue)}
+            onRunNow={() => runNow('repair', 'processAutoCampaignRepairQueueV2')}
+            isRunning={running.repair}
+            runMsg={runMsg.repair}
           />
-          <QueueSection
+          <QueueSectionWithRun
             title="Reparo de Keywords EXACT"
             icon={Key}
             color="cyan"
             items={keywordQueue}
             queueType="KeywordRepairQueue"
-            loading={false}
             onDelete={id => deleteItem('KeywordRepairQueue', id)}
             onClearDone={() => clearDone('KeywordRepairQueue', keywordQueue)}
+            onRunNow={() => runNow('keyword', 'processKeywordRepairQueue')}
+            isRunning={running.keyword}
+            runMsg={runMsg.keyword}
           />
         </div>
       )}
