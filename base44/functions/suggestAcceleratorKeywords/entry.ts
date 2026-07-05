@@ -210,10 +210,10 @@ Deno.serve(async (request) => {
       return Response.json({
         ok: false,
         blocked: true,
-        error: `Foram encontradas apenas ${accepted.length} sugestões elegíveis. Nenhuma palavra de cauda curta foi aceita.`,
+        error: `Foram encontradas apenas ${accepted.length} sugestões elegíveis com confiança ≥ 95%. Tente novamente para uma nova geração ou verifique se há mais termos históricos disponíveis.`,
         eligible_count: accepted.length,
         web_search_used: webResults.length > 0,
-      }, { status: 422 });
+      });
     }
 
     const now = new Date().toISOString();

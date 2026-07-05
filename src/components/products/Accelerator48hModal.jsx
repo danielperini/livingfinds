@@ -38,11 +38,13 @@ export default function Accelerator48hModal({ product, account, onClose, onDone 
         product_id: product.id,
       });
       const suggestionData = suggestionResponse?.data;
-      if (!suggestionData?.ok) throw new Error(suggestionData?.error || 'Falha ao gerar sugestões.');
+      if (!suggestionData?.ok) {
+        throw new Error(suggestionData?.error || 'Falha ao gerar sugestões.');
+      }
 
       const selected = rankSuggestions(suggestionData).slice(0, 4);
       if (selected.length < 4) {
-        throw new Error(`Somente ${selected.length} sugestões elegíveis foram encontradas. Cauda curta nunca é aceita.`);
+        throw new Error(suggestionData?.error || `Apenas ${selected.length} sugestões elegíveis encontradas. Tente novamente para uma nova geração.`);
       }
 
       setProgress('Criando quatro palavras-chave manuais exatas...');
