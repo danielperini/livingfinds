@@ -100,7 +100,7 @@ export default function Dashboard() {
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
 
-      // Última sincronização (manual ou automática)
+      // Última sincronização: priorizar SyncExecutionLog, depois last_sync_at da conta, depois última métrica no banco
       const lastSuccessRun = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
       if (lastSuccessRun) {
         setLastSyncInfo({
@@ -109,6 +109,12 @@ export default function Dashboard() {
         });
       } else if (acc?.last_sync_at) {
         setLastSyncInfo({ at: acc.last_sync_at, trigger: 'automatic' });
+      } else if (metrics.length > 0) {
+        // Usar data da métrica mais recente como referência
+        const latestMetric = metrics.reduce((a, b) => (a.date > b.date ? a : b), metrics[0]);
+        const latestDate = latestMetric?.synced_at || latestMetric?.date;
+        if (latestDate) setLastSyncInfo({ at: latestDate, trigger: 'automatic' });
+        else setLastSyncInfo(null);
       } else {
         setLastSyncInfo(null);
       }
@@ -272,8 +278,6 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
-  const lastSync = account?.last_sync_at ? new Date(account.last_sync_at).toLocaleString('pt-BR') : null;
-
   return (
     <div className="p-6 space-y-6 animate-fade-in">
       {/* Header */}
@@ -282,24 +286,22 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-sm text-slate-400 mt-0.5">
             {decisions.length > 0
-              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes · </>
-              : 'Sem decisões pendentes · '}
-            {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
+              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes</>
+              : metricsDaily.length > 0
+                ? <span className="text-emerald-400/80">{metricsDaily.length} registros no banco</span>
+                : <span className="text-slate-500">Aguardando sincronização automática</span>
+            }
+            {lastSyncInfo && (
+              <span className="ml-2 text-slate-500 text-xs flex items-center gap-1 inline-flex">
+                · <Clock className="w-3 h-3 inline" /> {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {lastSyncInfo && (
-            <p className="text-[10px] text-slate-500 flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-              <span className="px-1 py-0.5 rounded text-[9px] font-semibold border bg-slate-500/10 text-slate-400 border-slate-500/20">Auto</span>
-            </p>
-          )}
-          <button onClick={loadData} disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
+        <button onClick={loadData} disabled={loading}
+          className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
       </div>
 
       {error && (
