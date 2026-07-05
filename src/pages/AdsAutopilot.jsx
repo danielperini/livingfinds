@@ -14,7 +14,7 @@ import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
   Zap, TrendingDown, Search, Unlock, Brain, CheckCircle, XCircle,
   Filter, ChevronDown, ChevronUp, TrendingUp, Clock, Rocket, Shield,
-  Square, PauseCircle,
+  Square, PauseCircle, Package,
 } from 'lucide-react';
 
 const TABS = [
@@ -64,7 +64,7 @@ const PRIORITY_COLORS = {
   low: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
 };
 
-function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect, currencySymbol }) {
+function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect, currencySymbol, productMap }) {
   const [showRationale, setShowRationale] = useState(false);
   const [editBid, setEditBid] = useState(false);
   const [bidValue, setBidValue] = useState(dec.proposed_value ?? '');
@@ -84,6 +84,7 @@ function DecisionRow({ dec, actionState, onApprove, onReject, selected, onSelect
       <tr className={`border-b border-surface-2/40 transition-colors ${selected ? 'bg-cyan/5' : 'hover:bg-surface-2/60'}`}>
         <td className="pl-4 py-3 w-8"><input type="checkbox" checked={selected} onChange={onSelect} className="w-3.5 h-3.5 accent-cyan rounded" /></td>
         <td className="px-3 py-3 min-w-[180px]"><div className="flex items-center gap-2"><span className="text-base leading-none">{TYPE_ICONS[dec.decision_type] || '🤖'}</span><div className="min-w-0"><p className="text-xs font-semibold text-white truncate max-w-[160px]">{dec.entity_name || dec.entity_id || '—'}</p><p className="text-xs text-slate-500 mt-0.5">{DECISION_LABELS[dec.decision_type] || dec.decision_type}</p></div></div></td>
+        <td className="px-3 py-3 min-w-[160px] max-w-[200px]">{(() => { const asin = dec.asin; const prod = asin && productMap ? productMap.get(asin) : null; if (!prod && !asin) return <span className="text-xs text-slate-600">—</span>; return (<div className="flex items-center gap-2"><div className="flex-shrink-0">{prod?.product_image_url ? <img src={prod.product_image_url} alt="" className="w-7 h-7 rounded object-cover bg-surface-3" /> : <div className="w-7 h-7 rounded bg-surface-3 flex items-center justify-center"><Package className="w-3 h-3 text-slate-600" /></div>}</div><div className="min-w-0"><p className="text-[10px] font-mono text-cyan">{asin}</p><p className="text-[10px] text-slate-400 truncate max-w-[130px] leading-tight">{prod?.product_name || prod?.display_name || ''}</p></div></div>); })()}</td>
         <td className="px-3 py-3 w-24">{dec.priority && <span className={`text-xs px-2 py-0.5 rounded-full border font-medium capitalize ${PRIORITY_COLORS[dec.priority] || ''}`}>{dec.priority === 'high' ? 'Alta' : dec.priority === 'medium' ? 'Média' : 'Baixa'}</span>}</td>
         <td className="px-3 py-3 w-52">{dec.current_value != null && dec.proposed_value != null ? <div className="flex items-center gap-2"><span className="text-xs font-mono text-slate-400">{currencySymbol}{Number(dec.current_value).toFixed(2)}</span><span className={`text-xs font-bold flex items-center gap-0.5 ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>{isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}{changePct != null ? `${isPositive ? '+' : ''}${changePct.toFixed(1)}%` : '→'}</span>{editBid ? <div className="flex items-center gap-1"><input type="number" value={bidValue} onChange={e => setBidValue(e.target.value)} step={0.01} min={0.02} className="w-16 px-1.5 py-0.5 bg-surface-3 border border-cyan/40 rounded text-xs font-mono text-white focus:outline-none" autoFocus onBlur={() => !bidValue && setEditBid(false)} /><button onClick={() => setEditBid(false)} className="text-slate-500 hover:text-slate-300"><XCircle className="w-3 h-3" /></button></div> : <button onClick={() => setEditBid(true)} className="text-xs font-mono text-white bg-surface-2 hover:bg-surface-3 border border-surface-3 px-2 py-0.5 rounded transition-colors">{currencySymbol}{Number(bidValue || dec.proposed_value).toFixed(2)}</button>}</div> : <span className="text-xs text-slate-600">—</span>}</td>
         <td className="px-3 py-3 w-24">{dec.confidence != null && <div className="flex items-center gap-1.5"><div className="w-14 h-1.5 bg-surface-3 rounded-full overflow-hidden"><div className="h-full bg-cyan rounded-full" style={{ width: `${Math.min(dec.confidence * 100, 100)}%` }} /></div><span className="text-xs text-slate-500">{(dec.confidence * 100).toFixed(0)}%</span></div>}</td>
@@ -138,6 +139,7 @@ export default function AdsAutopilot() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [filterType, setFilterType] = useState('all');
+  const [products, setProducts] = useState([]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -152,7 +154,7 @@ export default function AdsAutopilot() {
       if (!acc) { setLoading(false); return; }
       const aid = acc.id;
 
-      const [cams, allDecs, als, negs, hist, rs, cfgs, sts] = await Promise.all([
+      const [cams, allDecs, als, negs, hist, rs, cfgs, sts, prods] = await Promise.all([
         loadAllCampaigns(aid),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 300),
         base44.entities.AutopilotAlert.filter({ amazon_account_id: aid, is_read: false }, '-created_date', 50),
@@ -161,9 +163,11 @@ export default function AdsAutopilot() {
         base44.entities.AutopilotRun.filter({ amazon_account_id: aid }, '-started_at', 10),
         base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }),
         base44.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders_14d', 500),
+        base44.entities.Product.filter({ amazon_account_id: aid }, null, 500),
       ]);
 
       setCampaigns(getAutopilotEligible(cams));
+      setProducts(prods);
       setAlerts(als);
       setNegatives(negs);
       setBidHistory(hist);
@@ -271,7 +275,7 @@ export default function AdsAutopilot() {
     {runMsg && <div className="rounded-lg border border-cyan/20 bg-cyan/5 p-3 text-sm text-cyan">{runMsg}</div>}
     <AutopilotKPIBar campaigns={campaigns} decisions={decisions} alerts={alerts} bidHistory={bidHistory} />
     <div className="flex flex-wrap gap-2">{TABS.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`px-3 py-2 rounded-lg text-xs font-semibold border ${tab === id ? 'bg-cyan/10 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-400 border-surface-3'}`}>{Icon && <Icon className="inline w-3 h-3 mr-1" />}{label}</button>)}</div>
-    {tab === 'decisions' && <div className="rounded-xl border border-surface-2 overflow-hidden"><table className="w-full"><tbody>{filteredDecisions.map(dec => <DecisionRow key={dec.id} dec={dec} actionState={actionStates[dec.id]} onApprove={(v) => handleDecision(dec.id, 'approve', v)} onReject={() => handleDecision(dec.id, 'reject')} selected={selectedIds.has(dec.id)} onSelect={() => toggleSelect(dec.id)} currencySymbol={currencySymbol} />)}</tbody></table>{!filteredDecisions.length && <div className="p-6 text-sm text-slate-500">Nenhuma decisão pendente.</div>}</div>}
+    {tab === 'decisions' && (() => { const productMap = new Map(products.map(p => [p.asin, p])); return (<div className="rounded-xl border border-surface-2 overflow-hidden"><table className="w-full"><thead><tr className="border-b border-surface-2 bg-surface-1"><th className="pl-4 py-2 w-8"></th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Decisão</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider min-w-[160px]">Produto</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-24">Prioridade</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-52">Valor</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-24">Confiança</th><th className="px-3 py-2 w-32"></th><th className="px-3 py-2 w-36"></th></tr></thead><tbody>{filteredDecisions.map(dec => <DecisionRow key={dec.id} dec={dec} actionState={actionStates[dec.id]} onApprove={(v) => handleDecision(dec.id, 'approve', v)} onReject={() => handleDecision(dec.id, 'reject')} selected={selectedIds.has(dec.id)} onSelect={() => toggleSelect(dec.id)} currencySymbol={currencySymbol} productMap={productMap} />)}</tbody></table>{!filteredDecisions.length && <div className="p-6 text-sm text-slate-500">Nenhuma decisão pendente.</div>}</div>); })()}
     {tab === 'history' && <div className="rounded-xl border border-surface-2 overflow-hidden"><table className="w-full"><tbody>{decHistory.map(d => <HistoryRow key={d.id} d={d} currencySymbol={currencySymbol} />)}</tbody></table>{!decHistory.length && <div className="p-6 text-sm text-slate-500">Nenhum histórico disponível.</div>}</div>}
     {tab === 'recommendations' && <Recommendations />}
     {tab === 'dayparting' && <DaypartingDashboard />}
