@@ -48,14 +48,14 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const campaignSummary = classifyCampaigns(campaigns);
   const activeCampaignList = campaignSummary.active;
   const activeCampaigns = campaignSummary.active_count;
-  const activeCampaignBudget = activeCampaignList.reduce((sum, campaign) => sum + number(campaign.daily_budget || campaign.budget), 0);
+  const activeCampaignBudget = activeCampaignList.reduce((sum, campaign) => sum + number(campaign.daily_budget || campaign.budget), 0); // exibição apenas
   const activeProducts = products.filter(productIsActive).length;
 
   // Regra vigente: média diária real + reserva operacional de 30%.
+  // NÃO usar soma de daily_budget das campanhas como mínimo — esse valor é configurado
+  // e pode divergir muito do gasto real, inflando artificialmente a sugestão.
   const reserveRate = 0.30;
-  const historicalSuggestion = avgDailySpend > 0 ? avgDailySpend * (1 + reserveRate) : 0;
-  const minimumOperationalBudget = activeCampaigns > 0 ? activeCampaignBudget : 0;
-  const recalculatedBudget = Math.max(historicalSuggestion, minimumOperationalBudget);
+  const recalculatedBudget = avgDailySpend > 0 ? avgDailySpend * (1 + reserveRate) : 0;
 
   const aiSuggested = number(autopilotConfig?.ai_suggested_daily_budget);
   const aiReasoning = autopilotConfig?.ai_budget_reasoning || '';
@@ -72,7 +72,7 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const isAiFresh = aiGeneratedTimestamp > 0 && Date.now() - aiGeneratedTimestamp < 48 * 3600000;
   const usePersistedAI = aiSuggested > 0 && isAiFresh && aiMatchesLatestReport;
 
-  const suggestedBudget = usePersistedAI ? Math.max(aiSuggested, minimumOperationalBudget) : recalculatedBudget;
+  const suggestedBudget = usePersistedAI ? aiSuggested : recalculatedBudget;
   const confidence = usePersistedAI
     ? aiConfidence
     : Math.min(95, Math.max(55, Math.round((daysWithData / 30) * 100)));
