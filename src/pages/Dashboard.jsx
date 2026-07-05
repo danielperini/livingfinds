@@ -5,6 +5,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
+import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -411,6 +412,14 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`R$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
       </div>
+
+      {/* Painel Orçamento em Risco */}
+      <BudgetOverrunPanel
+        campaigns={campaigns}
+        metricsDaily={metricsDaily}
+        loading={loading}
+        sym={account?.currency_symbol || 'R$'}
+      />
 
       {/* Painel 48h */}
       {(() => {
