@@ -33,11 +33,17 @@ export default function ReconciliationPanel({ account, onDone }) {
         ...(csvText ? { csv_text: csvText } : {}),
       });
 
-      if (res?.data?.ok) {
-        setResult(res.data);
+      const data = res?.data;
+      if (data?.ok) {
+        setResult(data);
         if (onDone) onDone();
       } else {
-        setError(res?.data?.error || 'Falha na conciliação.');
+        const errMsg = data?.error || 'Falha na conciliação.';
+        const isAuth = data?.error_type === 'auth';
+        setError(isAuth
+          ? `🔐 ${errMsg}`
+          : errMsg
+        );
       }
     } catch (e) {
       setError(e.message);
@@ -110,9 +116,17 @@ export default function ReconciliationPanel({ account, onDone }) {
       )}
 
       {error && (
-        <div className="mb-3 flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-          <p className="text-xs text-red-300">{error}</p>
+        <div className="mb-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg space-y-1.5">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-red-300">{error}</p>
+          </div>
+          {error.includes('Token') || error.includes('🔐') ? (
+            <a href="/integracoes/amazon"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan hover:underline">
+              → Reautorizar token Amazon Ads
+            </a>
+          ) : null}
         </div>
       )}
 

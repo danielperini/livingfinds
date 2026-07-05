@@ -329,8 +329,24 @@ Deno.serve(async (req) => {
         report.api_campaigns_found = apiCampaigns.length;
         console.log(`[reconcile] API retornou ${apiCampaigns.length} campanhas SP`);
       } catch (e) {
-        report.errors.push(`API fetch error: ${e.message}`);
-        console.error('[reconcile] API error:', e.message);
+        const msg = e.message || '';
+        const isAuthError = msg.toLowerCase().includes('not authorized')
+          || msg.includes('401') || msg.includes('403')
+          || msg.toLowerCase().includes('unauthorized')
+          || msg.toLowerCase().includes('token');
+
+        if (isAuthError) {
+          // Token expirado/revogado — falha total, não adianta continuar sem dados da API
+          return Response.json({
+            ok: false,
+            error: 'Token Amazon Ads expirado ou revogado. Acesse Configurações → Integrações → Amazon e reautorize o token de Ads.',
+            error_type: 'auth',
+            reconciled_at: now,
+          });
+        }
+
+        report.errors.push(`API fetch error: ${msg}`);
+        console.error('[reconcile] API error:', msg);
       }
     }
 
