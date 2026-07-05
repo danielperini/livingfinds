@@ -17,28 +17,8 @@
  *  - criar campanhas
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-
-const tokenCache = {};
-
-async function getAdsToken(refreshToken) {
-  const cached = tokenCache['hourly'];
-  if (cached && cached.expires_at > Date.now()) return cached.access_token;
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
-  });
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
-  const data = await res.json();
-  if (!res.ok) return null; // falha silenciosa no horário
-  tokenCache['hourly'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
-  return data.access_token;
-}
+// Guardrails são 100% locais — sem chamadas de API externa aqui.
+// Token e profiles são validados apenas no pipeline diário.
 
 Deno.serve(async (req) => {
   const startTime = Date.now();

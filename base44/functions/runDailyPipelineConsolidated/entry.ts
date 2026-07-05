@@ -81,8 +81,15 @@ Deno.serve(async (req) => {
       steps.push(await step(base44, 'fixProductCampaignLinksV2', basePayload));
       await wait(1000);
 
-      // ── 5. Solicitar relatórios Ads 30d ───────────────────────────────
-      steps.push(await step(base44, 'scheduledAdsReportSync', { ...basePayload, action: 'request' }));
+      // ── 5. Download de relatórios Ads (já solicitados às 06:00 BRT) ────
+      // O request foi feito separadamente às 06:00 BRT; aqui apenas baixamos.
+      // Se não houver reportIds no payload, tentamos solicitar + baixar inline.
+      if (body.report_ids) {
+        steps.push(await step(base44, 'scheduledAdsReportSync', { ...basePayload, action: 'download', reportIds: body.report_ids, syncRunId: body.sync_run_id }));
+      } else {
+        // Fallback: solicitar + aguardar + baixar numa só passagem (para execução manual)
+        steps.push(await step(base44, 'scheduledAdsReportSync', { ...basePayload, action: 'request' }));
+      }
       await wait(1000);
 
       // ── 6. AI Engine — análise e geração de decisões de bid/budget ─────
