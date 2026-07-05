@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package, BarChart2, Key } from 'lucide-react';
+import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package, BarChart2, Key, Target } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Settings() {
@@ -26,6 +26,22 @@ export default function Settings() {
     max_daily_budget_limit: 1000,
     max_bid_change_pct: 20,
   });
+  const [autopilotConfig, setAutopilotConfig] = useState(null);
+  const [goalsForm, setGoalsForm] = useState({
+    target_acos: 25,
+    maximum_acos: 40,
+    target_roas: 4,
+    target_tacos: 10,
+    maximum_tacos: 12,
+    total_daily_budget: 500,
+    min_bid: 0.10,
+    max_bid: 5.00,
+    max_bid_increase_pct: 15,
+    max_bid_decrease_pct: 20,
+    objective: 'profitability',
+  });
+  const [goalsSaving, setGoalsSaving] = useState(false);
+  const [goalsSaved, setGoalsSaved] = useState(false);
 
   useEffect(() => {
     base44.auth.me().then(me => {
@@ -44,6 +60,26 @@ export default function Settings() {
           max_daily_budget_limit: acc.max_daily_budget_limit || 1000,
           max_bid_change_pct: acc.max_bid_change_pct || 20,
         });
+        // Carregar AutopilotConfig
+        base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }).then(configs => {
+          if (configs.length > 0) {
+            const cfg = configs[0];
+            setAutopilotConfig(cfg);
+            setGoalsForm({
+              target_acos: cfg.target_acos ?? 25,
+              maximum_acos: cfg.maximum_acos ?? 40,
+              target_roas: cfg.target_roas ?? 4,
+              target_tacos: cfg.target_tacos ?? 10,
+              maximum_tacos: cfg.maximum_tacos ?? 12,
+              total_daily_budget: cfg.total_daily_budget ?? 500,
+              min_bid: cfg.min_bid ?? 0.10,
+              max_bid: cfg.max_bid ?? 5.00,
+              max_bid_increase_pct: cfg.max_bid_increase_pct ?? 15,
+              max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? 20,
+              objective: cfg.objective ?? 'profitability',
+            });
+          }
+        }).catch(() => {});
       }
     }).catch(console.error);
   }, []);
@@ -124,6 +160,25 @@ export default function Settings() {
       setSyncResult({ ok: false, message: e.message });
     } finally {
       setSyncLoading(false);
+    }
+  };
+
+  const saveGoals = async () => {
+    if (!account) return;
+    setGoalsSaving(true);
+    try {
+      if (autopilotConfig) {
+        await base44.entities.AutopilotConfig.update(autopilotConfig.id, goalsForm);
+      } else {
+        const created = await base44.entities.AutopilotConfig.create({ amazon_account_id: account.id, ...goalsForm });
+        setAutopilotConfig(created);
+      }
+      setGoalsSaved(true);
+      setTimeout(() => setGoalsSaved(false), 3000);
+    } catch (err) {
+      alert(`Erro ao salvar metas: ${err.message}`);
+    } finally {
+      setGoalsSaving(false);
     }
   };
 
@@ -226,6 +281,127 @@ export default function Settings() {
           className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
           {saving ? 'Guardando...' : saved ? 'Guardado!' : 'Guardar Configurações'}
+        </button>
+      </div>
+
+      {/* Metas de Performance */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+        <div className="flex items-center gap-2 mb-5">
+          <Target className="w-4 h-4 text-cyan" />
+          <h2 className="text-sm font-semibold text-white">Metas de Performance (Autopilot)</h2>
+        </div>
+
+        {/* Objetivo */}
+        <div className="mb-5">
+          <label className="block text-xs text-slate-400 mb-1.5">Objetivo Principal</label>
+          <select value={goalsForm.objective}
+            onChange={e => setGoalsForm(p => ({ ...p, objective: e.target.value }))}
+            className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50">
+            <option value="profitability">Lucratividade — reduzir ACoS e maximizar margem</option>
+            <option value="growth">Crescimento — aumentar vendas mantendo ACoS controlado</option>
+            <option value="launch">Lançamento — ganhar visibilidade e reviews iniciais</option>
+            <option value="defense">Defesa — proteger posição e Brand</option>
+            <option value="liquidation">Liquidação — girar estoque rapidamente</option>
+            <option value="maintenance">Manutenção — estabilizar sem mudanças agressivas</option>
+          </select>
+        </div>
+
+        {/* ACoS / ROAS */}
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Metas de Eficiência</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">ACoS Alvo (%)</label>
+            <input type="number" min="1" max="200" step="0.5" value={goalsForm.target_acos}
+              onChange={e => setGoalsForm(p => ({ ...p, target_acos: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Meta primária de gasto/venda</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">ACoS Máximo (%)</label>
+            <input type="number" min="1" max="500" step="0.5" value={goalsForm.maximum_acos}
+              onChange={e => setGoalsForm(p => ({ ...p, maximum_acos: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Acima disso: pausa ou corte de bid</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">ROAS Alvo (x)</label>
+            <input type="number" min="0.1" max="50" step="0.1" value={goalsForm.target_roas}
+              onChange={e => setGoalsForm(p => ({ ...p, target_roas: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Retorno mínimo sobre o investimento</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">TACoS Alvo (%)</label>
+            <input type="number" min="1" max="100" step="0.5" value={goalsForm.target_tacos}
+              onChange={e => setGoalsForm(p => ({ ...p, target_tacos: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Gasto / Vendas Totais (orgânico + ads)</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">TACoS Máximo (%)</label>
+            <input type="number" min="1" max="200" step="0.5" value={goalsForm.maximum_tacos}
+              onChange={e => setGoalsForm(p => ({ ...p, maximum_tacos: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Limite de risco máximo de TACoS</p>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Orçamento Diário Total (R$)</label>
+            <input type="number" min="0" step="10" value={goalsForm.total_daily_budget}
+              onChange={e => setGoalsForm(p => ({ ...p, total_daily_budget: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+            <p className="text-[10px] text-slate-600 mt-1">Budget total diário para todas as campanhas</p>
+          </div>
+        </div>
+
+        {/* Controles de Bid */}
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Controles de Bid</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Bid Mínimo (R$)</label>
+            <input type="number" min="0.02" max="10" step="0.01" value={goalsForm.min_bid}
+              onChange={e => setGoalsForm(p => ({ ...p, min_bid: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Bid Máximo (R$)</label>
+            <input type="number" min="0.10" max="100" step="0.10" value={goalsForm.max_bid}
+              onChange={e => setGoalsForm(p => ({ ...p, max_bid: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Aumento Máx. de Bid (%)</label>
+            <input type="number" min="1" max="100" step="1" value={goalsForm.max_bid_increase_pct}
+              onChange={e => setGoalsForm(p => ({ ...p, max_bid_increase_pct: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Redução Máx. de Bid (%)</label>
+            <input type="number" min="1" max="100" step="1" value={goalsForm.max_bid_decrease_pct}
+              onChange={e => setGoalsForm(p => ({ ...p, max_bid_decrease_pct: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
+          </div>
+        </div>
+
+        {/* Indicadores de referência */}
+        <div className="grid grid-cols-3 gap-3 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5">
+          <div className="text-center">
+            <p className="text-[10px] text-slate-500 mb-1">ACoS Alvo</p>
+            <p className="text-lg font-bold text-cyan">{goalsForm.target_acos}%</p>
+          </div>
+          <div className="text-center">
+            <p className="text-[10px] text-slate-500 mb-1">ROAS Alvo</p>
+            <p className="text-lg font-bold text-emerald-400">{goalsForm.target_roas}x</p>
+          </div>
+          <div className="text-center">
+            <p className="text-[10px] text-slate-500 mb-1">TACoS Alvo</p>
+            <p className="text-lg font-bold text-amber-400">{goalsForm.target_tacos}%</p>
+          </div>
+        </div>
+
+        <button onClick={saveGoals} disabled={goalsSaving || !account}
+          className="flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+          {goalsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : goalsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+          {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar Metas'}
         </button>
       </div>
 
