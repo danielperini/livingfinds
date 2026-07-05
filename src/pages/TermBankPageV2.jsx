@@ -73,9 +73,9 @@ export default function TermBankPageV2() {
       const account = accounts[0];
       if (!account) return;
       const [t, s, p] = await Promise.all([
-        base44.entities.TermBank.filter({ amazon_account_id: account.id }, '-performance_score', 1000),
-        base44.entities.KeywordSuggestion.filter({ amazon_account_id: account.id }, '-created_at', 1000),
-        base44.entities.Product.filter({ amazon_account_id: account.id }, '-updated_at', 2000),
+        base44.entities.TermBank.filter({ amazon_account_id: account.id }, '-performance_score', 500),
+        base44.entities.KeywordSuggestion.filter({ amazon_account_id: account.id }, '-created_at', 300),
+        base44.entities.Product.filter({ amazon_account_id: account.id }, '-updated_at', 200),
       ]);
       setTerms(t);
       setSuggestions(s.filter((x) => x.status !== 'rejected' && x.deleted_by_user !== true));
