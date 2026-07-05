@@ -90,6 +90,9 @@ export default function SpApiSelfAuth() {
     try {
       const res = await base44.functions.invoke('saveSpRefreshToken', { refresh_token: t });
       setResult(res.data);
+      if (res.data?.ok && res.data?.token_valid) {
+        setToken(''); // Limpar o campo após sucesso para não expor o token
+      }
     } catch (e) {
       const d = e?.response?.data;
       setResult({ ok: false, error: d?.error || e.message });
