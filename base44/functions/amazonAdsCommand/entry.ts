@@ -1,7 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-let tokenCache: { value: string; expiresAt: number; key: string } | null = null;
-
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
   '/sp/adGroups', '/sp/adGroups/list',
@@ -14,31 +12,37 @@ const ALLOWED_PATHS = [
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
-function adsBase(region?: string) {
+function adsBase(region) {
   const value = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
   if (value.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (value.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function accessToken(refreshToken?: string) {
+async function getAccessToken(base44Client, account) {
+  const entityToken = account.ads_refresh_token;
+  if (!entityToken || !entityToken.startsWith('Atzr|')) {
+    throw new Error('Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.');
+  }
+  // Fallback directo via HTTP (sem depender de invoke para token)
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const secret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-  // Usar exclusivamente o token passado (da entidade); nunca usar o secret ADS_REFRESH_TOKEN pois pode estar revogado
-  const refresh = refreshToken || '';
-  const cacheKey = `${refresh.slice(-12)}:${clientId}`;
-  if (tokenCache?.key === cacheKey && tokenCache.expiresAt > Date.now()) return tokenCache.value;
-  if (!refresh || !clientId || !secret) throw new Error('Credenciais Amazon Ads incompletas');
-
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+  if (!clientId || !secret) throw new Error('Credenciais ADS_CLIENT_ID/ADS_CLIENT_SECRET ausentes');
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refresh, client_id: clientId, client_secret: secret }),
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: entityToken,
+      client_id: clientId,
+      client_secret: secret,
+    }),
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) throw new Error(data.error_description || data.error || 'Falha no token Amazon Ads');
-  tokenCache = { value: data.access_token, expiresAt: Date.now() + (Number(data.expires_in || 3600) - 60) * 1000, key: cacheKey };
-  return tokenCache.value;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || 'Falha no token Amazon Ads');
+  }
+  return data.access_token;
 }
 
 Deno.serve(async (request) => {
@@ -59,17 +63,11 @@ Deno.serve(async (request) => {
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
-    // Usar SEMPRE o token da entidade (fonte de verdade do OAuth gerado via callback)
-    // O secret ADS_REFRESH_TOKEN pode estar desactualizado/revogado
-    const entityToken = account.ads_refresh_token;
-    if (!entityToken || !entityToken.startsWith('Atzr|')) {
-      return Response.json({ ok: false, error: 'Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.' }, { status: 401 });
-    }
-    const token = await accessToken(entityToken);
+    const token = await getAccessToken(base44, account);
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) throw new Error('ADS_PROFILE_ID ausente');
 
-    const response = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
+    const response = await base44.asServiceRole.functions.invoke('amazonApiGatewayCore', {
       amazon_account_id: account.id,
       api_family: 'ADS',
       operation: body.operation || `${method}:${path}`,

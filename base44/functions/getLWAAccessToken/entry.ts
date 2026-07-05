@@ -74,18 +74,22 @@ async function getToken(service, base44Client = null, accountId = null) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
-    const service = body.token_type || body.service || 'ads'; // 'ads' or 'sp'
+
+    // Suporta chamadas internas via _service_role (sem sessão de utilizador)
+    const isServiceRole = body._service_role === true;
+    if (!isServiceRole) {
+      const user = await base44.auth.me();
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const service = String(body.token_type || body.service || 'ads').toLowerCase();
     const accountId = body.amazon_account_id || null;
 
     if (!['ads', 'sp'].includes(service)) {
       return Response.json({ error: 'Invalid service. Use ads or sp.' }, { status: 400 });
     }
 
-    // Test-only: return health status, never the token itself
     const token = await getToken(service, base44, accountId);
     const cached = tokenCache[service];
 
@@ -93,13 +97,16 @@ Deno.serve(async (req) => {
       ok: true,
       service,
       status: 'active',
-      expires_in: Math.floor((cached.expires_at - Date.now()) / 1000),
+      // Expor o access_token para chamadas internas (service role)
+      ...(isServiceRole ? { access_token: token } : {}),
+      expires_in: cached ? Math.floor((cached.expires_at - Date.now()) / 1000) : null,
     });
   } catch (error) {
     const err = error || {};
     return Response.json({
       ok: false,
       error_code: err.code || 'unknown',
+      error: err.message || 'Internal error',
       message: err.message || 'Internal error',
     }, { status: err.status || 500 });
   }

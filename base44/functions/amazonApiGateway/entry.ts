@@ -44,7 +44,7 @@ Deno.serve(async (request) => {
           ? `Comando Amazon executado após postergação de ${deferredSeconds} segundos fora da janela.`
           : data?.errors?.[0]?.message || data?.error || `Comando Amazon postergado por ${deferredSeconds} segundos fora da janela.`
         : data?.message || data?.errors?.[0]?.message || null,
-    }, { status: data?.ok ? 200 : data?.status || 500 });
+    });
   } catch (error) {
     return Response.json({
       ok: false,
