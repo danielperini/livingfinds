@@ -79,43 +79,54 @@ Deno.serve(async (req) => {
       approved_by: user.email || user.id,
     });
 
-    // ── Invocar criação de campanha manual ────────────────────────────────────
+    // ── Invocar criação de campanha manual (v3 via createManualCampaignV2) ──────
     let campaignResult: any = {};
     let campaignStatus = 'unknown';
     let campaignError = null;
 
     try {
-      const res = await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+      const res = await base44.asServiceRole.functions.invoke('createManualCampaignV2', {
         amazon_account_id: suggestion.amazon_account_id,
-        suggestion_ids: [id],
+        asin: suggestion.asin,
+        keyword: suggestion.keyword,
+        bid: suggestion.recommended_bid || 0.5,
+        budget: suggestion.recommended_budget || 5,
+        sku: sku || undefined,
         _service_role: true,
       });
       const data = res?.data || res || {};
-      const itemResult = data?.results?.[0] || {};
 
-      if (itemResult.ok) {
-        // Determinar status real da campanha criada
-        // createManualCampaignFromKeywordSuggestion marca como 'created' mas não retorna completion_status
-        // Buscar campanha criada para obter estado real
-        if (itemResult.amazon_campaign_id) {
-          const camps = await base44.asServiceRole.entities.Campaign.filter(
-            { amazon_account_id: suggestion.amazon_account_id, campaign_id: String(itemResult.amazon_campaign_id) }, null, 1
-          ).catch(() => []);
-          const camp = camps[0];
-          campaignStatus = camp?.status || camp?.state || 'enabled';
-        } else {
-          campaignStatus = 'enabled';
-        }
-        campaignResult = itemResult;
-      } else if (itemResult.already_exists) {
-        campaignStatus = 'enabled';
-        campaignResult = itemResult;
+      if (data.ok || data.already_exists) {
+        campaignStatus = data.completion_status === 'complete' ? 'enabled'
+          : data.already_exists ? 'enabled'
+          : 'incomplete';
+        campaignResult = data;
+
+        // Marcar sugestão como criada
+        await base44.asServiceRole.entities.KeywordSuggestion.update(id, {
+          status: 'created',
+          created_campaign_id: data.local_campaign_id || null,
+          amazon_campaign_id: data.campaign_id ? String(data.campaign_id) : null,
+          created_keyword_id: data.keyword_id || null,
+          executed_at: now,
+        }).catch(() => {});
       } else {
-        campaignError = itemResult.error || data.error || 'Falha ao criar campanha';
+        // Traduzir erros comuns da Amazon para pt-BR
+        const rawError = data.error || 'Falha ao criar campanha';
+        if (rawError.includes('403') || rawError.includes('Unauthorized') || rawError.includes('Forbidden')) {
+          campaignError = 'Token Amazon Ads expirado ou revogado. Reautorize em Integrações → Amazon.';
+        } else if (rawError.includes('404')) {
+          campaignError = 'Endpoint da Amazon não encontrado. Verifique a região da conta.';
+        } else if (rawError.includes('OUT_OF_STOCK') || rawError.includes('estoque')) {
+          campaignError = 'Produto sem estoque. Campanha não criada.';
+        } else {
+          campaignError = rawError;
+        }
         campaignStatus = 'failed';
       }
     } catch (err: any) {
-      campaignError = err?.message || 'Erro ao invocar criação de campanha';
+      const msg = err?.message || 'Erro ao invocar criação de campanha';
+      campaignError = msg.includes('403') ? 'Token Amazon Ads expirado. Reautorize em Integrações → Amazon.' : msg;
       campaignStatus = 'failed';
     }
 
@@ -143,10 +154,10 @@ Deno.serve(async (req) => {
         product_name: productName || '',
         match_type: 'exact',
         source: 'manual_kickoff',
-        status: ['enabled', 'active'].includes(campaignStatus) ? 'active' : campaignStatus === 'incomplete' ? 'active' : 'paused',
+        status: ['enabled', 'incomplete'].includes(campaignStatus) ? 'active' : 'paused',
         classification: campaignStatus === 'enabled' ? 'winner' : 'new',
-        campaign_id: campaignResult?.campaign_record_id || null,
-        amazon_campaign_id: campaignResult?.amazon_campaign_id || null,
+        campaign_id: campaignResult?.local_campaign_id || null,
+        amazon_campaign_id: campaignResult?.campaign_id ? String(campaignResult.campaign_id) : null,
         keyword_id: campaignResult?.keyword_id || null,
         bid_initial: suggestion.recommended_bid || 0.5,
         bid_current: suggestion.recommended_bid || 0.5,

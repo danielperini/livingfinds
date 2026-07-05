@@ -98,11 +98,14 @@ function keywordAlreadyExists(existingKeywords, keyword) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, suggestion_ids, overrides = {} } = body;
+
+    // Aceita chamada via service role (ex: reviewKeywordSuggestion) OU usuário autenticado
+    if (!body._service_role) {
+      const user = await base44.auth.me();
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
 
     if (!Array.isArray(suggestion_ids) || !suggestion_ids.length) {
       return Response.json({ ok: false, error: 'suggestion_ids obrigatório (array não vazio)' }, { status: 400 });
