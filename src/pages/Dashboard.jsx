@@ -9,6 +9,7 @@ import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
 import SpendRevenueBarChart from '@/components/dashboard/SpendRevenueBarChart';
 import GoalsComparisonPanel from '@/components/dashboard/GoalsComparisonPanel';
 import BudgetAllocationPanel from '@/components/dashboard/BudgetAllocationPanel';
+import CampaignPerformancePanel from '@/components/dashboard/CampaignPerformancePanel';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -565,6 +566,13 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           )}
         </div>
       </div>
+
+      {/* Painel de Performance por Campanha */}
+      <CampaignPerformancePanel
+        campaigns={campaigns}
+        autopilotConfig={autopilotConfig}
+        loading={loading}
+      />
 
       {/* Barras Gasto vs Receita */}
       <SpendRevenueBarChart chartData={chartData} loading={loading} sym={account?.currency_symbol || 'R$'} />
