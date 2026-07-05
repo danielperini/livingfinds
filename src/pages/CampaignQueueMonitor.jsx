@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 
 const STATUS_CONFIG = {
-  scheduled: { label: 'Agendado',    color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',  dot: 'bg-slate-400',  icon: Clock },
+  scheduled: { label: 'Agendado',    color: 'text-amber-400',  bg: 'bg-amber-500/10 border-amber-500/20',  dot: 'bg-amber-400 animate-pulse',  icon: Clock },
   processing: { label: 'Processando', color: 'text-cyan',       bg: 'bg-cyan/10 border-cyan/20',            dot: 'bg-cyan animate-pulse', icon: Loader2 },
   completed:  { label: 'Concluído',   color: 'text-emerald-400',bg: 'bg-emerald-500/10 border-emerald-500/20', dot: 'bg-emerald-400', icon: CheckCircle },
   failed:     { label: 'Erro',        color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',      dot: 'bg-red-400',    icon: XCircle },
@@ -70,7 +70,7 @@ function QueueRow({ item, queueType, onDelete }) {
           </div>
 
           {/* Erro */}
-          {isFailed && item.last_error && (
+          {isFailed && item.last_error && item.status !== 'scheduled' && (
             <div className="mt-1.5 px-2.5 py-1.5 bg-red-500/8 border border-red-500/20 rounded-lg">
               <p className="text-[10px] text-red-300 font-mono break-all">{item.last_error}</p>
             </div>
