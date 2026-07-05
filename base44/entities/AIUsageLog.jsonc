@@ -1,0 +1,85 @@
+{
+  "name": "AIUsageLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "log_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "calls_made": {
+      "type": "number",
+      "default": 0
+    },
+    "calls_limit": {
+      "type": "number",
+      "default": 10
+    },
+    "tokens_used": {
+      "type": "number",
+      "default": 0
+    },
+    "tokens_limit": {
+      "type": "number",
+      "default": 100000
+    },
+    "cost_estimate": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_limit": {
+      "type": "number",
+      "default": 2.0
+    },
+    "calls_avoided_cache": {
+      "type": "number",
+      "default": 0
+    },
+    "calls_avoided_rules": {
+      "type": "number",
+      "default": 0
+    },
+    "api_calls_amazon": {
+      "type": "number",
+      "default": 0
+    },
+    "api_calls_sp": {
+      "type": "number",
+      "default": 0
+    },
+    "api_calls_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "api_calls_avoided_cache": {
+      "type": "number",
+      "default": 0
+    },
+    "api_calls_grouped": {
+      "type": "number",
+      "default": 0
+    },
+    "local_calculations": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_reused": {
+      "type": "number",
+      "default": 0
+    },
+    "queue_actions": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_resets_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "log_date"
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "name": "AmazonActionQueue",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "keyword",
+        "product_ad",
+        "target",
+        "budget",
+        "bid",
+        "negative"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "normal",
+        "low",
+        "background"
+      ],
+      "default": "normal"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "skipped",
+        "cancelled"
+      ],
+      "default": "pending"
+    },
+    "scheduled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "attempt_count": {
+      "type": "number",
+      "default": 0
+    },
+    "max_attempts": {
+      "type": "number",
+      "default": 3
+    },
+    "last_error": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "requires_ai": {
+      "type": "boolean",
+      "default": false
+    },
+    "ai_completed": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "operation",
+    "entity_type",
+    "idempotency_key"
+  ]
+}

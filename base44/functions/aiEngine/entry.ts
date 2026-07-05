@@ -132,7 +132,21 @@ Deno.serve(async (req) => {
       if (!prompt) {
         return Response.json({ ok: false, error: 'prompt obrigatório para mode=claude_analyze' }, { status: 400 });
       }
-      results.claude = await invoke('claudeAdsAgent', { mode: 'analyze', prompt, context });
+      // Verificar gatekeeper antes de chamar IA
+      const gateRes = await invoke('aiGatekeeper', {
+        analysis_type: 'campaign_strategy',
+        entity_type: 'account',
+        entity_id: amazon_account_id || '',
+        input_data: { prompt: prompt.slice(0, 200) },
+        priority_type: 'strategy',
+      });
+      if (gateRes?.cached) {
+        results.claude = { ok: true, source: 'cache', result: gateRes.result };
+      } else if (!gateRes?.allowed) {
+        results.claude = { ok: true, skipped: true, reason: gateRes?.reason || 'gatekeeper_blocked' };
+      } else {
+        results.claude = await invoke('claudeAdsAgent', { mode: 'analyze', prompt, context });
+      }
     }
 
     // ── Modo desconhecido ─────────────────────────────────────────────────

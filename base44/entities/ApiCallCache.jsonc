@@ -1,0 +1,47 @@
+{
+  "name": "ApiCallCache",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "request_hash": {
+      "type": "string"
+    },
+    "response_json": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "expired",
+        "error"
+      ],
+      "default": "valid"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_used_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reuse_count": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "operation",
+    "request_hash"
+  ]
+}

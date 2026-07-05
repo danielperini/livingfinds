@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Book, AlertTriangle, BookOpen, RefreshCw, ListTodo
+  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Book, AlertTriangle, BookOpen, RefreshCw, ListTodo, TrendingDown
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -22,6 +22,7 @@ const navItems = [
   { path: '/manual', icon: Book, label: 'Manual' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração com a Amazon' },
   { path: '/queue-monitor', icon: ListTodo, label: 'Fila de processamento' },
+  { path: '/eficiencia-ia', icon: TrendingDown, label: 'Uso e Eficiência IA' },
   { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do sistema' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
 ];
