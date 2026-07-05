@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, TrendingUp, Flame } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, TrendingUp, Flame, Zap } from 'lucide-react';
 
 /**
  * BudgetOverrunPanel
@@ -60,38 +60,43 @@ export default function BudgetOverrunPanel({ campaigns = [], metricsDaily = [], 
         totalSpend7d,
         daysWithData,
         utilizationPct,
-        severity: utilizationPct >= 95 ? 'critical' : 'warning',
+        severity: utilizationPct > 100 ? 'exceeded' : utilizationPct >= 95 ? 'critical' : 'warning',
         acos: c.acos || 0,
       };
     })
     .filter(Boolean)
     .sort((a, b) => b.utilizationPct - a.utilizationPct);
 
+  const exceededCount = flagged.filter(c => c.severity === 'exceeded').length;
   const criticalCount = flagged.filter(c => c.severity === 'critical').length;
   const warningCount = flagged.filter(c => c.severity === 'warning').length;
 
   if (!loading && flagged.length === 0) return null;
 
   return (
-    <div className={`rounded-xl border overflow-hidden ${criticalCount > 0 ? 'border-red-500/30 bg-red-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
+    <div className={`rounded-xl border overflow-hidden ${exceededCount > 0 ? 'border-red-600/50 bg-red-600/8' : criticalCount > 0 ? 'border-red-500/30 bg-red-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}>
       {/* Header */}
       <button
         onClick={() => setExpanded(e => !e)}
         className="w-full px-5 py-4 flex items-center justify-between hover:bg-white/5 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${criticalCount > 0 ? 'bg-red-500/20' : 'bg-amber-500/20'}`}>
-            {criticalCount > 0
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${exceededCount > 0 ? 'bg-red-600/25' : criticalCount > 0 ? 'bg-red-500/20' : 'bg-amber-500/20'}`}>
+            {exceededCount > 0
+              ? <Flame className="w-4 h-4 text-red-500 animate-pulse" />
+              : criticalCount > 0
               ? <Flame className="w-4 h-4 text-red-400" />
               : <AlertTriangle className="w-4 h-4 text-amber-400" />}
           </div>
           <div className="text-left">
-            <p className={`text-sm font-semibold ${criticalCount > 0 ? 'text-red-300' : 'text-amber-300'}`}>
-              Orçamento em Risco
+            <p className={`text-sm font-semibold ${exceededCount > 0 ? 'text-red-400' : criticalCount > 0 ? 'text-red-300' : 'text-amber-300'}`}>
+              {exceededCount > 0 ? '🚨 Orçamento Ultrapassado' : 'Orçamento em Risco'}
             </p>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {criticalCount > 0 && <span className="text-red-400 font-medium">{criticalCount} crítica{criticalCount > 1 ? 's' : ''}</span>}
-              {criticalCount > 0 && warningCount > 0 && ' · '}
+              {exceededCount > 0 && <span className="text-red-500 font-semibold">{exceededCount} excedida{exceededCount > 1 ? 's' : ''} · IA ajustará preventivamente</span>}
+              {exceededCount > 0 && (criticalCount > 0 || warningCount > 0) && ' · '}
+              {exceededCount === 0 && criticalCount > 0 && <span className="text-red-400 font-medium">{criticalCount} crítica{criticalCount > 1 ? 's' : ''}</span>}
+              {exceededCount === 0 && criticalCount > 0 && warningCount > 0 && ' · '}
               {warningCount > 0 && <span className="text-amber-400 font-medium">{warningCount} em atenção</span>}
               {' '}— média dos últimos 7 dias
             </p>
@@ -99,6 +104,11 @@ export default function BudgetOverrunPanel({ campaigns = [], metricsDaily = [], 
         </div>
         <div className="flex items-center gap-3">
           <div className="flex gap-1.5">
+            {exceededCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600/25 text-red-400 border border-red-600/40 animate-pulse">
+                {exceededCount} &gt;100%
+              </span>
+            )}
             {criticalCount > 0 && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
                 {criticalCount} ≥95%
@@ -122,15 +132,21 @@ export default function BudgetOverrunPanel({ campaigns = [], metricsDaily = [], 
           ) : (
             <div className="divide-y divide-white/5">
               {flagged.map(c => {
+                const isExceeded = c.severity === 'exceeded';
                 const isCritical = c.severity === 'critical';
-                const barWidth = Math.min(100, c.utilizationPct);
+                const barWidth = Math.min(120, c.utilizationPct); // permite visualmente ultrapassar 100%
                 return (
-                  <div key={c.id} className="px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                  <div key={c.id} className={`px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3 ${isExceeded ? 'bg-red-600/10 border-l-4 border-red-600' : ''}`}>
                     {/* Nome + badge */}
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${isCritical ? 'bg-red-400' : 'bg-amber-400'}`} />
-                      <p className="text-sm text-white font-medium truncate">{c.name}</p>
-                      {isCritical && (
+                      <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${isExceeded ? 'bg-red-500 animate-pulse' : isCritical ? 'bg-red-400' : 'bg-amber-400'}`} />
+                      <p className={`text-sm font-medium truncate ${isExceeded ? 'text-red-200' : 'text-white'}`}>{c.name}</p>
+                      {isExceeded && (
+                        <span className="flex-shrink-0 flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-red-600/25 text-red-400 border border-red-600/40 font-bold">
+                          <Flame className="w-2.5 h-2.5" /> EXCEDIDO
+                        </span>
+                      )}
+                      {!isExceeded && isCritical && (
                         <span className="flex-shrink-0 flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 font-semibold">
                           <TrendingUp className="w-2.5 h-2.5" /> CRÍTICO
                         </span>
@@ -141,16 +157,22 @@ export default function BudgetOverrunPanel({ campaigns = [], metricsDaily = [], 
                     <div className="flex-1 min-w-0 max-w-xs">
                       <div className="flex justify-between text-[10px] mb-1">
                         <span className="text-slate-400">Uso do orçamento (7d)</span>
-                        <span className={`font-bold ${isCritical ? 'text-red-400' : 'text-amber-400'}`}>
+                        <span className={`font-bold ${isExceeded ? 'text-red-500' : isCritical ? 'text-red-400' : 'text-amber-400'}`}>
                           {c.utilizationPct.toFixed(0)}%
+                          {isExceeded && <span className="ml-1 text-red-500">⚠</span>}
                         </span>
                       </div>
                       <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all ${isCritical ? 'bg-red-500' : 'bg-amber-400'}`}
-                          style={{ width: `${barWidth}%` }}
+                          className={`h-full rounded-full transition-all ${isExceeded ? 'bg-red-600' : isCritical ? 'bg-red-500' : 'bg-amber-400'}`}
+                          style={{ width: `${Math.min(100, barWidth)}%` }}
                         />
                       </div>
+                      {isExceeded && (
+                        <p className="text-[9px] text-red-400 mt-0.5 flex items-center gap-1">
+                          <Zap className="w-2.5 h-2.5" /> IA irá reduzir bids preventivamente no próximo ciclo
+                        </p>
+                      )}
                     </div>
 
                     {/* Valores */}

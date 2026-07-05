@@ -1092,6 +1092,74 @@ Deno.serve(async (req) => {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // BLOCO D0 — PRIORIDADE 7 (URGENTE): Campanha ultrapassando orçamento do gestor
+    // Se daily_budget_target está fixado e o gasto da campanha ultrapassa o budget
+    // definido, a IA reduz bids preventivamente nas keywords dessa campanha.
+    // ═══════════════════════════════════════════════════════════════════════
+    if (BUDGET_LOCKED && BUDGET_TARGET > 0) {
+      // Calcular gasto total de todas as campanhas ativas
+      const totalActiveCampSpend = campaigns.reduce((s, c) => s + (c.current_spend || c.spend || 0), 0);
+      if (totalActiveCampSpend > BUDGET_TARGET) {
+        // Identificar campanhas com gasto individual acima de sua fatia proporcional
+        const overBudgetCampaigns = campaigns.filter(c => {
+          if (c.state !== 'enabled' && c.status !== 'enabled') return false;
+          const campSpend = c.current_spend || c.spend || 0;
+          const campBudget = c.daily_budget || 0;
+          return campBudget > 0 && campSpend > campBudget;
+        });
+
+        for (const c of overBudgetCampaigns) {
+          if (campaignChangedThisCycle.has(c.campaign_id)) continue;
+          const campSpend = c.current_spend || c.spend || 0;
+          const campBudget = c.daily_budget || 0;
+          const overrunPct = ((campSpend / campBudget) - 1) * 100;
+
+          // Calcular redução proporcional ao excesso: quanto mais ultrapassou, maior a redução
+          const reductionPct = Math.min(MAX_DEC_PCT, Math.max(0.10, overrunPct / 200));
+
+          // Reduzir bids de todas as keywords ativas desta campanha
+          const campKeywords = keywords.filter(kw =>
+            kw.campaign_id === c.campaign_id &&
+            (kw.state === 'enabled' || kw.status === 'enabled')
+          );
+
+          for (const kw of campKeywords) {
+            const currentBid = kw.current_bid || kw.bid || 0.25;
+            const newBid = Math.max(currentBid * (1 - reductionPct), MIN_BID);
+            if (newBid >= currentBid - 0.005) continue;
+
+            const iKey = makeKey(amazonAccountId, 'bid_change', kw.keyword_id, 'budget_overrun_prevention', today);
+            if (existingKeys.has(iKey)) { stats.skipped_dup++; continue; }
+
+            decisionsToCreate.push({
+              amazon_account_id: amazonAccountId,
+              decision_type: 'bid_change', entity_type: 'keyword',
+              entity_id: kw.keyword_id, campaign_id: kw.campaign_id, ad_group_id: kw.ad_group_id,
+              keyword_id: kw.keyword_id, keyword_text: kw.keyword_text || kw.keyword, asin: kw.asin,
+              action: 'reduce_bid',
+              value_before: currentBid, value_after: Number(newBid.toFixed(2)),
+              change_pct: Number(((newBid / currentBid - 1) * 100).toFixed(1)),
+              rationale: `BUDGET_OVERRUN_PREVENTION: Campanha "${c.name || c.campaign_name}" ultrapassou o orçamento do gestor. Gasto: ${sym}${campSpend.toFixed(2)} vs budget: ${sym}${campBudget.toFixed(2)} (+${overrunPct.toFixed(1)}%). Redução preventiva de bid de ${sym}${currentBid.toFixed(2)} → ${sym}${newBid.toFixed(2)} (-${Math.round(reductionPct * 100)}%) para conter o gasto imediatamente.`,
+              data_used: JSON.stringify({ camp_spend: campSpend, camp_budget: campBudget, overrun_pct: overrunPct, budget_target: BUDGET_TARGET, total_spend: totalActiveCampSpend }),
+              risk: 'low',
+              requires_approval: autonomyLevel < 2,
+              status: autonomyLevel >= 2 ? 'approved' : 'pending',
+              confidence: 95,
+              objective: 'maintenance',
+              country_code: cc, currency_code: code, currency_symbol: sym,
+              idempotency_key: iKey, source_function: 'runDailyAdsOptimization',
+              evaluation_due_at: daysFromNow(1),
+              rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
+              created_at: now,
+            });
+            stats.bid_decrease++;
+          }
+          campaignChangedThisCycle.set(c.campaign_id, 'budget_overrun');
+        }
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // BLOCO D — PRIORIDADE 7: Análise de Budget de Campanhas
     // (apenas campanhas não alteradas neste ciclo)
     // ═══════════════════════════════════════════════════════════════════════
