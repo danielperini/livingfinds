@@ -36,9 +36,10 @@ Deno.serve(async (req) => {
 
     // Métricas diárias — últimos 30 dias
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    const metricsDaily = await base44.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid, date: { $gte: cutoff } }
+    const allMetrics = await base44.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: aid }, '-date', 500
     );
+    const metricsDaily = allMetrics.filter((m: any) => m.date >= cutoff);
 
     const uniqueMetricsMap = new Map();
     metricsDaily.forEach(m => {
@@ -119,11 +120,11 @@ Deno.serve(async (req) => {
         records_upserted: lastSync.records_upserted,
       } : null,
       formatted: {
-        spend: `$${totals.spend.toFixed(2)}`,
-        sales: `$${totals.sales.toFixed(2)}`,
+        spend: `R$${totals.spend.toFixed(2)}`,
+        sales: `R$${totals.sales.toFixed(2)}`,
         acos: `${(totals.sales > 0 ? (totals.spend / totals.sales * 100) : 0).toFixed(2)}%`,
         roas: `${(totals.spend > 0 ? (totals.sales / totals.spend) : 0).toFixed(2)}x`,
-        cpc: `$${(totals.clicks > 0 ? (totals.spend / totals.clicks) : 0).toFixed(2)}`,
+        cpc: `R$${(totals.clicks > 0 ? (totals.spend / totals.clicks) : 0).toFixed(2)}`,
       },
     });
   } catch (error) {
