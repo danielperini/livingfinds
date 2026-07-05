@@ -1,4 +1,4 @@
-// v2 — gateway retorna sempre HTTP 200; trata ok:false no body
+// amazonAdsCommand v3 — lógica de gateway inlinada para evitar falha de invocação interna
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const ALLOWED_PATHS = [
@@ -13,19 +13,24 @@ const ALLOWED_PATHS = [
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
-function adsBase(region) {
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function adsBase(region: string) {
   const value = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
   if (value.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (value.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function getAccessToken(base44Client, account) {
+function retryDelay(attempt: number): number {
+  return Math.min(1000 * Math.pow(2, attempt) + Math.floor(Math.random() * 1000), 30000);
+}
+
+async function getAccessToken(account: any): Promise<string> {
   const entityToken = account.ads_refresh_token;
   if (!entityToken || !entityToken.startsWith('Atzr|')) {
     throw new Error('Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.');
   }
-  // Fallback directo via HTTP (sem depender de invoke para token)
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const secret = Deno.env.get('ADS_CLIENT_SECRET') || '';
   if (!clientId || !secret) throw new Error('Credenciais ADS_CLIENT_ID/ADS_CLIENT_SECRET ausentes');
@@ -46,6 +51,38 @@ async function getAccessToken(base44Client, account) {
   return data.access_token;
 }
 
+async function callAmazonApi(url: string, method: string, headers: Record<string, string>, payload: any, maxAttempts: number, timeoutMs: number) {
+  let parsed: any = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const response = await fetch(url, {
+        method,
+        headers,
+        signal: controller.signal,
+        body: payload == null || method === 'GET' ? undefined : JSON.stringify(payload),
+      }).finally(() => clearTimeout(timer));
+
+      const text = await response.text().catch(() => '');
+      let body: any = null;
+      try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
+
+      const ok = response.status >= 200 && response.status < 300;
+      const retryable = response.status === 429 || response.status === 503 || response.status === 502;
+
+      parsed = { ok, status: response.status, payload: body, errors: ok ? [] : [{ code: String(response.status), message: body?.message || body?.error || text.slice(0, 200) || `HTTP ${response.status}` }] };
+      if (ok || !retryable || attempt === maxAttempts - 1) break;
+      await wait(retryDelay(attempt));
+    } catch (err: any) {
+      parsed = { ok: false, status: 0, payload: null, errors: [{ code: err?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR', message: err?.message || String(err) }] };
+      if (attempt === maxAttempts - 1) break;
+      await wait(retryDelay(attempt));
+    }
+  }
+  return parsed;
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -56,7 +93,7 @@ Deno.serve(async (request) => {
     const method = String(body.method || 'GET').toUpperCase();
     const path = String(body.path || '');
     if (!ALLOWED_METHODS.has(method)) return Response.json({ ok: false, error: 'Método não permitido' }, { status: 400 });
-    if (!ALLOWED_PATHS.some((allowed) => path === allowed || path.startsWith(`${allowed}?`))) {
+    if (!ALLOWED_PATHS.some((allowed) => path === allowed || path.startsWith(`${allowed}?`) || path.startsWith(`${allowed}/`))) {
       return Response.json({ ok: false, error: 'Endpoint Ads não permitido' }, { status: 403 });
     }
 
@@ -64,32 +101,25 @@ Deno.serve(async (request) => {
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
-    const token = await getAccessToken(base44, account);
+    const token = await getAccessToken(account);
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) throw new Error('ADS_PROFILE_ID ausente');
 
-    const response = await base44.asServiceRole.functions.invoke('amazonApiGatewayCore', {
-      amazon_account_id: account.id,
-      api_family: 'ADS',
-      operation: body.operation || `${method}:${path}`,
-      endpoint: `${adsBase(account.region)}${path}`,
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-        'Amazon-Advertising-API-Scope': String(profileId),
-        'Content-Type': body.content_type || 'application/json',
-        Accept: body.accept || body.content_type || 'application/json',
-      },
-      payload: body.payload ?? null,
-      queue_type: body.queue_type || 'WRITE',
-      max_attempts: Math.max(1, Math.min(Number(body.max_attempts || 5), 5)),
-      timeout_ms: Math.max(5000, Number(body.timeout_ms || 30000)),
-      _service_role: true,
-    });
+    const url = `${adsBase(account.region)}${path}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': body.content_type || 'application/json',
+      Accept: body.accept || body.content_type || 'application/json',
+    };
 
-    return Response.json(response?.data || response || {});
-  } catch (error) {
+    const maxAttempts = Math.max(1, Math.min(Number(body.max_attempts || 3), 5));
+    const timeoutMs = Math.max(5000, Number(body.timeout_ms || 30000));
+
+    const result = await callAmazonApi(url, method, headers, body.payload ?? null, maxAttempts, timeoutMs);
+    return Response.json(result);
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro no comando Amazon Ads' }, { status: 500 });
   }
 });
