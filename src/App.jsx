@@ -47,6 +47,7 @@ import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
 import IncompleteCampaigns from '@/pages/IncompleteCampaigns';
 import CampaignQueueMonitor from '@/pages/CampaignQueueMonitor';
+import TaskQueueMonitor from '@/pages/TaskQueueMonitor';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -108,6 +109,7 @@ const AuthenticatedApp = () => {
           <Route path="/term-bank" element={<TermBankPage />} />
           <Route path="/incomplete-campaigns" element={<IncompleteCampaigns />} />
           <Route path="/queue-monitor" element={<CampaignQueueMonitor />} />
+          <Route path="/task-queue" element={<TaskQueueMonitor />} />
 
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
