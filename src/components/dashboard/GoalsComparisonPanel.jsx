@@ -1,6 +1,7 @@
-import React from 'react';
-import { Target, TrendingUp, TrendingDown, AlertTriangle, CheckCircle } from 'lucide-react';
-import { RadialBarChart, RadialBar, ResponsiveContainer, Tooltip } from 'recharts';
+import React, { useState } from 'react';
+import { Target, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Zap, Loader2 } from 'lucide-react';
+import { RadialBarChart, RadialBar, ResponsiveContainer } from 'recharts';
+import { base44 } from '@/api/base44Client';
 
 function MetricGauge({ label, real, target, unit = '%', lowerIsBetter = false, targetLabel }) {
   const hasData = real > 0 && target > 0;
@@ -84,7 +85,35 @@ function MetricGauge({ label, real, target, unit = '%', lowerIsBetter = false, t
   );
 }
 
-export default function GoalsComparisonPanel({ acos, roas, tacos = 0, autopilotConfig, loading }) {
+export default function GoalsComparisonPanel({ acos, roas, tacos = 0, autopilotConfig, loading, amazonAccountId }) {
+  const [fixing, setFixing] = useState(false);
+  const [fixResult, setFixResult] = useState(null);
+
+  async function handleFixNow() {
+    setFixing(true);
+    setFixResult(null);
+    try {
+      const res = await base44.functions.invoke('runDailyAdsOptimization', {
+        amazon_account_id: amazonAccountId,
+        trigger: 'manual_goals_correction',
+      });
+      const d = res?.data || {};
+      if (d.ok === false && !d.rate_limited) {
+        setFixResult({ ok: false, msg: d.message || d.error || 'Erro ao executar ajuste.' });
+      } else {
+        setFixResult({
+          ok: true,
+          msg: d.rate_limited
+            ? 'Rate limit atingido. Tente novamente em 1-2 min.'
+            : `Ajuste concluído: ${d.decisions_created || 0} decisões geradas, ${d.decisions_executed || 0} aplicadas automaticamente.`,
+        });
+      }
+    } catch (e) {
+      setFixResult({ ok: false, msg: e.message || 'Erro inesperado.' });
+    } finally {
+      setFixing(false);
+    }
+  }
   if (loading) {
     return (
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 animate-pulse">
@@ -164,6 +193,25 @@ export default function GoalsComparisonPanel({ acos, roas, tacos = 0, autopilotC
           lowerIsBetter={true}
         />
       </div>
+
+      {anyBad && (
+        <div className="mt-4 flex flex-col gap-2">
+          <button
+            onClick={handleFixNow}
+            disabled={fixing}
+            className="flex items-center justify-center gap-2 w-full sm:w-auto sm:self-start px-4 py-2.5 bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-300 hover:text-red-200 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {fixing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            {fixing ? 'Executando ajuste automático...' : 'Corrigir Agora — Ajuste Automático de Bids'}
+          </button>
+          {fixResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-xs border ${fixResult.ok ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : 'bg-red-500/10 border-red-500/25 text-red-300'}`}>
+              {fixResult.ok ? <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
+              <span>{fixResult.msg}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {maximumAcos > 0 && acos > maximumAcos && (
         <div className="mt-3 flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/25 rounded-lg text-xs text-red-300">
