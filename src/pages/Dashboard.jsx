@@ -101,23 +101,15 @@ export default function Dashboard() {
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
 
-      // Última sincronização: priorizar SyncExecutionLog, depois last_sync_at da conta, depois última métrica no banco
-      const lastSuccessRun = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
-      if (lastSuccessRun) {
-        setLastSyncInfo({
+      // Última sincronização: priorizar last_sync_at da conta (sempre atualizado), depois SyncExecutionLog
+      if (acc?.last_sync_at) {
+        setLastSyncInfo({ at: acc.last_sync_at, trigger: 'automatic' });
+      } else {
+        const lastSuccessRun = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
+        setLastSyncInfo(lastSuccessRun ? {
           at: lastSuccessRun.completed_at || lastSuccessRun.started_at,
           trigger: lastSuccessRun.trigger_type,
-        });
-      } else if (acc?.last_sync_at) {
-        setLastSyncInfo({ at: acc.last_sync_at, trigger: 'automatic' });
-      } else if (metrics.length > 0) {
-        // Usar data da métrica mais recente como referência
-        const latestMetric = metrics.reduce((a, b) => (a.date > b.date ? a : b), metrics[0]);
-        const latestDate = latestMetric?.synced_at || latestMetric?.date;
-        if (latestDate) setLastSyncInfo({ at: latestDate, trigger: 'automatic' });
-        else setLastSyncInfo(null);
-      } else {
-        setLastSyncInfo(null);
+        } : null);
       }
     } catch (err) {
       setError(err.message);
@@ -288,9 +280,9 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           <p className="text-sm text-slate-400 mt-0.5">
             {decisions.length > 0
               ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes</>
-              : metricsDaily.length > 0
-                ? <span className="text-emerald-400/80">{metricsDaily.length} registros no banco</span>
-                : <span className="text-slate-500">Aguardando sincronização automática</span>
+              : account?.last_sync_at
+                ? <span className="text-emerald-400/80">{campaigns.length} campanhas · {metricsDaily.length} registros</span>
+                : <span className="text-slate-500">Sem conta conectada</span>
             }
             {lastSyncInfo && (
               <span className="ml-2 text-slate-500 text-xs flex items-center gap-1 inline-flex">
