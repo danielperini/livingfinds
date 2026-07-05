@@ -10,6 +10,7 @@ const ALLOWED_PATHS = [
   '/v2/sp/campaigns', '/v2/sp/adGroups', '/v2/sp/keywords', '/v2/sp/negativeKeywords',
   '/sp/negativeKeywords', '/sp/negativeKeywords/list',
   '/sp/targets', '/sp/targets/list', '/v2/sp/targets',
+  '/v2/profiles',
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
