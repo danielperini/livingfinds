@@ -1,14 +1,26 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Save, Loader2, Shield, AlertTriangle, Info } from 'lucide-react';
+import { Save, Loader2, Shield, AlertTriangle, Info, Target, DollarSign } from 'lucide-react';
+
+const PRIORITY_MODE_LABELS = {
+  acos_first:   { label: 'Reduzir ACoS',         hint: 'IA prioriza reduzir custo de publicidade sobre vendas' },
+  roas_first:   { label: 'Maximizar ROAS',        hint: 'IA prioriza retorno sobre gasto em anúncios' },
+  tacos_first:  { label: 'Controlar TACoS',       hint: 'IA prioriza percentual de gasto sobre vendas totais (inclui orgânico)' },
+  budget_first: { label: 'Gastar Orçamento Alvo', hint: 'IA ajusta bids para usar o orçamento diário definido sem ultrapassar' },
+};
 
 const DEFAULTS = {
   enabled: true,
-  autonomy_level: 3, // Autopilot Completo por padrão
+  autonomy_level: 3,
   objective: 'profitability',
   target_acos: 25,
   maximum_acos: 40,
   target_roas: 4,
+  target_tacos: 10,
+  maximum_tacos: 12,
+  ai_budget_priority_mode: 'acos_first',
+  ai_daily_budget_target: 0,
+  ai_budget_enforcement: false,
   total_daily_budget: 500,
   max_bid_increase_pct: 15,
   max_bid_decrease_pct: 20,
@@ -134,15 +146,81 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
         </div>
       </div>
 
-      {/* Metas */}
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Metas de Performance</p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <Field label="ACoS Alvo (%)" k="target_acos" min={1} max={100} hint="Ex: 25 = 25%" />
-          <Field label="ACoS Máximo (%)" k="maximum_acos" min={1} max={200} hint="Acima disso → reduzir" />
-          <Field label="ROAS Alvo (x)" k="target_roas" step={0.1} min={0.1} hint="Ex: 4 = 4x retorno" />
-          <Field label={`Budget Total Diário (${form.currency_symbol || 'R$'})`} k="total_daily_budget" min={1} hint="Limite total da conta" />
+      {/* Metas da IA */}
+      <div className="border border-cyan/20 bg-cyan/5 rounded-xl p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <Target className="w-4 h-4 text-cyan" />
+          <p className="text-sm font-semibold text-white">Metas da IA</p>
+          <span className="text-xs text-slate-500">— define o que a IA vai otimizar</span>
         </div>
+
+        {/* Métricas alvo */}
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Métricas Alvo</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Field label="ACoS Alvo (%)" k="target_acos" min={1} max={100} hint="Ex: 25 = 25%" />
+            <Field label="ACoS Máximo (%)" k="maximum_acos" min={1} max={200} hint="Acima disso → reduzir bid" />
+            <Field label="ROAS Alvo (x)" k="target_roas" step={0.1} min={0.1} hint="Ex: 4 = 4x retorno" />
+            <Field label="TACoS Alvo (%)" k="target_tacos" min={1} max={100} hint="% gasto sobre vendas totais" />
+            <Field label="TACoS Máximo (%)" k="maximum_tacos" min={1} max={100} hint="Gatilho para reduzir investimento" />
+            <Field label={`Budget Total Diário (${form.currency_symbol || 'R$'})`} k="total_daily_budget" min={1} hint="Limite total da conta" />
+          </div>
+        </div>
+
+        {/* Prioridade da IA */}
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Prioridade da IA ao Ajustar Bids</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {Object.entries(PRIORITY_MODE_LABELS).map(([mode, { label, hint }]) => (
+              <button key={mode} onClick={() => set('ai_budget_priority_mode', mode)}
+                className={`text-left p-3 rounded-xl border transition-all ${form.ai_budget_priority_mode === mode ? 'border-cyan/50 bg-cyan/10' : 'border-surface-2 bg-surface-1 hover:bg-surface-2'}`}>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <div className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${form.ai_budget_priority_mode === mode ? 'border-cyan bg-cyan' : 'border-slate-500'}`} />
+                  <span className={`text-xs font-semibold ${form.ai_budget_priority_mode === mode ? 'text-cyan' : 'text-slate-300'}`}>{label}</span>
+                </div>
+                <p className="text-[11px] text-slate-500 ml-5">{hint}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Orçamento diário alvo */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between p-3 rounded-xl border border-surface-2 bg-surface-1">
+            <div>
+              <p className="text-sm font-medium text-slate-300">Forçar Limite de Orçamento Diário</p>
+              <p className="text-xs text-slate-500 mt-0.5">IA reduz bids para não ultrapassar o orçamento alvo definido abaixo</p>
+            </div>
+            <button onClick={() => set('ai_budget_enforcement', !form.ai_budget_enforcement)}
+              className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.ai_budget_enforcement ? 'bg-cyan' : 'bg-surface-3'}`}>
+              <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.ai_budget_enforcement ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            </button>
+          </div>
+          {form.ai_budget_enforcement && (
+            <div className="ml-2">
+              <Field
+                label={`Orçamento Diário Alvo (${form.currency_symbol || 'R$'})`}
+                k="ai_daily_budget_target"
+                min={0}
+                step={5}
+                hint="A IA ajusta bids para que o gasto total do dia fique próximo deste valor"
+              />
+            </div>
+          )}
+        </div>
+
+        {form.ai_budget_priority_mode && (
+          <div className="flex items-start gap-2 p-3 bg-surface-1 border border-surface-2 rounded-xl">
+            <Info className="w-3.5 h-3.5 text-cyan flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-slate-400">
+              <span className="text-white font-semibold">Prioridade ativa: </span>
+              {PRIORITY_MODE_LABELS[form.ai_budget_priority_mode]?.label} — {PRIORITY_MODE_LABELS[form.ai_budget_priority_mode]?.hint}.
+              {form.ai_budget_enforcement && form.ai_daily_budget_target > 0 && (
+                <> Limite de <span className="text-cyan font-semibold">{form.currency_symbol || 'R$'}{form.ai_daily_budget_target.toFixed(2)}/dia</span> será respeitado.</>
+              )}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Lances */}
