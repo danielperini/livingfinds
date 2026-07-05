@@ -1,201 +1,185 @@
 /**
- * scheduledAdsReportPoll — Polling para relatórios Amazon Ads
- * 
- * Esta função é chamada 15 minutos após o request para verificar e baixar relatórios.
- * Se ainda estiverem pendentes, tenta novamente (até 3 tentativas).
+ * scheduledAdsReportPoll
+ *
+ * Fase 2 do pipeline de relatórios Amazon Ads:
+ * 1. Lê o SyncRun mais recente com status "running" para obter os reportIds
+ * 2. Verifica status de cada relatório na API Amazon
+ * 3. Se todos prontos: baixa, descomprime, grava no banco (AdsMetricsHistory,
+ *    CampaignMetricsDaily, SearchTerm, Campaign) e marca SyncRun como "success"
+ * 4. Se ainda pendente: retorna { ready: false } para a automação tentar novamente
+ *
+ * Design: execução < 5 min, sem loops de polling interno.
+ * Chamado pela automação "Download Relatórios" às 06:40, 07:00, 07:20 BRT.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-let _tokenCache = null;
-
-async function getAdsToken(refreshToken) {
-  if (_tokenCache && _tokenCache.expires_at > Date.now() + 5000) return _tokenCache.access_token;
-  
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
-  });
-  
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: params.toString(),
-  });
-  
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Token failed: ${data.error_description || res.status}`);
-  
-  _tokenCache = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
-  return data.access_token;
-}
-
-function getAdsBase(region) {
-  const r = (region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+function getAdsBase(region: string) {
+  const r = (region || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsGet(base, path, token, profileId) {
-  const res = await fetch(`${base}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-      'Amazon-Advertising-API-Scope': profileId,
-      Accept: 'application/json',
-    },
-  });
-  return await res.json();
-}
+function fmt(d: Date) { return d.toISOString().slice(0, 10); }
 
-async function decompress(arrayBuffer) {
+async function decompress(buf: ArrayBuffer): Promise<any[]> {
   const ds = new DecompressionStream('gzip');
   const writer = ds.writable.getWriter();
   const reader = ds.readable.getReader();
-  writer.write(new Uint8Array(arrayBuffer));
+  writer.write(new Uint8Array(buf));
   writer.close();
-  
-  const chunks = [];
+  const chunks: Uint8Array[] = [];
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     chunks.push(value);
   }
-  
-  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-  const merged = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { merged.set(c, off); off += c.length; }
   return JSON.parse(new TextDecoder().decode(merged));
 }
-
-function fmt(d) { return d.toISOString().slice(0, 10); }
 
 Deno.serve(async (req) => {
   const startTime = Date.now();
   try {
     const base44 = createClientFromRequest(req);
-    
-    // Obter primeira conta conectada
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-last_sync_at', 1);
+    const body = await req.json().catch(() => ({}));
+
+    // Resolver conta
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 1);
     const account = accounts[0];
-    if (!account) return Response.json({ error: 'Nenhuma conta Amazon conectada' }, { status: 404 });
-    
-    const amazonAccountId = account.id;
+    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon encontrada' });
+
+    const aid = account.id;
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-    const adsBase = getAdsBase(account.region);
-    
-    if (!refreshToken) return Response.json({ error: 'Refresh token não configurado' }, { status: 400 });
-    if (!profileId) return Response.json({ error: 'Profile ID não configurado' }, { status: 400 });
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
 
-    // Buscar último SyncRun running
-    const runs = await base44.asServiceRole.entities.SyncRun.filter(
-      { amazon_account_id: amazonAccountId, status: 'running', operation: { $regex: 'scheduledReports:' } },
-      '-started_at',
-      1
-    );
-    
-    if (runs.length === 0) {
-      return Response.json({ ok: false, error: 'Nenhum relatório pendente encontrado' });
+    if (!refreshToken || !profileId || !clientId || !clientSecret) {
+      return Response.json({ ok: false, error: 'Credenciais não configuradas' });
     }
-    
-    const syncRun = runs[0];
-    const match = syncRun.operation.match(/scheduledReports:([^:]+):(.+)/);
-    if (!match) return Response.json({ ok: false, error: 'Formato de operation inválido' });
-    
-    const endDate = match[1];
-    const reportIds = JSON.parse(match[2]);
-    
-    console.log(`[scheduledAdsReportPoll] Processando relatórios de ${endDate}: ${Object.keys(reportIds).length} reports`);
-    
-    const token = await getAdsToken(refreshToken);
-    
+
+    // Buscar SyncRun pendente mais recente
+    let syncRunId = body.syncRunId;
+    let reportIds: Record<string, string> = body.reportIds || {};
+    let endDateStr = '';
+
+    if (!syncRunId || Object.keys(reportIds).length === 0) {
+      // Auto-descobrir o SyncRun "running" mais recente
+      const runs = await base44.asServiceRole.entities.SyncRun.filter(
+        { amazon_account_id: aid, status: 'running' }, '-started_at', 5
+      );
+      const run = runs.find((r: any) => r.operation?.startsWith('adsReports:'));
+      if (!run) return Response.json({ ok: false, error: 'Nenhum SyncRun pendente encontrado. Execute autoRequestAndDownloadReports primeiro.' });
+      syncRunId = run.id;
+      const match = run.operation.match(/^adsReports:([^:]+):(.+)$/);
+      if (match) { endDateStr = match[1]; reportIds = JSON.parse(match[2]); }
+    }
+
+    if (Object.keys(reportIds).length === 0) {
+      return Response.json({ ok: false, error: 'reportIds não encontrados no SyncRun' });
+    }
+
+    // Obter token LWA
+    const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }).toString(),
+    });
+    const tokenData = await tokenRes.json().catch(() => ({}));
+    if (!tokenRes.ok || !tokenData.access_token) {
+      return Response.json({ ok: false, error: `Token falhou: ${tokenData.error_description || tokenRes.status}` });
+    }
+    const token = tokenData.access_token;
+    const adsBase = getAdsBase(account.region || Deno.env.get('ADS_REGION') || 'NA');
+
+    const adsHeaders: Record<string, string> = {
+      'Authorization': `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': clientId,
+      'Amazon-Advertising-API-Scope': profileId,
+      'Accept': 'application/json',
+    };
+
     // Verificar status de cada relatório
-    const statusChecks = await Promise.all(
-      Object.entries(reportIds).map(async ([key, reportId]) => {
-        const status = await adsGet(adsBase, `/reporting/reports/${reportId}`, token, profileId);
-        return { key, status: status.status, url: status.url, failureReason: status.failureReason };
+    console.log(`[adsReportPoll] Verificando ${Object.keys(reportIds).length} relatórios...`);
+    const statuses = await Promise.all(
+      Object.entries(reportIds).map(async ([key, rid]) => {
+        const r = await fetch(`${adsBase}/reporting/reports/${rid}`, { headers: adsHeaders });
+        const d = await r.json().catch(() => ({}));
+        return { key, status: d.status, url: d.url, reason: d.failureReason };
       })
     );
-    
-    const pending = {};
-    const failed = {};
-    const ready = {};
-    
-    for (const s of statusChecks) {
-      if (s.status === 'COMPLETED' && s.url) ready[s.key] = s.url;
-      else if (['FAILED', 'EXPIRED'].includes(s.status)) failed[s.key] = s.failureReason || s.status;
-      else pending[s.key] = s.status;
+
+    const ready = statuses.filter(s => s.status === 'COMPLETED' && s.url);
+    const pending = statuses.filter(s => !['COMPLETED', 'FAILED', 'EXPIRED'].includes(s.status));
+    const failed = statuses.filter(s => ['FAILED', 'EXPIRED'].includes(s.status));
+
+    console.log(`[adsReportPoll] ready=${ready.length} pending=${pending.length} failed=${failed.length}`);
+
+    // Se ainda há pendentes e nenhum pronto — aguardar próxima chamada
+    if (pending.length > 0 && ready.length === 0) {
+      return Response.json({ ok: true, ready: false, pending: pending.map(s => s.key), message: 'Relatórios ainda sendo gerados. Tente novamente em 15-20 min.' });
     }
-    
-    // Se ainda há pendentes, tentar novamente em 5 minutos (máx 3 tentativas)
-    if (Object.keys(pending).length > 0 && Object.keys(ready).length === 0) {
-      const retryCount = syncRun.retry_count || 0;
-      if (retryCount < 3) {
-        await base44.asServiceRole.entities.SyncRun.update(syncRun.id, {
-          retry_count: retryCount + 1,
-          last_polled_at: new Date().toISOString(),
-        });
-        return Response.json({ 
-          ok: true, 
-          ready: false, 
-          pending, 
-          retry: retryCount + 1,
-          message: `Relatórios pendentes. Tentativa ${retryCount + 1}/3. Aguarde 5 min.` 
-        });
-      }
-      return Response.json({ ok: false, error: 'Timeout após 3 tentativas', pending }, { status: 500 });
-    }
-    
-    if (Object.keys(ready).length === 0) {
-      await base44.asServiceRole.entities.SyncRun.update(syncRun.id, {
+
+    if (ready.length === 0) {
+      await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
         status: 'error',
-        error_message: `Todos falharam: ${JSON.stringify(failed)}`,
+        error_message: `Todos falharam: ${failed.map(s => `${s.key}:${s.reason}`).join(', ')}`,
         completed_at: new Date().toISOString(),
-      });
-      return Response.json({ ok: false, error: 'Todos os relatórios falharam', failed }, { status: 500 });
+      }).catch(() => {});
+      return Response.json({ ok: false, error: 'Todos os relatórios falharam ou expiraram', failed: failed.map(s => s.key) });
     }
-    
-    // Baixar e processar relatórios prontos
-    const data = {};
-    const downloadErrors = [];
-    
-    for (const [key, url] of Object.entries(ready)) {
+
+    // ── Baixar e processar relatórios prontos ──
+    const data: Record<string, any[]> = {};
+    for (const s of ready) {
       try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const buf = await res.arrayBuffer();
-        data[key] = await decompress(buf);
-        console.log(`✓ ${key}: ${data[key].length} linhas`);
-      } catch (e) {
-        downloadErrors.push(`${key}: ${e.message}`);
+        const r = await fetch(s.url!);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const buf = await r.arrayBuffer();
+        data[s.key] = await decompress(buf);
+        console.log(`[adsReportPoll] ${s.key}: ${data[s.key].length} linhas`);
+      } catch (e: any) {
+        console.error(`[adsReportPoll] download ${s.key}: ${e.message}`);
       }
     }
-    
-    // ── Processar Search Terms ──
-    let searchTermsCount = 0;
-    if (data.searchTerms?.length > 0) {
-      const records = [];
-      const seen = new Set();
-      
-      for (const row of data.searchTerms) {
+
+    if (Object.keys(data).length === 0) {
+      return Response.json({ ok: false, error: 'Falha ao baixar todos os relatórios' });
+    }
+
+    const now = new Date().toISOString();
+    const endDate = endDateStr || fmt(new Date(Date.now() - 86400000));
+
+    // ── Limpar dados antigos ──
+    console.log('[adsReportPoll] Limpando dados antigos...');
+    await Promise.all([
+      base44.asServiceRole.entities.AdsMetricsHistory.deleteMany({ amazon_account_id: aid }),
+      base44.asServiceRole.entities.SearchTerm.deleteMany({ amazon_account_id: aid }),
+      base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: aid }),
+    ]).catch(() => {});
+
+    // ── Construir AdsMetricsHistory ──
+    const historyRecords: any[] = [];
+    const seen = new Set<string>();
+
+    for (const [key, rows] of Object.entries(data)) {
+      for (const row of rows) {
         const date = row.date || endDate;
         const campaignId = String(row.campaignId || '');
         const adGroupId = String(row.adGroupId || '');
-        const keywordId = String(row.keywordId || `st_${row.searchTerm || 'unknown'}`);
-        const searchTerm = row.searchTerm || row.keyword || '';
+        const searchTerm = row.searchTerm || '';
+        const keywordId = String(row.keywordId || '');
         const asin = row.advertisedAsin || '';
-        
-        const uniqueKey = `${date}|${campaignId}|${adGroupId}|${searchTerm}|${keywordId}|${asin}`;
+        const uniqueKey = `${date}|${key}|${campaignId}|${adGroupId}|${searchTerm}|${keywordId}|${asin}`;
         if (seen.has(uniqueKey)) continue;
         seen.add(uniqueKey);
-        
-        const spend = Number(row.cost) || 0;
-        records.push({
-          amazon_account_id: amazonAccountId,
+
+        historyRecords.push({
+          amazon_account_id: aid,
           date,
           campaign_id: campaignId,
           campaign_name: row.campaignName || '',
@@ -203,151 +187,145 @@ Deno.serve(async (req) => {
           ad_group_name: row.adGroupName || '',
           keyword_id: keywordId,
           keyword_text: row.keyword || '',
-          keyword_type: row.keywordType || '',
-          match_type: (row.matchType || 'broad').toLowerCase(),
           search_term: searchTerm,
+          match_type: (row.matchType || '').toLowerCase(),
           advertised_asin: asin,
           advertised_sku: row.advertisedSku || '',
+          report_type: key,
           impressions: Number(row.impressions) || 0,
           clicks: Number(row.clicks) || 0,
-          ctr: Number(row.ctr) || 0,
-          cpc: Number(row.cpc) || 0,
-          spend,
+          spend: Number(row.cost) || 0,
           orders_1d: Number(row.purchases1d) || 0,
           orders_7d: Number(row.purchases7d) || 0,
           orders_14d: Number(row.purchases14d) || 0,
           orders_30d: Number(row.purchases30d) || 0,
-          units_1d: Number(row.unitsSoldClicks1d) || 0,
-          units_7d: Number(row.unitsSoldClicks7d) || 0,
-          units_14d: Number(row.unitsSoldClicks14d) || 0,
-          units_30d: Number(row.unitsSoldClicks30d) || 0,
           sales_1d: Number(row.sales1d) || 0,
           sales_7d: Number(row.sales7d) || 0,
           sales_14d: Number(row.sales14d) || 0,
           sales_30d: Number(row.sales30d) || 0,
-          acos_7d: Number(row.acosClicks7d) || 0,
           acos_14d: Number(row.acosClicks14d) || 0,
-          roas_7d: Number(row.roasClicks7d) || 0,
           roas_14d: Number(row.roasClicks14d) || 0,
-          conversion_rate: Number(row.conversionRate) || 0,
           unique_key: uniqueKey,
-          synced_at: new Date().toISOString(),
+          synced_at: now,
         });
       }
-      
-      // Delete + insert por date
-      const dates = [...new Set(records.map(r => r.date))];
-      for (const date of dates) {
-        await base44.asServiceRole.entities.SearchTerm.deleteMany({ amazon_account_id: amazonAccountId, date });
-      }
-      for (let i = 0; i < records.length; i += 500) {
-        await base44.asServiceRole.entities.SearchTerm.bulkCreate(records.slice(i, i + 500));
-      }
-      searchTermsCount = records.length;
     }
-    
-    // ── Processar Campaigns ──
-    let campaignsCount = 0;
-    if (data.campaigns?.length > 0) {
-      const metricsRecords = [];
-      for (const row of data.campaigns) {
-        const campaignId = String(row.campaignId);
-        const date = row.date || endDate;
-        const spend = Number(row.cost) || 0;
-        const sales = Number(row.sales14d) || 0;
-        const clicks = Number(row.clicks) || 0;
-        const impressions = Number(row.impressions) || 0;
-        const orders = Number(row.purchases14d) || 0;
-        
-        metricsRecords.push({
-          amazon_account_id: amazonAccountId,
-          campaign_id: campaignId,
-          date,
-          spend, sales, clicks, impressions, orders,
-        });
-      }
-      
-      // Upsert métricas
-      for (const m of metricsRecords) {
-        const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
-          amazon_account_id: amazonAccountId,
-          campaign_id: m.campaign_id,
-          date: m.date,
-        }, '-created_date', 1);
-        
-        if (existing.length > 0) {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.update(existing[0].id, m);
-        } else {
-          await base44.asServiceRole.entities.CampaignMetricsDaily.create(m);
-        }
-      }
-      campaignsCount = metricsRecords.length;
+
+    for (let i = 0; i < historyRecords.length; i += 500) {
+      await base44.asServiceRole.entities.AdsMetricsHistory.bulkCreate(historyRecords.slice(i, i + 500));
     }
-    
-    // ── Processar Products ──
-    let productsCount = 0;
-    if (data.products?.length > 0) {
-      const asinMap = {};
-      for (const row of data.products) {
-        const asin = row.advertisedAsin || '';
-        if (!asin) continue;
-        if (!asinMap[asin]) asinMap[asin] = { spend: 0, sales: 0, units: 0, sku: row.advertisedSku };
-        asinMap[asin].spend += Number(row.cost) || 0;
-        asinMap[asin].sales += Number(row.sales14d) || 0;
-        asinMap[asin].units += Number(row.unitsSoldClicks14d) || 0;
-      }
-      
-      const productRecords = Object.entries(asinMap).map(([asin, m]) => ({
-        amazon_account_id: amazonAccountId,
-        asin,
-        sku: m.sku,
-        total_revenue_30d: m.sales,
-        units_sold_30d: m.units,
-        synced_at: new Date().toISOString(),
+    console.log(`[adsReportPoll] AdsMetricsHistory: ${historyRecords.length}`);
+
+    // ── SearchTerm ──
+    const stRecords = historyRecords
+      .filter(r => r.report_type === 'searchTerms')
+      .map(r => ({
+        amazon_account_id: aid,
+        date: r.date, campaign_id: r.campaign_id, campaign_name: r.campaign_name,
+        ad_group_id: r.ad_group_id, ad_group_name: r.ad_group_name,
+        keyword_id: r.keyword_id, keyword_text: r.keyword_text, keyword_type: '',
+        match_type: r.match_type, search_term: r.search_term,
+        advertised_asin: r.advertised_asin, advertised_sku: r.advertised_sku,
+        impressions: r.impressions, clicks: r.clicks,
+        ctr: r.impressions > 0 ? (r.clicks / r.impressions * 100) : 0,
+        cpc: r.clicks > 0 ? (r.spend / r.clicks) : 0,
+        spend: r.spend,
+        orders_7d: r.orders_7d, orders_14d: r.orders_14d, orders_30d: r.orders_30d,
+        sales_7d: r.sales_7d, sales_14d: r.sales_14d, sales_30d: r.sales_30d,
+        acos_14d: r.acos_14d, roas_14d: r.roas_14d,
+        conversion_rate: r.clicks > 0 ? (r.orders_14d / r.clicks * 100) : 0,
+        unique_key: r.unique_key, synced_at: now,
       }));
-      
-      const existingProds = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: amazonAccountId });
-      const prodMap = new Map(existingProds.map(p => [p.asin, p]));
-      
-      const toUpdate = productRecords.filter(r => prodMap.has(r.asin)).map(r => ({ id: prodMap.get(r.asin).id, ...r }));
-      const toCreate = productRecords.filter(r => !prodMap.has(r.asin));
-      
-      for (let i = 0; i < toCreate.length; i += 500) await base44.asServiceRole.entities.Product.bulkCreate(toCreate.slice(i, i + 500));
-      for (let i = 0; i < toUpdate.length; i += 500) await base44.asServiceRole.entities.Product.bulkUpdate(toUpdate.slice(i, i + 500));
-      
-      productsCount = productRecords.length;
+
+    for (let i = 0; i < stRecords.length; i += 500) {
+      await base44.asServiceRole.entities.SearchTerm.bulkCreate(stRecords.slice(i, i + 500));
     }
-    
-    // Finalizar
-    const durationMs = Date.now() - startTime;
-    const now = new Date().toISOString();
-    
-    await base44.asServiceRole.entities.AmazonAccount.update(amazonAccountId, {
-      last_sync_at: now,
-      status: 'connected',
-    });
-    
-    await base44.asServiceRole.entities.SyncRun.update(syncRun.id, {
+    console.log(`[adsReportPoll] SearchTerm: ${stRecords.length}`);
+
+    // ── CampaignMetricsDaily (priorizar relatório "campaigns") ──
+    const metricsMap = new Map<string, any>();
+    for (const r of historyRecords) {
+      if (!r.campaign_id) continue;
+      const k = `${r.campaign_id}|${r.date}`;
+      if (!metricsMap.has(k)) {
+        metricsMap.set(k, { amazon_account_id: aid, campaign_id: r.campaign_id, campaign_name: r.campaign_name, date: r.date, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0, _prio: false });
+      }
+      const m = metricsMap.get(k)!;
+      if (r.report_type === 'campaigns') {
+        m.spend = r.spend; m.sales = r.sales_14d; m.clicks = r.clicks; m.impressions = r.impressions; m.orders = r.orders_14d; m._prio = true;
+      } else if (!m._prio) {
+        m.spend += r.spend; m.sales += r.sales_14d; m.clicks += r.clicks; m.impressions += r.impressions; m.orders += r.orders_14d;
+      }
+    }
+
+    const metricsRecords = Array.from(metricsMap.values()).map(({ _prio, ...m }) => ({
+      ...m,
+      acos: m.sales > 0 ? (m.spend / m.sales * 100) : 0,
+      roas: m.spend > 0 ? (m.sales / m.spend) : 0,
+      ctr: m.impressions > 0 ? (m.clicks / m.impressions * 100) : 0,
+      cpc: m.clicks > 0 ? (m.spend / m.clicks) : 0,
+      synced_at: now,
+    }));
+
+    for (let i = 0; i < metricsRecords.length; i += 500) {
+      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
+    }
+    console.log(`[adsReportPoll] CampaignMetricsDaily: ${metricsRecords.length}`);
+
+    // ── Atualizar métricas agregadas nas entidades Campaign ──
+    const campAgg = new Map<string, any>();
+    for (const r of historyRecords) {
+      if (!r.campaign_id) continue;
+      if (!campAgg.has(r.campaign_id)) campAgg.set(r.campaign_id, { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
+      const c = campAgg.get(r.campaign_id)!;
+      c.spend += r.spend; c.sales += r.sales_14d; c.clicks += r.clicks; c.impressions += r.impressions; c.orders += r.orders_14d;
+    }
+
+    const existingCamps = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 5000).catch(() => []);
+    const campMap = new Map((existingCamps as any[]).map(c => [c.campaign_id, c]));
+    const campUpdates = Array.from(campAgg.entries())
+      .filter(([id]) => campMap.has(id))
+      .map(([id, agg]) => {
+        const existing = campMap.get(id) as any;
+        return {
+          id: existing.id,
+          spend: agg.spend, sales: agg.sales, clicks: agg.clicks, impressions: agg.impressions, orders: agg.orders,
+          acos: agg.sales > 0 ? (agg.spend / agg.sales * 100) : 0,
+          roas: agg.spend > 0 ? (agg.sales / agg.spend) : 0,
+          ctr: agg.impressions > 0 ? (agg.clicks / agg.impressions * 100) : 0,
+          cpc: agg.clicks > 0 ? (agg.spend / agg.clicks) : 0,
+          synced_at: now,
+        };
+      });
+
+    for (let i = 0; i < campUpdates.length; i += 500) {
+      await base44.asServiceRole.entities.Campaign.bulkUpdate(campUpdates.slice(i, i + 500)).catch(() => {});
+    }
+    console.log(`[adsReportPoll] Campaign: ${campUpdates.length} atualizadas`);
+
+    // ── Finalizar ──
+    await base44.asServiceRole.entities.AmazonAccount.update(aid, { last_sync_at: now, status: 'connected' }).catch(() => {});
+    await base44.asServiceRole.entities.SyncRun.update(syncRunId, {
       status: 'success',
-      records_received: Object.values(data).reduce((sum, arr) => sum + arr.length, 0),
-      records_upserted: searchTermsCount + campaignsCount + productsCount,
-      duration_ms: durationMs,
+      records_upserted: historyRecords.length,
       completed_at: now,
-    });
-    
-    console.log(`[scheduledAdsReportPoll] Concluído: ${searchTermsCount} search terms, ${campaignsCount} campaigns, ${productsCount} products`);
-    
-    return Response.json({
+      duration_ms: Date.now() - startTime,
+    }).catch(() => {});
+
+    const summary = {
       ok: true,
       ready: true,
-      search_terms: searchTermsCount,
-      campaigns: campaignsCount,
-      products: productsCount,
-      duration_s: (durationMs / 1000).toFixed(1),
-    });
-    
-  } catch (error) {
-    console.error('[scheduledAdsReportPoll] Erro:', error.message);
-    return Response.json({ error: error.message }, { status: 500 });
+      history_records: historyRecords.length,
+      campaign_metrics: metricsRecords.length,
+      search_terms: stRecords.length,
+      campaigns_updated: campUpdates.length,
+      duration_s: ((Date.now() - startTime) / 1000).toFixed(1),
+    };
+    console.log('[adsReportPoll] ✅ Concluído:', JSON.stringify(summary));
+    return Response.json(summary);
+
+  } catch (err: any) {
+    console.error('[adsReportPoll] Erro:', err.message);
+    return Response.json({ ok: false, error: err.message });
   }
 });
