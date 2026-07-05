@@ -1,5 +1,7 @@
-// Importa campanhas ENABLED da Amazon que não existem no banco local
+// Importa/atualiza campanhas da Amazon (ENABLED, PAUSED, INCOMPLETE) e enfileira reparos para INCOMPLETE
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+
+const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 async function getAccessToken(account: any): Promise<string> {
   const tok = account.ads_refresh_token;
@@ -14,6 +16,32 @@ async function getAccessToken(account: any): Promise<string> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.access_token) throw new Error(data.error_description || 'Falha no token');
   return data.access_token;
+}
+
+async function listCampaignsByState(base: string, token: string, clientId: string, profileId: string, state: string): Promise<any[]> {
+  const CT = 'application/vnd.spCampaign.v3+json';
+  const all: any[] = [];
+  let nextToken: string | null = null;
+  do {
+    const bodyObj: any = { stateFilter: { include: [state] }, maxResults: 500 };
+    if (nextToken) bodyObj.nextToken = nextToken;
+    const r = await fetch(`${base}/sp/campaigns/list`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Amazon-Advertising-API-ClientId': clientId,
+        'Amazon-Advertising-API-Scope': profileId,
+        'Content-Type': CT,
+        Accept: CT,
+      },
+      body: JSON.stringify(bodyObj),
+    });
+    const data = await r.json().catch(() => ({}));
+    all.push(...(data?.campaigns || []));
+    nextToken = data?.nextToken || null;
+    if (nextToken) await wait(300);
+  } while (nextToken);
+  return all;
 }
 
 Deno.serve(async (req) => {
@@ -31,32 +59,15 @@ Deno.serve(async (req) => {
     const profileId = String(account.ads_profile_id || '');
     const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
     const base = 'https://advertising-api.amazon.com';
-    const CT = 'application/vnd.spCampaign.v3+json';
 
-    // Buscar todas campanhas ENABLED e PAUSED da Amazon
-    const allCampaigns: any[] = [];
-    for (const state of ['ENABLED', 'PAUSED']) {
-      let nextToken: string | null = null;
-      do {
-        const body2: any = { stateFilter: { include: [state] }, maxResults: 500 };
-        if (nextToken) body2.nextToken = nextToken;
-        const r = await fetch(`${base}/sp/campaigns/list`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Amazon-Advertising-API-ClientId': clientId,
-            'Amazon-Advertising-API-Scope': profileId,
-            'Content-Type': CT,
-            Accept: CT,
-          },
-          body: JSON.stringify(body2),
-        });
-        const data = await r.json().catch(() => ({}));
-        const page = data?.campaigns || [];
-        allCampaigns.push(...page);
-        nextToken = data?.nextToken || null;
-      } while (nextToken);
-    }
+    // Buscar todos os estados
+    const [enabled, paused, incomplete] = await Promise.all([
+      listCampaignsByState(base, token, clientId, profileId, 'ENABLED'),
+      listCampaignsByState(base, token, clientId, profileId, 'PAUSED'),
+      listCampaignsByState(base, token, clientId, profileId, 'INCOMPLETE'),
+    ]);
+
+    const allCampaigns = [...enabled, ...paused, ...incomplete];
 
     // Buscar campanhas existentes no banco
     const existingRows = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 2000);
@@ -70,17 +81,15 @@ Deno.serve(async (req) => {
       const campaignId = String(c.campaignId || '');
       if (!campaignId) continue;
 
-      const state = String(c.state || '').toLowerCase();
+      const amazonState = String(c.state || '').toUpperCase();
+      const state = amazonState === 'INCOMPLETE' ? 'incomplete' : amazonState.toLowerCase();
       const budget = c.budget?.budget || c.dailyBudget || 5;
       const targetingType = c.targetingType === 'AUTO' ? 'AUTO' : 'MANUAL';
-
-      // Extrair ASIN do nome (padrão AUTO | B0XXXXX | ...)
       const asinMatch = (c.name || '').match(/B0[A-Z0-9]{8}/);
       const asin = asinMatch?.[0] || null;
 
       const existing = existingByCampaignId.get(campaignId);
       if (existing) {
-        // Atualizar estado, budget e marcar como gerenciado
         toUpdate.push({
           id: existing.id,
           state,
@@ -92,11 +101,10 @@ Deno.serve(async (req) => {
           asin: asin || existing.asin || null,
           targeting_type: targetingType,
           is_operational: state === 'enabled',
-          created_by_app: existing.created_by_app || (c.name || '').includes('2026-06-30'),
+          requires_attention: state === 'incomplete',
           last_api_sync_at: now,
         });
       } else {
-        // Criar novo registro
         toCreate.push({
           amazon_account_id: accountId,
           campaign_id: campaignId,
@@ -110,7 +118,7 @@ Deno.serve(async (req) => {
           targeting_type: targetingType,
           asin: asin || null,
           is_operational: state === 'enabled',
-          created_by_app: (c.name || '').includes('2026-06-30'),
+          requires_attention: state === 'incomplete',
           source: 'api',
           last_api_sync_at: now,
           synced_at: now,
@@ -121,32 +129,63 @@ Deno.serve(async (req) => {
     // Executar em lotes
     let created = 0;
     let updated = 0;
+    const batchSize = 100;
 
-    if (toCreate.length > 0) {
-      const batchSize = 100;
-      for (let i = 0; i < toCreate.length; i += batchSize) {
-        const batch = toCreate.slice(i, i + batchSize);
-        await base44.asServiceRole.entities.Campaign.bulkCreate(batch);
-        created += batch.length;
-      }
+    for (let i = 0; i < toCreate.length; i += batchSize) {
+      await base44.asServiceRole.entities.Campaign.bulkCreate(toCreate.slice(i, i + batchSize));
+      created += Math.min(batchSize, toCreate.length - i);
+    }
+    for (let i = 0; i < toUpdate.length; i += batchSize) {
+      await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + batchSize));
+      updated += Math.min(batchSize, toUpdate.length - i);
     }
 
-    if (toUpdate.length > 0) {
-      const batchSize = 100;
-      for (let i = 0; i < toUpdate.length; i += batchSize) {
-        const batch = toUpdate.slice(i, i + batchSize);
-        await base44.asServiceRole.entities.Campaign.bulkUpdate(batch);
-        updated += batch.length;
+    // Enfileirar reparos para campanhas INCOMPLETE
+    const incompleteCampaigns = allCampaigns.filter(c => String(c.state || '').toUpperCase() === 'INCOMPLETE');
+    let repairQueued = 0;
+
+    if (incompleteCampaigns.length > 0) {
+      // Buscar itens já na fila para evitar duplicatas
+      const existingRepairs = await base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({
+        amazon_account_id: accountId,
+        status: 'scheduled',
+      }, null, 500).catch(() => []);
+      const existingRepairIds = new Set(existingRepairs.map((r: any) => String(r.campaign_id)));
+
+      const repairItems: any[] = [];
+      for (const c of incompleteCampaigns) {
+        const campaignId = String(c.campaignId || '');
+        if (!campaignId || existingRepairIds.has(campaignId)) continue;
+        const asinMatch = (c.name || '').match(/B0[A-Z0-9]{8}/);
+        const asin = asinMatch?.[0] || null;
+        repairItems.push({
+          amazon_account_id: accountId,
+          campaign_id: campaignId,
+          asin: asin || null,
+          sku: null,
+          status: 'scheduled',
+          attempt_count: 0,
+          max_attempts: 5,
+          scheduled_at: new Date().toISOString(),
+          source: 'import_incomplete',
+        });
+      }
+
+      if (repairItems.length > 0) {
+        await base44.asServiceRole.entities.AutoCampaignRepairQueue.bulkCreate(repairItems);
+        repairQueued = repairItems.length;
       }
     }
 
     return Response.json({
       ok: true,
       amazon_total: allCampaigns.length,
+      enabled: enabled.length,
+      paused: paused.length,
+      incomplete: incomplete.length,
       created,
       updated,
-      enabled: allCampaigns.filter(c => c.state === 'ENABLED').length,
-      paused: allCampaigns.filter(c => c.state === 'PAUSED').length,
+      repair_queued: repairQueued,
     });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro' }, { status: 500 });

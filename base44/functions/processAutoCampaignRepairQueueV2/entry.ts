@@ -209,7 +209,8 @@ Deno.serve(async (request) => {
       status: 'scheduled',
     }, 'scheduled_at', 100).catch(() => []);
 
-    const rows = scheduled.filter(due).slice(0, 10);
+    // Processar apenas 1 item por invocação para evitar Rate Limit
+    const rows = scheduled.filter(due).slice(0, 1);
     const results: any[] = [];
 
     for (const item of rows) {
@@ -247,7 +248,7 @@ Deno.serve(async (request) => {
         results.push({ id: item.id, asin: item.asin, campaign_id: item.campaign_id || null, ok: false, retry_scheduled: retry, error: error?.message || String(error) });
       }
 
-      await wait(2000); // pequena pausa entre itens
+      await wait(500); // pausa mínima (só 1 item por invocação agora)
     }
 
     return Response.json({
