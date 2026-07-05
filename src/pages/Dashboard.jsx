@@ -2,11 +2,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
-import { BarChart2, Loader2, TrendingUp, TrendingDown, Minus, RefreshCw, AlertCircle, Brain, Zap, Clock, Activity, XCircle, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
+import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
-import { Button } from '@/components/ui/button';
-import StatusBadge from '@/components/ui/StatusBadge';
+
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
 
@@ -61,8 +60,6 @@ export default function Dashboard() {
   const [bidChanges, setBidChanges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [auditData, setAuditData] = useState(null);
-  const [showAudit, setShowAudit] = useState(false);
   const [campFilter, setCampFilter] = useState('all');
   const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [forcingSyncAds, setForcingSyncAds] = useState(false);
@@ -202,36 +199,7 @@ export default function Dashboard() {
     }
   };
 
-  const runAudit = async () => {
-    if (!account) return;
-    try {
-      const res = await base44.functions.invoke('auditSyncData', { amazon_account_id: account.id });
-      if (res.data?.ok) {
-        setAuditData(res.data);
-        setShowAudit(true);
-      } else {
-        alert('Erro na auditoria: ' + (res.data?.error || 'Falha desconhecida'));
-      }
-    } catch (error) {
-      alert('Erro: ' + error.message);
-    }
-  };
 
-  useEffect(() => {
-    if (!loading && kpis.spend > 0) {
-      console.log('📊 AUDITORIA DASHBOARD:', {
-        'Ad Spend': `$${kpis.spend.toFixed(2)}`,
-        'Vendas': `$${kpis.sales.toFixed(2)}`,
-        'Pedidos': kpis.orders,
-        'Cliques': kpis.clicks,
-        'ACoS': `${acos.toFixed(2)}%`,
-        'ROAS': `${roas.toFixed(2)}x`,
-        'Registros diários': metricsDaily.length,
-        'Registros únicos': uniqueMetrics.length,
-        'Duplicatas': metricsDaily.length - uniqueMetrics.length,
-      });
-    }
-  }, [loading, kpis, metricsDaily.length, uniqueMetrics.length]);
 
   // Heat map data - dias do mês vs horas
   const heatMapData = hourlyMetrics.reduce((acc, h) => {
@@ -366,11 +334,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={runAudit} disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors">
-            <Activity className="w-4 h-4" />
-            Auditoria
-          </button>
+
         </div>
       </div>
 
@@ -724,79 +688,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
 
       </>}
 
-      {/* Modal de Auditoria */}
-      {showAudit && auditData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={e => e.target === e.currentTarget && setShowAudit(false)}>
-          <div className="bg-surface-1 border border-surface-2 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-surface-2">
-              <div>
-                <h2 className="text-sm font-bold text-white">📊 Auditoria de Dados Amazon</h2>
-                <p className="text-xs text-slate-400 font-mono">{auditData.account?.seller_name || auditData.account?.id}</p>
-              </div>
-              <button onClick={() => setShowAudit(false)} className="text-slate-500 hover:text-white">
-                <XCircle className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Totais */}
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                  <p className="text-xs text-slate-500 mb-1">Spend</p>
-                  <p className="text-lg font-bold text-white">{auditData.formatted?.spend}</p>
-                </div>
-                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                  <p className="text-xs text-slate-500 mb-1">Vendas</p>
-                  <p className="text-lg font-bold text-emerald-400">{auditData.formatted?.sales}</p>
-                </div>
-                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                  <p className="text-xs text-slate-500 mb-1">ACoS</p>
-                  <p className="text-lg font-bold text-amber-400">{auditData.formatted?.acos}</p>
-                </div>
-                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                  <p className="text-xs text-slate-500 mb-1">ROAS</p>
-                  <p className="text-lg font-bold text-cyan">{auditData.formatted?.roas}</p>
-                </div>
-                <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                  <p className="text-xs text-slate-500 mb-1">CPC</p>
-                  <p className="text-lg font-bold text-slate-300">{auditData.formatted?.cpc}</p>
-                </div>
-              </div>
-
-              {/* Qualidade */}
-              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                <h3 className="text-xs font-semibold text-slate-400 mb-3">Qualidade dos Dados</h3>
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Total:</span><span className="text-white font-semibold">{auditData.metrics?.total_records}</span></div>
-                  <div className="flex items-center justify-between py-1.5 border-b border-surface-3/50"><span className="text-slate-500">Únicos:</span><span className="text-emerald-400 font-semibold">{auditData.metrics?.unique_records}</span></div>
-                  <div className="flex items-center justify-between py-1.5"><span className="text-slate-500">Duplicatas:</span><span className={`font-semibold ${auditData.metrics?.duplicates_removed > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{auditData.metrics?.duplicates_removed}</span></div>
-                </div>
-              </div>
-
-              {/* Campanhas */}
-              <div className="bg-surface-2 rounded-xl p-4 border border-surface-3">
-                <h3 className="text-xs font-semibold text-slate-400 mb-3">Campanhas</h3>
-                <div className="grid grid-cols-4 gap-3 text-center">
-                  <div><p className="text-xs text-slate-500">Total</p><p className="text-lg font-bold text-white">{auditData.campaigns?.total}</p></div>
-                  <div><p className="text-xs text-slate-500">Ativas</p><p className="text-lg font-bold text-emerald-400">{auditData.campaigns?.active}</p></div>
-                  <div><p className="text-xs text-slate-500">Pausadas</p><p className="text-lg font-bold text-amber-400">{auditData.campaigns?.paused}</p></div>
-                  <div><p className="text-xs text-slate-500">Arquivadas</p><p className="text-lg font-bold text-slate-400">{auditData.campaigns?.archived}</p></div>
-                </div>
-              </div>
-
-              {/* Nota */}
-              <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
-                <p className="text-xs text-amber-300"><strong>⚠️ Nota:</strong> Divergências podem indicar necessidade de novo sync. Dados Amazon levam 48h para atribuição completa.</p>
-              </div>
-            </div>
-
-            <div className="px-6 py-4 border-t border-surface-2 flex items-center justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowAudit(false)}>Fechar</Button>
-              <Button onClick={() => { setShowAudit(false); loadData(); }}>Atualizar</Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

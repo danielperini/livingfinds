@@ -69,25 +69,6 @@ async function runUnifiedProductSync(accountId, trigger = 'manual') {
   return { reports, catalog, links, completedAt };
 }
 
-function hideLegacyProductActions() {
-  if (window.location.pathname !== '/products') return;
-
-  document.querySelectorAll('button').forEach((button) => {
-    const text = String(button.textContent || '').replace(/\s+/g, ' ').trim();
-    const shouldHide =
-      text.startsWith('Kick-off em massa') ||
-      text === 'Sincronizar Títulos' ||
-      text === 'Sincronizando...' ||
-      text === 'Corrigir Vínculos' ||
-      text === 'Corrigindo...';
-
-    if (shouldHide) {
-      button.style.display = 'none';
-      button.setAttribute('aria-hidden', 'true');
-      button.disabled = true;
-    }
-  });
-}
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -165,12 +146,6 @@ export default function AppLayout() {
     return () => window.clearInterval(interval);
   }, [account, executeProductSync]);
 
-  useEffect(() => {
-    hideLegacyProductActions();
-    const observer = new MutationObserver(hideLegacyProductActions);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [location.pathname]);
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
