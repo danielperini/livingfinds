@@ -7,9 +7,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const BATCH = 100;
-const WRITE_DELAY_MS = 20000; // 20s entre lotes de escrita
+const BATCH = 200;
 
 Deno.serve(async (request) => {
   const startedAt = Date.now();
@@ -127,20 +125,17 @@ Deno.serve(async (request) => {
 
     console.log(`[loadDashboard] create=${toCreate.length} update=${toUpdate.length}`);
 
-    // Escrever com pausa de 20s entre lotes para evitar rate/time limit
     let created = 0;
     let updated = 0;
 
     for (let i = 0; i < toCreate.length; i += BATCH) {
       await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(toCreate.slice(i, i + BATCH));
       created += Math.min(BATCH, toCreate.length - i);
-      if (i + BATCH < toCreate.length) await wait(WRITE_DELAY_MS);
     }
 
     for (let i = 0; i < toUpdate.length; i += BATCH) {
       await base44.asServiceRole.entities.CampaignMetricsDaily.bulkUpdate(toUpdate.slice(i, i + BATCH));
       updated += Math.min(BATCH, toUpdate.length - i);
-      if (i + BATCH < toUpdate.length) await wait(WRITE_DELAY_MS);
     }
 
     // Atualizar last_sync_at da conta

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
-import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer, FileDown } from 'lucide-react';
+import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
@@ -64,10 +64,6 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
   const [campFilter, setCampFilter] = useState('all');
   const [autopilotConfig, setAutopilotConfig] = useState(null);
-  const [forcingSyncAds, setForcingSyncAds] = useState(false);
-  const [forceSyncMsg, setForceSyncMsg] = useState(null);
-  const [loadingReports, setLoadingReports] = useState(false);
-  const [loadReportsMsg, setLoadReportsMsg] = useState(null);
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
 
   const loadData = useCallback(async () => {
@@ -181,66 +177,7 @@ export default function Dashboard() {
     return Number(num.toFixed(decimals));
   }
 
-  const loadFromReports = async () => {
-    if (!account || loadingReports) return;
-    setLoadingReports(true);
-    setLoadReportsMsg(null);
-    try {
-      const res = await base44.functions.invoke('loadDashboardFromReports', { amazon_account_id: account.id });
-      const data = res?.data || {};
-      if (data?.ok) {
-        setLoadReportsMsg({ type: 'success', text: `✓ ${data.created} criados · ${data.updated} atualizados (${data.duration_s}s)` });
-        await loadData();
-      } else {
-        setLoadReportsMsg({ type: 'error', text: data?.error || 'Sem dados de relatório disponíveis' });
-      }
-    } catch (e) {
-      setLoadReportsMsg({ type: 'error', text: e.message });
-    } finally {
-      setLoadingReports(false);
-      setTimeout(() => setLoadReportsMsg(null), 15000);
-    }
-  };
 
-  const triggerSync = async () => {
-    if (!account || forcingSyncAds) return;
-    setForcingSyncAds(true);
-    setForceSyncMsg(null);
-    try {
-      // Sync leve: apenas estados das campanhas + métricas de performance
-      const [statesRes, metricsRes] = await Promise.allSettled([
-        base44.functions.invoke('syncAds', { amazon_account_id: account.id, trigger_type: 'manual' }),
-        base44.functions.invoke('syncAdsPerformanceMetricsV2', { amazon_account_id: account.id, trigger_type: 'manual' }),
-      ]);
-
-      const statesData = statesRes.status === 'fulfilled' ? statesRes.value?.data : null;
-      const metricsData = metricsRes.status === 'fulfilled' ? metricsRes.value?.data : null;
-
-      const rateLimited =
-        String(statesData?.error || '').toLowerCase().includes('rate limit') ||
-        String(metricsData?.error || '').toLowerCase().includes('rate limit') ||
-        String(statesRes.reason?.message || '').toLowerCase().includes('rate limit') ||
-        String(metricsRes.reason?.message || '').toLowerCase().includes('rate limit');
-
-      if (rateLimited) {
-        setForceSyncMsg({ type: 'warn', text: '⚠️ Amazon em rate limit — aguarde alguns minutos e tente novamente.' });
-      } else if (statesData?.ok || metricsData?.ok) {
-        const camps = statesData?.campaigns_synced ?? statesData?.updated ?? 0;
-        const metrics = metricsData?.records_processed ?? metricsData?.updated ?? 0;
-        setForceSyncMsg({ type: 'success', text: `✓ ${camps} camp. · ${metrics} registros de métricas` });
-        setLastSyncInfo({ at: new Date().toISOString(), trigger: 'manual' });
-        await loadData();
-      } else {
-        const errMsg = statesData?.error || metricsData?.error || 'Falha no sync';
-        setForceSyncMsg({ type: 'error', text: errMsg });
-      }
-    } catch (e) {
-      setForceSyncMsg({ type: 'error', text: e.message });
-    } finally {
-      setForcingSyncAds(false);
-      setTimeout(() => setForceSyncMsg(null), 12000);
-    }
-  };
 
 
 
@@ -349,45 +286,18 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
             {lastSync ? `Último sync: ${lastSync}` : 'Nenhum sync realizado'}
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          {/* Sync unificado */}
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex items-center gap-2">
-              <div className="flex flex-col items-end gap-1">
-                <button onClick={loadFromReports} disabled={loadingReports || !account}
-                  className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
-                  {loadingReports ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
-                  {loadingReports ? 'Carregando...' : 'Carregar Relatórios'}
-                </button>
-                {loadReportsMsg && (
-                  <p className={`text-xs ${loadReportsMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{loadReportsMsg.text}</p>
-                )}
-              </div>
-              <button onClick={triggerSync} disabled={forcingSyncAds || !account}
-                className="flex items-center gap-2 px-4 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50">
-                <RefreshCw className={`w-4 h-4 ${forcingSyncAds ? 'animate-spin' : ''}`} />
-                {forcingSyncAds ? 'Sincronizando...' : 'Sincronizar Ads'}
-              </button>
-            </div>
-            {/* Última atualização */}
-            {lastSyncInfo && !forceSyncMsg && (
-              <p className="text-[10px] text-slate-500 flex items-center gap-1">
-                <Clock className="w-3 h-3" />
-                {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                <span className={`px-1 py-0.5 rounded text-[9px] font-semibold border ${lastSyncInfo.trigger === 'manual' ? 'bg-cyan/10 text-cyan border-cyan/20' : 'bg-slate-500/10 text-slate-400 border-slate-500/20'}`}>
-                  {lastSyncInfo.trigger === 'manual' ? 'Manual' : 'Auto'}
-                </span>
-              </p>
-            )}
-            {forceSyncMsg && (
-              <p className={`text-xs ${forceSyncMsg.type === 'success' ? 'text-emerald-400' : forceSyncMsg.type === 'warn' ? 'text-amber-400' : 'text-red-400'}`}>{forceSyncMsg.text}</p>
-            )}
-          </div>
+        <div className="flex items-center gap-2">
+          {lastSyncInfo && (
+            <p className="text-[10px] text-slate-500 flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              <span className="px-1 py-0.5 rounded text-[9px] font-semibold border bg-slate-500/10 text-slate-400 border-slate-500/20">Auto</span>
+            </p>
+          )}
           <button onClick={loadData} disabled={loading}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
-
         </div>
       </div>
 
