@@ -87,19 +87,69 @@ Deno.serve(async (request) => {
       }
     }
 
-    const newRecords = Array.from(metricsMap.values()).map((m) => {
+    // ── Verificação de integridade antes de gravar ──
+    let skippedIntegrity = 0;
+    const integrityIssues: string[] = [];
+
+    const newRecords = Array.from(metricsMap.values()).flatMap((m) => {
       const { _has_campaign_report, ...rec } = m;
-      return {
+
+      const spend = Number(rec.spend) || 0;
+      const sales = Number(rec.sales) || 0;
+      const clicks = Number(rec.clicks) || 0;
+      const impressions = Number(rec.impressions) || 0;
+      const orders = Number(rec.orders) || 0;
+
+      // Regras de integridade:
+      // 1. Valores negativos são inválidos
+      if (spend < 0 || sales < 0 || clicks < 0 || impressions < 0 || orders < 0) {
+        skippedIntegrity++;
+        integrityIssues.push(`neg:${rec.campaign_id}@${rec.date}`);
+        return [];
+      }
+      // 2. Cliques não podem exceder impressões (quando ambos > 0)
+      if (impressions > 0 && clicks > impressions) {
+        skippedIntegrity++;
+        integrityIssues.push(`clicks>impressions:${rec.campaign_id}@${rec.date}`);
+        return [];
+      }
+      // 3. ACoS acima de 10000% indica dado corrompido (spend sem sales proporcional)
+      const rawAcos = sales > 0 ? (spend / sales * 100) : 0;
+      if (sales > 0 && rawAcos > 10000) {
+        skippedIntegrity++;
+        integrityIssues.push(`acos_overflow:${rec.campaign_id}@${rec.date}:${rawAcos.toFixed(0)}%`);
+        return [];
+      }
+      // 4. CPC acima de R$500 é sinal de dado corrompido
+      const rawCpc = clicks > 0 ? (spend / clicks) : 0;
+      if (clicks > 0 && rawCpc > 500) {
+        skippedIntegrity++;
+        integrityIssues.push(`cpc_overflow:${rec.campaign_id}@${rec.date}:R$${rawCpc.toFixed(2)}`);
+        return [];
+      }
+      // 5. Pedidos não podem exceder cliques (quando ambos > 0)
+      if (clicks > 0 && orders > clicks) {
+        skippedIntegrity++;
+        integrityIssues.push(`orders>clicks:${rec.campaign_id}@${rec.date}`);
+        return [];
+      }
+
+      return [{
         ...rec,
-        acos: rec.sales > 0 ? (rec.spend / rec.sales * 100) : 0,
-        roas: rec.spend > 0 ? (rec.sales / rec.spend) : 0,
-        ctr: rec.impressions > 0 ? (rec.clicks / rec.impressions * 100) : 0,
-        cpc: rec.clicks > 0 ? (rec.spend / rec.clicks) : 0,
+        spend, sales, clicks, impressions, orders,
+        acos: sales > 0 ? rawAcos : 0,
+        roas: spend > 0 ? (sales / spend) : 0,
+        ctr: impressions > 0 ? (clicks / impressions * 100) : 0,
+        cpc: rawCpc,
         source: 'ads_report',
         synced_at: now,
         updated_at: now,
-      };
+      }];
     });
+
+    if (skippedIntegrity > 0) {
+      console.warn(`[loadDashboard] ⚠️ ${skippedIntegrity} registros descartados por falha de integridade:`, integrityIssues.slice(0, 10));
+    }
 
     console.log(`[loadDashboard] ${newRecords.length} registros CampaignMetricsDaily a sincronizar`);
 
@@ -151,6 +201,8 @@ Deno.serve(async (request) => {
       metrics_records: newRecords.length,
       created,
       updated,
+      integrity_skipped: skippedIntegrity,
+      integrity_issues: integrityIssues.slice(0, 20),
       duration_s: ((Date.now() - startedAt) / 1000).toFixed(1),
     };
 
