@@ -1,37 +1,82 @@
+// v2 — lógica de chamada Amazon inlinada (sem invoke intermediário)
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function ads(base44: any, accountId: string, operation: string, method: string, path: string, payload: any, contentType: string) {
-  const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-    amazon_account_id: accountId,
-    operation,
-    method,
-    path,
-    payload,
-    content_type: contentType,
-    accept: contentType,
-    _service_role: true,
+function adsBase(region: string | undefined) {
+  const value = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+  if (value.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (value.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+  return 'https://advertising-api.amazon.com';
+}
+
+async function getAccessToken(account: any): Promise<string> {
+  const entityToken = account.ads_refresh_token;
+  if (!entityToken || !entityToken.startsWith('Atzr|')) {
+    throw new Error('Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.');
+  }
+  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+  const secret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+  if (!clientId || !secret) throw new Error('Credenciais ADS_CLIENT_ID/ADS_CLIENT_SECRET ausentes');
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: entityToken,
+      client_id: clientId,
+      client_secret: secret,
+    }),
   });
-  return response?.data || response || {};
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) {
+    throw new Error(data.error_description || data.error || 'Falha no token Amazon Ads');
+  }
+  return data.access_token;
 }
 
-function payloadOf(result: any) {
-  return result?.payload || result || {};
+async function adsCall(baseUrl: string, token: string, clientId: string, profileId: string, method: string, path: string, contentType: string, payload: any): Promise<any> {
+  const url = `${baseUrl}${path}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': clientId,
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': contentType,
+      Accept: contentType,
+    },
+    signal: controller.signal,
+    body: payload == null || method === 'GET' ? undefined : JSON.stringify(payload),
+  }).finally(() => clearTimeout(timeout));
+
+  const text = await response.text().catch(() => '');
+  let parsed: any = null;
+  try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
+
+  const ok = response.status >= 200 && response.status < 300;
+  return {
+    ok,
+    status: response.status,
+    payload: parsed,
+    errors: ok ? [] : [{ code: String(response.status), message: text.slice(0, 300) }],
+  };
 }
 
-function listOf(result: any, key: string) {
-  const payload = payloadOf(result);
-  if (Array.isArray(payload?.[key])) return payload[key];
-  if (Array.isArray(payload)) return payload;
+function listOf(result: any, key: string): any[] {
+  const p = result?.payload || result || {};
+  if (Array.isArray(p?.[key])) return p[key];
+  if (Array.isArray(p)) return p;
   return [];
 }
 
-function createdId(result: any, group: string, field: string) {
-  const payload = payloadOf(result);
-  return payload?.[group]?.success?.[0]?.[field]
-    || payload?.success?.[0]?.[field]
-    || payload?.[group]?.[0]?.[field]
+function createdId(result: any, group: string, field: string): string | null {
+  const p = result?.payload || result || {};
+  return p?.[group]?.success?.[0]?.[field]
+    || p?.success?.[0]?.[field]
+    || p?.[group]?.[0]?.[field]
     || null;
 }
 
@@ -50,30 +95,47 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'amazon_account_id, campaign_id e asin ou sku são obrigatórios' }, { status: 400 });
     }
 
+    // Buscar conta no banco
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
+    const account = accounts[0];
+    if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
+
+    // Buscar campanha local
     const localRows = await base44.asServiceRole.entities.Campaign.filter({
       amazon_account_id: accountId,
       campaign_id: campaignId,
-    }, '-updated_at', 1).catch(() => []);
+    }, '-updated_date', 1).catch(() => []);
     const localCampaign = localRows[0] || null;
 
-    const campaignResult = await ads(base44, accountId, 'getAutoCampaignByIdForRepair', 'POST', '/sp/campaigns/list', {
-      campaignIdFilter: [campaignId],
+    // Autenticar diretamente
+    const token = await getAccessToken(account);
+    const profileId = String(account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '');
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const base = adsBase(account.region);
+    const CT_CAMPAIGN = 'application/vnd.spCampaign.v3+json';
+    const CT_ADGROUP = 'application/vnd.spAdGroup.v3+json';
+    const CT_PRODUCTAD = 'application/vnd.spProductAd.v3+json';
+
+    // 1. Verificar campanha na Amazon
+    const campaignResult = await adsCall(base, token, clientId, profileId, 'POST', '/sp/campaigns/list', CT_CAMPAIGN, {
+      campaignIdFilter: { include: [campaignId] },
       stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
       maxResults: 10,
-    }, 'application/vnd.spCampaign.v3+json');
+    });
 
     const campaign = listOf(campaignResult, 'campaigns').find((item: any) => String(item.campaignId) === campaignId);
     if (!campaign) {
-      throw new Error('Campanha não encontrada na Amazon pelo campaign_id.');
+      throw new Error(`Campanha ${campaignId} não encontrada na Amazon (ASIN: ${asin}).`);
     }
 
     const repaired: string[] = [];
     const alreadyComplete: string[] = [];
 
+    // 2. Ativar campanha se necessário
     if (String(campaign.state || '').toUpperCase() !== 'ENABLED') {
-      const enabled = await ads(base44, accountId, 'enableAutoCampaignById', 'PUT', '/sp/campaigns', {
+      const enabled = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/campaigns', CT_CAMPAIGN, {
         campaigns: [{ campaignId, state: 'ENABLED' }],
-      }, 'application/vnd.spCampaign.v3+json');
+      });
       if (!enabled?.ok && enabled?.status !== 207) throw new Error(enabled?.errors?.[0]?.message || 'Falha ao ativar campanha');
       repaired.push('campaign_enabled');
       await wait(14000);
@@ -81,30 +143,30 @@ Deno.serve(async (request) => {
       alreadyComplete.push('campaign_enabled');
     }
 
-    const adGroupsResult = await ads(base44, accountId, 'listAdGroupsByCampaignIdForRepair', 'POST', '/sp/adGroups/list', {
-      campaignIdFilter: [campaignId],
+    // 3. Verificar/criar ad group
+    const adGroupsResult = await adsCall(base, token, clientId, profileId, 'POST', '/sp/adGroups/list', CT_ADGROUP, {
+      campaignIdFilter: { include: [campaignId] },
       stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
       maxResults: 100,
-    }, 'application/vnd.spAdGroup.v3+json');
+    });
     if (!adGroupsResult?.ok) throw new Error(adGroupsResult?.errors?.[0]?.message || 'Falha ao listar grupos de anúncios');
 
-    let adGroup = listOf(adGroupsResult, 'adGroups').find((group: any) => String(group.state || '').toUpperCase() === 'ENABLED')
-      || listOf(adGroupsResult, 'adGroups').find((group: any) => String(group.state || '').toUpperCase() !== 'ARCHIVED');
+    let adGroup = listOf(adGroupsResult, 'adGroups').find((g: any) => String(g.state || '').toUpperCase() === 'ENABLED')
+      || listOf(adGroupsResult, 'adGroups').find((g: any) => String(g.state || '').toUpperCase() !== 'ARCHIVED');
 
     if (!adGroup) {
-      const created = await ads(base44, accountId, 'createMissingAutoAdGroupByCampaignId', 'POST', '/sp/adGroups', {
+      const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/adGroups', CT_ADGROUP, {
         adGroups: [{ name: `AG | AUTO | ${asin || sku}`, campaignId, defaultBid: 0.5, state: 'ENABLED' }],
-      }, 'application/vnd.spAdGroup.v3+json');
+      });
       const adGroupId = createdId(created, 'adGroups', 'adGroupId');
       if (!adGroupId) throw new Error(created?.errors?.[0]?.message || 'Amazon não retornou adGroupId');
       adGroup = { adGroupId: String(adGroupId), state: 'ENABLED' };
       repaired.push('ad_group_created');
       await wait(14000);
     } else if (String(adGroup.state || '').toUpperCase() !== 'ENABLED') {
-      const adGroupId = String(adGroup.adGroupId);
-      const enabled = await ads(base44, accountId, 'enableAutoAdGroupById', 'PUT', '/sp/adGroups', {
-        adGroups: [{ adGroupId, state: 'ENABLED' }],
-      }, 'application/vnd.spAdGroup.v3+json');
+      const enabled = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/adGroups', CT_ADGROUP, {
+        adGroups: [{ adGroupId: String(adGroup.adGroupId), state: 'ENABLED' }],
+      });
       if (!enabled?.ok && enabled?.status !== 207) throw new Error(enabled?.errors?.[0]?.message || 'Falha ao ativar grupo de anúncios');
       repaired.push('ad_group_enabled');
       await wait(14000);
@@ -113,12 +175,14 @@ Deno.serve(async (request) => {
     }
 
     const adGroupId = String(adGroup.adGroupId);
-    const productAdsResult = await ads(base44, accountId, 'listProductAdsByCampaignIdForRepair', 'POST', '/sp/productAds/list', {
-      campaignIdFilter: [campaignId],
-      adGroupIdFilter: [adGroupId],
+
+    // 4. Verificar/criar product ad
+    const productAdsResult = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds/list', CT_PRODUCTAD, {
+      campaignIdFilter: { include: [campaignId] },
+      adGroupIdFilter: { include: [adGroupId] },
       stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
       maxResults: 100,
-    }, 'application/vnd.spProductAd.v3+json');
+    });
     if (!productAdsResult?.ok) throw new Error(productAdsResult?.errors?.[0]?.message || 'Falha ao listar anúncios de produto');
 
     let productAd = listOf(productAdsResult, 'productAds').find((ad: any) =>
@@ -127,9 +191,9 @@ Deno.serve(async (request) => {
     ) || listOf(productAdsResult, 'productAds').find((ad: any) => String(ad.state || '').toUpperCase() !== 'ARCHIVED');
 
     if (!productAd) {
-      const created = await ads(base44, accountId, 'createMissingAutoProductAdByCampaignId', 'POST', '/sp/productAds', {
+      const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds', CT_PRODUCTAD, {
         productAds: [{ campaignId, adGroupId, ...(sku ? { sku } : { asin }), state: 'ENABLED' }],
-      }, 'application/vnd.spProductAd.v3+json');
+      });
       const productAdId = createdId(created, 'productAds', 'adId') || createdId(created, 'productAds', 'productAdId');
       if (!productAdId && !created?.ok && created?.status !== 207) {
         throw new Error(created?.errors?.[0]?.message || 'Falha ao criar anúncio de produto');
@@ -138,10 +202,9 @@ Deno.serve(async (request) => {
       repaired.push('product_ad_created');
       await wait(14000);
     } else if (String(productAd.state || '').toUpperCase() !== 'ENABLED') {
-      const adId = String(productAd.adId || productAd.productAdId);
-      const enabled = await ads(base44, accountId, 'enableAutoProductAdById', 'PUT', '/sp/productAds', {
-        productAds: [{ adId, state: 'ENABLED' }],
-      }, 'application/vnd.spProductAd.v3+json');
+      const enabled = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/productAds', CT_PRODUCTAD, {
+        productAds: [{ adId: String(productAd.adId || productAd.productAdId), state: 'ENABLED' }],
+      });
       if (!enabled?.ok && enabled?.status !== 207) throw new Error(enabled?.errors?.[0]?.message || 'Falha ao ativar anúncio de produto');
       repaired.push('product_ad_enabled');
       await wait(14000);
@@ -149,14 +212,14 @@ Deno.serve(async (request) => {
       alreadyComplete.push('product_ad');
     }
 
+    // 5. Atualizar banco local
     if (localCampaign) {
       await base44.asServiceRole.entities.Campaign.update(localCampaign.id, {
         asin: asin || localCampaign.asin || null,
-        sku: sku || localCampaign.sku || null,
-        completion_status: 'complete',
-        is_incomplete: false,
-        ad_group_id: adGroupId,
-        product_ad_id: String(productAd?.adId || productAd?.productAdId || '') || null,
+        state: 'enabled',
+        status: 'enabled',
+        is_operational: true,
+        requires_attention: false,
         repair_status: repaired.length ? 'repaired' : 'verified',
         repaired_at: new Date().toISOString(),
         last_repair_error: null,
@@ -175,7 +238,7 @@ Deno.serve(async (request) => {
       ad_group_id: adGroupId,
       product_ad_id: String(productAd?.adId || productAd?.productAdId || '') || null,
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, complete: false, error: error?.message || 'Erro ao reparar campanha AUTO por ID' }, { status: 500 });
   }
 });

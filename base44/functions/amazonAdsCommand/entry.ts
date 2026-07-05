@@ -1,4 +1,4 @@
-// amazonAdsCommand v3 — lógica de gateway inlinada para evitar falha de invocação interna
+// v3 — fetch direto à Amazon Ads API (sem invoke intermediário para evitar 403 no asServiceRole chain)
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const ALLOWED_PATHS = [
@@ -13,20 +13,14 @@ const ALLOWED_PATHS = [
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function adsBase(region: string) {
+function adsBase(region: string | undefined) {
   const value = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
   if (value.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (value.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-function retryDelay(attempt: number): number {
-  return Math.min(1000 * Math.pow(2, attempt) + Math.floor(Math.random() * 1000), 30000);
-}
-
-async function getAccessToken(account: any): Promise<string> {
+async function getAccessToken(account: any) {
   const entityToken = account.ads_refresh_token;
   if (!entityToken || !entityToken.startsWith('Atzr|')) {
     throw new Error('Token Amazon Ads não configurado. Reconecte a conta em Integrações → Amazon.');
@@ -51,36 +45,37 @@ async function getAccessToken(account: any): Promise<string> {
   return data.access_token;
 }
 
-async function callAmazonApi(url: string, method: string, headers: Record<string, string>, payload: any, maxAttempts: number, timeoutMs: number) {
-  let parsed: any = null;
+async function callAmazonApi(url: string, method: string, headers: Record<string, string>, payload: any, maxAttempts = 3) {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  let lastResult: any = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timeout = setTimeout(() => controller.abort(), 30000);
       const response = await fetch(url, {
         method,
         headers,
         signal: controller.signal,
         body: payload == null || method === 'GET' ? undefined : JSON.stringify(payload),
-      }).finally(() => clearTimeout(timer));
+      }).finally(() => clearTimeout(timeout));
 
       const text = await response.text().catch(() => '');
-      let body: any = null;
-      try { body = text ? JSON.parse(text) : null; } catch { body = { raw: text }; }
+      let parsed: any = null;
+      try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
 
       const ok = response.status >= 200 && response.status < 300;
       const retryable = response.status === 429 || response.status === 503 || response.status === 502;
+      lastResult = { ok, status: response.status, payload: parsed, errors: ok ? [] : [{ code: String(response.status), message: text.slice(0, 300) }] };
 
-      parsed = { ok, status: response.status, payload: body, errors: ok ? [] : [{ code: String(response.status), message: body?.message || body?.error || text.slice(0, 200) || `HTTP ${response.status}` }] };
       if (ok || !retryable || attempt === maxAttempts - 1) break;
-      await wait(retryDelay(attempt));
+      await wait(Math.min(1000 * Math.pow(2, attempt), 15000));
     } catch (err: any) {
-      parsed = { ok: false, status: 0, payload: null, errors: [{ code: err?.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR', message: err?.message || String(err) }] };
+      lastResult = { ok: false, status: 0, payload: null, errors: [{ code: 'NETWORK_ERROR', message: err?.message || String(err) }] };
       if (attempt === maxAttempts - 1) break;
-      await wait(retryDelay(attempt));
+      await wait(2000);
     }
   }
-  return parsed;
+  return lastResult;
 }
 
 Deno.serve(async (request) => {
@@ -114,10 +109,20 @@ Deno.serve(async (request) => {
       Accept: body.accept || body.content_type || 'application/json',
     };
 
-    const maxAttempts = Math.max(1, Math.min(Number(body.max_attempts || 3), 5));
-    const timeoutMs = Math.max(5000, Number(body.timeout_ms || 30000));
+    const result = await callAmazonApi(url, method, headers, body.payload ?? null, Number(body.max_attempts || 3));
 
-    const result = await callAmazonApi(url, method, headers, body.payload ?? null, maxAttempts, timeoutMs);
+    // Log no SyncExecutionLog para auditoria
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      amazon_account_id: account.id,
+      operation: `amazon_api:${body.operation || `${method}:${path}`}`,
+      status: result.ok ? 'success' : 'error',
+      trigger_type: 'gateway',
+      started_at: new Date().toISOString(),
+      completed_at: new Date().toISOString(),
+      records_processed: result.ok ? 1 : 0,
+      error_message: result.ok ? null : String(result.errors?.[0]?.message || '').slice(0, 500),
+    }).catch(() => {});
+
     return Response.json(result);
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro no comando Amazon Ads' }, { status: 500 });
