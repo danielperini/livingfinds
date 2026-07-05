@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   FileText, Search, RefreshCw, Loader2,
-  Minus, XCircle, Filter, TrendingUp, TrendingDown, Download
+  Minus, XCircle, Filter, TrendingUp, TrendingDown, Download, AlertTriangle, Play, CheckCircle2
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
@@ -19,6 +19,8 @@ export default function LogDeBids() {
   const [error, setError] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [runningBidEngine, setRunningBidEngine] = useState(false);
+  const [bidEngineMsg, setBidEngineMsg] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,6 +130,35 @@ export default function LogDeBids() {
     } finally {
       setSyncing(false);
       setTimeout(() => setSyncMsg(null), 12000);
+    }
+  };
+
+  // Verificar se bids foram atualizados hoje
+  const today = new Date().toISOString().slice(0, 10);
+  const lastBidDate = logs.find(l => l._source === 'api')?.date || logs.find(l => l._source === 'api')?.created_at?.slice(0, 10) || null;
+  const bidsUpdatedToday = lastBidDate === today;
+
+  const runBidEngines = async () => {
+    if (!account || runningBidEngine) return;
+    setRunningBidEngine(true);
+    setBidEngineMsg(null);
+    try {
+      const [smartRes, calibRes] = await Promise.all([
+        base44.functions.invoke('smartBidFromCpc', { amazon_account_id: account.id }),
+        base44.functions.invoke('calibrateBidsNoImpressions', { amazon_account_id: account.id }),
+      ]);
+      const s = smartRes?.data?.summary || {};
+      const c = calibRes?.data?.summary || {};
+      setBidEngineMsg({
+        type: 'success',
+        text: `✓ SmartBid: ${s.keywords_adjusted || 0} ajustadas · Calibração: ${(c.keywords_boosted || 0) + (c.keywords_reduced || 0)} ajustadas`,
+      });
+      await load();
+    } catch (e) {
+      setBidEngineMsg({ type: 'error', text: e.message });
+    } finally {
+      setRunningBidEngine(false);
+      setTimeout(() => setBidEngineMsg(null), 15000);
     }
   };
 
@@ -270,6 +301,44 @@ export default function LogDeBids() {
       {syncMsg && (
         <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${syncMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
           {syncMsg.text}
+        </div>
+      )}
+
+      {/* Painel de alerta: bids não atualizados hoje */}
+      {!loading && (
+        <div className={`rounded-xl border px-5 py-4 flex items-center justify-between gap-4 flex-wrap ${bidsUpdatedToday ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/8 border-amber-500/30'}`}>
+          <div className="flex items-center gap-3">
+            {bidsUpdatedToday
+              ? <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
+              : <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 animate-pulse" />}
+            <div>
+              <p className={`text-sm font-semibold ${bidsUpdatedToday ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {bidsUpdatedToday ? 'Bids atualizados hoje' : 'Bids não foram atualizados hoje'}
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {bidsUpdatedToday
+                  ? `Última atualização: ${lastBidDate} — motor de bids executou normalmente.`
+                  : `Último ajuste registrado: ${lastBidDate || 'nunca'}. O pipeline diário roda às 06:30 BRT — execute manualmente se necessário.`}
+              </p>
+            </div>
+          </div>
+          {!bidsUpdatedToday && (
+            <div className="flex flex-col items-end gap-1">
+              <button
+                onClick={runBidEngines}
+                disabled={runningBidEngine || !account}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+              >
+                {runningBidEngine ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                {runningBidEngine ? 'Executando...' : 'Executar Bid Engines Agora'}
+              </button>
+              {bidEngineMsg && (
+                <p className={`text-xs font-medium ${bidEngineMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {bidEngineMsg.text}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

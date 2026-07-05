@@ -86,8 +86,31 @@ Deno.serve(async (req) => {
       sync_run_id: reportRun.id,
       _service_role: true,
     });
-
     const plData = pipelineRes?.data || pipelineRes || {};
+
+    // ── Bid engines: smartBidFromCpc + calibrateBidsNoImpressions ────────────
+    // Verificar se já rodaram hoje (guard anti-duplicata)
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const recentBidLogs = await base44.asServiceRole.entities.AdsBidChangeLog.filter(
+      { amazon_account_id: aid }, '-created_at', 5
+    );
+    const lastBidLogDate = recentBidLogs[0]?.created_at?.slice(0, 10) || '';
+    const bidsAlreadyRunToday = lastBidLogDate === todayStr;
+
+    let smartBidRes: any = { skipped: true, reason: 'Já executado hoje' };
+    let calibrateRes: any = { skipped: true, reason: 'Já executado hoje' };
+
+    if (!bidsAlreadyRunToday) {
+      console.log('[downloadAndProcessAdsReports] Executando bid engines (não rodaram hoje)...');
+      const [sbRes, cbRes] = await Promise.all([
+        base44.asServiceRole.functions.invoke('smartBidFromCpc', { amazon_account_id: aid, _service_role: true }),
+        base44.asServiceRole.functions.invoke('calibrateBidsNoImpressions', { amazon_account_id: aid, _service_role: true }),
+      ]);
+      smartBidRes = sbRes?.data || sbRes || {};
+      calibrateRes = cbRes?.data || cbRes || {};
+    } else {
+      console.log('[downloadAndProcessAdsReports] Bid engines já rodaram hoje, pulando.');
+    }
 
     return Response.json({
       ok: true,
@@ -102,6 +125,11 @@ Deno.serve(async (req) => {
         ok: plData.ok,
         accounts_processed: plData.accounts_processed,
         duration_ms: plData.duration_ms,
+      },
+      bid_engines: {
+        smart_bid: smartBidRes?.summary || smartBidRes,
+        calibrate: calibrateRes?.summary || calibrateRes,
+        already_run_today: bidsAlreadyRunToday,
       },
       total_duration_ms: Date.now() - startMs,
     });
