@@ -105,20 +105,27 @@ export default function TaskQueueMonitor() {
     if (running || !account) return;
     setRunning(true);
     setRunMsg(null);
+    let succeeded = 0, failed = 0;
     try {
-      const res = await base44.functions.invoke('runTaskQueue', { amazon_account_id: account.id });
-      const d = res?.data || {};
-      if (d.ok) {
-        setRunMsg({ type: 'success', text: `✅ ${d.tasks_succeeded}/${d.tasks_total} tarefas concluídas (${d.duration_s}s)` });
-      } else {
-        setRunMsg({ type: 'warn', text: `⚠️ ${d.tasks_failed} falhou(aram). Veja detalhes abaixo.` });
+      // Processa tarefas uma a uma (cada chamada executa 1 tarefa)
+      for (let i = 0; i < 15; i++) {
+        const res = await base44.functions.invoke('runTaskQueue', { amazon_account_id: account.id, action: 'run' });
+        const d = res?.data || {};
+        if (d.done || d.message === 'Nenhuma tarefa pendente') break;
+        if (d.executed) { d.ok ? succeeded++ : failed++; }
+        await loadTasks();
+        if (!d.done && d.remaining_pending > 0) await new Promise(r => setTimeout(r, 3000));
       }
+      setRunMsg({ type: failed === 0 ? 'success' : 'warn', text: failed === 0
+        ? `✅ ${succeeded} tarefa(s) concluída(s) com sucesso`
+        : `⚠️ ${succeeded} ok, ${failed} falhou(aram). Veja detalhes abaixo.`
+      });
       await loadTasks();
     } catch (e) {
       setRunMsg({ type: 'error', text: e.message });
     } finally {
       setRunning(false);
-      setTimeout(() => setRunMsg(null), 15000);
+      setTimeout(() => setRunMsg(null), 20000);
     }
   };
 
