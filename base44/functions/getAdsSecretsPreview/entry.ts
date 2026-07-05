@@ -12,31 +12,31 @@ Deno.serve(async (req) => {
       return val.slice(0, 4) + '****' + val.slice(-4);
     };
 
-    const secrets = {
-      ADS_CLIENT_ID:     Deno.env.get('ADS_CLIENT_ID')     || null,
-      ADS_CLIENT_SECRET: Deno.env.get('ADS_CLIENT_SECRET') || null,
-      ADS_REFRESH_TOKEN: Deno.env.get('ADS_REFRESH_TOKEN') || null,
-      ADS_PROFILE_ID:    Deno.env.get('ADS_PROFILE_ID')    || null,
-      ADS_REGION:        Deno.env.get('ADS_REGION')        || null,
+    const read = (key: string) => Deno.env.get(key) || null;
+
+    const secrets: Record<string, string | null> = {
+      ADS_CLIENT_ID:              read('ADS_CLIENT_ID'),
+      ADS_CLIENT_SECRET:          read('ADS_CLIENT_SECRET'),
+      ADS_REFRESH_TOKEN:          read('ADS_REFRESH_TOKEN'),
+      ADS_PROFILE_ID:             read('ADS_PROFILE_ID'),
+      ADS_REGION:                 read('ADS_REGION'),
+      AMAZON_SP_REFRESH_TOKEN:    read('AMAZON_SP_REFRESH_TOKEN'),
+      AMAZON_LWA_CLIENT_ID:       read('AMAZON_LWA_CLIENT_ID'),
+      AMAZON_LWA_CLIENT_SECRET:   read('AMAZON_LWA_CLIENT_SECRET'),
+      ANTHROPIC_API_KEY:          read('ANTHROPIC_API_KEY'),
     };
 
-    return Response.json({
-      ok: true,
-      values: {
-        ADS_CLIENT_ID:     secrets.ADS_CLIENT_ID     ? mask(secrets.ADS_CLIENT_ID)     : null,
-        ADS_CLIENT_SECRET: secrets.ADS_CLIENT_SECRET ? mask(secrets.ADS_CLIENT_SECRET) : null,
-        ADS_REFRESH_TOKEN: secrets.ADS_REFRESH_TOKEN ? mask(secrets.ADS_REFRESH_TOKEN) : null,
-        ADS_PROFILE_ID:    secrets.ADS_PROFILE_ID,   // não sensível, mostrar completo
-        ADS_REGION:        secrets.ADS_REGION,        // não sensível, mostrar completo
-      },
-      set: {
-        ADS_CLIENT_ID:     !!secrets.ADS_CLIENT_ID,
-        ADS_CLIENT_SECRET: !!secrets.ADS_CLIENT_SECRET,
-        ADS_REFRESH_TOKEN: !!secrets.ADS_REFRESH_TOKEN,
-        ADS_PROFILE_ID:    !!secrets.ADS_PROFILE_ID,
-        ADS_REGION:        !!secrets.ADS_REGION,
-      },
-    });
+    // Campos não-sensíveis: mostrar valor completo
+    const nonSensitive = new Set(['ADS_PROFILE_ID', 'ADS_REGION']);
+
+    const values: Record<string, string | null> = {};
+    const set: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(secrets)) {
+      set[k] = !!v;
+      values[k] = v ? (nonSensitive.has(k) ? v : mask(v)) : null;
+    }
+
+    return Response.json({ ok: true, values, set });
   } catch (error) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
