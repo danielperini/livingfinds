@@ -6,6 +6,7 @@ import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePoi
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
+import SpendRevenueBarChart from '@/components/dashboard/SpendRevenueBarChart';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -606,6 +607,9 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           )}
         </div>
       </div>
+
+      {/* Barras Gasto vs Receita */}
+      <SpendRevenueBarChart chartData={chartData} loading={loading} sym={account?.currency_symbol || 'R$'} />
 
       {/* Gráfico Spend vs Vendas */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
