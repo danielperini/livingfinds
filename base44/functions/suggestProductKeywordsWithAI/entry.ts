@@ -433,11 +433,28 @@ Deno.serve(async (request) => {
       }
     }
 
+    // ── Limite: máx 10 sugestões por produto (top por relevância) ─────────────
+    const MAX_PER_PRODUCT = 10;
+    const alreadyCount = previousSuggestions.filter((s: any) =>
+      !['rejected', 'deleted'].includes(s.status)
+    ).length;
+
+    if (alreadyCount >= MAX_PER_PRODUCT) {
+      await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId: product.id, stage: 'skipped', message: `Já existem ${alreadyCount} sugestões para este produto — limite ${MAX_PER_PRODUCT}. Nenhuma gerada.`, details: { skipped: true, existing: alreadyCount } });
+      return Response.json({ ok: true, skipped: true, asin, reason: `already_has_${alreadyCount}_suggestions`, existing_count: alreadyCount });
+    }
+
+    // Ordenar por relevância e pegar apenas o necessário para completar até 10
+    const slots = MAX_PER_PRODUCT - alreadyCount;
+    const topRecords = recordsToCreate
+      .sort((a: any, b: any) => (b.relevance_score || 0) - (a.relevance_score || 0))
+      .slice(0, slots);
+
     // ── Gravar sugestões em lotes de 20 ──────────────────────────────────────
     stage = 'persist';
     let saved = 0;
-    for (let i = 0; i < recordsToCreate.length; i += 20) {
-      const batch = recordsToCreate.slice(i, i + 20);
+    for (let i = 0; i < topRecords.length; i += 20) {
+      const batch = topRecords.slice(i, i + 20);
       await base44.asServiceRole.entities.KeywordSuggestion.bulkCreate(batch);
       saved += batch.length;
     }
@@ -449,6 +466,7 @@ Deno.serve(async (request) => {
       asin, product_id: product.id, amazon_account_id: accountId,
       total: saved, new_suggestions: saved,
       ai_credits_used: forceAI,
+      limit_per_product: 10,
     };
 
     await writeLog(base44, {
