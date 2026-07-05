@@ -8,6 +8,7 @@ import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
 import SpendRevenueBarChart from '@/components/dashboard/SpendRevenueBarChart';
 import GoalsComparisonPanel from '@/components/dashboard/GoalsComparisonPanel';
+import BudgetAllocationPanel from '@/components/dashboard/BudgetAllocationPanel';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -335,6 +336,15 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         />
       )}
       {mainTab !== 'analytics' && mainTab !== 'budget14d' && <>
+
+      {/* Painel de Orçamento Diário Centralizado */}
+      <BudgetAllocationPanel
+        account={account}
+        campaigns={campaigns}
+        products={products}
+        metricsDaily={metricsDaily}
+        autopilotConfig={autopilotConfig}
+      />
 
       {/* Painel de Auditoria de Dados */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
