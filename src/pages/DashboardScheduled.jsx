@@ -34,7 +34,7 @@ export default function DashboardScheduled() {
     const timer = window.setInterval(() => {
       setRefreshKey((value) => value + 1);
       refreshMetrics();
-    }, 20000);
+    }, 300000);
     return () => window.clearInterval(timer);
   }, [refreshMetrics]);
 

@@ -195,10 +195,12 @@ export default function Dashboard() {
 
       const rateLimited =
         String(statesData?.error || '').toLowerCase().includes('rate limit') ||
-        String(metricsData?.error || '').toLowerCase().includes('rate limit');
+        String(metricsData?.error || '').toLowerCase().includes('rate limit') ||
+        String(statesRes.reason?.message || '').toLowerCase().includes('rate limit') ||
+        String(metricsRes.reason?.message || '').toLowerCase().includes('rate limit');
 
       if (rateLimited) {
-        setForceSyncMsg({ type: 'warn', text: 'Amazon em rate limit — dados atualizados na janela 00:00–04:00.' });
+        setForceSyncMsg({ type: 'warn', text: '⚠️ Amazon em rate limit — aguarde alguns minutos e tente novamente.' });
       } else if (statesData?.ok || metricsData?.ok) {
         const camps = statesData?.campaigns_synced ?? statesData?.updated ?? 0;
         const metrics = metricsData?.records_processed ?? metricsData?.updated ?? 0;
