@@ -25,7 +25,7 @@ const PROMPT_VERSION = '1.0.0';
 const MIN_TOTAL_DAILY_BUDGET = 50;
 const TARGET_TOTAL_DAILY_BUDGET = 60;
 const MAX_TOTAL_DAILY_BUDGET = 65;
-const MIN_CONFIDENCE = 0.95;
+const MIN_CONFIDENCE = 0.90;
 const MIN_BID = 0.10;
 const MAX_BID = 5.0;
 
@@ -39,7 +39,7 @@ const ALLOWED_METRICS = new Set([
   'impressions','clicks','ctr','cpc','spend','orders','units','conversion_rate',
   'sales','acos','tacos','roas','gross_profit','net_profit','profit_per_order',
   'stock','stock_days','current_bid','current_budget','campaign_age_days',
-  'keyword_age_days','search_term_confidence'
+  'keyword_age_days','search_term_confidence','days_since','bid','state','status'
 ]);
 const ALLOWED_ACTIONS = new Set([
   'increase_bid_percent','decrease_bid_percent','set_bid','pause_keyword',
@@ -62,6 +62,7 @@ function validateProposedRule(rule, existingRuleKeys = new Set()) {
   else if (existingRuleKeys.has(rule.rule_key)) errors.push(`rule_key duplicado neste batch: ${rule.rule_key}`);
   if (!rule.name || typeof rule.name !== 'string') errors.push('name ausente');
   if (!rule.scope) errors.push('scope ausente');
+  else rule.scope = rule.scope.toLowerCase(); // normalizar para minúsculas
   const ALLOWED_SCOPES = new Set(['keyword','campaign','ad_group','search_term','account','product']);
   if (rule.scope && !ALLOWED_SCOPES.has(rule.scope)) errors.push(`scope inválido: ${rule.scope}`);
   if (typeof rule.priority !== 'number' || rule.priority < 0 || rule.priority > 999) errors.push('priority deve ser número entre 0 e 999');
