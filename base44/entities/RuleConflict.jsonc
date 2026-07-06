@@ -1,0 +1,42 @@
+{
+  "name": "RuleConflict",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "rule_key_a": {
+      "type": "string"
+    },
+    "rule_key_b": {
+      "type": "string"
+    },
+    "conflict_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "resolution": {
+      "type": "string"
+    },
+    "rule_executed": {
+      "type": "string"
+    },
+    "rule_skipped": {
+      "type": "string"
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key_a",
+    "rule_key_b"
+  ]
+}

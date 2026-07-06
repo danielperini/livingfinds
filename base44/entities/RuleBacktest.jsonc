@@ -1,0 +1,92 @@
+{
+  "name": "RuleBacktest",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "rule_version": {
+      "type": "number"
+    },
+    "period_days": {
+      "type": "number"
+    },
+    "records_tested": {
+      "type": "number",
+      "default": 0
+    },
+    "actions_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_real": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_real": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_real": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_real": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos_real": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos_simulated": {
+      "type": "number",
+      "default": 0
+    },
+    "passed": {
+      "type": "boolean",
+      "default": false
+    },
+    "rejection_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key"
+  ]
+}

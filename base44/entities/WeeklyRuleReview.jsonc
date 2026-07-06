@@ -1,0 +1,116 @@
+{
+  "name": "WeeklyRuleReview",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "data_hash": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "partial",
+        "skipped"
+      ],
+      "default": "running"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "analysis_period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "analysis_period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "records_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "tokens_used": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_estimate_usd": {
+      "type": "number",
+      "default": 0
+    },
+    "data_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "data_warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules_proposed": {
+      "type": "number",
+      "default": 0
+    },
+    "rules_approved": {
+      "type": "number",
+      "default": 0
+    },
+    "rules_rejected": {
+      "type": "number",
+      "default": 0
+    },
+    "rules_unchanged": {
+      "type": "number",
+      "default": 0
+    },
+    "version_id": {
+      "type": "string"
+    },
+    "version_activated": {
+      "type": "boolean",
+      "default": false
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "global_observations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "claude_raw_response": {
+      "type": "string"
+    },
+    "next_scheduled_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "review_id"
+  ]
+}

@@ -1,0 +1,147 @@
+{
+  "name": "DecisionRule",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "keyword",
+        "campaign",
+        "ad_group",
+        "search_term",
+        "account",
+        "product"
+      ]
+    },
+    "priority": {
+      "type": "number",
+      "default": 100
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "action": {
+      "type": "object"
+    },
+    "minimum_evidence": {
+      "type": "object"
+    },
+    "cooldown_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "max_changes_per_week": {
+      "type": "number",
+      "default": 1
+    },
+    "expected_result": {
+      "type": "object"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "reason": {
+      "type": "string"
+    },
+    "source_metrics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollback_condition": {
+      "type": "object"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validating",
+        "rejected",
+        "approved",
+        "active",
+        "suspended",
+        "expired",
+        "rolled_back"
+      ],
+      "default": "draft"
+    },
+    "is_protected": {
+      "type": "boolean",
+      "default": false
+    },
+    "version": {
+      "type": "number",
+      "default": 1
+    },
+    "version_id": {
+      "type": "string"
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "effective_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "times_triggered": {
+      "type": "number",
+      "default": 0
+    },
+    "times_succeeded": {
+      "type": "number",
+      "default": 0
+    },
+    "times_rolled_back": {
+      "type": "number",
+      "default": 0
+    },
+    "last_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "system",
+        "claude_weekly",
+        "manual"
+      ],
+      "default": "system"
+    },
+    "created_by": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key",
+    "name",
+    "scope",
+    "action"
+  ]
+}

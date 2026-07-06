@@ -1,0 +1,46 @@
+{
+  "name": "RuleRollback",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "rule_version": {
+      "type": "number"
+    },
+    "version_id": {
+      "type": "string"
+    },
+    "trigger": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "rolled_back_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "previous_version_restored": {
+      "type": "string"
+    },
+    "actions_cancelled": {
+      "type": "number",
+      "default": 0
+    },
+    "reactivation_blocked_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "metrics_at_rollback": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key"
+  ]
+}

@@ -10,6 +10,7 @@ import AutopilotAlertsPanel from '@/components/autopilot/AutopilotAlertsPanel';
 import BiddingRulesPanel from '@/components/learner/BiddingRulesPanel';
 import MLLearningPanel from '@/components/learner/MLLearningPanel';
 import BudgetValidationPanel from '@/components/autopilot/BudgetValidationPanel';
+import WeeklyLearningTab from '@/components/autopilot/WeeklyLearningTab';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
   Bot, Play, RefreshCw, Loader2, Settings, AlertTriangle, History,
@@ -20,6 +21,7 @@ import {
 
 const TABS = [
   { id: 'decisions', label: 'Decisões IA', icon: Brain },
+  { id: 'weekly_learning', label: '🧬 Aprendizado Semanal', icon: null },
   { id: 'converted', label: 'Termos Convertidos', icon: Search },
   { id: 'alerts', label: 'Alertas', icon: AlertTriangle },
   { id: 'negatives', label: 'Negativas', icon: TrendingDown },
@@ -279,6 +281,7 @@ export default function AdsAutopilot() {
     <div className="flex flex-wrap gap-2">{TABS.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`px-3 py-2 rounded-lg text-xs font-semibold border ${tab === id ? 'bg-cyan/10 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-400 border-surface-3'}`}>{Icon && <Icon className="inline w-3 h-3 mr-1" />}{label}</button>)}</div>
     {tab === 'decisions' && (() => { const productMap = new Map(products.map(p => [p.asin, p])); return (<div className="rounded-xl border border-surface-2 overflow-hidden"><table className="w-full"><thead><tr className="border-b border-surface-2 bg-surface-1"><th className="pl-4 py-2 w-8"></th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Decisão</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider min-w-[160px]">Produto</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-24">Prioridade</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-52">Valor</th><th className="px-3 py-2 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider w-24">Confiança</th><th className="px-3 py-2 w-32"></th><th className="px-3 py-2 w-36"></th></tr></thead><tbody>{filteredDecisions.map(dec => <DecisionRow key={dec.id} dec={dec} actionState={actionStates[dec.id]} onApprove={(v) => handleDecision(dec.id, 'approve', v)} onReject={() => handleDecision(dec.id, 'reject')} selected={selectedIds.has(dec.id)} onSelect={() => toggleSelect(dec.id)} currencySymbol={currencySymbol} productMap={productMap} />)}</tbody></table>{!filteredDecisions.length && <div className="p-6 text-sm text-slate-500">Nenhuma decisão pendente.</div>}</div>); })()}
     {tab === 'history' && <div className="rounded-xl border border-surface-2 overflow-hidden"><table className="w-full"><tbody>{decHistory.map(d => <HistoryRow key={d.id} d={d} currencySymbol={currencySymbol} />)}</tbody></table>{!decHistory.length && <div className="p-6 text-sm text-slate-500">Nenhum histórico disponível.</div>}</div>}
+    {tab === 'weekly_learning' && <WeeklyLearningTab account={account} />}
     {tab === 'recommendations' && <Recommendations />}
     {tab === 'dayparting' && <DaypartingDashboard />}
     {tab === 'ml_learning' && <MLLearningPanel amazonAccountId={account.id} />}
