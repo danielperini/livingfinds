@@ -137,6 +137,9 @@ Deno.serve(async (req) => {
         else toCreate.push(record);
       }
 
+      // Ordenar updates por daily_budget decrescente — campanhas com maior orçamento primeiro
+      toUpdate.sort((a: any, b: any) => (b.daily_budget || 0) - (a.daily_budget || 0));
+
       // Processar em lotes com pausa para evitar rate limit
       for (let i = 0; i < toCreate.length; i += BATCH_DB) {
         await base44.asServiceRole.entities.Campaign.bulkCreate(toCreate.slice(i, i + BATCH_DB));
@@ -272,6 +275,9 @@ Deno.serve(async (req) => {
         if (existingMetric) metricsToUpdate.push({ id: existingMetric.id, ...metricRecord });
         else metricsToCreate.push(metricRecord);
       }
+
+      // Ordenar por spend decrescente — campanhas com maior gasto processadas primeiro
+      campUpdates.sort((a: any, b: any) => (b.spend || 0) - (a.spend || 0));
 
       // Aplicar updates em lotes com pausa
       for (let i = 0; i < campUpdates.length; i += BATCH_DB) {

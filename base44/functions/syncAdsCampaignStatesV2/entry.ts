@@ -173,6 +173,9 @@ Deno.serve(async (request) => {
       else toCreate.push(record);
     }
 
+    // Ordenar updates por spend decrescente — campanhas com maior gasto primeiro
+    toUpdate.sort((a: any, b: any) => (b.spend || 0) - (a.spend || 0));
+
     // Bulk ops em lotes de 100
     const BATCH = 100;
     let created = 0;
