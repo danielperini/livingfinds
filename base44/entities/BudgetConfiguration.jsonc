@@ -1,0 +1,111 @@
+{
+  "name": "BudgetConfiguration",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "daily_budget_floor": {
+      "type": "number",
+      "default": 50
+    },
+    "daily_budget_ceiling": {
+      "type": "number",
+      "default": 130
+    },
+    "calculated_daily_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "weekly_campaign_capacity": {
+      "type": "number",
+      "default": 10
+    },
+    "eligible_campaign_count": {
+      "type": "number",
+      "default": 0
+    },
+    "target_coverage_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "campaign_weight": {
+      "type": "number",
+      "default": 2
+    },
+    "hours_weight": {
+      "type": "number",
+      "default": 1
+    },
+    "campaign_factor": {
+      "type": "number",
+      "default": 0
+    },
+    "hours_factor": {
+      "type": "number",
+      "default": 1
+    },
+    "utilization_score": {
+      "type": "number",
+      "default": 0
+    },
+    "primary_goal": {
+      "type": "string",
+      "enum": [
+        "acos",
+        "tacos",
+        "roas",
+        "cpc",
+        "cost_per_order",
+        "budget_duration"
+      ],
+      "default": "acos"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 25
+    },
+    "target_tacos": {
+      "type": "number",
+      "default": 10
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "target_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "target_cost_per_order": {
+      "type": "number",
+      "default": 0
+    },
+    "minimum_campaign_budget": {
+      "type": "number",
+      "default": 15
+    },
+    "campaign_budget_increment": {
+      "type": "number",
+      "default": 5
+    },
+    "last_weekly_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_weekly_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "calculation_log": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

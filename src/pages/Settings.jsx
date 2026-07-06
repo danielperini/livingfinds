@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save, Zap, RefreshCw, ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package, BarChart2, Key, Target } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import BudgetConfigPanel from '@/components/dashboard/BudgetConfigPanel';
 
 export default function Settings() {
   const [user, setUser] = useState(null);
@@ -508,6 +509,11 @@ export default function Settings() {
           {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar Metas'}
         </button>
       </div>
+
+      {/* Motor de Orçamento Diário v2 */}
+      {account && (
+        <BudgetConfigPanel accountId={account.id} />
+      )}
 
       {/* Status de Autenticação Amazon */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">

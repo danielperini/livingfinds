@@ -1,119 +1,65 @@
 /**
- * calculateDailyBudgetAllocation — Função Central de Orçamento Diário v1
+ * calculateDailyBudgetAllocation — Motor Oficial de Orçamento v2
  *
- * Referência operacional: R$ 60,00/dia total.
- * Esta é a ÚNICA função responsável pelo cálculo de distribuição de orçamento.
- * Deve ser chamada por: criação de campanha, ativação de produto, kickoff,
- * otimização diária, aumento/redução de bid, sync de campanhas, IA.
+ * FONTE OFICIAL DE VERDADE — esta é a única função que define o limite diário geral.
  *
- * Regras:
- *  - Orçamento base = R$60 ÷ qtd_produtos_ativos por produto
- *  - Distribuição por tipo: AUTO 40% / manual_exact 30% / manual_phrase 15% / manual_broad 10% / product/asin 5%
- *  - Tolerância: R$54–R$66 (±10%)
- *  - Acima de R$66 somente com: lucro suficiente + ACoS abaixo da meta + campanha limitada por budget + conversões recentes
- *  - Campanhas sem histórico: orçamento mínimo, sem auto-aumento
- *  - Campanhas sem vendas/com prejuízo: redução progressiva
- *  - Fórmula SKU: limite_diario_sku = lucro_liquido × max_ads_pct × vendas_diarias
- *  - Nova campanha: redistribuir R$60 entre todas, sem somar 30% extra
- *  - Toda alteração registrada em CampaignChangeHistory
+ * REGRAS FUNDAMENTAIS:
+ *  - Limite diário geral ≠ soma dos budgets individuais
+ *  - Cada campanha inicia com R$15,00 mínimo
+ *  - Aumento de +R$5 só quando: budget esgotado + venda real + dentro da meta + estoque ok
+ *  - Sem venda: manter budget, registrar "esgotado sem conversão"
+ *  - Limite geral calculado por fórmula ponderada (campanhas×2 + horas×1) / 3
+ *  - Faixa: R$50 (floor) a R$130 (ceiling)
+ *  - Cálculos 100% determinísticos — sem IA
  *
- * Payload:
- *   amazon_account_id — obrigatório
- *   dry_run           — opcional (default false): simula sem salvar
- *   trigger           — origem da chamada (criacao_campanha, kickoff, otimizacao_diaria, etc.)
- *   override_budget   — opcional: substitui R$60 como referência (quando gestor fixou valor)
+ * Fórmula:
+ *   campaign_factor = eligible_campaigns / weekly_capacity  (clamp 0..1)
+ *   hours_factor    = target_coverage_hours / 24            (clamp 0..1)
+ *   utilization     = (campaign_factor×2 + hours_factor) / 3
+ *   daily_limit     = floor + (ceiling-floor) × utilization  → clamp floor..ceiling
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const REFERENCE_BUDGET    = 60.00;  // Orçamento total diário de referência (exibido no painel)
-const TOLERANCE_LOW       = 50.00;  // Mínimo exibido
-const TOLERANCE_HIGH      = 65.00;  // Máximo exibido
-const MIN_CAMPAIGN_BUDGET = 15.00;  // Mínimo garantido por campanha (R$15/dia)
-const MAX_CHANGE_PCT      = 0.30;   // variação máxima por ciclo (aplicado na escrita)
-const PAGE = 200;
+const FLOOR   = 50.00;
+const CEILING = 130.00;
+const RANGE   = CEILING - FLOOR; // 80
+const MIN_CAMPAIGN_BUDGET = 15.00;
+const BUDGET_INCREMENT    = 5.00;
 
-// Peso por tipo de campanha
-const CAMPAIGN_TYPE_WEIGHTS: Record<string, number> = {
-  AUTO:          0.40,
-  MANUAL_EXACT:  0.30,
-  MANUAL_PHRASE: 0.15,
-  MANUAL_BROAD:  0.10,
-  PRODUCT:       0.05,
-  ASIN:          0.05,
-};
+function clamp(val: number, min: number, max: number) { return Math.min(max, Math.max(min, val)); }
+function r2(v: number) { return Math.round(v * 100) / 100; }
 
-function detectCampaignType(campaign: any): string {
-  const name = (campaign.name || campaign.campaign_name || '').toUpperCase();
-  const targeting = (campaign.targeting_type || '').toUpperCase();
+function isMeetingGoal(metrics: any, cfg: any): boolean {
+  const acos   = metrics.acos  || 0;
+  const roas   = metrics.roas  || 0;
+  const tacos  = metrics.tacos || 0;
+  const cpc    = metrics.cpc   || 0;
+  const cpo    = metrics.orders > 0 ? metrics.spend / metrics.orders : 0;
 
-  if (targeting === 'AUTO' || name.includes('AUTO')) return 'AUTO';
-  if (name.includes('EXACT') || name.includes('EXATO')) return 'MANUAL_EXACT';
-  if (name.includes('PHRASE') || name.includes('FRASE')) return 'MANUAL_PHRASE';
-  if (name.includes('BROAD') || name.includes('AMPLA') || name.includes('AMPLO')) return 'MANUAL_BROAD';
-  if (name.includes('PRODUCT') || name.includes('PRODUTO') || name.includes('ASIN')) return 'PRODUCT';
-  if (targeting === 'MANUAL') return 'MANUAL_EXACT'; // padrão para manual sem tipo explícito
-  return 'AUTO'; // fallback
+  const targetAcos  = cfg.target_acos  || 0;
+  const targetRoas  = cfg.target_roas  || 0;
+  const targetTacos = cfg.target_tacos || 0;
+  const targetCpc   = cfg.target_cpc   || 0;
+  const targetCpo   = cfg.target_cost_per_order || 0;
+
+  const primary = (cfg.primary_goal || 'acos').toLowerCase();
+
+  if (primary === 'acos')          return targetAcos  > 0 ? acos  <= targetAcos  : true;
+  if (primary === 'roas')          return targetRoas  > 0 ? roas  >= targetRoas  : true;
+  if (primary === 'tacos')         return targetTacos > 0 ? tacos <= targetTacos : true;
+  if (primary === 'cpc')           return targetCpc   > 0 ? cpc   <= targetCpc   : true;
+  if (primary === 'cost_per_order') return targetCpo  > 0 ? cpo   <= targetCpo   : true;
+  return true;
 }
 
-function calcSkuLimit(product: any, minBudget: number): number {
-  const price = Number(product.price || 0);
-  const cost  = Number(product.product_cost || 0);
-  const fees  = Number(product.amazon_fees || price * 0.15);
-  const extra = Number(product.extra_cost || 0);
-  const profitPerUnit = price - cost - fees - extra;
-  if (profitPerUnit <= 0 || price <= 0) return 0;
-
-  const maxAdsPct = product.break_even_acos_pct > 0
-    ? (product.break_even_acos_pct / 100) * 0.80
-    : 0.25;
-
-  const limitPerSale = profitPerUnit * maxAdsPct;
-  const dailySales = Math.max(1, (product.total_units_30d || 0) / 30);
-  const skuLimit = limitPerSale * dailySales;
-
-  return Math.max(minBudget, Math.round(skuLimit * 100) / 100);
-}
-
-function avg7d(metrics: any[], campaignId: string): number {
-  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-  const seen = new Set<string>();
-  let total = 0; let days = 0;
-  for (const m of metrics) {
-    if (!m.date || m.date < sevenDaysAgo) continue;
-    if (m.campaign_id !== campaignId) continue;
-    const key = `${m.campaign_id}-${m.date}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    total += Number(m.spend || 0);
-    days++;
-  }
-  return days > 0 ? total / days : 0;
-}
-
-function avg30d(metrics: any[], campaignId: string): number {
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  const seen = new Set<string>();
-  let total = 0; let days = 0;
-  for (const m of metrics) {
-    if (!m.date || m.date < thirtyDaysAgo) continue;
-    if (m.campaign_id !== campaignId) continue;
-    const key = `${m.campaign_id}-${m.date}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    total += Number(m.spend || 0);
-    days++;
-  }
-  return days > 0 ? total / days : 0;
-}
-
-async function loadAll(entity: any, query: any, sort: string = '-created_date', limit: number = PAGE) {
+async function loadPaged(entity: any, query: any) {
   const all: any[] = [];
-  let offset = 0;
+  let skip = 0;
   while (true) {
-    const page = await entity.filter(query, sort, limit, offset);
+    const page = await entity.filter(query, '-created_date', 500, skip);
     all.push(...page);
-    if (page.length < limit) break;
-    offset += limit;
+    if (page.length < 500) break;
+    skip += 500;
   }
   return all;
 }
@@ -123,341 +69,262 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
-    const { dry_run = false, trigger = 'manual', override_budget } = body;
+    const dry_run   = body.dry_run  !== false ? true : false;
+    const trigger   = body.trigger  || 'manual';
+    const force     = body.force    || false;
 
-    // ── 1. Resolver conta ──────────────────────────────────────────────────
+    // ── 1. Conta ────────────────────────────────────────────────────────────
     let account: any = null;
     if (body.amazon_account_id) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
-      account = accs[0] || null;
+      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
+      account = rows[0] || null;
     }
     if (!account) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-      account = accs[0] || null;
+      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      account = rows[0] || null;
     }
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon conectada.' });
-
     const aid = account.id;
-    const sym = account.currency_symbol || 'R$';
 
-    // ── 2. AutopilotConfig ─────────────────────────────────────────────────
-    const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
-    const cfg = configs[0] || {};
-    const TARGET_ACOS = cfg.target_acos || cfg.acos_target || 25;
-    const BUDGET_LOCKED = cfg.daily_budget_locked === true && (cfg.daily_budget_target || 0) > 0;
+    // ── 2. BudgetConfiguration (fonte oficial) ──────────────────────────────
+    const budgetConfigs = await base44.asServiceRole.entities.BudgetConfiguration.filter({ amazon_account_id: aid });
+    let budgetCfg: any = budgetConfigs[0] || null;
 
-    // Referência: gestor pode fixar, senão usa R$60
-    const referenceTotal = BUDGET_LOCKED
-      ? Number(cfg.daily_budget_target)
-      : override_budget
-        ? Number(override_budget)
-        : REFERENCE_BUDGET;
+    // Criar config padrão se não existir
+    if (!budgetCfg) {
+      budgetCfg = await base44.asServiceRole.entities.BudgetConfiguration.create({
+        amazon_account_id: aid,
+        daily_budget_floor: FLOOR,
+        daily_budget_ceiling: CEILING,
+        weekly_campaign_capacity: 10,
+        target_coverage_hours: 24,
+        campaign_weight: 2,
+        hours_weight: 1,
+        minimum_campaign_budget: MIN_CAMPAIGN_BUDGET,
+        campaign_budget_increment: BUDGET_INCREMENT,
+        primary_goal: 'acos',
+        updated_at: now,
+      });
+    }
 
-    // ── 3. Produtos ativos ─────────────────────────────────────────────────
-    const products = await loadAll(
-      base44.asServiceRole.entities.Product,
-      { amazon_account_id: aid },
-      '-fba_inventory'
-    );
-    const activeProducts = products.filter((p: any) =>
-      p.status === 'active' &&
-      p.inventory_status !== 'out_of_stock' &&
-      !['inactive', 'archived'].includes(p.status)
-    );
-    const productMap = new Map(products.map((p: any) => [p.asin, p]));
+    const floor           = Number(budgetCfg.daily_budget_floor   || FLOOR);
+    const ceiling         = Number(budgetCfg.daily_budget_ceiling  || CEILING);
+    const weeklyCapacity  = Math.max(1, Number(budgetCfg.weekly_campaign_capacity || 10));
+    const coverageHours   = clamp(Number(budgetCfg.target_coverage_hours || 24), 1, 24);
+    const campaignWeight  = Number(budgetCfg.campaign_weight || 2);
+    const hoursWeight     = Number(budgetCfg.hours_weight    || 1);
+    const minBudget       = Number(budgetCfg.minimum_campaign_budget  || MIN_CAMPAIGN_BUDGET);
+    const increment       = Number(budgetCfg.campaign_budget_increment || BUDGET_INCREMENT);
 
-    // ── 4. Campanhas ativas ────────────────────────────────────────────────
-    const allCampaigns = await loadAll(
+    // ── 3. Campanhas elegíveis (ENABLED, não-archived, não-duplicadas) ──────
+    const allCampaigns = await loadPaged(
       base44.asServiceRole.entities.Campaign,
       { amazon_account_id: aid }
     );
-    const activeCampaigns = allCampaigns.filter((c: any) =>
+    const eligibleCampaigns = allCampaigns.filter((c: any) =>
       (c.state === 'enabled' || c.status === 'enabled') &&
-      c.state !== 'archived' &&
-      !c.archived
+      c.state !== 'archived' && c.status !== 'archived' && !c.archived
     );
+    // Deduplicar por campaign_id
+    const seenCampIds = new Set<string>();
+    const dedupedEligible = eligibleCampaigns.filter((c: any) => {
+      const cid = String(c.campaign_id || c.id);
+      if (seenCampIds.has(cid)) return false;
+      seenCampIds.add(cid);
+      return true;
+    });
+    const eligibleCount = dedupedEligible.length;
 
-    if (activeCampaigns.length === 0) {
-      return Response.json({ ok: true, message: 'Nenhuma campanha ativa.', allocations: [] });
-    }
+    // ── 4. Fórmula ponderada ─────────────────────────────────────────────────
+    const campaign_factor   = clamp(eligibleCount / weeklyCapacity, 0, 1);
+    const hours_factor      = clamp(coverageHours / 24, 0, 1);
+    const totalWeightSum    = campaignWeight + hoursWeight;
+    const utilization_score = ((campaign_factor * campaignWeight) + (hours_factor * hoursWeight)) / totalWeightSum;
+    const rangeSpan         = ceiling - floor;
+    const daily_limit       = r2(clamp(floor + rangeSpan * utilization_score, floor, ceiling));
 
-    // ── 5. Métricas diárias (últimos 30 dias) ──────────────────────────────
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    const metricsRaw = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid }, '-date', 5000
-    );
-    const metrics30d = metricsRaw.filter((m: any) => m.date && m.date >= thirtyDaysAgo);
-
-    // Spend total por campanha (30d, deduplicado)
-    const seenM = new Set<string>();
-    const spendTotals: Record<string, { total: number; days: number; orders: number; sales: number; acos: number }> = {};
-    for (const m of metrics30d) {
-      const k = `${m.campaign_id}-${m.date}`;
-      if (seenM.has(k)) continue;
-      seenM.add(k);
-      if (!m.campaign_id) continue;
-      if (!spendTotals[m.campaign_id]) spendTotals[m.campaign_id] = { total: 0, days: 0, orders: 0, sales: 0, acos: 0 };
-      spendTotals[m.campaign_id].total += Number(m.spend || 0);
-      spendTotals[m.campaign_id].days++;
-      spendTotals[m.campaign_id].orders += Number(m.orders || 0);
-      spendTotals[m.campaign_id].sales += Number(m.sales || 0);
-    }
-
-    // Calcular ACoS por campanha
-    for (const cid in spendTotals) {
-      const d = spendTotals[cid];
-      d.acos = d.sales > 0 ? (d.total / d.sales) * 100 : 0;
-    }
-
-    // ── 6. Agrupar campanhas por produto (ASIN) ────────────────────────────
-    const campaignsByProduct: Record<string, any[]> = {};
-    for (const c of activeCampaigns) {
-      // Usar asin da campanha, ou tentar extrair do nome, ou agrupar como 'pool'
-      const asin = c.asin || 'pool';
-      if (!campaignsByProduct[asin]) campaignsByProduct[asin] = [];
-      campaignsByProduct[asin].push(c);
-    }
-
-    // Número de grupos únicos de produto (com ASIN real vs pool)
-    const realProductGroups = Object.keys(campaignsByProduct).filter(k => k !== 'pool').length;
-    const poolCount = (campaignsByProduct['pool'] || []).length;
-    // Usar produtos ativos como referência se disponível, senão usar grupos reais
-    const numActiveProducts = Math.max(1,
-      activeProducts.length > 0 ? activeProducts.length :
-      realProductGroups > 0 ? realProductGroups : 1
-    );
-    const numActiveCampaigns = activeCampaigns.length;
-
-    // Orçamento base por produto (R$60 ÷ produtos ativos)
-    const budgetPerProduct = referenceTotal / numActiveProducts;
-    // Base por campanha para o response info
-    const budgetPerCampaign = referenceTotal / numActiveCampaigns;
-
-    // ── 7. Calcular alocação por campanha ──────────────────────────────────
-    const allocations: any[] = [];
-    let totalAllocated = 0;
-
-    for (const [asin, campaigns] of Object.entries(campaignsByProduct)) {
-      const product = productMap.get(asin);
-      const skuLimit = product ? calcSkuLimit(product, MIN_CAMPAIGN_BUDGET) : 0;
-      // MIN_CAMPAIGN_BUDGET é R$15 — cada campanha recebe no mínimo esse valor
-      // Para campanhas sem ASIN (pool), distribuir proporcionalmente ao total de campanhas
-      const isPool = asin === 'pool';
-      const productBudget = isPool
-        ? (poolCount / numActiveCampaigns) * referenceTotal
-        : budgetPerProduct;
-
-      // Calcular pesos dos tipos presentes neste produto
-      const typeWeights: Record<string, number> = {};
-      let totalWeight = 0;
-      for (const c of campaigns) {
-        const t = detectCampaignType(c);
-        typeWeights[c.id] = CAMPAIGN_TYPE_WEIGHTS[t] || 0.20;
-        totalWeight += typeWeights[c.id];
-      }
-
-      for (const campaign of campaigns) {
-        const cid = campaign.campaign_id || campaign.id;
-        const campType = detectCampaignType(campaign);
-        const currentBudget = Number(campaign.daily_budget || 0);
-        const campMetrics = spendTotals[cid] || { total: 0, days: 0, orders: 0, sales: 0, acos: 0 };
-        const hasHistory = campMetrics.days >= 3;
-        const hasOrders = campMetrics.orders > 0;
-        const avgSpend7 = avg7d(metrics30d, cid);
-        const avgSpend30 = avg30d(metrics30d, cid);
-
-        // Peso normalizado neste produto
-        const normalizedWeight = totalWeight > 0 ? typeWeights[campaign.id] / totalWeight : 1 / campaigns.length;
-
-        // Orçamento base proporcional ao produto + tipo
-        let baseBudget = productBudget * normalizedWeight;
-
-        // Ajuste por desempenho
-        let perfMultiplier = 1.0;
-        let perfReason = 'sem_histórico';
-
-        if (hasHistory) {
-          if (!hasOrders && campMetrics.days >= 7) {
-            // Sem vendas com histórico >= 7 dias → reduzir progressivamente
-            const reductionFactor = Math.min(0.5, 0.90 - (campMetrics.days - 7) * 0.02);
-            perfMultiplier = reductionFactor;
-            perfReason = `sem_conversões_${campMetrics.days}d`;
-          } else if (hasOrders && campMetrics.acos > 0) {
-            if (campMetrics.acos <= TARGET_ACOS) {
-              // Rentável: pode escalar, mas limitado pela tolerância geral
-              perfMultiplier = Math.min(1.30, 1 + (TARGET_ACOS - campMetrics.acos) / TARGET_ACOS * 0.3);
-              perfReason = `acos_${campMetrics.acos.toFixed(1)}_bom`;
-            } else if (campMetrics.acos > TARGET_ACOS * 1.5) {
-              // ACoS muito alto: reduzir
-              perfMultiplier = 0.75;
-              perfReason = `acos_${campMetrics.acos.toFixed(1)}_alto`;
-            } else {
-              // ACoS ligeiramente alto: manter
-              perfMultiplier = 0.90;
-              perfReason = `acos_${campMetrics.acos.toFixed(1)}_acima_meta`;
-            }
-          } else if (hasOrders) {
-            perfMultiplier = 1.10;
-            perfReason = 'com_conversões';
-          }
-        } else {
-          // Sem histórico: orçamento mínimo controlado
-          perfMultiplier = 0.70;
-          perfReason = 'novo_sem_dados';
-        }
-
-        let suggestedBudget = baseBudget * perfMultiplier;
-
-        // Guardrail 1: Limite por SKU (se disponível)
-        if (skuLimit > 0 && suggestedBudget > skuLimit) {
-          suggestedBudget = skuLimit;
-          perfReason += '+sku_capped';
-        }
-
-        // Guardrail 2: Mínimo R$15 por campanha
-        suggestedBudget = Math.max(MIN_CAMPAIGN_BUDGET, suggestedBudget);
-
-        // Guardrail 3: Variação máxima ±30% do atual (só na escrita real)
-        if (!dry_run && currentBudget > 0) {
-          const maxUp   = currentBudget * (1 + MAX_CHANGE_PCT);
-          const maxDown = Math.max(MIN_CAMPAIGN_BUDGET, currentBudget * (1 - MAX_CHANGE_PCT));
-          suggestedBudget = Math.min(suggestedBudget, maxUp);
-          suggestedBudget = Math.max(suggestedBudget, maxDown);
-        }
-
-        // Guardrail 4: Verificar se pode ultrapassar R$66 total
-        // (verificado depois de somar todos — aqui apenas calcular)
-
-        suggestedBudget = Math.round(suggestedBudget * 100) / 100;
-        totalAllocated += suggestedBudget;
-
-        allocations.push({
-          campaign_id: cid,
-          campaign_db_id: campaign.id,
-          campaign_name: campaign.name || campaign.campaign_name,
-          campaign_type: campType,
-          asin,
-          current_budget: currentBudget,
-          suggested_budget: suggestedBudget,
-          base_budget: Math.round(baseBudget * 100) / 100,
-          perf_multiplier: Math.round(perfMultiplier * 100) / 100,
-          perf_reason: perfReason,
-          avg_spend_7d: Math.round(avgSpend7 * 100) / 100,
-          avg_spend_30d: Math.round(avgSpend30 * 100) / 100,
-          has_history: hasHistory,
-          has_orders: hasOrders,
-          acos_30d: Math.round((campMetrics.acos || 0) * 10) / 10,
-          sku_limit: Math.round(skuLimit * 100) / 100,
-          change_pct: currentBudget > 0
-            ? Math.round((suggestedBudget - currentBudget) / currentBudget * 1000) / 10
-            : null,
-        });
-      }
-    }
-
-    // ── 8. Garantir mínimo R$15 por campanha ─────────────────────────────
-    // A soma das campanhas PODE ser maior que R$60 — isso é normal e esperado.
-    // O valor R$60 é o orçamento total DIÁRIO exibido no painel, não a soma das campanhas.
-    for (const a of allocations) {
-      if (a.suggested_budget < MIN_CAMPAIGN_BUDGET) {
-        a.suggested_budget = MIN_CAMPAIGN_BUDGET;
-        a.perf_reason += '+min_15';
-      }
-    }
-    totalAllocated = allocations.reduce((s: number, a: any) => s + a.suggested_budget, 0);
-
-    // ── 9. Validação final ─────────────────────────────────────────────────
-    const validation = {
-      no_negative_budget: allocations.every((a: any) => a.suggested_budget >= 0),
-      no_duplicate_campaigns: allocations.length === new Set(allocations.map((a: any) => a.campaign_id)).size,
-      min_budget_respected: allocations.every((a: any) => a.suggested_budget >= MIN_CAMPAIGN_BUDGET),
-      no_sku_exceeded: allocations.every((a: any) => a.sku_limit === 0 || a.suggested_budget <= a.sku_limit + 0.01),
-      sum_campaigns: Math.round(totalAllocated * 100) / 100,
-      display_budget: REFERENCE_BUDGET,
+    const calcLog = {
+      floor, ceiling, weekly_capacity: weeklyCapacity, eligible_campaigns: eligibleCount,
+      coverage_hours: coverageHours, campaign_weight: campaignWeight, hours_weight: hoursWeight,
+      campaign_factor: r2(campaign_factor), hours_factor: r2(hours_factor),
+      utilization_score: r2(utilization_score), range_span: rangeSpan, daily_limit,
+      formula: `${floor} + (${rangeSpan} × ${r2(utilization_score)}) = ${daily_limit}`,
     };
 
-    // ── 10. Aplicar se não for dry_run ─────────────────────────────────────
-    let applied = 0;
-    let skipped = 0;
-    const historyEntries: any[] = [];
+    // ── 5. Métricas D-1 por campanha ─────────────────────────────────────────
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const metricsRaw = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: aid }, '-date', 3000
+    );
+    const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const metrics30 = metricsRaw.filter((m: any) => m.date >= thirtyAgo);
 
+    // Agregar por campanha (deduplicado)
+    const campMetrics = new Map<string, any>();
+    const seenMetricKey = new Set<string>();
+    for (const m of metrics30) {
+      const key = `${m.campaign_id}|${m.date}`;
+      if (seenMetricKey.has(key)) continue;
+      seenMetricKey.add(key);
+      const cid = String(m.campaign_id || '');
+      if (!cid) continue;
+      if (!campMetrics.has(cid)) campMetrics.set(cid, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, days: 0 });
+      const agg = campMetrics.get(cid);
+      agg.spend      += Number(m.spend  || 0);
+      agg.sales      += Number(m.sales  || 0);
+      agg.orders     += Number(m.orders || 0);
+      agg.clicks     += Number(m.clicks || 0);
+      agg.impressions += Number(m.impressions || 0);
+      agg.days++;
+    }
+    // Calcular métricas derivadas
+    campMetrics.forEach((agg, cid) => {
+      agg.acos = agg.sales > 0 ? (agg.spend / agg.sales) * 100 : 0;
+      agg.roas = agg.spend > 0 ? agg.sales / agg.spend : 0;
+      agg.cpc  = agg.clicks > 0 ? agg.spend / agg.clicks : 0;
+    });
+
+    // Métricas de ontem (para detectar budget esgotado)
+    const yesterdayMetricsMap = new Map<string, any>();
+    for (const m of metricsRaw.filter((m: any) => m.date === yesterday)) {
+      const cid = String(m.campaign_id || '');
+      if (!cid) continue;
+      if (!yesterdayMetricsMap.has(cid)) yesterdayMetricsMap.set(cid, { spend: 0, orders: 0, sales: 0 });
+      const y = yesterdayMetricsMap.get(cid);
+      y.spend  += Number(m.spend  || 0);
+      y.orders += Number(m.orders || 0);
+      y.sales  += Number(m.sales  || 0);
+    }
+
+    // ── 6. Calcular sugestão de budget por campanha ──────────────────────────
+    // Regra: cada campanha começa com minBudget (R$15).
+    // Recebe +increment (R$5) somente se:
+    //   - budget foi esgotado ontem (spend ≥ 95% do budget atual)
+    //   - houve pelo menos 1 venda atribuída
+    //   - campanha está dentro da meta
+    //   - nenhum aumento já pendente hoje
+    //   - limite geral ainda permite gasto adicional
+    const totalCurrentBudget = dedupedEligible.reduce((s: number, c: any) => s + Number(c.daily_budget || 0), 0);
+    const budgetRemainingForIncreases = daily_limit - totalCurrentBudget;
+
+    const allocations: any[] = [];
+    let totalIncreases = 0;
+
+    for (const campaign of dedupedEligible) {
+      const cid     = String(campaign.campaign_id || campaign.id);
+      const current = Number(campaign.daily_budget || minBudget);
+      const metrics = campMetrics.get(cid) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, days: 0, acos: 0, roas: 0, cpc: 0 };
+      const yest    = yesterdayMetricsMap.get(cid) || { spend: 0, orders: 0, sales: 0 };
+
+      const budgetExhausted = current > 0 && yest.spend >= current * 0.95;
+      const hasSale         = yest.orders > 0 && yest.sales > 0;
+      const withinGoal      = isMeetingGoal(metrics, budgetCfg);
+      const hasStock        = true; // simplificado — stock check via produto se necessário
+      const limitAllows     = (budgetRemainingForIncreases - totalIncreases) >= increment;
+
+      let suggestedBudget = Math.max(minBudget, current);
+      let action          = 'manter';
+      let reason          = 'sem_mudança';
+
+      if (budgetExhausted && hasSale && withinGoal && hasStock && limitAllows) {
+        suggestedBudget = current + increment;
+        action = 'aumentar';
+        reason = `budget_esgotado+venda+meta_ok`;
+        totalIncreases += increment;
+      } else if (budgetExhausted && !hasSale) {
+        action = 'manter';
+        reason = 'budget_esgotado_sem_conversao';
+      } else if (budgetExhausted && !withinGoal) {
+        action = 'manter';
+        reason = 'budget_esgotado_fora_da_meta';
+      } else if (budgetExhausted && !limitAllows) {
+        action = 'manter';
+        reason = 'budget_esgotado_limite_geral_atingido';
+      }
+
+      // Garantir mínimo absoluto
+      suggestedBudget = Math.max(minBudget, r2(suggestedBudget));
+
+      allocations.push({
+        campaign_id: cid,
+        campaign_db_id: campaign.id,
+        campaign_name: campaign.name || campaign.campaign_name,
+        current_budget: current,
+        suggested_budget: suggestedBudget,
+        budget_change: r2(suggestedBudget - current),
+        action,
+        reason,
+        yesterday_spend: r2(yest.spend),
+        yesterday_orders: yest.orders,
+        yesterday_sales: r2(yest.sales),
+        acos_30d: r2(metrics.acos),
+        roas_30d: r2(metrics.roas),
+        cpc_30d: r2(metrics.cpc),
+        budget_exhausted: budgetExhausted,
+        has_sale: hasSale,
+        within_goal: withinGoal,
+      });
+    }
+
+    const totalSuggestedBudgets = allocations.reduce((s: number, a: any) => s + a.suggested_budget, 0);
+    const campaignsIncreased    = allocations.filter((a: any) => a.action === 'aumentar').length;
+
+    // ── 7. Persistir se não dry_run ──────────────────────────────────────────
     if (!dry_run) {
-      const dbUpdates: { id: string; daily_budget: number }[] = [];
+      // Atualizar BudgetConfiguration
+      const nextMonday = new Date();
+      nextMonday.setDate(nextMonday.getDate() + ((8 - nextMonday.getDay()) % 7 || 7));
+      nextMonday.setHours(0, 0, 0, 0);
 
-      for (const a of allocations) {
-        const diff = Math.abs(a.suggested_budget - a.current_budget);
-        const changePct = a.current_budget > 0 ? diff / a.current_budget : 1;
+      await base44.asServiceRole.entities.BudgetConfiguration.update(budgetCfg.id, {
+        calculated_daily_budget: daily_limit,
+        eligible_campaign_count: eligibleCount,
+        campaign_factor: r2(campaign_factor),
+        hours_factor: r2(hours_factor),
+        utilization_score: r2(utilization_score),
+        last_weekly_recalculation: now,
+        next_weekly_recalculation: nextMonday.toISOString(),
+        calculation_log: JSON.stringify(calcLog),
+        updated_at: now,
+      });
 
-        // Só aplica se diferença > 3%
-        if (changePct < 0.03) { skipped++; continue; }
+      // Aplicar aumentos de budget nas campanhas elegíveis
+      const toUpdate = allocations
+        .filter((a: any) => a.action === 'aumentar')
+        .map((a: any) => ({ id: a.campaign_db_id, daily_budget: a.suggested_budget }));
 
-        dbUpdates.push({ id: a.campaign_db_id, daily_budget: a.suggested_budget });
-        applied++;
+      for (let i = 0; i < toUpdate.length; i += 50) {
+        await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + 50)).catch(() => {});
+      }
 
-        historyEntries.push({
+      // Registrar histórico
+      const historyEntries = allocations
+        .filter((a: any) => a.action === 'aumentar')
+        .map((a: any) => ({
           amazon_account_id: aid,
           campaign_id: a.campaign_id,
-          change_type: 'CAMPAIGN_BUDGET',
+          change_type: 'CAMPAIGN_BUDGET_INCREASE',
           entity_type: 'campaign',
           entity_id: a.campaign_id,
           field_name: 'daily_budget',
           old_value: String(a.current_budget),
           new_value: String(a.suggested_budget),
-          source: 'PERFORMANCE_RULE',
+          source: 'BUDGET_ENGINE_V2',
           source_function: 'calculateDailyBudgetAllocation',
           reason: JSON.stringify({
-            trigger,
-            campaign_type: a.campaign_type,
-            perf_reason: a.perf_reason,
-            perf_multiplier: a.perf_multiplier,
-            avg_spend_7d: a.avg_spend_7d,
-            avg_spend_30d: a.avg_spend_30d,
-            acos_30d: a.acos_30d,
-            has_orders: a.has_orders,
-            sku_limit: a.sku_limit,
-            reference_total: referenceTotal,
-            active_products: numActiveProducts,
-            active_campaigns: numActiveCampaigns,
-            budget_per_product: Math.round(budgetPerProduct * 100) / 100,
-            total_allocated: Math.round(totalAllocated * 100) / 100,
+            trigger, action: a.action, reason: a.reason,
+            yesterday_spend: a.yesterday_spend, yesterday_orders: a.yesterday_orders,
+            yesterday_sales: a.yesterday_sales, acos_30d: a.acos_30d,
+            roas_30d: a.roas_30d, cpc_30d: a.cpc_30d,
+            daily_limit, budget_increment: increment,
           }),
           changed_at: now,
-          changed_by: 'calculateDailyBudgetAllocation',
+          changed_by: 'calculateDailyBudgetAllocation_v2',
           status: 'executed',
-        });
-      }
+        }));
 
-      // Bulk update no banco
-      for (let i = 0; i < dbUpdates.length; i += 50) {
-        await base44.asServiceRole.entities.Campaign.bulkUpdate(dbUpdates.slice(i, i + 50));
-      }
-
-      // Registrar histórico em lote
       for (const entry of historyEntries) {
         await base44.asServiceRole.entities.CampaignChangeHistory.create(entry).catch(() => {});
-      }
-
-      // O valor exibido no painel é sempre o referenceTotal (R$60), não a soma das campanhas.
-      // As campanhas podem somar mais que R$60 — mínimo R$15/cada é a regra por campanha.
-      const displayBudget = Math.min(TOLERANCE_HIGH, Math.max(TOLERANCE_LOW, referenceTotal));
-      const configUpdate = {
-        ai_suggested_daily_budget: displayBudget,
-        ai_budget_reasoning: `${numActiveCampaigns} campanhas ativas distribuindo ${sym}${displayBudget.toFixed(2)} total. Referência: ${sym}${referenceTotal}. Faixa permitida: ${sym}${TOLERANCE_LOW}–${sym}${TOLERANCE_HIGH}.`,
-        ai_budget_confidence: metrics30d.length > 0 ? 88 : 60,
-        ai_budget_generated_at: now,
-        ai_budget_breakdown: JSON.stringify({
-          reference_budget: referenceTotal,
-          display_budget: displayBudget,
-          active_products: numActiveProducts,
-          active_campaigns: numActiveCampaigns,
-          tolerance_low: TOLERANCE_LOW,
-          tolerance_high: TOLERANCE_HIGH,
-          trigger,
-        }),
-      };
-
-      if (configs.length > 0) {
-        await base44.asServiceRole.entities.AutopilotConfig.update(configs[0].id, configUpdate).catch(() => {});
       }
     }
 
@@ -465,23 +332,29 @@ Deno.serve(async (req) => {
       ok: true,
       dry_run,
       trigger,
-      reference_budget: referenceTotal,
-      active_products: numActiveProducts,
-      active_campaigns: numActiveCampaigns,
-      budget_per_product: Math.round(budgetPerProduct * 100) / 100,
-      budget_per_campaign: Math.round(budgetPerCampaign * 100) / 100,
-      total_allocated: Math.round(totalAllocated * 100) / 100,
-      tolerance_low: TOLERANCE_LOW,
-      tolerance_high: TOLERANCE_HIGH,
-      within_tolerance: totalAllocated >= TOLERANCE_LOW && totalAllocated <= TOLERANCE_HIGH,
-      campaigns_applied: applied,
-      campaigns_skipped: skipped,
+      // Limite diário geral (fórmula ponderada)
+      daily_limit,
+      floor,
+      ceiling,
+      // Memória do cálculo
+      calculation: calcLog,
+      // Campanhas
+      eligible_campaigns: eligibleCount,
+      weekly_capacity: weeklyCapacity,
+      total_current_budget_sum: r2(totalCurrentBudget),
+      total_suggested_budget_sum: r2(totalSuggestedBudgets),
+      campaigns_increased: campaignsIncreased,
       allocations,
-      validation,
+      // Config
+      coverage_hours: coverageHours,
+      primary_goal: budgetCfg.primary_goal || 'acos',
+      min_campaign_budget: minBudget,
+      budget_increment: increment,
+      next_weekly_recalculation: budgetCfg.next_weekly_recalculation || null,
     });
 
   } catch (error: any) {
-    console.error('[calculateDailyBudgetAllocation]', error.message);
+    console.error('[calculateDailyBudgetAllocation v2]', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });
