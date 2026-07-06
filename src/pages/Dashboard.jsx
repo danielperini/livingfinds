@@ -10,6 +10,7 @@ import SpendRevenueBarChart from '@/components/dashboard/SpendRevenueBarChart';
 import GoalsComparisonPanel from '@/components/dashboard/GoalsComparisonPanel';
 import BudgetAllocationPanel from '@/components/dashboard/BudgetAllocationPanel';
 import CampaignPerformancePanel from '@/components/dashboard/CampaignPerformancePanel';
+import WeeklyOptimizationSummary from '@/components/dashboard/WeeklyOptimizationSummary';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -626,6 +627,9 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           )}
         </div>
       </div>
+
+      {/* Painel de Otimizações Semanais Claude */}
+      <WeeklyOptimizationSummary account={account} />
 
       {/* Painel de Performance por Campanha */}
       <CampaignPerformancePanel
