@@ -4,7 +4,7 @@
 
 import { base44 } from '@/api/base44Client';
 
-const PAGE_SIZE = 200;
+const PAGE_SIZE = 500;
 
 function timestampOf(campaign = {}) {
   const values = [
