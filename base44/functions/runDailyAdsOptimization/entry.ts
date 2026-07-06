@@ -1022,13 +1022,23 @@ Deno.serve(async (req) => {
           }
         }
 
-        // ── C6. WINNER: ACoS dentro da meta, escalar ─────────────────────
-        else if (orders >= MIN_ORDERS && acos > 0 && acos <= TARGET_ACOS && clicks >= 10 && maturity === 'MATURE') {
+        // ── C6. WINNER: ACoS dentro da meta → escalar bid ───────────────
+        // Critérios de ativação por tier:
+        //   Tier 3 — ELITE: orders >= 5, acos <= 70% da meta, clicks >= 15 → +15% (max MAX_INC_PCT)
+        //   Tier 2 — FORTE: orders >= 3, acos <= meta, clicks >= 10 → +10%
+        //   Tier 1 — PADRÃO: orders >= MIN_ORDERS, acos <= meta, clicks >= 5 → +5%
+        //   Tier 0 — POTENCIAL: orders >= 1, acos <= meta*0.9, clicks >= MIN_CLICKS → +7% (bid abaixo do ideal)
+        const isEliteWinner  = orders >= 5 && acos > 0 && acos <= TARGET_ACOS * 0.70 && clicks >= 15;
+        const isStrongWinner = orders >= 3 && acos > 0 && acos <= TARGET_ACOS && clicks >= 10;
+        const isWinner       = orders >= MIN_ORDERS && acos > 0 && acos <= TARGET_ACOS && clicks >= 5;
+        // Tier 0: 1 pedido com ACoS bem abaixo da meta — sinal de subavaliação do bid
+        const isPotential    = orders >= 1 && acos > 0 && acos <= TARGET_ACOS * 0.90 && clicks >= MIN_CLICKS && maturity === 'MATURE';
+
+        if (isEliteWinner || isStrongWinner || isWinner || isPotential) {
           if (productBlockerList.includes('LOW_STOCK')) {
             blocked.push({ entity: kw.keyword_id, reason: 'LOW_STOCK_BLOCKS_INCREASE', text: kw.keyword_text });
             continue;
           }
-          // Respeitar prioridades da IA: bloquear aumento se orçamento/tacos/roas não permitem
           if (budgetCapReached) { blocked.push({ entity: kw.keyword_id, reason: 'BUDGET_CAP_REACHED', text: kw.keyword_text }); continue; }
           if (budgetLockedCapReached) { blocked.push({ entity: kw.keyword_id, reason: 'BUDGET_LOCKED_CAP', text: kw.keyword_text }); continue; }
           if (tacosOverTarget) { blocked.push({ entity: kw.keyword_id, reason: 'TACOS_OVER_TARGET', text: kw.keyword_text }); continue; }
@@ -1036,12 +1046,22 @@ Deno.serve(async (req) => {
           if (cpcOverMax) { blocked.push({ entity: kw.keyword_id, reason: 'CPC_OVER_MAX', text: kw.keyword_text }); continue; }
           if (inIncCooldown) { stats.skipped_cooldown++; continue; }
 
-          const isStrongWinner = orders >= 3 && acos <= TARGET_ACOS * 0.70;
-          const increasePct = isStrongWinner ? Math.min(MAX_INC_PCT, 0.10) : Math.min(MAX_INC_PCT * 0.5, 0.05);
-          const newBid = Math.min(currentBid * (1 + increasePct), MAX_BID);
+          // Calcular % de aumento baseado no headroom disponível até a meta
+          // headroom = quanto o ACoS está abaixo da meta (margem de segurança para aumentar bid)
+          const acosHeadroom = TARGET_ACOS > 0 ? Math.max(0, (TARGET_ACOS - acos) / TARGET_ACOS) : 0;
+          const tierLabel = isEliteWinner ? 'ELITE' : isStrongWinner ? 'FORTE' : isWinner ? 'WINNER' : 'POTENCIAL';
+
+          // Aumento proporcional ao headroom: quanto mais longe da meta, maior o espaço para subir
+          let basePct: number;
+          if (isEliteWinner)  basePct = Math.min(MAX_INC_PCT, 0.15 + acosHeadroom * 0.05);
+          else if (isStrongWinner) basePct = Math.min(MAX_INC_PCT, 0.10 + acosHeadroom * 0.03);
+          else if (isWinner)  basePct = Math.min(MAX_INC_PCT, 0.05 + acosHeadroom * 0.02);
+          else                basePct = Math.min(MAX_INC_PCT * 0.5, 0.07); // Potencial: moderado
+
+          const newBid = Math.min(currentBid * (1 + basePct), MAX_BID);
 
           if (newBid > currentBid + 0.005) {
-            const riskLevel = isStrongWinner ? 'medium' : 'low';
+            const riskLevel = isEliteWinner ? 'medium' : 'low';
             const iKey = makeKey(amazonAccountId, 'bid_change', kw.keyword_id, 'increase_winner', today);
             if (!existingKeys.has(iKey)) {
               const outcome = resolveOutcome(confidence, maturity, [], autonomyLevel, riskLevel, false);
@@ -1054,22 +1074,22 @@ Deno.serve(async (req) => {
                 value_before: currentBid, value_after: Number(newBid.toFixed(2)),
                 change_pct: Number(((newBid / currentBid - 1) * 100).toFixed(1)),
                 rationale: buildFullRationale({
-                  objective: `${objective}: escalar keyword vencedora com rentabilidade comprovada.`,
-                  diagnosis: `"${kw.keyword_text}" é ${isStrongWinner ? 'VENCEDORA FORTE' : 'WINNER'}: ACoS de ${acos.toFixed(1)}% está ${(TARGET_ACOS - acos).toFixed(1)}pp abaixo da meta com ${orders} pedidos e ${clicks} cliques.`,
-                  evidence: `acos=${acos.toFixed(1)}%, target=${TARGET_ACOS}%, orders=${orders}, clicks=${clicks}, cvr=${(convRate * 100).toFixed(2)}%, sales=${sym}${sales.toFixed(2)}, estoque_ok=${!productBlockerList.includes('LOW_STOCK')}`,
-                  action: `Aumentar bid +${Math.round(increasePct * 100)}%: de ${sym}${currentBid.toFixed(2)} para ${sym}${newBid.toFixed(2)}.`,
+                  objective: `${objective}: escalar keyword ${tierLabel} com ACoS ${acos.toFixed(1)}% (${(TARGET_ACOS - acos).toFixed(1)}pp de headroom).`,
+                  diagnosis: `"${kw.keyword_text}" classificada como ${tierLabel}: ACoS=${acos.toFixed(1)}% (meta=${TARGET_ACOS}%), ${orders} pedido(s), ${clicks} cliques, CVR=${(convRate * 100).toFixed(2)}%. Headroom=${Math.round(acosHeadroom * 100)}% → aumento de ${Math.round(basePct * 100)}%.`,
+                  evidence: `acos=${acos.toFixed(1)}%, target=${TARGET_ACOS}%, orders=${orders}, clicks=${clicks}, cvr=${(convRate * 100).toFixed(2)}%, sales=${sym}${sales.toFixed(2)}, spend=${sym}${spend.toFixed(2)}, headroom=${Math.round(acosHeadroom * 100)}%`,
+                  action: `Aumentar bid +${Math.round(basePct * 100)}%: de ${sym}${currentBid.toFixed(2)} para ${sym}${newBid.toFixed(2)}.`,
                   executeAt: 'Início do próximo dia.',
-                  whyThisAction: 'A keyword demonstra rentabilidade e conversão consistente. Um aumento gradual busca ampliar a visibilidade no leilão sem comprometer o ACoS.',
-                  whyNotAlternatives: 'Aumentar orçamento da campanha afetaria todas as keywords. Aumentar placement afeta a estratégia global. O aumento de bid isolado é mais controlado.',
-                  risk: riskLevel === 'medium' ? 'Médio (vencedor forte — maior exposição financeira).' : 'Baixo (primeiro aumento gradual).',
+                  whyThisAction: `A keyword ${tierLabel} está subavaliada no leilão — o ACoS abaixo da meta indica que o bid atual não está capturando todo o tráfego rentável disponível. O headroom de ${Math.round(acosHeadroom * 100)}% permite escalonamento seguro.`,
+                  whyNotAlternatives: 'Aumentar budget da campanha afetaria todas as keywords indiscriminadamente. O aumento de bid isolado é cirúrgico e proporcional à performance comprovada.',
+                  risk: riskLevel === 'medium' ? 'Médio (ELITE — alta exposição financeira, monitorar ACoS em 7 dias).' : 'Baixo — escalamento gradual dentro do headroom disponível.',
                   confidence,
-                  expectedResult: `Aumento de impressões e pedidos mantendo ACoS < ${TARGET_ACOS}%.`,
+                  expectedResult: `Aumento de impressões e volume de pedidos com ACoS mantido abaixo de ${TARGET_ACOS}%.`,
                   evaluationAt: 'Em 7 dias.',
                   successCriteria: `Aumento de pedidos com ACoS ainda < ${TARGET_ACOS}%.`,
-                  rollbackCriteria: `Reverter se ACoS ultrapassar ${MAX_ACOS}% após 7 dias.`,
+                  rollbackCriteria: `Reverter se ACoS ultrapassar ${MAX_ACOS}% após 7 dias, ou se pedidos caírem > 30% versus período anterior.`,
                   sym,
                 }),
-                data_used: JSON.stringify({ acos, orders, clicks, sales: sales.toFixed(2), maturity, confidence, strong_winner: isStrongWinner }),
+                data_used: JSON.stringify({ tier: tierLabel, acos, orders, clicks, sales: sales.toFixed(2), spend: spend.toFixed(2), acos_headroom: Math.round(acosHeadroom * 100), increase_pct: Math.round(basePct * 100), maturity, confidence }),
                 risk: riskLevel,
                 requires_approval: riskLevel !== 'low' || autonomyLevel < 3,
                 status: outcome === 'EXECUTE_NOW' ? 'approved' : 'pending',
@@ -1085,7 +1105,72 @@ Deno.serve(async (req) => {
               stats.bid_increase++;
             } else { stats.skipped_dup++; }
           } else {
-            stats.no_action++; // NO_ACTION: já no máximo ou mudança insignificante
+            stats.no_action++;
+          }
+        }
+
+        // ── C7. MANUAL EXACT COM POTENCIAL OCULTO ────────────────────────
+        // Keywords manuais exact com impressões baixas (< 50) e bid abaixo de R$1
+        // mas sem perdas recentes → candidatas a aumento de visibilidade
+        else if (
+          kw.match_type === 'exact' &&
+          impressions > 0 && impressions < 50 &&
+          clicks === 0 &&
+          currentBid < 1.0 &&
+          orders === 0 &&
+          maturity === 'MATURE' &&
+          !inIncCooldown &&
+          !productBlockerList.includes('OUT_OF_STOCK') &&
+          !productBlockerList.includes('LOW_STOCK') &&
+          !budgetCapReached && !budgetLockedCapReached
+        ) {
+          // Aumentar levemente para tentar obter cliques — não reduzir prematuramente
+          const newBid = Math.min(currentBid * 1.12, 1.0, MAX_BID);
+          if (newBid > currentBid + 0.005) {
+            const iKey = makeKey(amazonAccountId, 'bid_change', kw.keyword_id, 'exact_visibility_boost', today);
+            if (!existingKeys.has(iKey)) {
+              const outcome = resolveOutcome(confidence, maturity, [], autonomyLevel, 'low', false);
+              decisionsToCreate.push({
+                amazon_account_id: amazonAccountId,
+                decision_type: 'bid_change', entity_type: 'keyword',
+                entity_id: kw.keyword_id, campaign_id: kw.campaign_id, ad_group_id: kw.ad_group_id,
+                keyword_id: kw.keyword_id, keyword_text: kw.keyword_text || kw.keyword, asin: kw.asin,
+                action: 'increase_bid',
+                value_before: currentBid, value_after: Number(newBid.toFixed(2)),
+                change_pct: Number(((newBid / currentBid - 1) * 100).toFixed(1)),
+                rationale: buildFullRationale({
+                  objective: `${objective}: aumentar visibilidade de keyword EXACT manual com potencial oculto.`,
+                  diagnosis: `"${kw.keyword_text}" (EXACT MANUAL) tem ${impressions} impressões mas zero cliques — bid atual de ${sym}${currentBid.toFixed(2)} está provavelmente abaixo da posição competitiva de leilão para este termo.`,
+                  evidence: `impressions=${impressions}, clicks=0, bid=${sym}${currentBid.toFixed(2)}, match_type=exact, maturity=${maturity}`,
+                  action: `Aumentar bid +12%: de ${sym}${currentBid.toFixed(2)} para ${sym}${newBid.toFixed(2)} (teto ${sym}1.00).`,
+                  executeAt: 'Início do próximo dia.',
+                  whyThisAction: 'O termo está aparecendo em leilões mas não convertendo em cliques — indicativo de posição de anúncio muito baixa. Um aumento moderado busca melhorar a posição sem gasto especulativo excessivo.',
+                  whyNotAlternatives: 'Aguardar sem agir manteria a keyword em visibilidade mínima indefinidamente. Reduzir bid pioraria a situação.',
+                  risk: 'Baixo — teto de R$1,00 limita exposição.',
+                  confidence,
+                  expectedResult: 'Obter primeiros cliques qualificados para iniciar análise de conversão.',
+                  evaluationAt: 'Em 5 dias.',
+                  successCriteria: 'Pelo menos 3 cliques em 5 dias.',
+                  rollbackCriteria: `Reverter se ACoS > ${MAX_ACOS}% após primeiros 10 cliques, ou se gasto > ${sym}5,00 sem cliques.`,
+                  sym,
+                }),
+                data_used: JSON.stringify({ impressions, clicks: 0, current_bid: currentBid, new_bid: newBid, match_type: 'exact', maturity }),
+                risk: 'low',
+                requires_approval: autonomyLevel < 2,
+                status: outcome === 'EXECUTE_NOW' ? 'approved' : 'pending',
+                confidence: Math.round(confidence * 100),
+                objective: objective.toLowerCase(),
+                country_code: cc, currency_code: code, currency_symbol: sym,
+                idempotency_key: iKey, source_function: 'runDailyAdsOptimization',
+                evaluation_due_at: daysFromNow(5),
+                rollback_payload: JSON.stringify({ action: 'update_bid', value: currentBid }),
+                created_at: now,
+              });
+              campaignChangedThisCycle.set(campKey, 'bid');
+              stats.bid_increase++;
+            } else { stats.skipped_dup++; }
+          } else {
+            stats.no_action++;
           }
         }
       }
