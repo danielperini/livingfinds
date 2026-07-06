@@ -236,9 +236,11 @@ Deno.serve(async (request) => {
     const fbaInventory = Number(product.fba_inventory ?? product.fba_quantity ?? 0);
     const inventoryStatus = String(product.inventory_status || eventProduct?.inventory_status || '').toLowerCase();
 
-    if (productStatus !== 'active' || fbaInventory <= 0 || inventoryStatus === 'out_of_stock') {
-      await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId, stage, message: 'Produto ignorado: inativo ou sem estoque.', details: { skipped: true } });
-      return Response.json({ ok: true, skipped: true, asin, reason: 'product not active or no FBA stock' });
+    // force_ai = geração manual via TermBank — não bloquear por estoque (sugestões são independentes de stock)
+    // Automação/sync: bloquear apenas produtos inativos (archived/inactive), não por falta de estoque
+    if (!forceAI && productStatus !== 'active') {
+      await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId, stage, message: 'Produto ignorado: inativo.', details: { skipped: true } });
+      return Response.json({ ok: true, skipped: true, asin, reason: 'product not active' });
     }
 
     // ── Resolver conta ────────────────────────────────────────────────────────
