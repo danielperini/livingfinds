@@ -144,9 +144,12 @@ export default function AdsAutopilotScheduled() {
         <div className="flex items-start gap-3">
           <Clock className="w-5 h-5 text-cyan mt-0.5" />
           <div>
-            <p className="text-sm font-semibold text-white">{enabled ? 'Automação ativa e programada' : 'Automação pausada pelo usuário'}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-white">{enabled ? '✅ Automação Segura — rodando 24h sem página aberta' : '⏸ Automação pausada pelo usuário'}</p>
+              {enabled && <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-semibold">ATIVO</span>}
+            </div>
             <p className="text-xs text-slate-400 mt-1">
-              Sync, decisões, dayparting e proteções são distribuídos nas janelas 00:00–04:00 e 13:00–14:00 para evitar rate limit.
+              Aprendizado AUTO, otimização de bids, harvest de termos, colheita, guardrails e execução de ações Amazon rodam automaticamente no backend — independente de qualquer página aberta.
             </p>
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-slate-500">
               <span>Última atualização: {lastUpdate ? new Date(lastUpdate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'ainda não registrada'}</span>
