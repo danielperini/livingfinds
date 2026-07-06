@@ -12,6 +12,7 @@ import MLLearningPanel from '@/components/learner/MLLearningPanel';
 import BudgetValidationPanel from '@/components/autopilot/BudgetValidationPanel';
 import WeeklyLearningTab from '@/components/autopilot/WeeklyLearningTab';
 import WeeklySearchTermPromotionPanel from '@/components/autopilot/WeeklySearchTermPromotionPanel';
+import WasteTermsCleanupPanel from '@/components/autopilot/WasteTermsCleanupPanel';
 import AutoCampaignJourneyPanel from '@/components/autopilot/AutoCampaignJourneyPanel';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
@@ -302,6 +303,7 @@ export default function AdsAutopilot() {
     {tab === 'weekly_learning' && (
       <div className="space-y-6">
         <WeeklySearchTermPromotionPanel account={account} />
+        <WasteTermsCleanupPanel account={account} />
         <WeeklyLearningTab account={account} />
       </div>
     )}
