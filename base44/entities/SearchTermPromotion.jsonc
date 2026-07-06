@@ -1,0 +1,132 @@
+{
+  "name": "SearchTermPromotion",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "source_campaign_id": {
+      "type": "string"
+    },
+    "source_ad_group_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "search_term": {
+      "type": "string"
+    },
+    "normalized_term": {
+      "type": "string"
+    },
+    "tail_type": {
+      "type": "string",
+      "enum": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "default": "medium"
+    },
+    "word_count": {
+      "type": "number",
+      "default": 0
+    },
+    "conversions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "promotion_score": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "validating",
+        "creating_campaign",
+        "promoted",
+        "rejected",
+        "blocked_duplicate",
+        "blocked_negative",
+        "blocked_no_stock"
+      ],
+      "default": "candidate"
+    },
+    "target_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "manual_campaign_id": {
+      "type": "string"
+    },
+    "manual_campaign_name": {
+      "type": "string"
+    },
+    "manual_keyword_id": {
+      "type": "string"
+    },
+    "negative_created": {
+      "type": "boolean",
+      "default": false
+    },
+    "negative_confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rejection_reason": {
+      "type": "string"
+    },
+    "ai_relevance_check": {
+      "type": "string"
+    },
+    "ai_validated": {
+      "type": "boolean",
+      "default": false
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "promoted_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "source_campaign_id",
+    "asin",
+    "search_term"
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "name": "CampaignBidHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "previous_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "new_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "change_type": {
+      "type": "string",
+      "enum": [
+        "initial_bid",
+        "increase_no_spend_10",
+        "increase_no_spend_05",
+        "reduce_low_cpc_05",
+        "reduce_for_goal_05",
+        "recover_delivery_10",
+        "manual_adjustment"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "impressions_before": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_before": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_before": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_before": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_before": {
+      "type": "number",
+      "default": 0
+    },
+    "average_cpc_before": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_before": {
+      "type": "number",
+      "default": 0
+    },
+    "roas_before": {
+      "type": "number",
+      "default": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "execution_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "change_type"
+  ]
+}

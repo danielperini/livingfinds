@@ -1,0 +1,139 @@
+{
+  "name": "AutoCampaignLearning",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "learning_state": {
+      "type": "string",
+      "enum": [
+        "learning_48h",
+        "no_spend",
+        "bid_increase_10",
+        "observing_24h",
+        "observing_48h",
+        "bid_increase_05",
+        "spending",
+        "bid_reduction_05",
+        "delivery_lost",
+        "bid_recovery_10",
+        "stable",
+        "term_promotion_pending",
+        "term_promoted",
+        "blocked"
+      ],
+      "default": "learning_48h"
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "bid_floor_operational": {
+      "type": "number",
+      "default": 0.5
+    },
+    "bid_ceiling": {
+      "type": "number",
+      "default": 5.0
+    },
+    "last_bid_with_delivery": {
+      "type": "number",
+      "default": 0
+    },
+    "last_bid_without_delivery": {
+      "type": "number",
+      "default": 0
+    },
+    "stable_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_analysis_due_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_analysis_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_bid_change_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bid_increase_count": {
+      "type": "number",
+      "default": 0
+    },
+    "bid_reduction_count": {
+      "type": "number",
+      "default": 0
+    },
+    "total_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "total_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "total_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "total_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "block_reason": {
+      "type": "string"
+    },
+    "terms_promoted": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_pending_promotion": {
+      "type": "number",
+      "default": 0
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id"
+  ]
+}
