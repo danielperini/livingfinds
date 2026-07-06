@@ -277,7 +277,21 @@ export default function AdsAutopilot() {
   if (!account) return <div className="p-6"><h2 className="text-lg font-bold text-white">Nenhuma conta Amazon conectada.</h2><p className="text-sm text-slate-400 mt-2">Configure sua conta Amazon nas Configurações antes de usar o Autopilot.</p></div>;
 
   return <div className="p-6 space-y-6">
-    <div className="flex items-center justify-between"><div><h1 className="text-xl font-bold text-white">Ads Autopilot & IA</h1><p className="text-sm text-slate-400">{runs[0]?.started_at ? `Última análise: ${new Date(runs[0].started_at).toLocaleString('pt-BR')}` : 'Nenhuma análise executada'}</p></div></div>
+    <div className="flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h1 className="text-xl font-bold text-white">Ads Autopilot & IA</h1>
+        <p className="text-sm text-slate-400">{runs[0]?.started_at ? `Última análise: ${new Date(runs[0].started_at).toLocaleString('pt-BR')}` : 'Nenhuma análise executada'}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={loadData} disabled={loading} className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs rounded-lg transition-colors disabled:opacity-50">
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Atualizar
+        </button>
+        <button onClick={() => runAnalysis(false)} disabled={running} className="flex items-center gap-1.5 px-4 py-2 bg-cyan/20 border border-cyan/30 text-cyan hover:bg-cyan/30 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50">
+          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+          {running ? 'Analisando...' : 'Executar Análise'}
+        </button>
+      </div>
+    </div>
     {runMsg && <div className="rounded-lg border border-cyan/20 bg-cyan/5 p-3 text-sm text-cyan">{runMsg}</div>}
     <AutopilotKPIBar campaigns={campaigns} decisions={decisions} alerts={alerts} runs={runs} config={config} />
     <div className="flex flex-wrap gap-2">{TABS.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`px-3 py-2 rounded-lg text-xs font-semibold border ${tab === id ? 'bg-cyan/10 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-400 border-surface-3'}`}>{Icon && <Icon className="inline w-3 h-3 mr-1" />}{label}</button>)}</div>
