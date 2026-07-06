@@ -166,40 +166,28 @@ const REPORT_CONFIGS = [
   },
 ];
 
-// Limpa dados dos últimos 30 dias antes de importar
-async function clearLast30Days(base44, amazonAccountId, startDate, endDate) {
-  console.log(`[clearLast30Days] Limpando dados de ${startDate} a ${endDate}`);
-  
-  // Limpar SearchTerm por date range
-  await base44.asServiceRole.entities.SearchTerm.deleteMany({
-    amazon_account_id: amazonAccountId,
-  });
-  
-  // Limpar AdsMetricsHistory
-  await base44.asServiceRole.entities.AdsMetricsHistory.deleteMany({
-    amazon_account_id: amazonAccountId,
-  });
-  
-  // Limpar AdsReportRaw
-  await base44.asServiceRole.entities.AdsReportRaw.deleteMany({
-    amazon_account_id: amazonAccountId,
-  });
-  
-  // Limpar CampaignMetricsDaily (apenas últimos 30 dias)
-  const dates = [];
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  for (let d = start; d <= end; d.setDate(d.getDate() + 1)) {
-    dates.push(fmt(d));
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const BATCH = 100;
+const BATCH_PAUSE = 150;
+
+async function bulkInsertBatched(entity, records) {
+  for (let i = 0; i < records.length; i += BATCH) {
+    await entity.bulkCreate(records.slice(i, i + BATCH));
+    if (i + BATCH < records.length) await sleep(BATCH_PAUSE);
   }
-  
-  for (const date of dates) {
-    await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({
-      amazon_account_id: amazonAccountId,
-      date,
-    });
-  }
-  
+}
+
+// Limpa dados antes de importar — uma chamada por entidade, sem loop por data
+async function clearLast30Days(base44, amazonAccountId) {
+  console.log(`[clearLast30Days] Limpando dados da conta ${amazonAccountId}`);
+  await base44.asServiceRole.entities.SearchTerm.deleteMany({ amazon_account_id: amazonAccountId }).catch(() => {});
+  await sleep(BATCH_PAUSE);
+  await base44.asServiceRole.entities.AdsMetricsHistory.deleteMany({ amazon_account_id: amazonAccountId }).catch(() => {});
+  await sleep(BATCH_PAUSE);
+  await base44.asServiceRole.entities.AdsReportRaw.deleteMany({ amazon_account_id: amazonAccountId }).catch(() => {});
+  await sleep(BATCH_PAUSE);
+  await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: amazonAccountId }).catch(() => {});
   console.log(`[clearLast30Days] Dados limpos`);
 }
 
@@ -350,7 +338,7 @@ Deno.serve(async (req) => {
       const startDate = fmt(new Date(new Date(endDate).getTime() - 29 * 86400000));
 
       // ── LIMPAR DADOS ANTIGOS ANTES DE IMPORTAR ──
-      await clearLast30Days(base44, amazonAccountId, startDate, endDate);
+      await clearLast30Days(base44, amazonAccountId);
 
       // Baixar dados
       const data = {};
@@ -388,10 +376,7 @@ Deno.serve(async (req) => {
         }
       }
       
-      // Bulk insert raw data em lotes de 500
-      for (let i = 0; i < rawRecords.length; i += 500) {
-        await base44.asServiceRole.entities.AdsReportRaw.bulkCreate(rawRecords.slice(i, i + 500));
-      }
+      await bulkInsertBatched(base44.asServiceRole.entities.AdsReportRaw, rawRecords);
       console.log(`✓ AdsReportRaw: ${rawRecords.length} registos`);
       totalRecords += rawRecords.length;
 
@@ -534,10 +519,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Bulk insert history
-      for (let i = 0; i < historyRecords.length; i += 500) {
-        await base44.asServiceRole.entities.AdsMetricsHistory.bulkCreate(historyRecords.slice(i, i + 500));
-      }
+      await bulkInsertBatched(base44.asServiceRole.entities.AdsMetricsHistory, historyRecords);
       console.log(`✓ AdsMetricsHistory: ${historyRecords.length} registos`);
       totalRecords += historyRecords.length;
 
@@ -584,9 +566,7 @@ Deno.serve(async (req) => {
         synced_at: now,
       }));
 
-      for (let i = 0; i < searchTermRecords.length; i += 500) {
-        await base44.asServiceRole.entities.SearchTerm.bulkCreate(searchTermRecords.slice(i, i + 500));
-      }
+      await bulkInsertBatched(base44.asServiceRole.entities.SearchTerm, searchTermRecords);
       console.log(`✓ SearchTerm: ${searchTermRecords.length} registos`);
 
       // CampaignMetricsDaily (agregar por campaign_id + date)
@@ -621,9 +601,7 @@ Deno.serve(async (req) => {
         cpc: m.clicks > 0 ? (m.spend / m.clicks) : 0,
       }));
 
-      for (let i = 0; i < metricsRecords.length; i += 500) {
-        await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
-      }
+      await bulkInsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
       console.log(`✓ CampaignMetricsDaily: ${metricsRecords.length} registos`);
 
       // Atualizar Campaigns e Products (agregado 30 dias)
@@ -688,8 +666,11 @@ Deno.serve(async (req) => {
       const toUpdate = campRecords.filter(r => campMap.has(r.campaign_id)).map(r => ({ id: campMap.get(r.campaign_id).id, ...r }));
       const toCreate = campRecords.filter(r => !campMap.has(r.campaign_id));
 
-      for (let i = 0; i < toCreate.length; i += 500) await base44.asServiceRole.entities.Campaign.bulkCreate(toCreate.slice(i, i + 500));
-      for (let i = 0; i < toUpdate.length; i += 500) await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + 500));
+      await bulkInsertBatched(base44.asServiceRole.entities.Campaign, toCreate);
+      for (let i = 0; i < toUpdate.length; i += BATCH) {
+        await base44.asServiceRole.entities.Campaign.bulkUpdate(toUpdate.slice(i, i + BATCH));
+        if (i + BATCH < toUpdate.length) await sleep(BATCH_PAUSE);
+      }
       console.log(`✓ Campaign: ${campRecords.length} atualizadas`);
 
       // Products
@@ -705,8 +686,11 @@ Deno.serve(async (req) => {
       const prodToUpdate = prodRecords.filter(r => prodMap.has(r.asin)).map(r => ({ id: prodMap.get(r.asin).id, ...r }));
       const prodToCreate = prodRecords.filter(r => !prodMap.has(r.asin));
 
-      for (let i = 0; i < prodToCreate.length; i += 500) await base44.asServiceRole.entities.Product.bulkCreate(prodToCreate.slice(i, i + 500));
-      for (let i = 0; i < prodToUpdate.length; i += 500) await base44.asServiceRole.entities.Product.bulkUpdate(prodToUpdate.slice(i, i + 500));
+      await bulkInsertBatched(base44.asServiceRole.entities.Product, prodToCreate);
+      for (let i = 0; i < prodToUpdate.length; i += BATCH) {
+        await base44.asServiceRole.entities.Product.bulkUpdate(prodToUpdate.slice(i, i + BATCH));
+        if (i + BATCH < prodToUpdate.length) await sleep(BATCH_PAUSE);
+      }
       console.log(`✓ Product: ${prodRecords.length} atualizados`);
 
       // Finalizar

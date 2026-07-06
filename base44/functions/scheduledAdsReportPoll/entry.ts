@@ -41,6 +41,25 @@ async function decompress(buf: ArrayBuffer): Promise<any[]> {
   return JSON.parse(new TextDecoder().decode(merged));
 }
 
+const BATCH = 100;          // registros por lote de DB
+const BATCH_PAUSE = 150;    // ms entre lotes para evitar rate limit
+
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+async function bulkInsertBatched(entity: any, records: any[]) {
+  for (let i = 0; i < records.length; i += BATCH) {
+    await entity.bulkCreate(records.slice(i, i + BATCH));
+    if (i + BATCH < records.length) await sleep(BATCH_PAUSE);
+  }
+}
+
+async function bulkUpdateBatched(entity: any, records: any[]) {
+  for (let i = 0; i < records.length; i += BATCH) {
+    await entity.bulkUpdate(records.slice(i, i + BATCH));
+    if (i + BATCH < records.length) await sleep(BATCH_PAUSE);
+  }
+}
+
 Deno.serve(async (req) => {
   const startTime = Date.now();
   try {
@@ -154,13 +173,13 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
     const endDate = endDateStr || fmt(new Date(Date.now() - 86400000));
 
-    // ── Limpar dados antigos ──
+    // ── Limpar dados antigos (sequencial para evitar rate limit) ──
     console.log('[adsReportPoll] Limpando dados antigos...');
-    await Promise.all([
-      base44.asServiceRole.entities.AdsMetricsHistory.deleteMany({ amazon_account_id: aid }),
-      base44.asServiceRole.entities.SearchTerm.deleteMany({ amazon_account_id: aid }),
-      base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: aid }),
-    ]).catch(() => {});
+    await base44.asServiceRole.entities.AdsMetricsHistory.deleteMany({ amazon_account_id: aid }).catch(() => {});
+    await sleep(BATCH_PAUSE);
+    await base44.asServiceRole.entities.SearchTerm.deleteMany({ amazon_account_id: aid }).catch(() => {});
+    await sleep(BATCH_PAUSE);
+    await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: aid }).catch(() => {});
 
     // ── Construir AdsMetricsHistory ──
     const historyRecords: any[] = [];
@@ -211,9 +230,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    for (let i = 0; i < historyRecords.length; i += 500) {
-      await base44.asServiceRole.entities.AdsMetricsHistory.bulkCreate(historyRecords.slice(i, i + 500));
-    }
+    await bulkInsertBatched(base44.asServiceRole.entities.AdsMetricsHistory, historyRecords);
     console.log(`[adsReportPoll] AdsMetricsHistory: ${historyRecords.length}`);
 
     // ── SearchTerm ──
@@ -237,9 +254,7 @@ Deno.serve(async (req) => {
         unique_key: r.unique_key, synced_at: now,
       }));
 
-    for (let i = 0; i < stRecords.length; i += 500) {
-      await base44.asServiceRole.entities.SearchTerm.bulkCreate(stRecords.slice(i, i + 500));
-    }
+    await bulkInsertBatched(base44.asServiceRole.entities.SearchTerm, stRecords);
     console.log(`[adsReportPoll] SearchTerm: ${stRecords.length}`);
 
     // ── CampaignMetricsDaily (priorizar relatório "campaigns") ──
@@ -267,9 +282,7 @@ Deno.serve(async (req) => {
       synced_at: now,
     }));
 
-    for (let i = 0; i < metricsRecords.length; i += 500) {
-      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(metricsRecords.slice(i, i + 500));
-    }
+    await bulkInsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
     console.log(`[adsReportPoll] CampaignMetricsDaily: ${metricsRecords.length}`);
 
     // ── Atualizar métricas agregadas nas entidades Campaign ──
@@ -298,9 +311,7 @@ Deno.serve(async (req) => {
         };
       });
 
-    for (let i = 0; i < campUpdates.length; i += 500) {
-      await base44.asServiceRole.entities.Campaign.bulkUpdate(campUpdates.slice(i, i + 500)).catch(() => {});
-    }
+    await bulkUpdateBatched(base44.asServiceRole.entities.Campaign, campUpdates).catch(() => {});
     console.log(`[adsReportPoll] Campaign: ${campUpdates.length} atualizadas`);
 
     // ── Finalizar ──
