@@ -53,8 +53,44 @@ function uuid() {
 }
 function daysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
 
+// ── Normalização de regra (antes da validação) ───────────────────────────────
+function normalizeRule(rule) {
+  if (!rule || typeof rule !== 'object') return rule;
+  // Normalizar strings para minúsculas onde necessário
+  if (rule.scope) rule.scope = String(rule.scope).toLowerCase().trim();
+  if (rule.action?.type) rule.action.type = String(rule.action.type).toLowerCase().trim();
+  // Normalizar action.value: pode vir como string numérica
+  if (rule.action?.value != null && typeof rule.action.value === 'string') {
+    const parsed = parseFloat(rule.action.value);
+    if (!isNaN(parsed)) rule.action.value = parsed;
+  }
+  // Normalizar priority para número
+  if (rule.priority != null && typeof rule.priority === 'string') {
+    rule.priority = parseInt(rule.priority, 10) || 100;
+  }
+  if (rule.priority == null) rule.priority = 100;
+  // Normalizar confidence para número
+  if (rule.confidence != null && typeof rule.confidence === 'string') {
+    rule.confidence = parseFloat(rule.confidence) || 0;
+  }
+  // Normalizar cooldown_hours
+  if (rule.cooldown_hours != null && typeof rule.cooldown_hours === 'string') {
+    rule.cooldown_hours = parseInt(rule.cooldown_hours, 10) || 72;
+  }
+  // Normalizar conditions
+  if (Array.isArray(rule.conditions)) {
+    for (const cond of rule.conditions) {
+      if (cond.metric) cond.metric = String(cond.metric).toLowerCase().trim();
+      if (cond.operator) cond.operator = String(cond.operator).toLowerCase().trim();
+    }
+  }
+  return rule;
+}
+
 // ── Validação de regra proposta ──────────────────────────────────────────────
 function validateProposedRule(rule, existingRuleKeys = new Set()) {
+  // Normalizar antes de validar
+  normalizeRule(rule);
   const errors = [];
 
   // Campos obrigatórios
@@ -62,7 +98,6 @@ function validateProposedRule(rule, existingRuleKeys = new Set()) {
   else if (existingRuleKeys.has(rule.rule_key)) errors.push(`rule_key duplicado neste batch: ${rule.rule_key}`);
   if (!rule.name || typeof rule.name !== 'string') errors.push('name ausente');
   if (!rule.scope) errors.push('scope ausente');
-  else rule.scope = rule.scope.toLowerCase(); // normalizar para minúsculas
   const ALLOWED_SCOPES = new Set(['keyword','campaign','ad_group','search_term','account','product']);
   if (rule.scope && !ALLOWED_SCOPES.has(rule.scope)) errors.push(`scope inválido: ${rule.scope}`);
   if (typeof rule.priority !== 'number' || rule.priority < 0 || rule.priority > 999) errors.push('priority deve ser número entre 0 e 999');
@@ -187,10 +222,19 @@ async function backtestProposedRule(base44, rule, aid, keywords, metrics30d) {
     risk_level: 'low',
   };
 
+  // Normalizar a regra antes do backtest
+  normalizeRule(rule);
+
   // Dados insuficientes: regra de scope keyword sem keywords
   const isKeywordScope = !rule.scope || rule.scope === 'keyword';
   if (isKeywordScope && keywords.length < 5) {
     result.rejection_reasons.push('dados insuficientes para backtest (< 5 keywords)');
+    return result;
+  }
+
+  // Verificação de segurança: ação deve ser válida
+  if (!rule.action?.type || !ALLOWED_ACTIONS.has(rule.action.type)) {
+    result.rejection_reasons.push(`ação inválida ou não autorizada: ${rule.action?.type}`);
     return result;
   }
 
@@ -335,6 +379,16 @@ async function backtestProposedRule(base44, rule, aid, keywords, metrics30d) {
     );
   }
 
+  // 5b. Aumento de spend simulado > 30% sem aumento proporcional de vendas (eficiência deteriora)
+  const spendIncreasePct = realSpend > 0 ? ((result.spend_simulated - realSpend) / realSpend) * 100 : 0;
+  const salesIncreasePct = realSales > 0 ? ((result.sales_simulated - realSales) / realSales) * 100 : 0;
+  if (spendIncreasePct > 30 && salesIncreasePct < spendIncreasePct * 0.5) {
+    result.risk_level = 'high';
+    result.rejection_reasons.push(
+      `spend simulado cresce ${spendIncreasePct.toFixed(1)}% mas vendas crescem apenas ${salesIncreasePct.toFixed(1)}% — eficiência deteriora`
+    );
+  }
+
   // 6. Budget total após ação ficaria fora da faixa permitida
   if (rule.action.type === 'redistribute_budget') {
     const budgetAfter = realSpend + spendDelta;
@@ -348,6 +402,22 @@ async function backtestProposedRule(base44, rule, aid, keywords, metrics30d) {
         `budget simulado R$${budgetAfter.toFixed(2)} abaixo do mínimo R$${MIN_TOTAL_DAILY_BUDGET}`
       );
     }
+  }
+
+  // 7. Cobertura zero com ação de pausa/negação — regra inerte é perigosa se impostora
+  if (actionsCount === 0 && ['pause_keyword','pause_campaign','negate_search_term'].includes(rule.action.type)) {
+    result.rejection_reasons.push('regra de pausa/negação não afeta nenhuma entidade — pode ser um falso positivo');
+  }
+
+  // 8. Spend estimado diário total ultrapassaria MAX_TOTAL_DAILY_BUDGET
+  // Usamos spend_real como proxy do gasto diário médio (30 dias)
+  const dailyAvgSpend = realSpend > 0 ? realSpend / 30 : 0;
+  const dailySimulatedSpend = result.spend_simulated > 0 ? result.spend_simulated / 30 : 0;
+  if (dailySimulatedSpend > MAX_TOTAL_DAILY_BUDGET) {
+    result.risk_level = 'high';
+    result.rejection_reasons.push(
+      `gasto diário simulado R$${dailySimulatedSpend.toFixed(2)} ultrapassa limite máximo de R$${MAX_TOTAL_DAILY_BUDGET}`
+    );
   }
 
   result.passed = result.rejection_reasons.length === 0;
