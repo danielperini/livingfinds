@@ -146,6 +146,29 @@ export default function Dashboard() {
   const ctr = kpis.impressions > 0 ? (kpis.clicks / kpis.impressions * 100) : 0;
   const cpc = kpis.clicks > 0 ? (kpis.spend / kpis.clicks) : 0;
 
+  // Ad Spend Ontem — dia anterior completo (D-1), sem dados parciais do dia atual
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().slice(0, 10);
+  const seenYesterday = new Set();
+  const yesterdayKpis = metricsDaily
+    .filter(m => m.date === yesterdayStr)
+    .reduce((acc, m) => {
+      const key = `${m.campaign_id || ''}-${m.date}`;
+      if (seenYesterday.has(key)) return acc;
+      seenYesterday.add(key);
+      return {
+        spend: acc.spend + (m.spend || 0),
+        sales: acc.sales + (m.sales || 0),
+        clicks: acc.clicks + (m.clicks || 0),
+        orders: acc.orders + (m.orders || 0),
+        impressions: acc.impressions + (m.impressions || 0),
+      };
+    }, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 });
+
+  const yesterdayAcos = yesterdayKpis.sales > 0 ? (yesterdayKpis.spend / yesterdayKpis.sales * 100) : 0;
+  const yesterdayRoas = yesterdayKpis.spend > 0 ? (yesterdayKpis.sales / yesterdayKpis.spend) : 0;
+
   const chartData = Object.values(
     uniqueMetrics.reduce((acc, m) => {
       if (!acc[m.date]) acc[m.date] = { name: m.date?.slice(5) || '', date: m.date, spend: 0, sales: 0, orders: 0, clicks: 0 };
@@ -374,6 +397,50 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           </div>
         </div>
       </div>
+
+      {/* Card Ad Spend Ontem (D-1) */}
+      {loading ? (
+        <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4 animate-pulse h-28" />
+      ) : (
+        <div className="bg-surface-1 border border-amber-500/25 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <h3 className="text-xs font-semibold text-amber-400">Ad Spend Ontem ({yesterdayStr})</h3>
+              <span className="text-[10px] text-slate-500 bg-surface-2 px-1.5 py-0.5 rounded">D-1 · dados completos</span>
+            </div>
+            <span className="text-[10px] text-slate-500">{Object.keys(metricsDaily.filter(m => m.date === yesterdayStr).reduce((a, m) => { a[m.campaign_id] = 1; return a; }, {})).length} campanhas</span>
+          </div>
+          {yesterdayKpis.spend === 0 ? (
+            <p className="text-xs text-slate-500">Sem dados para {yesterdayStr}. Aguarde o sync da próxima janela.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-400 mb-1">Gasto</p>
+                <p className="text-xl font-bold text-amber-400">R${yesterdayKpis.spend.toFixed(2)}</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-400 mb-1">Vendas</p>
+                <p className="text-xl font-bold text-emerald-400">R${yesterdayKpis.sales.toFixed(2)}</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-400 mb-1">Pedidos</p>
+                <p className="text-xl font-bold text-white">{yesterdayKpis.orders}</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-400 mb-1">ACoS</p>
+                <p className={`text-xl font-bold ${yesterdayAcos === 0 ? 'text-slate-500' : yesterdayAcos > (autopilotConfig?.maximum_acos || 40) ? 'text-red-400' : yesterdayAcos > (autopilotConfig?.target_acos || 25) ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {yesterdayAcos > 0 ? `${yesterdayAcos.toFixed(1)}%` : '—'}
+                </p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-400 mb-1">ROAS</p>
+                <p className="text-xl font-bold text-slate-300">{yesterdayRoas > 0 ? `${yesterdayRoas.toFixed(2)}x` : '—'}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
