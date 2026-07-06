@@ -75,11 +75,14 @@ export default function Dashboard() {
       if (!acc) { setLoading(false); return; }
 
       const aid = acc.id;
-      const [cams, prods, metrics, hourly, decs, runs, changes, apConfigs] = await Promise.all([
+      // Dividir em 2 lotes para evitar rate limit (429)
+      const [cams, prods, metrics, hourly] = await Promise.all([
         loadAllCampaigns(aid),
         base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 30),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120),
         base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720),
+      ]);
+      const [decs, runs, changes, apConfigs] = await Promise.all([
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8),
         loadAllBidChanges(aid),
