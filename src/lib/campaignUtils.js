@@ -44,7 +44,33 @@ export async function loadAllCampaigns(amazonAccountId, extraFilter = {}) {
     const campaignId = String(campaign?.campaign_id || campaign?.amazon_campaign_id || '').trim();
     if (!campaignId) return;
     const current = byCampaignId.get(campaignId);
-    if (!current || timestampOf(campaign) >= timestampOf(current)) byCampaignId.set(campaignId, campaign);
+    if (!current) { byCampaignId.set(campaignId, campaign); return; }
+    // Preferir o registro mais recente para estado/orçamento, mas mesclar métricas do que tiver mais spend
+    const newerIsRecent = timestampOf(campaign) >= timestampOf(current);
+    const candidateSpend = campaign.spend || 0;
+    const currentSpend = current.spend || 0;
+    if (newerIsRecent) {
+      // Usar registro mais recente para estado/orçamento, mas herdar spend/sales/acos/roas do mais rico se o atual for zerado
+      const merged = { ...campaign };
+      if (candidateSpend === 0 && currentSpend > 0) {
+        merged.spend = current.spend;
+        merged.sales = current.sales;
+        merged.acos = current.acos;
+        merged.roas = current.roas;
+        merged.clicks = current.clicks || merged.clicks;
+        merged.impressions = current.impressions || merged.impressions;
+        merged.orders = current.orders || merged.orders;
+        merged.cpc = current.cpc || merged.cpc;
+        merged.ctr = current.ctr || merged.ctr;
+      }
+      byCampaignId.set(campaignId, merged);
+    } else if (candidateSpend > currentSpend) {
+      // Registro mais antigo mas com métricas melhores — mesclar métricas no registro atual
+      const merged = { ...current, spend: candidateSpend, sales: campaign.sales, acos: campaign.acos, roas: campaign.roas,
+        clicks: campaign.clicks || current.clicks, impressions: campaign.impressions || current.impressions,
+        orders: campaign.orders || current.orders, cpc: campaign.cpc || current.cpc, ctr: campaign.ctr || current.ctr };
+      byCampaignId.set(campaignId, merged);
+    }
   });
 
   return [...byCampaignId.values()];
