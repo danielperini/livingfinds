@@ -370,23 +370,28 @@ Deno.serve(async (req) => {
     );
     const isNewCampaignTrigger = trigger === 'criacao_campanha' || trigger === 'nova_campanha';
 
-    if (totalAllocated > TOLERANCE_HIGH) {
-      // Para nova campanha OU sem justificativa, normalizar para referência exata
-      // Com justificativa (campanhas rentáveis), permite até R$66
-      const targetNorm = (hasScalingJustification && !isNewCampaignTrigger) ? TOLERANCE_HIGH : referenceTotal;
-      const scaleFactor = targetNorm / totalAllocated;
+    // Normalização SEMPRE para referenceTotal (R$60) — sem exceção por "justificativa"
+    // Isso evita que multiplicadores de performance (1.30x por campanha) inflem o total
+    if (totalAllocated > 0 && Math.abs(totalAllocated - referenceTotal) > 0.50) {
+      const scaleFactor = referenceTotal / totalAllocated;
       for (const a of allocations) {
         a.suggested_budget = Math.max(MIN_CAMPAIGN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
         a.normalized = true;
-        if (isNewCampaignTrigger) a.perf_reason += '+redistributed_new_campaign';
+      }
+      totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
+    }
+
+    // Limitador final: R$50–R$65 (nunca sai dessa faixa)
+    if (totalAllocated > TOLERANCE_HIGH) {
+      const scaleFactor = TOLERANCE_HIGH / totalAllocated;
+      for (const a of allocations) {
+        a.suggested_budget = Math.max(MIN_CAMPAIGN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
       }
       totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
     } else if (totalAllocated < TOLERANCE_LOW && totalAllocated > 0) {
-      // Total muito baixo: escalar para piso de tolerância
       const scaleFactor = TOLERANCE_LOW / totalAllocated;
       for (const a of allocations) {
         a.suggested_budget = Math.round(a.suggested_budget * scaleFactor * 100) / 100;
-        a.normalized = true;
       }
       totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
     }

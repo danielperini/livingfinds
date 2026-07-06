@@ -83,7 +83,13 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const isAiFresh = aiGeneratedTimestamp > 0 && Date.now() - aiGeneratedTimestamp < 7 * 24 * 3600000;
   const usePersistedAI = aiSuggested > 0 && isAiFresh;
 
-  const suggestedBudget = usePersistedAI ? aiSuggested : recalculatedBudget;
+  // Limitador obrigatório: R$50–R$65. Corrige valores históricos fora da faixa (ex: R$466,88)
+  const BUDGET_MIN = 50;
+  const BUDGET_MAX = 65;
+  const rawBudget = usePersistedAI ? aiSuggested : recalculatedBudget;
+  const suggestedBudget = rawBudget > 0
+    ? Math.min(BUDGET_MAX, Math.max(BUDGET_MIN, rawBudget))
+    : rawBudget;
   const confidence = usePersistedAI
     ? aiConfidence
     : Math.min(95, Math.max(55, Math.round((daysWithData / 30) * 100)));
