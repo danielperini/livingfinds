@@ -323,11 +323,9 @@ export default function CampaignQueueMonitor() {
       const acc = accounts[0];
       if (!acc) return;
       setAccount(acc);
-      const [kickoff, repair, keyword] = await Promise.all([
-        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 200),
-        base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 200),
-        base44.entities.KeywordRepairQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 200),
-      ]);
+      const kickoff = await base44.entities.ProductKickoffQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 100);
+      const repair = await base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 100);
+      const keyword = await base44.entities.KeywordRepairQueue.filter({ amazon_account_id: acc.id }, '-scheduled_at', 100);
       setKickoffQueue(kickoff);
       setRepairQueue(repair);
       setKeywordQueue(keyword);
@@ -341,7 +339,7 @@ export default function CampaignQueueMonitor() {
 
   useEffect(() => {
     if (autoRefresh) {
-      intervalRef.current = setInterval(() => loadQueues(false), 15000);
+      intervalRef.current = setInterval(() => loadQueues(false), 30000);
     } else {
       clearInterval(intervalRef.current);
     }
