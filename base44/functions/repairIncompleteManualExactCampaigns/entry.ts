@@ -277,23 +277,34 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 7b. Criar product ads faltando
+    // 7b. Criar product ads faltando — buscar SKU dos produtos locais
     const needProductAds = needsWork.filter(r => r.needs_product_ad && r.ad_group_id);
     if (needProductAds.length > 0) {
+      // Buscar SKUs dos ASINs no banco local
+      const uniqueAsins = [...new Set(needProductAds.map(r => r.asin).filter(Boolean))];
+      const localProducts = amazon_account_id
+        ? await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin: { $in: uniqueAsins } }, null, 200)
+        : [];
+      const skuByAsin: Record<string, string> = {};
+      localProducts.forEach((p: any) => { if (p.asin && p.sku) skuByAsin[p.asin] = p.sku; });
+
       for (let i = 0; i < needProductAds.length; i += BATCH) {
         const batch = needProductAds.slice(i, i + BATCH);
-        const payload = {
-          productAds: batch.map(r => ({
-            campaignId: r.campaign_id,
-            adGroupId: r.ad_group_id,
-            asin: r.asin,
-            state: 'ENABLED',
-          })),
-        };
+        const adsPayload: any[] = [];
+        for (const r of batch) {
+          const sku = skuByAsin[r.asin];
+          if (sku) {
+            adsPayload.push({ campaignId: r.campaign_id, adGroupId: r.ad_group_id, sku, state: 'ENABLED' });
+          } else {
+            // Sem SKU — tentar com ASIN mesmo (alguns marketplaces aceitam)
+            adsPayload.push({ campaignId: r.campaign_id, adGroupId: r.ad_group_id, asin: r.asin, state: 'ENABLED' });
+          }
+        }
+        const payload = { productAds: adsPayload };
         const res = await apiPost(`${baseUrl}/sp/productAds`, makeHeaders('application/vnd.spProductAd.v3+json'), payload);
         const success = (res.data?.productAds?.success || []).length;
         const errors = res.data?.productAds?.error || [];
-        results.push({ type: 'product_ads_created', count: success, errors: errors.length, errors_sample: errors.slice(0, 3) });
+        results.push({ type: 'product_ads_created', count: success, errors: errors.length, errors_sample: errors.slice(0, 3), sku_map_size: Object.keys(skuByAsin).length });
         if (i + BATCH < needProductAds.length) await delay(400);
       }
     }
