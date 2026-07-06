@@ -184,7 +184,7 @@ export default function Settings() {
       // Aplicar redutor: total_daily_budget sempre entre R$50 e R$65
       const sanitized = {
         ...goalsForm,
-        total_daily_budget: Math.min(70, Math.max(goalsForm.total_daily_budget > 0 ? 50 : 0, goalsForm.total_daily_budget)),
+        total_daily_budget: goalsForm.total_daily_budget,
       };
       if (autopilotConfig) {
         await base44.entities.AutopilotConfig.update(autopilotConfig.id, sanitized);
@@ -366,10 +366,10 @@ export default function Settings() {
           </div>
           <div>
             <label className="block text-xs text-slate-400 mb-1.5">Orçamento Diário Total (R$)</label>
-            <input type="number" min="50" max="70" step="5" value={goalsForm.total_daily_budget}
+            <input type="number" min="0" step="5" value={goalsForm.total_daily_budget}
               onChange={e => setGoalsForm(p => ({ ...p, total_daily_budget: parseFloat(e.target.value) || 0 }))}
               className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
-            <p className="text-[10px] text-slate-600 mt-1">Faixa recomendada: R$50 – R$70/dia</p>
+            <p className="text-[10px] text-slate-600 mt-1">Budget total diário para todas as campanhas</p>
           </div>
         </div>
 
