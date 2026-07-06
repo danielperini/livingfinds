@@ -128,20 +128,14 @@ export default function BudgetAllocationPanel({ account, campaigns = [], product
         <div className="bg-surface-2 rounded-lg p-3">
           <div className="flex items-center gap-1.5 mb-1">
             <DollarSign className="w-3 h-3 text-emerald-400" />
-            <p className="text-[10px] text-slate-400">Orçamento atual</p>
+            <p className="text-[10px] text-slate-400">Gasto real D-1</p>
           </div>
-          <p className="text-xl font-bold text-white">R${currentTotalBudget.toFixed(2)}</p>
-          {budgetDiff !== null && (
-            <p className={`text-[10px] mt-0.5 flex items-center gap-0.5 ${budgetDiff > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-              {budgetDiff > 0 ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />}
-              {budgetDiff > 0 ? '+' : ''}R${budgetDiff.toFixed(2)} vs R$60
-            </p>
-          )}
-          {budgetDiff === null && (
-            <p className="text-[10px] text-emerald-400 mt-0.5 flex items-center gap-0.5">
-              <CheckCircle className="w-2.5 h-2.5" /> Dentro da referência
-            </p>
-          )}
+          <p className="text-xl font-bold text-white">R${spendYesterday.toFixed(2)}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">
+            {spendYesterday > 0
+              ? `${((spendYesterday / REFERENCE) * 100).toFixed(0)}% da ref. R$${REFERENCE}`
+              : 'Aguardando relatório'}
+          </p>
         </div>
 
         <div className="bg-surface-2 rounded-lg p-3">
@@ -158,18 +152,18 @@ export default function BudgetAllocationPanel({ account, campaigns = [], product
         </div>
       </div>
 
-      {/* Barra de utilização */}
+      {/* Barra de utilização — baseada no gasto real D-1 */}
       <div className="px-5 pb-4">
         <div className="flex justify-between text-[10px] mb-1.5 text-slate-400">
-          <span>Utilização do orçamento de referência (R${REFERENCE.toFixed(2)})</span>
-          <span className={`font-semibold ${currentTotalBudget > 66 ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {((currentTotalBudget / REFERENCE) * 100).toFixed(0)}%
+          <span>Gasto real D-1 vs referência (R${REFERENCE.toFixed(2)})</span>
+          <span className={`font-semibold ${spendYesterday > 66 ? 'text-amber-400' : spendYesterday > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+            {spendYesterday > 0 ? `${((spendYesterday / REFERENCE) * 100).toFixed(0)}%` : '—'}
           </span>
         </div>
         <div className="h-2 bg-surface-3 rounded-full overflow-hidden">
           <div
-            className={`h-full rounded-full transition-all ${currentTotalBudget > 66 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-            style={{ width: `${Math.min(140, (currentTotalBudget / REFERENCE) * 100)}%` }}
+            className={`h-full rounded-full transition-all ${spendYesterday > 66 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+            style={{ width: `${Math.min(140, (spendYesterday / REFERENCE) * 100)}%` }}
           />
         </div>
         <div className="flex justify-between text-[9px] text-slate-600 mt-1">
@@ -177,6 +171,11 @@ export default function BudgetAllocationPanel({ account, campaigns = [], product
           <span className="text-slate-500">R$60 referência</span>
           <span>R$66 (+10%)</span>
         </div>
+        {currentTotalBudget > 0 && (
+          <p className="text-[9px] text-slate-600 mt-1.5">
+            Limite configurado Amazon: R${currentTotalBudget.toFixed(2)} (soma dos daily_budget das campanhas)
+          </p>
+        )}
       </div>
 
       {/* Resultado da simulação/aplicação */}
