@@ -162,7 +162,26 @@ export default function LogDeBids() {
     }
   };
 
-  useEffect(() => { load(); }, [load]);
+  // Carrega na montagem e repete uma vez por dia enquanto a página estiver aberta
+  useEffect(() => {
+    const STORAGE_KEY = 'livingfinds:bidlog:lastLoad';
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    const maybeLoad = () => {
+      const last = Number(localStorage.getItem(STORAGE_KEY) || 0);
+      if (Date.now() - last >= DAY_MS) {
+        localStorage.setItem(STORAGE_KEY, String(Date.now()));
+        load();
+      }
+    };
+
+    // Carrega imediatamente na montagem (sem verificar o intervalo)
+    localStorage.setItem(STORAGE_KEY, String(Date.now()));
+    load();
+
+    const timer = window.setInterval(maybeLoad, DAY_MS);
+    return () => window.clearInterval(timer);
+  }, [load]);
 
   const filtered = logs.filter(l => {
     const matchSearch = !search || (
