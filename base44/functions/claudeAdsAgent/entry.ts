@@ -347,7 +347,7 @@ async function callClaude(prompt, context = null) {
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-5',
       max_tokens: 2048,
       temperature: 0.1,
       system: SYSTEM_PROMPT,
@@ -378,7 +378,7 @@ async function callClaude(prompt, context = null) {
     ok: true,
     response: parsed || text,
     raw_text: parsed ? undefined : text,
-    model: 'claude-haiku-4-5',
+    model: 'claude-sonnet-4-5',
     input_tokens: data.usage?.input_tokens,
     output_tokens: data.usage?.output_tokens,
   };

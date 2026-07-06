@@ -1381,6 +1381,128 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // BLOCO E — CLAUDE AI: análise de casos ambíguos (borderline)
+    // Aciona quando: ACoS está entre TARGET e MAX, com pedidos e dados MATURE,
+    // mas as regras determinísticas não conseguem classificar com clareza.
+    // Máximo de 5 análises por ciclo (controle de custo).
+    // ═══════════════════════════════════════════════════════════════════════
+    const claudeAnalyzed = [];
+    try {
+      const ambiguousKws = keywords.filter(kw => {
+        if ((kw.state || kw.status) === 'archived') return false;
+        const a = kw.acos || 0;
+        const o = kw.orders || 0;
+        const c = kw.clicks || 0;
+        const s = kw.spend || 0;
+        // Casos ambíguos: ACoS entre a meta e o máximo, com pedidos reais, dados maduros
+        return a > TARGET_ACOS && a <= MAX_ACOS && o >= 1 && c >= MIN_CLICKS && s >= MIN_SPEND;
+      }).slice(0, 5);
+
+      for (const kw of ambiguousKws) {
+        const iKey = makeKey(amazonAccountId, 'claude_analysis', kw.keyword_id, today);
+        if (existingKeys.has(iKey)) continue;
+
+        // Verificar gatekeeper antes de chamar Claude
+        let gateAllowed = false;
+        try {
+          const gateRes = await base44.asServiceRole.functions.invoke('aiGatekeeper', {
+            amazon_account_id: amazonAccountId,
+            analysis_type: 'keyword_analysis',
+            entity_type: 'keyword',
+            entity_id: kw.keyword_id,
+            input_data: { acos: kw.acos, clicks: kw.clicks, orders: kw.orders },
+            priority_type: 'high_spend',
+          });
+          gateAllowed = gateRes?.data?.allowed === true;
+        } catch {}
+
+        if (!gateAllowed) continue;
+
+        const product = kw.asin ? productMap.get(kw.asin) : null;
+        const campaign = campaignMap.get(kw.campaign_id);
+        const objective = campaign ? inferCampaignObjective(campaign, cfg) : 'PROFITABILITY';
+        const convRate = kw.clicks > 0 ? (kw.orders / kw.clicks) * 100 : 0;
+        const margin = product?.contribution_margin || product?.profit_margin_pct || 0;
+
+        const claudePrompt = `Analyze this borderline Amazon Ads keyword and recommend a bid action:
+
+KEYWORD: "${kw.keyword_text}"
+CAMPAIGN OBJECTIVE: ${objective}
+METRICS (last 14 days):
+- ACoS: ${(kw.acos || 0).toFixed(1)}% (target: ${TARGET_ACOS}%, max: ${MAX_ACOS}%)
+- ROAS: ${kw.spend > 0 ? (kw.sales / kw.spend).toFixed(2) : 0}x (target: ${TARGET_ROAS}x)
+- Orders: ${kw.orders}, Clicks: ${kw.clicks}, CVR: ${convRate.toFixed(2)}%
+- Spend: ${sym}${(kw.spend || 0).toFixed(2)}, Sales: ${sym}${(kw.sales || 0).toFixed(2)}, CPC: ${sym}${(kw.cpc || 0).toFixed(2)}
+- Current bid: ${sym}${(kw.current_bid || kw.bid || 0).toFixed(2)}
+- Match type: ${kw.match_type || 'unknown'}
+- Product margin: ${margin > 0 ? margin.toFixed(1) + '%' : 'unknown'}
+- Inventory: ${product?.inventory_status || 'unknown'}
+
+The ACoS is ABOVE TARGET (${TARGET_ACOS}%) but BELOW MAX (${MAX_ACOS}%). The keyword has conversions.
+Should we reduce the bid (to lower ACoS toward target) or hold/increase (if conversion potential justifies)?
+
+Respond with JSON only.`;
+
+        let claudeRes = null;
+        try {
+          const res = await base44.asServiceRole.functions.invoke('claudeAdsAgent', {
+            mode: 'analyze',
+            prompt: claudePrompt,
+            context: { amazon_account_id: amazonAccountId },
+          });
+          claudeRes = res?.data;
+        } catch {}
+
+        if (!claudeRes?.ok || !claudeRes?.response) continue;
+
+        const decision = claudeRes.response;
+        const action = decision.action;
+        const valueBefore = kw.current_bid || kw.bid || 0.25;
+
+        // Só agir em bid changes com valor definido
+        if (!['increase_bid', 'reduce_bid', 'update_bid'].includes(action || '') || !decision.value_after) continue;
+
+        // Guardrails: respeitar limites mesmo com Claude
+        const rawNewBid = Number(decision.value_after);
+        const clampedBid = Math.min(Math.max(rawNewBid, MIN_BID), MAX_BID);
+        const changePct = (clampedBid / valueBefore - 1) * 100;
+        if (Math.abs(changePct) < 3) continue; // mudança insignificante
+
+        const riskLevel = Math.abs(changePct) > MAX_INC_PCT * 100 ? 'medium' : 'low';
+        const outcome = resolveOutcome(0.75, 'MATURE', [], autonomyLevel, riskLevel, false);
+
+        decisionsToCreate.push({
+          amazon_account_id: amazonAccountId,
+          decision_type: 'bid_change', entity_type: 'keyword',
+          entity_id: kw.keyword_id, campaign_id: kw.campaign_id, ad_group_id: kw.ad_group_id,
+          keyword_id: kw.keyword_id, keyword_text: kw.keyword_text || kw.keyword, asin: kw.asin,
+          action: changePct > 0 ? 'increase_bid' : 'reduce_bid',
+          value_before: valueBefore, value_after: Number(clampedBid.toFixed(2)),
+          change_pct: Number(changePct.toFixed(1)),
+          rationale: `[CLAUDE AI] ${decision.rationale?.diagnosis || ''} — ${decision.rationale?.why_this_action || ''} (confiança: ${decision.rationale?.confidence || 75}%, risco: ${riskLevel})`,
+          data_used: JSON.stringify({ acos: kw.acos, orders: kw.orders, clicks: kw.clicks, cpc: kw.cpc, claude_action: action, original_value_after: rawNewBid }),
+          risk: riskLevel,
+          requires_approval: riskLevel !== 'low' || autonomyLevel < 3,
+          status: outcome === 'EXECUTE_NOW' ? 'approved' : 'pending',
+          confidence: decision.rationale?.confidence || 75,
+          objective: objective.toLowerCase(),
+          country_code: cc, currency_code: code, currency_symbol: sym,
+          idempotency_key: iKey, source_function: 'runDailyAdsOptimization_claude',
+          evaluation_due_at: daysFromNow(decision.evaluation_due_days || 7),
+          rollback_payload: JSON.stringify({ action: 'update_bid', value: valueBefore }),
+          created_at: now,
+        });
+        campaignChangedThisCycle.set(kw.campaign_id, 'bid_claude');
+        claudeAnalyzed.push({ keyword: kw.keyword_text, action, value_after: clampedBid });
+        stats.bid_increase += changePct > 0 ? 1 : 0;
+        stats.bid_decrease += changePct < 0 ? 1 : 0;
+      }
+    } catch (claudeErr) {
+      // Claude é suplementar — falha não interrompe o ciclo
+      console.warn('[runDailyAdsOptimization] Claude block error:', claudeErr?.message);
+    }
+
     // ── Gravar decisões em lotes de 50 ───────────────────────────────────
     let decisionsCreated = 0;
     const approvedIds = [];
@@ -1461,6 +1583,8 @@ Deno.serve(async (req) => {
       decisions_created: decisionsCreated,
       decisions_executed: executed,
       decisions_exec_failed: execFailed,
+      claude_analyzed: claudeAnalyzed.length,
+      claude_decisions: claudeAnalyzed,
       breakdown: stats,
       blocked: blocked.length,
       wait_for_data: waitForData.length,
