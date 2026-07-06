@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
-import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer } from 'lucide-react';
+import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer, Rocket, CheckCircle2 } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
@@ -61,6 +61,8 @@ export default function Dashboard() {
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
   const [syncingDashboard, setSyncingDashboard] = useState(false);
   const [syncDashMsg, setSyncDashMsg] = useState(null);
+  const [kickoffStatus, setKickoffStatus] = useState(null);
+  const [kickoffRunning, setKickoffRunning] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -97,6 +99,10 @@ export default function Dashboard() {
       setSyncRuns(runs);
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
+
+      // Status do kickoff automático: produtos sem campanha
+      const noAds = prods.filter(p => p.status === 'active' && !p.has_campaign && p.inventory_status !== 'out_of_stock');
+      setKickoffStatus({ productsWithoutAds: noAds.length, lastRun: apConfigs[0]?.updated_at || null });
 
       // Última sincronização: priorizar last_sync_at da conta (sempre atualizado), depois SyncExecutionLog
       if (acc?.last_sync_at) {
@@ -350,6 +356,49 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
 
       {/* Banner de status de sincronização */}
       {account && <SyncStatusBanner accountId={account.id} />}
+
+      {/* Status Automação de Produtos */}
+      {account && kickoffStatus !== null && (
+        <div className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-xs ${kickoffStatus.productsWithoutAds > 0 ? 'bg-amber-500/5 border-amber-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
+          <div className="flex items-center gap-2">
+            <Rocket className={`w-4 h-4 flex-shrink-0 ${kickoffStatus.productsWithoutAds > 0 ? 'text-amber-400' : 'text-emerald-400'}`} />
+            <span className={kickoffStatus.productsWithoutAds > 0 ? 'text-amber-300' : 'text-emerald-300'}>
+              {kickoffStatus.productsWithoutAds > 0
+                ? <><span className="font-bold">{kickoffStatus.productsWithoutAds}</span> produto(s) sem campanha — kick-off automático agendado (diário 06h + segunda 07h BRT)</>
+                : <>✓ Todos os produtos ativos têm campanhas. Automação operando normalmente.</>
+              }
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              if (kickoffRunning) return;
+              setKickoffRunning(true);
+              try {
+                const res = await base44.functions.invoke('runFullProductAutomation', { amazon_account_id: account.id });
+                const d = res.data;
+                if (d?.ok) {
+                  const s = d.summary || {};
+                  setKickoffStatus(prev => ({ ...prev, lastMsg: `✓ ${s.auto_campaigns_created || 0} AUTO + ${s.manual_campaigns_created || 0} MANUAL criadas · ${s.keywords_created || 0} keywords`, productsWithoutAds: 0 }));
+                } else {
+                  setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${d?.error || 'Erro'}` }));
+                }
+              } catch (e) {
+                setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${e.message}` }));
+              } finally {
+                setKickoffRunning(false);
+              }
+            }}
+            disabled={kickoffRunning}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+          >
+            {kickoffRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
+            {kickoffRunning ? 'Executando...' : 'Executar agora'}
+          </button>
+        </div>
+      )}
+      {kickoffStatus?.lastMsg && (
+        <div className="px-4 py-2 rounded-lg bg-surface-2 border border-surface-3 text-xs text-slate-300">{kickoffStatus.lastMsg}</div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
