@@ -5,7 +5,7 @@ import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
   Settings, Package, History, Zap, Bot, Sparkles, Wand2, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Play, AlertTriangle
+  Pause, Trash2, Rocket, Play, AlertTriangle, Wifi, WifiOff, Shield
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -203,6 +203,21 @@ export default function AdsManagement() {
   const [campaignActionMsg, setCampaignActionMsg] = useState(null);
   const [kickoffProduct, setKickoffProduct] = useState(null); // produto para re-kickoff
   const [mainView, setMainView] = useState('campaigns'); // 'campaigns' | 'incomplete'
+  const [tokenCheck, setTokenCheck] = useState(null); // null | 'checking' | { ok, profiles, error, latency }
+
+  const checkToken = async () => {
+    setTokenCheck('checking');
+    const t0 = Date.now();
+    try {
+      const res = await base44.functions.invoke('listAdsProfiles', {});
+      const latency = Date.now() - t0;
+      const profiles = res?.data?.profiles || [];
+      setTokenCheck({ ok: profiles.length > 0, profiles, latency, checkedAt: new Date().toLocaleTimeString('pt-BR') });
+    } catch (e) {
+      setTokenCheck({ ok: false, error: e.message, latency: Date.now() - t0, checkedAt: new Date().toLocaleTimeString('pt-BR') });
+    }
+    setTimeout(() => setTokenCheck(null), 15000);
+  };
 
   const loadCampaigns = async () => {
     setLoading(true);
@@ -446,6 +461,23 @@ export default function AdsManagement() {
                 {creatingManuals ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
                 {creatingManuals ? 'Criando...' : 'Criar Manuais'}
               </button>
+              <button onClick={checkToken} disabled={tokenCheck === 'checking'}
+                title="Verificar conexão com a API Amazon Ads"
+                className={`flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-lg border transition-colors disabled:opacity-50 ${
+                  tokenCheck === null ? 'bg-surface-2 border-surface-3 text-slate-400 hover:text-white' :
+                  tokenCheck === 'checking' ? 'bg-surface-2 border-surface-3 text-slate-400' :
+                  tokenCheck.ok ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' :
+                  'bg-red-500/15 border-red-500/30 text-red-400'
+                }`}>
+                {tokenCheck === 'checking' ? <Loader2 className="w-3 h-3 animate-spin" /> :
+                 tokenCheck?.ok ? <Wifi className="w-3 h-3" /> :
+                 tokenCheck?.ok === false ? <WifiOff className="w-3 h-3" /> :
+                 <Shield className="w-3 h-3" />}
+                {tokenCheck === 'checking' ? 'Verificando...' :
+                 tokenCheck?.ok ? 'API OK' :
+                 tokenCheck?.ok === false ? 'Falha' :
+                 'Verificar'}
+              </button>
               <button onClick={forceSync} disabled={syncing || !account}
                 className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
                 <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
@@ -466,6 +498,14 @@ export default function AdsManagement() {
 
           {syncMsg && (
             <p className={`text-[10px] mt-1.5 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+          )}
+          {tokenCheck && tokenCheck !== 'checking' && (
+            <div className={`mt-1.5 px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-2 ${tokenCheck.ok ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
+              {tokenCheck.ok
+                ? <><Wifi className="w-3 h-3 text-emerald-400 flex-shrink-0" /><span className="text-emerald-300">API OK · {tokenCheck.profiles?.length} profile(s) · {tokenCheck.latency}ms · {tokenCheck.checkedAt}</span></>
+                : <><WifiOff className="w-3 h-3 text-red-400 flex-shrink-0" /><span className="text-red-300">Falha: {tokenCheck.error?.slice(0, 80)} · {tokenCheck.checkedAt}</span></>
+              }
+            </div>
           )}
           {manualResult && (
             <ManualCreationResult result={manualResult} onClose={() => setManualResult(null)} />
