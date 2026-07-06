@@ -5,43 +5,29 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
     "source_campaign_id": {
       "type": "string"
     },
     "source_ad_group_id": {
       "type": "string"
     },
-    "asin": {
+    "source_search_term": {
       "type": "string"
     },
-    "search_term": {
+    "normalized_search_term": {
       "type": "string"
     },
-    "normalized_term": {
-      "type": "string"
-    },
-    "tail_type": {
-      "type": "string",
-      "enum": [
-        "short",
-        "medium",
-        "long"
-      ],
-      "default": "medium"
-    },
-    "word_count": {
+    "orders": {
       "type": "number",
       "default": 0
     },
-    "conversions": {
-      "type": "number",
-      "default": 0
-    },
-    "clicks": {
-      "type": "number",
-      "default": 0
-    },
-    "spend": {
+    "units_sold": {
       "type": "number",
       "default": 0
     },
@@ -49,7 +35,15 @@
       "type": "number",
       "default": 0
     },
-    "avg_cpc": {
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "average_cpc": {
       "type": "number",
       "default": 0
     },
@@ -61,64 +55,82 @@
       "type": "number",
       "default": 0
     },
-    "promotion_score": {
-      "type": "number",
-      "default": 0
-    },
-    "confidence": {
-      "type": "number",
-      "default": 0
-    },
-    "status": {
-      "type": "string",
-      "enum": [
-        "candidate",
-        "validating",
-        "creating_campaign",
-        "promoted",
-        "rejected",
-        "blocked_duplicate",
-        "blocked_negative",
-        "blocked_no_stock"
-      ],
-      "default": "candidate"
-    },
     "target_bid": {
       "type": "number",
       "default": 0.5
     },
-    "manual_campaign_id": {
+    "destination_campaign_id": {
       "type": "string"
     },
-    "manual_campaign_name": {
+    "destination_campaign_name": {
       "type": "string"
     },
-    "manual_keyword_id": {
+    "destination_ad_group_id": {
       "type": "string"
     },
-    "negative_created": {
-      "type": "boolean",
-      "default": false
+    "destination_ad_id": {
+      "type": "string"
     },
-    "negative_confirmed_at": {
+    "destination_keyword_id": {
+      "type": "string"
+    },
+    "negative_keyword_id": {
+      "type": "string"
+    },
+    "promotion_status": {
       "type": "string",
-      "format": "date-time"
+      "enum": [
+        "identified",
+        "validated",
+        "campaign_creating",
+        "campaign_created",
+        "ad_group_created",
+        "product_ad_created",
+        "keyword_created",
+        "enabling",
+        "manual_active",
+        "negative_creating",
+        "negative_created",
+        "completed",
+        "repair_required",
+        "failed_retryable",
+        "failed_permanent"
+      ],
+      "default": "identified"
     },
-    "rejection_reason": {
+    "completion_status": {
       "type": "string"
     },
-    "ai_relevance_check": {
+    "idempotency_key": {
       "type": "string"
+    },
+    "last_error": {
+      "type": "string"
+    },
+    "retry_count": {
+      "type": "number",
+      "default": 0
     },
     "ai_validated": {
       "type": "boolean",
       "default": false
     },
+    "ai_relevance_check": {
+      "type": "string"
+    },
     "created_at": {
       "type": "string",
       "format": "date-time"
     },
-    "promoted_at": {
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_retry_at": {
       "type": "string",
       "format": "date-time"
     }
@@ -127,6 +139,6 @@
     "amazon_account_id",
     "source_campaign_id",
     "asin",
-    "search_term"
+    "source_search_term"
   ]
 }
