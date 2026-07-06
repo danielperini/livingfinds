@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw, Sparkles, BarChart2 } from 'lucide-react';
+import { Package, Search, TrendingUp, Loader2, AlertTriangle, RefreshCw, BarChart2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 
 export default function InventorySales() {
@@ -8,8 +8,7 @@ export default function InventorySales() {
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [enriching, setEnriching] = useState(false);
-  const [enrichMsg, setEnrichMsg] = useState(null);
+  const [syncMsg, setSyncMsg] = useState(null);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState('products');
 
@@ -34,24 +33,7 @@ export default function InventorySales() {
 
   useEffect(() => { load(); }, [load]);
 
-  const missingTitles = products.filter(p => !p.product_name && !p.display_name).length;
 
-  const enrichTitles = async () => {
-    if (!account || enriching) return;
-    setEnriching(true);
-    setEnrichMsg(null);
-    try {
-      const res = await base44.functions.invoke('enrichProductNames', { amazon_account_id: account.id });
-      const updated = res?.data?.updated || 0;
-      setEnrichMsg({ type: 'success', text: `${updated} títulos atualizados via IA.` });
-      await load();
-    } catch (e) {
-      setEnrichMsg({ type: 'error', text: e.message });
-    } finally {
-      setEnriching(false);
-      setTimeout(() => setEnrichMsg(null), 6000);
-    }
-  };
 
   const filtered = products.filter(p =>
     (p.asin || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -102,7 +84,7 @@ export default function InventorySales() {
             ))}
           </div>
 
-          <button onClick={load} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
+          <button onClick={load} title="Atualizar dados dos relatórios" className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
