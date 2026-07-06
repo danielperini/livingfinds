@@ -28,8 +28,8 @@ export default function AutopilotKPIBar({ runs = [], decisions = [], alerts = []
     {
       label: 'Nível de Autonomia',
       value: autonomyLabels[autonomyLevel] || `Nível ${autonomyLevel}`,
-      sub: config?.enabled ? '✓ Autopilot ativo' : '— Autopilot desligado',
-      color: config?.enabled ? 'text-emerald-400' : 'text-slate-500',
+      sub: (config?.enabled === true || config?.enabled === 1) ? '✓ Autopilot ativo' : '— Autopilot desligado',
+      color: (config?.enabled === true || config?.enabled === 1) ? 'text-emerald-400' : 'text-slate-500',
     },
     {
       label: 'Spend Total',
