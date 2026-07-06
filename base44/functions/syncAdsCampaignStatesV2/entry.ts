@@ -1,7 +1,8 @@
 // v8 — sem invoke aninhado + bulk DB ops para evitar rate limit
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const STATES = ['ENABLED', 'PAUSED', 'ARCHIVED'];
+// Não importar ARCHIVED — elas não têm valor operacional e inflam o banco
+const STATES = ['ENABLED', 'PAUSED'];
 const PRIORITY: any = { ENABLED: 3, PAUSED: 2, ARCHIVED: 1 };
 
 function normalizedState(value: any) {
@@ -126,10 +127,12 @@ Deno.serve(async (request) => {
 
     console.log(`[syncV8] total Amazon: ${found.size}`);
     if (found.size === 0) {
-      return Response.json({ ok: false, error: 'Nenhuma campanha retornada pela Amazon' });
+      return Response.json({ ok: false, error: 'Nenhuma campanha ativa/pausada retornada pela Amazon' });
     }
 
-    // Carregar campanhas locais
+    console.log(`[syncV8] enabled/paused: ${found.size} — excluindo archived`);
+
+    // Carregar apenas campanhas não-archived locais
     const existing = await base44.asServiceRole.entities.Campaign.filter(
       { amazon_account_id: accountId }, '-updated_at', 5000
     ).catch(() => []);
@@ -185,18 +188,21 @@ Deno.serve(async (request) => {
       updated += Math.min(BATCH, toUpdate.length - i);
     }
 
-    // Marcar ausentes
-    const missingRows = existing.filter((row: any) => !remoteIds.has(String(row.campaign_id)));
-    const missingUpdates = missingRows.map((row: any) => ({
+    // Campanhas locais que não estão na lista ativa/pausada da Amazon
+    // → marcar como archived localmente (elas foram arquivadas depois do último sync)
+    const remoteEnabledPausedIds = new Set(found.keys());
+    const nowArchived = existing.filter((row: any) => !remoteEnabledPausedIds.has(String(row.campaign_id)) && row.state !== 'archived');
+    const nowArchivedUpdates = nowArchived.map((row: any) => ({
       id: row.id,
-      api_missing: true,
-      requires_attention: true,
-      reconciliation_status: 'missing_in_api',
-      reconciliation_notes: 'Não retornou nesta leitura.',
+      state: 'archived',
+      status: 'archived',
+      archived: true,
+      is_operational: false,
+      amazon_status: 'archived',
       synced_at: new Date().toISOString(),
     }));
-    for (let i = 0; i < missingUpdates.length; i += BATCH) {
-      await base44.asServiceRole.entities.Campaign.bulkUpdate(missingUpdates.slice(i, i + BATCH)).catch(() => {});
+    for (let i = 0; i < nowArchivedUpdates.length; i += BATCH) {
+      await base44.asServiceRole.entities.Campaign.bulkUpdate(nowArchivedUpdates.slice(i, i + BATCH)).catch(() => {});
     }
 
     const summary = {
@@ -204,10 +210,9 @@ Deno.serve(async (request) => {
       remote_total: found.size,
       enabled: [...found.values()].filter((c: any) => normalizedState(c.state) === 'enabled').length,
       paused: [...found.values()].filter((c: any) => normalizedState(c.state) === 'paused').length,
-      archived: [...found.values()].filter((c: any) => normalizedState(c.state) === 'archived').length,
       created,
       updated,
-      missing_preserved: missingRows.length,
+      newly_archived_local: nowArchivedUpdates.length,
     };
 
     console.log('[syncV8] concluído:', JSON.stringify(summary));
