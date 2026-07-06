@@ -44,10 +44,14 @@ function productHasCampaign(product) {
       product?.campaign_id ||
       product?.amazon_campaign_id ||
       product?.has_campaign ||
-      ['active', 'enabled', 'paused'].includes(
+      ['active', 'enabled', 'paused', 'incomplete'].includes(
         String(product?.campaign_status || '').toLowerCase()
       )
   );
+}
+
+function isCampaignIncomplete(product) {
+  return String(product?.campaign_status || '').toLowerCase() === 'incomplete';
 }
 
 function campaignIdOf(product) {
@@ -163,6 +167,13 @@ function CampaignStatusCell({ product }) {
         Ativa
       </span>
     );
+  } else if (campStatus === 'incomplete') {
+    badge = (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/20">
+        <AlertCircle className="w-3 h-3" />
+        Incompleta
+      </span>
+    );
   } else {
     badge = (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">
@@ -194,23 +205,24 @@ function ActionButtons({
   const isLoading = loading === product.id;
   const hasCampaign = productHasCampaign(product);
   const active = isCampaignActive(product);
+  const incomplete = isCampaignIncomplete(product);
 
-  if (!hasCampaign) {
+  if (!hasCampaign || incomplete) {
     return (
       <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => onKickoff(product)}
           disabled={isLoading}
-          title="Criar campanha para este produto"
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25 whitespace-nowrap"
+          title={incomplete ? "Reparar campanha incompleta (sem keyword/anúncio)" : "Criar campanha para este produto"}
+          className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' : 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'}`}
         >
           {isLoading ? (
             <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
             <Rocket className="w-3 h-3" />
           )}
-          Kick-off
+          {incomplete ? 'Reparar' : 'Kick-off'}
         </button>
 
         <button
