@@ -11,6 +11,7 @@ import GoalsComparisonPanel from '@/components/dashboard/GoalsComparisonPanel';
 import BudgetAllocationPanel from '@/components/dashboard/BudgetAllocationPanel';
 import CampaignPerformancePanel from '@/components/dashboard/CampaignPerformancePanel';
 import WeeklyOptimizationSummary from '@/components/dashboard/WeeklyOptimizationSummary';
+import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
 
 import { Link } from 'react-router-dom';
 import Analytics from '@/pages/Analytics';
@@ -343,6 +344,9 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
           </button>
         </div>
       </div>
+
+      {/* Banner de status de sincronização */}
+      {account && <SyncStatusBanner accountId={account.id} />}
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 flex items-center gap-3">
