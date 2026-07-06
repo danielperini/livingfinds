@@ -54,95 +54,300 @@ function uuid() {
 function daysAgo(n) { return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10); }
 
 // ── Validação de regra proposta ──────────────────────────────────────────────
-function validateProposedRule(rule) {
+function validateProposedRule(rule, existingRuleKeys = new Set()) {
   const errors = [];
+
+  // Campos obrigatórios
   if (!rule.rule_key || typeof rule.rule_key !== 'string') errors.push('rule_key ausente');
-  if (!rule.name) errors.push('name ausente');
+  else if (existingRuleKeys.has(rule.rule_key)) errors.push(`rule_key duplicado neste batch: ${rule.rule_key}`);
+  if (!rule.name || typeof rule.name !== 'string') errors.push('name ausente');
   if (!rule.scope) errors.push('scope ausente');
-  if (typeof rule.priority !== 'number') errors.push('priority inválida');
-  if (!Array.isArray(rule.conditions) || rule.conditions.length === 0) errors.push('conditions vazio');
-  if (!rule.action?.type) errors.push('action.type ausente');
-  if (!ALLOWED_ACTIONS.has(rule.action?.type)) errors.push(`action.type não autorizado: ${rule.action?.type}`);
-  if (typeof rule.confidence !== 'number' || rule.confidence < MIN_CONFIDENCE) errors.push(`confidence ${rule.confidence} < mínimo ${MIN_CONFIDENCE}`);
-  if (!rule.rollback_condition) errors.push('rollback_condition ausente');
-  if (!rule.cooldown_hours || rule.cooldown_hours < 1) errors.push('cooldown_hours inválido');
+  const ALLOWED_SCOPES = new Set(['keyword','campaign','ad_group','search_term','account','product']);
+  if (rule.scope && !ALLOWED_SCOPES.has(rule.scope)) errors.push(`scope inválido: ${rule.scope}`);
+  if (typeof rule.priority !== 'number' || rule.priority < 0 || rule.priority > 999) errors.push('priority deve ser número entre 0 e 999');
+  if (!Array.isArray(rule.conditions) || rule.conditions.length === 0) errors.push('conditions não pode ser vazio');
+  if (rule.conditions?.length > 10) errors.push('conditions excede limite de 10 por regra');
 
-  // Validar operadores e métricas nas conditions
-  for (const cond of (rule.conditions || [])) {
-    if (cond.operator && !ALLOWED_OPERATORS.has(cond.operator)) errors.push(`operator não autorizado: ${cond.operator}`);
-    if (cond.metric && !ALLOWED_METRICS.has(cond.metric)) errors.push(`metric não autorizada: ${cond.metric}`);
+  // Ação
+  if (!rule.action || typeof rule.action !== 'object') errors.push('action ausente');
+  else {
+    if (!rule.action.type) errors.push('action.type ausente');
+    else if (!ALLOWED_ACTIONS.has(rule.action.type)) errors.push(`action.type não autorizado: ${rule.action.type}`);
+    // Ações que requerem value
+    const requiresValue = new Set(['increase_bid_percent','decrease_bid_percent','set_bid']);
+    if (requiresValue.has(rule.action.type) && (rule.action.value == null || typeof rule.action.value !== 'number')) {
+      errors.push(`action.value obrigatório para ${rule.action.type}`);
+    }
+    // Guardrails de bid
+    if (rule.action.type === 'set_bid') {
+      if (rule.action.value < MIN_BID) errors.push(`bid ${rule.action.value} abaixo do mínimo R$${MIN_BID}`);
+      if (rule.action.value > MAX_BID) errors.push(`bid ${rule.action.value} acima do máximo R$${MAX_BID}`);
+    }
+    if (rule.action.type === 'increase_bid_percent') {
+      if (rule.action.value <= 0) errors.push('increase_bid_percent.value deve ser > 0');
+      if (rule.action.value > 30) errors.push('aumento de bid > 30% bloqueado');
+    }
+    if (rule.action.type === 'decrease_bid_percent') {
+      if (rule.action.value <= 0) errors.push('decrease_bid_percent.value deve ser > 0');
+      if (rule.action.value > 30) errors.push('redução de bid > 30% bloqueado');
+    }
   }
 
-  // Guardrail: ação de bid
-  if (rule.action.type === 'set_bid') {
-    if (rule.action.value < MIN_BID) errors.push(`bid ${rule.action.value} abaixo do mínimo ${MIN_BID}`);
-    if (rule.action.value > MAX_BID) errors.push(`bid ${rule.action.value} acima do máximo ${MAX_BID}`);
+  // Confidence
+  if (typeof rule.confidence !== 'number') errors.push('confidence deve ser número');
+  else if (rule.confidence < MIN_CONFIDENCE) errors.push(`confidence ${rule.confidence} < mínimo ${MIN_CONFIDENCE}`);
+  else if (rule.confidence > 1.0) errors.push('confidence deve ser <= 1.0');
+
+  // Rollback e cooldown
+  if (!rule.rollback_condition || typeof rule.rollback_condition !== 'object') errors.push('rollback_condition ausente ou inválido');
+  if (!rule.cooldown_hours || typeof rule.cooldown_hours !== 'number' || rule.cooldown_hours < 24) errors.push('cooldown_hours deve ser >= 24');
+  if (rule.max_changes_per_week != null && (typeof rule.max_changes_per_week !== 'number' || rule.max_changes_per_week < 1)) {
+    errors.push('max_changes_per_week deve ser >= 1');
   }
-  if (rule.action.type === 'increase_bid_percent' && rule.action.value > 30) errors.push('aumento de bid > 30% bloqueado');
-  if (rule.action.type === 'decrease_bid_percent' && rule.action.value > 30) errors.push('redução de bid > 30% bloqueado');
+
+  // Validar cada condição individualmente
+  for (const [i, cond] of (rule.conditions || []).entries()) {
+    if (!cond.metric) { errors.push(`conditions[${i}]: metric ausente`); continue; }
+    if (!ALLOWED_METRICS.has(cond.metric)) errors.push(`conditions[${i}]: metric não autorizada: ${cond.metric}`);
+    if (!cond.operator) { errors.push(`conditions[${i}]: operator ausente`); continue; }
+    if (!ALLOWED_OPERATORS.has(cond.operator)) errors.push(`conditions[${i}]: operator não autorizado: ${cond.operator}`);
+    // between requer array de 2 elementos
+    if (cond.operator === 'between') {
+      if (!Array.isArray(cond.value) || cond.value.length !== 2) errors.push(`conditions[${i}]: 'between' requer value=[min,max]`);
+    }
+    // in / not_in requerem array
+    if ((cond.operator === 'in' || cond.operator === 'not_in') && !Array.isArray(cond.value)) {
+      errors.push(`conditions[${i}]: '${cond.operator}' requer array de valores`);
+    }
+    // operadores de comparação simples requerem valor numérico
+    const numericOps = new Set(['greater_than','greater_than_or_equal','less_than','less_than_or_equal','equals','not_equals']);
+    if (numericOps.has(cond.operator) && cond.value == null) errors.push(`conditions[${i}]: valor ausente para operador ${cond.operator}`);
+  }
 
   return errors;
 }
 
-// ── Backtest simplificado ─────────────────────────────────────────────────────
+// ── Avaliador de condição única ───────────────────────────────────────────────
+function evalCondition(cond, entity) {
+  const val = entity[cond.metric] ?? 0;
+  switch (cond.operator) {
+    case 'greater_than':              return val > cond.value;
+    case 'greater_than_or_equal':     return val >= cond.value;
+    case 'less_than':                 return val < cond.value;
+    case 'less_than_or_equal':        return val <= cond.value;
+    case 'equals':                    return val === cond.value;
+    case 'not_equals':                return val !== cond.value;
+    case 'between':
+      return Array.isArray(cond.value) && cond.value.length === 2
+        ? val >= cond.value[0] && val <= cond.value[1]
+        : false;
+    case 'in':                        return Array.isArray(cond.value) && cond.value.includes(val);
+    case 'not_in':                    return Array.isArray(cond.value) && !cond.value.includes(val);
+    case 'percentage_change': {
+      // Requer reference no cond: (val - reference) / reference * 100
+      const ref = cond.reference ?? 0;
+      if (ref === 0) return false;
+      const pct = ((val - ref) / ref) * 100;
+      return cond.direction === 'decrease' ? pct <= -(cond.value ?? 0) : pct >= (cond.value ?? 0);
+    }
+    case 'days_since': {
+      // entity deve ter campo com data ISO; cond.value = número de dias mínimo
+      const dateVal = entity[`${cond.metric}_at`] || entity[cond.metric];
+      if (!dateVal) return false;
+      const daysDiff = (Date.now() - new Date(dateVal).getTime()) / 86400000;
+      return daysDiff >= (cond.value ?? 0);
+    }
+    case 'consecutive_periods':
+      // Aproximação: verificar se valor está fora do threshold por N períodos
+      return val >= (cond.value ?? 0);
+    case 'all': case 'any':
+      // Operadores compostos: aprovado no backtest simples (requer avaliação de sub-conditions)
+      return true;
+    default:
+      return true; // operadores desconhecidos: pass-through conservador
+  }
+}
+
+// ── Backtest completo ─────────────────────────────────────────────────────────
 async function backtestProposedRule(base44, rule, aid, keywords, metrics30d) {
   const result = {
     rule_key: rule.rule_key,
+    rule_version: 1,
     records_tested: 0,
     actions_simulated: 0,
     spend_real: 0,
     spend_simulated: 0,
+    sales_real: 0,
+    sales_simulated: 0,
+    acos_real: 0,
+    acos_simulated: 0,
     passed: false,
     rejection_reasons: [],
     risk_level: 'low',
   };
 
-  if (keywords.length < 5) {
+  // Dados insuficientes: regra de scope keyword sem keywords
+  const isKeywordScope = !rule.scope || rule.scope === 'keyword';
+  if (isKeywordScope && keywords.length < 5) {
     result.rejection_reasons.push('dados insuficientes para backtest (< 5 keywords)');
     return result;
   }
 
-  // Simular: quantas keywords teriam sido atingidas por essa regra
+  // Para escopo de campanha, usar métricas diárias agregadas
+  const entities = isKeywordScope ? keywords : metrics30d.reduce((acc, m) => {
+    const key = m.campaign_id || 'global';
+    if (!acc[key]) acc[key] = { campaign_id: key, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, acos: 0 };
+    acc[key].spend += m.spend || 0;
+    acc[key].sales += m.sales || 0;
+    acc[key].orders += m.orders || 0;
+    acc[key].clicks += m.clicks || 0;
+    acc[key].impressions += m.impressions || 0;
+    return acc;
+  }, {});
+  const entityList = isKeywordScope ? keywords : Object.values(entities);
+
+  // Calcular métricas reais agregadas dos 30d
+  const realSpend = metrics30d.reduce((s, m) => s + (m.spend || 0), 0);
+  const realSales = metrics30d.reduce((s, m) => s + (m.sales || 0), 0);
+  result.spend_real = realSpend;
+  result.sales_real = realSales;
+  result.acos_real = realSales > 0 ? (realSpend / realSales) * 100 : 0;
+  result.records_tested = entityList.length;
+
+  // Simulação: identificar entidades afetadas e estimar impacto
   let actionsCount = 0;
-  let totalSpendAffected = 0;
+  let spendAffected = 0;
+  let salesAffected = 0;
 
-  for (const kw of keywords) {
-    const meetsConditions = (rule.conditions || []).every(cond => {
-      const val = kw[cond.metric] ?? 0;
-      switch (cond.operator) {
-        case 'greater_than': return val > cond.value;
-        case 'greater_than_or_equal': return val >= cond.value;
-        case 'less_than': return val < cond.value;
-        case 'equals': return val === cond.value;
-        default: return true; // operadores complexos: aprovado por padrão no backtest simples
-      }
-    });
+  for (const entity of entityList) {
+    // Calcular acos da entidade se não existir
+    const entityAcos = entity.acos || (entity.sales > 0 ? (entity.spend / entity.sales) * 100 : 0);
+    const entityWithAcos = { ...entity, acos: entityAcos };
 
-    if (meetsConditions) {
-      actionsCount++;
-      totalSpendAffected += kw.spend || 0;
+    const meetsAll = (rule.conditions || []).every(cond => evalCondition(cond, entityWithAcos));
+    if (!meetsAll) continue;
+
+    actionsCount++;
+    spendAffected += entity.spend || 0;
+    salesAffected += entity.sales || 0;
+  }
+
+  result.actions_simulated = actionsCount;
+
+  // Estimar impacto financeiro da ação
+  // Fator de elasticidade: mudança de bid X% → mudança de spend ~0.5X%, vendas ~0.3X%
+  let spendDelta = 0;
+  let salesDelta = 0;
+
+  switch (rule.action.type) {
+    case 'decrease_bid_percent': {
+      const pct = (rule.action.value || 10) / 100;
+      spendDelta  = -(spendAffected * pct * 0.55);
+      salesDelta  = -(salesAffected * pct * 0.30);
+      break;
+    }
+    case 'increase_bid_percent': {
+      const pct = (rule.action.value || 10) / 100;
+      spendDelta  = spendAffected * pct * 0.45;
+      salesDelta  = salesAffected * pct * 0.35;
+      break;
+    }
+    case 'set_bid': {
+      // Estimar com base no spread entre bid atual e bid alvo
+      const avgCurrentBid = entityList
+        .filter(e => {
+          const entityAcos = e.acos || (e.sales > 0 ? (e.spend / e.sales) * 100 : 0);
+          return (rule.conditions || []).every(c => evalCondition(c, { ...e, acos: entityAcos }));
+        })
+        .reduce((s, e, _, arr) => s + (e.current_bid || 0.25) / arr.length, 0);
+      const bidRatio = avgCurrentBid > 0 ? rule.action.value / avgCurrentBid : 1;
+      spendDelta = spendAffected * (bidRatio - 1) * 0.5;
+      salesDelta = salesAffected * (bidRatio - 1) * 0.3;
+      break;
+    }
+    case 'pause_keyword':
+    case 'pause_campaign':
+      spendDelta = -spendAffected;
+      salesDelta = -salesAffected;
+      break;
+    case 'negate_search_term':
+      // Impacto parcial: apenas o spend do search term específico
+      spendDelta = -spendAffected * 0.8;
+      salesDelta = -salesAffected * 0.5; // pode perder algumas vendas colaterais
+      break;
+    case 'create_exact_keyword':
+    case 'create_phrase_keyword':
+    case 'create_broad_keyword':
+      // Harvest: spend adicional estimado
+      spendDelta = spendAffected * 0.15;
+      salesDelta = salesAffected * 0.25;
+      break;
+    default:
+      // Ações sem impacto financeiro direto
+      spendDelta = 0;
+      salesDelta = 0;
+  }
+
+  result.spend_simulated = Math.max(0, realSpend + spendDelta);
+  result.sales_simulated = Math.max(0, realSales + salesDelta);
+  result.acos_simulated = result.sales_simulated > 0
+    ? (result.spend_simulated / result.sales_simulated) * 100
+    : 0;
+
+  // ── Critérios de rejeição do backtest ───────────────────────────────────
+  // 1. Nenhuma entidade afetada (regra inerte)
+  if (actionsCount === 0) {
+    result.rejection_reasons.push('nenhuma entidade seria afetada pela regra com os dados atuais');
+  }
+
+  // 2. Alcance excessivo (> 60% das entidades) — alto risco
+  const coverageRatio = entityList.length > 0 ? actionsCount / entityList.length : 0;
+  if (coverageRatio > 0.60) {
+    result.risk_level = 'high';
+    result.rejection_reasons.push(
+      `alcance excessivo: ${actionsCount}/${entityList.length} entidades afetadas (${(coverageRatio * 100).toFixed(0)}% > 60%)`
+    );
+  } else if (coverageRatio > 0.35) {
+    result.risk_level = 'medium';
+  }
+
+  // 3. Spend simulado negativo ou abaixo do mínimo total
+  if (result.spend_simulated < 0) {
+    result.rejection_reasons.push('spend simulado resultaria em valor negativo');
+  }
+
+  // 4. ACoS simulado piora > 20pp em relação ao real (regra vai piorar a eficiência)
+  const acosDelta = result.acos_simulated - result.acos_real;
+  if (result.acos_real > 0 && acosDelta > 20) {
+    result.risk_level = 'high';
+    result.rejection_reasons.push(
+      `ACoS simulado piora ${acosDelta.toFixed(1)}pp (real: ${result.acos_real.toFixed(1)}% → simulado: ${result.acos_simulated.toFixed(1)}%)`
+    );
+  }
+
+  // 5. Redução de vendas > 40% (regra vai prejudicar o negócio)
+  const salesDropPct = realSales > 0 ? ((realSales - result.sales_simulated) / realSales) * 100 : 0;
+  if (salesDropPct > 40) {
+    result.risk_level = 'high';
+    result.rejection_reasons.push(
+      `queda de vendas simulada de ${salesDropPct.toFixed(1)}% — risco inaceitável`
+    );
+  }
+
+  // 6. Budget total após ação ficaria fora da faixa permitida
+  if (rule.action.type === 'redistribute_budget') {
+    const budgetAfter = realSpend + spendDelta;
+    if (budgetAfter > MAX_TOTAL_DAILY_BUDGET) {
+      result.rejection_reasons.push(
+        `budget simulado R$${budgetAfter.toFixed(2)} ultrapassa máximo R$${MAX_TOTAL_DAILY_BUDGET}`
+      );
+    }
+    if (budgetAfter < MIN_TOTAL_DAILY_BUDGET) {
+      result.rejection_reasons.push(
+        `budget simulado R$${budgetAfter.toFixed(2)} abaixo do mínimo R$${MIN_TOTAL_DAILY_BUDGET}`
+      );
     }
   }
-
-  result.records_tested = keywords.length;
-  result.actions_simulated = actionsCount;
-  result.spend_real = metrics30d.reduce((s, m) => s + (m.spend || 0), 0);
-
-  // Estimativa de gasto simulado: aplicar ação sobre o spend afetado
-  let spendFactor = 1.0;
-  if (rule.action.type === 'decrease_bid_percent') spendFactor = 1 - (rule.action.value / 100) * 0.6;
-  if (rule.action.type === 'increase_bid_percent') spendFactor = 1 + (rule.action.value / 100) * 0.4;
-  if (rule.action.type === 'pause_keyword' || rule.action.type === 'pause_campaign') spendFactor = 0;
-
-  result.spend_simulated = result.spend_real - totalSpendAffected * (1 - spendFactor);
-
-  // Validações do backtest
-  if (actionsCount === 0) result.rejection_reasons.push('nenhuma keyword seria afetada pela regra');
-  if (actionsCount > keywords.length * 0.5) {
-    result.risk_level = 'high';
-    result.rejection_reasons.push(`ações excessivas: ${actionsCount}/${keywords.length} keywords afetadas (> 50%)`);
-  }
-  if (result.spend_simulated < 0) result.rejection_reasons.push('spend simulado negativo');
 
   result.passed = result.rejection_reasons.length === 0;
   return result;
@@ -339,16 +544,22 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
 
     // ── Validação e backtest de cada regra proposta ───────────────────────
     const rulesToCreate = claudeResponse.rules_to_create || [];
+    const rulesToUpdate = claudeResponse.rules_to_update || [];
     const approvedRules = [];
+    const approvedUpdates = [];
     const rejectedRules = [];
     const backtestResults = [];
 
+    // Set de rule_keys já aprovados neste batch (evita duplicatas intra-revisão)
+    const seenRuleKeys = new Set(existingRules.map(r => r.rule_key));
+
     for (const rule of rulesToCreate) {
-      const validationErrors = validateProposedRule(rule);
+      const validationErrors = validateProposedRule(rule, seenRuleKeys);
       if (validationErrors.length > 0) {
-        rejectedRules.push({ rule_key: rule.rule_key, reasons: validationErrors });
+        rejectedRules.push({ rule_key: rule.rule_key || '(sem chave)', reasons: validationErrors });
         continue;
       }
+      seenRuleKeys.add(rule.rule_key);
 
       // Backtest
       const bt = await backtestProposedRule(base44, rule, aid, sanitizedKeywords, metrics30d);
@@ -358,19 +569,44 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         review_id: reviewId,
         ...bt,
         period_days: 30,
-      });
+      }).catch(() => {});
 
       if (!bt.passed) {
-        rejectedRules.push({ rule_key: rule.rule_key, reasons: bt.rejection_reasons });
+        rejectedRules.push({ rule_key: rule.rule_key, reasons: bt.rejection_reasons, risk_level: bt.risk_level });
         continue;
       }
 
       approvedRules.push(rule);
     }
 
+    // Validar e processar atualizações de regras existentes
+    for (const update of rulesToUpdate) {
+      if (!update.rule_key) { rejectedRules.push({ rule_key: '(sem chave)', reasons: ['rule_key ausente na atualização'] }); continue; }
+      // Encontrar regra existente
+      const found = existingRules.find(r => r.rule_key === update.rule_key);
+      if (!found) { rejectedRules.push({ rule_key: update.rule_key, reasons: ['regra não encontrada para atualização'] }); continue; }
+      // Mesclar com a regra existente e validar o resultado
+      const merged = { ...found, ...update };
+      const validationErrors = validateProposedRule(merged, new Set()); // updates não precisam checar duplicatas
+      if (validationErrors.length > 0) {
+        rejectedRules.push({ rule_key: update.rule_key, reasons: validationErrors });
+        continue;
+      }
+      const bt = await backtestProposedRule(base44, merged, aid, sanitizedKeywords, metrics30d);
+      backtestResults.push(bt);
+      await base44.asServiceRole.entities.RuleBacktest.create({
+        amazon_account_id: aid, review_id: reviewId, ...bt, period_days: 30,
+      }).catch(() => {});
+      if (!bt.passed) {
+        rejectedRules.push({ rule_key: update.rule_key, reasons: bt.rejection_reasons, risk_level: bt.risk_level });
+        continue;
+      }
+      approvedUpdates.push({ existing_id: found.id, ...update });
+    }
+
     // ── Publicar nova versão de regras ────────────────────────────────────
     let versionId = null;
-    if (approvedRules.length > 0) {
+    if (approvedRules.length > 0 || approvedUpdates.length > 0) {
       // Obter versão atual
       const versions = await base44.asServiceRole.entities.DecisionRuleVersion.filter(
         { amazon_account_id: aid, status: 'active' }, '-version_number', 1
@@ -407,6 +643,19 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         createdRuleKeys.push(rule.rule_key);
       }
 
+      // Aplicar atualizações aprovadas
+      const updatedRuleKeys = [];
+      for (const upd of approvedUpdates) {
+        const { existing_id, ...fields } = upd;
+        await base44.asServiceRole.entities.DecisionRule.update(existing_id, {
+          ...fields,
+          version: (fields.version || 1) + 1,
+          review_id: reviewId,
+          effective_from: new Date().toISOString(),
+        });
+        updatedRuleKeys.push(upd.rule_key);
+      }
+
       // Regras a desativar
       const disabledKeys = (claudeResponse.rules_to_disable || []).map(r => r.rule_key || r);
       for (const rk of disabledKeys) {
@@ -433,6 +682,7 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         activated_at: new Date().toISOString(),
         previous_version_id: versions[0]?.id || null,
         rules_created: createdRuleKeys,
+        rules_updated: updatedRuleKeys,
         rules_disabled: disabledKeys,
         rules_unchanged: (claudeResponse.rules_unchanged || []).map(r => r.rule_key || r),
         backtest_result: backtestResults,
@@ -454,8 +704,8 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
       records_analyzed: keywords.length + campaigns.length + metrics30d.length,
       tokens_used: tokensUsed,
       cost_estimate_usd: costEstimate,
-      rules_proposed: rulesToCreate.length,
-      rules_approved: approvedRules.length,
+      rules_proposed: rulesToCreate.length + rulesToUpdate.length,
+      rules_approved: approvedRules.length + approvedUpdates.length,
       rules_rejected: rejectedRules.length,
       rules_unchanged: (claudeResponse.rules_unchanged || []).length,
       version_id: versionId,
@@ -468,8 +718,8 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
       correlationId,
       review_id: reviewId,
       model: AI_WEEKLY_REVIEW_MODEL,
-      rules_proposed: rulesToCreate.length,
-      rules_approved: approvedRules.length,
+      rules_proposed: rulesToCreate.length + rulesToUpdate.length,
+      rules_approved: approvedRules.length + approvedUpdates.length,
       rules_rejected: rejectedRules.length,
       rejected_reasons: rejectedRules,
       version_activated: versionId,
