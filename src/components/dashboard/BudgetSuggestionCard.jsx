@@ -103,8 +103,8 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
   const trendColor = acosTrend === 'improving' ? 'text-emerald-400' : acosTrend === 'worsening' ? 'text-red-400' : 'text-slate-400';
 
   const currentReasoning = daysWithData > 0
-    ? `Média real de ${daysWithData} dia(s) com dados: R$${avgDailySpend.toFixed(2)}/dia. Reserva operacional de 30%: R$${(avgDailySpend * reserveRate).toFixed(2)}. Último dia (${latestMetricDate}): R$${latestDaySpend.toFixed(2)}. Tendência: ${trend === 'growth' ? 'crescimento' : trend === 'decline' ? 'queda' : 'estável'}. Campanhas ativas consideradas: ${activeCampaigns}.`
-    : `Ainda não há dias com gasto registrado para calcular uma sugestão diária confiável. Campanhas ativas consideradas: ${activeCampaigns}.`;
+    ? `Média real de ${daysWithData} dia(s): R$${avgDailySpend.toFixed(2)}/dia. ${activeCampaigns} campanhas ativas. Faixa permitida: R$${BUDGET_MIN}–R$${BUDGET_MAX}.`
+    : `Sem dados de gasto ainda. ${activeCampaigns} campanhas ativas. Faixa permitida: R$${BUDGET_MIN}–R$${BUDGET_MAX}.`;
 
   const updatedAt = usePersistedAI ? aiGeneratedAt : latestMetricTimestamp || null;
 
@@ -131,24 +131,19 @@ export default function BudgetSuggestionCard({ metricsDaily = [], campaigns = []
             <p className="text-[10px] text-violet-400 mt-0.5">confiança {confidence}%</p>
           </div>
 
-          <div className="space-y-2 text-xs">
+          <div className="space-y-1.5 text-xs">
             <div className="flex justify-between py-1.5 border-b border-surface-2">
-              <span className="text-slate-500">Média diária ({daysWithData} dias com dados)</span>
+              <span className="text-slate-500">Budget calculado (antes do limitador)</span>
+              <span className="text-slate-300 font-semibold">R${rawBudget > 0 ? rawBudget.toFixed(2) : '—'}</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-surface-2">
+              <span className="text-slate-500">Faixa permitida</span>
+              <span className="text-cyan font-semibold">R${BUDGET_MIN},00 – R${BUDGET_MAX},00</span>
+            </div>
+            <div className="flex justify-between py-1.5 border-b border-surface-2">
+              <span className="text-slate-500">Média diária real ({daysWithData}d)</span>
               <span className="text-white font-semibold">R${avgDailySpend.toFixed(2)}</span>
             </div>
-            <div className="flex justify-between py-1.5 border-b border-surface-2">
-              <span className="text-slate-500">Reserva operacional</span>
-              <span className="text-emerald-400 font-semibold">+10% · R${(avgDailySpend * reserveRate).toFixed(2)}</span>
-            </div>
-            {usePersistedAI && acosTrend && (
-              <div className="flex justify-between py-1.5 border-b border-surface-2">
-                <span className="text-slate-500">Tendência ACoS</span>
-                <span className={`font-semibold flex items-center gap-1 ${trendColor}`}>
-                  <TrendIcon className="w-3 h-3" />
-                  {acosTrend === 'improving' ? 'Melhorando' : acosTrend === 'worsening' ? 'Piorando' : 'Estável'}
-                </span>
-              </div>
-            )}
             <div className="flex justify-between py-1.5 border-b border-surface-2">
               <span className="text-slate-500">Produtos ativos</span>
               <span className="text-white font-semibold">{activeProducts}</span>

@@ -55,25 +55,23 @@ function detectCampaignType(campaign: any): string {
   return 'AUTO'; // fallback
 }
 
-function calcSkuLimit(product: any): number {
+function calcSkuLimit(product: any, minBudget: number): number {
   const price = Number(product.price || 0);
   const cost  = Number(product.product_cost || 0);
-  const fees  = Number(product.amazon_fees || price * 0.15); // 15% padrão se não informado
+  const fees  = Number(product.amazon_fees || price * 0.15);
   const extra = Number(product.extra_cost || 0);
   const profitPerUnit = price - cost - fees - extra;
   if (profitPerUnit <= 0 || price <= 0) return 0;
 
   const maxAdsPct = product.break_even_acos_pct > 0
-    ? (product.break_even_acos_pct / 100) * 0.80  // 80% do ponto de equilíbrio
-    : 0.25; // 25% padrão se não configurado
+    ? (product.break_even_acos_pct / 100) * 0.80
+    : 0.25;
 
   const limitPerSale = profitPerUnit * maxAdsPct;
-
-  // Estimar vendas diárias: units_30d / 30 ou mínimo 1
   const dailySales = Math.max(1, (product.total_units_30d || 0) / 30);
   const skuLimit = limitPerSale * dailySales;
 
-  return Math.max(MIN_CAMPAIGN_BUDGET, Math.round(skuLimit * 100) / 100);
+  return Math.max(minBudget, Math.round(skuLimit * 100) / 100);
 }
 
 function avg7d(metrics: any[], campaignId: string): number {
@@ -230,8 +228,7 @@ Deno.serve(async (req) => {
     );
     const numActiveCampaigns = activeCampaigns.length;
 
-    // Mínimo dinâmico: garante que o total caiba em referenceTotal
-    // Nunca abaixo de R$1 (exigência Amazon), nunca acima de referenceTotal / numActiveCampaigns
+    // Mínimo dinâmico por campanha
     const MIN_CAMPAIGN_BUDGET = Math.max(ABSOLUTE_MIN_BUDGET, Math.min(3.00, referenceTotal / numActiveCampaigns * 0.50));
 
     // Orçamentos base por produto e campanha
@@ -245,7 +242,7 @@ Deno.serve(async (req) => {
 
     for (const [asin, campaigns] of Object.entries(campaignsByProduct)) {
       const product = productMap.get(asin);
-      const skuLimit = product ? calcSkuLimit(product) : 0;
+      const skuLimit = product ? calcSkuLimit(product, MIN_CAMPAIGN_BUDGET) : 0;
       // Para campanhas sem ASIN (pool), distribuir proporcionalmente ao total de campanhas
       const isPool = asin === 'pool';
       const productBudget = isPool
@@ -322,13 +319,14 @@ Deno.serve(async (req) => {
         // Guardrail 2: Nunca abaixo do mínimo
         suggestedBudget = Math.max(MIN_CAMPAIGN_BUDGET, suggestedBudget);
 
-        // Guardrail 3: Variação máxima ±30% do atual (se houver budget atual)
-        if (currentBudget > 0) {
+        // Guardrail 3: Variação máxima ±30% do atual — aplicado APENAS no modo dry_run=false
+        // para não inflacionar o cálculo de normalização do total
+        if (!dry_run && currentBudget > 0) {
           const maxUp   = currentBudget * (1 + MAX_CHANGE_PCT);
           const maxDown = currentBudget * (1 - MAX_CHANGE_PCT);
           suggestedBudget = Math.min(suggestedBudget, maxUp);
           suggestedBudget = Math.max(suggestedBudget, maxDown);
-          suggestedBudget = Math.max(suggestedBudget, MIN_CAMPAIGN_BUDGET);
+          suggestedBudget = Math.max(suggestedBudget, ABSOLUTE_MIN_BUDGET);
         }
 
         // Guardrail 4: Verificar se pode ultrapassar R$66 total
@@ -370,22 +368,23 @@ Deno.serve(async (req) => {
     );
     const isNewCampaignTrigger = trigger === 'criacao_campanha' || trigger === 'nova_campanha';
 
-    // Normalização SEMPRE para referenceTotal (R$60) — sem exceção por "justificativa"
-    // Isso evita que multiplicadores de performance (1.30x por campanha) inflem o total
-    if (totalAllocated > 0 && Math.abs(totalAllocated - referenceTotal) > 0.50) {
+    // Normalização SEMPRE para referenceTotal (R$60)
+    // Quando há muitas campanhas (mínimo × N > referência), normalizar sem guardrail de mínimo
+    if (totalAllocated > 0 && totalAllocated !== referenceTotal) {
       const scaleFactor = referenceTotal / totalAllocated;
       for (const a of allocations) {
-        a.suggested_budget = Math.max(MIN_CAMPAIGN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
+        // Sem floor de MIN_CAMPAIGN_BUDGET aqui — o total é o que manda
+        a.suggested_budget = Math.max(ABSOLUTE_MIN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
         a.normalized = true;
       }
       totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
     }
 
-    // Limitador final: R$50–R$65 (nunca sai dessa faixa)
+    // Limitador final absoluto: R$50–R$65
     if (totalAllocated > TOLERANCE_HIGH) {
       const scaleFactor = TOLERANCE_HIGH / totalAllocated;
       for (const a of allocations) {
-        a.suggested_budget = Math.max(MIN_CAMPAIGN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
+        a.suggested_budget = Math.max(ABSOLUTE_MIN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
       }
       totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
     } else if (totalAllocated < TOLERANCE_LOW && totalAllocated > 0) {
@@ -466,23 +465,22 @@ Deno.serve(async (req) => {
         await base44.asServiceRole.entities.CampaignChangeHistory.create(entry).catch(() => {});
       }
 
-      // Atualizar AutopilotConfig com nova sugestão
+      // Atualizar AutopilotConfig — usar referenceTotal como budget sugerido exibido,
+      // não a soma das campanhas (que pode ser > R$60 por floor R$1/campanha × N campanhas)
+      const displayBudget = Math.min(TOLERANCE_HIGH, Math.max(TOLERANCE_LOW, referenceTotal));
       const configUpdate = {
-        ai_suggested_daily_budget: Math.round(totalAllocated * 100) / 100,
-        ai_budget_reasoning: `calculateDailyBudgetAllocation (${trigger}): ${numActiveProducts} produtos × ${sym}${Math.round(budgetPerProduct * 100) / 100}/produto. ${numActiveCampaigns} campanhas ativas. Total alocado: ${sym}${Math.round(totalAllocated * 100) / 100}. Referência: ${sym}${referenceTotal}.`,
+        ai_suggested_daily_budget: displayBudget,
+        ai_budget_reasoning: `${numActiveCampaigns} campanhas ativas distribuindo ${sym}${displayBudget.toFixed(2)} total. Referência: ${sym}${referenceTotal}. Faixa permitida: ${sym}${TOLERANCE_LOW}–${sym}${TOLERANCE_HIGH}.`,
         ai_budget_confidence: metrics30d.length > 0 ? 88 : 60,
         ai_budget_generated_at: now,
         ai_budget_breakdown: JSON.stringify({
           reference_budget: referenceTotal,
+          display_budget: displayBudget,
           active_products: numActiveProducts,
           active_campaigns: numActiveCampaigns,
-          budget_per_product: Math.round(budgetPerProduct * 100) / 100,
-          budget_per_campaign: Math.round(budgetPerCampaign * 100) / 100,
-          total_allocated: Math.round(totalAllocated * 100) / 100,
           tolerance_low: TOLERANCE_LOW,
           tolerance_high: TOLERANCE_HIGH,
           trigger,
-          validation,
         }),
       };
 
