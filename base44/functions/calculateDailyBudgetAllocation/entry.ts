@@ -25,11 +25,11 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const REFERENCE_BUDGET = 60.00;  // Referência operacional em R$
-const TOLERANCE_LOW    = 54.00;  // -10%
-const TOLERANCE_HIGH   = 66.00;  // +10%
-const ABSOLUTE_MIN_BUDGET = 1.00; // mínimo absoluto por campanha (Amazon exige >= R$1)
-const MAX_CHANGE_PCT   = 0.30;   // variação máxima por ciclo
+const REFERENCE_BUDGET    = 60.00;  // Orçamento total diário de referência (exibido no painel)
+const TOLERANCE_LOW       = 50.00;  // Mínimo exibido
+const TOLERANCE_HIGH      = 65.00;  // Máximo exibido
+const MIN_CAMPAIGN_BUDGET = 15.00;  // Mínimo garantido por campanha (R$15/dia)
+const MAX_CHANGE_PCT      = 0.30;   // variação máxima por ciclo (aplicado na escrita)
 const PAGE = 200;
 
 // Peso por tipo de campanha
@@ -228,12 +228,9 @@ Deno.serve(async (req) => {
     );
     const numActiveCampaigns = activeCampaigns.length;
 
-    // Mínimo dinâmico por campanha
-    const MIN_CAMPAIGN_BUDGET = Math.max(ABSOLUTE_MIN_BUDGET, Math.min(3.00, referenceTotal / numActiveCampaigns * 0.50));
-
-    // Orçamentos base por produto e campanha
+    // Orçamento base por produto (R$60 ÷ produtos ativos)
     const budgetPerProduct = referenceTotal / numActiveProducts;
-    // Para campanhas sem ASIN (pool), distribuir o budget total entre elas diretamente
+    // Base por campanha para o response info
     const budgetPerCampaign = referenceTotal / numActiveCampaigns;
 
     // ── 7. Calcular alocação por campanha ──────────────────────────────────
@@ -243,6 +240,7 @@ Deno.serve(async (req) => {
     for (const [asin, campaigns] of Object.entries(campaignsByProduct)) {
       const product = productMap.get(asin);
       const skuLimit = product ? calcSkuLimit(product, MIN_CAMPAIGN_BUDGET) : 0;
+      // MIN_CAMPAIGN_BUDGET é R$15 — cada campanha recebe no mínimo esse valor
       // Para campanhas sem ASIN (pool), distribuir proporcionalmente ao total de campanhas
       const isPool = asin === 'pool';
       const productBudget = isPool
@@ -316,17 +314,15 @@ Deno.serve(async (req) => {
           perfReason += '+sku_capped';
         }
 
-        // Guardrail 2: Nunca abaixo do mínimo
+        // Guardrail 2: Mínimo R$15 por campanha
         suggestedBudget = Math.max(MIN_CAMPAIGN_BUDGET, suggestedBudget);
 
-        // Guardrail 3: Variação máxima ±30% do atual — aplicado APENAS no modo dry_run=false
-        // para não inflacionar o cálculo de normalização do total
+        // Guardrail 3: Variação máxima ±30% do atual (só na escrita real)
         if (!dry_run && currentBudget > 0) {
           const maxUp   = currentBudget * (1 + MAX_CHANGE_PCT);
-          const maxDown = currentBudget * (1 - MAX_CHANGE_PCT);
+          const maxDown = Math.max(MIN_CAMPAIGN_BUDGET, currentBudget * (1 - MAX_CHANGE_PCT));
           suggestedBudget = Math.min(suggestedBudget, maxUp);
           suggestedBudget = Math.max(suggestedBudget, maxDown);
-          suggestedBudget = Math.max(suggestedBudget, ABSOLUTE_MIN_BUDGET);
         }
 
         // Guardrail 4: Verificar se pode ultrapassar R$66 total
@@ -359,49 +355,25 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 8. Normalizar total para referência ──────────────────────────────
-    // SEMPRE normalizar para manter o total próximo de referenceTotal (R$60 ±10%)
-    // Campanhas com melhor ACoS recebem mais, mas o TOTAL não deve ultrapassar a tolerância
-    // a menos que seja explicitamente justificado por lucro real.
-    const hasScalingJustification = allocations.some(a =>
-      a.has_orders && a.acos_30d > 0 && a.acos_30d <= TARGET_ACOS
-    );
-    const isNewCampaignTrigger = trigger === 'criacao_campanha' || trigger === 'nova_campanha';
-
-    // Normalização SEMPRE para referenceTotal (R$60)
-    // Quando há muitas campanhas (mínimo × N > referência), normalizar sem guardrail de mínimo
-    if (totalAllocated > 0 && totalAllocated !== referenceTotal) {
-      const scaleFactor = referenceTotal / totalAllocated;
-      for (const a of allocations) {
-        // Sem floor de MIN_CAMPAIGN_BUDGET aqui — o total é o que manda
-        a.suggested_budget = Math.max(ABSOLUTE_MIN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
-        a.normalized = true;
+    // ── 8. Garantir mínimo R$15 por campanha ─────────────────────────────
+    // A soma das campanhas PODE ser maior que R$60 — isso é normal e esperado.
+    // O valor R$60 é o orçamento total DIÁRIO exibido no painel, não a soma das campanhas.
+    for (const a of allocations) {
+      if (a.suggested_budget < MIN_CAMPAIGN_BUDGET) {
+        a.suggested_budget = MIN_CAMPAIGN_BUDGET;
+        a.perf_reason += '+min_15';
       }
-      totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
     }
-
-    // Limitador final absoluto: R$50–R$65
-    if (totalAllocated > TOLERANCE_HIGH) {
-      const scaleFactor = TOLERANCE_HIGH / totalAllocated;
-      for (const a of allocations) {
-        a.suggested_budget = Math.max(ABSOLUTE_MIN_BUDGET, Math.round(a.suggested_budget * scaleFactor * 100) / 100);
-      }
-      totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
-    } else if (totalAllocated < TOLERANCE_LOW && totalAllocated > 0) {
-      const scaleFactor = TOLERANCE_LOW / totalAllocated;
-      for (const a of allocations) {
-        a.suggested_budget = Math.round(a.suggested_budget * scaleFactor * 100) / 100;
-      }
-      totalAllocated = allocations.reduce((s, a) => s + a.suggested_budget, 0);
-    }
+    totalAllocated = allocations.reduce((s: number, a: any) => s + a.suggested_budget, 0);
 
     // ── 9. Validação final ─────────────────────────────────────────────────
     const validation = {
-      no_negative_budget: allocations.every(a => a.suggested_budget >= 0),
-      no_duplicate_campaigns: allocations.length === new Set(allocations.map(a => a.campaign_id)).size,
-      total_within_reference: totalAllocated >= TOLERANCE_LOW && totalAllocated <= TOLERANCE_HIGH * 1.20,
-      no_sku_exceeded: allocations.every(a => a.sku_limit === 0 || a.suggested_budget <= a.sku_limit + 0.01),
-      sum_check: Math.round(totalAllocated * 100) / 100,
+      no_negative_budget: allocations.every((a: any) => a.suggested_budget >= 0),
+      no_duplicate_campaigns: allocations.length === new Set(allocations.map((a: any) => a.campaign_id)).size,
+      min_budget_respected: allocations.every((a: any) => a.suggested_budget >= MIN_CAMPAIGN_BUDGET),
+      no_sku_exceeded: allocations.every((a: any) => a.sku_limit === 0 || a.suggested_budget <= a.sku_limit + 0.01),
+      sum_campaigns: Math.round(totalAllocated * 100) / 100,
+      display_budget: REFERENCE_BUDGET,
     };
 
     // ── 10. Aplicar se não for dry_run ─────────────────────────────────────
@@ -465,8 +437,8 @@ Deno.serve(async (req) => {
         await base44.asServiceRole.entities.CampaignChangeHistory.create(entry).catch(() => {});
       }
 
-      // Atualizar AutopilotConfig — usar referenceTotal como budget sugerido exibido,
-      // não a soma das campanhas (que pode ser > R$60 por floor R$1/campanha × N campanhas)
+      // O valor exibido no painel é sempre o referenceTotal (R$60), não a soma das campanhas.
+      // As campanhas podem somar mais que R$60 — mínimo R$15/cada é a regra por campanha.
       const displayBudget = Math.min(TOLERANCE_HIGH, Math.max(TOLERANCE_LOW, referenceTotal));
       const configUpdate = {
         ai_suggested_daily_budget: displayBudget,
