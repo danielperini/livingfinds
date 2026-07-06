@@ -51,10 +51,17 @@ export default function BudgetAllocationPanel({ account, campaigns = [], product
     }
   }, [account]);
 
-  // Campanhas elegíveis (excluir arquivadas)
-  const activeCampaigns = campaigns.filter(c =>
+  // Campanhas elegíveis (excluir arquivadas) — deduplicar por campaign_id
+  const activeCampaignsRaw = campaigns.filter(c =>
     (c.state === 'enabled' || c.status === 'enabled') && !c.archived && c.state !== 'archived'
   );
+  const seenCampIds = new Set();
+  const activeCampaigns = activeCampaignsRaw.filter(c => {
+    const key = c.campaign_id || c.id;
+    if (seenCampIds.has(key)) return false;
+    seenCampIds.add(key);
+    return true;
+  });
   const activeProducts = products.filter(p =>
     p.status === 'active' && p.inventory_status !== 'out_of_stock'
   );
