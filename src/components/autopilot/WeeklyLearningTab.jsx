@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Brain, RefreshCw, Loader2, CheckCircle, XCircle, AlertTriangle, Clock, RotateCcw, ChevronDown, ChevronRight, Zap, Shield } from 'lucide-react';
+import { Brain, RefreshCw, Loader2, CheckCircle, XCircle, AlertTriangle, Clock, RotateCcw, ChevronDown, ChevronRight, Zap, Shield, History, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
 const AI_WEEKLY_REVIEW_MODEL = 'claude-sonnet-4-5';
 
@@ -92,10 +92,12 @@ export default function WeeklyLearningTab({ account }) {
   const [reviews, setReviews] = useState([]);
   const [rules, setRules] = useState([]);
   const [versions, setVersions] = useState([]);
+  const [executions, setExecutions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [rollbackMsg, setRollbackMsg] = useState('');
   const [tab, setTab] = useState('overview');
+  const [auditFilter, setAuditFilter] = useState('all');
 
   const aid = account?.id;
 
@@ -103,14 +105,16 @@ export default function WeeklyLearningTab({ account }) {
     if (!aid) return;
     setLoading(true);
     try {
-      const [revs, activeRules, vers] = await Promise.all([
+      const [revs, activeRules, vers, execs] = await Promise.all([
         base44.entities.WeeklyRuleReview.filter({ amazon_account_id: aid }, '-started_at', 10),
         base44.entities.DecisionRule.filter({ amazon_account_id: aid }, '-created_date', 50),
         base44.entities.DecisionRuleVersion.filter({ amazon_account_id: aid }, '-version_number', 5),
+        base44.entities.RuleExecution.filter({ amazon_account_id: aid }, '-executed_at', 200),
       ]);
       setReviews(revs);
       setRules(activeRules);
       setVersions(vers);
+      setExecutions(execs);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -209,6 +213,7 @@ export default function WeeklyLearningTab({ account }) {
           { id: 'overview', label: 'Última Revisão' },
           { id: 'rules', label: `Regras (${activeRules.length} ativas)` },
           { id: 'versions', label: 'Versões' },
+          { id: 'audit', label: `Auditoria (${executions.length})` },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${tab === t.id ? 'border-violet-400 text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
@@ -354,6 +359,96 @@ export default function WeeklyLearningTab({ account }) {
               )}
             </div>
           )}
+
+          {/* Tab: Auditoria */}
+          {tab === 'audit' && (() => {
+            const filtered = auditFilter === 'all' ? executions
+              : executions.filter(e => e.status === auditFilter);
+            const ruleMap = new Map(rules.map(r => [r.rule_key, r.name]));
+            const outcomeIcon = (o) => {
+              if (o === 'positive') return <TrendingUp className="w-3 h-3 text-emerald-400" />;
+              if (o === 'negative') return <TrendingDown className="w-3 h-3 text-red-400" />;
+              return <Minus className="w-3 h-3 text-slate-500" />;
+            };
+            return (
+              <div className="space-y-3">
+                {/* Filtros */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {[
+                    { key: 'all', label: 'Todos' },
+                    { key: 'completed', label: 'Concluídos' },
+                    { key: 'failed', label: 'Falhou' },
+                    { key: 'rolled_back', label: 'Rollback' },
+                  ].map(f => (
+                    <button key={f.key} onClick={() => setAuditFilter(f.key)}
+                      className={`px-3 py-1 rounded-full text-xs border transition-colors ${auditFilter === f.key ? 'bg-violet-500/20 text-violet-300 border-violet-500/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                      {f.label}
+                    </button>
+                  ))}
+                  <button onClick={loadData} className="ml-auto text-slate-500 hover:text-slate-300 transition-colors p-1">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {filtered.length === 0 ? (
+                  <div className="text-center py-12 text-slate-500 text-sm">
+                    <History className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                    Nenhuma execução registrada ainda.
+                  </div>
+                ) : (
+                  <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/50">
+                          <th className="px-4 py-2.5 text-left text-[10px] text-slate-500 uppercase">Quando</th>
+                          <th className="px-4 py-2.5 text-left text-[10px] text-slate-500 uppercase">Regra</th>
+                          <th className="px-4 py-2.5 text-left text-[10px] text-slate-500 uppercase">Ação</th>
+                          <th className="px-4 py-2.5 text-right text-[10px] text-slate-500 uppercase">Antes</th>
+                          <th className="px-4 py-2.5 text-right text-[10px] text-slate-500 uppercase">Depois</th>
+                          <th className="px-4 py-2.5 text-left text-[10px] text-slate-500 uppercase">Status</th>
+                          <th className="px-4 py-2.5 text-center text-[10px] text-slate-500 uppercase">Resultado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map(e => (
+                          <tr key={e.id} className="border-b border-surface-2/50 hover:bg-surface-2/40 transition-colors">
+                            <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">
+                              {e.executed_at
+                                ? new Date(e.executed_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                                : new Date(e.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td className="px-4 py-2.5 max-w-[160px]">
+                              <p className="text-white font-medium truncate">{ruleMap.get(e.rule_key) || e.rule_key}</p>
+                              <p className="text-[10px] text-slate-500 font-mono truncate">{e.rule_key}</p>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span className="px-1.5 py-0.5 rounded bg-surface-3 text-slate-300 font-mono text-[10px]">{e.action_type || '—'}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-slate-400 font-mono">
+                              {e.value_before != null ? e.value_before.toFixed(2) : '—'}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-mono font-semibold">
+                              {e.value_after != null ? (
+                                <span className={e.value_after > (e.value_before || 0) ? 'text-emerald-400' : 'text-amber-400'}>
+                                  {e.value_after.toFixed(2)}
+                                </span>
+                              ) : '—'}
+                            </td>
+                            <td className="px-4 py-2.5"><StatusBadge status={e.status} /></td>
+                            <td className="px-4 py-2.5 text-center">
+                              {e.outcome ? (
+                                <span title={e.outcome} className="flex justify-center">{outcomeIcon(e.outcome)}</span>
+                              ) : <span className="text-slate-600">—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Tab: Versões */}
           {tab === 'versions' && (
