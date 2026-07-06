@@ -34,23 +34,12 @@ function KPICard({ label, value, unit, sub, inverse, loading }) {
 
 
 async function loadAllBidChanges(amazonAccountId) {
-  const rows = [];
-  const pageSize = 200;
-  let offset = 0;
-
-  while (true) {
-    const page = await base44.entities.AdsBidChangeLog.filter(
-      { amazon_account_id: amazonAccountId },
-      '-created_at',
-      pageSize,
-      offset
-    );
-    rows.push(...page);
-    if (page.length < pageSize) break;
-    offset += pageSize;
-  }
-
-  return rows;
+  // Limite fixo de 500 para evitar rate limit — suficiente para o gráfico de 30 dias
+  return base44.entities.AdsBidChangeLog.filter(
+    { amazon_account_id: amazonAccountId },
+    '-created_at',
+    500
+  );
 }
 
 export default function Dashboard() {
@@ -304,11 +293,13 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         <div>
           <h1 className="text-xl font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-sm text-slate-400 mt-0.5">
-            {decisions.length > 0
-              ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes</>
-              : account?.last_sync_at
-                ? <span className="text-emerald-400/80">{campaigns.length} campanhas · {metricsDaily.length} registros</span>
-                : <span className="text-slate-500">Sem conta conectada</span>
+            {loading
+              ? <span className="text-slate-500">Carregando...</span>
+              : decisions.length > 0
+                ? <><span className="text-amber-400 font-semibold">{decisions.length}</span> decisões IA pendentes</>
+                : account
+                  ? <span className="text-emerald-400/80">{campaigns.length} campanhas · {metricsDaily.length} registros</span>
+                  : <span className="text-slate-500">Configure sua conta Amazon nas <Link to="/settings" className="underline">Configurações</Link></span>
             }
             {lastSyncInfo && (
               <span className="ml-2 text-slate-500 text-xs flex items-center gap-1 inline-flex">
