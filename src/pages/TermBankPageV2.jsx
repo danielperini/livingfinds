@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, Sparkles, CheckCheck } from 'lucide-react';
 import SuggestionsPanel from '@/components/termbank/SuggestionsPanel';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -15,6 +15,10 @@ export default function TermBankPageV2() {
   const [workingId, setWorkingId] = useState(null);
   const [message, setMessage] = useState(null);
   const [cleaning, setCleaning] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genProgress, setGenProgress] = useState('');
+  const [approveAllRunning, setApproveAllRunning] = useState(false);
+  const [account, setAccount] = useState(null);
 
   // Top 10 por produto: agrupar sugestões por asin e pegar as 10 mais relevantes
   const top10Suggestions = (() => {
@@ -64,6 +68,75 @@ export default function TermBankPageV2() {
     }
   };
 
+  // Gera sugestões via IA para todos os produtos com título, em lotes
+  const generateSuggestions = async () => {
+    if (!account || generating) return;
+    setGenerating(true);
+    setGenProgress('');
+    setMessage(null);
+    try {
+      // Pegar produtos com título para gerar keywords
+      const productsWithTitle = products.filter(p => p.product_name || p.display_name);
+      if (!productsWithTitle.length) {
+        setMessage({ type: 'error', text: 'Nenhum produto com título encontrado. Sincronize os títulos primeiro.' });
+        return;
+      }
+
+      let totalGenerated = 0;
+      let errors = 0;
+      for (let i = 0; i < productsWithTitle.length; i++) {
+        const p = productsWithTitle[i];
+        setGenProgress(`Gerando sugestões para ${p.asin} (${i + 1}/${productsWithTitle.length})...`);
+        try {
+          const res = await base44.functions.invoke('suggestProductKeywordsWithAI', {
+            amazon_account_id: account.id,
+            asin: p.asin,
+            product_id: p.id,
+            product_name: p.product_name || p.display_name,
+          });
+          if (res?.data?.ok) totalGenerated += res.data.suggestions_created || 0;
+        } catch { errors++; }
+        // Pausa de 1s entre produtos para evitar rate limit
+        if (i < productsWithTitle.length - 1) await new Promise(r => setTimeout(r, 1000));
+      }
+
+      setGenProgress('');
+      setMessage({ type: 'success', text: `✓ ${totalGenerated} sugestões geradas para ${productsWithTitle.length} produtos${errors > 0 ? ` · ${errors} erros` : ''}.` });
+      await load();
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+      setGenProgress('');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Aprovar todas as sugestões pendentes em sequência
+  const approveAll = async () => {
+    if (!account || approveAllRunning) return;
+    const pending = top10Suggestions.filter(s => !['created', 'approved'].includes(s.status));
+    if (!pending.length) {
+      setMessage({ type: 'error', text: 'Nenhuma sugestão pendente para aprovar.' });
+      return;
+    }
+    setApproveAllRunning(true);
+    setMessage(null);
+    let success = 0, failed = 0;
+    for (const s of pending) {
+      setWorkingId(s.id);
+      try {
+        const res = await base44.functions.invoke('reviewKeywordSuggestion', { suggestion_id: s.id, action: 'approve' });
+        if (res?.data?.ok) success++;
+        else failed++;
+      } catch { failed++; }
+      await new Promise(r => setTimeout(r, 800));
+    }
+    setWorkingId(null);
+    setApproveAllRunning(false);
+    setMessage({ type: success > 0 ? 'success' : 'error', text: `✓ ${success} campanhas criadas${failed > 0 ? ` · ${failed} falhas` : ''}.` });
+    await load();
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -72,6 +145,7 @@ export default function TermBankPageV2() {
       if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
       const account = accounts[0];
       if (!account) return;
+      setAccount(account);
       const [t, s, p] = await Promise.all([
         base44.entities.TermBank.filter({ amazon_account_id: account.id }, '-performance_score', 500),
         base44.entities.KeywordSuggestion.filter({ amazon_account_id: account.id }, '-created_at', 300),
@@ -132,10 +206,37 @@ export default function TermBankPageV2() {
           <p className="text-xs text-slate-400">{terms.length} termos · {terms.filter(t => t.status === 'active').length} ativos · {top10Suggestions.length} sugestões (top 10/produto)</p>
         </div>
       </div>
-      <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
-        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={generateSuggestions}
+          disabled={generating || loading}
+          className="flex items-center gap-2 rounded-lg bg-violet-500/15 border border-violet-500/30 px-3 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/25 transition-colors disabled:opacity-50"
+        >
+          {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {generating ? 'Gerando...' : 'Gerar com IA'}
+        </button>
+        {top10Suggestions.filter(s => !['created', 'approved'].includes(s.status)).length > 0 && (
+          <button
+            onClick={approveAll}
+            disabled={approveAllRunning || loading}
+            className="flex items-center gap-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+          >
+            {approveAllRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCheck className="h-3.5 w-3.5" />}
+            {approveAllRunning ? 'Criando...' : `Aprovar todas (${top10Suggestions.filter(s => !['created', 'approved'].includes(s.status)).length})`}
+          </button>
+        )}
+        <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
     </div>
+
+    {genProgress && (
+      <div className="flex items-center gap-2 rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3 text-xs text-violet-300">
+        <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
+        {genProgress}
+      </div>
+    )}
 
     {excessCount > 0 && (
       <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
