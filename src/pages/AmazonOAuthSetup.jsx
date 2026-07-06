@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   CheckCircle, XCircle, Loader2, ExternalLink, RefreshCw,
-  ShieldCheck, ShieldAlert, Zap, Copy, Database, Key, RotateCcw
+  ShieldCheck, ShieldAlert, Zap, Copy, Database, Key, RotateCcw, Save, Eye, EyeOff
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -19,6 +19,10 @@ export default function AmazonOAuthSetup() {
   const [info, setInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pasteToken, setPasteToken] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -33,6 +37,28 @@ export default function AmazonOAuthSetup() {
   };
 
   useEffect(() => { load(); }, []);
+
+  const saveToken = async () => {
+    const token = pasteToken.trim();
+    if (!token.startsWith('Atzr|')) {
+      setSaveResult({ ok: false, error: 'Token deve começar com Atzr|' });
+      return;
+    }
+    setSaving(true);
+    setSaveResult(null);
+    try {
+      const res = await base44.functions.invoke('saveAdsRefreshToken', { refresh_token: token });
+      setSaveResult(res.data);
+      if (res.data?.ok) {
+        setPasteToken('');
+        setTimeout(() => load(), 1500);
+      }
+    } catch (e) {
+      setSaveResult({ ok: false, error: e.message });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const copyUrl = () => {
     if (info?.auth_url) {
@@ -159,6 +185,59 @@ export default function AmazonOAuthSetup() {
               <p className="text-xs text-amber-300">Erro ao listar profiles: {info.profiles_error}</p>
             </div>
           )}
+
+          {/* Colar Refresh Token manualmente */}
+          <div className="bg-surface-1 border border-cyan/20 rounded-xl p-5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Key className="w-4 h-4 text-cyan" />
+              <h2 className="text-sm font-semibold text-white">Colar e validar token</h2>
+              <span className="text-[10px] text-slate-500 bg-surface-2 px-2 py-0.5 rounded">Refresh Token (começa com Atzr|)</span>
+            </div>
+            <p className="text-xs text-slate-500">
+              O token nunca é enviado para o frontend — é validado e armazenado apenas no backend.
+            </p>
+            <div className="relative">
+              <input
+                type={showToken ? 'text' : 'password'}
+                value={pasteToken}
+                onChange={e => { setPasteToken(e.target.value); setSaveResult(null); }}
+                placeholder="Atzr|..."
+                className="w-full px-3 py-2.5 pr-10 bg-surface-2 border border-surface-3 rounded-lg text-xs font-mono text-white placeholder-slate-600 focus:outline-none focus:border-cyan/40"
+              />
+              <button
+                type="button"
+                onClick={() => setShowToken(v => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              >
+                {showToken ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            {saveResult && (
+              <div className={`flex items-start gap-2 p-3 rounded-lg text-xs border ${saveResult.ok ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+                {saveResult.ok ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" /> : <XCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />}
+                <div>
+                  {saveResult.ok ? (
+                    <>
+                      <p className="font-semibold">Token validado e salvo com sucesso!</p>
+                      {saveResult.profiles_found > 0 && <p className="text-emerald-400 mt-0.5">{saveResult.profiles_found} profile(s) encontrado(s)</p>}
+                    </>
+                  ) : (
+                    <p>{saveResult.error}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={saveToken}
+              disabled={saving || !pasteToken.trim()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-bold rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Validando...' : 'Validar e guardar token'}
+            </button>
+          </div>
 
           {/* Reautorizar — sempre visível */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
