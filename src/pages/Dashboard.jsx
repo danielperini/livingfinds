@@ -58,6 +58,8 @@ export default function Dashboard() {
   const [campFilter, setCampFilter] = useState('all');
   const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
+  const [syncingDashboard, setSyncingDashboard] = useState(false);
+  const [syncDashMsg, setSyncDashMsg] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -112,6 +114,26 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const runSync = async () => {
+    if (!account || syncingDashboard) return;
+    setSyncingDashboard(true);
+    setSyncDashMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
+      if (res?.data?.ok) {
+        setSyncDashMsg({ type: 'success', text: `${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
+        await loadData();
+      } else {
+        setSyncDashMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
+      }
+    } catch (e) {
+      setSyncDashMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncingDashboard(false);
+      setTimeout(() => setSyncDashMsg(null), 8000);
+    }
+  };
 
   const cutoffDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
   const metricsLast30Days = metricsDaily.filter(m => m.date >= cutoffDate);
@@ -309,10 +331,19 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
             )}
           </p>
         </div>
-        <button onClick={loadData} disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          {syncingDashboard && <span className="text-xs text-cyan animate-pulse">Sincronizando...</span>}
+          {syncDashMsg && <span className={`text-xs ${syncDashMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncDashMsg.text}</span>}
+          <button onClick={runSync} disabled={loading || syncingDashboard}
+            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm rounded-lg transition-colors disabled:opacity-50">
+            <RefreshCw className={`w-4 h-4 ${syncingDashboard ? 'animate-spin' : ''}`} />
+            Sync
+          </button>
+          <button onClick={loadData} disabled={loading}
+            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {error && (
