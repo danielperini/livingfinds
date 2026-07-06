@@ -13,6 +13,7 @@ import BudgetValidationPanel from '@/components/autopilot/BudgetValidationPanel'
 import WeeklyLearningTab from '@/components/autopilot/WeeklyLearningTab';
 import WeeklySearchTermPromotionPanel from '@/components/autopilot/WeeklySearchTermPromotionPanel';
 import WasteTermsCleanupPanel from '@/components/autopilot/WasteTermsCleanupPanel';
+import AcosViolationPanel from '@/components/autopilot/AcosViolationPanel';
 import AutoCampaignJourneyPanel from '@/components/autopilot/AutoCampaignJourneyPanel';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
@@ -304,6 +305,7 @@ export default function AdsAutopilot() {
       <div className="space-y-6">
         <WeeklySearchTermPromotionPanel account={account} />
         <WasteTermsCleanupPanel account={account} />
+        <AcosViolationPanel account={account} />
         <WeeklyLearningTab account={account} />
       </div>
     )}

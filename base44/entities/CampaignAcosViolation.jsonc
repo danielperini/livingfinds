@@ -1,0 +1,94 @@
+{
+  "name": "CampaignAcosViolation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "campaign_type": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "consecutive_violations": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_cycle_1": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_cycle_2": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_cycle_3": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_1": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_2": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_3": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 25
+    },
+    "maximum_acos": {
+      "type": "number",
+      "default": 45
+    },
+    "last_violation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_violation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "paused_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pause_reason": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "watching",
+        "warning",
+        "paused",
+        "recovered",
+        "exempt"
+      ],
+      "default": "watching"
+    },
+    "reset_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id"
+  ]
+}
