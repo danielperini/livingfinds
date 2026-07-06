@@ -385,10 +385,6 @@ export default function ProductsScheduled() {
           return;
         }
 
-        await refreshCampaignLinks(
-          current.id
-        );
-
         await readQueue(current.id);
 
         const logs =
@@ -513,7 +509,7 @@ export default function ProductsScheduled() {
 
   /*
    * Atualização automática a cada
-   * 20 segundos.
+   * 5 minutos (evita Rate Limit).
    */
   useEffect(() => {
     readStatus();
@@ -521,7 +517,7 @@ export default function ProductsScheduled() {
     const timer =
       window.setInterval(
         readStatus,
-        20000
+        300000
       );
 
     return () => {
