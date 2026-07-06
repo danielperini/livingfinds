@@ -101,16 +101,7 @@ export default function InventorySales() {
               </button>
             ))}
           </div>
-          {tab === 'products' && missingTitles > 0 && (
-            <button onClick={enrichTitles} disabled={enriching}
-              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors disabled:opacity-50">
-              {enriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-              {enriching ? 'Atualizando...' : `Enriquecer ${missingTitles} títulos via IA`}
-            </button>
-          )}
-          {enrichMsg && (
-            <span className={`text-xs ${enrichMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{enrichMsg.text}</span>
-          )}
+
           <button onClick={load} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -172,7 +163,7 @@ export default function InventorySales() {
                         {(p.product_name || p.display_name) ? (
                           <p className="text-xs text-slate-200 leading-snug line-clamp-2">{p.product_name || p.display_name}</p>
                         ) : (
-                          <span className="text-xs text-slate-600 italic">Sem título · clique em Enriquecer</span>
+                          <span className="text-xs text-slate-600 italic">Sem título</span>
                         )}
                       </td>
                       <td className="px-5 py-3 text-xs text-slate-400 font-mono">{p.sku || '—'}</td>
