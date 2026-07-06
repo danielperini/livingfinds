@@ -144,9 +144,26 @@ export default function GoalsComparisonPanel({ acos, roas, tacos = 0, autopilotC
       </div>
 
       {anyBad && (
-        <div className="mt-3 flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/25 rounded-lg text-xs text-amber-300">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-          <span>Metas fora do alvo — o Autopilot ajustará os bids automaticamente no próximo ciclo programado.</span>
+        <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/25 rounded-lg text-xs text-amber-300 space-y-1.5">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span className="font-semibold">Metas fora do alvo — o Autopilot atuará no próximo ciclo:</span>
+          </div>
+          <ul className="ml-6 space-y-1 text-amber-200/80">
+            {!acosOk && acos > 0 && (
+              <>
+                <li>• <strong>Reduzir bids</strong> de keywords com ACoS acima da meta ({targetAcos}%)</li>
+                <li>• <strong>Criar keywords manuais exact</strong> para search terms já convertidos (harvest)</li>
+              </>
+            )}
+            {!roasOk && roas > 0 && (
+              <li>• <strong>Aumentar bids</strong> de keywords vencedoras (ROAS abaixo de {targetRoas}x indica baixo volume de vendas)</li>
+            )}
+            {(!acosOk || !roasOk) && (
+              <li>• <strong>Negativar termos irrelevantes</strong> com gasto e zero conversões (libera orçamento para investir em termos que vendem)</li>
+            )}
+          </ul>
+          <p className="ml-6 text-amber-400/60 mt-1">O objetivo é vender mais, não apenas reduzir gastos.</p>
         </div>
       )}
 
