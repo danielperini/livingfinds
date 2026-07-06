@@ -67,10 +67,9 @@ export default function Dashboard() {
     try {
       const me = await base44.auth.me();
       setUser(me);
-      // Uma única query — a mais abrangente; filtra por user_id no cliente
-      const allAccounts = await base44.entities.AmazonAccount.list('-updated_date', 5);
-      const accounts = allAccounts.filter(a => a.user_id === me.id && a.status === 'connected');
-      const acc = accounts[0] || allAccounts.find(a => a.user_id === me.id) || allAccounts[0] || null;
+      // Uma única query — filtra por user_id direto no servidor
+      const allAccounts = await base44.entities.AmazonAccount.filter({ user_id: me.id }, '-updated_date', 5);
+      const acc = allAccounts.find(a => a.status === 'connected') || allAccounts[0] || null;
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
 
