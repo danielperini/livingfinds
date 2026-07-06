@@ -325,6 +325,21 @@ export default function AmazonIntegracao() {
         </a>
       </div>
 
+      {/* Atalho Amazon Ads OAuth */}
+      <Link
+        to="/amazon-oauth-setup"
+        className="flex items-center justify-between px-4 py-3 bg-surface-1 border border-amber-500/20 rounded-xl hover:bg-surface-2 transition-colors group"
+      >
+        <div className="flex items-center gap-3">
+          <Zap className="w-4 h-4 text-amber-400" />
+          <div>
+            <p className="text-sm font-semibold text-white">Configurar / Reautorizar Amazon Ads</p>
+            <p className="text-xs text-slate-400">Gerir token OAuth da API de Anúncios (campanhas, bids, relatórios)</p>
+          </div>
+        </div>
+        <ExternalLink className="w-4 h-4 text-slate-500 group-hover:text-amber-400 transition-colors" />
+      </Link>
+
       {/* Atalho self-auth */}
       <Link
         to="/sp-api-self-auth"
