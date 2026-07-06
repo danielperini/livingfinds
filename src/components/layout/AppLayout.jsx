@@ -119,7 +119,8 @@ export default function AppLayout() {
       try {
         const me = await base44.auth.me();
         let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-        if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
+        if (!accounts.length) accounts = await base44.entities.AmazonAccount.filter({ status: 'connected' });
+        if (!accounts.length) accounts = await base44.entities.AmazonAccount.list('-updated_date', 1);
 
         const current = accounts[0] || null;
         if (!mounted || !current) return;
