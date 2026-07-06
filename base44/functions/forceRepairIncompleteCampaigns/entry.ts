@@ -87,10 +87,9 @@ Deno.serve(async (request) => {
       'B0DJ3RGHK6','B0H59FPPKS','B0GR6GXS1B','B0GHP612B8','B0GNW1Q6V3'
     ];
 
-    // Listar campanhas AUTO na Amazon
+    // Listar TODAS as campanhas SP (AUTO + MANUAL)
     const campResult = await adsCall('POST', '/sp/campaigns/list', {
       stateFilter: { include: ['ENABLED', 'PAUSED'] },
-      targetingTypeFilter: ['AUTO'],
       maxResults: 500,
     });
 
