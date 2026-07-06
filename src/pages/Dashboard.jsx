@@ -79,23 +79,29 @@ export default function Dashboard() {
 
       const aid = acc.id;
       const delay = (ms) => new Promise(r => setTimeout(r, ms));
+      const safeQuery = async (fn, fallback = []) => {
+        try { return await fn(); } catch (e) {
+          if (e?.response?.status === 429 || String(e?.message).includes('429')) return fallback;
+          throw e;
+        }
+      };
 
       // Fila sequencial com intervalo para evitar rate limit (429)
-      const cams = await loadAllCampaigns(aid);
-      await delay(150);
-      const prods = await base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 30);
-      await delay(150);
-      const metrics = await base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120);
-      await delay(150);
-      const hourly = await base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720);
-      await delay(150);
-      const decs = await base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10);
-      await delay(150);
-      const runs = await base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8);
-      await delay(150);
-      const changes = await loadAllBidChanges(aid);
-      await delay(150);
-      const apConfigs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: aid });
+      const cams = await safeQuery(() => loadAllCampaigns(aid));
+      await delay(300);
+      const prods = await safeQuery(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 30));
+      await delay(300);
+      const metrics = await safeQuery(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 120));
+      await delay(300);
+      const hourly = await safeQuery(() => base44.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 720));
+      await delay(300);
+      const decs = await safeQuery(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10));
+      await delay(300);
+      const runs = await safeQuery(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 8));
+      await delay(300);
+      const changes = await safeQuery(() => loadAllBidChanges(aid));
+      await delay(300);
+      const apConfigs = await safeQuery(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }));
 
       setCampaigns(cams);
       setProducts(prods);
