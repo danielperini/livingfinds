@@ -56,7 +56,7 @@ export default function Dashboard() {
   const [bidChanges, setBidChanges] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [campFilter, setCampFilter] = useState('all');
+  const [campFilter, setCampFilter] = useState('active');
   const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
   const [syncingDashboard, setSyncingDashboard] = useState(false);
@@ -666,7 +666,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
 
       {/* Painel de Performance por Campanha */}
       <CampaignPerformancePanel
-        campaigns={campaigns}
+        campaigns={campaigns.filter(c => c.state !== 'archived' && c.status !== 'archived' && !c.archived)}
         autopilotConfig={autopilotConfig}
         loading={loading}
       />
@@ -701,10 +701,11 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         const pausedCamps = pausedCampaignsList;
         const archivedCamps = archivedCampaignsList;
 
+        // Arquivadas nunca aparecem — filtro 'all' mostra apenas ativas + pausadas
+        const nonArchivedCamps = [...activeCamps, ...pausedCamps];
         const filtered = campFilter === 'active' ? activeCamps
           : campFilter === 'paused' ? pausedCamps
-          : campFilter === 'archived' ? archivedCamps
-          : campaigns;
+          : nonArchivedCamps;
 
         const sorted = [...filtered].sort((a, b) => (b.spend || 0) - (a.spend || 0) || new Date(b.created_date || 0) - new Date(a.created_date || 0)).slice(0, 25);
 
@@ -728,10 +729,9 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
                 <h2 className="text-sm font-semibold text-slate-300">Campanhas</h2>
                 <div className="flex items-center gap-1">
                   {[
-                    { key: 'all', label: `Todas (${campaigns.length})` },
+                    { key: 'all', label: `Ativas + Pausadas (${activeCamps.length + pausedCamps.length})` },
                     { key: 'active', label: `Ativas (${activeCamps.length})` },
                     { key: 'paused', label: `Pausadas (${pausedCamps.length})` },
-                    { key: 'archived', label: `Encerradas (${archivedCamps.length})` },
                   ].map(f => (
                     <button key={f.key} onClick={() => setCampFilter(f.key)}
                       className={`text-xs px-2.5 py-1 rounded-full border transition-colors whitespace-nowrap ${campFilter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
