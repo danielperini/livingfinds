@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
-import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer, Rocket, CheckCircle2 } from 'lucide-react';
+import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer, Rocket, CheckCircle2, X } from 'lucide-react';
 import BudgetSuggestionCard from '@/components/dashboard/BudgetSuggestionCard';
 import BudgetReport14d from '@/components/dashboard/BudgetReport14d';
 import BudgetOverrunPanel from '@/components/dashboard/BudgetOverrunPanel';
@@ -63,6 +63,7 @@ export default function Dashboard() {
   const [syncDashMsg, setSyncDashMsg] = useState(null);
   const [kickoffStatus, setKickoffStatus] = useState(null);
   const [kickoffRunning, setKickoffRunning] = useState(false);
+  const kickoffAbortRef = useRef(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -374,31 +375,51 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
               }
             </span>
           </div>
-          <button
-            onClick={async () => {
-              if (kickoffRunning) return;
-              setKickoffRunning(true);
-              try {
-                const res = await base44.functions.invoke('runFullProductAutomation', { amazon_account_id: account.id });
-                const d = res.data;
-                if (d?.ok) {
-                  const s = d.summary || {};
-                  setKickoffStatus(prev => ({ ...prev, lastMsg: `✓ ${s.auto_campaigns_created || 0} AUTO + ${s.manual_campaigns_created || 0} MANUAL criadas · ${s.keywords_created || 0} keywords`, productsWithoutAds: 0 }));
-                } else {
-                  setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${d?.error || 'Erro'}` }));
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                if (kickoffRunning) return;
+                const abortController = new AbortController();
+                kickoffAbortRef.current = abortController;
+                setKickoffRunning(true);
+                try {
+                  const res = await base44.functions.invoke('runFullProductAutomation', { amazon_account_id: account.id });
+                  if (abortController.signal.aborted) return;
+                  const d = res.data;
+                  if (d?.ok) {
+                    const s = d.summary || {};
+                    setKickoffStatus(prev => ({ ...prev, lastMsg: `✓ ${s.auto_campaigns_created || 0} AUTO + ${s.manual_campaigns_created || 0} MANUAL criadas · ${s.keywords_created || 0} keywords`, productsWithoutAds: 0 }));
+                  } else {
+                    setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${d?.error || 'Erro'}` }));
+                  }
+                } catch (e) {
+                  if (!abortController.signal.aborted) {
+                    setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${e.message}` }));
+                  }
+                } finally {
+                  kickoffAbortRef.current = null;
+                  setKickoffRunning(false);
                 }
-              } catch (e) {
-                setKickoffStatus(prev => ({ ...prev, lastMsg: `⚠ ${e.message}` }));
-              } finally {
-                setKickoffRunning(false);
-              }
-            }}
-            disabled={kickoffRunning}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
-          >
-            {kickoffRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
-            {kickoffRunning ? 'Executando...' : 'Executar agora'}
-          </button>
+              }}
+              disabled={kickoffRunning}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap"
+            >
+              {kickoffRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
+              {kickoffRunning ? 'Executando...' : 'Executar agora'}
+            </button>
+            {kickoffRunning && (
+              <button
+                onClick={() => {
+                  kickoffAbortRef.current?.abort();
+                  setKickoffRunning(false);
+                  setKickoffStatus(prev => ({ ...prev, lastMsg: '⚠ Kick-off cancelado pelo usuário.' }));
+                }}
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors text-xs whitespace-nowrap"
+              >
+                <X className="w-3 h-3" /> Cancelar
+              </button>
+            )}
+          </div>
         </div>
       )}
       {kickoffStatus?.lastMsg && (
