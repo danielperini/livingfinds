@@ -53,17 +53,41 @@ export default function AdsAutopilotScheduled() {
 
         const [configs, logs] = await Promise.all([
           base44.entities.AutopilotConfig.filter({ amazon_account_id: current.id }),
-          base44.entities.SyncExecutionLog.filter({ amazon_account_id: current.id }, '-completed_at', 20),
+          base44.entities.SyncExecutionLog.filter({ amazon_account_id: current.id }, '-completed_at', 50),
         ]);
         if (!active) return;
         setConfig(configs[0] || { amazon_account_id: current.id, enabled: true });
-        const latest = logs.find((log) => log.completed_at || log.started_at);
-        setLastUpdate(latest?.completed_at || latest?.started_at || current.last_sync_at || null);
+
+        // Pegar a data mais recente entre todos os logs e o last_sync_at da conta
+        const dates = [
+          current.last_sync_at,
+          ...logs.map((l) => l.completed_at || l.started_at),
+        ].filter(Boolean).map((d) => new Date(d).getTime()).filter((t) => !isNaN(t));
+        const mostRecent = dates.length ? new Date(Math.max(...dates)).toISOString() : null;
+        setLastUpdate(mostRecent);
       } catch {
         // A página original continuará funcionando mesmo sem o resumo programado.
       }
     })();
     return () => { active = false; };
+  }, []);
+
+  // Atualiza a data uma vez por hora para refletir syncs automáticos do backend
+  useEffect(() => {
+    const interval = window.setInterval(async () => {
+      try {
+        const me = await base44.auth.me();
+        let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+        if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
+        const current = accounts[0];
+        if (!current) return;
+        const logs = await base44.entities.SyncExecutionLog.filter({ amazon_account_id: current.id }, '-completed_at', 50);
+        const dates = [current.last_sync_at, ...logs.map((l) => l.completed_at || l.started_at)]
+          .filter(Boolean).map((d) => new Date(d).getTime()).filter((t) => !isNaN(t));
+        if (dates.length) setLastUpdate(new Date(Math.max(...dates)).toISOString());
+      } catch { /* silencioso */ }
+    }, 60 * 60 * 1000); // 1 hora
+    return () => window.clearInterval(interval);
   }, []);
 
   useEffect(() => {
