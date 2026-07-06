@@ -181,10 +181,16 @@ export default function Settings() {
     if (!account) return;
     setGoalsSaving(true);
     try {
+      // Aplicar redutor: total_daily_budget sempre entre R$50 e R$65
+      const sanitized = {
+        ...goalsForm,
+        total_daily_budget: Math.min(65, Math.max(goalsForm.total_daily_budget > 0 ? 50 : 0, goalsForm.total_daily_budget)),
+      };
       if (autopilotConfig) {
-        await base44.entities.AutopilotConfig.update(autopilotConfig.id, goalsForm);
+        await base44.entities.AutopilotConfig.update(autopilotConfig.id, sanitized);
+        setGoalsForm(p => ({ ...p, total_daily_budget: sanitized.total_daily_budget }));
       } else {
-        const created = await base44.entities.AutopilotConfig.create({ amazon_account_id: account.id, ...goalsForm });
+        const created = await base44.entities.AutopilotConfig.create({ amazon_account_id: account.id, ...sanitized });
         setAutopilotConfig(created);
       }
       setGoalsSaved(true);
@@ -360,10 +366,19 @@ export default function Settings() {
           </div>
           <div>
             <label className="block text-xs text-slate-400 mb-1.5">Orçamento Diário Total (R$)</label>
-            <input type="number" min="0" step="10" value={goalsForm.total_daily_budget}
-              onChange={e => setGoalsForm(p => ({ ...p, total_daily_budget: parseFloat(e.target.value) || 0 }))}
-              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
-            <p className="text-[10px] text-slate-600 mt-1">Budget total diário para todas as campanhas</p>
+            <input type="number" min="50" max="65" step="5" value={goalsForm.total_daily_budget}
+              onChange={e => {
+                const raw = parseFloat(e.target.value) || 0;
+                const clamped = raw > 65 ? 65 : raw < 1 ? raw : raw < 50 ? 50 : raw;
+                setGoalsForm(p => ({ ...p, total_daily_budget: clamped }));
+              }}
+              className={`w-full px-3 py-2.5 bg-surface-2 border rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50 ${goalsForm.total_daily_budget > 65 ? 'border-red-500/60' : 'border-surface-3'}`} />
+            <p className="text-[10px] mt-1">
+              {goalsForm.total_daily_budget > 65
+                ? <span className="text-red-400 font-semibold">⚠️ Valor será limitado a R$65,00 ao salvar</span>
+                : <span className="text-slate-600">Faixa permitida: R$50 – R$65/dia</span>
+              }
+            </p>
           </div>
         </div>
 
