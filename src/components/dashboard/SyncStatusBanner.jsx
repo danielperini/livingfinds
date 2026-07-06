@@ -88,9 +88,12 @@ export default function SyncStatusBanner({ accountId }) {
       try {
         const res = await base44.functions.invoke(fn, { amazon_account_id: accountId });
         const ok = res?.data?.ok !== false;
-        results.push({ logId: log.id, ok, message: ok ? 'Reprocessado com sucesso' : (res?.data?.error || 'Falhou') });
+        const errMsg = res?.data?.error || res?.data?.message || 'Falhou';
+        results.push({ logId: log.id, ok, message: ok ? 'Sincronizado com sucesso' : errMsg });
       } catch (e) {
-        results.push({ logId: log.id, ok: false, message: e.message || 'Erro ao invocar função' });
+        // Axios lança exceção em status 4xx/5xx — extrair mensagem do response body quando disponível
+        const errMsg = e?.response?.data?.error || e?.response?.data?.message || e.message || 'Erro ao invocar função';
+        results.push({ logId: log.id, ok: false, message: errMsg });
       }
       // Pausa entre chamadas para evitar rate limit
       if (targets.indexOf(log) < targets.length - 1) await sleep(1500);
