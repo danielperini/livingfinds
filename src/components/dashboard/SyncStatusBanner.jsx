@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { AlertTriangle, WifiOff, Clock, CheckCircle, RefreshCw, X, ChevronDown, ChevronUp, Play, Loader2 } from 'lucide-react';
+import { AlertTriangle, WifiOff, Clock, CheckCircle, RefreshCw, X, ChevronDown, ChevronUp, Play, Loader2, ShieldAlert, Zap } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 const STATUS_CONFIG = {
   ok:         { icon: CheckCircle,  color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', label: 'Sincronização OK' },
@@ -9,7 +10,6 @@ const STATUS_CONFIG = {
   rate_limit: { icon: WifiOff,      color: 'text-orange-400',  bg: 'bg-orange-500/10 border-orange-500/25',  label: 'Limite de chamadas atingido' },
 };
 
-// Mapeia operation do log → função de sync a invocar
 const OPERATION_SYNC_FN = {
   ads_sync:     'syncAdsQuick',
   quick_sync:   'syncAdsQuick',
@@ -34,16 +34,29 @@ export default function SyncStatusBanner({ accountId }) {
   const [logs, setLogs]           = useState([]);
   const [expanded, setExpanded]   = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  const [selected, setSelected]   = useState(new Set()); // IDs dos logs selecionados
+  const [selected, setSelected]   = useState(new Set());
   const [reprocessing, setReprocessing] = useState(false);
-  const [reprocessResults, setReprocessResults] = useState([]); // { logId, ok, message }
+  const [reprocessResults, setReprocessResults] = useState([]);
+  const [tokenInvalid, setTokenInvalid] = useState(false);
+  const [tokenDismissed, setTokenDismissed] = useState(false);
 
   useEffect(() => {
     if (!accountId) return;
     loadStatus();
+    checkToken();
     const interval = setInterval(loadStatus, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [accountId]);
+
+  async function checkToken() {
+    try {
+      const res = await base44.functions.invoke('getOAuthSetupInfo', {});
+      const d = res?.data;
+      if (d && d.token_status && d.token_status !== 'valid' && d.token_status !== 'not_configured') {
+        setTokenInvalid(true);
+      }
+    } catch { /* silencioso */ }
+  }
 
   async function loadStatus() {
     try {
@@ -53,7 +66,7 @@ export default function SyncStatusBanner({ accountId }) {
         10
       );
       setLogs(recentLogs);
-      setSelected(new Set()); // limpa seleção ao recarregar
+      setSelected(new Set());
       setReprocessResults([]);
 
       if (recentLogs.length === 0) { setStatus('stale'); return; }
@@ -80,6 +93,7 @@ export default function SyncStatusBanner({ accountId }) {
     setReprocessing(true);
     setReprocessResults([]);
 
+    const errorLogs = logs.filter(l => l.status === 'error');
     const targets = errorLogs.filter(l => selected.has(l.id));
     const results = [];
 
@@ -91,18 +105,14 @@ export default function SyncStatusBanner({ accountId }) {
         const errMsg = res?.data?.error || res?.data?.message || 'Falhou';
         results.push({ logId: log.id, ok, message: ok ? 'Sincronizado com sucesso' : errMsg });
       } catch (e) {
-        // Axios lança exceção em status 4xx/5xx — extrair mensagem do response body quando disponível
         const errMsg = e?.response?.data?.error || e?.response?.data?.message || e.message || 'Erro ao invocar função';
         results.push({ logId: log.id, ok: false, message: errMsg });
       }
-      // Pausa entre chamadas para evitar rate limit
       if (targets.indexOf(log) < targets.length - 1) await sleep(1500);
     }
 
     setReprocessResults(results);
     setReprocessing(false);
-
-    // Se todos OK, recarrega status após 2s
     if (results.every(r => r.ok)) setTimeout(loadStatus, 2000);
   }
 
@@ -115,119 +125,141 @@ export default function SyncStatusBanner({ accountId }) {
   }
 
   function toggleSelectAll() {
+    const errorLogs = logs.filter(l => l.status === 'error');
     if (selected.size === errorLogs.length) setSelected(new Set());
     else setSelected(new Set(errorLogs.map(l => l.id)));
   }
 
-  if (status === null || dismissed || status === 'ok') return null;
+  const showSyncBanner = status !== null && !dismissed && status !== 'ok';
+  const showTokenBanner = tokenInvalid && !tokenDismissed;
 
-  const cfg = STATUS_CONFIG[status];
-  const Icon = cfg.icon;
+  if (!showTokenBanner && !showSyncBanner) return null;
+
+  const cfg = showSyncBanner ? STATUS_CONFIG[status] : null;
+  const Icon = cfg?.icon;
   const lastSuccess = logs.find(l => l.status === 'success' || l.status === 'skipped_limit');
   const errorLogs = logs.filter(l => l.status === 'error');
   const allSelected = errorLogs.length > 0 && selected.size === errorLogs.length;
 
   return (
-    <div className={`rounded-xl border px-4 py-3 ${cfg.bg}`}>
-      {/* Header row */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <Icon className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} />
-          <div className="min-w-0">
-            <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
-            {lastSuccess ? (
-              <span className="ml-2 text-xs text-slate-500">
-                Último sync OK: {timeAgo(lastSuccess.started_at || lastSuccess.created_date)}
-              </span>
-            ) : (
-              <span className="ml-2 text-xs text-slate-500">Nenhum sync bem-sucedido encontrado</span>
-            )}
+    <div className="space-y-2">
+      {showTokenBanner && (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <ShieldAlert className="w-5 h-5 text-red-400 flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-red-300">Token Amazon Ads inválido ou expirado</p>
+              <p className="text-xs text-red-400/70 mt-0.5">Todas as operações de campanhas falham com "Not authorized". Reautorize para restaurar o funcionamento.</p>
+            </div>
           </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {errorLogs.length > 0 && (
-            <button
-              onClick={() => { setExpanded(v => !v); setReprocessResults([]); }}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
-            >
-              {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              {errorLogs.length} erro{errorLogs.length > 1 ? 's' : ''}
-            </button>
-          )}
-          <button onClick={loadStatus} title="Verificar novamente"
-            className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={() => setDismissed(true)} title="Dispensar"
-            className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Lista de erros com seleção */}
-      {expanded && errorLogs.length > 0 && (
-        <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
-
-          {/* Barra de ações */}
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={toggleSelectAll}
-                className="w-3.5 h-3.5 rounded accent-red-400 cursor-pointer"
-              />
-              <span className="text-xs text-slate-400">
-                {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
-              </span>
-            </label>
-
-            <button
-              onClick={reprocessSelected}
-              disabled={selected.size === 0 || reprocessing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors
-                bg-red-500/20 border border-red-500/30 text-red-300
-                hover:bg-red-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {reprocessing
-                ? <><Loader2 className="w-3 h-3 animate-spin" /> Reprocessando...</>
-                : <><Play className="w-3 h-3" /> Reprocessar Selecionados ({selected.size})</>
-              }
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Link to="/amazon-oauth-setup"
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded-lg transition-colors whitespace-nowrap">
+              <Zap className="w-3.5 h-3.5" /> Reautorizar agora
+            </Link>
+            <button onClick={() => setTokenDismissed(true)} className="p-1.5 text-slate-500 hover:text-slate-300">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Linhas de erro */}
-          {errorLogs.slice(0, 5).map((log) => {
-            const result = reprocessResults.find(r => r.logId === log.id);
-            return (
-              <div key={log.id}
-                className={`flex items-start gap-2.5 p-2 rounded-lg text-xs transition-colors
-                  ${selected.has(log.id) ? 'bg-white/5' : 'bg-transparent'}
-                  ${result?.ok ? 'border border-emerald-500/20' : result ? 'border border-red-500/20' : ''}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(log.id)}
-                  onChange={() => toggleSelect(log.id)}
-                  className="w-3.5 h-3.5 mt-0.5 rounded accent-red-400 cursor-pointer flex-shrink-0"
-                />
-                <div className="flex-1 min-w-0 space-y-0.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-slate-500 font-mono">{timeAgo(log.started_at || log.created_date)}</span>
-                    <span className="text-slate-300 font-semibold uppercase tracking-wide">{log.operation}</span>
-                    {result && (
-                      <span className={`font-semibold ${result.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {result.ok ? '✓ OK' : `✗ ${result.message}`}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-red-400 truncate">{log.error_message || 'Erro desconhecido'}</p>
-                </div>
+      {showSyncBanner && (
+        <div className={`rounded-xl border px-4 py-3 ${cfg.bg}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Icon className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} />
+              <div className="min-w-0">
+                <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
+                {lastSuccess ? (
+                  <span className="ml-2 text-xs text-slate-500">
+                    Último sync OK: {timeAgo(lastSuccess.started_at || lastSuccess.created_date)}
+                  </span>
+                ) : (
+                  <span className="ml-2 text-xs text-slate-500">Nenhum sync bem-sucedido encontrado</span>
+                )}
               </div>
-            );
-          })}
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {errorLogs.length > 0 && (
+                <button
+                  onClick={() => { setExpanded(v => !v); setReprocessResults([]); }}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
+                >
+                  {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                  {errorLogs.length} erro{errorLogs.length > 1 ? 's' : ''}
+                </button>
+              )}
+              <button onClick={loadStatus} title="Verificar novamente"
+                className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => setDismissed(true)} title="Dispensar"
+                className="p-1.5 text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {expanded && errorLogs.length > 0 && (
+            <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 rounded accent-red-400 cursor-pointer"
+                  />
+                  <span className="text-xs text-slate-400">
+                    {allSelected ? 'Desmarcar todos' : 'Selecionar todos'}
+                  </span>
+                </label>
+
+                <button
+                  onClick={reprocessSelected}
+                  disabled={selected.size === 0 || reprocessing}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {reprocessing
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Reprocessando...</>
+                    : <><Play className="w-3 h-3" /> Reprocessar Selecionados ({selected.size})</>
+                  }
+                </button>
+              </div>
+
+              {errorLogs.slice(0, 5).map((log) => {
+                const result = reprocessResults.find(r => r.logId === log.id);
+                return (
+                  <div key={log.id}
+                    className={`flex items-start gap-2.5 p-2 rounded-lg text-xs transition-colors
+                      ${selected.has(log.id) ? 'bg-white/5' : 'bg-transparent'}
+                      ${result?.ok ? 'border border-emerald-500/20' : result ? 'border border-red-500/20' : ''}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(log.id)}
+                      onChange={() => toggleSelect(log.id)}
+                      className="w-3.5 h-3.5 mt-0.5 rounded accent-red-400 cursor-pointer flex-shrink-0"
+                    />
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-slate-500 font-mono">{timeAgo(log.started_at || log.created_date)}</span>
+                        <span className="text-slate-300 font-semibold uppercase tracking-wide">{log.operation}</span>
+                        {result && (
+                          <span className={`font-semibold ${result.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {result.ok ? '✓ OK' : `✗ ${result.message}`}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-red-400 truncate">{log.error_message || 'Erro desconhecido'}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
