@@ -1,0 +1,117 @@
+{
+  "name": "MLModelVersion",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "insufficient_data",
+        "learning",
+        "testing",
+        "validated",
+        "production",
+        "superseded",
+        "rolled_back"
+      ],
+      "default": "learning"
+    },
+    "readiness_score": {
+      "type": "number",
+      "default": 0
+    },
+    "training_date": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "total_candidates": {
+      "type": "number",
+      "default": 0
+    },
+    "total_approved": {
+      "type": "number",
+      "default": 0
+    },
+    "total_created": {
+      "type": "number",
+      "default": 0
+    },
+    "total_with_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "precision": {
+      "type": "number",
+      "default": 0
+    },
+    "recall": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_prediction_accuracy": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_prediction_error": {
+      "type": "number",
+      "default": 0
+    },
+    "roas_prediction_error": {
+      "type": "number",
+      "default": 0
+    },
+    "false_positive_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_generated": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_saved": {
+      "type": "number",
+      "default": 0
+    },
+    "weights_json": {
+      "type": "string"
+    },
+    "thresholds_json": {
+      "type": "string"
+    },
+    "training_records": {
+      "type": "number",
+      "default": 0
+    },
+    "training_products": {
+      "type": "number",
+      "default": 0
+    },
+    "training_campaigns": {
+      "type": "number",
+      "default": 0
+    },
+    "training_search_terms": {
+      "type": "number",
+      "default": 0
+    },
+    "notes": {
+      "type": "string"
+    },
+    "previous_version_id": {
+      "type": "string"
+    },
+    "rollback_available": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "version"
+  ]
+}

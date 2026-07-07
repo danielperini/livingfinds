@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Book, AlertTriangle, BookOpen, RefreshCw, ListTodo, TrendingDown
+  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Book, AlertTriangle, BookOpen, RefreshCw, ListTodo, TrendingDown, Brain
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -18,6 +18,7 @@ const navItems = [
   { path: '/inventory', icon: Package, label: 'Estoque e vendas' },
   { path: '/bids-log', icon: FileText, label: 'Histórico de lances' },
   { path: '/term-bank', icon: BookOpen, label: 'Banco de termos' },
+  { path: '/keyword-ml', icon: Brain, label: 'ML Alta Conversão' },
   { path: '/alerts', icon: AlertTriangle, label: 'Alertas' },
   { path: '/manual', icon: Book, label: 'Manual' },
   { path: '/integracoes/amazon', icon: Link2, label: 'Integração com a Amazon' },

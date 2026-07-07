@@ -1,0 +1,239 @@
+{
+  "name": "KeywordPrediction",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "EXACT",
+        "PHRASE",
+        "BROAD"
+      ],
+      "default": "EXACT"
+    },
+    "source": {
+      "type": "string"
+    },
+    "model_version": {
+      "type": "string"
+    },
+    "tail_type": {
+      "type": "string",
+      "enum": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "default": "medium"
+    },
+    "word_count": {
+      "type": "number",
+      "default": 0
+    },
+    "relevance_score": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_probability": {
+      "type": "number",
+      "default": 0
+    },
+    "keyword_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "data_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "recommended_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "reason": {
+      "type": "string"
+    },
+    "recommended_action": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "scored",
+        "approved",
+        "experimental",
+        "rejected",
+        "created",
+        "monitoring",
+        "successful",
+        "underperforming",
+        "blocked",
+        "expired",
+        "duplicate"
+      ],
+      "default": "candidate"
+    },
+    "features_json": {
+      "type": "string"
+    },
+    "historical_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "negative_keyword_conflict": {
+      "type": "boolean",
+      "default": false
+    },
+    "duplicate_keyword": {
+      "type": "boolean",
+      "default": false
+    },
+    "policy_valid": {
+      "type": "boolean",
+      "default": true
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_keyword_id": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actual_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "prediction_error": {
+      "type": "number",
+      "default": 0
+    },
+    "outcome_status": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "keyword"
+  ]
+}
