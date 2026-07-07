@@ -151,9 +151,37 @@ export default function TermBankPageV2() {
         base44.entities.KeywordSuggestion.filter({ amazon_account_id: account.id }, '-created_at', 300),
         base44.entities.Product.filter({ amazon_account_id: account.id }, '-updated_at', 200),
       ]);
-      setTerms(t);
-      setSuggestions(s.filter((x) => x.status !== 'rejected' && x.deleted_by_user !== true));
-      setProducts(p);
+      // Produtos com estoque ativo
+      const activeProducts = p.filter(prod =>
+        (prod.status === 'active') &&
+        (Number(prod.fba_inventory ?? prod.fba_quantity ?? 0) > 0 ||
+         prod.inventory_status === 'in_stock' ||
+         prod.inventory_status === 'available' ||
+         prod.inventory_status === null || prod.inventory_status === undefined)
+      );
+      const activeAsins = new Set(activeProducts.map(prod => prod.asin).filter(Boolean));
+
+      // Remover termos truncados
+      const isTruncated = (kw) => {
+        if (!kw) return false;
+        const k = kw.trim();
+        if (/\.{2,}$|:\s*$/.test(k)) return true;
+        const lastWord = k.split(/\s+/).pop() || '';
+        const allowedShort = new Set(['de','do','da','em','no','na','ao','os','as','e','a','o']);
+        return lastWord.length <= 2 && !allowedShort.has(lastWord.toLowerCase());
+      };
+
+      setTerms(t.filter(term =>
+        !isTruncated(term.term) &&
+        (!term.asin || activeAsins.has(term.asin))
+      ));
+      setSuggestions(s.filter((x) =>
+        x.status !== 'rejected' &&
+        x.deleted_by_user !== true &&
+        !isTruncated(x.keyword) &&
+        (!x.asin || activeAsins.has(x.asin))
+      ));
+      setProducts(activeProducts);
     } finally {
       setLoading(false);
     }

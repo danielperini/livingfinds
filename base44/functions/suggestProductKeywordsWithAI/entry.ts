@@ -82,6 +82,20 @@ function calcBid({ stCpc, stAcos, stConvRate, avgCpc, price, targetAcos, minBid,
   };
 }
 
+// ── Detectar termos truncados (palavras cortadas com '..', '::', limite de char) ─
+function isTruncated(keyword: string): boolean {
+  if (!keyword) return false;
+  const k = keyword.trim();
+  // Termina com '..', '...', ':' ou tem palavras com menos de 2 chars no final
+  if (/\.{2,}$|:\s*$/.test(k)) return true;
+  // Palavra final muito curta (≤2 chars) que não é uma preposição conhecida
+  const shortEndings = /\s[a-z]{1,2}$/;
+  const allowedShort = new Set(['de', 'do', 'da', 'em', 'no', 'na', 'ao', 'os', 'as', 'e', 'a', 'o']);
+  const lastWord = k.split(/\s+/).pop() || '';
+  if (lastWord.length <= 2 && !allowedShort.has(lastWord.toLowerCase())) return true;
+  return false;
+}
+
 // ── Extração determinística de N-grams do título ──────────────────────────────
 function extractTitleNgrams(title: string): string[] {
   const stopWords = new Set([
@@ -235,12 +249,17 @@ Deno.serve(async (request) => {
     const productStatus = String(product.status || eventProduct?.status || '').toLowerCase();
     const fbaInventory = Number(product.fba_inventory ?? product.fba_quantity ?? 0);
     const inventoryStatus = String(product.inventory_status || eventProduct?.inventory_status || '').toLowerCase();
+    const hasStock = fbaInventory > 0 || inventoryStatus === 'in_stock' || inventoryStatus === 'available';
 
-    // force_ai = geração manual via TermBank — não bloquear por estoque (sugestões são independentes de stock)
-    // Automação/sync: bloquear apenas produtos inativos (archived/inactive), não por falta de estoque
+    // Bloquear produtos inativos
     if (!forceAI && productStatus !== 'active') {
       await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId, stage, message: 'Produto ignorado: inativo.', details: { skipped: true } });
       return Response.json({ ok: true, skipped: true, asin, reason: 'product not active' });
+    }
+    // Bloquear produtos sem estoque (geração automática). force_ai manual ainda gera mas avisa.
+    if (!forceAI && !hasStock && fbaInventory === 0) {
+      await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId, stage, message: 'Produto ignorado: sem estoque.', details: { skipped: true, fba_inventory: fbaInventory } });
+      return Response.json({ ok: true, skipped: true, asin, reason: 'out_of_stock' });
     }
 
     // ── Resolver conta ────────────────────────────────────────────────────────
@@ -322,6 +341,8 @@ Deno.serve(async (request) => {
     const addSuggestion = (keyword: string, tailType: string, intent: string, relevance: number, confidence: number, reason: string, sourceMetricTerm?: string) => {
       const kw = keyword.toLowerCase().trim();
       if (!kw || kw.length < 4) return;
+      // Rejeitar termos truncados
+      if (isTruncated(kw)) return;
       if (negativeTexts.some((n) => isSimilar(n, kw))) return;
       if (existingKeywordTexts.some((e) => isSimilar(e, kw))) return;
       const normalized = norm(kw);
@@ -398,16 +419,23 @@ Deno.serve(async (request) => {
       // ── MODO DETERMINÍSTICO: zero créditos de IA ───────────────────────────
       stage = 'deterministic_generation';
 
-      // 1. Search terms já convertidos (melhor fonte — intenção de compra confirmada)
+      // 1. Search terms já convertidos — score dinâmico por conversão e cauda
       for (const metric of searchTermMetrics) {
         if (metric.orders < 1) continue;
-        const confidence = Math.min(0.95, 0.65 + metric.orders * 0.08);
+        if (isTruncated(metric.term)) continue;
         const words = metric.term.split(' ').length;
-        const tailType = words >= 4 ? 'long' : 'medium';
+        // Cauda média (2-3 palavras): priorizar alta conversão e volume
+        // Cauda longa (4+): priorizar menor acos e intenção de compra confirmada
+        const isMedium = words >= 2 && words <= 3;
+        const tailType = isMedium ? 'medium' : 'long';
+        // Score de relevância: médio ganha bônus por volume de conversão
+        const convBonus = Math.min(0.10, metric.orders * 0.02);
+        const relevance = isMedium ? Math.min(0.98, 0.90 + convBonus) : Math.min(0.95, 0.85 + convBonus);
+        const confidence = Math.min(0.97, 0.65 + metric.orders * 0.08 + (metric.conv_rate > 0.10 ? 0.10 : 0));
         addSuggestion(
           metric.term, tailType, 'high_purchase_intent',
-          0.95, confidence,
-          `Search term convertido: ${metric.orders} pedido(s), CPC R$${metric.cpc.toFixed(2)}`,
+          relevance, confidence,
+          `Convertido: ${metric.orders} pedido(s), taxa ${(metric.conv_rate * 100).toFixed(1)}%, CPC R$${metric.cpc.toFixed(2)}`,
         );
       }
 

@@ -71,10 +71,26 @@ export default function SuggestionsPanel({ suggestions, products, workingId, onR
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <span className="text-xs font-semibold text-violet-400">
-                      {Math.round((s.confidence || s.relevance_score || 0) * 100)}%
-                    </span>
-                    <p className="text-[10px] text-slate-500 mt-0.5">{s.match_type || 'exact'}</p>
+                   <span className="text-xs font-semibold text-violet-400">
+                     {Math.round((s.confidence || s.relevance_score || 0) * 100)}%
+                   </span>
+                   <div className="flex items-center gap-1 mt-1 flex-wrap">
+                     {s.tail_type === 'medium' && (
+                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/25 text-amber-400">
+                         cauda média
+                       </span>
+                     )}
+                     {s.tail_type === 'long' && (
+                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 border border-blue-500/25 text-blue-400">
+                         cauda longa
+                       </span>
+                     )}
+                     {s.intent === 'high_purchase_intent' && (
+                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                         alta conversão
+                       </span>
+                     )}
+                   </div>
                   </td>
                   <td className="px-4 py-3">
                     {campStatus ? (
