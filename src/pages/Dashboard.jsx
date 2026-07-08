@@ -426,9 +426,9 @@ export default function Dashboard() {
               ? <><span className="text-emerald-400/80">{campaigns.length} campanhas</span> · {active_count} ativas · {products.length} produtos</>
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
             {lastSyncInfo && (
-              <span className="flex items-center gap-1 text-slate-600">
+              <span className="flex items-center gap-1 text-slate-500 ml-1">
                 · <Clock className="w-3 h-3" />
-                {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                Atualizado em {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
           </p>
@@ -858,10 +858,9 @@ export default function Dashboard() {
               <p className="text-xl font-bold text-white">{totalChanges}</p>
             </div>
             <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Último sync</p>
-              <p className="text-sm font-semibold text-slate-300">
-                {lastSyncInfo ? new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-              </p>
+              <p className="text-[10px] text-slate-500 mb-1">Alterações automáticas</p>
+              <p className="text-xl font-bold text-white">{totalChanges}</p>
+              <p className="text-[10px] text-slate-600 mt-0.5">últimos 30 dias</p>
             </div>
           </div>
         </div>

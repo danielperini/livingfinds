@@ -171,12 +171,8 @@ export default function SyncStatusBanner({ accountId }) {
               <Icon className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} />
               <div className="min-w-0">
                 <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
-                {lastSuccess ? (
-                  <span className="ml-2 text-xs text-slate-500">
-                    Último sync OK: {timeAgo(lastSuccess.started_at || lastSuccess.created_date)}
-                  </span>
-                ) : (
-                  <span className="ml-2 text-xs text-slate-500">Nenhum sync bem-sucedido encontrado</span>
+                {status === 'rate_limit' && (
+                  <span className="ml-2 text-xs text-slate-500">Detalhes na Sala de Controle</span>
                 )}
               </div>
             </div>
