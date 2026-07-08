@@ -93,6 +93,48 @@ const STOCK_RULES = [
   },
 ];
 
+// ── Regras nativas de ACoS por produto (30 dias) ─────────────────────────────
+// Calculam o ACoS real por ASIN (spend ads / vendas ads 30d) e comparam com a
+// meta global (AutopilotConfig.target_acos). Ajustam bid proporcionalmente.
+//
+//   ACoS real >> meta (+50%+)  → reduzir bid 15% — produto gastando demais
+//   ACoS real >  meta (+20–50%) → reduzir bid 8% — acima da meta
+//   ACoS real <  meta (-30%–)  → aumentar bid 8% — espaço para crescer
+//   Zona neutra (±20%)          → sem ação
+//
+// Requisitos mínimos: ≥10 cliques E ≥R$5 de spend nos últimos 30d.
+// Cooldown: 72h para evitar oscilação excessiva.
+
+const ACOS_RULES = [
+  {
+    rule_key: 'acos_way_above_target',
+    label: 'ACoS muito acima da meta (>50%) — reduzir bid 15%',
+    cooldown_hours: 72,
+    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.acos_30d > d.target_acos * 1.5,
+    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.85),
+    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_30d / d.target_acos - 1) * 100)}%). Bid reduzido 15%.`,
+    is_boost: false,
+  },
+  {
+    rule_key: 'acos_above_target',
+    label: 'ACoS acima da meta (20–50%) — reduzir bid 8%',
+    cooldown_hours: 72,
+    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.acos_30d > d.target_acos * 1.2 && d.acos_30d <= d.target_acos * 1.5,
+    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.92),
+    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_30d / d.target_acos - 1) * 100)}%). Bid reduzido 8%.`,
+    is_boost: false,
+  },
+  {
+    rule_key: 'acos_below_target',
+    label: 'ACoS abaixo da meta (>30% abaixo) — aumentar bid 8%',
+    cooldown_hours: 72,
+    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.sales_30d > 0 && d.acos_30d < d.target_acos * 0.7,
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.08),
+    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (-${Math.round((1 - d.acos_30d / d.target_acos) * 100)}%). Há espaço para crescer. Bid aumentado 8%.`,
+    is_boost: true,
+  },
+];
+
 function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
 function evaluateCondition(cond, entity) {
@@ -453,7 +495,7 @@ Deno.serve(async (req) => {
 
     const actionsToEnqueue = [];
     const conflicts = [];
-    const stats = { evaluated: 0, matched: 0, skipped_cooldown: 0, skipped_dup: 0, skipped_stock: 0, skipped_seasonal: 0, enqueued: 0, stock_rules_applied: 0 };
+    const stats = { evaluated: 0, matched: 0, skipped_cooldown: 0, skipped_dup: 0, skipped_stock: 0, skipped_seasonal: 0, enqueued: 0, stock_rules_applied: 0, acos_rules_applied: 0 };
     const entityChangedThisCycle = new Map();
     const scopedEntities = { keyword: keywords, campaign: campaigns };
 
@@ -538,7 +580,99 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 7b. Regras externas do banco de dados (opcional — roda mesmo se vazio) ──
+    // ── 7b. Regras nativas de ACoS por ASIN (30 dias) ────────────────────────
+    // Carrega AutopilotConfig para obter target_acos global
+    const apConfigs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []);
+    const globalTargetAcos = (apConfigs[0]?.target_acos) || 0;
+
+    // Agregar métricas de ads por ASIN nos últimos 30 dias (de CampaignMetricsDaily)
+    const adMetricsByAsin = new Map(); // asin → { spend, sales, clicks, orders }
+    for (const m of metricsRaw) {
+      if (!m.campaign_id) continue;
+      const asin = campaignAsinMap.get(m.campaign_id) || null;
+      if (!asin) continue;
+      if (!adMetricsByAsin.has(asin)) adMetricsByAsin.set(asin, { spend: 0, sales: 0, clicks: 0, orders: 0 });
+      const a = adMetricsByAsin.get(asin);
+      a.spend += m.spend || 0;
+      a.sales += m.sales || 0;
+      a.clicks += m.clicks || 0;
+      a.orders += m.orders || 0;
+    }
+
+    if (globalTargetAcos > 0) {
+      for (const kw of keywords) {
+        const entityId = kw.keyword_id || kw.id;
+        if (!entityId) continue;
+
+        // Pular keywords que já receberam ação de estoque neste ciclo
+        if (entityChangedThisCycle.has(entityId)) continue;
+
+        const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
+        if (!resolvedAsin) continue;
+
+        const adMetrics = adMetricsByAsin.get(resolvedAsin);
+        if (!adMetrics) continue;
+
+        const acos30d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
+
+        const entityData = {
+          current_bid: kw.current_bid || kw.bid || 0.25,
+          acos_30d: acos30d,
+          target_acos: globalTargetAcos,
+          spend_30d: adMetrics.spend,
+          sales_30d: adMetrics.sales,
+          clicks_30d: adMetrics.clicks,
+        };
+
+        for (const ar of ACOS_RULES) {
+          if (!ar.matches(entityData)) continue;
+
+          // Guardrail sazonal para boost
+          if (ar.is_boost) {
+            if (seasonalCtx.is_low_demand) continue;
+            const product = productMap.get(resolvedAsin);
+            if (seasonalCtx.is_holiday && !salesMetricsByAsin.get(resolvedAsin)?.has_real_sales) continue;
+            if (product?.inventory_status === 'out_of_stock') continue;
+          }
+
+          // Cooldown
+          const lastExecAR = lastExecByRuleEntity.get(`${ar.rule_key}|${entityId}`);
+          if (lastExecAR) {
+            const lastTs = lastExecAR.created_date || lastExecAR.executed_at;
+            if (lastTs && (Date.now() - new Date(lastTs).getTime()) / 3600000 < ar.cooldown_hours) continue;
+          }
+
+          const iKey = `acos|${aid}|${ar.rule_key}|${entityId}|${today}`;
+          if (usedIdemKeys.has(iKey)) continue;
+
+          const newBid = ar.action(entityData);
+          actionsToEnqueue.push({
+            amazon_account_id: aid,
+            correlation_id: correlationId,
+            rule_key: ar.rule_key,
+            rule_version: 1,
+            entity_type: 'keyword',
+            entity_id: entityId,
+            campaign_id: kw.campaign_id,
+            keyword_id: kw.keyword_id,
+            asin: resolvedAsin,
+            action_type: 'set_bid',
+            value_before: entityData.current_bid,
+            value_after: newBid,
+            idempotency_key: iKey,
+            status: 'pending',
+            seasonal_context: seasonalPayload,
+            reason: ar.reason_fn(entityData),
+          });
+          entityChangedThisCycle.set(entityId, ar.rule_key);
+          stats.acos_rules_applied++;
+          stats.enqueued++;
+          break; // uma regra de ACoS por keyword por ciclo
+        }
+      }
+    }
+
+    // ── 7c. Regras externas do banco de dados (opcional — roda mesmo se vazio) ──
     for (const rule of activeRules) {
       const entities = scopedEntities[rule.scope] || [];
 
@@ -696,6 +830,7 @@ Deno.serve(async (req) => {
       seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
       sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
       stock_rules: { applied: stats.stock_rules_applied },
+      acos_rules: { applied: stats.acos_rules_applied, target_acos_used: globalTargetAcos },
       stats,
       conflicts_resolved: conflicts.length,
       actions_enqueued: actionsToEnqueue.length,
