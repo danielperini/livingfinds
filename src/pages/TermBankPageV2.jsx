@@ -223,25 +223,23 @@ export default function TermBankPageV2() {
       ]);
       const activeProducts = p.filter(prod =>
         prod.status === 'active' &&
-        (Number(prod.fba_inventory ?? prod.fba_quantity ?? 0) > 0 ||
-         prod.inventory_status === 'in_stock' ||
-         prod.inventory_status === 'available' ||
-         prod.inventory_status == null)
+        prod.inventory_status !== 'out_of_stock' &&
+        Number(prod.fba_inventory ?? prod.fba_quantity ?? 0) > 0
       );
       const activeAsins = new Set(activeProducts.map(prod => prod.asin).filter(Boolean));
 
-      // TermBank: ordenar por confidence desc
+      // TermBank: apenas termos com ASIN ativo e com estoque
       const validTerms = t
-        .filter(term => !isTermIncomplete(term.term) && (!term.asin || activeAsins.has(term.asin)))
+        .filter(term => !isTermIncomplete(term.term) && term.asin && activeAsins.has(term.asin))
         .sort((a, b) => toConf100(b.confidence) - toConf100(a.confidence));
       setTerms(validTerms);
 
-      // Sugestões: filtrar rejeitadas, incompletas e baixa confiança
+      // Sugestões: filtrar rejeitadas, incompletas e sem ASIN ativo
       setSuggestions(s.filter(x =>
         x.status !== 'rejected' &&
         x.deleted_by_user !== true &&
         !isTermIncomplete(x.keyword) &&
-        (!x.asin || activeAsins.has(x.asin))
+        x.asin && activeAsins.has(x.asin)
       ));
       setProducts(activeProducts);
     } catch (e) {
