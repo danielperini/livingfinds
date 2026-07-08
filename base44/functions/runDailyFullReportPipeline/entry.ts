@@ -222,8 +222,8 @@ Deno.serve(async (req) => {
     // Relatórios Amazon Ads raramente ficam prontos antes de 20 min.
     // Estratégia: esperar 20 min fixos antes do PRIMEIRO poll (economiza ~20 chamadas
     // desnecessárias), depois checar a cada 30s por até 10 min adicionais.
-    console.log('[Pipeline] Fase 2: aguardando 20 min antes do primeiro poll (padrão Amazon)...');
-    await sleep(20 * 60 * 1000); // 20 min — janela mínima real da Amazon
+    console.log('[Pipeline] Fase 2: aguardando 30 min antes do primeiro poll (padrão Amazon)...');
+    await sleep(30 * 60 * 1000); // 30 min — janela mínima real da Amazon
 
     let ready: { key: string; url: string }[] = [];
     const pendingIds = { ...reportIds };
