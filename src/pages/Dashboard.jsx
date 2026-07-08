@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { Link } from 'react-router-dom';
 import {
-  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  ComposedChart, AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import {
@@ -39,6 +39,19 @@ function safe(v, d = 2) {
 function fmt(v) { return v !== null && v !== undefined && isFinite(v) && !isNaN(v) ? v : 0; }
 function fmtBRL(v) { return `R$${fmt(v).toFixed(2)}`; }
 function fmtPct(v) { return `${fmt(v).toFixed(1)}%`; }
+
+// Converte YYYY-MM-DD → DD/MM
+function fmtDateBR(isoDate) {
+  if (!isoDate) return '';
+  const [, m, d] = isoDate.split('-');
+  return `${d}/${m}`;
+}
+// Converte YYYY-MM-DD → DD/MM/YYYY
+function fmtDateBRFull(isoDate) {
+  if (!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
 
 // ─── Deduplicar métricas ────────────────────────────────────────────────────
 
@@ -341,7 +354,7 @@ export default function Dashboard() {
       const syncStr = lastSyncAt
         ? `sync ${new Date(lastSyncAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
         : '';
-      label = `Relatório atualizado · ${datesWithData.size} dias · dados até ${lastDate}${syncStr ? ` · ${syncStr}` : ''}`;
+      label = `Relatório atualizado · ${datesWithData.size} dias · dados até ${fmtDateBRFull(lastDate)}${syncStr ? ` · ${syncStr}` : ''}`;
     } else {
       // Sync antigo E gap grande — aí sim é desatualizado
       source = 'stale'; quality = 'low';
@@ -410,21 +423,23 @@ export default function Dashboard() {
       const day = new Date(firstDay); day.setDate(firstDay.getDate() + i);
       const key = dateKey(day);
       if (key >= today.toISOString().slice(0, 10)) return null;
-      return { date: key.slice(5), alterações: counts.get(key) || 0 };
+      return { date: fmtDateBR(key), alterações: counts.get(key) || 0 };
     }).filter(Boolean);
   }, [bidChanges]);
 
   const totalChanges = useMemo(() => aiChangesChart.reduce((s, d) => s + d.alterações, 0), [aiChangesChart]);
 
-  // ─── Gráfico: Impressões diárias ──────────────────────────────────────────
+  // ─── Gráfico: Consolidado Gasto + Vendas + Impressões ────────────────────
 
-  const impressionsChart = useMemo(() => {
+  const consolidatedChart = useMemo(() => {
     const byDate = {};
     for (const m of periodMetrics) {
       if (!m.date) continue;
-      if (!byDate[m.date]) byDate[m.date] = { date: m.date.slice(5), impressões: 0, cliques: 0 };
+      const label = fmtDateBR(m.date);
+      if (!byDate[m.date]) byDate[m.date] = { date: label, gasto: 0, vendas: 0, impressões: 0 };
+      byDate[m.date].gasto += m.spend || 0;
+      byDate[m.date].vendas += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
-      byDate[m.date].cliques += m.clicks || 0;
     }
     return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
   }, [periodMetrics]);
@@ -535,56 +550,60 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── 3. EVOLUÇÃO OPERACIONAL ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Alterações da IA por dia */}
+      {/* ── 3. GRÁFICO CONSOLIDADO: Gasto · Vendas · Impressões ─────────────── */}
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+          <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Impressões</h2>
+          <div className="flex items-center gap-3 text-[10px]">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas: {fmtBRL(kpis.sales)}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+          </div>
+        </div>
+        <p className="text-[10px] text-slate-500 mb-4">{periodLabel} · dados do relatório Amazon</p>
+        {loading ? (
+          <div className="h-44 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
+        ) : consolidatedChart.length === 0 ? (
+          <div className="h-44 flex items-center justify-center text-xs text-slate-600">Sem dados no período. Execute sync para obter o relatório.</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={180}>
+            <ComposedChart data={consolidatedChart}>
+              <defs>
+                <linearGradient id="gGasto" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
+                <linearGradient id="gVendas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.3} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="brl" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.35} radius={[2, 2, 0, 0]} />
+              <Area yAxisId="brl" type="monotone" dataKey="vendas" name="Vendas" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
+              <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* ── 3b. ALTERAÇÕES DA IA (compacto) ──────────────────────────────────── */}
+      {!loading && aiChangesChart.length > 0 && totalChanges > 0 && (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-1">
             <h2 className="text-sm font-semibold text-slate-300">Alterações da IA por dia</h2>
-            <span className="text-xs font-bold text-amber-400">{totalChanges} total</span>
+            <span className="text-xs font-bold text-amber-400">{totalChanges} total · 30 dias</span>
           </div>
-          <p className="text-[10px] text-slate-500 mb-4">Ações enviadas à Amazon — últimos 30 dias fechados</p>
-          {loading ? (
-            <div className="h-36 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
-          ) : aiChangesChart.length === 0 || totalChanges === 0 ? (
-            <div className="h-36 flex items-center justify-center text-xs text-slate-600">Nenhuma alteração registrada ainda.</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={150}>
-              <BarChart data={aiChangesChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="alterações" fill="#F59E0B" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
+          <p className="text-[10px] text-slate-500 mb-3">Ações de bid/orçamento enviadas à Amazon</p>
+          <ResponsiveContainer width="100%" height={100}>
+            <BarChart data={aiChangesChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+              <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} width={20} />
+              <Tooltip content={<ChartTooltip />} />
+              <Bar dataKey="alterações" fill="#F59E0B" radius={[2, 2, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
-
-        {/* Impressões diárias */}
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="text-sm font-semibold text-slate-300">Impressões diárias</h2>
-            <span className="text-xs font-bold text-violet-400">{kpis.impressions.toLocaleString('pt-BR')}</span>
-          </div>
-          <p className="text-[10px] text-slate-500 mb-4">Alcance dos anúncios — {periodLabel}</p>
-          {loading ? (
-            <div className="h-36 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
-          ) : impressionsChart.length === 0 ? (
-            <div className="h-36 flex items-center justify-center text-xs text-slate-600">Sem dados de impressões. Execute sync quando o relatório estiver vencido.</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={150}>
-              <BarChart data={impressionsChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="impressões" fill="#8B5CF6" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
@@ -657,36 +676,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* ── 5. GRÁFICO GASTO VS VENDAS ───────────────────────────────────────── */}
-      {!loading && periodMetrics.length > 0 && (() => {
-        const byDate = {};
-        for (const m of periodMetrics) {
-          if (!m.date) continue;
-          if (!byDate[m.date]) byDate[m.date] = { date: m.date.slice(5), gasto: 0, vendas: 0 };
-          byDate[m.date].gasto += m.spend || 0;
-          byDate[m.date].vendas += m.sales || 0;
-        }
-        const chartData = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-        return (
-          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-slate-300 mb-4">Gasto vs Vendas — {periodLabel}</h2>
-            <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="gV" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
-                  <linearGradient id="gG" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="vendas" name="Vendas" stroke="#10B981" fill="url(#gV)" strokeWidth={2} />
-                <Area type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gG)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        );
-      })()}
+
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
       {!loading && (
@@ -721,18 +711,7 @@ export default function Dashboard() {
                 })}
               </div>
             )}
-            {/* Totais acumulados das campanhas (complemento quando relatório diário está defasado) */}
-            {campAggregated.spend > 0 && (
-              <div className="mt-3 pt-3 border-t border-surface-2">
-                <p className="text-[10px] text-slate-500 mb-1.5">Acumulado nas campanhas (inclui dias sem relatório)</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div><p className="text-[10px] text-slate-500">Gasto total</p><p className="text-xs font-bold text-cyan">R${campAggregated.spend.toFixed(2)}</p></div>
-                  <div><p className="text-[10px] text-slate-500">Vendas total</p><p className="text-xs font-bold text-emerald-400">R${campAggregated.sales.toFixed(2)}</p></div>
-                  <div><p className="text-[10px] text-slate-500">Pedidos</p><p className="text-xs font-bold text-white">{campAggregated.orders}</p></div>
-                  <div><p className="text-[10px] text-slate-500">ACoS geral</p><p className="text-xs font-bold text-amber-400">{campAggregated.sales > 0 ? (campAggregated.spend / campAggregated.sales * 100).toFixed(1) : '—'}%</p></div>
-                </div>
-              </div>
-            )}
+
           </div>
 
           {/* Estoque e saúde dos produtos */}
