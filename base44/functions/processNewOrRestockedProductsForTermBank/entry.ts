@@ -593,7 +593,18 @@ Deno.serve(async (req) => {
     await base44.asServiceRole.entities.NewProductTermBankRun.update(runRecord.id, {
       finished_at: finishedAt,
       status: runStatus,
-      ...stats,
+      products_scanned: stats.products_scanned,
+      new_products_found: stats.new_products_found,
+      restocked_products_found: stats.restocked_products_found,
+      products_processed: stats.products_processed,
+      terms_generated: stats.terms_generated,
+      terms_created: stats.terms_created,
+      terms_updated: stats.terms_updated,
+      terms_rejected: stats.terms_rejected,
+      ai_calls_used: stats.ai_calls_used,
+      fallback_used: stats.fallback_used,
+      products_skipped: stats.products_skipped,
+      errors: stats.errors.slice(0, 20),
     });
 
     return Response.json({
