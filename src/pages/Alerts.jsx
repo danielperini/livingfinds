@@ -3,7 +3,7 @@ import React from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   AlertTriangle, Bell, Check, Loader2, TrendingUp, TrendingDown,
-  DollarSign, Package, Eye, RefreshCw, Zap, XCircle, Filter
+  DollarSign, Package, Eye, RefreshCw, Zap, XCircle, Filter, Trash2
 } from 'lucide-react';
 
 const ALERT_CONFIG = {
@@ -60,6 +60,17 @@ export default function Alerts() {
     setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'acknowledged' } : a));
   };
 
+  const deleteAlert = async (id) => {
+    await base44.entities.Alert.delete(id);
+    setAlerts(prev => prev.filter(a => a.id !== id));
+  };
+
+  const deleteAllResolved = async () => {
+    const resolved = alerts.filter(a => a.status === 'resolved');
+    await Promise.all(resolved.map(a => base44.entities.Alert.delete(a.id)));
+    setAlerts(prev => prev.filter(a => a.status !== 'resolved'));
+  };
+
   const generateAlerts = async () => {
     if (!account) return;
     setGenerating(true);
@@ -114,6 +125,13 @@ export default function Alerts() {
             {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
             {generating ? 'Gerando...' : 'Gerar Alertas'}
           </button>
+          {alerts.filter(a => a.status === 'resolved').length > 0 && (
+            <button onClick={deleteAllResolved}
+              className="flex items-center gap-1.5 px-3 py-2 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 text-xs font-semibold rounded-lg transition-colors">
+              <Trash2 className="w-3.5 h-3.5" />
+              Limpar resolvidos ({alerts.filter(a => a.status === 'resolved').length})
+            </button>
+          )}
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -216,20 +234,24 @@ export default function Alerts() {
                         {a.created_at ? new Date(a.created_at).toLocaleDateString('pt-BR') : '—'}
                       </td>
                       <td className="px-4 py-3">
-                        {!isResolved && (
-                          <div className="flex items-center gap-1.5">
-                            {a.status === 'active' && (
-                              <button onClick={() => acknowledge(a.id)}
-                                className="p-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded-lg transition-colors" title="Reconhecer">
-                                <Eye className="w-3.5 h-3.5" />
-                              </button>
-                            )}
+                        <div className="flex items-center gap-1.5">
+                          {!isResolved && a.status === 'active' && (
+                            <button onClick={() => acknowledge(a.id)}
+                              className="p-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20 rounded-lg transition-colors" title="Reconhecer">
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {!isResolved && (
                             <button onClick={() => resolve(a.id)}
                               className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 rounded-lg transition-colors" title="Resolver">
                               <Check className="w-3.5 h-3.5" />
                             </button>
-                          </div>
-                        )}
+                          )}
+                          <button onClick={() => deleteAlert(a.id)}
+                            className="p-1.5 bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors" title="Deletar">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
