@@ -568,6 +568,22 @@ Deno.serve(async (req) => {
       summary.phases.decision_engine = { triggered: false, error: e.message };
     }
 
+    // ── FASE 9: Executar ações de bid geradas pelo motor determinístico ──────
+    console.log('[Pipeline] Fase 9: executando bids de estoque pendentes...');
+    try {
+      const bidRes = await base44.asServiceRole.functions.invoke('executeStockBidRules', {
+        amazon_account_id: aid,
+      });
+      summary.phases.stock_bid_execution = {
+        executed: bidRes?.executed || 0,
+        failed: bidRes?.failed || 0,
+        total_pending: bidRes?.total_pending || 0,
+      };
+    } catch (e: any) {
+      console.warn('[Pipeline] executeStockBidRules (não crítico):', e.message);
+      summary.phases.stock_bid_execution = { triggered: false, error: e.message };
+    }
+
     summary.duration_s = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log('[Pipeline] ✅ Concluído em', summary.duration_s, 's');
     return Response.json({ ok: true, summary });
