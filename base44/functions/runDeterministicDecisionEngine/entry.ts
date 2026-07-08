@@ -27,52 +27,69 @@ const CONFLICT_PRIORITY = {
 };
 
 // ── Regras nativas de estoque ────────────────────────────────────────────────
-// Executadas automaticamente independente do banco de regras (DecisionRule).
-// Prioridade máxima: sobrescrevem regras externas para o mesmo entity neste ciclo.
+// Executadas automaticamente em TODOS os ciclos, independente do banco de regras.
+// Prioridade máxima (priority: 2 = stock) — sobrescrevem regras externas para o
+// mesmo entity neste ciclo. Cooldown por chave de idempotência diária.
 //
-// Limites de cobertura (em dias de estoque disponível):
-//   CRÍTICO  : < 7  dias → pausar ads / reduzir bid agressivo
-//   BAIXO    : 7–21 dias → reduzir bid 10% (proteger estoque)
-//   SAUDÁVEL : 21–60 dias → manter (sem ação)
-//   ALTO     : 60–90 dias → aumentar bid 15% (acelerar giro)
-//   EXCESSO  : > 90 dias → aumentar bid 25% (liquidar aggressivo)
+// Classificação por dias de cobertura (estoque ÷ velocidade de venda):
+//   ZERADO   :   0 un  → bid mínimo (MIN_BID) — não anunciar sem produto
+//   CRÍTICO  : < 7 dias → reduzir bid 25% — preservar estoque residual
+//   BAIXO    : 7–21 dias → reduzir bid 10% — desacelerar saída
+//   SAUDÁVEL : 21–60 dias → sem ação (zona neutra)
+//   ALTO     : 60–90 dias → aumentar bid 10% — acelerar giro
+//   EXCESSO  : > 90 dias → aumentar bid 15% — liquidação agressiva
+//
+// Quando não há histórico de vendas (stockVelocity = 0), cobertura = 999 dias
+// mas o produto NÃO entra nas regras de boost — exige pelo menos 1 venda nos 30d.
 
 const STOCK_RULES = [
   {
+    rule_key: 'stock_zero',
+    label: 'Sem estoque — bid mínimo',
+    cooldown_hours: 24,
+    // Só atua se tem campanha ativa mas estoque zerado
+    matches: (d: any) => d.stock === 0,
+    action: (_d: any) => MIN_BID,
+    reason: 'Produto sem estoque. Bid reduzido ao mínimo para evitar gasto sem capacidade de venda.',
+    is_boost: false,
+  },
+  {
     rule_key: 'stock_critical_pause',
     label: 'Estoque crítico (< 7 dias) — reduzir bid 25%',
-    priority: 2,
     cooldown_hours: 48,
-    matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7 && d.stock_coverage_days > 0,
+    matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7,
     action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.75),
     reason: 'Estoque crítico: < 7 dias de cobertura. Bid reduzido 25% para proteger estoque.',
+    is_boost: false,
   },
   {
     rule_key: 'stock_low_reduce',
     label: 'Estoque baixo (7–21 dias) — reduzir bid 10%',
-    priority: 2,
     cooldown_hours: 48,
     matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 7 && d.stock_coverage_days < 21,
     action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.90),
     reason: 'Estoque baixo: 7–21 dias de cobertura. Bid reduzido 10% para proteger ritmo de vendas.',
+    is_boost: false,
   },
   {
     rule_key: 'stock_high_boost',
     label: 'Estoque alto (60–90 dias) — aumentar bid 10%',
-    priority: 2,
     cooldown_hours: 48,
-    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
+    // Exige velocidade de venda real para evitar boost em produto sem histórico
+    matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
     action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.10),
     reason: 'Estoque alto: 60–90 dias de cobertura. Bid aumentado 10% para acelerar giro.',
+    is_boost: true,
   },
   {
     rule_key: 'stock_excess_liquidate',
     label: 'Excesso de estoque (> 90 dias) — aumentar bid 15%',
-    priority: 2,
     cooldown_hours: 48,
-    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 90,
+    // Exige velocidade de venda real para evitar boost em produto sem histórico
+    matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 90,
     action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
     reason: 'Excesso de estoque: > 90 dias de cobertura. Bid aumentado 15% para liquidação agressiva.',
+    is_boost: true,
   },
 ];
 
@@ -281,9 +298,7 @@ Deno.serve(async (req) => {
       return true;
     }).sort((a, b) => (a.priority || 100) - (b.priority || 100));
 
-    if (activeRules.length === 0) {
-      return Response.json({ ok: true, message: 'Nenhuma regra ativa. Motor encerrado.', correlationId });
-    }
+    // Regras de estoque nativas rodam sempre — mesmo sem regras no banco.
 
     // ── 2. Dados em paralelo ──────────────────────────────────────────────
     const [keywords, campaigns, products, customSeasonalEvents, metricsRaw, salesDailyRaw] = await Promise.all([
@@ -473,19 +488,20 @@ Deno.serve(async (req) => {
       for (const sr of STOCK_RULES) {
         if (!sr.matches(entityData)) continue;
 
-        // Guardrail: não aumentar bid se produto sem estoque
-        if (stockQty === 0 && ['stock_high_boost', 'stock_excess_liquidate'].includes(sr.rule_key)) continue;
-
-        // Guardrail sazonal: não aumentar em baixa demanda
-        if (['stock_high_boost', 'stock_excess_liquidate'].includes(sr.rule_key)) {
-          if (seasonalCtx.is_low_demand || (seasonalCtx.is_holiday && !realSales.has_real_sales)) continue;
+        // Guardrail sazonal: não aumentar bid em baixa demanda ou feriado sem vendas
+        if (sr.is_boost) {
+          if (seasonalCtx.is_low_demand) continue;
+          if (seasonalCtx.is_holiday && !realSales.has_real_sales) continue;
         }
 
-        // Cooldown
+        // Cooldown — usa created_date (campo real do banco) com fallback para executed_at
         const lastExecSR = lastExecByRuleEntity.get(`${sr.rule_key}|${entityId}`);
-        if (lastExecSR?.executed_at) {
-          const hoursAgo = (Date.now() - new Date(lastExecSR.executed_at).getTime()) / 3600000;
-          if (hoursAgo < sr.cooldown_hours) continue;
+        if (lastExecSR) {
+          const lastTs = lastExecSR.created_date || lastExecSR.executed_at;
+          if (lastTs) {
+            const hoursAgo = (Date.now() - new Date(lastTs).getTime()) / 3600000;
+            if (hoursAgo < sr.cooldown_hours) continue;
+          }
         }
 
         const iKey = `stock|${aid}|${sr.rule_key}|${entityId}|${today}`;
@@ -522,7 +538,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 7b. Regras externas (banco de dados) ─────────────────────────────
+    // ── 7b. Regras externas do banco de dados (opcional — roda mesmo se vazio) ──
     for (const rule of activeRules) {
       const entities = scopedEntities[rule.scope] || [];
 
@@ -595,13 +611,16 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Guardrail cooldown
+        // Guardrail cooldown — usa created_date com fallback para executed_at
         const lastExec = lastExecByRuleEntity.get(`${rule.rule_key}|${entityId}`);
-        if (lastExec?.executed_at) {
-          const hoursAgo = (Date.now() - new Date(lastExec.executed_at).getTime()) / 3600000;
-          if (hoursAgo < (rule.cooldown_hours || 72)) {
-            stats.skipped_cooldown++;
-            continue;
+        if (lastExec) {
+          const lastTs = lastExec.created_date || lastExec.executed_at;
+          if (lastTs) {
+            const hoursAgo = (Date.now() - new Date(lastTs).getTime()) / 3600000;
+            if (hoursAgo < (rule.cooldown_hours || 72)) {
+              stats.skipped_cooldown++;
+              continue;
+            }
           }
         }
 
