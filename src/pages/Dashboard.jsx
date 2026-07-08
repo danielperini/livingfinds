@@ -211,7 +211,7 @@ export default function Dashboard() {
         safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300)),
         safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10)),
         safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5)),
-        safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500)),
+        safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 2000)),
         safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
         safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []),
         safe_(() => base44.entities.SellerPerformanceBenchmark.filter({ amazon_account_id: aid }, '-period_end', 5), []),
