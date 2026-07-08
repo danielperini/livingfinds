@@ -1,68 +1,34 @@
 /**
- * syncProductSalesMetrics — Busca métricas completas de vendas e tráfego via SP-API
- * 
- * Relatório: GET_SALES_AND_TRAFFIC_REPORT (Business Reports)
- * 
- * Métricas retornadas:
- * Vendas:
- * - orderedProductSales (vendas de produtos pedidos)
- * - unitsOrdered (unidades pedidas)
- * - orderItemCount (total de itens do pedido)
- * - averageSalesPerOrderItem (vendas médias por item)
- * - averageUnitsPerOrder (média de unidades por pedido)
- * - averagePrice (preço médio de venda)
- * 
- * Tráfego:
- * - pageViewsMobile (visualizações mobile)
- * - pageViewsDesktop (visualizações desktop)
- * - pageViewsTotal (visualizações total)
- * - sessionsMobile (sessões mobile)
- * - sessionsDesktop (sessões desktop)
- * - sessionsTotal (sessões total)
- * 
- * Conversão:
- * - buyBoxPercentage (porcentagem buy box)
- * - sessionItemOrderRatio (porcentagem sessão do item do pedido)
- * - unitSessionRatio (porcentagem sessão de unidade)
- * - offerCount (média de ofertas)
- * - parentItemCount (média de produtos parent)
- * 
- * Reembolsos:
- * - unitsRefunded (unidades reembolsadas)
- * - refundRate (tarifa de reembolso)
- * 
- * Avaliações:
- * - reviewsReceived (avaliações recebidas)
- * - negativeReviewsReceived (avaliações negativas)
- * - negativeReviewRate (índice negativas)
- * 
- * Reclamações:
- * - claimsGranted (reivindicações A-Z)
- * - claimsAmount (valor das reivindicações)
- * 
- * Envios:
- * - shippedProductSales (vendas de produtos enviados)
- * - unitsShipped (unidades enviadas)
- * - ordersShipped (pedidos enviados)
+ * syncProductSalesMetrics — Busca Business Report (GET_SALES_AND_TRAFFIC_REPORT) via SP-API
+ * e persiste dados diários na entidade SalesDaily.
+ *
+ * Fluxo:
+ * 1. Solicita relatório à SP-API
+ * 2. Aguarda processamento via polling (até 60s)
+ * 3. Baixa e parseia o TSV
+ * 4. Upsert de registros em SalesDaily por (amazon_account_id, asin, date)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-async function getSPApiToken(refreshToken) {
+async function getSPApiToken() {
+  const refreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN');
+  if (!refreshToken) throw new Error('Sem SP refresh token configurado (AMAZON_SP_REFRESH_TOKEN)');
+
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: Deno.env.get('SP_CLIENT_ID') || '',
-    client_secret: Deno.env.get('SP_CLIENT_SECRET') || '',
+    client_id: Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '',
+    client_secret: Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '',
   });
-  
+
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
   });
-  
+
   const data = await res.json();
-  if (!res.ok) throw new Error(`Token error: ${data.error_description || data.error}`);
+  if (!res.ok) throw new Error(`Token SP-API error: ${data.error_description || data.error}`);
   return data.access_token;
 }
 
@@ -73,6 +39,8 @@ function getSPApiBase(region) {
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -81,7 +49,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     let amazonAccountId = body.amazon_account_id;
-    
+
     if (!amazonAccountId) {
       const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-last_sync_at', 1);
       if (accounts.length === 0) return Response.json({ error: 'Nenhuma conta Amazon encontrada' }, { status: 404 });
@@ -91,188 +59,145 @@ Deno.serve(async (req) => {
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId);
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
 
-    const refreshToken = account.ads_refresh_token || Deno.env.get('SP_REFRESH_TOKEN');
-    if (!refreshToken) return Response.json({ error: 'Sem refresh token SP-API' }, { status: 400 });
-
-    const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'ATVPDKIKX0DER';
-    const sellerId = account.seller_id || Deno.env.get('AMAZON_SELLER_ID');
-    
-    const token = await getSPApiToken(refreshToken);
+    const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
     const spBase = getSPApiBase(account.region);
 
-    // Solicitar relatório GET_SALES_AND_TRAFFIC_REPORT (últimos 30 dias)
+    // Período: últimos 30 dias fechados
     const endDate = new Date();
-    const startDate = new Date(Date.now() - 30 * 86400000);
-    
+    endDate.setDate(endDate.getDate() - 1); // ontem
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - 29); // 30 dias atrás
+
+    const token = await getSPApiToken();
+
+    // 1. Solicitar relatório
+    console.log(`[syncProductSalesMetrics] Solicitando relatório ${startDate.toISOString().slice(0,10)} → ${endDate.toISOString().slice(0,10)}`);
     const reportRes = await fetch(`${spBase}/reports/2021-06-30/reports`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
         'x-amz-access-token': token,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
         marketplaceIds: [marketplaceId],
         dataStartTime: startDate.toISOString(),
         dataEndTime: endDate.toISOString(),
+        reportOptions: { dateGranularity: 'DAY' },
       }),
     });
 
     if (!reportRes.ok) {
       const err = await reportRes.json().catch(() => ({}));
-      return Response.json({ 
-        error: 'Falha ao solicitar relatório',
-        amazon_error: err.errors?.[0]?.message || JSON.stringify(err) 
-      }, { status: 500 });
+      const msg = err.errors?.[0]?.message || JSON.stringify(err);
+      console.error(`[syncProductSalesMetrics] Falha ao solicitar: ${msg}`);
+      return Response.json({ error: 'Falha ao solicitar relatório SP-API', amazon_error: msg }, { status: 500 });
     }
 
-    const reportData = await reportRes.json();
-    const reportId = reportData.reportId;
-    console.log(`[syncProductSalesMetrics] Relatório solicitado: ${reportId}`);
+    const { reportId } = await reportRes.json();
+    console.log(`[syncProductSalesMetrics] reportId: ${reportId}`);
 
-    // Aguardar processamento (polling)
+    // 2. Polling até DONE (max 60s)
     let reportStatus = 'IN_QUEUE';
     let reportDocumentId = null;
-    let attempts = 0;
-    
-    while (['IN_QUEUE', 'IN_PROGRESS'].includes(reportStatus) && attempts < 15) {
-      await new Promise(resolve => setTimeout(resolve, 4000));
-      
+    for (let i = 0; i < 15 && ['IN_QUEUE', 'IN_PROGRESS'].includes(reportStatus); i++) {
+      await sleep(4000);
       const statusRes = await fetch(`${spBase}/reports/2021-06-30/reports/${reportId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'x-amz-access-token': token,
-        },
+        headers: { 'Authorization': `Bearer ${token}`, 'x-amz-access-token': token },
       });
-      
       const statusData = await statusRes.json();
       reportStatus = statusData.processingStatus;
       if (reportStatus === 'DONE') reportDocumentId = statusData.reportDocumentId;
       else if (reportStatus === 'CANCELLED' || reportStatus === 'FATAL') {
-        return Response.json({ error: 'Relatório falhou', status: reportStatus }, { status: 500 });
+        return Response.json({ error: `Relatório ${reportStatus}`, status: reportStatus }, { status: 500 });
       }
-      attempts++;
-      console.log(`[syncProductSalesMetrics] Aguardando... ${attempts}/15 - Status: ${reportStatus}`);
+      console.log(`[syncProductSalesMetrics] Tentativa ${i+1}/15 — ${reportStatus}`);
     }
 
     if (!reportDocumentId) {
       return Response.json({ error: 'Relatório não processado a tempo', status: reportStatus }, { status: 500 });
     }
 
-    // Baixar documento do relatório
-    const docRes = await fetch(`${spBase}/reports/2021-06-30/documents/${reportDocumentId}`, {
-      headers: { 
-        'Authorization': `Bearer ${token}`, 
-        'x-amz-access-token': token,
-        'Accept': 'text/tab-separated-values',
-      },
-    });
-    
-    if (!docRes.ok) {
-      return Response.json({ error: 'Falha ao baixar relatório', status: docRes.status }, { status: 500 });
-    }
-    
-    const reportText = await docRes.text();
-    const lines = reportText.split('\n').filter(l => l.trim());
-    
-    if (lines.length < 2) {
-      return Response.json({ error: 'Relatório vazio', lines: lines.length }, { status: 400 });
-    }
+    // 3. Baixar URL do documento
+    const docMeta = await (await fetch(`${spBase}/reports/2021-06-30/documents/${reportDocumentId}`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'x-amz-access-token': token },
+    })).json();
 
-    // Parse TSV
+    const downloadUrl = docMeta.url;
+    if (!downloadUrl) return Response.json({ error: 'URL do documento não encontrada', docMeta }, { status: 500 });
+
+    // 4. Baixar conteúdo TSV
+    const contentRes = await fetch(downloadUrl);
+    if (!contentRes.ok) return Response.json({ error: 'Falha ao baixar conteúdo', status: contentRes.status }, { status: 500 });
+
+    const text = await contentRes.text();
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length < 2) return Response.json({ ok: true, message: 'Relatório vazio', lines: lines.length });
+
+    // 5. Parsear TSV
     const headers = lines[0].split('\t').map(h => h.trim());
-    console.log(`[syncProductSalesMetrics] Headers: ${headers.length} colunas`);
-    
-    const products = [];
-    for (let i = 1; i < Math.min(lines.length, 200); i++) {
+    const num = (val) => {
+      if (!val || val === '--' || val === '-' || val === 'N/A') return 0;
+      return parseFloat(val.replace(/[^0-9.-]/g, '')) || 0;
+    };
+
+    const records = [];
+    for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split('\t');
       const row = {};
-      headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim() });
-      
-      // Mapear colunas do relatório
-      const asin = row['ASIN'] || row['asin'] || '';
-      const sku = row['SKU'] || row['seller-sku'] || '';
-      const title = row['title'] || row['item-name'] || '';
-      
-      // Helper para parsear números
-      const num = (val) => {
-        if (!val || val === '--' || val === '-') return 0;
-        return parseFloat(val.replace(/[^0-9.-]/g, '')) || 0;
-      };
-      
-      products.push({
+      headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim(); });
+
+      // O relatório por DAY tem uma coluna de data
+      const date = row['date'] || row['Date'] || row['startDate'] || endDate.toISOString().slice(0, 10);
+      const asin = row['parentAsin'] || row['childAsin'] || row['ASIN'] || row['asin'] || '';
+      const sku = row['sku'] || row['SKU'] || row['seller-sku'] || '';
+
+      if (!asin && !sku) continue;
+
+      records.push({
+        amazon_account_id: amazonAccountId,
         asin,
         sku,
-        title,
-        // Vendas
-        orderedProductSales: num(row['orderedProductSales']),
-        unitsOrdered: num(row['unitsOrdered']),
-        orderItemCount: num(row['orderItemCount']),
-        averageSalesPerOrderItem: num(row['averageSalesPerOrderItem']),
-        averageUnitsPerOrder: num(row['averageUnitsPerOrder']),
-        averagePrice: num(row['averagePrice']),
-        
-        // Tráfego
-        pageViewsMobile: num(row['pageViewsMobile']),
-        pageViewsDesktop: num(row['pageViewsDesktop']),
-        pageViewsTotal: num(row['pageViewsTotal']),
-        sessionsMobile: num(row['sessionsMobile']),
-        sessionsDesktop: num(row['sessionsDesktop']),
-        sessionsTotal: num(row['sessionsTotal']),
-        
-        // Conversão
-        buyBoxPercentage: num(row['buyBoxPercentage']),
-        sessionItemOrderRatio: num(row['sessionItemOrderRatio']),
-        unitSessionRatio: num(row['unitSessionRatio']),
-        offerCount: num(row['offerCount']),
-        parentItemCount: num(row['parentItemCount']),
-        
-        // Reembolsos
-        unitsRefunded: num(row['unitsRefunded']),
-        refundRate: num(row['refundRate']),
-        
-        // Avaliações
-        reviewsReceived: num(row['reviewsReceived']),
-        negativeReviewsReceived: num(row['negativeReviewsReceived']),
-        negativeReviewRate: num(row['negativeReviewRate']),
-        
-        // Reclamações
-        claimsGranted: num(row['claimsGranted']),
-        claimsAmount: num(row['claimsAmount']),
-        
-        // Envios
-        shippedProductSales: num(row['shippedProductSales']),
-        unitsShipped: num(row['unitsShipped']),
-        ordersShipped: num(row['ordersShipped']),
+        date: date.slice(0, 10),
+        units_ordered: num(row['unitsOrdered']),
+        ordered_product_sales: num(row['orderedProductSales'] || row['orderedProductSalesAmount']),
+        sessions: num(row['sessionsTotal'] || row['sessions']),
+        page_views: num(row['pageViewsTotal'] || row['pageViews']),
+        buy_box_pct: num(row['buyBoxPercentage']),
+        conversion_rate: num(row['unitSessionRatio'] || row['sessionItemOrderRatio']),
       });
     }
 
-    // Calcular totais agregados
-    const summary = {
-      totalOrderedProductSales: products.reduce((sum, p) => sum + p.orderedProductSales, 0),
-      totalUnitsOrdered: products.reduce((sum, p) => sum + p.unitsOrdered, 0),
-      totalPageViews: products.reduce((sum, p) => sum + p.pageViewsTotal, 0),
-      totalSessions: products.reduce((sum, p) => sum + p.sessionsTotal, 0),
-      totalReviews: products.reduce((sum, p) => sum + p.reviewsReceived, 0),
-      totalNegativeReviews: products.reduce((sum, p) => sum + p.negativeReviewsReceived, 0),
-      totalUnitsShipped: products.reduce((sum, p) => sum + p.unitsShipped, 0),
-      avgBuyBoxPercentage: products.length > 0 ? products.reduce((sum, p) => sum + p.buyBoxPercentage, 0) / products.length : 0,
-      avgRefundRate: products.length > 0 ? products.reduce((sum, p) => sum + p.refundRate, 0) / products.length : 0,
-      totalProducts: products.length,
-    };
+    console.log(`[syncProductSalesMetrics] ${records.length} registros para salvar`);
 
-    console.log(`[syncProductSalesMetrics] ${products.length} produtos processados`);
+    // 6. Upsert em SalesDaily — deletar e recriar para o período
+    if (records.length > 0) {
+      // Deletar registros antigos do período para evitar duplicatas
+      await base44.asServiceRole.entities.SalesDaily.deleteMany({
+        amazon_account_id: amazonAccountId,
+        date: { $gte: startDate.toISOString().slice(0, 10), $lte: endDate.toISOString().slice(0, 10) },
+      });
+
+      // Salvar em lotes de 50
+      const BATCH = 50;
+      let saved = 0;
+      for (let i = 0; i < records.length; i += BATCH) {
+        const batch = records.slice(i, i + BATCH);
+        await base44.asServiceRole.entities.SalesDaily.bulkCreate(batch);
+        saved += batch.length;
+      }
+
+      console.log(`[syncProductSalesMetrics] ${saved} registros salvos em SalesDaily`);
+    }
 
     return Response.json({
       ok: true,
       amazon_account_id: amazonAccountId,
       period: { start: startDate.toISOString().slice(0, 10), end: endDate.toISOString().slice(0, 10) },
       report_id: reportId,
-      summary,
-      products: products.slice(0, 100),
-      total_products: products.length,
-      message: `${products.length} produtos sincronizados com métricas completas`,
+      records_saved: records.length,
+      message: `${records.length} registros salvos em SalesDaily`,
     });
   } catch (error) {
     console.error('[syncProductSalesMetrics] Erro:', error.message);
