@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, Bot, ShoppingBag, FileText, Link2, Book, AlertTriangle, BookOpen, RefreshCw, ListTodo, TrendingDown, Brain
+  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -11,21 +11,14 @@ const PRODUCT_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 const PRODUCT_SYNC_STORAGE_KEY = 'livingfinds:lastUnifiedProductSync';
 
 const navItems = [
-  { path: '/', icon: LayoutDashboard, label: 'Painel e análises' },
+  { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
-  { path: '/ads', icon: Megaphone, label: 'Gestão de anúncios' },
-  { path: '/autopilot', icon: Bot, label: 'Automação e IA' },
-  { path: '/inventory', icon: Package, label: 'Estoque e vendas' },
-  { path: '/bids-log', icon: FileText, label: 'Histórico de lances' },
-  { path: '/term-bank', icon: BookOpen, label: 'Banco de termos' },
-  { path: '/keyword-ml', icon: Brain, label: 'ML Alta Conversão' },
-  { path: '/alerts', icon: AlertTriangle, label: 'Alertas' },
-  { path: '/manual', icon: Book, label: 'Manual' },
-  { path: '/integracoes/amazon', icon: Link2, label: 'Integração com a Amazon' },
-  { path: '/queue-monitor', icon: ListTodo, label: 'Fila de processamento' },
-  { path: '/eficiencia-ia', icon: TrendingDown, label: 'Uso e Eficiência IA' },
-  { path: '/saude-do-sistema', icon: Activity, label: 'Saúde do sistema' },
+  { path: '/ads', icon: Megaphone, label: 'Campanhas' },
+  { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
+  { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Comando' },
+  { path: '/inventory', icon: Package, label: 'Estoque e Vendas' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
+  { path: '/manual', icon: Book, label: 'Manual' },
 ];
 
 function formatLastSync(value) {

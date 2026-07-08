@@ -1,0 +1,884 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { base44 } from '@/api/base44Client';
+import {
+  Terminal, RefreshCw, Loader2, AlertTriangle, Bell, FileText,
+  Activity, Zap, CheckCircle, XCircle, TrendingUp, TrendingDown,
+  Play, Wrench, RotateCcw, ChevronDown, ChevronRight, Trash2,
+  Clock, Filter, Search, Download, Package, Key, Rocket,
+  AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings
+} from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area
+} from 'recharts';
+import StatusBadge from '@/components/ui/StatusBadge';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const ALERT_CONFIG = {
+  high_acos:        { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       label: 'ACoS Alto' },
+  low_roas:         { color: 'text-amber-400',  bg: 'bg-amber-500/10 border-amber-500/20',   label: 'ROAS Baixo' },
+  budget_exhausted: { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       label: 'Budget Esgotado' },
+  no_impressions:   { color: 'text-amber-400',  bg: 'bg-amber-500/10 border-amber-500/20',   label: 'Sem Impressões' },
+  out_of_stock:     { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       label: 'Sem Estoque' },
+  token_expired:    { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       label: 'Token Expirado' },
+  high_cpc:         { color: 'text-amber-400',  bg: 'bg-amber-500/10 border-amber-500/20',   label: 'CPC Alto' },
+  campaign_paused:  { color: 'text-slate-400',  bg: 'bg-slate-500/10 border-slate-500/20',   label: 'Campanha Pausada' },
+  rate_limit:       { color: 'text-amber-400',  bg: 'bg-amber-500/10 border-amber-500/20',   label: 'Rate Limit' },
+  sync_error:       { color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',       label: 'Erro de Sync' },
+};
+
+const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+const STATUS_QUEUE = {
+  scheduled:  { label: 'Agendado',    color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20' },
+  processing: { label: 'Processando', color: 'text-cyan',        bg: 'bg-cyan/10 border-cyan/20' },
+  completed:  { label: 'Concluído',   color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20' },
+  failed:     { label: 'Erro',        color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/20' },
+  cancelled:  { label: 'Cancelado',   color: 'text-slate-500',   bg: 'bg-slate-500/5 border-slate-500/15' },
+};
+
+function parseError(err) {
+  if (!err) return null;
+  if (err.includes('campaignId=') || err.includes('Dados insuficientes'))
+    return { type: 'no_campaign', short: 'Sem campaign_id', hint: 'Campanha não criada na Amazon. Use o Kickoff na página de Produtos.' };
+  if (err.includes('403') || err.includes('token'))
+    return { type: 'auth', short: 'Token expirado', hint: 'Reautorize em Integrações → Amazon.' };
+  if (err.includes('429') || err.includes('Rate limit'))
+    return { type: 'rate_limit', short: 'Rate limit', hint: 'Aguarde e tente novamente.' };
+  return { type: 'generic', short: 'Erro', hint: err };
+}
+
+const TABS = [
+  { id: 'visao_geral', label: 'Visão Geral' },
+  { id: 'alertas', label: 'Alertas' },
+  { id: 'fila', label: 'Fila e Execuções' },
+  { id: 'historico', label: 'Histórico e Decisões' },
+  { id: 'autopilot', label: 'Automação IA' },
+  { id: 'reparo', label: 'Reparo de Campanhas' },
+];
+
+// ── Subcomponentes ────────────────────────────────────────────────────────────
+
+function QueueStatusBadge({ status }) {
+  const cfg = STATUS_QUEUE[status] || STATUS_QUEUE.scheduled;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-lg border ${cfg.bg} ${cfg.color} whitespace-nowrap`}>
+      {cfg.label}
+    </span>
+  );
+}
+
+function QueueRowItem({ item, onDelete, onRetry, retrying }) {
+  const [expanded, setExpanded] = useState(item.status === 'failed');
+  const isFailed = item.status === 'failed';
+  const parsed = isFailed ? parseError(item.last_error) : null;
+  return (
+    <div className={`border-b border-surface-2/50 ${isFailed ? 'bg-red-500/3' : ''}`}>
+      <div className="flex items-start gap-3 px-4 py-3">
+        <button onClick={() => setExpanded(v => !v)} className="mt-0.5 text-slate-600 hover:text-slate-400">
+          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-mono font-bold text-cyan">{item.asin || '—'}</span>
+            {item.campaign_name && <span className="text-xs text-slate-400 truncate max-w-[200px]">{item.campaign_name}</span>}
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500 flex-wrap">
+            {(item.attempt_count || 0) > 0 && <span className="text-amber-400">{item.attempt_count}/{item.max_attempts || 5} tentativas</span>}
+            {item.scheduled_at && <span>Agendado: {new Date(item.scheduled_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+          </div>
+          {expanded && isFailed && parsed && (
+            <div className="mt-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2">
+              <p className="text-[10px] font-bold text-red-400 mb-0.5">{parsed.short}</p>
+              <p className="text-[10px] text-red-300/80">{parsed.hint}</p>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <QueueStatusBadge status={item.status} />
+          {isFailed && parsed?.type !== 'no_campaign' && (
+            <button onClick={() => onRetry(item)} disabled={retrying === item.id}
+              className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/15 transition-colors disabled:opacity-30">
+              {retrying === item.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
+            </button>
+          )}
+          {['failed', 'completed', 'cancelled'].includes(item.status) && (
+            <button onClick={() => onDelete(item.id)} className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Página Principal ──────────────────────────────────────────────────────────
+
+export default function SalaDeComando() {
+  const [tab, setTab] = useState('visao_geral');
+  const [account, setAccount] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Alertas
+  const [alerts, setAlerts] = useState([]);
+  const [alertFilter, setAlertFilter] = useState('active');
+  const [generating, setGenerating] = useState(false);
+
+  // Fila
+  const [kickoffQueue, setKickoffQueue] = useState([]);
+  const [repairQueue, setRepairQueue] = useState([]);
+  const [keywordQueue, setKeywordQueue] = useState([]);
+  const [running, setRunning] = useState({ kickoff: false, repair: false, keyword: false });
+  const [retrying, setRetrying] = useState(null);
+  const [queueFilter, setQueueFilter] = useState('all');
+
+  // Histórico de Lances
+  const [bidLogs, setBidLogs] = useState([]);
+  const [bidSearch, setBidSearch] = useState('');
+  const [bidFilter, setBidFilter] = useState({ direction: 'all', status: 'all' });
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
+  const [runningBidEngine, setRunningBidEngine] = useState(false);
+
+  // Decisões IA
+  const [decisions, setDecisions] = useState([]);
+  const [syncRuns, setSyncRuns] = useState([]);
+
+  // Reparo incompleto
+  const [repairRunning, setRepairRunning] = useState(false);
+  const [repairMsg, setRepairMsg] = useState(null);
+
+  const intervalRef = useRef(null);
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const me = await base44.auth.me();
+      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      const acc = accounts[0] || (await base44.entities.AmazonAccount.list())[0];
+      setAccount(acc);
+      if (!acc) return;
+      const aid = acc.id;
+
+      const [
+        alertsData, kickoff, repair, keyword, logs, decs, runs,
+      ] = await Promise.all([
+        base44.entities.Alert.filter({ amazon_account_id: aid }, '-created_at', 100),
+        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
+        base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
+        base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 10),
+      ]);
+
+      setAlerts(alertsData.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4)));
+      setKickoffQueue(kickoff);
+      setRepairQueue(repair);
+      setKeywordQueue(keyword);
+      setBidLogs(logs);
+      setDecisions(decs);
+      setSyncRuns(runs);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAll();
+    intervalRef.current = setInterval(() => loadAll(), 60000);
+    return () => clearInterval(intervalRef.current);
+  }, [loadAll]);
+
+  // ── Ações de Alerta ──
+  const resolveAlert = async (id) => {
+    await base44.entities.Alert.update(id, { status: 'resolved', resolved_at: new Date().toISOString() });
+    setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved' } : a));
+  };
+  const acknowledgeAlert = async (id) => {
+    await base44.entities.Alert.update(id, { status: 'acknowledged' });
+    setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'acknowledged' } : a));
+  };
+  const generateAlerts = async () => {
+    if (!account) return;
+    setGenerating(true);
+    try {
+      const res = await base44.functions.invoke('checkAndCreateAlerts', { amazon_account_id: account.id });
+      await loadAll();
+    } finally { setGenerating(false); }
+  };
+
+  // ── Ações de Fila ──
+  const deleteQueueItem = async (entityName, id) => {
+    await base44.entities[entityName].delete(id);
+    loadAll();
+  };
+  const retryQueueItem = async (item, entityName, runnerFn) => {
+    if (retrying) return;
+    setRetrying(item.id);
+    try {
+      await base44.entities[entityName].update(item.id, { status: 'scheduled', last_error: null, attempt_count: 0, scheduled_at: new Date().toISOString() });
+      await base44.functions.invoke(runnerFn, { amazon_account_id: item.amazon_account_id, force: true });
+      loadAll();
+    } finally { setRetrying(null); }
+  };
+  const runQueueNow = async (key, fnName) => {
+    if (!account || running[key]) return;
+    setRunning(r => ({ ...r, [key]: true }));
+    try {
+      await base44.functions.invoke(fnName, { amazon_account_id: account.id, force: true });
+      loadAll();
+    } finally { setRunning(r => ({ ...r, [key]: false })); }
+  };
+  const clearDone = async (entityName, items) => {
+    const done = items.filter(i => ['completed', 'cancelled', 'failed'].includes(i.status));
+    await Promise.all(done.map(i => base44.entities[entityName].delete(i.id)));
+    loadAll();
+  };
+
+  // ── Ações de Bid Log ──
+  const syncBids = async () => {
+    if (!account || syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncBidChangesFromApi', { amazon_account_id: account.id });
+      const d = res.data;
+      setSyncMsg(d?.ok ? { type: 'success', text: `✓ ${d.keywords_synced} keywords · ${d.changes} alterações` } : { type: 'error', text: d?.error || 'Falha' });
+      loadAll();
+    } catch (e) { setSyncMsg({ type: 'error', text: e.message }); }
+    finally { setSyncing(false); setTimeout(() => setSyncMsg(null), 10000); }
+  };
+  const runBidEngines = async () => {
+    if (!account || runningBidEngine) return;
+    setRunningBidEngine(true);
+    try {
+      await Promise.all([
+        base44.functions.invoke('smartBidFromCpc', { amazon_account_id: account.id }),
+        base44.functions.invoke('calibrateBidsNoImpressions', { amazon_account_id: account.id }),
+      ]);
+      loadAll();
+    } finally { setRunningBidEngine(false); }
+  };
+
+  // ── Reparo ──
+  const runRepair = async () => {
+    if (!account || repairRunning) return;
+    setRepairRunning(true);
+    setRepairMsg(null);
+    try {
+      const res = await base44.functions.invoke('forceRepairIncompleteCampaigns', { amazon_account_id: account.id });
+      setRepairMsg(res.data?.ok ? { type: 'success', text: `✓ ${res.data.repaired || 0} campanhas reparadas` } : { type: 'error', text: res.data?.error || 'Erro' });
+    } catch (e) { setRepairMsg({ type: 'error', text: e.message }); }
+    finally { setRepairRunning(false); }
+  };
+
+  // ── KPIs rápidos ──
+  const allQueue = [...kickoffQueue, ...repairQueue, ...keywordQueue];
+  const activeAlerts = alerts.filter(a => a.status === 'active').length;
+  const criticalAlerts = alerts.filter(a => a.severity === 'critical' && a.status === 'active').length;
+  const queueFailed = allQueue.filter(i => i.status === 'failed').length;
+  const queueProcessing = allQueue.filter(i => i.status === 'processing').length;
+  const pendingDecisions = decisions.filter(d => d.status === 'pending').length;
+
+  // ── Bid log filtrado ──
+  const filteredBids = bidLogs.filter(l => {
+    const matchSearch = !bidSearch || (l.keyword || '').toLowerCase().includes(bidSearch.toLowerCase()) || (l.asin || '').includes(bidSearch);
+    const matchDir = bidFilter.direction === 'all' || l.direction === bidFilter.direction;
+    const matchSt = bidFilter.status === 'all' || l.status === bidFilter.status;
+    return matchSearch && matchDir && matchSt;
+  });
+
+  // ── Filtro alertas ──
+  const filteredAlerts = alerts.filter(a => {
+    if (alertFilter === 'active') return a.status === 'active';
+    if (alertFilter === 'critical') return a.severity === 'critical';
+    if (alertFilter === 'resolved') return a.status === 'resolved';
+    return true;
+  });
+
+  // ── Fila filtrada ──
+  const filteredQueue = allQueue.filter(i => {
+    if (queueFilter === 'failed') return i.status === 'failed';
+    if (queueFilter === 'scheduled') return i.status === 'scheduled';
+    if (queueFilter === 'completed') return i.status === 'completed';
+    return true;
+  });
+
+  // ── Gráfico de alterações de bid ──
+  const bidTrendData = (() => {
+    const map = new Map();
+    for (const l of bidLogs) {
+      const date = l.date || l.created_at?.slice(0, 10);
+      if (!date) continue;
+      const prev = map.get(date) || { date: date.slice(5), aumentos: 0, reducoes: 0 };
+      if (l.direction === 'increase') prev.aumentos++;
+      else if (l.direction === 'decrease') prev.reducoes++;
+      map.set(date, prev);
+    }
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
+  })();
+
+  // Última sync status
+  const lastSync = syncRuns[0];
+
+  return (
+    <div className="p-6 space-y-5 animate-fade-in">
+
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
+            <Terminal className="w-5 h-5 text-cyan" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-white">Sala de Comando</h1>
+            <p className="text-xs text-slate-400">
+              {criticalAlerts > 0 && <span className="text-red-400 font-semibold">{criticalAlerts} crítico{criticalAlerts > 1 ? 's' : ''} · </span>}
+              {activeAlerts} alerta{activeAlerts !== 1 ? 's' : ''} ativos · {queueFailed} erros na fila · {pendingDecisions} decisões pendentes
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {lastSync && (
+            <span className="text-[10px] text-slate-500">
+              Sync: {lastSync.status === 'success' ? '✓' : '⚠'} {new Date(lastSync.started_at || lastSync.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          <button onClick={loadAll} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs rounded-lg transition-colors disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Atualizar
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-surface-2 overflow-x-auto scrollbar-thin">
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            {t.label}
+            {t.id === 'alertas' && activeAlerts > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span>}
+            {t.id === 'fila' && queueFailed > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span>}
+            {t.id === 'autopilot' && pendingDecisions > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span>}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-6 h-6 text-cyan animate-spin" />
+        </div>
+      ) : (
+        <>
+          {/* ── VISÃO GERAL ─────────────────────────────────────────────────── */}
+          {tab === 'visao_geral' && (
+            <div className="space-y-5">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  { label: 'Alertas Ativos', value: activeAlerts, color: activeAlerts > 0 ? 'text-amber-400' : 'text-emerald-400', action: () => setTab('alertas') },
+                  { label: 'Alertas Críticos', value: criticalAlerts, color: criticalAlerts > 0 ? 'text-red-400' : 'text-slate-400', action: () => setTab('alertas') },
+                  { label: 'Erros na Fila', value: queueFailed, color: queueFailed > 0 ? 'text-red-400' : 'text-emerald-400', action: () => setTab('fila') },
+                  { label: 'Decisões IA Pendentes', value: pendingDecisions, color: pendingDecisions > 0 ? 'text-amber-400' : 'text-emerald-400', action: () => setTab('autopilot') },
+                ].map(k => (
+                  <button key={k.label} onClick={k.action} className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-left hover:border-surface-3 transition-colors">
+                    <p className="text-xs text-slate-500 mb-1">{k.label}</p>
+                    <p className={`text-2xl font-bold ${k.color}`}>{k.value}</p>
+                  </button>
+                ))}
+              </div>
+
+              {/* Rotinas status */}
+              <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-slate-300 mb-3">Status das Rotinas</h3>
+                <div className="space-y-2">
+                  {syncRuns.slice(0, 5).map((r, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-surface-2/50 last:border-0">
+                      <div className="flex items-center gap-2">
+                        {r.status === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : r.status === 'running' ? <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" /> : <XCircle className="w-3.5 h-3.5 text-red-400" />}
+                        <span className="text-slate-300">{r.operation || 'sync'}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-slate-500">
+                        {r.records_upserted != null && <span>{r.records_upserted} registros</span>}
+                        <span>{new Date(r.started_at || r.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {syncRuns.length === 0 && <p className="text-xs text-slate-500">Sem logs de sync</p>}
+                </div>
+              </div>
+
+              {/* Alertas críticos no resumo */}
+              {criticalAlerts > 0 && (
+                <div className="rounded-xl border border-red-500/25 bg-red-500/5 p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertTriangle className="w-4 h-4 text-red-400" />
+                    <p className="text-sm font-semibold text-red-300">{criticalAlerts} alerta(s) crítico(s)</p>
+                  </div>
+                  {alerts.filter(a => a.severity === 'critical' && a.status === 'active').slice(0, 3).map(a => (
+                    <div key={a.id} className="flex items-start justify-between gap-3 py-2 border-b border-red-500/10 last:border-0">
+                      <div>
+                        <p className="text-xs font-semibold text-white">{a.title}</p>
+                        <p className="text-xs text-slate-400">{a.message}</p>
+                      </div>
+                      <button onClick={() => resolveAlert(a.id)} className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg">
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={() => setTab('alertas')} className="mt-2 text-xs text-red-400 hover:text-red-300">Ver todos →</button>
+                </div>
+              )}
+
+              {/* Gráfico bid trends */}
+              {bidTrendData.length > 2 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                  <h3 className="text-sm font-semibold text-slate-300 mb-3">Ajustes de Bid — 14 dias</h3>
+                  <ResponsiveContainer width="100%" height={150}>
+                    <BarChart data={bidTrendData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 11 }} />
+                      <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[2, 2, 0, 0]} stackId="a" />
+                      <Bar dataKey="reducoes" name="Reduções" fill="#EF4444" radius={[2, 2, 0, 0]} stackId="a" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {/* Atalhos rápidos */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  { label: 'Gestão de Anúncios', path: '/ads', desc: 'Campanhas, keywords, bids' },
+                  { label: 'Autopilot', path: '/autopilot', desc: 'Motor de IA completo' },
+                  { label: 'Integração Amazon', path: '/integracoes/amazon', desc: 'Token, SP-API, OAuth' },
+                  { label: 'Configurações', path: '/settings', desc: 'Metas, budget, perfil' },
+                ].map(s => (
+                  <Link key={s.path} to={s.path} className="bg-surface-1 border border-surface-2 hover:border-surface-3 rounded-xl p-4 block transition-colors">
+                    <p className="text-sm font-semibold text-white">{s.label}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{s.desc}</p>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── ALERTAS ─────────────────────────────────────────────────────── */}
+          {tab === 'alertas' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="grid grid-cols-3 gap-3 flex-1 max-w-sm">
+                  {[
+                    { label: 'Ativos', value: alerts.filter(a => a.status === 'active').length, color: 'text-amber-400' },
+                    { label: 'Críticos', value: criticalAlerts, color: 'text-red-400' },
+                    { label: 'Total', value: alerts.length, color: 'text-slate-300' },
+                  ].map(k => (
+                    <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-3 text-center">
+                      <p className="text-[10px] text-slate-500">{k.label}</p>
+                      <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={generateAlerts} disabled={generating || !account}
+                    className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg disabled:opacity-50">
+                    {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                    {generating ? 'Gerando...' : 'Gerar Alertas'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-500" />
+                {[
+                  { key: 'active', label: 'Ativos' },
+                  { key: 'critical', label: 'Críticos' },
+                  { key: 'all', label: 'Todos' },
+                  { key: 'resolved', label: 'Resolvidos' },
+                ].map(f => (
+                  <button key={f.key} onClick={() => setAlertFilter(f.key)}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${alertFilter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
+              {filteredAlerts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
+                  <Bell className="w-10 h-10 text-slate-700" />
+                  <p className="text-sm text-slate-500">Sem alertas com este filtro</p>
+                </div>
+              ) : (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/40">
+                          {['Tipo', 'Severidade', 'Título', 'Mensagem', 'Status', 'Data', 'Ações'].map(h => (
+                            <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAlerts.map(a => {
+                          const cfg = ALERT_CONFIG[a.alert_type] || { color: 'text-slate-400', bg: 'bg-slate-500/10 border-slate-500/20', label: a.alert_type };
+                          const isResolved = a.status === 'resolved';
+                          return (
+                            <tr key={a.id} className={`border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors ${isResolved ? 'opacity-50' : ''}`}>
+                              <td className="px-4 py-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${cfg.bg} ${cfg.color}`}>{cfg.label}</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${a.severity === 'critical' ? 'bg-red-500/20 text-red-400' : a.severity === 'high' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-500/20 text-slate-400'}`}>
+                                  {a.severity || 'medium'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs font-semibold text-white max-w-[180px] truncate">{a.title}</td>
+                              <td className="px-4 py-3 text-xs text-slate-400 max-w-[200px] truncate">{a.message || '—'}</td>
+                              <td className="px-4 py-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${a.status === 'active' ? 'bg-amber-500/20 text-amber-400' : a.status === 'acknowledged' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                  {a.status || 'active'}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">
+                                {a.created_at ? new Date(a.created_at).toLocaleDateString('pt-BR') : '—'}
+                              </td>
+                              <td className="px-4 py-3">
+                                {!isResolved && (
+                                  <div className="flex items-center gap-1.5">
+                                    {a.status === 'active' && (
+                                      <button onClick={() => acknowledgeAlert(a.id)} className="p-1.5 bg-blue-500/10 border border-blue-500/20 text-blue-400 rounded-lg" title="Reconhecer">
+                                        <Eye className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                    <button onClick={() => resolveAlert(a.id)} className="p-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg" title="Resolver">
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── FILA E EXECUÇÕES ─────────────────────────────────────────────── */}
+          {tab === 'fila' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'Processando', value: queueProcessing, color: 'text-cyan' },
+                  { label: 'Agendados',   value: allQueue.filter(i => i.status === 'scheduled').length, color: 'text-slate-300' },
+                  { label: 'Concluídos',  value: allQueue.filter(i => i.status === 'completed').length, color: 'text-emerald-400' },
+                  { label: 'Com Erro',    value: queueFailed, color: 'text-red-400' },
+                ].map(k => (
+                  <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl px-4 py-3 text-center">
+                    <p className="text-xs text-slate-500 mb-1">{k.label}</p>
+                    <p className={`text-2xl font-bold ${k.color}`}>{k.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <Filter className="w-3.5 h-3.5 text-slate-500" />
+                {[{ key: 'all', l: 'Todos' }, { key: 'failed', l: 'Erros' }, { key: 'scheduled', l: 'Agendados' }, { key: 'completed', l: 'Concluídos' }].map(f => (
+                  <button key={f.key} onClick={() => setQueueFilter(f.key)}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${queueFilter === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                    {f.l}
+                  </button>
+                ))}
+              </div>
+
+              {[
+                { key: 'kickoff', title: 'Kickoff de Produtos', items: kickoffQueue, entity: 'ProductKickoffQueue', fn: 'processProductKickoffQueueV2' },
+                { key: 'repair',  title: 'Reparo AUTO',         items: repairQueue,  entity: 'AutoCampaignRepairQueue', fn: 'processAutoCampaignRepairQueueV2' },
+                { key: 'keyword', title: 'Reparo Keywords',     items: keywordQueue, entity: 'KeywordRepairQueue', fn: 'processKeywordRepairQueue' },
+              ].map(q => {
+                const qFiltered = q.items.filter(i => queueFilter === 'all' || i.status === queueFilter);
+                const qFailed = q.items.filter(i => i.status === 'failed').length;
+                const qScheduled = q.items.filter(i => i.status === 'scheduled').length;
+                return (
+                  <div key={q.key} className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                    <div className="px-5 py-3 border-b border-surface-2 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{q.title}</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {qScheduled > 0 && <span className="text-amber-400">{qScheduled} ag. </span>}
+                          {qFailed > 0 && <span className="text-red-400">{qFailed} erro{qFailed !== 1 ? 's' : ''} </span>}
+                          {q.items.filter(i => i.status === 'completed').length} ok
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {q.items.filter(i => ['completed', 'failed'].includes(i.status)).length > 0 && (
+                          <button onClick={() => clearDone(q.entity, q.items)} className="text-[10px] text-slate-500 hover:text-slate-300 px-2 py-1 border border-surface-3 rounded-lg">
+                            Limpar
+                          </button>
+                        )}
+                        <button onClick={() => runQueueNow(q.key, q.fn)} disabled={running[q.key] || qScheduled === 0}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg disabled:opacity-40 font-semibold">
+                          {running[q.key] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                          {running[q.key] ? 'Executando...' : 'Executar Agora'}
+                        </button>
+                      </div>
+                    </div>
+                    {qFiltered.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-slate-500">Fila vazia</div>
+                    ) : (
+                      <div className="max-h-72 overflow-y-auto scrollbar-thin">
+                        {qFiltered.filter(i => i.status === 'failed').map(i => (
+                          <QueueRowItem key={i.id} item={i} onDelete={id => deleteQueueItem(q.entity, id)} onRetry={item => retryQueueItem(item, q.entity, q.fn)} retrying={retrying} />
+                        ))}
+                        {qFiltered.filter(i => i.status !== 'failed').map(i => (
+                          <QueueRowItem key={i.id} item={i} onDelete={id => deleteQueueItem(q.entity, id)} onRetry={item => retryQueueItem(item, q.entity, q.fn)} retrying={retrying} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── HISTÓRICO E DECISÕES ─────────────────────────────────────────── */}
+          {tab === 'historico' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    { label: 'Alterações', value: bidLogs.length, color: 'text-white' },
+                    { label: 'Aumentos', value: bidLogs.filter(l => l.direction === 'increase').length, color: 'text-emerald-400' },
+                    { label: 'Reduções', value: bidLogs.filter(l => l.direction === 'decrease').length, color: 'text-red-400' },
+                  ].map(k => (
+                    <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-3 text-center">
+                      <p className="text-[10px] text-slate-500">{k.label}</p>
+                      <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={syncBids} disabled={syncing || !account}
+                    className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan text-xs font-semibold rounded-lg disabled:opacity-50">
+                    <Download className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                    {syncing ? 'Sincronizando...' : 'Sync Bids'}
+                  </button>
+                  <button onClick={runBidEngines} disabled={runningBidEngine || !account}
+                    className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-semibold rounded-lg disabled:opacity-50">
+                    {runningBidEngine ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                    {runningBidEngine ? 'Executando...' : 'Executar Bid Engines'}
+                  </button>
+                </div>
+              </div>
+
+              {syncMsg && (
+                <div className={`px-4 py-2 rounded-xl border text-xs ${syncMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+                  {syncMsg.text}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                  <input value={bidSearch} onChange={e => setBidSearch(e.target.value)}
+                    placeholder="Keyword, ASIN..."
+                    className="pl-9 pr-4 py-2 bg-surface-1 border border-surface-2 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50 w-48" />
+                </div>
+                {[{ key: 'all', l: 'Todos' }, { key: 'increase', l: '↑ Aumentos' }, { key: 'decrease', l: '↓ Reduções' }].map(f => (
+                  <button key={f.key} onClick={() => setBidFilter(p => ({ ...p, direction: f.key }))}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${bidFilter.direction === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                    {f.l}
+                  </button>
+                ))}
+                {[{ key: 'all', l: 'Todos status' }, { key: 'executed', l: '✓ Executadas' }, { key: 'failed', l: '⚠ Falhas' }].map(f => (
+                  <button key={f.key} onClick={() => setBidFilter(p => ({ ...p, status: f.key }))}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${bidFilter.status === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+                    {f.l}
+                  </button>
+                ))}
+              </div>
+
+              {/* Decisões IA pendentes */}
+              {decisions.filter(d => d.status === 'pending').length > 0 && (
+                <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-semibold text-amber-300">{decisions.filter(d => d.status === 'pending').length} Decisões IA Pendentes</p>
+                    <Link to="/autopilot" className="text-xs text-cyan hover:underline">Ver no Autopilot →</Link>
+                  </div>
+                  {decisions.filter(d => d.status === 'pending').slice(0, 3).map(d => (
+                    <div key={d.id} className="flex items-center justify-between py-1.5 border-b border-surface-2/50 last:border-0 text-xs">
+                      <span className="text-slate-300">{d.keyword_text || d.action || d.decision_type}</span>
+                      <span className="text-amber-400">{d.risk || 'medium'} risk</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Tabela bid logs */}
+              <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-surface-2 bg-surface-2/40">
+                        {['Data', 'Keyword', 'ASIN', 'Antes', 'Depois', 'Direção', 'Motivo', 'Fonte', 'Status'].map(h => (
+                          <th key={h} className="px-4 py-2.5 text-left font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredBids.slice(0, 100).map((l, i) => {
+                        const isAu = l.direction === 'increase';
+                        const isDown = l.direction === 'decrease';
+                        return (
+                          <tr key={l.id || i} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
+                            <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{l.date || l.created_at?.slice(0, 10) || '—'}</td>
+                            <td className="px-4 py-2.5 text-white max-w-[160px] truncate">{l.keyword || '—'}</td>
+                            <td className="px-4 py-2.5 font-mono text-cyan">{l.asin || '—'}</td>
+                            <td className="px-4 py-2.5 font-mono text-slate-400">R${(l.old_bid || 0).toFixed(2)}</td>
+                            <td className="px-4 py-2.5 font-mono text-white">R${(l.new_bid || 0).toFixed(2)}</td>
+                            <td className="px-4 py-2.5">
+                              {isAu ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> : isDown ? <TrendingDown className="w-3.5 h-3.5 text-red-400" /> : <Minus className="w-3.5 h-3.5 text-slate-500" />}
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-500 max-w-[160px] truncate">{l.reason || '—'}</td>
+                            <td className="px-4 py-2.5">
+                              <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium ${l._source === 'autopilot' ? 'text-purple-400 bg-purple-400/10 border-purple-400/20' : 'text-cyan bg-cyan/10 border-cyan/20'}`}>
+                                {l._source === 'autopilot' ? 'IA' : 'API'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5"><StatusBadge status={l.status || 'pending'} size="xs" /></td>
+                          </tr>
+                        );
+                      })}
+                      {filteredBids.length === 0 && (
+                        <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-500">Sem alterações com este filtro</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── AUTOMAÇÃO IA ──────────────────────────────────────────────────── */}
+          {tab === 'autopilot' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-cyan/20 rounded-xl">
+                <Bot className="w-5 h-5 text-cyan flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Motor de Automação IA</p>
+                  <p className="text-xs text-slate-400 mt-0.5">O Autopilot completo com decisões, jornada AUTO, harvest e regras está na página dedicada.</p>
+                </div>
+                <Link to="/autopilot" className="flex items-center gap-1.5 px-4 py-2 bg-cyan/15 border border-cyan/30 text-cyan text-xs font-semibold rounded-lg hover:bg-cyan/25 whitespace-nowrap">
+                  Abrir Autopilot
+                </Link>
+              </div>
+
+              {/* Decisões pendentes */}
+              <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-surface-2 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-white">Decisões Pendentes ({decisions.filter(d => d.status === 'pending').length})</p>
+                  <Link to="/autopilot" className="text-xs text-cyan hover:underline">Gerenciar no Autopilot →</Link>
+                </div>
+                {decisions.filter(d => d.status === 'pending').length === 0 ? (
+                  <div className="py-10 text-center text-sm text-slate-500">Nenhuma decisão pendente</div>
+                ) : (
+                  <div className="divide-y divide-surface-2/50 max-h-80 overflow-y-auto scrollbar-thin">
+                    {decisions.filter(d => d.status === 'pending').map(d => (
+                      <div key={d.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate">{d.keyword_text || d.entity_name || d.decision_type || '—'}</p>
+                          <p className="text-[10px] text-slate-500 mt-0.5 truncate">{d.rationale?.slice(0, 80) || d.action}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {d.risk && <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${d.risk === 'high' ? 'text-red-400 border-red-400/20 bg-red-400/10' : d.risk === 'medium' ? 'text-amber-400 border-amber-400/20 bg-amber-400/10' : 'text-emerald-400 border-emerald-400/20 bg-emerald-400/10'}`}>{d.risk}</span>}
+                          <span className="text-[10px] text-slate-500">{d.created_at ? new Date(d.created_at).toLocaleDateString('pt-BR') : ''}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Palavras-chave alta conversão */}
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-surface-2 rounded-xl">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Palavras-chave de Alta Conversão</p>
+                  <p className="text-xs text-slate-400 mt-0.5">ML pipeline + Term Bank integrados no Banco de Termos.</p>
+                </div>
+                <Link to="/term-bank" className="flex items-center gap-1.5 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold rounded-lg hover:text-white whitespace-nowrap">
+                  Abrir Term Bank
+                </Link>
+              </div>
+
+              {/* Metas de performance */}
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-surface-2 rounded-xl">
+                <Settings className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Metas de Performance</p>
+                  <p className="text-xs text-slate-400 mt-0.5">ACoS, ROAS, CPC, budget — fonte única em Configurações.</p>
+                </div>
+                <Link to="/settings" className="flex items-center gap-1.5 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold rounded-lg hover:text-white whitespace-nowrap">
+                  Configurações
+                </Link>
+              </div>
+            </div>
+          )}
+
+          {/* ── REPARO ───────────────────────────────────────────────────────── */}
+          {tab === 'reparo' && (
+            <div className="space-y-4">
+              <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Reparo de Campanhas Incompletas</h3>
+                    <p className="text-xs text-slate-400 mt-0.5">Verifica e repara campanhas AUTO sem ad groups ou product ads.</p>
+                  </div>
+                  <button onClick={runRepair} disabled={repairRunning || !account}
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-sm font-semibold rounded-lg disabled:opacity-50">
+                    {repairRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                    {repairRunning ? 'Reparando...' : 'Executar Reparo'}
+                  </button>
+                </div>
+                {repairMsg && (
+                  <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${repairMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+                    {repairMsg.text}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-surface-2 rounded-xl">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Campanhas Incompletas — Visão detalhada</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Lista completa com ações individuais de reparo.</p>
+                </div>
+                <Link to="/incomplete-campaigns" className="flex items-center gap-1.5 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold rounded-lg hover:text-white whitespace-nowrap">
+                  Ver detalhes
+                </Link>
+              </div>
+
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-surface-2 rounded-xl">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Diagnóstico de Sistema</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Verificação de token, SP-API, campanhas e health geral.</p>
+                </div>
+                <Link to="/diagnostico" className="flex items-center gap-1.5 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold rounded-lg hover:text-white whitespace-nowrap">
+                  Diagnóstico
+                </Link>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}

@@ -327,6 +327,36 @@ export default function Analytics() {
             </div>
           </div>
 
+          {/* Gráfico Impressões por Dia */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <h2 className="text-sm font-semibold text-slate-300 mb-1">Impressões por Dia ({period}d)</h2>
+            <p className="text-xs text-slate-500 mb-4">
+              Total: <span className="text-white font-semibold">{totImpressions.toLocaleString('pt-BR')}</span> impressões
+              · Média/dia: <span className="text-white font-semibold">{dailyData.length > 0 ? Math.round(totImpressions / dailyData.length).toLocaleString('pt-BR') : 0}</span>
+            </p>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={dailyData}>
+                <defs>
+                  <linearGradient id="gImpressions" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gClicks2" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                <Area type="monotone" dataKey="impressions" name="Impressões" stroke="#8B5CF6" fill="url(#gImpressions)" strokeWidth={2} />
+                <Area type="monotone" dataKey="clicks" name="Cliques" stroke="#3B82F6" fill="url(#gClicks2)" strokeWidth={1.5} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
           {/* Receita por produto */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
             <h2 className="text-sm font-semibold text-slate-300 mb-4">Receita & Spend por Produto (Top 10, 30d)</h2>

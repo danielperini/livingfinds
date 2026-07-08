@@ -50,6 +50,7 @@ import CampaignQueueMonitor from '@/pages/CampaignQueueMonitor';
 import TaskQueueMonitor from '@/pages/TaskQueueMonitor';
 import EficienciaIA from '@/pages/EficienciaIA';
 import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
+import SalaDeComando from '@/pages/SalaDeComando';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -114,6 +115,7 @@ const AuthenticatedApp = () => {
           <Route path="/task-queue" element={<TaskQueueMonitor />} />
           <Route path="/eficiencia-ia" element={<EficienciaIA />} />
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
+          <Route path="/sala-de-comando" element={<SalaDeComando />} />
 
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
