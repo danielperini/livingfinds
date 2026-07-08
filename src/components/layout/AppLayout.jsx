@@ -17,7 +17,7 @@ const navItems = [
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
   { path: '/ads', icon: Megaphone, label: 'Campanhas' },
   { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
-  { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Comando' },
+  { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Controle' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
   { path: '/manual', icon: Book, label: 'Manual' },
 ];

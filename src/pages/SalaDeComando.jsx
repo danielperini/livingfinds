@@ -7,6 +7,7 @@ import {
   Clock, Filter, Search, Download, Package, Key, Rocket,
   AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings
 } from 'lucide-react';
+import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import { Link } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -52,6 +53,7 @@ function parseError(err) {
 
 const TABS = [
   { id: 'visao_geral', label: 'Visão Geral' },
+  { id: 'kickoff', label: 'Kick-off' },
   { id: 'alertas', label: 'Alertas' },
   { id: 'fila', label: 'Fila e Execuções' },
   { id: 'historico', label: 'Histórico e Decisões' },
@@ -335,7 +337,7 @@ export default function SalaDeComando() {
             <Terminal className="w-5 h-5 text-cyan" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">Sala de Comando</h1>
+            <h1 className="text-lg font-bold text-white">Sala de Controle</h1>
             <p className="text-xs text-slate-400">
               {criticalAlerts > 0 && <span className="text-red-400 font-semibold">{criticalAlerts} crítico{criticalAlerts > 1 ? 's' : ''} · </span>}
               {activeAlerts} alerta{activeAlerts !== 1 ? 's' : ''} ativos · {queueFailed} erros na fila · {pendingDecisions} decisões pendentes
@@ -362,6 +364,8 @@ export default function SalaDeComando() {
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             {t.label}
+            {t.id === 'kickoff' && kickoffQueue.filter(i => i.status === 'failed').length > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{kickoffQueue.filter(i => i.status === 'failed').length}</span>}
+            {t.id === 'kickoff' && kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length > 0 && kickoffQueue.filter(i => i.status === 'failed').length === 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">{kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length}</span>}
             {t.id === 'alertas' && activeAlerts > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span>}
             {t.id === 'fila' && queueFailed > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span>}
             {t.id === 'autopilot' && pendingDecisions > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span>}
@@ -454,9 +458,12 @@ export default function SalaDeComando() {
 
               {/* Atalhos rápidos */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <button onClick={() => setTab('kickoff')} className="bg-surface-1 border border-violet-500/25 hover:border-violet-500/40 rounded-xl p-4 block text-left w-full transition-colors">
+                  <p className="text-sm font-semibold text-violet-300">Kick-off de Produtos</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Fila e status de lançamentos</p>
+                </button>
                 {[
                   { label: 'Gestão de Anúncios', path: '/ads', desc: 'Campanhas, keywords, bids' },
-                  { label: 'Autopilot', path: '/autopilot', desc: 'Motor de IA completo' },
                   { label: 'Integração Amazon', path: '/integracoes/amazon', desc: 'Token, SP-API, OAuth' },
                   { label: 'Configurações', path: '/settings', desc: 'Metas, budget, perfil' },
                 ].map(s => (
@@ -465,6 +472,91 @@ export default function SalaDeComando() {
                     <p className="text-xs text-slate-500 mt-0.5">{s.desc}</p>
                   </Link>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── KICK-OFF ─────────────────────────────────────────────────────── */}
+          {tab === 'kickoff' && (
+            <div className="space-y-4">
+              {/* KPIs */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'Agendados',   value: kickoffQueue.filter(i => i.status === 'scheduled').length,  color: 'text-cyan' },
+                  { label: 'Processando', value: kickoffQueue.filter(i => i.status === 'processing').length, color: 'text-amber-400' },
+                  { label: 'Concluídos',  value: kickoffQueue.filter(i => i.status === 'completed').length,  color: 'text-emerald-400' },
+                  { label: 'Com Erro',    value: kickoffQueue.filter(i => i.status === 'failed').length,     color: 'text-red-400' },
+                ].map(k => (
+                  <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl px-4 py-3 text-center">
+                    <p className="text-xs text-slate-500 mb-1">{k.label}</p>
+                    <p className={`text-2xl font-bold ${k.color}`}>{k.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Ações rápidas */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={() => runQueueNow('kickoff', 'processProductKickoffQueueV2')}
+                  disabled={running.kickoff || !account || kickoffQueue.filter(i => i.status === 'scheduled').length === 0}
+                  className="flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-40 transition-colors"
+                >
+                  {running.kickoff ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  {running.kickoff ? 'Executando Fila...' : 'Executar Fila Agora'}
+                </button>
+                <button
+                  onClick={() => clearDone('ProductKickoffQueue', kickoffQueue)}
+                  disabled={kickoffQueue.filter(i => ['completed', 'failed', 'cancelled'].includes(i.status)).length === 0}
+                  className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg disabled:opacity-40 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Limpar Concluídos
+                </button>
+                <button
+                  onClick={() => runRepair()}
+                  disabled={repairRunning || !account}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-sm font-semibold rounded-lg disabled:opacity-40 transition-colors"
+                >
+                  {repairRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
+                  {repairRunning ? 'Reparando...' : 'Reparar Campanhas AUTO'}
+                </button>
+              </div>
+
+              {repairMsg && (
+                <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${repairMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+                  {repairMsg.text}
+                </div>
+              )}
+
+              {/* Painel de Kick-off integrado */}
+              {account && (
+                <div className="rounded-xl border border-violet-500/20 bg-[#0f0d1a] overflow-hidden">
+                  <KickoffControlPanel
+                    accountId={account.id}
+                    onRetry={async (item) => {
+                      await base44.entities.ProductKickoffQueue.update(item.id, {
+                        status: 'scheduled',
+                        last_error: null,
+                        attempt_count: 0,
+                        scheduled_at: new Date().toISOString(),
+                      });
+                      loadAll();
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Link para produtos */}
+              <div className="flex items-center gap-3 p-4 bg-surface-1 border border-surface-2 rounded-xl">
+                <Rocket className="w-4 h-4 text-violet-400 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-white">Iniciar novo Kick-off</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Selecione um produto sem campanha e inicie o processo de lançamento.</p>
+                </div>
+                <a href="/products" onClick={e => { e.preventDefault(); window.location.href = '/products'; }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 text-xs font-semibold rounded-lg hover:bg-violet-500/25 whitespace-nowrap transition-colors">
+                  Ir para Produtos
+                </a>
               </div>
             </div>
           )}
