@@ -1,34 +1,30 @@
 /**
- * syncProductSalesMetrics — Busca Business Report (GET_SALES_AND_TRAFFIC_REPORT) via SP-API
- * e persiste dados diários na entidade SalesDaily.
+ * syncProductSalesMetrics — Busca dados de vendas via SP-API Reports
  *
- * Fluxo:
- * 1. Solicita relatório à SP-API
- * 2. Aguarda processamento via polling (até 60s)
- * 3. Baixa e parseia o TSV
- * 4. Upsert de registros em SalesDaily por (amazon_account_id, asin, date)
+ * Usa GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL
+ * Role necessária: "Inventory and Order Tracking" (Inventário e rastreamento de pedidos)
+ * — já aprovada na conta.
+ *
+ * Agrega pedidos por dia e ASIN, salva em SalesDaily.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 async function getSPApiToken() {
   const refreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN');
-  if (!refreshToken) throw new Error('Sem SP refresh token configurado (AMAZON_SP_REFRESH_TOKEN)');
-
+  if (!refreshToken) throw new Error('Sem SP refresh token (AMAZON_SP_REFRESH_TOKEN)');
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
     client_id: Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '',
     client_secret: Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '',
   });
-
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString(),
   });
-
   const data = await res.json();
-  if (!res.ok) throw new Error(`Token SP-API error: ${data.error_description || data.error}`);
+  if (!res.ok) throw new Error(`Token SP-API: ${data.error_description || data.error}`);
   return data.access_token;
 }
 
@@ -52,7 +48,7 @@ Deno.serve(async (req) => {
 
     if (!amazonAccountId) {
       const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-last_sync_at', 1);
-      if (accounts.length === 0) return Response.json({ error: 'Nenhuma conta Amazon encontrada' }, { status: 404 });
+      if (accounts.length === 0) return Response.json({ error: 'Nenhuma conta Amazon conectada' }, { status: 404 });
       amazonAccountId = accounts[0].id;
     }
 
@@ -61,17 +57,20 @@ Deno.serve(async (req) => {
 
     const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
     const spBase = getSPApiBase(account.region);
+    const token = await getSPApiToken();
 
     // Período: últimos 30 dias fechados
     const endDate = new Date();
-    endDate.setDate(endDate.getDate() - 1); // ontem
+    endDate.setDate(endDate.getDate() - 1);
     const startDate = new Date(endDate);
-    startDate.setDate(startDate.getDate() - 29); // 30 dias atrás
+    startDate.setDate(startDate.getDate() - 29);
 
-    const token = await getSPApiToken();
+    const startISO = startDate.toISOString().slice(0, 10);
+    const endISO = endDate.toISOString().slice(0, 10);
 
-    // 1. Solicitar relatório
-    console.log(`[syncProductSalesMetrics] Solicitando relatório ${startDate.toISOString().slice(0,10)} → ${endDate.toISOString().slice(0,10)}`);
+    console.log(`[syncProductSalesMetrics] Solicitando relatório de pedidos ${startISO} → ${endISO}`);
+
+    // 1. Solicitar relatório de pedidos (role: Inventory and Order Tracking)
     const reportRes = await fetch(`${spBase}/reports/2021-06-30/reports`, {
       method: 'POST',
       headers: {
@@ -80,25 +79,24 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        reportType: 'GET_SALES_AND_TRAFFIC_REPORT',
+        reportType: 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',
         marketplaceIds: [marketplaceId],
         dataStartTime: startDate.toISOString(),
         dataEndTime: endDate.toISOString(),
-        reportOptions: { dateGranularity: 'DAY' },
       }),
     });
 
     if (!reportRes.ok) {
       const err = await reportRes.json().catch(() => ({}));
       const msg = err.errors?.[0]?.message || JSON.stringify(err);
-      console.error(`[syncProductSalesMetrics] Falha ao solicitar: ${msg}`);
+      console.error(`[syncProductSalesMetrics] Erro ao solicitar: ${msg}`);
       return Response.json({ error: 'Falha ao solicitar relatório SP-API', amazon_error: msg }, { status: 500 });
     }
 
     const { reportId } = await reportRes.json();
     console.log(`[syncProductSalesMetrics] reportId: ${reportId}`);
 
-    // 2. Polling até DONE (max 60s)
+    // 2. Polling até DONE (max ~60s)
     let reportStatus = 'IN_QUEUE';
     let reportDocumentId = null;
     for (let i = 0; i < 15 && ['IN_QUEUE', 'IN_PROGRESS'].includes(reportStatus); i++) {
@@ -110,95 +108,108 @@ Deno.serve(async (req) => {
       reportStatus = statusData.processingStatus;
       if (reportStatus === 'DONE') reportDocumentId = statusData.reportDocumentId;
       else if (reportStatus === 'CANCELLED' || reportStatus === 'FATAL') {
-        return Response.json({ error: `Relatório ${reportStatus}`, status: reportStatus }, { status: 500 });
+        return Response.json({ error: `Relatório ${reportStatus}`, detail: statusData }, { status: 500 });
       }
-      console.log(`[syncProductSalesMetrics] Tentativa ${i+1}/15 — ${reportStatus}`);
+      console.log(`[syncProductSalesMetrics] Tentativa ${i + 1}/15 — ${reportStatus}`);
     }
 
     if (!reportDocumentId) {
-      return Response.json({ error: 'Relatório não processado a tempo', status: reportStatus }, { status: 500 });
+      return Response.json({ error: 'Timeout aguardando relatório', status: reportStatus }, { status: 500 });
     }
 
     // 3. Baixar URL do documento
-    const docMeta = await (await fetch(`${spBase}/reports/2021-06-30/documents/${reportDocumentId}`, {
+    const docRes = await fetch(`${spBase}/reports/2021-06-30/documents/${reportDocumentId}`, {
       headers: { 'Authorization': `Bearer ${token}`, 'x-amz-access-token': token },
-    })).json();
-
+    });
+    const docMeta = await docRes.json();
     const downloadUrl = docMeta.url;
-    if (!downloadUrl) return Response.json({ error: 'URL do documento não encontrada', docMeta }, { status: 500 });
+    if (!downloadUrl) return Response.json({ error: 'URL do documento ausente', docMeta }, { status: 500 });
 
-    // 4. Baixar conteúdo TSV
+    // 4. Baixar TSV
     const contentRes = await fetch(downloadUrl);
     if (!contentRes.ok) return Response.json({ error: 'Falha ao baixar conteúdo', status: contentRes.status }, { status: 500 });
 
     const text = await contentRes.text();
     const lines = text.split('\n').filter(l => l.trim());
-    if (lines.length < 2) return Response.json({ ok: true, message: 'Relatório vazio', lines: lines.length });
+    if (lines.length < 2) return Response.json({ ok: true, message: 'Relatório vazio', records_saved: 0 });
 
-    // 5. Parsear TSV
-    const headers = lines[0].split('\t').map(h => h.trim());
+    // 5. Parsear TSV — colunas do relatório de pedidos flat file
+    const headers = lines[0].split('\t').map(h => h.trim().toLowerCase());
     const num = (val) => {
-      if (!val || val === '--' || val === '-' || val === 'N/A') return 0;
-      return parseFloat(val.replace(/[^0-9.-]/g, '')) || 0;
+      if (!val || val === '--' || val === '-') return 0;
+      return parseFloat(String(val).replace(/[^0-9.-]/g, '')) || 0;
     };
 
-    const records = [];
+    // Agregar por (date, asin)
+    const byDateAsin = new Map();
+
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split('\t');
       const row = {};
       headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim(); });
 
-      // O relatório por DAY tem uma coluna de data
-      const date = row['date'] || row['Date'] || row['startDate'] || endDate.toISOString().slice(0, 10);
-      const asin = row['parentAsin'] || row['childAsin'] || row['ASIN'] || row['asin'] || '';
-      const sku = row['sku'] || row['SKU'] || row['seller-sku'] || '';
+      // Extrair data do pedido (purchase-date ou order-date)
+      const rawDate = row['purchase-date'] || row['order-date'] || row['purchase_date'] || '';
+      if (!rawDate) continue;
+      const date = rawDate.slice(0, 10); // YYYY-MM-DD
+      if (date < startISO || date > endISO) continue;
 
-      if (!asin && !sku) continue;
+      const asin = row['asin'] || '';
+      const sku = row['sku'] || row['seller-sku'] || '';
+      const qty = num(row['quantity'] || row['quantity-purchased'] || '1');
+      const price = num(row['item-price'] || row['item_price'] || '0');
 
-      records.push({
-        amazon_account_id: amazonAccountId,
-        asin,
-        sku,
-        date: date.slice(0, 10),
-        units_ordered: num(row['unitsOrdered']),
-        ordered_product_sales: num(row['orderedProductSales'] || row['orderedProductSalesAmount']),
-        sessions: num(row['sessionsTotal'] || row['sessions']),
-        page_views: num(row['pageViewsTotal'] || row['pageViews']),
-        buy_box_pct: num(row['buyBoxPercentage']),
-        conversion_rate: num(row['unitSessionRatio'] || row['sessionItemOrderRatio']),
-      });
-    }
-
-    console.log(`[syncProductSalesMetrics] ${records.length} registros para salvar`);
-
-    // 6. Upsert em SalesDaily — deletar e recriar para o período
-    if (records.length > 0) {
-      // Deletar registros antigos do período para evitar duplicatas
-      await base44.asServiceRole.entities.SalesDaily.deleteMany({
-        amazon_account_id: amazonAccountId,
-        date: { $gte: startDate.toISOString().slice(0, 10), $lte: endDate.toISOString().slice(0, 10) },
-      });
-
-      // Salvar em lotes de 50
-      const BATCH = 50;
-      let saved = 0;
-      for (let i = 0; i < records.length; i += BATCH) {
-        const batch = records.slice(i, i + BATCH);
-        await base44.asServiceRole.entities.SalesDaily.bulkCreate(batch);
-        saved += batch.length;
+      const key = `${date}|${asin || sku}`;
+      if (!byDateAsin.has(key)) {
+        byDateAsin.set(key, {
+          amazon_account_id: amazonAccountId,
+          asin,
+          sku,
+          date,
+          units_ordered: 0,
+          ordered_product_sales: 0,
+          sessions: 0,
+          page_views: 0,
+          buy_box_pct: 0,
+          conversion_rate: 0,
+        });
       }
-
-      console.log(`[syncProductSalesMetrics] ${saved} registros salvos em SalesDaily`);
+      const entry = byDateAsin.get(key);
+      entry.units_ordered += qty;
+      entry.ordered_product_sales += price;
     }
+
+    const records = Array.from(byDateAsin.values());
+    console.log(`[syncProductSalesMetrics] ${records.length} registros (date×asin) extraídos`);
+
+    if (records.length === 0) {
+      return Response.json({ ok: true, message: 'Nenhum pedido encontrado no período', records_saved: 0 });
+    }
+
+    // 6. Deletar registros antigos do período e salvar novos
+    await base44.asServiceRole.entities.SalesDaily.deleteMany({
+      amazon_account_id: amazonAccountId,
+      date: { $gte: startISO, $lte: endISO },
+    });
+
+    const BATCH = 50;
+    let saved = 0;
+    for (let i = 0; i < records.length; i += BATCH) {
+      await base44.asServiceRole.entities.SalesDaily.bulkCreate(records.slice(i, i + BATCH));
+      saved += Math.min(BATCH, records.length - i);
+    }
+
+    console.log(`[syncProductSalesMetrics] ${saved} registros salvos em SalesDaily`);
 
     return Response.json({
       ok: true,
       amazon_account_id: amazonAccountId,
-      period: { start: startDate.toISOString().slice(0, 10), end: endDate.toISOString().slice(0, 10) },
+      period: { start: startISO, end: endISO },
       report_id: reportId,
-      records_saved: records.length,
-      message: `${records.length} registros salvos em SalesDaily`,
+      records_saved: saved,
+      message: `${saved} registros diários salvos em SalesDaily`,
     });
+
   } catch (error) {
     console.error('[syncProductSalesMetrics] Erro:', error.message);
     return Response.json({ error: error.message }, { status: 500 });
