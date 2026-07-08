@@ -233,13 +233,56 @@ Deno.serve(async (req) => {
     }
 
     // ── 2. Dados em paralelo ──────────────────────────────────────────────
-    const [keywords, campaigns, products, customSeasonalEvents, metricsRaw] = await Promise.all([
+    const [keywords, campaigns, products, customSeasonalEvents, metricsRaw, salesDailyRaw] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
       base44.asServiceRole.entities.SeasonalityCalendar.filter({ amazon_account_id: aid, enabled: true }).catch(() => []),
       base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 200).catch(() => []),
+      base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 500).catch(() => []),
     ]);
+
+    // ── 2b. Agregar SalesDaily por ASIN (últimos 30 dias) ─────────────────
+    // Métricas reais de pedidos vindas do SP-API Orders Report
+    const salesByAsin = new Map(); // asin → { total_revenue, total_units, orders_count, avg_ticket, dates: Set }
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    for (const s of salesDailyRaw) {
+      if (!s.asin || s.date < thirtyDaysAgo) continue;
+      if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { total_revenue: 0, total_units: 0, orders_count: 0, dates: new Set() });
+      const entry = salesByAsin.get(s.asin);
+      entry.total_revenue += s.ordered_product_sales || 0;
+      entry.total_units += s.units_ordered || 0;
+      if ((s.units_ordered || 0) > 0) entry.orders_count++;
+      if (s.date) entry.dates.add(s.date);
+    }
+    // Finalizar métricas derivadas por ASIN
+    const salesMetricsByAsin = new Map();
+    for (const [asin, s] of salesByAsin.entries()) {
+      const activeDays = s.dates.size || 1;
+      salesMetricsByAsin.set(asin, {
+        real_revenue_30d: s.total_revenue,
+        real_units_30d: s.total_units,
+        real_orders_30d: s.orders_count,
+        real_avg_ticket: s.orders_count > 0 ? s.total_revenue / s.orders_count : 0,
+        real_revenue_per_day: s.total_revenue / activeDays,
+        has_real_sales: s.total_units > 0,
+      });
+    }
+
+    // TACoS real por ASIN: gasto ads / receita real
+    // Calculado usando metricsRaw (ads spend) + salesDailyRaw (receita real)
+    const adsSpendByAsin = new Map();
+    for (const m of metricsRaw) {
+      const asin = m.asin;
+      if (!asin) continue;
+      if (!adsSpendByAsin.has(asin)) adsSpendByAsin.set(asin, 0);
+      adsSpendByAsin.set(asin, adsSpendByAsin.get(asin) + (m.spend || 0));
+    }
+    for (const [asin, metrics] of salesMetricsByAsin.entries()) {
+      const spend = adsSpendByAsin.get(asin) || 0;
+      metrics.real_tacos_pct = metrics.real_revenue_30d > 0 ? (spend / metrics.real_revenue_30d) * 100 : null;
+      metrics.ads_spend_30d = spend;
+    }
 
     // ── 3. Contexto sazonal ───────────────────────────────────────────────
     const seasonalCtx = getSeasonalCtx(today, customSeasonalEvents);
@@ -331,12 +374,24 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // Enriquecer com métricas reais de pedidos do SP-API (SalesDaily)
+        const realSales = entity.asin ? (salesMetricsByAsin.get(entity.asin) || {}) : {};
+
         const entityData = {
           ...entity,
           current_bid: entity.current_bid || entity.bid || 0.25,
           current_budget: entity.daily_budget || 0,
           stock: product?.fba_inventory || 0,
           stock_days: product?.stock_days || 0,
+          // Métricas reais de faturamento (SP-API Orders)
+          real_revenue_30d: realSales.real_revenue_30d || 0,
+          real_units_30d: realSales.real_units_30d || 0,
+          real_orders_30d: realSales.real_orders_30d || 0,
+          real_avg_ticket: realSales.real_avg_ticket || 0,
+          real_revenue_per_day: realSales.real_revenue_per_day || 0,
+          has_real_sales: realSales.has_real_sales || false,
+          real_tacos_pct: realSales.real_tacos_pct ?? null,
+          ads_spend_30d: realSales.ads_spend_30d || 0,
         };
 
         if (!entityMatchesRule(rule, entityData)) continue;
@@ -345,7 +400,8 @@ Deno.serve(async (req) => {
         // Guardrail sazonal — apenas para ações de aumento
         const isIncreaseAction = ['increase_bid_percent', 'redistribute_budget', 'activate_campaign', 'activate_keyword', 'create_exact_keyword', 'create_phrase_keyword', 'create_broad_keyword', 'create_campaign'].includes(rule.action.type);
         if (isIncreaseAction) {
-          const hasSales = (entityData.sales || entityData.orders || 0) > 0;
+          // Considerar vendas reais (SP-API) além de vendas de ads
+          const hasSales = (entityData.sales || entityData.orders || 0) > 0 || entityData.has_real_sales;
           const hasStock = !isOutOfStock;
           const stockDays = product?.stock_days || null;
           if (seasonalBlocksIncrease(seasonalCtx, weekendCtx, hasSales, hasStock, stockDays)) {
@@ -407,6 +463,10 @@ Deno.serve(async (req) => {
           idempotency_key: iKey,
           status: 'pending',
           seasonal_context: seasonalPayload,
+          // Métricas reais de faturamento registradas junto à ação
+          real_revenue_30d: entityData.real_revenue_30d || 0,
+          real_tacos_pct: entityData.real_tacos_pct,
+          has_real_sales: entityData.has_real_sales,
         });
         entityChangedThisCycle.set(entityId, rule.rule_key);
         stats.enqueued++;
@@ -430,6 +490,7 @@ Deno.serve(async (req) => {
       suggested_total_budget: suggestedTotalBudget,
       budget_within_limits: totalActiveBudget <= MAX_TOTAL_DAILY_BUDGET,
       seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
+      sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
       stats,
       conflicts_resolved: conflicts.length,
       actions_enqueued: actionsToEnqueue.length,
