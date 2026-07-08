@@ -206,6 +206,8 @@ Responda SOMENTE com JSON válido no formato:
   return terms.slice(0, TERMS_PER_PRODUCT);
 }
 
+const MAX_SUGGESTIONS_PER_ASIN = 10;
+
 // ── Verificar se produto já tem termos suficientes ────────────────────────────
 
 async function hasEnoughTerms(base44, aid, asin) {
@@ -214,6 +216,16 @@ async function hasEnoughTerms(base44, aid, asin) {
   );
   const goodTerms = existing.filter(t => (t.confidence || 0) >= MIN_CONFIDENCE);
   return goodTerms.length >= TERMS_PER_PRODUCT;
+}
+
+// ── Verificar limite de sugestões ativas por ASIN ─────────────────────────────
+
+async function hasReachedSuggestionLimit(base44, aid, asin) {
+  const existing = await base44.asServiceRole.entities.KeywordSuggestion.filter(
+    { amazon_account_id: aid, asin }, null, MAX_SUGGESTIONS_PER_ASIN + 1
+  );
+  const active = existing.filter(s => !['rejected', 'deleted'].includes(s.status) && s.deleted_by_user !== true);
+  return active.length >= MAX_SUGGESTIONS_PER_ASIN;
 }
 
 // ── Verificar cache ───────────────────────────────────────────────────────────
@@ -454,6 +466,13 @@ Deno.serve(async (req) => {
       const alreadyHas = await hasEnoughTerms(base44, aid, p.asin);
       if (alreadyHas && !forceAsin) {
         stats.products_skipped++;
+        continue;
+      }
+      // Bloquear se já atingiu o limite de sugestões ativas
+      const atLimit = await hasReachedSuggestionLimit(base44, aid, p.asin);
+      if (atLimit) {
+        stats.products_skipped++;
+        console.log(`[processNewOrRestocked] ASIN ${p.asin} no limite de ${MAX_SUGGESTIONS_PER_ASIN} sugestões — pulando.`);
         continue;
       }
 

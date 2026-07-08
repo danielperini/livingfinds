@@ -346,6 +346,21 @@ Deno.serve(async (request) => {
     const price = Number(product.price || product.buy_box_price || 0);
     const now = new Date().toISOString();
 
+    // ── Guardrail: limite de 10 sugestões ativas por ASIN ────────────────────
+    const MAX_SUGGESTIONS_PER_ASIN = 10;
+    const activeSuggestions = previousSuggestions.filter((s: any) =>
+      !['rejected', 'deleted'].includes(s.status) && s.deleted_by_user !== true
+    );
+    if (activeSuggestions.length >= MAX_SUGGESTIONS_PER_ASIN) {
+      await writeLog(base44, {
+        accountId, status: 'success', startedAt, asin, productId: product.id,
+        stage: 'skipped',
+        message: `ASIN ${asin} já tem ${activeSuggestions.length} sugestões ativas — limite ${MAX_SUGGESTIONS_PER_ASIN}. Bloqueado.`,
+        details: { skipped: true, active_suggestions: activeSuggestions.length },
+      });
+      return Response.json({ ok: true, skipped: true, asin, reason: `suggestion_limit_reached`, existing_count: activeSuggestions.length });
+    }
+
     // ── Conjunto de sugestões já existentes para dedup ────────────────────────
     const alreadySuggestedNorms = new Set(
       previousSuggestions.map((s: any) => `${norm(s.keyword || '')}::${s.match_type || 'exact'}`)
@@ -484,11 +499,9 @@ Deno.serve(async (request) => {
       }
     }
 
-    // ── Limite: máx 10 sugestões por produto (top por relevância) ─────────────
-    const MAX_PER_PRODUCT = 10;
-    const alreadyCount = previousSuggestions.filter((s: any) =>
-      !['rejected', 'deleted'].includes(s.status)
-    ).length;
+    // ── Limite: slots disponíveis até o máximo de 10 ──────────────────────────
+    const MAX_PER_PRODUCT = MAX_SUGGESTIONS_PER_ASIN;
+    const alreadyCount = activeSuggestions.length;
 
     if (alreadyCount >= MAX_PER_PRODUCT) {
       await writeLog(base44, { accountId, status: 'success', startedAt, asin, productId: product.id, stage: 'skipped', message: `Já existem ${alreadyCount} sugestões para este produto — limite ${MAX_PER_PRODUCT}. Nenhuma gerada.`, details: { skipped: true, existing: alreadyCount } });
