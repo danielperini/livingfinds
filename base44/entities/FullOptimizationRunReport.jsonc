@@ -1,0 +1,145 @@
+{
+  "name": "FullOptimizationRunReport",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "number",
+      "default": 0
+    },
+    "trigger": {
+      "type": "string",
+      "default": "manual"
+    },
+    "campaigns_reviewed": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_repaired": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_archived": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_created_auto": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_created_manual": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_reviewed": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_repaired": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_paused": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_created": {
+      "type": "number",
+      "default": 0
+    },
+    "targets_reviewed": {
+      "type": "number",
+      "default": 0
+    },
+    "targets_repaired": {
+      "type": "number",
+      "default": 0
+    },
+    "product_ads_paused_no_stock": {
+      "type": "number",
+      "default": 0
+    },
+    "bids_reduced": {
+      "type": "number",
+      "default": 0
+    },
+    "bids_increased": {
+      "type": "number",
+      "default": 0
+    },
+    "budgets_changed": {
+      "type": "number",
+      "default": 0
+    },
+    "negatives_created": {
+      "type": "number",
+      "default": 0
+    },
+    "errors": {
+      "type": "number",
+      "default": 0
+    },
+    "skipped_low_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_savings_total": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_sales_impact": {
+      "type": "number",
+      "default": 0
+    },
+    "data_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "reports_used": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "partial"
+      ],
+      "default": "running"
+    },
+    "economy_first_applied": {
+      "type": "boolean",
+      "default": true
+    },
+    "actions_enqueued": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}
