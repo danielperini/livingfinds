@@ -14,7 +14,13 @@
     "asin": {
       "type": "string"
     },
+    "sku": {
+      "type": "string"
+    },
     "product_name": {
+      "type": "string"
+    },
+    "product_title": {
       "type": "string"
     },
     "match_type": {
@@ -27,6 +33,15 @@
       ],
       "default": "exact"
     },
+    "recommended_match_type": {
+      "type": "string",
+      "enum": [
+        "EXACT",
+        "PHRASE",
+        "BROAD"
+      ],
+      "default": "PHRASE"
+    },
     "source": {
       "type": "string",
       "enum": [
@@ -35,9 +50,28 @@
         "user_input",
         "cross_asin",
         "ai_suggestion",
-        "csv_import"
+        "csv_import",
+        "product_title_ai_analysis",
+        "deterministic_title_parser"
       ],
       "default": "search_term_auto"
+    },
+    "source_detail": {
+      "type": "string"
+    },
+    "created_from": {
+      "type": "string"
+    },
+    "term_type": {
+      "type": "string",
+      "enum": [
+        "primary_high_conversion",
+        "mid_tail",
+        "long_tail",
+        "alternative_purchase_intent",
+        "general"
+      ],
+      "default": "general"
     },
     "status": {
       "type": "string",
@@ -48,6 +82,21 @@
         "archived"
       ],
       "default": "active"
+    },
+    "promotion_status": {
+      "type": "string",
+      "enum": [
+        "kickoff_candidate",
+        "promoted_to_manual",
+        "in_auto_campaign",
+        "rejected",
+        "pending"
+      ],
+      "default": "pending"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
     },
     "campaign_id": {
       "type": "string"
@@ -91,6 +140,10 @@
       "default": 0
     },
     "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr": {
       "type": "number",
       "default": 0
     },
@@ -146,6 +199,10 @@
       "format": "date-time"
     },
     "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
       "type": "string",
       "format": "date-time"
     }

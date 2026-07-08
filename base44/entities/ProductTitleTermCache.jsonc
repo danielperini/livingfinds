@@ -1,0 +1,48 @@
+{
+  "name": "ProductTitleTermCache",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "title_hash": {
+      "type": "string"
+    },
+    "product_title": {
+      "type": "string"
+    },
+    "terms_json": {
+      "type": "string"
+    },
+    "terms_count": {
+      "type": "number",
+      "default": 0
+    },
+    "min_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "title_hash"
+  ]
+}

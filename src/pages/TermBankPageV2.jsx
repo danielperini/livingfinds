@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, Sparkles, CheckCheck } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, Sparkles, CheckCheck, PackagePlus } from 'lucide-react';
 import SuggestionsPanel from '@/components/termbank/SuggestionsPanel';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -19,6 +19,7 @@ export default function TermBankPageV2() {
   const [genProgress, setGenProgress] = useState('');
   const [approveAllRunning, setApproveAllRunning] = useState(false);
   const [account, setAccount] = useState(null);
+  const [genRestocked, setGenRestocked] = useState(false);
 
   const MIN_CONFIDENCE = 75;
 
@@ -288,6 +289,36 @@ export default function TermBankPageV2() {
             {approveAllRunning ? 'Criando...' : `Aprovar todas (${top10Suggestions.filter(s => !['created', 'approved'].includes(s.status)).length})`}
           </button>
         )}
+        <button
+          onClick={async () => {
+            if (!account || genRestocked) return;
+            setGenRestocked(true);
+            setMessage(null);
+            try {
+              const res = await base44.functions.invoke('processNewOrRestockedProductsForTermBank', {
+                amazon_account_id: account.id, trigger: 'manual_ui'
+              });
+              const d = res?.data;
+              if (d?.ok) {
+                const s = d.stats || {};
+                setMessage({ type: 'success', text: `✓ ${s.terms_created || 0} termos criados para ${s.products_processed || 0} produto(s) novo(s)/reabastecido(s).` });
+                await load();
+              } else {
+                setMessage({ type: 'error', text: d?.error || 'Falha ao gerar termos de produtos.' });
+              }
+            } catch (e) {
+              setMessage({ type: 'error', text: e.message });
+            } finally {
+              setGenRestocked(false);
+            }
+          }}
+          disabled={genRestocked || loading}
+          className="flex items-center gap-2 rounded-lg bg-cyan/10 border border-cyan/25 px-3 py-2 text-xs font-semibold text-cyan hover:bg-cyan/20 transition-colors disabled:opacity-50"
+          title="Gerar termos iniciais para produtos novos ou reabastecidos"
+        >
+          {genRestocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackagePlus className="h-3.5 w-3.5" />}
+          {genRestocked ? 'Gerando...' : 'Produtos novos'}
+        </button>
         <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>

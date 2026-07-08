@@ -1,0 +1,84 @@
+{
+  "name": "NewProductTermBankRun",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trigger": {
+      "type": "string",
+      "default": "manual"
+    },
+    "products_scanned": {
+      "type": "number",
+      "default": 0
+    },
+    "new_products_found": {
+      "type": "number",
+      "default": 0
+    },
+    "restocked_products_found": {
+      "type": "number",
+      "default": 0
+    },
+    "products_processed": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_generated": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_created": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_updated": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_rejected": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_calls_used": {
+      "type": "number",
+      "default": 0
+    },
+    "fallback_used": {
+      "type": "number",
+      "default": 0
+    },
+    "products_skipped": {
+      "type": "number",
+      "default": 0
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "partial"
+      ],
+      "default": "running"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}
