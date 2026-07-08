@@ -71,9 +71,12 @@ export default function SuggestionsPanel({ suggestions, products, workingId, onR
                     )}
                   </td>
                   <td className="px-4 py-3">
-                   <span className="text-xs font-semibold text-violet-400">
-                     {Math.round((s.confidence || s.relevance_score || 0) * 100)}%
-                   </span>
+                   {(() => {
+                     const raw = s.confidence || s.relevance_score || 0;
+                     const conf = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+                     const color = conf >= 90 ? 'text-emerald-400' : conf >= 75 ? 'text-violet-400' : 'text-amber-400';
+                     return <span className={`text-xs font-semibold ${color}`}>{conf}%</span>;
+                   })()}
                    <div className="flex items-center gap-1 mt-1 flex-wrap">
                      {s.tail_type === 'medium' && (
                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/25 text-amber-400">

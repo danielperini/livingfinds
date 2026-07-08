@@ -82,18 +82,30 @@ function calcBid({ stCpc, stAcos, stConvRate, avgCpc, price, targetAcos, minBid,
   };
 }
 
-// ── Detectar termos truncados (palavras cortadas com '..', '::', limite de char) ─
+const TERM_BANK_MIN_CONFIDENCE = 75; // confiança mínima (0-100 escala inteira)
+
+// ── Detectar termos truncados / incompletos ───────────────────────────────────
 function isTruncated(keyword: string): boolean {
-  if (!keyword) return false;
+  if (!keyword) return true;
   const k = keyword.trim();
-  // Termina com '..', '...', ':' ou tem palavras com menos de 2 chars no final
+  if (k.length < 3) return true;
   if (/\.{2,}$|:\s*$/.test(k)) return true;
-  // Palavra final muito curta (≤2 chars) que não é uma preposição conhecida
-  const shortEndings = /\s[a-z]{1,2}$/;
-  const allowedShort = new Set(['de', 'do', 'da', 'em', 'no', 'na', 'ao', 'os', 'as', 'e', 'a', 'o']);
+  const allowedShort = new Set(['de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'ao', 'os', 'as', 'e', 'a', 'o']);
   const lastWord = k.split(/\s+/).pop() || '';
   if (lastWord.length <= 2 && !allowedShort.has(lastWord.toLowerCase())) return true;
+  // Apenas números ou símbolos
+  if (/^[\d\s\W]+$/.test(k)) return true;
+  // Tokens muito curtos sem ser preposição
+  const tokens = k.split(/\s+/);
+  const usefulTokens = tokens.filter(t => t.length >= 3 || allowedShort.has(t.toLowerCase()));
+  if (usefulTokens.length === 0) return true;
   return false;
+}
+
+// Normaliza confidence para escala 0-100 (aceita 0-1 float ou 0-100 int)
+function toConfidence100(c: number): number {
+  if (c <= 1) return Math.round(c * 100);
+  return Math.round(c);
 }
 
 // ── Extração determinística de N-grams do título ──────────────────────────────
@@ -152,11 +164,15 @@ async function callClaude(payload: any): Promise<any> {
   const model = 'claude-haiku-4-5';
   const systemPrompt = `Você é especialista em Amazon Ads Sponsored Products no marketplace brasileiro.
 Gere exatamente 10 palavras-chave novas: 5 de cauda média e 5 de cauda longa.
-Use apenas características reais do produto e dados históricos.
-Não repita keywords existentes ou negativadas.
-Use match_type exact.
-Retorne somente JSON válido no formato:
-{"medium_tail":[{"keyword":"...","match_type":"exact","intent":"commercial","relevance_score":0.95,"confidence":0.90,"reason":"..."}],"long_tail":[{"keyword":"...","match_type":"exact","intent":"high_purchase_intent","relevance_score":0.97,"confidence":0.88,"reason":"..."}]}`;
+REGRAS OBRIGATÓRIAS:
+- Apenas termos COMPLETOS (nunca fragmentos como "sensor infra", "cesto de", "clor")
+- Confidence em escala 0-100 (inteiro). Mínimo obrigatório: 75. NÃO incluir termos com confidence < 75.
+- Termos com intenção de compra no marketplace brasileiro
+- Não repetir keywords existentes ou negativadas
+- match_type: exact para todos
+- Explicar por que o termo é relevante em "reason"
+Retorne APENAS JSON válido neste formato exato:
+{"medium_tail":[{"keyword":"lixeira com sensor","match_type":"exact","intent":"commercial","relevance_score":0.95,"confidence":88,"reason":"Termo direto com intenção de compra confirmada"}],"long_tail":[{"keyword":"lixeira automatica com sensor infravermelho","match_type":"exact","intent":"high_purchase_intent","relevance_score":0.97,"confidence":82,"reason":"Especificação técnica com alta conversão"}]}`;
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -338,11 +354,13 @@ Deno.serve(async (request) => {
     const recordsToCreate: any[] = [];
     const generatedNorms = new Set<string>();
 
-    const addSuggestion = (keyword: string, tailType: string, intent: string, relevance: number, confidence: number, reason: string, sourceMetricTerm?: string) => {
+    const addSuggestion = (keyword: string, tailType: string, intent: string, relevance: number, confidence: number, reason: string, _sourceMetricTerm?: string) => {
       const kw = keyword.toLowerCase().trim();
       if (!kw || kw.length < 4) return;
-      // Rejeitar termos truncados
       if (isTruncated(kw)) return;
+      // Confiança mínima obrigatória (escala 0-100)
+      const conf100 = toConfidence100(confidence);
+      if (conf100 < TERM_BANK_MIN_CONFIDENCE) return;
       if (negativeTexts.some((n) => isSimilar(n, kw))) return;
       if (existingKeywordTexts.some((e) => isSimilar(e, kw))) return;
       const normalized = norm(kw);
@@ -370,7 +388,7 @@ Deno.serve(async (request) => {
         match_type: 'exact',
         intent,
         relevance_score: relevance,
-        confidence,
+        confidence: conf100, // sempre salvar em escala 0-100
         reason,
         source: 'AUTOMATIC_SEARCH_TERM',
         status: 'suggested',
@@ -406,12 +424,15 @@ Deno.serve(async (request) => {
         ...aiResult.long_tail.map((s: any) => ({ ...s, tail_type: 'long' })),
       ];
       for (const suggestion of aiSuggestions) {
+        const rawConf = Number(suggestion.confidence || 0.75);
+        const conf100 = toConfidence100(rawConf);
+        if (conf100 < TERM_BANK_MIN_CONFIDENCE) continue; // rejeitar antes de addSuggestion
         addSuggestion(
           String(suggestion.keyword || ''),
           suggestion.tail_type,
           suggestion.intent || 'commercial',
           Number(suggestion.relevance_score || 0.80),
-          Number(suggestion.confidence || 0.75),
+          conf100, // já em 0-100
           suggestion.reason || 'Gerado por IA (Claude)',
         );
       }
@@ -419,22 +440,21 @@ Deno.serve(async (request) => {
       // ── MODO DETERMINÍSTICO: zero créditos de IA ───────────────────────────
       stage = 'deterministic_generation';
 
-      // 1. Search terms já convertidos — score dinâmico por conversão e cauda
+      // 1. Search terms convertidos — confidence em escala 0-100
       for (const metric of searchTermMetrics) {
         if (metric.orders < 1) continue;
         if (isTruncated(metric.term)) continue;
         const words = metric.term.split(' ').length;
-        // Cauda média (2-3 palavras): priorizar alta conversão e volume
-        // Cauda longa (4+): priorizar menor acos e intenção de compra confirmada
         const isMedium = words >= 2 && words <= 3;
         const tailType = isMedium ? 'medium' : 'long';
-        // Score de relevância: médio ganha bônus por volume de conversão
-        const convBonus = Math.min(0.10, metric.orders * 0.02);
-        const relevance = isMedium ? Math.min(0.98, 0.90 + convBonus) : Math.min(0.95, 0.85 + convBonus);
-        const confidence = Math.min(0.97, 0.65 + metric.orders * 0.08 + (metric.conv_rate > 0.10 ? 0.10 : 0));
+        const convBonus = Math.min(10, metric.orders * 2);
+        const relevance = isMedium ? Math.min(0.98, 0.90 + convBonus / 100) : Math.min(0.95, 0.85 + convBonus / 100);
+        // orders=1 → 75, orders=2 → 85, orders=3+ → 90+
+        const conf100 = metric.orders >= 3 ? Math.min(97, 90 + metric.orders) :
+                        metric.orders === 2 ? 85 :
+                        metric.conv_rate > 0.10 ? 80 : 75;
         addSuggestion(
-          metric.term, tailType, 'high_purchase_intent',
-          relevance, confidence,
+          metric.term, tailType, 'high_purchase_intent', relevance, conf100,
           `Convertido: ${metric.orders} pedido(s), taxa ${(metric.conv_rate * 100).toFixed(1)}%, CPC R$${metric.cpc.toFixed(2)}`,
         );
       }
@@ -445,20 +465,21 @@ Deno.serve(async (request) => {
         const words = String(tb.term || '').split(' ').length;
         const tailType = words >= 4 ? 'long' : 'medium';
         addSuggestion(
-          String(tb.term || ''), tailType, 'commercial',
-          0.88, 0.80,
+          String(tb.term || ''), tailType, 'commercial', 0.88, 80,
           `TermBank: classificação ${tb.classification || 'active'}, score ${tb.performance_score || 0}`,
         );
       }
 
-      // 3. N-grams do título (extração determinística)
+      // 3. N-grams do título — confidence 75 (mínimo permitido) para termos apenas especulativos
       const titleNgrams = extractTitleNgrams(title);
       for (const ngram of titleNgrams) {
         const words = ngram.split(' ').length;
         const tailType = words >= 4 ? 'long' : 'medium';
+        // Título gera 75 — acima do mínimo, mas precisa ter pelo menos 2 palavras completas
+        if (words < 2) continue;
         addSuggestion(
-          ngram, tailType, 'commercial', 0.75, 0.65,
-          `Extraído do título do produto: "${title.slice(0, 60)}"`,
+          ngram, tailType, 'commercial', 0.75, 75,
+          `Extraído do título: "${title.slice(0, 60)}"`,
         );
       }
     }
@@ -474,10 +495,16 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, skipped: true, asin, reason: `already_has_${alreadyCount}_suggestions`, existing_count: alreadyCount });
     }
 
-    // Ordenar por relevância e pegar apenas o necessário para completar até 10
+    // Ordenar por confidence desc, depois relevance, orders, sales
     const slots = MAX_PER_PRODUCT - alreadyCount;
     const topRecords = recordsToCreate
-      .sort((a: any, b: any) => (b.relevance_score || 0) - (a.relevance_score || 0))
+      .sort((a: any, b: any) => {
+        const cDiff = (b.confidence || 0) - (a.confidence || 0);
+        if (cDiff !== 0) return cDiff;
+        const rDiff = (b.relevance_score || 0) - (a.relevance_score || 0);
+        if (rDiff !== 0) return rDiff;
+        return (b.orders || 0) - (a.orders || 0);
+      })
       .slice(0, slots);
 
     // ── Gravar sugestões em lotes de 20 ──────────────────────────────────────

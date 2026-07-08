@@ -20,18 +20,23 @@ export default function TermBankPageV2() {
   const [approveAllRunning, setApproveAllRunning] = useState(false);
   const [account, setAccount] = useState(null);
 
-  // Top 10 por produto: agrupar sugestões por asin e pegar as 10 mais relevantes
+  const MIN_CONFIDENCE = 75;
+
+  // Normaliza confidence: aceita 0-1 float ou 0-100 int
+  const toConf100 = (c) => c == null ? 0 : c <= 1 ? Math.round(c * 100) : Math.round(c);
+
+  // Top 10 por produto: filtrar confidence >= 75, ordenar por confidence desc
   const top10Suggestions = (() => {
     const byAsin = {};
     for (const s of suggestions) {
+      const conf = toConf100(s.confidence || s.relevance_score);
+      if (conf < MIN_CONFIDENCE) continue; // rejeitar baixa confiança
       if (!byAsin[s.asin]) byAsin[s.asin] = [];
-      byAsin[s.asin].push(s);
+      byAsin[s.asin].push({ ...s, _conf100: conf });
     }
     const result = [];
     for (const asin of Object.keys(byAsin)) {
-      const sorted = [...byAsin[asin]].sort((a, b) =>
-        (b.relevance_score || b.confidence || 0) - (a.relevance_score || a.confidence || 0)
-      );
+      const sorted = [...byAsin[asin]].sort((a, b) => b._conf100 - a._conf100);
       result.push(...sorted.slice(0, 10));
     }
     return result;
@@ -72,10 +77,9 @@ export default function TermBankPageV2() {
   const generateSuggestions = async () => {
     if (!account || generating) return;
     setGenerating(true);
-    setGenProgress('');
+    setGenProgress('Iniciando geração...');
     setMessage(null);
     try {
-      // Pegar produtos com título para gerar keywords
       const productsWithTitle = products.filter(p => p.product_name || p.display_name);
       if (!productsWithTitle.length) {
         setMessage({ type: 'error', text: 'Nenhum produto com título encontrado. Sincronize os títulos primeiro.' });
@@ -83,31 +87,41 @@ export default function TermBankPageV2() {
       }
 
       let totalGenerated = 0;
+      let totalRejected = 0;
       let errors = 0;
       for (let i = 0; i < productsWithTitle.length; i++) {
         const p = productsWithTitle[i];
-        setGenProgress(`Gerando sugestões para ${p.asin} (${i + 1}/${productsWithTitle.length})...`);
+        setGenProgress(`Processando ${p.asin || p.sku} (${i + 1}/${productsWithTitle.length})...`);
         try {
           const res = await base44.functions.invoke('suggestProductKeywordsWithAI', {
             amazon_account_id: account.id,
             asin: p.asin,
             product_id: p.id,
             product_name: p.product_name || p.display_name,
+            force_ai: false,
           });
-          if (res?.data?.ok) totalGenerated += res.data.suggestions_created || 0;
-        } catch { errors++; }
-        // Pausa de 1s entre produtos para evitar rate limit
-        if (i < productsWithTitle.length - 1) await new Promise(r => setTimeout(r, 1000));
+          const d = res?.data;
+          if (d?.ok && !d?.skipped) {
+            totalGenerated += d.new_suggestions || d.suggestions_created || 0;
+          }
+          if (d?.terms_rejected_low_confidence) totalRejected += d.terms_rejected_low_confidence;
+        } catch (err) { errors++; }
+        if (i < productsWithTitle.length - 1) await new Promise(r => setTimeout(r, 800));
       }
 
       setGenProgress('');
-      setMessage({ type: 'success', text: `✓ ${totalGenerated} sugestões geradas para ${productsWithTitle.length} produtos${errors > 0 ? ` · ${errors} erros` : ''}.` });
+      if (totalGenerated === 0) {
+        setMessage({ type: 'error', text: `Nenhum termo atingiu confiança mínima de ${MIN_CONFIDENCE}%.${totalRejected > 0 ? ` ${totalRejected} rejeitados por baixa confiança.` : ''}${errors > 0 ? ` ${errors} erros.` : ''}` });
+      } else {
+        setMessage({ type: 'success', text: `Termos criados com sucesso. ${totalGenerated} sugestão(ões) com confidence >= ${MIN_CONFIDENCE}%.${errors > 0 ? ` ${errors} erros.` : ''}` });
+      }
       await load();
     } catch (e) {
-      setMessage({ type: 'error', text: e.message });
+      setMessage({ type: 'error', text: `Erro: ${e.message}` });
       setGenProgress('');
     } finally {
       setGenerating(false);
+      setGenProgress('');
     }
   };
 
@@ -137,51 +151,57 @@ export default function TermBankPageV2() {
     await load();
   };
 
+  const isTermIncomplete = (kw) => {
+    if (!kw) return true;
+    const k = kw.trim();
+    if (k.length < 3) return true;
+    if (/\.{2,}$|:\s*$/.test(k)) return true;
+    const allowedShort = new Set(['de','do','da','dos','das','em','no','na','ao','os','as','e','a','o']);
+    const lastWord = k.split(/\s+/).pop() || '';
+    if (lastWord.length <= 2 && !allowedShort.has(lastWord.toLowerCase())) return true;
+    if (/^[\d\s\W]+$/.test(k)) return true;
+    return false;
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const me = await base44.auth.me();
       let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
-      const account = accounts[0];
-      if (!account) return;
-      setAccount(account);
+      const acc = accounts[0];
+      if (!acc) { setLoading(false); return; }
+      setAccount(acc);
       const [t, s, p] = await Promise.all([
-        base44.entities.TermBank.filter({ amazon_account_id: account.id }, '-performance_score', 500),
-        base44.entities.KeywordSuggestion.filter({ amazon_account_id: account.id }, '-created_at', 300),
-        base44.entities.Product.filter({ amazon_account_id: account.id }, '-updated_at', 200),
+        base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500),
+        base44.entities.KeywordSuggestion.filter({ amazon_account_id: acc.id }, '-confidence', 500),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-updated_at', 200),
       ]);
-      // Produtos com estoque ativo
       const activeProducts = p.filter(prod =>
-        (prod.status === 'active') &&
+        prod.status === 'active' &&
         (Number(prod.fba_inventory ?? prod.fba_quantity ?? 0) > 0 ||
          prod.inventory_status === 'in_stock' ||
          prod.inventory_status === 'available' ||
-         prod.inventory_status === null || prod.inventory_status === undefined)
+         prod.inventory_status == null)
       );
       const activeAsins = new Set(activeProducts.map(prod => prod.asin).filter(Boolean));
 
-      // Remover termos truncados
-      const isTruncated = (kw) => {
-        if (!kw) return false;
-        const k = kw.trim();
-        if (/\.{2,}$|:\s*$/.test(k)) return true;
-        const lastWord = k.split(/\s+/).pop() || '';
-        const allowedShort = new Set(['de','do','da','em','no','na','ao','os','as','e','a','o']);
-        return lastWord.length <= 2 && !allowedShort.has(lastWord.toLowerCase());
-      };
+      // TermBank: ordenar por confidence desc
+      const validTerms = t
+        .filter(term => !isTermIncomplete(term.term) && (!term.asin || activeAsins.has(term.asin)))
+        .sort((a, b) => toConf100(b.confidence) - toConf100(a.confidence));
+      setTerms(validTerms);
 
-      setTerms(t.filter(term =>
-        !isTruncated(term.term) &&
-        (!term.asin || activeAsins.has(term.asin))
-      ));
-      setSuggestions(s.filter((x) =>
+      // Sugestões: filtrar rejeitadas, incompletas e baixa confiança
+      setSuggestions(s.filter(x =>
         x.status !== 'rejected' &&
         x.deleted_by_user !== true &&
-        !isTruncated(x.keyword) &&
+        !isTermIncomplete(x.keyword) &&
         (!x.asin || activeAsins.has(x.asin))
       ));
       setProducts(activeProducts);
+    } catch (e) {
+      setMessage({ type: 'error', text: `Erro ao carregar: ${e.message}` });
     } finally {
       setLoading(false);
     }
@@ -190,6 +210,16 @@ export default function TermBankPageV2() {
   useEffect(() => { load(); }, [load]);
 
   async function review(suggestion, action) {
+    // Validar antes de enviar
+    if (action === 'approve' && isTermIncomplete(suggestion.keyword)) {
+      setMessage({ type: 'error', text: `Termo rejeitado por parecer incompleto: "${suggestion.keyword}"` });
+      return;
+    }
+    if (action === 'approve' && toConf100(suggestion.confidence || suggestion.relevance_score) < MIN_CONFIDENCE) {
+      setMessage({ type: 'error', text: `Termo com confiança abaixo de ${MIN_CONFIDENCE}% não pode ser aprovado.` });
+      return;
+    }
+
     setWorkingId(suggestion.id);
     setMessage(null);
     try {
@@ -200,30 +230,32 @@ export default function TermBankPageV2() {
       if (action === 'approve') {
         const campStatus = data.campaign_status;
         const statusLabels = {
-          enabled: '✅ Campanha ativa',
-          active: '✅ Campanha ativa',
-          created: '✅ Campanha criada',
-          incomplete: '⚠️ Campanha incompleta (reparo agendado)',
-          paused: '⏸ Campanha pausada',
-          archived: '📦 Campanha arquivada',
-          failed: '❌ Falha ao criar campanha',
+          enabled: 'Campanha ativa',
+          active: 'Campanha ativa',
+          created: 'Campanha criada',
+          incomplete: 'Campanha incompleta (reparo agendado)',
+          paused: 'Campanha pausada',
+          archived: 'Campanha arquivada',
+          failed: 'Falha ao criar campanha',
         };
-        const statusText = statusLabels[campStatus] || '✅ Campanha criada';
+        const statusText = statusLabels[campStatus] || 'Campanha criada';
         setMessage({ type: campStatus === 'failed' ? 'error' : 'success', text: `${statusText} para "${suggestion.keyword}" (${data.product_name || suggestion.asin}). Termo adicionado ao TermBank.` });
       } else {
         setMessage({ type: 'success', text: 'Sugestão removida.' });
       }
       await load();
     } catch (e) {
-      setMessage({ type: 'error', text: e?.response?.data?.error || e.message });
+      setMessage({ type: 'error', text: e?.response?.data?.error || e.message || 'Erro ao processar sugestão.' });
     } finally {
       setWorkingId(null);
     }
   }
 
   const q = search.toLowerCase();
-  const filteredSuggestions = suggestions.filter((s) => `${s.keyword || ''} ${s.asin || ''} ${s.sku || ''}`.toLowerCase().includes(q));
+  const filteredSuggestions = top10Suggestions.filter((s) => `${s.keyword || ''} ${s.asin || ''} ${s.sku || ''}`.toLowerCase().includes(q));
   const filteredTerms = terms.filter((t) => `${t.term || ''} ${t.asin || ''} ${t.product_name || ''}`.toLowerCase().includes(q));
+
+  const rejectedLowConf = suggestions.filter(s => toConf100(s.confidence || s.relevance_score) < MIN_CONFIDENCE).length;
 
   return <div className="space-y-5 p-6">
     <div className="flex items-center justify-between">
@@ -231,7 +263,10 @@ export default function TermBankPageV2() {
         <BookOpen className="h-5 w-5 text-violet-400" />
         <div>
           <h1 className="text-lg font-bold text-white">Banco de Termos</h1>
-          <p className="text-xs text-slate-400">{terms.length} termos · {terms.filter(t => t.status === 'active').length} ativos · {top10Suggestions.length} sugestões (top 10/produto)</p>
+          <p className="text-xs text-slate-400">
+            {terms.length} termos · {terms.filter(t => t.status === 'active').length} ativos · {top10Suggestions.length} sugestões (conf ≥{MIN_CONFIDENCE}%)
+            {rejectedLowConf > 0 && <span className="text-amber-400 ml-1">· {rejectedLowConf} ocultos por baixa confiança</span>}
+          </p>
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -289,6 +324,20 @@ export default function TermBankPageV2() {
     </div>
     <div className="relative max-w-md"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Pesquisar palavra, ASIN ou produto" className="w-full rounded-lg border border-surface-2 bg-surface-1 py-2 pl-10 pr-3 text-sm text-white" /></div>
     {message && <div className={`rounded-lg p-3 text-sm ${message.type === 'success' ? 'bg-emerald-400/10 text-emerald-300' : 'bg-red-400/10 text-red-300'}`}>{message.text}</div>}
-    {loading ? <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-violet-400" /></div> : tab === 'suggestions' ? <SuggestionsPanel suggestions={top10Suggestions.filter(s => `${s.keyword||''} ${s.asin||''} ${s.sku||''}`.toLowerCase().includes(q))} products={products} workingId={workingId} onReview={review} /> : <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-surface-2 bg-surface-2/40">{['Termo','Produto / ASIN','Uso','Status','Pedidos','Vendas','Gasto','ACoS','ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs uppercase text-slate-500">{h}</th>)}</tr></thead><tbody>{filteredTerms.map(t => <tr key={t.id} className="border-b border-surface-2/40"><td className="px-4 py-3 font-semibold text-white">{t.term}</td><td className="px-4 py-3"><p className="max-w-[260px] truncate text-xs text-slate-200">{t.product_name || 'Produto não identificado'}</p><p className="font-mono text-[10px] text-cyan">{t.asin || 'Sem ASIN'}</p></td><td className="px-4 py-3 text-xs">{t.used_by_product || t.amazon_campaign_id ? <span className="text-emerald-400">Em uso</span> : <span className="text-slate-500">Nenhum produto</span>}</td><td className="px-4 py-3 text-xs"><span className={t.status === 'active' ? 'text-emerald-400' : 'text-slate-500'}>{t.status || 'inactive'}</span></td><td className="px-4 py-3 text-cyan">{t.orders || 0}</td><td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.sales)}</td><td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.spend)}</td><td className="px-4 py-3 text-xs text-slate-300">{t.acos ? `${fmt(t.acos,1)}%` : '0%'}</td><td className="px-4 py-3 text-xs text-slate-300">{t.roas ? `${fmt(t.roas)}x` : '0,00x'}</td></tr>)}</tbody></table></div></div>}
+    {loading ? <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-violet-400" /></div> : tab === 'suggestions' ? <SuggestionsPanel suggestions={top10Suggestions.filter(s => `${s.keyword||''} ${s.asin||''} ${s.sku||''}`.toLowerCase().includes(q))} products={products} workingId={workingId} onReview={review} /> : <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1"><div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-surface-2 bg-surface-2/40">{['Termo','Conf.','Produto / ASIN','Status','Pedidos','Vendas','Gasto','ACoS','ROAS'].map(h => <th key={h} className="px-4 py-3 text-left text-xs uppercase text-slate-500">{h}</th>)}</tr></thead><tbody>{filteredTerms.map(t => {
+  const conf = toConf100(t.confidence);
+  const confColor = conf >= 90 ? 'text-emerald-400' : conf >= 75 ? 'text-amber-400' : 'text-red-400';
+  return <tr key={t.id} className="border-b border-surface-2/40">
+    <td className="px-4 py-3 font-semibold text-white">{t.term}</td>
+    <td className="px-4 py-3"><span className={`text-xs font-bold ${confColor}`}>{conf > 0 ? `${conf}%` : '—'}</span></td>
+    <td className="px-4 py-3"><p className="max-w-[200px] truncate text-xs text-slate-200">{t.product_name || 'Produto não identificado'}</p><p className="font-mono text-[10px] text-cyan">{t.asin || 'Sem ASIN'}</p></td>
+    <td className="px-4 py-3 text-xs"><span className={t.status === 'active' ? 'text-emerald-400' : 'text-slate-500'}>{t.status || 'inactive'}</span></td>
+    <td className="px-4 py-3 text-cyan">{t.orders || 0}</td>
+    <td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.sales)}</td>
+    <td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.spend)}</td>
+    <td className="px-4 py-3 text-xs text-slate-300">{t.acos ? `${fmt(t.acos,1)}%` : '0%'}</td>
+    <td className="px-4 py-3 text-xs text-slate-300">{t.roas ? `${fmt(t.roas)}x` : '0,00x'}</td>
+  </tr>;
+})}</tbody></table></div></div>}
   </div>;
 }
