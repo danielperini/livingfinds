@@ -310,35 +310,46 @@ export default function Dashboard() {
   const kpis = useMemo(() => deriveRates(calcKpis(periodMetrics)), [periodMetrics]);
 
   // ─── Qualidade da fonte de dados ─────────────────────────────────────────
+  // A Amazon tem latência natural de 1-2 dias nos relatórios.
+  // "Atualizado" = o último sync foi recente (< 23h), independente do gap de datas do relatório.
   const dataQuality = useMemo(() => {
-    const yesterday = getYesterday();
-    const datesWithData = new Set(allMetrics.filter(m => m.date <= yesterday).map(m => m.date));
+    const datesWithData = new Set(allMetrics.map(m => m.date).filter(Boolean));
     const lastDate = [...datesWithData].sort().pop();
-    const gapDays = lastDate
+
+    // Idade do último sync em horas (fonte confiável: last_sync_at da conta)
+    const lastSyncAt = account?.last_sync_at;
+    const syncAgeHours = lastSyncAt
+      ? (Date.now() - new Date(lastSyncAt).getTime()) / 3600000
+      : null;
+
+    // Gap do relatório: quantos dias faltam até ontem (latência normal da Amazon = até 2 dias)
+    const yesterday = getYesterday();
+    const reportGapDays = lastDate
       ? Math.round((new Date(yesterday).getTime() - new Date(lastDate).getTime()) / 86400000)
       : null;
 
-    // Métricas diárias têm dados recentes?
-    const hasRecentDailyMetrics = gapDays !== null && gapDays <= 2;
-    // Campanhas têm spend registrado (fonte alternativa)?
-    const campWithSpend = campaigns.filter(c => (c.spend || 0) > 0).length;
+    // Consideramos atualizado se: sync recente (< 23h) OR dados com gap <= 2 dias (latência Amazon)
+    const syncRecente = syncAgeHours !== null && syncAgeHours < 23;
+    const reportNormal = reportGapDays !== null && reportGapDays <= 3; // Amazon pode demorar até 3 dias
 
     let source, quality, label;
-    if (hasRecentDailyMetrics && datesWithData.size >= 3) {
-      source = 'daily_report'; quality = 'high';
-      label = `Relatório diário · ${datesWithData.size} dias · última data: ${lastDate}`;
-    } else if (campWithSpend > 0 && (!hasRecentDailyMetrics)) {
-      source = 'campaigns_fallback'; quality = 'medium';
-      label = `Dados das campanhas (relatório desatualizado ${gapDays !== null ? `há ${gapDays}d` : ''}) — decisões da IA usam esta fonte`;
-    } else if (datesWithData.size > 0) {
-      source = 'daily_report_stale'; quality = 'low';
-      label = `Relatório com gap de ${gapDays}d — execute Sync para atualizar`;
-    } else {
+    if (datesWithData.size === 0) {
       source = 'none'; quality = 'none';
       label = 'Sem dados de performance. Sincronize para começar.';
+    } else if (syncRecente || reportNormal) {
+      source = 'daily_report'; quality = 'high';
+      const syncStr = lastSyncAt
+        ? `sync ${new Date(lastSyncAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+        : '';
+      label = `Relatório atualizado · ${datesWithData.size} dias · dados até ${lastDate}${syncStr ? ` · ${syncStr}` : ''}`;
+    } else {
+      // Sync antigo E gap grande — aí sim é desatualizado
+      source = 'stale'; quality = 'low';
+      const dias = syncAgeHours !== null ? `há ${Math.round(syncAgeHours)}h` : 'há tempo desconhecido';
+      label = `Último sync ${dias} — execute Sync para obter relatório atualizado`;
     }
-    return { source, quality, label, lastDate, gapDays, daysCount: datesWithData.size };
-  }, [allMetrics, campaigns]);
+    return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours };
+  }, [allMetrics, account]);
 
   // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
   const campAggregated = useMemo(() => {
@@ -598,9 +609,9 @@ export default function Dashboard() {
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
-            {dataQuality.quality === 'medium' && (
+            {dataQuality.quality === 'low' && (
               <button onClick={runSync} disabled={syncingDashboard}
-                className="ml-auto text-amber-400 hover:text-amber-300 underline whitespace-nowrap disabled:opacity-50">
+                className="ml-auto text-red-400 hover:text-red-300 underline whitespace-nowrap disabled:opacity-50">
                 Sincronizar agora
               </button>
             )}
