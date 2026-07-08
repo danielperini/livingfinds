@@ -11,6 +11,7 @@ import {
   AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
 } from 'lucide-react';
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
+import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -723,6 +724,11 @@ export default function Dashboard() {
           </ResponsiveContainer>
         )}
       </div>
+
+      {/* ── 3b. COMPARAÇÃO MÊS ATUAL VS MÊS ANTERIOR ───────────────────────── */}
+      {!loading && (
+        <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
+      )}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
