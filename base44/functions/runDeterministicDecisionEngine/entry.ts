@@ -58,21 +58,21 @@ const STOCK_RULES = [
   },
   {
     rule_key: 'stock_high_boost',
-    label: 'Estoque alto (60–90 dias) — aumentar bid 15%',
+    label: 'Estoque alto (60–90 dias) — aumentar bid 10%',
     priority: 2,
     cooldown_hours: 48,
     matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
-    reason: 'Estoque alto: 60–90 dias de cobertura. Bid aumentado 15% para acelerar giro.',
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.10),
+    reason: 'Estoque alto: 60–90 dias de cobertura. Bid aumentado 10% para acelerar giro.',
   },
   {
     rule_key: 'stock_excess_liquidate',
-    label: 'Excesso de estoque (> 90 dias) — aumentar bid 25%',
+    label: 'Excesso de estoque (> 90 dias) — aumentar bid 15%',
     priority: 2,
     cooldown_hours: 48,
     matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 90,
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.25),
-    reason: 'Excesso de estoque: > 90 dias de cobertura. Bid aumentado 25% para liquidação agressiva.',
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
+    reason: 'Excesso de estoque: > 90 dias de cobertura. Bid aumentado 15% para liquidação agressiva.',
   },
 ];
 
