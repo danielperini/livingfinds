@@ -98,24 +98,34 @@ export default function Products() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ── Filtro permanente: apenas produtos ativos com estoque ────────────────────
+  // Oculta permanentemente inativos (status !== 'active') e sem estoque (out_of_stock).
+  const visibleProducts = useMemo(() =>
+    products.filter(p =>
+      p.status !== 'inactive' && p.status !== 'archived' &&
+      offerStatus(p) !== 'out_of_stock'
+    ),
+    [products]
+  );
+
   // ── Contadores ──────────────────────────────────────────────────────────────
   const counters = useMemo(() => {
-    const activeOffers = products.filter(p => offerStatus(p) === 'active').length;
-    const lowStock = products.filter(p => offerStatus(p) === 'low_stock').length;
-    const outOfStock = products.filter(p => offerStatus(p) === 'out_of_stock').length;
-    const staleStock = products.filter(p => stockFreshness(p) === 'stale').length;
-    const unknownStock = products.filter(p => stockFreshness(p) === 'unknown').length;
-    const activeAds = products.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
-    const pausedAds = products.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
-    const withoutCampaign = products.filter(p => !productHasCampaign(p)).length;
-    const pausedByStock = products.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
+    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active').length;
+    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock').length;
+    const outOfStock = 0; // ocultos permanentemente
+    const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
+    const unknownStock = visibleProducts.filter(p => stockFreshness(p) === 'unknown').length;
+    const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
+    const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
+    const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
+    const pausedByStock = visibleProducts.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
     return { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock };
   }, [products]);
 
   // ── Filtro + Ordenação ──────────────────────────────────────────────────────
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    const base = products.filter(product => {
+    const base = visibleProducts.filter(product => {
       const matchesSearch = !term ||
         String(product?.asin || '').toLowerCase().includes(term) ||
         String(product?.sku || '').toLowerCase().includes(term) ||
@@ -126,7 +136,6 @@ export default function Products() {
       const matchesFilter =
         filter === 'all' ||
         (filter === 'offer_active' && offerStatus(product) === 'active') ||
-        (filter === 'out_of_stock' && offerStatus(product) === 'out_of_stock') ||
         (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
         (filter === 'stale_stock' && stockFreshness(product) === 'stale') ||
         (filter === 'ads_active' && hasCampaign && active) ||
@@ -291,7 +300,7 @@ export default function Products() {
   };
 
   const { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock } = counters;
-  const eligibleForKickoff = products.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
+  const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
@@ -304,7 +313,7 @@ export default function Products() {
           <div>
             <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
             <p className="text-xs text-slate-400">
-              {products.length} ASINs · {activeAds} ads ativos · {withoutCampaign} sem campanha · {outOfStock} sem estoque
+              {visibleProducts.length} ASINs ativos · {activeAds} ads ativos · {withoutCampaign} sem campanha · {products.length - visibleProducts.length} ocultos (sem estoque/inativos)
             </p>
           </div>
         </div>
@@ -337,7 +346,7 @@ export default function Products() {
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard label="Em Estoque" value={loading ? '—' : activeOffers} detail={`${lowStock} baixo`} tone="success" />
-        <KpiCard label="Sem Estoque" value={loading ? '—' : outOfStock} detail={`${staleStock} desatualizado · ${unknownStock} desconhecido`} tone="danger" />
+        <KpiCard label="Baixo Estoque" value={loading ? '—' : lowStock} detail={`${staleStock} desatualizado`} tone="warning" />
         <KpiCard label="Ads Ativos" value={loading ? '—' : activeAds} detail={`${pausedAds} pausados`} tone="cyan" />
         <KpiCard label="Sem Campanha" value={loading ? '—' : withoutCampaign} detail={`${eligibleForKickoff} elegíveis p/ Kick-off`} tone={withoutCampaign > 0 ? 'warning' : 'default'} />
         <KpiCard label="Pausados p/ Estoque" value={loading ? '—' : pausedByStock} detail="pausa automática aplicada" tone={pausedByStock > 0 ? 'violet' : 'default'} />
@@ -353,10 +362,9 @@ export default function Products() {
         <div className="flex items-center gap-1.5 flex-wrap">
           <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           {[
-            { key: 'all', label: `Todos (${products.length})` },
-            { key: 'offer_active', label: `Em Estoque (${activeOffers})` },
-            { key: 'out_of_stock', label: `Sem Estoque (${outOfStock})` },
-            { key: 'low_stock', label: `Baixo (${lowStock})` },
+            { key: 'all', label: `Todos (${visibleProducts.length})` },
+            { key: 'offer_active', label: `Estoque OK (${activeOffers})` },
+            { key: 'low_stock', label: `Baixo Estoque (${lowStock})` },
             { key: 'stale_stock', label: `Desatualizado (${staleStock})` },
             { key: 'ads_active', label: `Ads Ativos (${activeAds})` },
             { key: 'ads_paused', label: `Ads Pausados (${pausedAds})` },
