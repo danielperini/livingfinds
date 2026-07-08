@@ -218,19 +218,20 @@ Deno.serve(async (req) => {
     summary.phases.request = { reportIds, count: Object.keys(reportIds).length };
     console.log(`[Pipeline] ${Object.keys(reportIds).length} relatórios solicitados`);
 
-    // ── FASE 2: Polling até todos prontos (max 20 min) ───────────────────────
-    // Primeiras 4 tentativas a cada 30s (2 min), depois a cada 60s até 20 min total
-    console.log('[Pipeline] Fase 2: aguardando relatórios (até 20 min)...');
+    // ── FASE 2: Polling — estratégia de espera inteligente ───────────────────
+    // Relatórios Amazon Ads raramente ficam prontos antes de 20 min.
+    // Estratégia: esperar 20 min fixos antes do PRIMEIRO poll (economiza ~20 chamadas
+    // desnecessárias), depois checar a cada 30s por até 10 min adicionais.
+    console.log('[Pipeline] Fase 2: aguardando 20 min antes do primeiro poll (padrão Amazon)...');
+    await sleep(20 * 60 * 1000); // 20 min — janela mínima real da Amazon
+
     let ready: { key: string; url: string }[] = [];
     const pendingIds = { ...reportIds };
     let attempts = 0;
-    const MAX_ATTEMPTS = 22; // ~20 min: 4×30s + 18×60s = 18 min + buffer
+    const MAX_ATTEMPTS = 20; // 20 × 30s = até 10 min adicionais após a espera inicial
 
     while (attempts < MAX_ATTEMPTS && Object.keys(pendingIds).length > 0) {
-      const waitMs = attempts < 4 ? 30000 : 60000;
-      await sleep(waitMs);
       attempts++;
-
       const statuses = await Promise.all(
         Object.entries(pendingIds).map(async ([key, rid]) => {
           const r = await fetch(`${adsBase}/reporting/reports/${rid}`, { headers: adsHeaders }).catch(() => null);
@@ -243,21 +244,22 @@ Deno.serve(async (req) => {
       for (const s of statuses) {
         if (s.status === 'COMPLETED' && s.url) {
           ready.push(s as any);
-          delete pendingIds[s.key]; // remover dos pendentes para não re-checar
+          delete pendingIds[s.key];
         } else if (['FAILED', 'EXPIRED'].includes(s.status)) {
-          delete pendingIds[s.key]; // descartar permanentemente
+          delete pendingIds[s.key];
         }
       }
 
-      console.log(`[Pipeline] Tentativa ${attempts}: ready=${ready.length} pending=${Object.keys(pendingIds).length}`);
+      console.log(`[Pipeline] Poll ${attempts}: ready=${ready.length} pending=${Object.keys(pendingIds).length}`);
       if (Object.keys(pendingIds).length === 0) break;
+      await sleep(30000); // 30s entre checks após a espera inicial
     }
 
     if (ready.length === 0) {
-      return Response.json({ ok: false, error: `Nenhum relatório ficou pronto em 20 min (${attempts} tentativas)`, summary });
+      return Response.json({ ok: false, error: `Nenhum relatório ficou pronto após 20 min de espera + ${attempts} polls`, summary });
     }
     if (Object.keys(pendingIds).length > 0) {
-      console.warn(`[Pipeline] ${Object.keys(pendingIds).length} relatório(s) não ficaram prontos: ${Object.keys(pendingIds).join(', ')}`);
+      console.warn(`[Pipeline] ${Object.keys(pendingIds).length} relatório(s) não prontos após timeout: ${Object.keys(pendingIds).join(', ')}`);
     }
 
     // ── FASE 3: Download + parse ──────────────────────────────────────────────
@@ -520,12 +522,13 @@ Deno.serve(async (req) => {
       if (ordersRes.ok) {
         const { reportId } = await ordersRes.json();
         if (reportId) {
-          // Polling rápido (3 tentativas de 20s)
+          // Esperar 3 min antes do primeiro poll (SP-API Orders raramente fica pronto antes disso)
+          await sleep(3 * 60 * 1000);
           let docId = '';
-          for (let i = 0; i < 3 && !docId; i++) {
-            await sleep(20000);
+          for (let i = 0; i < 8 && !docId; i++) {
             const st = await fetch(`${spBase}/reports/2021-06-30/reports/${reportId}`, { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } });
             if (st.ok) { const sd = await st.json(); if (sd.processingStatus === 'DONE') docId = sd.reportDocumentId; }
+            if (!docId) await sleep(30000); // 30s entre checks
           }
           if (docId) {
             const docRes = await fetch(`${spBase}/reports/2021-06-30/documents/${docId}`, { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } });
