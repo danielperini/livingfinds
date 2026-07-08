@@ -423,21 +423,32 @@ Deno.serve(async (req) => {
           ? realSales.real_tacos_pct
           : (tacosByCampaignId.get(entity.campaign_id) ?? accountTacos ?? null);
 
+        const stockQty = product?.fba_inventory || 0;
+        const realUnits30d = realSales.real_units_30d || 0;
+        // Velocidade de venda: unidades vendidas por dia (últimos 30d)
+        const stockVelocity = realUnits30d / 30;
+        // Dias de cobertura: com o estoque atual, quantos dias durariam as vendas
+        const stockCoverageDays = stockVelocity > 0 ? stockQty / stockVelocity : 999;
+
         const entityData = {
           ...entity,
           current_bid: entity.current_bid || entity.bid || 0.25,
           current_budget: entity.daily_budget || 0,
-          stock: product?.fba_inventory || 0,
-          stock_days: product?.stock_days || 0,
+          stock: stockQty,
+          stock_days: stockCoverageDays,
           // Métricas reais de faturamento (SP-API Orders)
           real_revenue_30d: realSales.real_revenue_30d || 0,
-          real_units_30d: realSales.real_units_30d || 0,
+          real_units_30d: realUnits30d,
           real_orders_30d: realSales.real_orders_30d || 0,
           real_avg_ticket: realSales.real_avg_ticket || 0,
           real_revenue_per_day: realSales.real_revenue_per_day || 0,
           has_real_sales: realSales.has_real_sales || false,
           real_tacos_pct: tacosValue,
           ads_spend_30d: realSales.ads_spend_30d || 0,
+          stock_velocity: stockVelocity,
+          stock_coverage_days: stockCoverageDays,
+          // acos da keyword (próprio da entidade keyword)
+          acos: entity.acos || (entity.spend > 0 && entity.sales > 0 ? entity.spend / entity.sales * 100 : 0),
         };
 
         if (!entityMatchesRule(rule, entityData)) continue;
