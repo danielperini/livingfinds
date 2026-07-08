@@ -22,6 +22,7 @@ export default function TermBankPageV2() {
   const [genRestocked, setGenRestocked] = useState(false);
 
   const MIN_CONFIDENCE = 75;
+  const MAX_SUGGESTIONS_PER_ASIN = 10;
 
   // Normaliza confidence: aceita 0-1 float ou 0-100 int
   const toConf100 = (c) => c == null ? 0 : c <= 1 ? Math.round(c * 100) : Math.round(c);
@@ -44,6 +45,17 @@ export default function TermBankPageV2() {
   })();
 
   const excessCount = suggestions.length - top10Suggestions.length;
+
+  // Contar sugestões por ASIN para bloquear geração quando limite atingido
+  const suggestionCountByAsin = {};
+  for (const s of suggestions) {
+    if (s.asin) suggestionCountByAsin[s.asin] = (suggestionCountByAsin[s.asin] || 0) + 1;
+  }
+  // ASINs que já atingiram o limite
+  const asinsAtLimit = new Set(Object.keys(suggestionCountByAsin).filter(a => suggestionCountByAsin[a] >= MAX_SUGGESTIONS_PER_ASIN));
+  // Todos os produtos atingiram o limite?
+  const allAsinsAtLimit = products.length > 0 && products.every(p => !p.asin || asinsAtLimit.has(p.asin));
+  const asinsAtLimitCount = asinsAtLimit.size;
 
   const cleanExcess = async () => {
     if (excessCount <= 0) return;
@@ -77,13 +89,21 @@ export default function TermBankPageV2() {
   // Gera sugestões via IA para todos os produtos com título, em lotes
   const generateSuggestions = async () => {
     if (!account || generating) return;
+    // Bloquear imediatamente se todos os ASINs já têm 10+ sugestões
+    if (allAsinsAtLimit) {
+      setMessage({ type: 'error', text: `Todos os produtos já atingiram o limite de ${MAX_SUGGESTIONS_PER_ASIN} sugestões por ASIN. Limpe o excesso ou aprove as sugestões existentes primeiro.` });
+      return;
+    }
     setGenerating(true);
     setGenProgress('Iniciando geração...');
     setMessage(null);
     try {
-      const productsWithTitle = products.filter(p => p.product_name || p.display_name);
+      // Filtrar apenas produtos sem título OU que ainda não atingiram o limite
+      const productsWithTitle = products.filter(p =>
+        (p.product_name || p.display_name) && (!p.asin || !asinsAtLimit.has(p.asin))
+      );
       if (!productsWithTitle.length) {
-        setMessage({ type: 'error', text: 'Nenhum produto com título encontrado. Sincronize os títulos primeiro.' });
+        setMessage({ type: 'error', text: 'Nenhum produto elegível. Todos já atingiram o limite de sugestões ou não possuem título.' });
         return;
       }
 
@@ -273,11 +293,12 @@ export default function TermBankPageV2() {
       <div className="flex items-center gap-2">
         <button
           onClick={generateSuggestions}
-          disabled={generating || loading}
-          className="flex items-center gap-2 rounded-lg bg-violet-500/15 border border-violet-500/30 px-3 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/25 transition-colors disabled:opacity-50"
+          disabled={generating || loading || allAsinsAtLimit}
+          title={allAsinsAtLimit ? `Todos os ASINs já têm ${MAX_SUGGESTIONS_PER_ASIN} sugestões. Limpe o excesso primeiro.` : undefined}
+          className="flex items-center gap-2 rounded-lg bg-violet-500/15 border border-violet-500/30 px-3 py-2 text-xs font-semibold text-violet-300 hover:bg-violet-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          {generating ? 'Gerando...' : 'Gerar com IA'}
+          {generating ? 'Gerando...' : allAsinsAtLimit ? `IA bloqueada (limite ${MAX_SUGGESTIONS_PER_ASIN}/ASIN)` : `Gerar com IA${asinsAtLimitCount > 0 ? ` (${asinsAtLimitCount} ASIN no limite)` : ''}`}
         </button>
         {top10Suggestions.filter(s => !['created', 'approved'].includes(s.status)).length > 0 && (
           <button
@@ -312,9 +333,9 @@ export default function TermBankPageV2() {
               setGenRestocked(false);
             }
           }}
-          disabled={genRestocked || loading}
-          className="flex items-center gap-2 rounded-lg bg-cyan/10 border border-cyan/25 px-3 py-2 text-xs font-semibold text-cyan hover:bg-cyan/20 transition-colors disabled:opacity-50"
-          title="Gerar termos iniciais para produtos novos ou reabastecidos"
+          disabled={genRestocked || loading || allAsinsAtLimit}
+          className="flex items-center gap-2 rounded-lg bg-cyan/10 border border-cyan/25 px-3 py-2 text-xs font-semibold text-cyan hover:bg-cyan/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title={allAsinsAtLimit ? `Todos os ASINs já têm ${MAX_SUGGESTIONS_PER_ASIN} sugestões. Limpe o excesso primeiro.` : 'Gerar termos iniciais para produtos novos ou reabastecidos'}
         >
           {genRestocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackagePlus className="h-3.5 w-3.5" />}
           {genRestocked ? 'Gerando...' : 'Produtos novos'}
