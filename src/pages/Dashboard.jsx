@@ -37,7 +37,9 @@ function safe(v, d = 2) {
 }
 
 function fmt(v) { return v !== null && v !== undefined && isFinite(v) && !isNaN(v) ? v : 0; }
-function fmtBRL(v) { return `R$${fmt(v).toFixed(2)}`; }
+function fmtBRL(v) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 }).format(fmt(v));
+}
 function fmtPct(v) { return `${fmt(v).toFixed(1)}%`; }
 
 // Converte YYYY-MM-DD → DD/MM
@@ -115,7 +117,7 @@ const ChartTooltip = ({ active, payload, label }) => {
           <span className="text-white font-semibold">
             {String(p.name).toLowerCase().includes('impressões') || String(p.name).toLowerCase().includes('cliques') || String(p.name).toLowerCase().includes('alterações')
               ? Number(p.value).toLocaleString('pt-BR')
-              : `R$${Number(p.value).toFixed(2)}`}
+              : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(p.value))}
           </span>
         </div>
       ))}

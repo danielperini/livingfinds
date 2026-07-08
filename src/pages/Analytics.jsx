@@ -46,7 +46,7 @@ const CustomTooltip = ({ active, payload, label }) => {
           <span className="text-white font-semibold">
             {p.name?.toLowerCase().includes('acos') ? `${Number(p.value).toFixed(1)}%`
               : p.name?.toLowerCase().includes('spend') || p.name?.toLowerCase().includes('venda') || p.name?.toLowerCase().includes('receita')
-              ? `$${Number(p.value).toFixed(2)}`
+              ? `R$${Number(p.value).toFixed(2)}`
               : p.value}
           </span>
         </div>
@@ -117,7 +117,8 @@ export default function Analytics() {
   const dailyData = Object.values(
     dedupedMetrics.reduce((acc, m) => {
       const d = m.date || '';
-      const label = d.slice(5) || d; // MM-DD
+      const [yy, mm, dd_] = d.split('-');
+      const label = d ? `${dd_}/${mm}` : d; // DD/MM
       if (!acc[d]) acc[d] = { name: label, date: d, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
       acc[d].spend += m.spend || 0;
       acc[d].sales += m.sales || 0;
@@ -216,16 +217,16 @@ export default function Analytics() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KPI label={`Spend ${period}d`} value={`$${totSpend.toFixed(2)}`} loading={loading} />
-        <KPI label={`Vendas Ads ${period}d`} value={`$${totSales.toFixed(2)}`} trend={salesTrend} loading={loading} />
+        <KPI label={`Spend ${period}d`} value={`R$${totSpend.toFixed(2)}`} loading={loading} />
+        <KPI label={`Vendas Ads ${period}d`} value={`R$${totSales.toFixed(2)}`} trend={salesTrend} loading={loading} />
         <KPI label="ACoS" value={`${avgAcos.toFixed(2)}%`} trend={acosTrend} inverse loading={loading} />
-        <KPI label="CPC Médio" value={`$${avgCpc.toFixed(2)}`} loading={loading} />
+        <KPI label="CPC Médio" value={`R$${avgCpc.toFixed(2)}`} loading={loading} />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI label="CVR (Conversão)" value={`${cvr.toFixed(1)}%`} loading={loading} />
-        <KPI label="CPA" value={`$${cpa.toFixed(2)}`} loading={loading} />
-        <KPI label="RPC (Receita/Clique)" value={`$${rpc.toFixed(2)}`} loading={loading} />
-        <KPI label="Ticket Médio" value={`$${ticketMedio.toFixed(2)}`} loading={loading} />
+        <KPI label="CPA" value={`R$${cpa.toFixed(2)}`} loading={loading} />
+        <KPI label="RPC (Receita/Clique)" value={`R$${rpc.toFixed(2)}`} loading={loading} />
+        <KPI label="Ticket Médio" value={`R$${ticketMedio.toFixed(2)}`} loading={loading} />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI label="Cliques" value={totClicks.toLocaleString('pt-BR')} loading={loading} />
@@ -400,8 +401,8 @@ export default function Analytics() {
                       <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
                         <td className="px-4 py-3 font-mono text-cyan">{p.asin}</td>
                         <td className="px-4 py-3 text-slate-400 font-mono">{p.sku || '—'}</td>
-                        <td className="px-4 py-3 text-emerald-400">${(p.total_sales_30d || p.total_revenue_30d || 0).toFixed(2)}</td>
-                        <td className="px-4 py-3 text-slate-300">${(p.total_spend_30d || 0).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-emerald-400">R${(p.total_sales_30d || p.total_revenue_30d || 0).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-slate-300">R${(p.total_spend_30d || 0).toFixed(2)}</td>
                         <td className={`px-4 py-3 font-semibold ${acosColor}`}>{acos.toFixed(1)}%</td>
                         <td className="px-4 py-3 text-slate-300">{(p.roas || 0).toFixed(2)}x</td>
                         <td className="px-4 py-3 text-slate-300">{p.total_units_30d || p.units_sold_30d || 0}</td>
