@@ -421,35 +421,8 @@ export default function Dashboard() {
     [allMetrics, yesterday]
   );
 
-  // ─── Gráfico: Alterações da IA por dia ────────────────────────────────────
-
-  const aiChangesChart = useMemo(() => {
-    // Usar data BRT para evitar corte errado por fuso UTC
-    const nowBRT = new Date(Date.now() - 3 * 3600000);
-    const todayBRT = nowBRT.toISOString().slice(0, 10);
-    const firstDay = new Date(nowBRT); firstDay.setDate(firstDay.getDate() - 29);
-    const firstDayStr = firstDay.toISOString().slice(0, 10);
-
-    const counts = new Map();
-    for (const c of bidChanges) {
-      // created_at pode ser o campo do registro ou created_date do Base44
-      const raw = c.created_date || c.created_at;
-      if (!raw) continue;
-      // Converter para BRT antes de extrair a data
-      const dBRT = new Date(new Date(raw).getTime() - 3 * 3600000);
-      const key = dBRT.toISOString().slice(0, 10);
-      if (key < firstDayStr || key > todayBRT) continue;
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    return Array.from({ length: 30 }, (_, i) => {
-      const day = new Date(firstDay); day.setDate(firstDay.getDate() + i);
-      const key = day.toISOString().slice(0, 10);
-      if (key > todayBRT) return null;
-      return { date: fmtDateBR(key), alterações: counts.get(key) || 0 };
-    }).filter(Boolean);
-  }, [bidChanges]);
-
-  const totalChanges = useMemo(() => aiChangesChart.reduce((s, d) => s + d.alterações, 0), [aiChangesChart]);
+  // ─── Total de alterações da IA (soma de todos os registros de bidChanges) ──
+  const totalChanges = bidChanges.length;
 
   // ─── SalesDaily: faturamento real por data ────────────────────────────────
 
@@ -499,62 +472,62 @@ export default function Dashboard() {
     return { monthRevenue, monthDays, avgPerDay, projected, daysInMonth, remainingDays, completedPct: Math.round((dayOfMonth / daysInMonth) * 100) };
   }, [salesDailyByDate]);
 
-  // ─── Gráfico: Consolidado Gasto + Vendas + Impressões ────────────────────
+  // ─── Gráfico: Consolidado Gasto + Vendas + Impressões (RANGE MÁXIMO) ────────
+  // Usa TODOS os dados disponíveis — não filtrado pelo período selecionado nos KPIs.
+  // Inclui alterações da IA integradas como barras de coluna secundárias.
 
-  // Média diária de faturamento total a partir do benchmark (fallback se não há SalesDaily)
-  const avgDailyRevenue = useMemo(() => {
-    if (!sellerBenchmark?.gross_revenue || !sellerBenchmark?.period_start || !sellerBenchmark?.period_end) return null;
-    const days = Math.max(1, Math.round(
-      (new Date(sellerBenchmark.period_end).getTime() - new Date(sellerBenchmark.period_start).getTime()) / 86400000
-    ) + 1);
-    return sellerBenchmark.gross_revenue / days;
-  }, [sellerBenchmark]);
+  // Mapa de alterações da IA por data (para integrar no gráfico consolidado)
+  const aiChangesByDate = useMemo(() => {
+    const map = new Map();
+    for (const c of bidChanges) {
+      const raw = c.created_date || c.created_at;
+      if (!raw) continue;
+      const dBRT = new Date(new Date(raw).getTime() - 3 * 3600000);
+      const key = dBRT.toISOString().slice(0, 10);
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return map;
+  }, [bidChanges]);
 
   const consolidatedChart = useMemo(() => {
     const byDate = {};
-    for (const m of periodMetrics) {
-      if (!m.date) continue;
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    // Usar TODOS os dados de metrics (não filtrado pelo período)
+    for (const m of allMetrics) {
+      if (!m.date || m.date > todayStr) continue;
       const label = fmtDateBR(m.date);
       if (!byDate[m.date]) byDate[m.date] = { _isoDate: m.date, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
       byDate[m.date].gasto += m.spend || 0;
       byDate[m.date]['vendas ads'] += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
     }
-    // Incluir dias do SalesDaily que podem não ter métricas de ads
+    // Incluir todos os dias do SalesDaily disponíveis
     for (const [isoDate, v] of Object.entries(salesDailyByDate)) {
-      if (isoDate < startDate || isoDate > endDate) continue;
+      if (isoDate > todayStr) continue;
       const label = fmtDateBR(isoDate);
       if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
       byDate[isoDate]['faturamento real'] = v.revenue;
     }
-    // Preencher faturamento real nos dias que já existiam
+    // Preencher faturamento real nos dias que já existiam via ads metrics
     for (const entry of Object.values(byDate)) {
       if (entry['faturamento real'] === undefined && salesDailyByDate[entry._isoDate] !== undefined) {
         entry['faturamento real'] = salesDailyByDate[entry._isoDate].revenue;
       }
-      // Fallback: linha de referência do benchmark quando não há SalesDaily
-      if (entry['faturamento real'] === undefined && avgDailyRevenue) {
-        entry['fat. médio/dia'] = avgDailyRevenue;
-      }
+      // Integrar alterações da IA por dia
+      const aiCount = aiChangesByDate.get(entry._isoDate);
+      if (aiCount) entry['alterações IA'] = aiCount;
     }
-
-    // Projeção: adicionar pontos futuros do mês atual com valor projetado
-    if (monthProjection && activePeriod === '30') {
-      const today_ = new Date();
-      const todayStr = today_.toISOString().slice(0, 10);
-      for (let d = 1; d <= monthProjection.remainingDays; d++) {
-        const futureDate = new Date(today_);
-        futureDate.setDate(today_.getDate() + d);
-        const isoDate = futureDate.toISOString().slice(0, 10);
-        const label = fmtDateBR(isoDate);
-        if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
-        byDate[isoDate]['projeção'] = monthProjection.avgPerDay;
+    // Incluir dias que só têm alterações da IA (sem métricas de ads)
+    for (const [isoDate, count] of aiChangesByDate.entries()) {
+      if (isoDate > todayStr) continue;
+      if (!byDate[isoDate]) {
+        byDate[isoDate] = { _isoDate: isoDate, date: fmtDateBR(isoDate), gasto: 0, 'vendas ads': 0, impressões: 0 };
       }
-      // Ponto de conexão: adicionar projeção no último dia real também
-      if (byDate[todayStr]) byDate[todayStr]['projeção'] = monthProjection.avgPerDay;
+      if (!byDate[isoDate]['alterações IA']) byDate[isoDate]['alterações IA'] = count;
     }
     return Object.values(byDate).sort((a, b) => a._isoDate.localeCompare(b._isoDate));
-  }, [periodMetrics, salesDailyByDate, startDate, endDate, avgDailyRevenue]);
+  }, [allMetrics, salesDailyByDate, aiChangesByDate]);
 
   const hasSalesDailyData = salesDaily.length > 0;
 
@@ -664,7 +637,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── 3. GRÁFICO CONSOLIDADO: Gasto · Vendas Ads · Impressões ─────────── */}
+      {/* ── 3. GRÁFICO CONSOLIDADO: range máximo de dados disponíveis ──────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
           <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2>
@@ -672,18 +645,14 @@ export default function Dashboard() {
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
             {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
-            {!hasSalesDailyData && avgDailyRevenue && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Fat. ref/dia: {fmtBRL(avgDailyRevenue)}</span>}
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+            {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
-          {periodLabel} · Vendas Ads = atribuição Amazon
-          {hasSalesDailyData
-            ? <> · <span className="text-orange-400/80">curva laranja = faturamento real de pedidos (SP-API)</span></>
-            : avgDailyRevenue
-              ? <> · <span className="text-amber-400/80">linha pontilhada = referência do benchmark</span></>
-              : <> · <span className="text-slate-500">sem dados de faturamento real ainda</span></>
-          }
+          Todo o histórico disponível · Vendas Ads = atribuição Amazon
+          {hasSalesDailyData && <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></>}
+          {' · '}barras roxas = impressões · barras âmbar = alterações da IA
         </p>
         {hasSalesDailyData && (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
@@ -702,67 +671,42 @@ export default function Dashboard() {
             )}
           </div>
         )}
-        {!hasSalesDailyData && sellerBenchmark && (
-          <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-emerald-500/8 border border-emerald-500/20 text-[10px]">
-            <span className="text-slate-400">📊 Benchmark (Seller Central):</span>
-            <span className="text-emerald-400 font-bold">{fmtBRL(sellerBenchmark.gross_revenue)}</span>
-            <span className="text-slate-500">{sellerBenchmark.period_start?.slice(5).replace('-','/')} → {sellerBenchmark.period_end?.slice(5).replace('-','/')}</span>
-            <span className="text-slate-400">· TACoS: <span className="text-amber-400 font-semibold">{sellerBenchmark.tacos_pct?.toFixed(1)}%</span></span>
-          </div>
-        )}
 
         {loading ? (
-          <div className="h-44 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
+          <div className="h-56 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
         ) : consolidatedChart.length === 0 ? (
-          <div className="h-44 flex items-center justify-center text-xs text-slate-600">Sem dados no período. Execute sync para obter o relatório.</div>
+          <div className="h-56 flex items-center justify-center text-xs text-slate-600">Sem dados. Execute sync para obter o relatório.</div>
         ) : (
-          <ResponsiveContainer width="100%" height={180}>
-            <ComposedChart data={consolidatedChart}>
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={consolidatedChart} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <defs>
-                <linearGradient id="gGasto" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
-                <linearGradient id="gVendas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.3} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
+                <linearGradient id="gGasto" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient>
+                <linearGradient id="gVendas" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-              <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="brl" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              {/* Eixo esquerdo: R$ (gasto, vendas, faturamento) */}
+              <YAxis yAxisId="brl" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={42}
+                tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
+              {/* Eixo direito: impressões e alterações IA (escalas diferentes — impressões domina) */}
+              <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={36}
+                tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
+              <YAxis yAxisId="ai" orientation="right" hide />
               <Tooltip content={<ChartTooltip />} />
-              <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.35} radius={[2, 2, 0, 0]} />
-              <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
-              <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
+              {/* Impressões: barras roxas (eixo direito) */}
+              <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.3} radius={[1, 1, 0, 0]} />
+              {/* Alterações da IA: barras âmbar (eixo ai — escala própria) */}
+              <Bar yAxisId="ai" dataKey="alterações IA" name="Alterações IA" fill="#F59E0B" opacity={0.7} radius={[2, 2, 0, 0]} />
+              {/* Linhas de valor em R$ */}
+              <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} dot={false} />
+              <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} dot={false} />
               {hasSalesDailyData && (
                 <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={2} dot={false} />
-              )}
-              {hasSalesDailyData && monthProjection && activePeriod === '30' && (
-                <Line yAxisId="brl" type="monotone" dataKey="projeção" name="Projeção" stroke="#FB923C" strokeWidth={1.5} strokeDasharray="6 3" dot={false} opacity={0.6} />
-              )}
-              {!hasSalesDailyData && avgDailyRevenue && (
-                <Line yAxisId="brl" type="monotone" dataKey="fat. médio/dia" name="Fat. Ref/dia" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
               )}
             </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>
-
-      {/* ── 3b. ALTERAÇÕES DA IA (compacto) ──────────────────────────────────── */}
-      {!loading && aiChangesChart.length > 0 && totalChanges > 0 && (
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="text-sm font-semibold text-slate-300">Alterações da IA por dia</h2>
-            <span className="text-xs font-bold text-amber-400">{totalChanges} total · 30 dias</span>
-          </div>
-          <p className="text-[10px] text-slate-500 mb-3">Ações de bid/orçamento enviadas à Amazon</p>
-          <ResponsiveContainer width="100%" height={100}>
-            <BarChart data={aiChangesChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-              <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} allowDecimals={false} width={20} />
-              <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="alterações" fill="#F59E0B" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
