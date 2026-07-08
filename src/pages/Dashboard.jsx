@@ -138,6 +138,17 @@ export default function Dashboard() {
 
   const runSync = async () => {
     if (!account || syncingDashboard) return;
+
+    // Guard: TTL de 23h — evita chamadas redundantes no mesmo dia
+    if (account.last_sync_at) {
+      const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
+      if (ageHours < 23) {
+        setSyncDashMsg({ type: 'info', text: `Sync já realizado ${ageHours.toFixed(1)}h atrás. Próximo disponível em ${(23 - ageHours).toFixed(1)}h.` });
+        setTimeout(() => setSyncDashMsg(null), 8000);
+        return;
+      }
+    }
+
     setSyncingDashboard(true);
     setSyncDashMsg(null);
     try {
@@ -354,7 +365,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         </div>
         <div className="flex items-center gap-2">
           {syncingDashboard && <span className="text-xs text-cyan animate-pulse">Sincronizando...</span>}
-          {syncDashMsg && <span className={`text-xs ${syncDashMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncDashMsg.text}</span>}
+          {syncDashMsg && <span className={`text-xs ${syncDashMsg.type === 'success' ? 'text-emerald-400' : syncDashMsg.type === 'info' ? 'text-amber-400' : 'text-red-400'}`}>{syncDashMsg.text}</span>}
           <button onClick={runSync} disabled={loading || syncingDashboard}
             className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm rounded-lg transition-colors disabled:opacity-50">
             <RefreshCw className={`w-4 h-4 ${syncingDashboard ? 'animate-spin' : ''}`} />

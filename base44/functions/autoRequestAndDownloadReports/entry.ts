@@ -55,11 +55,29 @@ const REPORT_CONFIGS = [
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
+    const body = await req.json().catch(() => ({}));
+    const forceSync = body.force === true;
 
     // Resolver conta
     const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon encontrada' });
+
+    // ── GUARD: TTL de 23h — impede chamadas redundantes no mesmo dia ──
+    if (!forceSync && account.last_sync_at) {
+      const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
+      if (ageHours < 23) {
+        console.log(`[autoRequestReports] Skipped — último sync ${ageHours.toFixed(1)}h atrás (TTL 23h)`);
+        return Response.json({
+          ok: true,
+          skipped: true,
+          reason: 'already_synced_today',
+          last_sync_at: account.last_sync_at,
+          hours_since_sync: Math.round(ageHours * 10) / 10,
+          message: `Sync já realizado ${ageHours.toFixed(1)}h atrás. Próximo sync disponível em ${(23 - ageHours).toFixed(1)}h.`,
+        });
+      }
+    }
 
     const aid = account.id;
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
