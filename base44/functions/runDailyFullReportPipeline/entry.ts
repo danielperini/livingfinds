@@ -522,10 +522,10 @@ Deno.serve(async (req) => {
       if (ordersRes.ok) {
         const { reportId } = await ordersRes.json();
         if (reportId) {
-          // Esperar 3 min antes do primeiro poll (SP-API Orders raramente fica pronto antes disso)
-          await sleep(3 * 60 * 1000);
+          // Esperar 5 min antes do primeiro poll (SP-API Orders raramente fica pronto antes disso)
+          await sleep(5 * 60 * 1000);
           let docId = '';
-          for (let i = 0; i < 8 && !docId; i++) {
+          for (let i = 0; i < 16 && !docId; i++) { // 16 × 30s = até 8 min adicionais
             const st = await fetch(`${spBase}/reports/2021-06-30/reports/${reportId}`, { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } });
             if (st.ok) { const sd = await st.json(); if (sd.processingStatus === 'DONE') docId = sd.reportDocumentId; }
             if (!docId) await sleep(30000); // 30s entre checks
