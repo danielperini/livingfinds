@@ -216,14 +216,18 @@ export default function Dashboard() {
       setAutopilotConfig(apConfigs[0] || null);
       setBudgetCfg(budgCfgs[0] || null);
 
-      // Verificar gap de dados: checar data mais recente em CampaignMetricsDaily
+      // Verificar gap de dados: só alertar se defasagem > 2 dias (latência normal da Amazon é 1-2 dias)
       const today_ = new Date(); today_.setHours(0,0,0,0);
       const yesterday_ = new Date(today_.getTime() - 86400000).toISOString().slice(0,10);
       const uniqueDatesAll = [...new Set(metrics.map(m => m.date).filter(Boolean))].sort();
       const lastDataDate = uniqueDatesAll.length > 0 ? uniqueDatesAll[uniqueDatesAll.length - 1] : null;
       if (lastDataDate && lastDataDate < yesterday_) {
         const gapDays = Math.round((new Date(yesterday_).getTime() - new Date(lastDataDate).getTime()) / 86400000);
-        setDataGapWarning({ lastDate: lastDataDate, gapDays });
+        if (gapDays > 2) {
+          setDataGapWarning({ lastDate: lastDataDate, gapDays });
+        } else {
+          setDataGapWarning(null); // latência normal, não alertar
+        }
       } else {
         setDataGapWarning(null);
       }
@@ -236,6 +240,9 @@ export default function Dashboard() {
         const last = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
         if (last) setLastSyncInfo({ at: last.completed_at || last.started_at });
       }
+
+      // Gap de dados: só alertar se defasagem > 2 dias (latência normal da Amazon é 1-2 dias)
+      const DATA_GAP_ALERT_THRESHOLD_DAYS = 2;
     } catch (err) {
       setError(err.message);
     } finally {
@@ -247,6 +254,14 @@ export default function Dashboard() {
 
   const runSync = async () => {
     if (!account || syncingDashboard) return;
+
+    // Bloquear sync se dados são recentes (gap ≤ 2 dias — latência normal da Amazon)
+    if (!dataGapWarning) {
+      setSyncDashMsg({ type: 'info', text: 'Dados já estão atualizados. A Amazon leva 1–2 dias para publicar relatórios — isso é normal.' });
+      setTimeout(() => setSyncDashMsg(null), 7000);
+      return;
+    }
+
     if (account.last_sync_at) {
       const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
       if (ageHours < 23) {
@@ -469,8 +484,7 @@ export default function Dashboard() {
             <p className="text-amber-300 font-semibold">Dados de {dataGapWarning.gapDays} dia(s) ainda não sincronizados</p>
             <p className="text-amber-300/70 mt-0.5">
               O último relatório processado cobre até <span className="font-semibold">{new Date(dataGapWarning.lastDate + 'T12:00:00').toLocaleDateString('pt-BR')}</span>.
-              Vendas e gasto dos dias seguintes ainda não aparecem nos gráficos e cards — isso é normal, os relatórios da Amazon têm latência de 1–2 dias.
-              Use o botão Sync para solicitar atualização.
+              Dados dos últimos {dataGapWarning.gapDays} dia(s) ainda não chegaram — use o botão Sync para solicitar atualização junto à Amazon.
             </p>
           </div>
         </div>
