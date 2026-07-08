@@ -316,11 +316,6 @@ export default function Products() {
               {bulkActivating ? 'Criando...' : `Kick-off em massa (${eligibleForKickoff})`}
             </button>
           )}
-          <button type="button" onClick={syncTitles} disabled={syncingTitles || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-            {syncingTitles ? <Loader2 className="w-4 h-4 animate-spin" /> : <Tag className="w-4 h-4" />}
-            {syncingTitles ? 'Sincronizando...' : 'Sincronizar'}
-          </button>
           <button type="button" onClick={fixCampaignLinks} disabled={fixingLinks || !account}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             {fixingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
