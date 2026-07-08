@@ -458,8 +458,8 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
       <div className="flex border-b border-surface-2">
         {[
           { id: 'dashboard', label: 'Dashboard' },
-          { id: 'budget14d', label: '💰 Budget 14d' },
-          { id: 'analytics', label: '📊 Analytics' },
+          { id: 'budget14d', label: 'Budget 14 dias' },
+          { id: 'analytics', label: 'Analytics' },
         ].map(t => (
           <button key={t.id} onClick={() => setMainTab(t.id)}
             className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${mainTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
@@ -491,7 +491,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
       {/* Painel de Auditoria de Dados */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs font-semibold text-slate-400">📊 Auditoria de Dados (30 dias)</h3>
+          <h3 className="text-xs font-semibold text-slate-400">Auditoria de Dados (30 dias)</h3>
           <span className="text-[10px] text-slate-500">Fontes: CampaignMetricsDaily</span>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 text-xs">

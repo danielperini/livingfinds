@@ -24,7 +24,6 @@ import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Products from '@/pages/ProductsScheduled';
 import Report from '@/pages/Report';
-import LogDeBids from '@/pages/LogDeBids';
 import Diagnostico from '@/pages/Diagnostico';
 import BidLogs from '@/pages/BidLogs';
 import Analytics from '@/pages/Analytics';
@@ -39,16 +38,12 @@ import SystemHealth from '@/pages/SystemHealth';
 import CampaignConfig from '@/pages/CampaignConfig';
 import DaypartingDashboard from '@/pages/DaypartingDashboard';
 import ManualInstrucoes from '@/pages/ManualInstrucoes';
-import Alerts from '@/pages/Alerts';
 import OptimizerPipeline from '@/pages/OptimizerPipeline';
 import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
-import IncompleteCampaigns from '@/pages/IncompleteCampaigns';
-import CampaignQueueMonitor from '@/pages/CampaignQueueMonitor';
-import TaskQueueMonitor from '@/pages/TaskQueueMonitor';
-import EficienciaIA from '@/pages/EficienciaIA';
+
 import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
 import SalaDeComando from '@/pages/SalaDeComando';
 
@@ -87,9 +82,8 @@ const AuthenticatedApp = () => {
           <Route path="/learner" element={<LearnerEngine />} />
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/products" element={<Products />} />
-          <Route path="/bids-log" element={<LogDeBids />} />
-          <Route path="/bid-logs" element={<BidLogs />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/bid-logs" element={<BidLogs />} />
           <Route path="/metrics" element={<MetricsDashboard />} />
           <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/search-terms" element={<SearchTerms />} />
@@ -104,19 +98,20 @@ const AuthenticatedApp = () => {
           <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
           <Route path="/dayparting" element={<DaypartingDashboard />} />
           <Route path="/manual" element={<ManualInstrucoes />} />
-          <Route path="/alerts" element={<Alerts />} />
           <Route path="/optimizer" element={<OptimizerPipeline />} />
           <Route path="/currency-audit" element={<CurrencyAudit />} />
           <Route path="/keyword-management" element={<KeywordManagement />} />
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
-          <Route path="/incomplete-campaigns" element={<IncompleteCampaigns />} />
-          <Route path="/queue-monitor" element={<CampaignQueueMonitor />} />
-          <Route path="/task-queue" element={<TaskQueueMonitor />} />
-          <Route path="/eficiencia-ia" element={<EficienciaIA />} />
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
           <Route path="/sala-de-comando" element={<SalaDeComando />} />
-
+          {/* Redirecionamentos: rotas removidas da sidebar → Sala de Comando */}
+          <Route path="/alerts" element={<Navigate to="/sala-de-comando" replace />} />
+          <Route path="/bids-log" element={<Navigate to="/sala-de-comando" replace />} />
+          <Route path="/queue-monitor" element={<Navigate to="/sala-de-comando" replace />} />
+          <Route path="/task-queue" element={<Navigate to="/sala-de-comando" replace />} />
+          <Route path="/eficiencia-ia" element={<Navigate to="/sala-de-comando" replace />} />
+          <Route path="/incomplete-campaigns" element={<Navigate to="/sala-de-comando" replace />} />
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
           <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
         </Route>

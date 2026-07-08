@@ -1,74 +1,42 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Megaphone, Package, Settings, Activity, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal
+  LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
+  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
 
-const PRODUCT_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+// TTL de 23 horas — nunca sync automático mais frequente que isso
+const PRODUCT_SYNC_TTL_MS = 23 * 60 * 60 * 1000;
 const PRODUCT_SYNC_STORAGE_KEY = 'livingfinds:lastUnifiedProductSync';
 
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/analytics', icon: BarChart2, label: 'Analytics' },
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
   { path: '/ads', icon: Megaphone, label: 'Campanhas' },
   { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
   { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Comando' },
-  { path: '/inventory', icon: Package, label: 'Estoque e Vendas' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
   { path: '/manual', icon: Book, label: 'Manual' },
 ];
 
 function formatLastSync(value) {
   if (!value) return 'Nunca atualizado';
-  return new Intl.DateTimeFormat('pt-BR', {
-    dateStyle: 'short',
-    timeStyle: 'medium',
-  }).format(new Date(value));
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
 }
 
-function shouldRunAutomaticSync() {
+/** Verifica se o último sync ainda está dentro do TTL */
+function isSyncFresh() {
   const last = Number(localStorage.getItem(PRODUCT_SYNC_STORAGE_KEY) || 0);
-  return !last || Date.now() - last >= PRODUCT_SYNC_INTERVAL_MS;
+  return last > 0 && Date.now() - last < PRODUCT_SYNC_TTL_MS;
 }
-
-async function invokeOptional(name, payload) {
-  try {
-    const response = await base44.functions.invoke(name, payload);
-    return response?.data || null;
-  } catch (error) {
-    return { ok: false, error: error?.message || `Falha em ${name}` };
-  }
-}
-
-async function runUnifiedProductSync(accountId, trigger = 'manual') {
-  const payload = { amazon_account_id: accountId, trigger };
-
-  const reports = await invokeOptional('requestProductReports', payload);
-  const catalog = await invokeOptional('syncProductCatalog', payload);
-  const links = await invokeOptional('fixProductCampaignLinks', payload);
-
-  if (!catalog?.ok) {
-    throw new Error(catalog?.error || 'Falha ao sincronizar catálogo, estoque e títulos.');
-  }
-
-  const completedAt = catalog?.completed_at || catalog?.synced_at || new Date().toISOString();
-  localStorage.setItem(PRODUCT_SYNC_STORAGE_KEY, String(new Date(completedAt).getTime()));
-
-  window.dispatchEvent(new CustomEvent('livingfinds:products-synced', {
-    detail: { reports, catalog, links, completedAt },
-  }));
-
-  return { reports, catalog, links, completedAt };
-}
-
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [accountMode, setAccountMode] = useState('mock');
+  const [accountMode, setAccountMode] = useState('real');
   const [account, setAccount] = useState(null);
   const [productSyncing, setProductSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState('');
@@ -78,34 +46,9 @@ export default function AppLayout() {
   });
   const location = useLocation();
 
-  const executeProductSync = useCallback(async (trigger = 'manual') => {
-    if (!account?.id || productSyncing) return;
-
-    setProductSyncing(true);
-    setSyncMessage('Solicitando relatórios e sincronizando produtos...');
-
-    try {
-      const result = await runUnifiedProductSync(account.id, trigger);
-      setLastSync(result.completedAt);
-
-      const reportCount = result.reports?.requested?.length || 0;
-      const updated = result.catalog?.updated || result.catalog?.total_updated || 0;
-      const fixed = result.links?.updated || 0;
-      setSyncMessage(`${updated} produtos atualizados · ${fixed} vínculos corrigidos · ${reportCount} relatórios solicitados`);
-
-      if (window.location.pathname === '/products') {
-        setTimeout(() => window.location.reload(), 700);
-      }
-    } catch (error) {
-      setSyncMessage(error?.message || 'Falha na sincronização de produtos.');
-    } finally {
-      setProductSyncing(false);
-    }
-  }, [account, productSyncing]);
-
+  // Inicializar conta (apenas leitura do banco — sem chamar Amazon)
   useEffect(() => {
     let mounted = true;
-
     document.documentElement.lang = 'pt-BR';
     document.title = 'Living Finds — Gestão Amazon';
 
@@ -115,14 +58,12 @@ export default function AppLayout() {
         let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
         if (!accounts.length) accounts = await base44.entities.AmazonAccount.filter({ status: 'connected' });
         if (!accounts.length) accounts = await base44.entities.AmazonAccount.list('-updated_date', 1);
-
+        if (!mounted) return;
         const current = accounts[0] || null;
-        if (!mounted || !current) return;
-
         setAccount(current);
-        setAccountMode(current.mode || 'real');
-      } catch (error) {
-        console.error('[Inicialização Amazon]', error?.message || error);
+        setAccountMode(current?.mode || 'real');
+      } catch (e) {
+        console.error('[AppLayout init]', e?.message);
       }
     };
 
@@ -130,18 +71,79 @@ export default function AppLayout() {
     return () => { mounted = false; };
   }, []);
 
-  useEffect(() => {
-    if (!account?.id) return;
+  /**
+   * Sync de produtos com guard de TTL e verificação de relatório válido.
+   * Fluxo:
+   * 1. Se sync ainda está fresco (< 23h) e trigger é automático → pular
+   * 2. Verificar se há relatório válido no banco (account.last_sync_at)
+   * 3. Se relatório válido → apenas re-linkar produtos sem chamar relatório novo
+   * 4. Se vencido → solicitar novo relatório e sincronizar
+   */
+  const executeProductSync = useCallback(async (trigger = 'manual') => {
+    if (!account?.id || productSyncing) return;
 
-    if (shouldRunAutomaticSync()) executeProductSync('automatic_app_start');
+    // Guard TTL: bloqueia sync automático se dados ainda são frescos
+    if (trigger !== 'manual' && isSyncFresh()) {
+      return;
+    }
 
-    const interval = window.setInterval(() => {
-      if (shouldRunAutomaticSync()) executeProductSync('automatic_interval');
-    }, PRODUCT_SYNC_INTERVAL_MS);
+    // Guard extra: verifica last_sync_at da conta (atualizado pelo backend)
+    if (trigger !== 'manual' && account.last_sync_at) {
+      const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
+      if (ageHours < 23) {
+        return; // dados do banco ainda válidos — não chamar Amazon
+      }
+    }
 
-    return () => window.clearInterval(interval);
-  }, [account, executeProductSync]);
+    setProductSyncing(true);
+    setSyncMessage('Verificando relatórios e sincronizando produtos...');
 
+    try {
+      // 1. Tentar apenas linkar produtos (leve, sem Amazon)
+      let links = null;
+      try {
+        const linksRes = await base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: account.id, trigger });
+        links = linksRes?.data;
+      } catch {}
+
+      // 2. Sincronizar catálogo (usa cache interno se disponível)
+      const catalogRes = await base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id, trigger });
+      const catalog = catalogRes?.data;
+
+      if (!catalog?.ok) {
+        setSyncMessage(catalog?.error || 'Falha ao sincronizar catálogo.');
+        return;
+      }
+
+      // 3. Solicitar relatório apenas se catálogo indicou necessidade ou se for manual
+      let reportMsg = '';
+      if (trigger === 'manual' || catalog?.report_needed) {
+        try {
+          const reportRes = await base44.functions.invoke('requestProductReports', { amazon_account_id: account.id, trigger });
+          const reportCount = reportRes?.data?.requested?.length || 0;
+          if (reportCount > 0) reportMsg = ` · ${reportCount} relatórios solicitados`;
+        } catch {}
+      }
+
+      const completedAt = catalog?.completed_at || catalog?.synced_at || new Date().toISOString();
+      localStorage.setItem(PRODUCT_SYNC_STORAGE_KEY, String(Date.now()));
+      setLastSync(completedAt);
+
+      const updated = catalog?.updated || catalog?.total_updated || 0;
+      const fixed = links?.updated || 0;
+      setSyncMessage(`${updated} produtos atualizados · ${fixed} vínculos corrigidos${reportMsg}`);
+
+      window.dispatchEvent(new CustomEvent('livingfinds:products-synced', { detail: { catalog, links, completedAt } }));
+
+      if (window.location.pathname === '/products') {
+        setTimeout(() => window.location.reload(), 700);
+      }
+    } catch (error) {
+      setSyncMessage(error?.message || 'Falha na sincronização.');
+    } finally {
+      setProductSyncing(false);
+    }
+  }, [account, productSyncing]);
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
@@ -212,7 +214,7 @@ export default function AppLayout() {
           <div className="p-4 border-t border-surface-2 space-y-2">
             {productSyncing && (
               <div className="flex items-center gap-2 text-[11px] text-cyan">
-                <Activity className="w-3 h-3 animate-pulse" />
+                <Loader2 className="w-3 h-3 animate-spin" />
                 Sincronizando produtos...
               </div>
             )}
@@ -249,6 +251,7 @@ export default function AppLayout() {
                 <div className="min-w-0">
                   <p className="text-[11px] text-slate-400">
                     Última atualização: {formatLastSync(lastSync)}
+                    {lastSync && isSyncFresh() && <span className="ml-1 text-emerald-500">· dados frescos</span>}
                   </p>
                   {syncMessage && (
                     <p className="text-[11px] text-cyan truncate max-w-[620px]">{syncMessage}</p>
