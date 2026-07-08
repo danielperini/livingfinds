@@ -27,15 +27,15 @@
     },
     "target_acos": {
       "type": "number",
-      "default": 25
+      "default": 10
     },
     "acos_target": {
       "type": "number",
-      "default": 25
+      "default": 10
     },
     "maximum_acos": {
       "type": "number",
-      "default": 40
+      "default": 15
     },
     "target_roas": {
       "type": "number",
@@ -47,37 +47,34 @@
     },
     "maximum_tacos": {
       "type": "number",
-      "default": 12
+      "default": 10
     },
     "target_tacos": {
       "type": "number",
-      "default": 10,
-      "description": "TACoS alvo \u2014 meta da IA para percentual de gastos sobre vendas totais"
+      "default": 5,
+      "description": "TACoS alvo \u2014 meta da IA"
     },
     "target_cpc": {
       "type": "number",
       "default": 0,
-      "description": "CPC alvo em R$. Quando > 0, a IA ajusta bids para manter o CPC m\u00e9dio pr\u00f3ximo deste valor."
+      "description": "CPC alvo em R$"
     },
     "maximum_cpc": {
       "type": "number",
       "default": 0,
-      "description": "CPC m\u00e1ximo tolerado. Acima disso, a IA reduz bid da keyword automaticamente."
+      "description": "CPC m\u00e1ximo tolerado"
     },
     "cpc_enforcement": {
       "type": "boolean",
-      "default": false,
-      "description": "Quando ativo, a IA bloqueia aumentos de bid que ultrapassariam o maximum_cpc."
+      "default": false
     },
     "daily_budget_target": {
       "type": "number",
-      "default": 0,
-      "description": "Or\u00e7amento di\u00e1rio alvo fixado pelo gestor em R$. Tem prioridade sobre a sugest\u00e3o da IA quando > 0."
+      "default": 0
     },
     "daily_budget_locked": {
       "type": "boolean",
-      "default": false,
-      "description": "Quando true, a IA usa daily_budget_target como valor fixo e ignora a sugest\u00e3o autom\u00e1tica."
+      "default": false
     },
     "daily_budget_source": {
       "type": "string",
@@ -86,16 +83,16 @@
         "manager_fixed",
         "auto"
       ],
-      "default": "auto",
-      "description": "Origem do or\u00e7amento di\u00e1rio ativo: ai_suggestion = sugerido pela IA, manager_fixed = fixado pelo gestor, auto = calculado automaticamente."
+      "default": "auto"
     },
     "total_daily_budget": {
       "type": "number",
-      "default": 500
+      "default": 80
     },
     "daily_budget_limit": {
       "type": "number",
-      "default": 500
+      "default": 80,
+      "description": "Limite di\u00e1rio geral de risco \u2014 fonte oficial do motor"
     },
     "maximum_campaign_budget": {
       "type": "number",
@@ -110,18 +107,15 @@
         "budget_first",
         "cpc_first"
       ],
-      "default": "acos_first",
-      "description": "Define qual meta a IA prioriza ao ajustar bids: acos_first = reduzir ACoS, roas_first = maximizar ROAS, tacos_first = controlar TACoS, budget_first = gastar o or\u00e7amento definido sem ultrapassar, cpc_first = manter CPC no alvo."
+      "default": "acos_first"
     },
     "ai_daily_budget_target": {
       "type": "number",
-      "default": 0,
-      "description": "Or\u00e7amento di\u00e1rio alvo em R$. Quando > 0 e ai_budget_priority_mode=budget_first, a IA ajusta bids para atingir este gasto sem ultrapassar."
+      "default": 0
     },
     "ai_budget_enforcement": {
       "type": "boolean",
-      "default": false,
-      "description": "Quando ativo, a IA reduz bids de keywords para garantir que o gasto di\u00e1rio n\u00e3o ultrapasse ai_daily_budget_target"
+      "default": false
     },
     "max_bid_increase_pct": {
       "type": "number",
@@ -141,11 +135,25 @@
     },
     "min_bid": {
       "type": "number",
-      "default": 0.1
+      "default": 0.5
     },
     "max_bid": {
       "type": "number",
       "default": 5.0
+    },
+    "target_daily_impressions": {
+      "type": "number",
+      "default": 0,
+      "description": "Meta de impress\u00f5es di\u00e1rias. 0 = desativada."
+    },
+    "min_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_goal_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Ativa meta de impress\u00f5es di\u00e1rias"
     },
     "min_clicks_for_decision": {
       "type": "number",
@@ -274,6 +282,22 @@
     "learning_enabled": {
       "type": "boolean",
       "default": true
+    },
+    "ai_auto_optimization": {
+      "type": "boolean",
+      "default": false
+    },
+    "top_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "rest_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "product_page_limit": {
+      "type": "number",
+      "default": 0
     },
     "marketplace_timezone": {
       "type": "string",

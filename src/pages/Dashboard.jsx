@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { ImpressionsDailyChart } from '@/components/shared/DailyMetricsChart';
 import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line } from 'recharts';
 import { Loader2, RefreshCw, AlertCircle, Clock, Send, DollarSign, Eye, MousePointer, Rocket, CheckCircle2, X } from 'lucide-react';
@@ -468,7 +469,7 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
         ))}
       </div>
 
-      {mainTab === 'analytics' && <Analytics />}
+      {mainTab === 'analytics' && <Analytics metricsOnly />}
       {mainTab === 'budget14d' && (
         <BudgetReport14d
           metricsDaily={metricsDaily}
@@ -567,12 +568,29 @@ const totalChanges = changesChartData.reduce((sum, day) => sum + day.changes, 0)
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <KPICard label="Ad Spend 30d" value={`R$${kpis.spend.toFixed(2)}`} sub={`${active_count} ativas · ${paused_count} pausadas`} loading={loading} />
         <KPICard label="Vendas Ads 30d" value={`R$${kpis.sales.toFixed(2)}`} sub={`${kpis.orders} pedidos`} loading={loading} />
         <KPICard label="ACoS" value={`${acos.toFixed(1)}%`} sub={`ROAS: ${roas.toFixed(2)}x`} loading={loading} />
         <KPICard label="CPC Médio" value={`R$${cpc.toFixed(2)}`} sub={`CTR: ${ctr.toFixed(2)}%`} loading={loading} />
+        <KPICard label="Impressões 30d" value={kpis.impressions.toLocaleString('pt-BR')} sub={`CTR: ${ctr.toFixed(3)}%`} loading={loading} />
       </div>
+
+      {/* Impressões Diárias */}
+      {!loading && metricsDaily.length > 0 && (
+        <div className="bg-surface-1 border border-violet-500/20 rounded-xl p-5">
+          <h2 className="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-violet-400" />
+            Impressões Diárias
+          </h2>
+          <ImpressionsDailyChart
+            metricsDaily={metricsDaily}
+            period={30}
+            targetDailyImpressions={autopilotConfig?.target_daily_impressions || 0}
+            height={180}
+          />
+        </div>
+      )}
 
       {/* Metas vs Realidade */}
       <GoalsComparisonPanel

@@ -1,0 +1,178 @@
+{
+  "name": "PerformanceSettings",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "primary_goal": {
+      "type": "string",
+      "enum": [
+        "acos",
+        "roas",
+        "tacos",
+        "cpc",
+        "daily_impressions",
+        "budget_coverage",
+        "cost_per_order",
+        "growth"
+      ],
+      "default": "acos"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 10
+    },
+    "max_acos": {
+      "type": "number",
+      "default": 15
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "target_tacos": {
+      "type": "number",
+      "default": 5
+    },
+    "max_tacos": {
+      "type": "number",
+      "default": 10
+    },
+    "daily_budget_limit": {
+      "type": "number",
+      "default": 80,
+      "description": "Limite di\u00e1rio geral de risco em R$. Fonte oficial do motor."
+    },
+    "suggested_daily_budget": {
+      "type": "number",
+      "default": 0,
+      "description": "Sugerido pelo c\u00e1lculo semanal."
+    },
+    "calculated_daily_budget": {
+      "type": "number",
+      "default": 0,
+      "description": "Resultado da f\u00f3rmula t\u00e9cnica."
+    },
+    "target_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "max_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "max_bid_increase_pct": {
+      "type": "number",
+      "default": 15
+    },
+    "max_bid_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "target_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "min_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "max_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_goal_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "target_coverage_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "pacing_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "dayparting_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "placement_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "first_page_exposure_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "top_of_search_limit": {
+      "type": "number",
+      "default": 0,
+      "description": "% m\u00e1ximo de ajuste ToS. 0 = sem ajuste."
+    },
+    "rest_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "product_page_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "minimum_campaign_budget": {
+      "type": "number",
+      "default": 15
+    },
+    "campaign_budget_increment": {
+      "type": "number",
+      "default": 5
+    },
+    "weekly_campaign_capacity": {
+      "type": "number",
+      "default": 10
+    },
+    "budget_formula_version": {
+      "type": "string",
+      "default": "v2"
+    },
+    "last_budget_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_budget_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "objective": {
+      "type": "string",
+      "enum": [
+        "profitability",
+        "growth",
+        "launch",
+        "defense",
+        "liquidation",
+        "maintenance"
+      ],
+      "default": "profitability"
+    },
+    "ai_auto_optimization": {
+      "type": "boolean",
+      "default": false
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}
