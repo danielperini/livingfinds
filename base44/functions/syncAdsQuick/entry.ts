@@ -272,17 +272,23 @@ Deno.serve(async (req) => {
     if (action === 'download') {
       if (!report_id) return Response.json({ error: 'report_id required for action=download' }, { status: 400 });
 
-      const token = await getAdsToken(refreshToken);
-      const status = await adsCall('GET', `/reporting/reports/${report_id}`, null, token, profileId);
+      // Polling interno: espera até 20 minutos (120 tentativas × 10s)
+      const POLL_INTERVAL_MS = 10_000;
+      const POLL_MAX_ATTEMPTS = 120; // 20 minutos
+      let token = await getAdsToken(refreshToken);
+      let status: any = null;
+      let attempts = 0;
 
-      if (status.status === 'PENDING' || status.status === 'PROCESSING') {
-        return Response.json({ ok: true, ready: false, status: status.status, message: 'Relatório ainda a processar. Tente novamente em 1-2 min.' });
+      while (attempts < POLL_MAX_ATTEMPTS) {
+        status = await adsCall('GET', `/reporting/reports/${report_id}`, null, token, profileId);
+        if (status.status === 'COMPLETED' && status.url) break;
+        if (status.status === 'FAILED') throw new Error(`Relatório falhou: ${status.failureReason || JSON.stringify(status)}`);
+        attempts++;
+        if (attempts < POLL_MAX_ATTEMPTS) await pause(POLL_INTERVAL_MS);
       }
-      if (status.status === 'FAILED') {
-        throw new Error(`Relatório falhou: ${status.failureReason || JSON.stringify(status)}`);
-      }
-      if (status.status !== 'COMPLETED' || !status.url) {
-        return Response.json({ ok: true, ready: false, status: status.status });
+
+      if (!status || status.status !== 'COMPLETED' || !status.url) {
+        return Response.json({ ok: true, ready: false, status: status?.status || 'TIMEOUT', message: `Relatório não ficou pronto em 20 minutos (${attempts} tentativas).` });
       }
 
       // Baixar e descomprimir
