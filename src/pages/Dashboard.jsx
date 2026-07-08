@@ -329,7 +329,20 @@ export default function Dashboard() {
   // Garantir que period seja válido
   const activePeriod = availablePeriods.includes(period) ? period : availablePeriods[availablePeriods.length - 1] || 'yesterday';
 
-  const { startDate, endDate, label: periodLabel } = useMemo(() => getClosedReportingPeriod(activePeriod), [activePeriod]);
+  // Última data com dados de Ads (pode ser anterior a ontem por latência da Amazon)
+  const lastAvailableAdsDate = useMemo(() => {
+    const dates = allMetrics.map(m => m.date).filter(Boolean).sort();
+    return dates.length > 0 ? dates[dates.length - 1] : null;
+  }, [allMetrics]);
+
+  const { startDate, endDate, label: periodLabel } = useMemo(() => {
+    const base = getClosedReportingPeriod(activePeriod);
+    // Se "Ontem" não tem dados de Ads mas há dados mais antigos, usar o último dia disponível
+    if (activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < base.endDate) {
+      return { startDate: lastAvailableAdsDate, endDate: lastAvailableAdsDate, label: `Último dia c/ dados (${fmtDateBR(lastAvailableAdsDate)})` };
+    }
+    return base;
+  }, [activePeriod, lastAvailableAdsDate]);
 
   const periodMetrics = useMemo(() =>
     allMetrics.filter(m => m.date >= startDate && m.date <= endDate),
@@ -653,6 +666,9 @@ export default function Dashboard() {
           Todo o histórico disponível · Vendas Ads = atribuição Amazon
           {hasSalesDailyData && <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></>}
           {' · '}barras roxas = impressões · barras âmbar = alterações da IA
+          {activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday() && (
+            <> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></>
+          )}
         </p>
         {hasSalesDailyData && (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
