@@ -29,7 +29,10 @@ const CONFLICT_PRIORITY = {
 function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
 function evaluateCondition(cond, entity) {
-  const val = entity[cond.metric] ?? 0;
+  // null/undefined métricas: retornar false imediatamente para evitar comparações incorretas
+  const rawVal = entity[cond.metric];
+  if (rawVal === null || rawVal === undefined) return false;
+  const val = rawVal;
   switch (cond.operator) {
     case 'equals': return val === cond.value;
     case 'not_equals': return val !== cond.value;
@@ -270,19 +273,47 @@ Deno.serve(async (req) => {
     }
 
     // TACoS real por ASIN: gasto ads / receita real
-    // Calculado usando metricsRaw (ads spend) + salesDailyRaw (receita real)
+    // Fonte primária: CampaignMetricsDaily (tem campaign_id); Campaigns têm asin
     const adsSpendByAsin = new Map();
+    const adsSpendByCampaign = new Map();
     for (const m of metricsRaw) {
-      const asin = m.asin;
-      if (!asin) continue;
-      if (!adsSpendByAsin.has(asin)) adsSpendByAsin.set(asin, 0);
-      adsSpendByAsin.set(asin, adsSpendByAsin.get(asin) + (m.spend || 0));
+      if (m.campaign_id) {
+        adsSpendByCampaign.set(m.campaign_id, (adsSpendByCampaign.get(m.campaign_id) || 0) + (m.spend || 0));
+      }
+      if (m.asin) {
+        adsSpendByAsin.set(m.asin, (adsSpendByAsin.get(m.asin) || 0) + (m.spend || 0));
+      }
+    }
+    // Para campanhas com ASIN: acumular spend por ASIN via campaign
+    for (const c of campaigns) {
+      if (!c.asin || !c.campaign_id) continue;
+      const campaignSpend = adsSpendByCampaign.get(c.campaign_id) || adsSpendByCampaign.get(c.amazon_campaign_id) || 0;
+      adsSpendByAsin.set(c.asin, (adsSpendByAsin.get(c.asin) || 0) + campaignSpend);
     }
     for (const [asin, metrics] of salesMetricsByAsin.entries()) {
       const spend = adsSpendByAsin.get(asin) || 0;
       metrics.real_tacos_pct = metrics.real_revenue_30d > 0 ? (spend / metrics.real_revenue_30d) * 100 : null;
       metrics.ads_spend_30d = spend;
     }
+
+    // TACoS por campanha: para keywords sem ASIN, usar o TACoS da campanha
+    // Calculado como: spend da campanha / receita real do ASIN da campanha
+    const tacosByCampaignId = new Map();
+    for (const c of campaigns) {
+      if (!c.asin) continue;
+      const campaignSpend = adsSpendByCampaign.get(c.campaign_id) || adsSpendByCampaign.get(c.amazon_campaign_id) || 0;
+      const asinSales = salesMetricsByAsin.get(c.asin);
+      if (asinSales?.real_revenue_30d > 0 && campaignSpend > 0) {
+        const tacos = (campaignSpend / asinSales.real_revenue_30d) * 100;
+        if (c.campaign_id) tacosByCampaignId.set(c.campaign_id, tacos);
+        if (c.amazon_campaign_id) tacosByCampaignId.set(c.amazon_campaign_id, tacos);
+      }
+    }
+
+    // TACoS de conta: soma de todo spend / soma de toda receita real
+    const totalAdsSpend30d = Array.from(adsSpendByCampaign.values()).reduce((s, v) => s + v, 0);
+    const totalRealRevenue30d = Array.from(salesMetricsByAsin.values()).reduce((s, m) => s + m.real_revenue_30d, 0);
+    const accountTacos = totalRealRevenue30d > 0 ? (totalAdsSpend30d / totalRealRevenue30d) * 100 : null;
 
     // ── 3. Contexto sazonal ───────────────────────────────────────────────
     const seasonalCtx = getSeasonalCtx(today, customSeasonalEvents);
@@ -336,6 +367,13 @@ Deno.serve(async (req) => {
     // ── 6. Índices ────────────────────────────────────────────────────────
     const productMap = new Map(products.map(p => [p.asin, p]));
 
+    // Mapear campaign_id → asin (para keywords sem asin direto)
+    const campaignAsinMap = new Map();
+    for (const c of campaigns) {
+      if (c.campaign_id && c.asin) campaignAsinMap.set(c.campaign_id, c.asin);
+      if (c.amazon_campaign_id && c.asin) campaignAsinMap.set(c.amazon_campaign_id, c.asin);
+    }
+
     const recentExecs = await base44.asServiceRole.entities.RuleExecution.filter(
       { amazon_account_id: aid }, '-created_date', 300
     );
@@ -365,7 +403,8 @@ Deno.serve(async (req) => {
         const entityId = entity.keyword_id || entity.campaign_id || entity.id;
         if (!entityId) continue;
 
-        const product = entity.asin ? productMap.get(entity.asin) : null;
+        const resolvedAsinEarly = entity.asin || campaignAsinMap.get(entity.campaign_id) || null;
+        const product = resolvedAsinEarly ? productMap.get(resolvedAsinEarly) : null;
         const isOutOfStock = product?.inventory_status === 'out_of_stock';
 
         // Guardrail estoque
@@ -375,7 +414,14 @@ Deno.serve(async (req) => {
         }
 
         // Enriquecer com métricas reais de pedidos do SP-API (SalesDaily)
-        const realSales = entity.asin ? (salesMetricsByAsin.get(entity.asin) || {}) : {};
+        // Resolver ASIN da keyword: campo direto ou via campaign_id
+        const resolvedAsin = entity.asin || campaignAsinMap.get(entity.campaign_id) || null;
+        const realSales = resolvedAsin ? (salesMetricsByAsin.get(resolvedAsin) || {}) : {};
+
+        // TACoS em cascata: ASIN direto → campanha → conta
+        const tacosValue = realSales.real_tacos_pct !== undefined && realSales.real_tacos_pct !== null
+          ? realSales.real_tacos_pct
+          : (tacosByCampaignId.get(entity.campaign_id) ?? accountTacos ?? null);
 
         const entityData = {
           ...entity,
@@ -390,7 +436,7 @@ Deno.serve(async (req) => {
           real_avg_ticket: realSales.real_avg_ticket || 0,
           real_revenue_per_day: realSales.real_revenue_per_day || 0,
           has_real_sales: realSales.has_real_sales || false,
-          real_tacos_pct: realSales.real_tacos_pct ?? null,
+          real_tacos_pct: tacosValue,
           ads_spend_30d: realSales.ads_spend_30d || 0,
         };
 
