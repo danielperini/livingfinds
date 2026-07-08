@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, Sparkles, CheckCheck, PackagePlus } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, Sparkles, CheckCheck, PackagePlus, TrendingUp } from 'lucide-react';
 import SuggestionsPanel from '@/components/termbank/SuggestionsPanel';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -20,6 +20,7 @@ export default function TermBankPageV2() {
   const [approveAllRunning, setApproveAllRunning] = useState(false);
   const [account, setAccount] = useState(null);
   const [genRestocked, setGenRestocked] = useState(false);
+  const [syncingWinners, setSyncingWinners] = useState(false);
 
   const MIN_CONFIDENCE = 75;
   const MAX_SUGGESTIONS_PER_ASIN = 10;
@@ -358,6 +359,39 @@ export default function TermBankPageV2() {
         >
           {genRestocked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PackagePlus className="h-3.5 w-3.5" />}
           {genRestocked ? 'Gerando...' : 'Produtos novos'}
+        </button>
+        <button
+          onClick={async () => {
+            if (!account || syncingWinners) return;
+            setSyncingWinners(true);
+            setMessage(null);
+            try {
+              const res = await base44.functions.invoke('updateTermBankFromAutomaticCampaigns', {
+                amazon_account_id: account.id,
+              });
+              const d = res?.data;
+              if (d?.ok) {
+                if (d.skipped) {
+                  setMessage({ type: 'error', text: d.reason || 'Nenhum termo vencedor encontrado.' });
+                } else {
+                  setMessage({ type: 'success', text: `✓ ${d.terms_created} termos criados, ${d.terms_updated} atualizados — de ${d.search_terms_with_min_orders} termos com ≥3 pedidos (30d).` });
+                  await load();
+                }
+              } else {
+                setMessage({ type: 'error', text: d?.error || 'Falha ao importar termos.' });
+              }
+            } catch (e) {
+              setMessage({ type: 'error', text: e.message });
+            } finally {
+              setSyncingWinners(false);
+            }
+          }}
+          disabled={syncingWinners || loading}
+          className="flex items-center gap-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+          title="Importar search terms que venderam ≥3 vezes (30d) de campanhas manuais e automáticas"
+        >
+          {syncingWinners ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <TrendingUp className="h-3.5 w-3.5" />}
+          {syncingWinners ? 'Importando...' : 'Importar vencedores'}
         </button>
         <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
