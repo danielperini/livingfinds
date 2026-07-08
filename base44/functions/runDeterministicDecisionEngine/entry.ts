@@ -26,6 +26,56 @@ const CONFLICT_PRIORITY = {
   maintenance: 9, increase_bid: 10, expansion: 11, campaign_creation: 12,
 };
 
+// ── Regras nativas de estoque ────────────────────────────────────────────────
+// Executadas automaticamente independente do banco de regras (DecisionRule).
+// Prioridade máxima: sobrescrevem regras externas para o mesmo entity neste ciclo.
+//
+// Limites de cobertura (em dias de estoque disponível):
+//   CRÍTICO  : < 7  dias → pausar ads / reduzir bid agressivo
+//   BAIXO    : 7–21 dias → reduzir bid 10% (proteger estoque)
+//   SAUDÁVEL : 21–60 dias → manter (sem ação)
+//   ALTO     : 60–90 dias → aumentar bid 15% (acelerar giro)
+//   EXCESSO  : > 90 dias → aumentar bid 25% (liquidar aggressivo)
+
+const STOCK_RULES = [
+  {
+    rule_key: 'stock_critical_pause',
+    label: 'Estoque crítico (< 7 dias) — reduzir bid 25%',
+    priority: 2,
+    cooldown_hours: 48,
+    matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7 && d.stock_coverage_days > 0,
+    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.75),
+    reason: 'Estoque crítico: < 7 dias de cobertura. Bid reduzido 25% para proteger estoque.',
+  },
+  {
+    rule_key: 'stock_low_reduce',
+    label: 'Estoque baixo (7–21 dias) — reduzir bid 10%',
+    priority: 2,
+    cooldown_hours: 48,
+    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 7 && d.stock_coverage_days < 21,
+    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.90),
+    reason: 'Estoque baixo: 7–21 dias de cobertura. Bid reduzido 10% para proteger ritmo de vendas.',
+  },
+  {
+    rule_key: 'stock_high_boost',
+    label: 'Estoque alto (60–90 dias) — aumentar bid 15%',
+    priority: 2,
+    cooldown_hours: 48,
+    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
+    reason: 'Estoque alto: 60–90 dias de cobertura. Bid aumentado 15% para acelerar giro.',
+  },
+  {
+    rule_key: 'stock_excess_liquidate',
+    label: 'Excesso de estoque (> 90 dias) — aumentar bid 25%',
+    priority: 2,
+    cooldown_hours: 48,
+    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 90,
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.25),
+    reason: 'Excesso de estoque: > 90 dias de cobertura. Bid aumentado 25% para liquidação agressiva.',
+  },
+];
+
 function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
 function evaluateCondition(cond, entity) {
@@ -388,13 +438,91 @@ Deno.serve(async (req) => {
 
     const actionsToEnqueue = [];
     const conflicts = [];
-    const stats = { evaluated: 0, matched: 0, skipped_cooldown: 0, skipped_dup: 0, skipped_stock: 0, skipped_seasonal: 0, enqueued: 0 };
+    const stats = { evaluated: 0, matched: 0, skipped_cooldown: 0, skipped_dup: 0, skipped_stock: 0, skipped_seasonal: 0, enqueued: 0, stock_rules_applied: 0 };
     const entityChangedThisCycle = new Map();
     const scopedEntities = { keyword: keywords, campaign: campaigns };
 
     const seasonalPayload = buildSeasonalContextPayload(seasonalCtx);
 
-    // ── 7. Avaliar regras ─────────────────────────────────────────────────
+    // ── 7a. Regras nativas de estoque (prioridade máxima) ─────────────────
+    // Executam sobre keywords com asin resolvido, independente do banco de regras.
+    for (const kw of keywords) {
+      const entityId = kw.keyword_id || kw.id;
+      if (!entityId) continue;
+
+      const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
+      if (!resolvedAsin) continue;
+
+      const product = productMap.get(resolvedAsin);
+      if (!product) continue;
+
+      const realSales = salesMetricsByAsin.get(resolvedAsin) || {};
+      const stockQty = product.fba_inventory || 0;
+      const realUnits30d = realSales.real_units_30d || 0;
+      const stockVelocity = realUnits30d / 30;
+      const stockCoverageDays = stockVelocity > 0 ? stockQty / stockVelocity : 999;
+
+      const entityData = {
+        ...kw,
+        current_bid: kw.current_bid || kw.bid || 0.25,
+        stock: stockQty,
+        stock_coverage_days: stockCoverageDays,
+        stock_velocity: stockVelocity,
+      };
+
+      for (const sr of STOCK_RULES) {
+        if (!sr.matches(entityData)) continue;
+
+        // Guardrail: não aumentar bid se produto sem estoque
+        if (stockQty === 0 && ['stock_high_boost', 'stock_excess_liquidate'].includes(sr.rule_key)) continue;
+
+        // Guardrail sazonal: não aumentar em baixa demanda
+        if (['stock_high_boost', 'stock_excess_liquidate'].includes(sr.rule_key)) {
+          if (seasonalCtx.is_low_demand || (seasonalCtx.is_holiday && !realSales.has_real_sales)) continue;
+        }
+
+        // Cooldown
+        const lastExecSR = lastExecByRuleEntity.get(`${sr.rule_key}|${entityId}`);
+        if (lastExecSR?.executed_at) {
+          const hoursAgo = (Date.now() - new Date(lastExecSR.executed_at).getTime()) / 3600000;
+          if (hoursAgo < sr.cooldown_hours) continue;
+        }
+
+        const iKey = `stock|${aid}|${sr.rule_key}|${entityId}|${today}`;
+        if (usedIdemKeys.has(iKey)) continue;
+
+        // Conflito com ação já agendada para esta entity neste ciclo
+        if (entityChangedThisCycle.has(entityId)) continue;
+
+        const newBid = sr.action(entityData);
+        actionsToEnqueue.push({
+          amazon_account_id: aid,
+          correlation_id: correlationId,
+          rule_key: sr.rule_key,
+          rule_version: 1,
+          entity_type: 'keyword',
+          entity_id: entityId,
+          campaign_id: kw.campaign_id,
+          keyword_id: kw.keyword_id,
+          asin: resolvedAsin,
+          action_type: 'set_bid',
+          value_before: entityData.current_bid,
+          value_after: newBid,
+          idempotency_key: iKey,
+          status: 'pending',
+          seasonal_context: seasonalPayload,
+          reason: `${sr.reason} (cobertura: ${Math.round(stockCoverageDays)}d, estoque: ${stockQty}un, velocidade: ${stockVelocity.toFixed(2)}un/dia)`,
+          stock_coverage_days: stockCoverageDays,
+          stock_qty: stockQty,
+        });
+        entityChangedThisCycle.set(entityId, sr.rule_key);
+        stats.stock_rules_applied++;
+        stats.enqueued++;
+        break; // apenas uma regra de estoque por keyword por ciclo
+      }
+    }
+
+    // ── 7b. Regras externas (banco de dados) ─────────────────────────────
     for (const rule of activeRules) {
       const entities = scopedEntities[rule.scope] || [];
 
@@ -548,6 +676,7 @@ Deno.serve(async (req) => {
       budget_within_limits: totalActiveBudget <= MAX_TOTAL_DAILY_BUDGET,
       seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
       sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
+      stock_rules: { applied: stats.stock_rules_applied },
       stats,
       conflicts_resolved: conflicts.length,
       actions_enqueued: actionsToEnqueue.length,
