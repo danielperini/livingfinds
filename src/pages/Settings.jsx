@@ -3,9 +3,10 @@ import { base44 } from '@/api/base44Client';
 import {
   Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save,
   ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package,
-  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye
+  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
+import AppearanceSelector from '@/components/settings/AppearanceSelector';
 
 const PERFORMANCE_DEFAULTS = {
   primary_goal: 'acos',
@@ -429,6 +430,9 @@ export default function Settings() {
           {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar configurações'}
         </button>
       </div>
+
+      {/* ─── APARÊNCIA ─── */}
+      <AppearanceSelector />
 
       {/* ─── CREDENCIAIS AMAZON — accordion ─── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">

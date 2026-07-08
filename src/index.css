@@ -4,6 +4,293 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Tokens de tema — aplicados via data-theme no <html> ─────────────────── */
+
+/* ESCURO (padrão) */
+:root,
+[data-theme="dark"] {
+  --app-bg: #0A0B0F;
+  --surface-1-color: #111318;
+  --surface-2-color: #1A1D26;
+  --surface-3-color: #22263A;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --border-color: #1A1D26;
+  --accent-color: #3B82F6;
+  --danger-color: #EF4444;
+  --warning-color: #F59E0B;
+  --success-color: #10B981;
+  --chart-color-1: #3B82F6;
+  --chart-color-2: #10B981;
+  --chart-color-3: #F59E0B;
+  --chart-color-4: #8B5CF6;
+  --chart-color-5: #EF4444;
+  --chart-grid: #1A1D26;
+  --chart-axis: #64748b;
+  --tooltip-bg: #111318;
+  --tooltip-border: #1A1D26;
+  --input-bg: #1A1D26;
+  --sidebar-bg-color: #0D0F14;
+  --sidebar-border-color: #1A1D26;
+  --header-bg: #111318;
+}
+
+/* CLARO */
+[data-theme="light"] {
+  --app-bg: #ffffff;
+  --surface-1-color: #f4f4f5;
+  --surface-2-color: #e4e4e7;
+  --surface-3-color: #d4d4d8;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --border-color: #e2e8f0;
+  --accent-color: #2563EB;
+  --danger-color: #dc2626;
+  --warning-color: #d97706;
+  --success-color: #16a34a;
+  --chart-color-1: #2563EB;
+  --chart-color-2: #16a34a;
+  --chart-color-3: #d97706;
+  --chart-color-4: #7c3aed;
+  --chart-color-5: #dc2626;
+  --chart-grid: #e2e8f0;
+  --chart-axis: #64748b;
+  --tooltip-bg: #ffffff;
+  --tooltip-border: #e2e8f0;
+  --input-bg: #f8fafc;
+  --sidebar-bg-color: #f8fafc;
+  --sidebar-border-color: #e2e8f0;
+  --header-bg: #f4f4f5;
+}
+
+/* BEGE */
+[data-theme="beige"] {
+  --app-bg: #f5f0e8;
+  --surface-1-color: #ede8de;
+  --surface-2-color: #e3ddd2;
+  --surface-3-color: #d6cfc3;
+  --text-primary: #2c1f0e;
+  --text-secondary: #6b5a44;
+  --border-color: #d6cfc3;
+  --accent-color: #7c5c34;
+  --danger-color: #b91c1c;
+  --warning-color: #b45309;
+  --success-color: #15803d;
+  --chart-color-1: #7c5c34;
+  --chart-color-2: #15803d;
+  --chart-color-3: #b45309;
+  --chart-color-4: #6d28d9;
+  --chart-color-5: #b91c1c;
+  --chart-grid: #d6cfc3;
+  --chart-axis: #6b5a44;
+  --tooltip-bg: #f5f0e8;
+  --tooltip-border: #d6cfc3;
+  --input-bg: #ede8de;
+  --sidebar-bg-color: #ede8de;
+  --sidebar-border-color: #d6cfc3;
+  --header-bg: #ede8de;
+}
+
+/* PRETO E BRANCO */
+[data-theme="monochrome"] {
+  --app-bg: #ffffff;
+  --surface-1-color: #f5f5f5;
+  --surface-2-color: #e8e8e8;
+  --surface-3-color: #d4d4d4;
+  --text-primary: #0a0a0a;
+  --text-secondary: #525252;
+  --border-color: #cccccc;
+  --accent-color: #171717;
+  --danger-color: #171717;
+  --warning-color: #525252;
+  --success-color: #171717;
+  --chart-color-1: #171717;
+  --chart-color-2: #525252;
+  --chart-color-3: #737373;
+  --chart-color-4: #a3a3a3;
+  --chart-color-5: #d4d4d4;
+  --chart-grid: #e8e8e8;
+  --chart-axis: #525252;
+  --tooltip-bg: #ffffff;
+  --tooltip-border: #cccccc;
+  --input-bg: #f5f5f5;
+  --sidebar-bg-color: #f5f5f5;
+  --sidebar-border-color: #cccccc;
+  --header-bg: #f5f5f5;
+}
+
+/* ─── Aplicar tokens como variáveis de background/cor globais ─────────────── */
+[data-theme="light"] body,
+[data-theme="beige"] body,
+[data-theme="monochrome"] body {
+  background-color: var(--app-bg) !important;
+  color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .bg-\[#0A0B0F\],
+[data-theme="beige"] .bg-\[#0A0B0F\],
+[data-theme="monochrome"] .bg-\[#0A0B0F\] {
+  background-color: var(--app-bg) !important;
+}
+
+/* Overrides genéricos de surface para temas claros */
+[data-theme="light"] .bg-surface-1,
+[data-theme="beige"] .bg-surface-1,
+[data-theme="monochrome"] .bg-surface-1 {
+  background-color: var(--surface-1-color) !important;
+}
+[data-theme="light"] .bg-surface-2,
+[data-theme="beige"] .bg-surface-2,
+[data-theme="monochrome"] .bg-surface-2 {
+  background-color: var(--surface-2-color) !important;
+}
+[data-theme="light"] .bg-surface-3,
+[data-theme="beige"] .bg-surface-3,
+[data-theme="monochrome"] .bg-surface-3 {
+  background-color: var(--surface-3-color) !important;
+}
+[data-theme="light"] .bg-canvas,
+[data-theme="beige"] .bg-canvas,
+[data-theme="monochrome"] .bg-canvas {
+  background-color: var(--app-bg) !important;
+}
+
+/* Bordas */
+[data-theme="light"] .border-surface-2,
+[data-theme="beige"] .border-surface-2,
+[data-theme="monochrome"] .border-surface-2 {
+  border-color: var(--border-color) !important;
+}
+[data-theme="light"] .border-surface-3,
+[data-theme="beige"] .border-surface-3,
+[data-theme="monochrome"] .border-surface-3 {
+  border-color: var(--border-color) !important;
+}
+
+/* Textos */
+[data-theme="light"] .text-white,
+[data-theme="beige"] .text-white,
+[data-theme="monochrome"] .text-white {
+  color: var(--text-primary) !important;
+}
+[data-theme="light"] .text-slate-300,
+[data-theme="beige"] .text-slate-300,
+[data-theme="monochrome"] .text-slate-300 {
+  color: var(--text-secondary) !important;
+}
+[data-theme="light"] .text-slate-400,
+[data-theme="beige"] .text-slate-400,
+[data-theme="monochrome"] .text-slate-400 {
+  color: var(--text-secondary) !important;
+}
+[data-theme="light"] .text-slate-500,
+[data-theme="beige"] .text-slate-500,
+[data-theme="monochrome"] .text-slate-500 {
+  color: var(--text-secondary) !important;
+  opacity: 0.75;
+}
+[data-theme="light"] .text-slate-600,
+[data-theme="beige"] .text-slate-600,
+[data-theme="monochrome"] .text-slate-600 {
+  color: var(--text-secondary) !important;
+  opacity: 0.6;
+}
+
+/* Inputs e selects em temas claros */
+[data-theme="light"] input,
+[data-theme="light"] select,
+[data-theme="light"] textarea,
+[data-theme="beige"] input,
+[data-theme="beige"] select,
+[data-theme="beige"] textarea,
+[data-theme="monochrome"] input,
+[data-theme="monochrome"] select,
+[data-theme="monochrome"] textarea {
+  background-color: var(--input-bg) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Sidebar */
+[data-theme="light"] aside,
+[data-theme="beige"] aside,
+[data-theme="monochrome"] aside {
+  background-color: var(--sidebar-bg-color) !important;
+  border-color: var(--sidebar-border-color) !important;
+}
+
+/* Header */
+[data-theme="light"] header,
+[data-theme="beige"] header,
+[data-theme="monochrome"] header {
+  background-color: var(--header-bg) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Cyan → accent nos temas claros */
+[data-theme="light"] .text-cyan,
+[data-theme="beige"] .text-cyan,
+[data-theme="monochrome"] .text-cyan {
+  color: var(--accent-color) !important;
+}
+[data-theme="light"] .bg-cyan,
+[data-theme="beige"] .bg-cyan,
+[data-theme="monochrome"] .bg-cyan {
+  background-color: var(--accent-color) !important;
+}
+[data-theme="light"] .border-cyan,
+[data-theme="beige"] .border-cyan,
+[data-theme="monochrome"] .border-cyan {
+  border-color: var(--accent-color) !important;
+}
+[data-theme="light"] .bg-cyan\/10,
+[data-theme="beige"] .bg-cyan\/10,
+[data-theme="monochrome"] .bg-cyan\/10 {
+  background-color: color-mix(in srgb, var(--accent-color) 10%, transparent) !important;
+}
+[data-theme="light"] .bg-cyan\/15,
+[data-theme="beige"] .bg-cyan\/15,
+[data-theme="monochrome"] .bg-cyan\/15 {
+  background-color: color-mix(in srgb, var(--accent-color) 15%, transparent) !important;
+}
+[data-theme="light"] .bg-cyan\/20,
+[data-theme="beige"] .bg-cyan\/20,
+[data-theme="monochrome"] .bg-cyan\/20 {
+  background-color: color-mix(in srgb, var(--accent-color) 20%, transparent) !important;
+}
+
+/* Monochrome: apagar cores de status decorativas */
+[data-theme="monochrome"] .text-emerald-400,
+[data-theme="monochrome"] .text-green-400 {
+  color: #171717 !important;
+}
+[data-theme="monochrome"] .text-red-400,
+[data-theme="monochrome"] .text-crimson {
+  color: #525252 !important;
+}
+[data-theme="monochrome"] .text-amber-400,
+[data-theme="monochrome"] .text-yellow-400 {
+  color: #525252 !important;
+}
+[data-theme="monochrome"] .text-violet-400,
+[data-theme="monochrome"] .text-purple-400 {
+  color: #525252 !important;
+}
+[data-theme="monochrome"] .bg-emerald-500\/10,
+[data-theme="monochrome"] .bg-green-500\/10 {
+  background-color: #f5f5f5 !important;
+  border-color: #cccccc !important;
+}
+[data-theme="monochrome"] .bg-red-500\/10,
+[data-theme="monochrome"] .bg-amber-500\/10 {
+  background-color: #f5f5f5 !important;
+  border-color: #cccccc !important;
+}
+[data-theme="monochrome"] .bg-violet-500\/5 {
+  background-color: #f5f5f5 !important;
+  border-color: #cccccc !important;
+}
+
 @layer base {
   :root {
     --background: 240 10% 4%;
