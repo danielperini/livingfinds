@@ -173,6 +173,84 @@ Deno.serve(async (req) => {
       const reportId = reportReq.reportId;
       if (!reportId) throw new Error('No reportId: ' + JSON.stringify(reportReq));
 
+      // ── Sync de inventário FBA via SP-API ────────────────────────────────
+      let inventoryUpdated = 0;
+      try {
+        const spRefreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '';
+        const spClientId = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '';
+        const spClientSecret = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '';
+        const marketplaceId = account?.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
+
+        if (spRefreshToken && spClientId && spClientSecret) {
+          // Obter token SP-API
+          const spTokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: spRefreshToken, client_id: spClientId, client_secret: spClientSecret }).toString(),
+          });
+          const spTokenData = await spTokenRes.json();
+          const spToken = spTokenData.access_token;
+
+          if (spToken) {
+            const spBase = (account?.region || '').toUpperCase().includes('EU')
+              ? 'https://sellingpartnerapi-eu.amazon.com'
+              : 'https://sellingpartnerapi-na.amazon.com';
+
+            // Buscar inventário FBA
+            const invRes = await fetch(
+              `${spBase}/fba/inventory/v1/summaries?granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`,
+              { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } }
+            );
+
+            if (invRes.ok) {
+              const invData = await invRes.json();
+              const summaries: any[] = invData?.payload?.inventorySummaries || [];
+
+              // Carregar produtos existentes para upsert
+              const existingProducts = await base44.asServiceRole.entities.Product.filter(
+                { amazon_account_id }, '-created_date', 500
+              ).catch(() => []);
+              const productByAsin = new Map(existingProducts.map((p: any) => [p.asin, p]));
+              const productBySku = new Map(existingProducts.map((p: any) => [p.sku, p]));
+
+              const invUpdates: any[] = [];
+              const invCreates: any[] = [];
+
+              for (const s of summaries) {
+                const asin = s.asin || '';
+                const sku = s.sellerSku || '';
+                const qty = s.inventoryDetails?.fulfillableQuantity ?? s.totalQuantity ?? 0;
+                const inbound = (s.inventoryDetails?.inboundWorkingQuantity || 0) + (s.inventoryDetails?.inboundShippedQuantity || 0);
+                const reserved = s.inventoryDetails?.reservedQuantity?.totalReservedQuantity || 0;
+                const inventoryStatus = qty === 0 ? 'out_of_stock' : qty < 5 ? 'low_stock' : 'in_stock';
+
+                const existing = productByAsin.get(asin) || productBySku.get(sku);
+                const record: any = { fba_inventory: qty, reserved_inventory: reserved, inbound_inventory: inbound, inventory_status: inventoryStatus, last_sync_at: now };
+                if (s.productName) record.product_name = s.productName;
+
+                if (existing) {
+                  invUpdates.push({ id: existing.id, ...record });
+                } else if (asin) {
+                  invCreates.push({ amazon_account_id, asin, sku, product_name: s.productName || asin, ...record, status: 'active' });
+                }
+              }
+
+              for (let i = 0; i < invUpdates.length; i += BATCH_DB) {
+                await base44.asServiceRole.entities.Product.bulkUpdate(invUpdates.slice(i, i + BATCH_DB));
+                if (i + BATCH_DB < invUpdates.length) await pause(BATCH_PAUSE_MS);
+              }
+              for (let i = 0; i < invCreates.length; i += BATCH_DB) {
+                await base44.asServiceRole.entities.Product.bulkCreate(invCreates.slice(i, i + BATCH_DB));
+                if (i + BATCH_DB < invCreates.length) await pause(BATCH_PAUSE_MS);
+              }
+              inventoryUpdated = invUpdates.length + invCreates.length;
+            }
+          }
+        }
+      } catch (invErr: any) {
+        console.warn('[syncAdsQuick] Inventário FBA falhou (não crítico):', invErr.message);
+      }
+
       await base44.asServiceRole.entities.AmazonAccount.update(amazon_account_id, {
         last_sync_at: now,
         status: 'connected',
@@ -183,9 +261,10 @@ Deno.serve(async (req) => {
         campaigns_imported: campaigns.length,
         campaigns_created: toCreate.length,
         campaigns_updated: toUpdate.length,
+        inventory_updated: inventoryUpdated,
         report_id: reportId,
         duplicate: reportReq._duplicate || false,
-        message: 'Campanhas importadas. Aguarde 2-10 min e chame action=download com o report_id.',
+        message: 'Campanhas e inventário importados. Aguarde 2-10 min e chame action=download com o report_id.',
       });
     }
 

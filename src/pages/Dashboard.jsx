@@ -457,8 +457,9 @@ export default function Dashboard() {
     const map = {};
     for (const s of salesDaily) {
       if (!s.date) continue;
-      if (!map[s.date]) map[s.date] = 0;
-      map[s.date] += s.ordered_product_sales || 0;
+      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0 };
+      map[s.date].revenue += s.ordered_product_sales || 0;
+      map[s.date].units += s.units_ordered || 0;
     }
     return map;
   }, [salesDaily]);
@@ -466,19 +467,37 @@ export default function Dashboard() {
   // KPIs reais do SalesDaily no período selecionado
   const realSalesKpis = useMemo(() => {
     let revenue = 0, units = 0;
-    for (const [date, rev] of Object.entries(salesDailyByDate)) {
+    for (const [date, v] of Object.entries(salesDailyByDate)) {
       if (date >= startDate && date <= endDate) {
-        revenue += rev;
-        // somar unidades
-        for (const s of salesDaily) {
-          if (s.date === date) units += s.units_ordered || 0;
-        }
+        revenue += v.revenue;
+        units += v.units;
       }
     }
     const adsSpend = kpis.spend;
     const tacos = revenue > 0 ? (adsSpend / revenue) * 100 : null;
     return { revenue, units, tacos };
-  }, [salesDailyByDate, salesDaily, startDate, endDate, kpis.spend]);
+  }, [salesDailyByDate, startDate, endDate, kpis.spend]);
+
+  // ─── Projeção do mês atual ─────────────────────────────────────────────────
+  const monthProjection = useMemo(() => {
+    const today = new Date();
+    const firstOfMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+    const yesterday_ = getYesterday();
+    let monthRevenue = 0, monthDays = 0;
+    for (const [date, v] of Object.entries(salesDailyByDate)) {
+      if (date >= firstOfMonth && date <= yesterday_) {
+        monthRevenue += v.revenue;
+        monthDays++;
+      }
+    }
+    if (monthDays === 0) return null;
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const dayOfMonth = today.getDate(); // dias corridos (incluindo hoje)
+    const avgPerDay = monthRevenue / monthDays;
+    const projected = avgPerDay * daysInMonth;
+    const remainingDays = daysInMonth - dayOfMonth;
+    return { monthRevenue, monthDays, avgPerDay, projected, daysInMonth, remainingDays, completedPct: Math.round((dayOfMonth / daysInMonth) * 100) };
+  }, [salesDailyByDate]);
 
   // ─── Gráfico: Consolidado Gasto + Vendas + Impressões ────────────────────
 
@@ -502,21 +521,37 @@ export default function Dashboard() {
       byDate[m.date].impressões += m.impressions || 0;
     }
     // Incluir dias do SalesDaily que podem não ter métricas de ads
-    for (const [isoDate, revenue] of Object.entries(salesDailyByDate)) {
+    for (const [isoDate, v] of Object.entries(salesDailyByDate)) {
       if (isoDate < startDate || isoDate > endDate) continue;
       const label = fmtDateBR(isoDate);
       if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
-      byDate[isoDate]['faturamento real'] = revenue;
+      byDate[isoDate]['faturamento real'] = v.revenue;
     }
     // Preencher faturamento real nos dias que já existiam
     for (const entry of Object.values(byDate)) {
       if (entry['faturamento real'] === undefined && salesDailyByDate[entry._isoDate] !== undefined) {
-        entry['faturamento real'] = salesDailyByDate[entry._isoDate];
+        entry['faturamento real'] = salesDailyByDate[entry._isoDate].revenue;
       }
       // Fallback: linha de referência do benchmark quando não há SalesDaily
       if (entry['faturamento real'] === undefined && avgDailyRevenue) {
         entry['fat. médio/dia'] = avgDailyRevenue;
       }
+    }
+
+    // Projeção: adicionar pontos futuros do mês atual com valor projetado
+    if (monthProjection && activePeriod === '30') {
+      const today_ = new Date();
+      const todayStr = today_.toISOString().slice(0, 10);
+      for (let d = 1; d <= monthProjection.remainingDays; d++) {
+        const futureDate = new Date(today_);
+        futureDate.setDate(today_.getDate() + d);
+        const isoDate = futureDate.toISOString().slice(0, 10);
+        const label = fmtDateBR(isoDate);
+        if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
+        byDate[isoDate]['projeção'] = monthProjection.avgPerDay;
+      }
+      // Ponto de conexão: adicionar projeção no último dia real também
+      if (byDate[todayStr]) byDate[todayStr]['projeção'] = monthProjection.avgPerDay;
     }
     return Object.values(byDate).sort((a, b) => a._isoDate.localeCompare(b._isoDate));
   }, [periodMetrics, salesDailyByDate, startDate, endDate, avgDailyRevenue]);
@@ -650,12 +685,21 @@ export default function Dashboard() {
               : <> · <span className="text-slate-500">sem dados de faturamento real ainda</span></>
           }
         </p>
-        {hasSalesDailyData && realSalesKpis.tacos !== null && (
-          <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
+        {hasSalesDailyData && (
+          <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
             <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
             <span className="text-orange-400 font-bold">{fmtBRL(realSalesKpis.revenue)}</span>
-            <span className="text-slate-500">{realSalesKpis.units} unidades</span>
-            <span className="text-slate-400">· TACoS real: <span className={`font-semibold ${realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'text-red-400' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'text-amber-400' : 'text-emerald-400'}`}>{realSalesKpis.tacos.toFixed(1)}%</span></span>
+            <span className="text-slate-500">{realSalesKpis.units} unid.</span>
+            {realSalesKpis.tacos !== null && (
+              <span className="text-slate-400">TACoS: <span className={`font-semibold ${realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'text-red-400' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'text-amber-400' : 'text-emerald-400'}`}>{realSalesKpis.tacos.toFixed(1)}%</span></span>
+            )}
+            {monthProjection && (
+              <>
+                <span className="text-slate-600">·</span>
+                <span className="text-slate-400">Mês atual: <span className="text-orange-300 font-semibold">{fmtBRL(monthProjection.monthRevenue)}</span> <span className="text-slate-600">({monthProjection.completedPct}% do mês)</span></span>
+                <span className="text-slate-400">Projeção mês: <span className="text-amber-300 font-bold">{fmtBRL(monthProjection.projected)}</span> <span className="text-slate-600">(~{fmtBRL(monthProjection.avgPerDay)}/dia)</span></span>
+              </>
+            )}
           </div>
         )}
         {!hasSalesDailyData && sellerBenchmark && (
@@ -688,6 +732,9 @@ export default function Dashboard() {
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
               {hasSalesDailyData && (
                 <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={2} dot={false} />
+              )}
+              {hasSalesDailyData && monthProjection && activePeriod === '30' && (
+                <Line yAxisId="brl" type="monotone" dataKey="projeção" name="Projeção" stroke="#FB923C" strokeWidth={1.5} strokeDasharray="6 3" dot={false} opacity={0.6} />
               )}
               {!hasSalesDailyData && avgDailyRevenue && (
                 <Line yAxisId="brl" type="monotone" dataKey="fat. médio/dia" name="Fat. Ref/dia" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
@@ -795,6 +842,12 @@ export default function Dashboard() {
                 sub={targetTacos > 0 ? `Meta: ${targetTacos}%` : 'Gasto Ads / Fat. Real'}
                 tone={realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'bad' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'warn' : 'good'} />
             )}
+            {monthProjection && (
+              <KpiCard label="Projeção do Mês"
+                value={fmtBRL(monthProjection.projected)}
+                sub={`${monthProjection.completedPct}% concluído · ${fmtBRL(monthProjection.avgPerDay)}/dia`}
+                tone="cyan" />
+            )}
           </div>
         )}
       </div>
@@ -845,13 +898,14 @@ export default function Dashboard() {
             </div>
             <div className="grid grid-cols-3 gap-2 mb-3">
               {[
-                { label: 'Em estoque', value: products.filter(p => p.inventory_status === 'in_stock').length, color: 'text-emerald-400' },
-                { label: 'Baixo estoque', value: products.filter(p => p.inventory_status === 'low_stock').length, color: 'text-amber-400' },
-                { label: 'Sem estoque', value: products.filter(p => p.inventory_status === 'out_of_stock').length, color: 'text-red-400' },
+                { label: 'Em estoque', value: products.filter(p => p.inventory_status === 'in_stock').length, sub: `${products.filter(p=>p.inventory_status==='in_stock').reduce((s,p)=>s+(p.fba_inventory||0),0)} un`, color: 'text-emerald-400' },
+                { label: 'Baixo estoque', value: products.filter(p => p.inventory_status === 'low_stock').length, sub: `${products.filter(p=>p.inventory_status==='low_stock').reduce((s,p)=>s+(p.fba_inventory||0),0)} un`, color: 'text-amber-400' },
+                { label: 'Sem estoque', value: products.filter(p => p.inventory_status === 'out_of_stock').length, sub: '0 un', color: 'text-red-400' },
               ].map(s => (
                 <div key={s.label} className="text-center bg-surface-2 rounded-lg p-2">
                   <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
                   <p className="text-[9px] text-slate-500 leading-tight">{s.label}</p>
+                  <p className="text-[9px] text-slate-600">{s.sub}</p>
                 </div>
               ))}
             </div>
