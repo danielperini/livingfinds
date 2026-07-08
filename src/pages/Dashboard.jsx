@@ -433,7 +433,7 @@ export default function Dashboard() {
     const counts = new Map();
     for (const c of bidChanges) {
       // created_at pode ser o campo do registro ou created_date do Base44
-      const raw = c.created_at || c.created_date;
+      const raw = c.created_date || c.created_at;
       if (!raw) continue;
       // Converter para BRT antes de extrair a data
       const dBRT = new Date(new Date(raw).getTime() - 3 * 3600000);
