@@ -185,24 +185,19 @@ export default function Dashboard() {
       setAccount(acc);
       if (!acc) { setLoading(false); return; }
       const aid = acc.id;
-      const delay = ms => new Promise(r => setTimeout(r, ms));
       const safe_ = async (fn, fb = []) => { try { return await fn(); } catch (e) { if (String(e?.message).includes('429')) return fb; throw e; } };
 
-      const cams = await safe_(() => loadAllCampaigns(aid));
-      await delay(300);
-      const prods = await safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20));
-      await delay(300);
-      const metrics = await safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 200));
-      await delay(300);
-      const decs = await safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10));
-      await delay(300);
-      const runs = await safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5));
-      await delay(300);
-      const changes = await safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500));
-      await delay(300);
-      const apConfigs = await safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid }));
-      await delay(150);
-      const budgCfgs = await safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []);
+      // Carregar tudo em paralelo — elimina latência sequencial
+      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs] = await Promise.all([
+        safe_(() => loadAllCampaigns(aid)),
+        safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
+        safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300)),
+        safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10)),
+        safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5)),
+        safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500)),
+        safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
+        safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []),
+      ]);
 
       setCampaigns(cams);
       setProducts(prods);
@@ -313,6 +308,37 @@ export default function Dashboard() {
   );
 
   const kpis = useMemo(() => deriveRates(calcKpis(periodMetrics)), [periodMetrics]);
+
+  // ─── Qualidade da fonte de dados ─────────────────────────────────────────
+  const dataQuality = useMemo(() => {
+    const yesterday = getYesterday();
+    const datesWithData = new Set(allMetrics.filter(m => m.date <= yesterday).map(m => m.date));
+    const lastDate = [...datesWithData].sort().pop();
+    const gapDays = lastDate
+      ? Math.round((new Date(yesterday).getTime() - new Date(lastDate).getTime()) / 86400000)
+      : null;
+
+    // Métricas diárias têm dados recentes?
+    const hasRecentDailyMetrics = gapDays !== null && gapDays <= 2;
+    // Campanhas têm spend registrado (fonte alternativa)?
+    const campWithSpend = campaigns.filter(c => (c.spend || 0) > 0).length;
+
+    let source, quality, label;
+    if (hasRecentDailyMetrics && datesWithData.size >= 3) {
+      source = 'daily_report'; quality = 'high';
+      label = `Relatório diário · ${datesWithData.size} dias · última data: ${lastDate}`;
+    } else if (campWithSpend > 0 && (!hasRecentDailyMetrics)) {
+      source = 'campaigns_fallback'; quality = 'medium';
+      label = `Dados das campanhas (relatório desatualizado ${gapDays !== null ? `há ${gapDays}d` : ''}) — decisões da IA usam esta fonte`;
+    } else if (datesWithData.size > 0) {
+      source = 'daily_report_stale'; quality = 'low';
+      label = `Relatório com gap de ${gapDays}d — execute Sync para atualizar`;
+    } else {
+      source = 'none'; quality = 'none';
+      label = 'Sem dados de performance. Sincronize para começar.';
+    }
+    return { source, quality, label, lastDate, gapDays, daysCount: datesWithData.size };
+  }, [allMetrics, campaigns]);
 
   // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
   const campAggregated = useMemo(() => {
@@ -551,13 +577,36 @@ export default function Dashboard() {
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
           <div>
             <h2 className="text-sm font-semibold text-slate-300">Resumo de performance</h2>
             <p className="text-[10px] text-slate-500 mt-0.5">Período: {periodLabel} · dados fechados sem o dia atual</p>
           </div>
           <PeriodSelector value={activePeriod} onChange={setPeriod} available={availablePeriods} />
         </div>
+        {/* Indicador de qualidade da fonte */}
+        {!loading && (
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-4 text-[10px] font-medium ${
+            dataQuality.quality === 'high'   ? 'bg-emerald-500/8 border border-emerald-500/15 text-emerald-400' :
+            dataQuality.quality === 'medium' ? 'bg-amber-500/8 border border-amber-500/15 text-amber-400' :
+            dataQuality.quality === 'low'    ? 'bg-red-500/8 border border-red-500/15 text-red-400' :
+                                               'bg-surface-2 border border-surface-3 text-slate-500'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+              dataQuality.quality === 'high' ? 'bg-emerald-400' :
+              dataQuality.quality === 'medium' ? 'bg-amber-400' :
+              dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
+            }`} />
+            <span>Fonte: {dataQuality.label}</span>
+            {dataQuality.quality === 'medium' && (
+              <button onClick={runSync} disabled={syncingDashboard}
+                className="ml-auto text-amber-400 hover:text-amber-300 underline whitespace-nowrap disabled:opacity-50">
+                Sincronizar agora
+              </button>
+            )}
+          </div>
+        )}
+
 
         {loading ? (
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
