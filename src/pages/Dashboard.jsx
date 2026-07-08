@@ -183,6 +183,7 @@ export default function Dashboard() {
   const [autopilotConfig, setAutopilotConfig] = useState(null);
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
   const [syncingDashboard, setSyncingDashboard] = useState(false);
+  const [syncingSales, setSyncingSales] = useState(false);
   const [syncDashMsg, setSyncDashMsg] = useState(null);
   const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
@@ -274,6 +275,29 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  const runSalesSync = async () => {
+    if (!account || syncingSales) return;
+    setSyncingSales(true);
+    setSyncDashMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncProductSalesMetrics', {
+        amazon_account_id: account.id,
+        lookback_days: 60,
+      });
+      if (res?.data?.ok) {
+        setSyncDashMsg({ type: 'success', text: `Faturamento sincronizado: ${res.data.records_saved || 0} registros salvos.` });
+        await loadData();
+      } else {
+        setSyncDashMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar vendas.' });
+      }
+    } catch (e) {
+      setSyncDashMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncingSales(false);
+      setTimeout(() => setSyncDashMsg(null), 8000);
+    }
+  };
 
   const runSync = async () => {
     if (!account || syncingDashboard) return;
@@ -577,10 +601,16 @@ export default function Dashboard() {
               {syncDashMsg.text}
             </span>
           )}
+          <button onClick={runSalesSync} disabled={loading || syncingSales}
+            title="Sincronizar faturamento real (SP-API Orders)"
+            className="flex items-center gap-1.5 px-3 py-2 bg-orange-500/10 border border-orange-500/20 text-orange-400 hover:bg-orange-500/20 text-sm rounded-lg transition-colors disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${syncingSales ? 'animate-spin' : ''}`} />
+            {syncingSales ? 'Buscando...' : 'Sync Vendas'}
+          </button>
           <button onClick={runSync} disabled={loading || syncingDashboard}
             className="flex items-center gap-1.5 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-sm rounded-lg transition-colors disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${syncingDashboard ? 'animate-spin' : ''}`} />
-            {syncingDashboard ? 'Sincronizando...' : 'Sync'}
+            {syncingDashboard ? 'Sincronizando...' : 'Sync Ads'}
           </button>
           <button onClick={loadData} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">

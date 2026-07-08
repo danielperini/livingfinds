@@ -59,11 +59,12 @@ Deno.serve(async (req) => {
     const spBase = getSPApiBase(account.region);
     const token = await getSPApiToken();
 
-    // Período: últimos 30 dias fechados
+    // Período: padrão = últimos 60 dias fechados (ou custom via body)
     const endDate = new Date();
     endDate.setDate(endDate.getDate() - 1);
     const startDate = new Date(endDate);
-    startDate.setDate(startDate.getDate() - 29);
+    const lookbackDays = body.lookback_days || 60;
+    startDate.setDate(startDate.getDate() - (lookbackDays - 1));
 
     const startISO = startDate.toISOString().slice(0, 10);
     const endISO = endDate.toISOString().slice(0, 10);
