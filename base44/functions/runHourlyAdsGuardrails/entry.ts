@@ -142,7 +142,9 @@ Deno.serve(async (req) => {
       const totalSpentToday = await base44.asServiceRole.entities.Campaign.filter(
         { amazon_account_id: aid }, null, 500
       );
-      const totalSpend = totalSpentToday.reduce((s, c) => s + (c.current_spend || c.spend || 0), 0);
+      // Usar apenas current_spend (gasto do dia corrente na Amazon).
+      // O campo `spend` é acumulado histórico (30d) e NÃO representa o gasto de hoje.
+      const totalSpend = totalSpentToday.reduce((s, c) => s + (c.current_spend || 0), 0);
       const expectedRatio = (currentHour + 1) / 24;
       const expectedSpend = globalBudgetLimit * expectedRatio;
 
