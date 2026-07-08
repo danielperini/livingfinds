@@ -188,6 +188,7 @@ export default function Dashboard() {
   const [period, setPeriod] = useState('7');
   const [budgetCfg, setBudgetCfg] = useState(null);
   const [sellerBenchmark, setSellerBenchmark] = useState(null);
+  const [salesDaily, setSalesDaily] = useState([]);
   const autoSyncedRef = useRef(false);
 
   const loadData = useCallback(async () => {
@@ -204,7 +205,7 @@ export default function Dashboard() {
       const safe_ = async (fn, fb = []) => { try { return await fn(); } catch (e) { if (String(e?.message).includes('429')) return fb; throw e; } };
 
       // Carregar tudo em paralelo — elimina latência sequencial
-      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs, benchmarks] = await Promise.all([
+      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs, benchmarks, salesDailyData] = await Promise.all([
         safe_(() => loadAllCampaigns(aid)),
         safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
         safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300)),
@@ -214,6 +215,7 @@ export default function Dashboard() {
         safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
         safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []),
         safe_(() => base44.entities.SellerPerformanceBenchmark.filter({ amazon_account_id: aid }, '-period_end', 5), []),
+        safe_(() => base44.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 500), []),
       ]);
 
       setCampaigns(cams);
@@ -225,6 +227,7 @@ export default function Dashboard() {
       setAutopilotConfig(apConfigs[0] || null);
       setBudgetCfg(budgCfgs[0] || null);
       setSellerBenchmark(benchmarks[0] || null);
+      setSalesDaily(salesDailyData);
 
       if (acc?.last_sync_at) setLastSyncInfo({ at: acc.last_sync_at });
       else {
@@ -440,9 +443,38 @@ export default function Dashboard() {
 
   const totalChanges = useMemo(() => aiChangesChart.reduce((s, d) => s + d.alterações, 0), [aiChangesChart]);
 
+  // ─── SalesDaily: faturamento real por data ────────────────────────────────
+
+  const salesDailyByDate = useMemo(() => {
+    const map = {};
+    for (const s of salesDaily) {
+      if (!s.date) continue;
+      if (!map[s.date]) map[s.date] = 0;
+      map[s.date] += s.ordered_product_sales || 0;
+    }
+    return map;
+  }, [salesDaily]);
+
+  // KPIs reais do SalesDaily no período selecionado
+  const realSalesKpis = useMemo(() => {
+    let revenue = 0, units = 0;
+    for (const [date, rev] of Object.entries(salesDailyByDate)) {
+      if (date >= startDate && date <= endDate) {
+        revenue += rev;
+        // somar unidades
+        for (const s of salesDaily) {
+          if (s.date === date) units += s.units_ordered || 0;
+        }
+      }
+    }
+    const adsSpend = kpis.spend;
+    const tacos = revenue > 0 ? (adsSpend / revenue) * 100 : null;
+    return { revenue, units, tacos };
+  }, [salesDailyByDate, salesDaily, startDate, endDate, kpis.spend]);
+
   // ─── Gráfico: Consolidado Gasto + Vendas + Impressões ────────────────────
 
-  // Média diária de faturamento total a partir do benchmark (referência para linha horizontal)
+  // Média diária de faturamento total a partir do benchmark (fallback se não há SalesDaily)
   const avgDailyRevenue = useMemo(() => {
     if (!sellerBenchmark?.gross_revenue || !sellerBenchmark?.period_start || !sellerBenchmark?.period_end) return null;
     const days = Math.max(1, Math.round(
@@ -456,18 +488,32 @@ export default function Dashboard() {
     for (const m of periodMetrics) {
       if (!m.date) continue;
       const label = fmtDateBR(m.date);
-      if (!byDate[m.date]) byDate[m.date] = { date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
+      if (!byDate[m.date]) byDate[m.date] = { _isoDate: m.date, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
       byDate[m.date].gasto += m.spend || 0;
       byDate[m.date]['vendas ads'] += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
     }
-    const rows = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-    // Adicionar referência de faturamento médio diário se disponível
-    if (avgDailyRevenue) {
-      rows.forEach(r => { r['fat. médio/dia'] = avgDailyRevenue; });
+    // Incluir dias do SalesDaily que podem não ter métricas de ads
+    for (const [isoDate, revenue] of Object.entries(salesDailyByDate)) {
+      if (isoDate < startDate || isoDate > endDate) continue;
+      const label = fmtDateBR(isoDate);
+      if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
+      byDate[isoDate]['faturamento real'] = revenue;
     }
-    return rows;
-  }, [periodMetrics, avgDailyRevenue]);
+    // Preencher faturamento real nos dias que já existiam
+    for (const entry of Object.values(byDate)) {
+      if (entry['faturamento real'] === undefined && salesDailyByDate[entry._isoDate] !== undefined) {
+        entry['faturamento real'] = salesDailyByDate[entry._isoDate];
+      }
+      // Fallback: linha de referência do benchmark quando não há SalesDaily
+      if (entry['faturamento real'] === undefined && avgDailyRevenue) {
+        entry['fat. médio/dia'] = avgDailyRevenue;
+      }
+    }
+    return Object.values(byDate).sort((a, b) => a._isoDate.localeCompare(b._isoDate));
+  }, [periodMetrics, salesDailyByDate, startDate, endDate, avgDailyRevenue]);
+
+  const hasSalesDailyData = salesDaily.length > 0;
 
   // ─── Orçamento e pacing ────────────────────────────────────────────────────
 
@@ -578,23 +624,38 @@ export default function Dashboard() {
       {/* ── 3. GRÁFICO CONSOLIDADO: Gasto · Vendas Ads · Impressões ─────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas Ads · Impressões</h2>
+          <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2>
           <div className="flex items-center gap-3 text-[10px] flex-wrap">
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
-            {avgDailyRevenue && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Fat. médio/dia: {fmtBRL(avgDailyRevenue)}</span>}
+            {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
+            {!hasSalesDailyData && avgDailyRevenue && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Fat. ref/dia: {fmtBRL(avgDailyRevenue)}</span>}
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
-          {periodLabel} · Vendas Ads = atribuição Amazon (janela 7-14d){avgDailyRevenue ? <> · <span className="text-amber-400/80">linha laranja = faturamento médio/dia do benchmark ({sellerBenchmark?.period_start?.slice(5).replace('-','/')}→{sellerBenchmark?.period_end?.slice(5).replace('-','/')})</span></> : <> · <span className="text-amber-400/80">≠ faturamento total</span></>}
+          {periodLabel} · Vendas Ads = atribuição Amazon
+          {hasSalesDailyData
+            ? <> · <span className="text-orange-400/80">curva laranja = faturamento real de pedidos (SP-API)</span></>
+            : avgDailyRevenue
+              ? <> · <span className="text-amber-400/80">linha pontilhada = referência do benchmark</span></>
+              : <> · <span className="text-slate-500">sem dados de faturamento real ainda</span></>
+          }
         </p>
-        {sellerBenchmark && (
+        {hasSalesDailyData && realSalesKpis.tacos !== null && (
+          <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
+            <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
+            <span className="text-orange-400 font-bold">{fmtBRL(realSalesKpis.revenue)}</span>
+            <span className="text-slate-500">{realSalesKpis.units} unidades</span>
+            <span className="text-slate-400">· TACoS real: <span className={`font-semibold ${realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'text-red-400' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'text-amber-400' : 'text-emerald-400'}`}>{realSalesKpis.tacos.toFixed(1)}%</span></span>
+          </div>
+        )}
+        {!hasSalesDailyData && sellerBenchmark && (
           <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-emerald-500/8 border border-emerald-500/20 text-[10px]">
-            <span className="text-slate-400">📊 Faturamento real (Seller Central):</span>
+            <span className="text-slate-400">📊 Benchmark (Seller Central):</span>
             <span className="text-emerald-400 font-bold">{fmtBRL(sellerBenchmark.gross_revenue)}</span>
             <span className="text-slate-500">{sellerBenchmark.period_start?.slice(5).replace('-','/')} → {sellerBenchmark.period_end?.slice(5).replace('-','/')}</span>
-            <span className="text-slate-400">· TACoS real: <span className="text-amber-400 font-semibold">{sellerBenchmark.tacos_pct?.toFixed(1)}%</span></span>
+            <span className="text-slate-400">· TACoS: <span className="text-amber-400 font-semibold">{sellerBenchmark.tacos_pct?.toFixed(1)}%</span></span>
           </div>
         )}
 
@@ -617,8 +678,11 @@ export default function Dashboard() {
               <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.35} radius={[2, 2, 0, 0]} />
               <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
-              {avgDailyRevenue && (
-                <Line yAxisId="brl" type="monotone" dataKey="fat. médio/dia" name="Fat. Total médio/dia" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+              {hasSalesDailyData && (
+                <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={2} dot={false} />
+              )}
+              {!hasSalesDailyData && avgDailyRevenue && (
+                <Line yAxisId="brl" type="monotone" dataKey="fat. médio/dia" name="Fat. Ref/dia" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
               )}
             </ComposedChart>
           </ResponsiveContainer>
@@ -712,6 +776,17 @@ export default function Dashboard() {
             <KpiCard label="Pedidos" value={kpis.orders.toLocaleString('pt-BR')}
               sub={activePeriod !== 'yesterday' ? `Ontem: ${yesterdayKpis.orders.toLocaleString('pt-BR')}` : undefined}
               tone={kpis.orders > 0 ? 'good' : 'default'} />
+            {hasSalesDailyData && (
+              <KpiCard label="Fat. Real (SP-API)" value={fmtBRL(realSalesKpis.revenue)}
+                sub={`${realSalesKpis.units} unidades`}
+                tone={realSalesKpis.revenue > 0 ? 'good' : 'default'} />
+            )}
+            {hasSalesDailyData && realSalesKpis.tacos !== null && (
+              <KpiCard label="TACoS Real"
+                value={`${realSalesKpis.tacos.toFixed(1)}%`}
+                sub={targetTacos > 0 ? `Meta: ${targetTacos}%` : 'Gasto Ads / Fat. Real'}
+                tone={realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'bad' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'warn' : 'good'} />
+            )}
           </div>
         )}
       </div>
@@ -888,7 +963,7 @@ export default function Dashboard() {
             <GoalRow label="ACoS" real={kpis.acos} target={targetAcos} unit="%" lowerIsBetter />
             {maxAcos > 0 && <GoalRow label="ACoS máximo" real={kpis.acos} target={maxAcos} unit="%" lowerIsBetter />}
             <GoalRow label="ROAS" real={kpis.roas} target={targetRoas} unit="x" lowerIsBetter={false} realLabel={kpis.roas > 0 ? `${kpis.roas.toFixed(2)}x` : '—'} />
-            <GoalRow label="TACoS alvo" real={0} target={targetTacos} unit="%" lowerIsBetter />
+            <GoalRow label="TACoS real" real={realSalesKpis.tacos || 0} target={targetTacos} unit="%" lowerIsBetter realLabel={realSalesKpis.tacos !== null ? `${realSalesKpis.tacos.toFixed(1)}%` : '—'} />
             {targetCpc > 0 && <GoalRow label="CPC alvo" real={kpis.cpc} target={targetCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} />}
             {maxCpc > 0 && <GoalRow label="CPC máximo" real={kpis.cpc} target={maxCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} />}
             {officialDailyLimit > 0 && <GoalRow label="Budget D-1" real={spendYesterday} target={officialDailyLimit} unit="" lowerIsBetter realLabel={fmtBRL(spendYesterday)} />}
