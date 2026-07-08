@@ -218,29 +218,46 @@ Deno.serve(async (req) => {
     summary.phases.request = { reportIds, count: Object.keys(reportIds).length };
     console.log(`[Pipeline] ${Object.keys(reportIds).length} relatórios solicitados`);
 
-    // ── FASE 2: Polling até todos prontos (max 8 min, check a cada 60s) ──────
-    console.log('[Pipeline] Fase 2: aguardando relatórios...');
+    // ── FASE 2: Polling até todos prontos (max 20 min) ───────────────────────
+    // Primeiras 4 tentativas a cada 30s (2 min), depois a cada 60s até 20 min total
+    console.log('[Pipeline] Fase 2: aguardando relatórios (até 20 min)...');
     let ready: { key: string; url: string }[] = [];
+    const pendingIds = { ...reportIds };
     let attempts = 0;
-    while (attempts < 8 && Object.keys(reportIds).length > 0) {
-      await sleep(60000); // 60s
+    const MAX_ATTEMPTS = 22; // ~20 min: 4×30s + 18×60s = 18 min + buffer
+
+    while (attempts < MAX_ATTEMPTS && Object.keys(pendingIds).length > 0) {
+      const waitMs = attempts < 4 ? 30000 : 60000;
+      await sleep(waitMs);
       attempts++;
+
       const statuses = await Promise.all(
-        Object.entries(reportIds).map(async ([key, rid]) => {
+        Object.entries(pendingIds).map(async ([key, rid]) => {
           const r = await fetch(`${adsBase}/reporting/reports/${rid}`, { headers: adsHeaders }).catch(() => null);
           if (!r) return { key, status: 'ERROR', url: '' };
           const d = await r.json().catch(() => ({}));
           return { key, status: d.status, url: d.url || '' };
         })
       );
-      ready = statuses.filter(s => s.status === 'COMPLETED' && s.url) as any;
-      const pending = statuses.filter(s => !['COMPLETED', 'FAILED', 'EXPIRED'].includes(s.status));
-      console.log(`[Pipeline] Tentativa ${attempts}: ready=${ready.length} pending=${pending.length}`);
-      if (pending.length === 0) break;
+
+      for (const s of statuses) {
+        if (s.status === 'COMPLETED' && s.url) {
+          ready.push(s as any);
+          delete pendingIds[s.key]; // remover dos pendentes para não re-checar
+        } else if (['FAILED', 'EXPIRED'].includes(s.status)) {
+          delete pendingIds[s.key]; // descartar permanentemente
+        }
+      }
+
+      console.log(`[Pipeline] Tentativa ${attempts}: ready=${ready.length} pending=${Object.keys(pendingIds).length}`);
+      if (Object.keys(pendingIds).length === 0) break;
     }
 
     if (ready.length === 0) {
-      return Response.json({ ok: false, error: 'Relatórios não ficaram prontos no tempo limite (8 min)', summary });
+      return Response.json({ ok: false, error: `Nenhum relatório ficou pronto em 20 min (${attempts} tentativas)`, summary });
+    }
+    if (Object.keys(pendingIds).length > 0) {
+      console.warn(`[Pipeline] ${Object.keys(pendingIds).length} relatório(s) não ficaram prontos: ${Object.keys(pendingIds).join(', ')}`);
     }
 
     // ── FASE 3: Download + parse ──────────────────────────────────────────────
