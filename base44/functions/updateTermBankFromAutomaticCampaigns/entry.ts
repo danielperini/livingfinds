@@ -90,7 +90,7 @@ Deno.serve(async (req) => {
 
     const now = new Date().toISOString();
     const toCreate = [];
-    const toUpdate = [];
+    const toUpdateMap = new Map(); // id → record — evita IDs duplicados no bulkUpdate
 
     for (const st of autoSearchTerms) {
       if (!st.search_term) continue;
@@ -148,12 +148,17 @@ Deno.serve(async (req) => {
 
       const existing = termIndex.get(key);
       if (existing) {
-        // Atualizar métricas mantendo campos de identidade
-        toUpdate.push({ id: existing.id, ...record });
+        // Deduplicar por ID: se o mesmo registro já foi mapeado, manter o com mais pedidos
+        const prev = toUpdateMap.get(existing.id);
+        if (!prev || orders > (prev.orders || 0)) {
+          toUpdateMap.set(existing.id, { id: existing.id, ...record });
+        }
       } else {
         toCreate.push({ ...record, first_seen_at: now, created_at: now });
       }
     }
+
+    const toUpdate = Array.from(toUpdateMap.values());
 
     // 4. Persistir em batches de 100
     const BATCH = 100;
