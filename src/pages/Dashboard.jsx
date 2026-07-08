@@ -4,7 +4,7 @@ import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
 import { Link } from 'react-router-dom';
 import {
   ComposedChart, AreaChart, Area, BarChart, Bar, LineChart, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import {
   RefreshCw, AlertCircle, Clock, Loader2,
@@ -442,6 +442,15 @@ export default function Dashboard() {
 
   // ─── Gráfico: Consolidado Gasto + Vendas + Impressões ────────────────────
 
+  // Média diária de faturamento total a partir do benchmark (referência para linha horizontal)
+  const avgDailyRevenue = useMemo(() => {
+    if (!sellerBenchmark?.gross_revenue || !sellerBenchmark?.period_start || !sellerBenchmark?.period_end) return null;
+    const days = Math.max(1, Math.round(
+      (new Date(sellerBenchmark.period_end).getTime() - new Date(sellerBenchmark.period_start).getTime()) / 86400000
+    ) + 1);
+    return sellerBenchmark.gross_revenue / days;
+  }, [sellerBenchmark]);
+
   const consolidatedChart = useMemo(() => {
     const byDate = {};
     for (const m of periodMetrics) {
@@ -452,8 +461,13 @@ export default function Dashboard() {
       byDate[m.date]['vendas ads'] += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
     }
-    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-  }, [periodMetrics]);
+    const rows = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
+    // Adicionar referência de faturamento médio diário se disponível
+    if (avgDailyRevenue) {
+      rows.forEach(r => { r['fat. médio/dia'] = avgDailyRevenue; });
+    }
+    return rows;
+  }, [periodMetrics, avgDailyRevenue]);
 
   // ─── Orçamento e pacing ────────────────────────────────────────────────────
 
@@ -565,14 +579,15 @@ export default function Dashboard() {
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
           <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas Ads · Impressões</h2>
-          <div className="flex items-center gap-3 text-[10px]">
+          <div className="flex items-center gap-3 text-[10px] flex-wrap">
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
+            {avgDailyRevenue && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Fat. médio/dia: {fmtBRL(avgDailyRevenue)}</span>}
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
-          {periodLabel} · vendas atribuídas aos Ads (janela Amazon 7-14d) · <span className="text-amber-400/80">≠ faturamento total</span>
+          {periodLabel} · Vendas Ads = atribuição Amazon (janela 7-14d){avgDailyRevenue ? <> · <span className="text-amber-400/80">linha laranja = faturamento médio/dia do benchmark ({sellerBenchmark?.period_start?.slice(5).replace('-','/')}→{sellerBenchmark?.period_end?.slice(5).replace('-','/')})</span></> : <> · <span className="text-amber-400/80">≠ faturamento total</span></>}
         </p>
         {sellerBenchmark && (
           <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-emerald-500/8 border border-emerald-500/20 text-[10px]">
@@ -602,6 +617,9 @@ export default function Dashboard() {
               <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.35} radius={[2, 2, 0, 0]} />
               <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
+              {avgDailyRevenue && (
+                <Line yAxisId="brl" type="monotone" dataKey="fat. médio/dia" name="Fat. Total médio/dia" stroke="#F59E0B" strokeWidth={1.5} strokeDasharray="5 3" dot={false} />
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         )}
