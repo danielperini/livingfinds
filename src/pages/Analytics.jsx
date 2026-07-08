@@ -136,29 +136,77 @@ export default function Analytics() {
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  // Top produtos por receita
-  const topProducts = [...products]
-    .sort((a, b) => (b.total_sales_30d || b.total_revenue_30d || 0) - (a.total_sales_30d || a.total_revenue_30d || 0))
-    .slice(0, 10);
+  // ── Agregar métricas do período por campaign_id ──────────────────────────────
+  const metricsByCampaign = dedupedMetrics.reduce((acc, m) => {
+    const cid = m.campaign_id || '';
+    if (!cid) return acc;
+    if (!acc[cid]) acc[cid] = { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
+    acc[cid].spend += m.spend || 0;
+    acc[cid].sales += m.sales || 0;
+    acc[cid].orders += m.orders || 0;
+    acc[cid].clicks += m.clicks || 0;
+    acc[cid].impressions += m.impressions || 0;
+    return acc;
+  }, {});
 
-  const productBarData = topProducts.map(p => ({
-    name: p.asin,
-    Receita: p.total_sales_30d || p.total_revenue_30d || 0,
-    Spend: p.total_spend_30d || 0,
-    ACoS: p.acos || 0,
-  }));
+  // Mapear campaign_id → asin usando a entidade Campaign
+  const campaignAsinMap = new Map();
+  campaigns.forEach(c => {
+    if (c.asin && c.campaign_id) campaignAsinMap.set(c.campaign_id, c.asin);
+    if (c.asin && c.amazon_campaign_id) campaignAsinMap.set(c.amazon_campaign_id, c.asin);
+  });
 
-  // ACoS por campanha (top 10)
-  const campAcosData = [...campaigns]
-    .filter(c => (c.spend || 0) > 0)
-    .sort((a, b) => (b.spend || 0) - (a.spend || 0))
+  // Agregar por ASIN usando os dados do período
+  const metricsByAsin = {};
+  Object.entries(metricsByCampaign).forEach(([cid, m]) => {
+    const asin = campaignAsinMap.get(cid);
+    if (!asin) return;
+    if (!metricsByAsin[asin]) metricsByAsin[asin] = { spend: 0, sales: 0, orders: 0, clicks: 0 };
+    metricsByAsin[asin].spend += m.spend;
+    metricsByAsin[asin].sales += m.sales;
+    metricsByAsin[asin].orders += m.orders;
+    metricsByAsin[asin].clicks += m.clicks;
+  });
+
+  // Enriquecer produtos com métricas do período
+  const productMap = new Map(products.map(p => [p.asin, p]));
+  const enrichedProducts = Object.entries(metricsByAsin)
+    .map(([asin, m]) => {
+      const p = productMap.get(asin) || { asin };
+      const acos = m.sales > 0 ? m.spend / m.sales * 100 : 0;
+      const roas = m.spend > 0 ? m.sales / m.spend : 0;
+      return { ...p, _sales: m.sales, _spend: m.spend, _orders: m.orders, _acos: acos, _roas: roas };
+    })
+    .sort((a, b) => b._sales - a._sales);
+
+  // Incluir produtos sem métricas no período (para mostrar na tabela)
+  const asinsWithMetrics = new Set(enrichedProducts.map(p => p.asin));
+  const productsNoMetrics = products
+    .filter(p => p.asin && !asinsWithMetrics.has(p.asin))
+    .map(p => ({ ...p, _sales: 0, _spend: 0, _orders: 0, _acos: 0, _roas: 0 }));
+
+  const topProducts = [...enrichedProducts, ...productsNoMetrics].slice(0, 10);
+
+  const productBarData = topProducts
+    .filter(p => p._sales > 0 || p._spend > 0)
     .slice(0, 10)
-    .map(c => ({
-      name: (c.name || c.campaign_name || c.campaign_id || '').slice(0, 20),
-      ACoS: c.acos || 0,
-      Spend: c.spend || 0,
-      Vendas: c.sales || 0,
+    .map(p => ({
+      name: p.asin,
+      Receita: p._sales,
+      Spend: p._spend,
     }));
+
+  // ACoS por campanha — calculado a partir das métricas do período filtrado
+  const campAcosData = Object.entries(metricsByCampaign)
+    .map(([cid, m]) => {
+      const camp = campaigns.find(c => c.campaign_id === cid || c.amazon_campaign_id === cid);
+      const name = (camp?.name || camp?.campaign_name || cid).slice(0, 22);
+      const acos = m.sales > 0 ? m.spend / m.sales * 100 : 0;
+      return { name, ACoS: acos, Spend: m.spend, Vendas: m.sales };
+    })
+    .filter(c => c.Spend > 0)
+    .sort((a, b) => b.Spend - a.Spend)
+    .slice(0, 10);
 
   // KPIs globais
   const totSpend = dailyData.reduce((s, d) => s + d.spend, 0);
@@ -360,7 +408,7 @@ export default function Analytics() {
 
           {/* Receita por produto */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-slate-300 mb-4">Receita & Spend por Produto (Top 10, 30d)</h2>
+            <h2 className="text-sm font-semibold text-slate-300 mb-4">Receita & Spend por Produto (Top 10, {period}d)</h2>
             {productBarData.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-10">Sem dados de produtos</p>
             ) : (
@@ -381,34 +429,34 @@ export default function Analytics() {
           {/* Tabela resumo de produtos */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
             <div className="px-5 py-4 border-b border-surface-2">
-              <h2 className="text-sm font-semibold text-slate-300">Resumo de Performance por Produto</h2>
+              <h2 className="text-sm font-semibold text-slate-300">Resumo de Performance por Produto <span className="text-slate-500 font-normal">({period}d)</span></h2>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-surface-2">
-                    {['ASIN', 'SKU', 'Receita 30d', 'Spend 30d', 'ACoS', 'ROAS', 'Units', 'Stock FBA', 'Campanha'].map(h => (
+                    {['ASIN', 'SKU', `Receita ${period}d`, `Spend ${period}d`, 'ACoS', 'ROAS', 'Pedidos', 'Stock FBA', 'Campanha'].map(h => (
                       <th key={h} className="px-4 py-3 text-left font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {topProducts.map((p, i) => {
-                    const acos = p.acos || 0;
-                    const acosColor = acos > 50 ? 'text-red-400' : acos > 25 ? 'text-amber-400' : 'text-emerald-400';
+                    const acos = p._acos || 0;
+                    const acosColor = acos === 0 ? 'text-slate-500' : acos > 50 ? 'text-red-400' : acos > 25 ? 'text-amber-400' : 'text-emerald-400';
                     const campColor = p.campaign_status === 'active' ? 'text-emerald-400' : p.campaign_status === 'paused' ? 'text-amber-400' : 'text-slate-500';
                     return (
                       <tr key={p.id || i} className="border-b border-surface-2/50 hover:bg-surface-2 transition-colors">
                         <td className="px-4 py-3 font-mono text-cyan">{p.asin}</td>
                         <td className="px-4 py-3 text-slate-400 font-mono">{p.sku || '—'}</td>
-                        <td className="px-4 py-3 text-emerald-400">R${(p.total_sales_30d || p.total_revenue_30d || 0).toFixed(2)}</td>
-                        <td className="px-4 py-3 text-slate-300">R${(p.total_spend_30d || 0).toFixed(2)}</td>
-                        <td className={`px-4 py-3 font-semibold ${acosColor}`}>{acos.toFixed(1)}%</td>
-                        <td className="px-4 py-3 text-slate-300">{(p.roas || 0).toFixed(2)}x</td>
-                        <td className="px-4 py-3 text-slate-300">{p.total_units_30d || p.units_sold_30d || 0}</td>
+                        <td className="px-4 py-3 text-emerald-400">R${(p._sales || 0).toFixed(2)}</td>
+                        <td className="px-4 py-3 text-slate-300">R${(p._spend || 0).toFixed(2)}</td>
+                        <td className={`px-4 py-3 font-semibold ${acosColor}`}>{acos > 0 ? `${acos.toFixed(1)}%` : '—'}</td>
+                        <td className="px-4 py-3 text-slate-300">{p._roas > 0 ? `${p._roas.toFixed(2)}x` : '—'}</td>
+                        <td className="px-4 py-3 text-slate-300">{p._orders || 0}</td>
                         <td className="px-4 py-3">
                           <span className={`font-semibold ${(p.fba_inventory || 0) === 0 ? 'text-red-400' : (p.fba_inventory || 0) < 10 ? 'text-amber-400' : 'text-white'}`}>
-                            {p.fba_inventory || 0}
+                            {p.fba_inventory ?? '—'}
                           </span>
                         </td>
                         <td className={`px-4 py-3 capitalize font-medium ${campColor}`}>{p.campaign_status || 'none'}</td>
