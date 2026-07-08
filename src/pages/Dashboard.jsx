@@ -339,7 +339,7 @@ export default function Dashboard() {
     const base = getClosedReportingPeriod(activePeriod);
     // Se "Ontem" não tem dados de Ads mas há dados mais antigos, usar o último dia disponível
     if (activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < base.endDate) {
-      return { startDate: lastAvailableAdsDate, endDate: lastAvailableAdsDate, label: `Último dia c/ dados (${fmtDateBR(lastAvailableAdsDate)})` };
+      return { startDate: lastAvailableAdsDate, endDate: lastAvailableAdsDate, label: `${fmtDateBRFull(lastAvailableAdsDate)} (último c/ dados)` };
     }
     return base;
   }, [activePeriod, lastAvailableAdsDate]);
