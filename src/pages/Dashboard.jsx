@@ -174,6 +174,7 @@ export default function Dashboard() {
   const [kickoffRunning, setKickoffRunning] = useState(false);
   const [period, setPeriod] = useState('7');
   const [budgetCfg, setBudgetCfg] = useState(null);
+  const [dataGapWarning, setDataGapWarning] = useState(null);
   const kickoffAbortRef = useRef(null);
 
   const loadData = useCallback(async () => {
@@ -214,6 +215,18 @@ export default function Dashboard() {
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
       setBudgetCfg(budgCfgs[0] || null);
+
+      // Verificar gap de dados: checar data mais recente em CampaignMetricsDaily
+      const today_ = new Date(); today_.setHours(0,0,0,0);
+      const yesterday_ = new Date(today_.getTime() - 86400000).toISOString().slice(0,10);
+      const uniqueDatesAll = [...new Set(metrics.map(m => m.date).filter(Boolean))].sort();
+      const lastDataDate = uniqueDatesAll.length > 0 ? uniqueDatesAll[uniqueDatesAll.length - 1] : null;
+      if (lastDataDate && lastDataDate < yesterday_) {
+        const gapDays = Math.round((new Date(yesterday_).getTime() - new Date(lastDataDate).getTime()) / 86400000);
+        setDataGapWarning({ lastDate: lastDataDate, gapDays });
+      } else {
+        setDataGapWarning(null);
+      }
 
       const noAds = prods.filter(p => p.status === 'active' && !p.has_campaign && p.inventory_status !== 'out_of_stock');
       setKickoffStatus({ productsWithoutAds: noAds.length });
@@ -285,6 +298,40 @@ export default function Dashboard() {
   );
 
   const kpis = useMemo(() => deriveRates(calcKpis(periodMetrics)), [periodMetrics]);
+
+  // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
+  const campAggregated = useMemo(() => {
+    const active = campaigns.filter(c => {
+      const st = String(c.state || c.status || '').toLowerCase();
+      return st !== 'archived' && !c.archived;
+    });
+    return active.reduce((acc, c) => ({
+      spend: acc.spend + (c.spend || 0),
+      sales: acc.sales + (c.sales || 0),
+      orders: acc.orders + (c.orders || 0),
+      clicks: acc.clicks + (c.clicks || 0),
+      impressions: acc.impressions + (c.impressions || 0),
+    }), { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 });
+  }, [campaigns]);
+
+  // Top campanhas por gasto
+  const topCampaigns = useMemo(() =>
+    [...campaigns]
+      .filter(c => (c.spend || 0) > 0)
+      .sort((a, b) => (b.spend || 0) - (a.spend || 0))
+      .slice(0, 5),
+    [campaigns]
+  );
+
+  // Produtos com problemas (sem estoque, sem campanha, etc.)
+  const productsNeedAttention = useMemo(() =>
+    products.filter(p => p.status === 'active' && (
+      p.inventory_status === 'out_of_stock' ||
+      p.inventory_status === 'low_stock' ||
+      (!p.has_campaign && p.fba_inventory > 0)
+    )).slice(0, 5),
+    [products]
+  );
 
   // Ontem para subtexto
   const yesterday = getYesterday();
@@ -411,6 +458,21 @@ export default function Dashboard() {
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
           <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* Aviso de gap de dados — explicação clara quando relatório está defasado */}
+      {!loading && dataGapWarning && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border bg-amber-500/5 border-amber-500/20 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-amber-300 font-semibold">Dados de {dataGapWarning.gapDays} dia(s) ainda não sincronizados</p>
+            <p className="text-amber-300/70 mt-0.5">
+              O último relatório processado cobre até <span className="font-semibold">{new Date(dataGapWarning.lastDate + 'T12:00:00').toLocaleDateString('pt-BR')}</span>.
+              Vendas e gasto dos dias seguintes ainda não aparecem nos gráficos e cards — isso é normal, os relatórios da Amazon têm latência de 1–2 dias.
+              Use o botão Sync para solicitar atualização.
+            </p>
+          </div>
         </div>
       )}
 
@@ -584,6 +646,139 @@ export default function Dashboard() {
           </div>
         );
       })()}
+
+      {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
+      {!loading && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+          {/* Top campanhas por gasto */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-slate-300">Top campanhas por gasto</h2>
+              <Link to="/ads" className="text-[10px] text-cyan hover:underline">Ver todas →</Link>
+            </div>
+            {topCampaigns.length === 0 ? (
+              <p className="text-xs text-slate-600 py-4 text-center">Sem dados de campanhas</p>
+            ) : (
+              <div className="space-y-2.5">
+                {topCampaigns.map((c, i) => {
+                  const acos = c.acos || (c.sales > 0 ? c.spend / c.sales * 100 : 0);
+                  const acosColor = acos === 0 ? 'text-slate-500' : acos <= (autopilotConfig?.target_acos || 25) ? 'text-emerald-400' : acos <= (autopilotConfig?.maximum_acos || 40) ? 'text-amber-400' : 'text-red-400';
+                  return (
+                    <div key={c.id || i} className="flex items-center gap-2">
+                      <span className="text-[10px] text-slate-600 w-3 flex-shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-slate-300 truncate">{(c.campaign_name || c.name || c.campaign_id || '—').replace(/AUTO \| /, '').slice(0, 35)}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-cyan">R${(c.spend || 0).toFixed(2)}</span>
+                          <span className="text-[10px] text-emerald-400">R${(c.sales || 0).toFixed(2)}</span>
+                          {acos > 0 && <span className={`text-[10px] font-semibold ${acosColor}`}>{acos.toFixed(1)}%</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Totais acumulados das campanhas (complemento quando relatório diário está defasado) */}
+            {dataGapWarning && campAggregated.spend > 0 && (
+              <div className="mt-3 pt-3 border-t border-surface-2">
+                <p className="text-[10px] text-slate-500 mb-1.5">Acumulado nas campanhas (inclui dias sem relatório)</p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <div><p className="text-[10px] text-slate-500">Gasto total</p><p className="text-xs font-bold text-cyan">R${campAggregated.spend.toFixed(2)}</p></div>
+                  <div><p className="text-[10px] text-slate-500">Vendas total</p><p className="text-xs font-bold text-emerald-400">R${campAggregated.sales.toFixed(2)}</p></div>
+                  <div><p className="text-[10px] text-slate-500">Pedidos</p><p className="text-xs font-bold text-white">{campAggregated.orders}</p></div>
+                  <div><p className="text-[10px] text-slate-500">ACoS geral</p><p className="text-xs font-bold text-amber-400">{campAggregated.sales > 0 ? (campAggregated.spend / campAggregated.sales * 100).toFixed(1) : '—'}%</p></div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Estoque e saúde dos produtos */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-slate-300">Saúde dos produtos</h2>
+              <Link to="/products" className="text-[10px] text-cyan hover:underline">Ver todos →</Link>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              {[
+                { label: 'Em estoque', value: products.filter(p => p.inventory_status === 'in_stock').length, color: 'text-emerald-400' },
+                { label: 'Baixo estoque', value: products.filter(p => p.inventory_status === 'low_stock').length, color: 'text-amber-400' },
+                { label: 'Sem estoque', value: products.filter(p => p.inventory_status === 'out_of_stock').length, color: 'text-red-400' },
+              ].map(s => (
+                <div key={s.label} className="text-center bg-surface-2 rounded-lg p-2">
+                  <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
+                  <p className="text-[9px] text-slate-500 leading-tight">{s.label}</p>
+                </div>
+              ))}
+            </div>
+            {productsNeedAttention.length > 0 ? (
+              <div className="space-y-1.5">
+                <p className="text-[10px] text-slate-500 mb-1">Requer atenção:</p>
+                {productsNeedAttention.map((p, i) => (
+                  <div key={p.id || i} className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${p.inventory_status === 'out_of_stock' ? 'bg-red-400' : p.inventory_status === 'low_stock' ? 'bg-amber-400' : 'bg-violet-400'}`} />
+                    <span className="text-[10px] text-slate-400 truncate">{p.asin}</span>
+                    <span className="text-[10px] text-slate-600 ml-auto flex-shrink-0">
+                      {p.inventory_status === 'out_of_stock' ? 'Sem estoque' : p.inventory_status === 'low_stock' ? `${p.fba_inventory || 0} un` : 'Sem campanha'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-emerald-400 text-center py-2">Todos os produtos saudáveis</p>
+            )}
+          </div>
+
+          {/* Eficiência operacional */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <h2 className="text-sm font-semibold text-slate-300 mb-3">Eficiência operacional</h2>
+            <div className="space-y-2.5">
+              {[
+                {
+                  label: 'CVR (Conversão)',
+                  value: kpis.clicks > 0 ? `${(kpis.orders / kpis.clicks * 100).toFixed(2)}%` : '—',
+                  hint: 'Pedidos / Cliques',
+                  color: kpis.clicks > 0 && kpis.orders / kpis.clicks > 0.02 ? 'text-emerald-400' : 'text-amber-400',
+                },
+                {
+                  label: 'CPA (Custo por pedido)',
+                  value: kpis.orders > 0 ? `R$${(kpis.spend / kpis.orders).toFixed(2)}` : '—',
+                  hint: 'Gasto / Pedidos',
+                  color: 'text-slate-300',
+                },
+                {
+                  label: 'Receita por clique',
+                  value: kpis.clicks > 0 ? `R$${(kpis.sales / kpis.clicks).toFixed(2)}` : '—',
+                  hint: 'Vendas / Cliques',
+                  color: kpis.clicks > 0 && kpis.sales / kpis.clicks > 3 ? 'text-emerald-400' : 'text-slate-300',
+                },
+                {
+                  label: 'Ticket médio',
+                  value: kpis.orders > 0 ? `R$${(kpis.sales / kpis.orders).toFixed(2)}` : '—',
+                  hint: 'Vendas / Pedidos',
+                  color: 'text-slate-300',
+                },
+                {
+                  label: 'Spend / Impressão',
+                  value: kpis.impressions > 0 ? `R$${(kpis.spend / kpis.impressions * 1000).toFixed(3)}/mil` : '—',
+                  hint: 'CPM — custo por mil impressões',
+                  color: 'text-slate-300',
+                },
+              ].map(m => (
+                <div key={m.label} className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-slate-500">{m.label}</p>
+                    <p className="text-[9px] text-slate-600">{m.hint}</p>
+                  </div>
+                  <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-[9px] text-slate-600 mt-3">Período: {periodLabel}</p>
+          </div>
+        </div>
+      )}
 
       {/* ── 6. ORÇAMENTO E PACING ────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
