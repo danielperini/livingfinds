@@ -7,9 +7,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import {
-  RefreshCw, AlertCircle, Clock, Rocket, Loader2, X,
-  Target, TrendingUp, TrendingDown, Minus, CheckCircle, AlertTriangle,
-  BarChart2, Megaphone, BookOpen, Terminal, DollarSign
+  RefreshCw, AlertCircle, Clock, Loader2,
+  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
 } from 'lucide-react';
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
 
@@ -170,12 +169,10 @@ export default function Dashboard() {
   const [lastSyncInfo, setLastSyncInfo] = useState(null);
   const [syncingDashboard, setSyncingDashboard] = useState(false);
   const [syncDashMsg, setSyncDashMsg] = useState(null);
-  const [kickoffStatus, setKickoffStatus] = useState(null);
-  const [kickoffRunning, setKickoffRunning] = useState(false);
+  const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
   const [budgetCfg, setBudgetCfg] = useState(null);
-  const [dataGapWarning, setDataGapWarning] = useState(null);
-  const kickoffAbortRef = useRef(null);
+  const autoSyncedRef = useRef(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -216,33 +213,43 @@ export default function Dashboard() {
       setAutopilotConfig(apConfigs[0] || null);
       setBudgetCfg(budgCfgs[0] || null);
 
-      // Verificar gap de dados: só alertar se defasagem > 2 dias (latência normal da Amazon é 1-2 dias)
-      const today_ = new Date(); today_.setHours(0,0,0,0);
-      const yesterday_ = new Date(today_.getTime() - 86400000).toISOString().slice(0,10);
-      const uniqueDatesAll = [...new Set(metrics.map(m => m.date).filter(Boolean))].sort();
-      const lastDataDate = uniqueDatesAll.length > 0 ? uniqueDatesAll[uniqueDatesAll.length - 1] : null;
-      if (lastDataDate && lastDataDate < yesterday_) {
-        const gapDays = Math.round((new Date(yesterday_).getTime() - new Date(lastDataDate).getTime()) / 86400000);
-        if (gapDays > 2) {
-          setDataGapWarning({ lastDate: lastDataDate, gapDays });
-        } else {
-          setDataGapWarning(null); // latência normal, não alertar
-        }
-      } else {
-        setDataGapWarning(null);
-      }
-
-      const noAds = prods.filter(p => p.status === 'active' && !p.has_campaign && p.inventory_status !== 'out_of_stock');
-      setKickoffStatus({ productsWithoutAds: noAds.length });
-
       if (acc?.last_sync_at) setLastSyncInfo({ at: acc.last_sync_at });
       else {
         const last = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
         if (last) setLastSyncInfo({ at: last.completed_at || last.started_at });
       }
 
-      // Gap de dados: só alertar se defasagem > 2 dias (latência normal da Amazon é 1-2 dias)
-      const DATA_GAP_ALERT_THRESHOLD_DAYS = 2;
+      // Sync automático se gap > 2 dias e ainda não rodou nesta sessão
+      const yesterday_ = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+      const uniqueDatesAll = [...new Set(metrics.map(m => m.date).filter(Boolean))].sort();
+      const lastDataDate = uniqueDatesAll.length > 0 ? uniqueDatesAll[uniqueDatesAll.length - 1] : null;
+      const gapDays = lastDataDate ? Math.round((new Date(yesterday_).getTime() - new Date(lastDataDate).getTime()) / 86400000) : 0;
+      const needsSync = gapDays > 2;
+
+      if (needsSync && !autoSyncedRef.current) {
+        // Verificar cooldown de 23h para não sobrecarregar a API
+        const lastSyncAt = acc?.last_sync_at;
+        const ageHours = lastSyncAt ? (Date.now() - new Date(lastSyncAt).getTime()) / 3600000 : 999;
+        if (ageHours >= 23) {
+          autoSyncedRef.current = true;
+          setSyncingDashboard(true);
+          setSyncError(null);
+          base44.functions.invoke('syncAdsQuick', { amazon_account_id: aid })
+            .then(res => {
+              if (res?.data?.ok) {
+                setSyncDashMsg({ type: 'success', text: `Sync automático concluído: ${res.data.campaigns_updated || 0} campanhas atualizadas.` });
+                loadData();
+              } else {
+                setSyncError(res?.data?.error || 'Sync automático falhou.');
+              }
+            })
+            .catch(e => setSyncError(e.message))
+            .finally(() => {
+              setSyncingDashboard(false);
+              setTimeout(() => setSyncDashMsg(null), 8000);
+            });
+        }
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -254,33 +261,26 @@ export default function Dashboard() {
 
   const runSync = async () => {
     if (!account || syncingDashboard) return;
-
-    // Bloquear sync se dados são recentes (gap ≤ 2 dias — latência normal da Amazon)
-    if (!dataGapWarning) {
-      setSyncDashMsg({ type: 'info', text: 'Dados já estão atualizados. A Amazon leva 1–2 dias para publicar relatórios — isso é normal.' });
-      setTimeout(() => setSyncDashMsg(null), 7000);
-      return;
-    }
-
     if (account.last_sync_at) {
       const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
       if (ageHours < 23) {
-        setSyncDashMsg({ type: 'info', text: `Sync realizado há ${ageHours.toFixed(1)}h. Próximo em ${(23 - ageHours).toFixed(1)}h.` });
-        setTimeout(() => setSyncDashMsg(null), 7000);
+        setSyncDashMsg({ type: 'info', text: `Sync realizado há ${ageHours.toFixed(1)}h. Dados estão atualizados.` });
+        setTimeout(() => setSyncDashMsg(null), 5000);
         return;
       }
     }
     setSyncingDashboard(true);
+    setSyncError(null);
     try {
       const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
       if (res?.data?.ok) {
         setSyncDashMsg({ type: 'success', text: `${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
         await loadData();
       } else {
-        setSyncDashMsg({ type: 'error', text: res?.data?.error || 'Falha.' });
+        setSyncError(res?.data?.error || 'Falha no sync.');
       }
     } catch (e) {
-      setSyncDashMsg({ type: 'error', text: e.message });
+      setSyncError(e.message);
     } finally {
       setSyncingDashboard(false);
       setTimeout(() => setSyncDashMsg(null), 7000);
@@ -476,51 +476,18 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Aviso de gap de dados — explicação clara quando relatório está defasado */}
-      {!loading && dataGapWarning && (
-        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border bg-amber-500/5 border-amber-500/20 text-xs">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-amber-300 font-semibold">Dados de {dataGapWarning.gapDays} dia(s) ainda não sincronizados</p>
-            <p className="text-amber-300/70 mt-0.5">
-              O último relatório processado cobre até <span className="font-semibold">{new Date(dataGapWarning.lastDate + 'T12:00:00').toLocaleDateString('pt-BR')}</span>.
-              Dados dos últimos {dataGapWarning.gapDays} dia(s) ainda não chegaram — use o botão Sync para solicitar atualização junto à Amazon.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Kick-off pendente — compacto */}
-      {!loading && account && kickoffStatus?.productsWithoutAds > 0 && (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border bg-amber-500/5 border-amber-500/20 text-xs">
+      {/* Erro de sync automático — só aparece quando falha */}
+      {syncError && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border bg-red-500/5 border-red-500/20 text-xs">
           <div className="flex items-center gap-2">
-            <Rocket className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-            <span className="text-amber-300">
-              <span className="font-bold">{kickoffStatus.productsWithoutAds}</span> produto(s) sem campanha — kick-off agendado automaticamente.
-            </span>
+            <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+            <span className="text-red-300">Sync falhou: {syncError}</span>
           </div>
-          <button onClick={async () => {
-            if (kickoffRunning) return;
-            const ctrl = new AbortController();
-            kickoffAbortRef.current = ctrl;
-            setKickoffRunning(true);
-            try {
-              const res = await base44.functions.invoke('runFullProductAutomation', { amazon_account_id: account.id });
-              if (!ctrl.signal.aborted && res?.data?.ok) {
-                const s = res.data.summary || {};
-                setKickoffStatus(p => ({ ...p, productsWithoutAds: 0, lastMsg: `✓ ${s.auto_campaigns_created || 0} campanhas criadas` }));
-              }
-            } catch {}
-            finally { kickoffAbortRef.current = null; setKickoffRunning(false); }
-          }} disabled={kickoffRunning}
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-50 whitespace-nowrap">
-            {kickoffRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
-            {kickoffRunning ? 'Executando...' : 'Executar agora'}
+          <button onClick={() => { setSyncError(null); runSync(); }}
+            className="px-2.5 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap">
+            Tentar novamente
           </button>
         </div>
-      )}
-      {kickoffStatus?.lastMsg && (
-        <p className="text-xs text-slate-400 px-1">{kickoffStatus.lastMsg}</p>
       )}
 
       {/* Decisões pendentes — compacto */}
@@ -695,7 +662,7 @@ export default function Dashboard() {
               </div>
             )}
             {/* Totais acumulados das campanhas (complemento quando relatório diário está defasado) */}
-            {dataGapWarning && campAggregated.spend > 0 && (
+            {campAggregated.spend > 0 && (
               <div className="mt-3 pt-3 border-t border-surface-2">
                 <p className="text-[10px] text-slate-500 mb-1.5">Acumulado nas campanhas (inclui dias sem relatório)</p>
                 <div className="grid grid-cols-2 gap-1.5">
