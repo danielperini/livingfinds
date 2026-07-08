@@ -115,7 +115,7 @@ const ChartTooltip = ({ active, payload, label }) => {
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
           <span className="text-slate-300">{p.name}:</span>
           <span className="text-white font-semibold">
-            {String(p.name).toLowerCase().includes('impressões') || String(p.name).toLowerCase().includes('cliques') || String(p.name).toLowerCase().includes('alterações')
+            {['impressões', 'cliques', 'alterações'].some(w => String(p.name).toLowerCase().includes(w))
               ? Number(p.value).toLocaleString('pt-BR')
               : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(p.value))}
           </span>
@@ -187,6 +187,7 @@ export default function Dashboard() {
   const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
   const [budgetCfg, setBudgetCfg] = useState(null);
+  const [sellerBenchmark, setSellerBenchmark] = useState(null);
   const autoSyncedRef = useRef(false);
 
   const loadData = useCallback(async () => {
@@ -203,7 +204,7 @@ export default function Dashboard() {
       const safe_ = async (fn, fb = []) => { try { return await fn(); } catch (e) { if (String(e?.message).includes('429')) return fb; throw e; } };
 
       // Carregar tudo em paralelo — elimina latência sequencial
-      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs] = await Promise.all([
+      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs, benchmarks] = await Promise.all([
         safe_(() => loadAllCampaigns(aid)),
         safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
         safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300)),
@@ -212,6 +213,7 @@ export default function Dashboard() {
         safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 500)),
         safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
         safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []),
+        safe_(() => base44.entities.SellerPerformanceBenchmark.filter({ amazon_account_id: aid }, '-period_end', 5), []),
       ]);
 
       setCampaigns(cams);
@@ -222,6 +224,7 @@ export default function Dashboard() {
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
       setBudgetCfg(budgCfgs[0] || null);
+      setSellerBenchmark(benchmarks[0] || null);
 
       if (acc?.last_sync_at) setLastSyncInfo({ at: acc.last_sync_at });
       else {
@@ -438,9 +441,9 @@ export default function Dashboard() {
     for (const m of periodMetrics) {
       if (!m.date) continue;
       const label = fmtDateBR(m.date);
-      if (!byDate[m.date]) byDate[m.date] = { date: label, gasto: 0, vendas: 0, impressões: 0 };
+      if (!byDate[m.date]) byDate[m.date] = { date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
       byDate[m.date].gasto += m.spend || 0;
-      byDate[m.date].vendas += m.sales || 0;
+      byDate[m.date]['vendas ads'] += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
     }
     return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
@@ -552,17 +555,28 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── 3. GRÁFICO CONSOLIDADO: Gasto · Vendas · Impressões ─────────────── */}
+      {/* ── 3. GRÁFICO CONSOLIDADO: Gasto · Vendas Ads · Impressões ─────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
-          <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Impressões</h2>
+          <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas Ads · Impressões</h2>
           <div className="flex items-center gap-3 text-[10px]">
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas: {fmtBRL(kpis.sales)}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           </div>
         </div>
-        <p className="text-[10px] text-slate-500 mb-4">{periodLabel} · dados do relatório Amazon</p>
+        <p className="text-[10px] text-slate-500 mb-2">
+          {periodLabel} · vendas atribuídas aos Ads (janela Amazon 7-14d) · <span className="text-amber-400/80">≠ faturamento total</span>
+        </p>
+        {sellerBenchmark && (
+          <div className="flex items-center gap-4 px-3 py-2 mb-3 rounded-lg bg-emerald-500/8 border border-emerald-500/20 text-[10px]">
+            <span className="text-slate-400">📊 Faturamento real (Seller Central):</span>
+            <span className="text-emerald-400 font-bold">{fmtBRL(sellerBenchmark.gross_revenue)}</span>
+            <span className="text-slate-500">{sellerBenchmark.period_start?.slice(5).replace('-','/')} → {sellerBenchmark.period_end?.slice(5).replace('-','/')}</span>
+            <span className="text-slate-400">· TACoS real: <span className="text-amber-400 font-semibold">{sellerBenchmark.tacos_pct?.toFixed(1)}%</span></span>
+          </div>
+        )}
+
         {loading ? (
           <div className="h-44 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
         ) : consolidatedChart.length === 0 ? (
@@ -580,7 +594,7 @@ export default function Dashboard() {
               <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
               <Tooltip content={<ChartTooltip />} />
               <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.35} radius={[2, 2, 0, 0]} />
-              <Area yAxisId="brl" type="monotone" dataKey="vendas" name="Vendas" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
+              <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} />
             </ComposedChart>
           </ResponsiveContainer>
