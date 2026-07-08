@@ -413,21 +413,27 @@ export default function Dashboard() {
   // ─── Gráfico: Alterações da IA por dia ────────────────────────────────────
 
   const aiChangesChart = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const firstDay = new Date(today); firstDay.setDate(today.getDate() - 29);
-    const dateKey = d => d.toISOString().slice(0, 10);
+    // Usar data BRT para evitar corte errado por fuso UTC
+    const nowBRT = new Date(Date.now() - 3 * 3600000);
+    const todayBRT = nowBRT.toISOString().slice(0, 10);
+    const firstDay = new Date(nowBRT); firstDay.setDate(firstDay.getDate() - 29);
+    const firstDayStr = firstDay.toISOString().slice(0, 10);
+
     const counts = new Map();
     for (const c of bidChanges) {
-      if (!c.created_at) continue;
-      const d = new Date(c.created_at); d.setHours(0, 0, 0, 0);
-      if (d < firstDay || d.toISOString().slice(0, 10) >= today.toISOString().slice(0, 10)) continue;
-      const k = dateKey(d);
-      counts.set(k, (counts.get(k) || 0) + 1);
+      // created_at pode ser o campo do registro ou created_date do Base44
+      const raw = c.created_at || c.created_date;
+      if (!raw) continue;
+      // Converter para BRT antes de extrair a data
+      const dBRT = new Date(new Date(raw).getTime() - 3 * 3600000);
+      const key = dBRT.toISOString().slice(0, 10);
+      if (key < firstDayStr || key > todayBRT) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     return Array.from({ length: 30 }, (_, i) => {
       const day = new Date(firstDay); day.setDate(firstDay.getDate() + i);
-      const key = dateKey(day);
-      if (key >= today.toISOString().slice(0, 10)) return null;
+      const key = day.toISOString().slice(0, 10);
+      if (key > todayBRT) return null;
       return { date: fmtDateBR(key), alterações: counts.get(key) || 0 };
     }).filter(Boolean);
   }, [bidChanges]);
