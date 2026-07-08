@@ -191,7 +191,25 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 4. Ações Amazon não confirmadas ───────────────────────────────────
+    // ── 4. Despachar ações de bid programadas da janela atual ─────────────
+    // Invoca runScheduledBidAdjustments se há ações de dayparting para esta hora
+    try {
+      const windowEnd = new Date(Date.now() + 35 * 60 * 1000).toISOString();
+      const DAYPART_OPS = ['daypart_bid_increase', 'daypart_bid_decrease', 'daypart_bid_restore', 'keyword_bid_update', 'keyword_bid_restore'];
+      const pendingBids = await base44.asServiceRole.entities.AmazonActionQueue.filter(
+        { amazon_account_id: aid, status: 'approved' }, 'scheduled_at', 10
+      );
+      const hasDueActions = pendingBids.some((a: any) =>
+        DAYPART_OPS.includes(a.operation) && a.scheduled_at && a.scheduled_at <= windowEnd
+      );
+      if (hasDueActions) {
+        await base44.asServiceRole.functions.invoke('runScheduledBidAdjustments', { amazon_account_id: aid })
+          .catch((e: any) => actions.push({ type: 'scheduled_bid_dispatch_error', error: e.message }));
+        actions.push({ type: 'scheduled_bid_dispatch', hour: currentHour });
+      }
+    } catch {}
+
+    // ── 5. Ações Amazon não confirmadas ───────────────────────────────────
     // Decisões executadas mas sem amazon_response válido nas últimas 4h
     const unconfirmedCutoff = new Date(Date.now() - 4 * 3600000).toISOString();
     const unconfirmed = await base44.asServiceRole.entities.OptimizationDecision.filter(
