@@ -23,6 +23,9 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MAX_ACTIONS_PER_RUN = 150;
 const API_DELAY_MS = 300;
+const RATE_LIMIT_RETRY_DELAY_MS = 5000; // espera após 429 antes de retentar
+const MAX_RATE_LIMIT_RETRIES = 3;       // tentativas por ação em caso de 429
+const WINDOW_AHEAD_MS = 5 * 60 * 60 * 1000; // janela de 5h à frente (cobre bloco madrugada 00h-05h)
 
 // ── Amazon Ads API ────────────────────────────────────────────────────────────
 
@@ -157,8 +160,8 @@ Deno.serve(async (req) => {
     const MIN_BID = Number(cfg.min_bid || 0.10);
     const MAX_BID = Number(cfg.max_bid || 5.0);
 
-    // Janela: ações agendadas para até 30 min no futuro (para evitar atraso)
-    const windowEnd = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    // Janela: ações agendadas até 5h no futuro (cobre bloco madrugada 00h-05h e margem de atraso)
+    const windowEnd = new Date(Date.now() + WINDOW_AHEAD_MS).toISOString();
     const nowTs = nowIso();
 
     // ── 1. Buscar ações pendentes/aprovadas na janela ─────────────────────
@@ -247,7 +250,16 @@ Deno.serve(async (req) => {
       }).catch(() => {});
 
       try {
-        const apiResult = await updateKeywordBid(kwId, newBid, refreshToken, profileId, region);
+        // Retry com backoff em caso de rate limit (429)
+        let apiResult: Awaited<ReturnType<typeof updateKeywordBid>> = { ok: false, status: 0, requestId: '', error: 'not_run' };
+        for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+          apiResult = await updateKeywordBid(kwId, newBid, refreshToken, profileId, region);
+          const isRateLimit = apiResult.status === 429 || String(apiResult.error || '').includes('429');
+          if (!isRateLimit) break;
+          const backoff = RATE_LIMIT_RETRY_DELAY_MS * (attempt + 1);
+          console.warn(`[runScheduledBidAdjustments] Rate limit em ${kwId} (tentativa ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES}), aguardando ${backoff}ms`);
+          await sleep(backoff);
+        }
         await sleep(API_DELAY_MS);
 
         if (apiResult.ok) {
@@ -328,8 +340,7 @@ Deno.serve(async (req) => {
           results.push({ kw: kwId, operation: action.operation, bid_before: baseBid, bid_after: newBid, ok: true });
 
         } else {
-          // API retornou erro
-          const isRateLimit = String(apiResult.status) === '429' || String(apiResult.error || '').includes('429');
+          // API retornou erro (após retries de rate limit)
           const newStatus = (action.attempt_count || 0) + 1 >= (action.max_attempts || 3) ? 'failed' : 'pending';
 
           await base44.asServiceRole.entities.AmazonActionQueue.update(action.id, {
@@ -340,7 +351,6 @@ Deno.serve(async (req) => {
 
           stats.failed++;
           errors.push(`${kwId}: ${apiResult.error}`);
-          if (isRateLimit) await sleep(3000);
         }
 
       } catch (e: any) {
