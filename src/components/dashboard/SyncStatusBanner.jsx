@@ -60,29 +60,40 @@ export default function SyncStatusBanner({ accountId }) {
 
   async function loadStatus() {
     try {
-      const recentLogs = await base44.entities.SyncExecutionLog.filter(
-        { amazon_account_id: accountId },
-        '-started_at',
-        10
-      );
+      const [recentLogs, accounts] = await Promise.all([
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 10),
+        base44.entities.AmazonAccount.filter({ id: accountId }),
+      ]);
       setLogs(recentLogs);
       setSelected(new Set());
       setReprocessResults([]);
 
-      if (recentLogs.length === 0) { setStatus('stale'); return; }
+      const account = accounts[0];
+      const accountSyncAt = account?.last_sync_at;
 
       const hasRateLimit = recentLogs.slice(0, 3).some(
         l => l.status === 'error' && /rate.?limit|429|too many/i.test(l.error_message || '')
       );
       if (hasRateLimit) { setStatus('rate_limit'); return; }
 
-      if (recentLogs[0].status === 'error') { setStatus('error'); return; }
+      // Calcular idade do último sync: priorizar last_sync_at da conta (mais confiável)
+      let ageHours = 999;
+      if (accountSyncAt) {
+        ageHours = (Date.now() - new Date(accountSyncAt).getTime()) / 3600000;
+      } else {
+        const lastSuccess = recentLogs.find(l => l.status === 'success' || l.status === 'skipped_limit');
+        if (lastSuccess) {
+          ageHours = (Date.now() - new Date(lastSuccess.started_at || lastSuccess.created_date).getTime()) / 3600000;
+        }
+      }
 
-      const lastSuccess = recentLogs.find(l => l.status === 'success' || l.status === 'skipped_limit');
-      if (!lastSuccess) { setStatus('error'); return; }
+      // Se dados estão atualizados (< 26h = dentro do ciclo diário), mostrar OK
+      if (ageHours < 26) { setStatus('ok'); return; }
 
-      const ageHours = (Date.now() - new Date(lastSuccess.started_at || lastSuccess.created_date).getTime()) / 3600000;
-      setStatus(ageHours > 3 ? 'stale' : 'ok');
+      // Verificar erros recentes apenas quando dados estão desatualizados
+      if (recentLogs.length > 0 && recentLogs[0].status === 'error') { setStatus('error'); return; }
+
+      setStatus(ageHours < 999 ? 'stale' : (recentLogs.length === 0 ? 'stale' : 'ok'));
     } catch {
       setStatus(null);
     }
