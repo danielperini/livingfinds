@@ -1,0 +1,98 @@
+{
+  "name": "DaypartScheduleAction",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "hour_block": {
+      "type": "string"
+    },
+    "start_hour": {
+      "type": "number"
+    },
+    "end_hour": {
+      "type": "number"
+    },
+    "timezone": {
+      "type": "string",
+      "default": "America/Sao_Paulo"
+    },
+    "action_type": {
+      "type": "string",
+      "enum": [
+        "daypart_bid_increase",
+        "daypart_bid_decrease",
+        "daypart_bid_restore",
+        "budget_protect",
+        "budget_release"
+      ]
+    },
+    "base_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "scheduled_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "bid_multiplier": {
+      "type": "number",
+      "default": 1.0
+    },
+    "reason": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "executing",
+        "executed",
+        "failed",
+        "cancelled"
+      ],
+      "default": "pending"
+    },
+    "last_executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_execution_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "action_type"
+  ]
+}
