@@ -580,10 +580,51 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 7b. Regras nativas de ACoS por ASIN (30 dias) ────────────────────────
-    // Carrega AutopilotConfig para obter target_acos global
-    const apConfigs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []);
-    const globalTargetAcos = (apConfigs[0]?.target_acos) || 0;
+    // ── 7b. Regras nativas de ACoS por ASIN (30 dias) com meta dinâmica ─────────
+    // Meta de ACoS calculada automaticamente por produto a partir da margem bruta:
+    //   target_acos_asin = gross_margin_pct × (1 - safety_buffer)
+    //   safety_buffer = 0.20 (reserva 20% da margem para lucro líquido)
+    //   Limites: mínimo 5%, máximo 30%
+    //   Fallback: globalTargetAcos → 10%
+    //
+    // Lógica: se a margem bruta é 30%, o máximo que posso gastar em ads é
+    //         30% × 0.80 = 24% do faturamento, mantendo 6% de lucro líquido.
+
+    const ACOS_SAFETY_BUFFER = 0.20; // 20% de reserva de margem para lucro
+    const ACOS_MIN = 5;              // nunca usar meta abaixo de 5%
+    const ACOS_MAX = 30;             // nunca usar meta acima de 30%
+
+    const [apConfigs, profitLearnings] = await Promise.all([
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
+      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
+    ]);
+    const globalTargetAcos = (apConfigs[0]?.target_acos) || 10;
+
+    // Construir mapa asin → meta_acos calculada por produto
+    // Fonte: ProductProfitabilityLearning.gross_margin_pct (margem bruta real dos últimos 30d)
+    const acosByAsin = new Map(); // asin → target_acos calculado
+    const acosBySkuIdx = new Map(); // sku → learning (para join com Product via sku)
+    for (const pl of profitLearnings) {
+      if (pl.sku) acosBySkuIdx.set(pl.sku, pl);
+    }
+    for (const p of products) {
+      const asin = p.asin;
+      if (!asin) continue;
+      // Buscar learning: por ASIN direto ou via SKU
+      const pl = profitLearnings.find(l => l.asin === asin) || (p.sku ? acosBySkuIdx.get(p.sku) : null);
+      if (!pl) continue;
+      const grossMargin = Number(pl.gross_margin_pct || 0);
+      if (grossMargin <= 0) {
+        // Margem negativa → produto bloqueado, não gerar meta (motor não atua)
+        continue;
+      }
+      // Meta dinâmica: margem bruta × (1 - buffer de segurança)
+      const dynTarget = grossMargin * (1 - ACOS_SAFETY_BUFFER);
+      const clamped = Math.min(ACOS_MAX, Math.max(ACOS_MIN, dynTarget));
+      acosByAsin.set(asin, Math.round(clamped * 10) / 10); // arredondar para 1 casa
+    }
+
+    const acosTargetSource = acosByAsin.size > 0 ? 'dynamic_per_product' : 'global_config';
 
     // Agregar métricas de ads por ASIN nos últimos 30 dias (de CampaignMetricsDaily)
     const adMetricsByAsin = new Map(); // asin → { spend, sales, clicks, orders }
@@ -599,76 +640,91 @@ Deno.serve(async (req) => {
       a.orders += m.orders || 0;
     }
 
-    if (globalTargetAcos > 0) {
-      for (const kw of keywords) {
-        const entityId = kw.keyword_id || kw.id;
-        if (!entityId) continue;
+    // Persistir metas calculadas em Product.break_even_acos_pct (batch, sem bloquear pipeline)
+    const productUpdates = [];
+    for (const [asin, dynTarget] of acosByAsin.entries()) {
+      const p = productMap.get(asin);
+      if (p && p.id && Math.abs((p.break_even_acos_pct || 0) - dynTarget) > 0.5) {
+        productUpdates.push({ id: p.id, break_even_acos_pct: dynTarget });
+      }
+    }
+    if (productUpdates.length > 0) {
+      base44.asServiceRole.entities.Product.bulkUpdate(productUpdates).catch(() => {});
+    }
 
-        // Pular keywords que já receberam ação de estoque neste ciclo
-        if (entityChangedThisCycle.has(entityId)) continue;
+    for (const kw of keywords) {
+      const entityId = kw.keyword_id || kw.id;
+      if (!entityId) continue;
 
-        const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
-        if (!resolvedAsin) continue;
+      // Pular keywords que já receberam ação de estoque neste ciclo
+      if (entityChangedThisCycle.has(entityId)) continue;
 
-        const adMetrics = adMetricsByAsin.get(resolvedAsin);
-        if (!adMetrics) continue;
+      const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
+      if (!resolvedAsin) continue;
 
-        const acos30d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
+      const adMetrics = adMetricsByAsin.get(resolvedAsin);
+      if (!adMetrics) continue;
 
-        const entityData = {
-          current_bid: kw.current_bid || kw.bid || 0.25,
-          acos_30d: acos30d,
-          target_acos: globalTargetAcos,
-          spend_30d: adMetrics.spend,
-          sales_30d: adMetrics.sales,
-          clicks_30d: adMetrics.clicks,
-        };
+      // Meta por produto (dinâmica) com fallback para global
+      const effectiveTargetAcos = acosByAsin.get(resolvedAsin) ?? globalTargetAcos;
+      if (effectiveTargetAcos <= 0) continue;
 
-        for (const ar of ACOS_RULES) {
-          if (!ar.matches(entityData)) continue;
+      const acos30d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
 
-          // Guardrail sazonal para boost
-          if (ar.is_boost) {
-            if (seasonalCtx.is_low_demand) continue;
-            const product = productMap.get(resolvedAsin);
-            if (seasonalCtx.is_holiday && !salesMetricsByAsin.get(resolvedAsin)?.has_real_sales) continue;
-            if (product?.inventory_status === 'out_of_stock') continue;
-          }
+      const entityData = {
+        current_bid: kw.current_bid || kw.bid || 0.25,
+        acos_30d: acos30d,
+        target_acos: effectiveTargetAcos,
+        spend_30d: adMetrics.spend,
+        sales_30d: adMetrics.sales,
+        clicks_30d: adMetrics.clicks,
+      };
 
-          // Cooldown
-          const lastExecAR = lastExecByRuleEntity.get(`${ar.rule_key}|${entityId}`);
-          if (lastExecAR) {
-            const lastTs = lastExecAR.created_date || lastExecAR.executed_at;
-            if (lastTs && (Date.now() - new Date(lastTs).getTime()) / 3600000 < ar.cooldown_hours) continue;
-          }
+      for (const ar of ACOS_RULES) {
+        if (!ar.matches(entityData)) continue;
 
-          const iKey = `acos|${aid}|${ar.rule_key}|${entityId}|${today}`;
-          if (usedIdemKeys.has(iKey)) continue;
-
-          const newBid = ar.action(entityData);
-          actionsToEnqueue.push({
-            amazon_account_id: aid,
-            correlation_id: correlationId,
-            rule_key: ar.rule_key,
-            rule_version: 1,
-            entity_type: 'keyword',
-            entity_id: entityId,
-            campaign_id: kw.campaign_id,
-            keyword_id: kw.keyword_id,
-            asin: resolvedAsin,
-            action_type: 'set_bid',
-            value_before: entityData.current_bid,
-            value_after: newBid,
-            idempotency_key: iKey,
-            status: 'pending',
-            seasonal_context: seasonalPayload,
-            reason: ar.reason_fn(entityData),
-          });
-          entityChangedThisCycle.set(entityId, ar.rule_key);
-          stats.acos_rules_applied++;
-          stats.enqueued++;
-          break; // uma regra de ACoS por keyword por ciclo
+        // Guardrail sazonal para boost
+        if (ar.is_boost) {
+          if (seasonalCtx.is_low_demand) continue;
+          const product = productMap.get(resolvedAsin);
+          if (seasonalCtx.is_holiday && !salesMetricsByAsin.get(resolvedAsin)?.has_real_sales) continue;
+          if (product?.inventory_status === 'out_of_stock') continue;
         }
+
+        // Cooldown
+        const lastExecAR = lastExecByRuleEntity.get(`${ar.rule_key}|${entityId}`);
+        if (lastExecAR) {
+          const lastTs = lastExecAR.created_date || lastExecAR.executed_at;
+          if (lastTs && (Date.now() - new Date(lastTs).getTime()) / 3600000 < ar.cooldown_hours) continue;
+        }
+
+        const iKey = `acos|${aid}|${ar.rule_key}|${entityId}|${today}`;
+        if (usedIdemKeys.has(iKey)) continue;
+
+        const newBid = ar.action(entityData);
+        const isDynamic = acosByAsin.has(resolvedAsin);
+        actionsToEnqueue.push({
+          amazon_account_id: aid,
+          correlation_id: correlationId,
+          rule_key: ar.rule_key,
+          rule_version: 1,
+          entity_type: 'keyword',
+          entity_id: entityId,
+          campaign_id: kw.campaign_id,
+          keyword_id: kw.keyword_id,
+          asin: resolvedAsin,
+          action_type: 'set_bid',
+          value_before: entityData.current_bid,
+          value_after: newBid,
+          idempotency_key: iKey,
+          status: 'pending',
+          seasonal_context: seasonalPayload,
+          reason: ar.reason_fn(entityData) + (isDynamic ? ` [meta dinâmica por produto: ${effectiveTargetAcos}%]` : ' [meta global]'),
+        });
+        entityChangedThisCycle.set(entityId, ar.rule_key);
+        stats.acos_rules_applied++;
+        stats.enqueued++;
+        break; // uma regra de ACoS por keyword por ciclo
       }
     }
 
@@ -830,7 +886,14 @@ Deno.serve(async (req) => {
       seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
       sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
       stock_rules: { applied: stats.stock_rules_applied },
-      acos_rules: { applied: stats.acos_rules_applied, target_acos_used: globalTargetAcos },
+      acos_rules: {
+        applied: stats.acos_rules_applied,
+        target_acos_global: globalTargetAcos,
+        target_acos_source: acosTargetSource,
+        dynamic_targets_calculated: acosByAsin.size,
+        product_targets_updated: productUpdates.length,
+        sample_targets: Array.from(acosByAsin.entries()).slice(0, 5).map(([asin, t]) => ({ asin, target_acos: t })),
+      },
       stats,
       conflicts_resolved: conflicts.length,
       actions_enqueued: actionsToEnqueue.length,
