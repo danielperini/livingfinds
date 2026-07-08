@@ -1,0 +1,94 @@
+{
+  "name": "SellerPerformanceBenchmark",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "import",
+        "sp_api",
+        "business_report"
+      ],
+      "default": "manual"
+    },
+    "label": {
+      "type": "string"
+    },
+    "gross_revenue": {
+      "type": "number",
+      "default": 0
+    },
+    "marketplace_net_revenue": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_margin_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_count": {
+      "type": "number",
+      "default": 0
+    },
+    "units_sold": {
+      "type": "number",
+      "default": 0
+    },
+    "average_ticket": {
+      "type": "number",
+      "default": 0
+    },
+    "roi_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "ads_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_profit_after_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "mpa_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "notes": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "period_start",
+    "period_end"
+  ]
+}
