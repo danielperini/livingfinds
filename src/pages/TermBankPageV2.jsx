@@ -46,15 +46,23 @@ export default function TermBankPageV2() {
 
   const excessCount = suggestions.length - top10Suggestions.length;
 
-  // Contar sugestões por ASIN para bloquear geração quando limite atingido
-  const suggestionCountByAsin = {};
+  // Contar sugestões ATIVAS por ASIN (excluindo rejeitadas/deletadas) para o guardrail de limite
+  const activeSuggestionCountByAsin = {};
   for (const s of suggestions) {
-    if (s.asin) suggestionCountByAsin[s.asin] = (suggestionCountByAsin[s.asin] || 0) + 1;
+    if (s.asin && !['rejected', 'deleted'].includes(s.status) && s.deleted_by_user !== true) {
+      activeSuggestionCountByAsin[s.asin] = (activeSuggestionCountByAsin[s.asin] || 0) + 1;
+    }
   }
   // ASINs que já atingiram o limite
-  const asinsAtLimit = new Set(Object.keys(suggestionCountByAsin).filter(a => suggestionCountByAsin[a] >= MAX_SUGGESTIONS_PER_ASIN));
+  const asinsAtLimit = new Set(
+    Object.keys(activeSuggestionCountByAsin).filter(a => activeSuggestionCountByAsin[a] >= MAX_SUGGESTIONS_PER_ASIN)
+  );
+  // Produtos elegíveis (ativos, com título, sem ter atingido o limite)
+  const eligibleProducts = products.filter(p =>
+    (p.product_name || p.display_name) && (!p.asin || !asinsAtLimit.has(p.asin))
+  );
   // Todos os produtos atingiram o limite?
-  const allAsinsAtLimit = products.length > 0 && products.every(p => !p.asin || asinsAtLimit.has(p.asin));
+  const allAsinsAtLimit = products.length > 0 && eligibleProducts.length === 0;
   const asinsAtLimitCount = asinsAtLimit.size;
 
   const cleanExcess = async () => {
@@ -98,10 +106,8 @@ export default function TermBankPageV2() {
     setGenProgress('Iniciando geração...');
     setMessage(null);
     try {
-      // Filtrar apenas produtos sem título OU que ainda não atingiram o limite
-      const productsWithTitle = products.filter(p =>
-        (p.product_name || p.display_name) && (!p.asin || !asinsAtLimit.has(p.asin))
-      );
+      // Usar lista de elegíveis já calculada (ativas, com título, sem atingir limite)
+      const productsWithTitle = eligibleProducts;
       if (!productsWithTitle.length) {
         setMessage({ type: 'error', text: 'Nenhum produto elegível. Todos já atingiram o limite de sugestões ou não possuem título.' });
         return;
@@ -110,8 +116,16 @@ export default function TermBankPageV2() {
       let totalGenerated = 0;
       let totalRejected = 0;
       let errors = 0;
+      // Snapshot do contador de sugestões ativas por ASIN para guardrail em tempo real
+      const liveCountByAsin = { ...activeSuggestionCountByAsin };
+
       for (let i = 0; i < productsWithTitle.length; i++) {
         const p = productsWithTitle[i];
+        // Re-checar limite em tempo real antes de cada chamada
+        if (p.asin && (liveCountByAsin[p.asin] || 0) >= MAX_SUGGESTIONS_PER_ASIN) {
+          setGenProgress(`ASIN ${p.asin} no limite — pulando (${i + 1}/${productsWithTitle.length})...`);
+          continue;
+        }
         setGenProgress(`Processando ${p.asin || p.sku} (${i + 1}/${productsWithTitle.length})...`);
         try {
           const res = await base44.functions.invoke('suggestProductKeywordsWithAI', {
@@ -123,7 +137,12 @@ export default function TermBankPageV2() {
           });
           const d = res?.data;
           if (d?.ok && !d?.skipped) {
-            totalGenerated += d.new_suggestions || d.suggestions_created || 0;
+            const added = d.new_suggestions || d.suggestions_created || 0;
+            totalGenerated += added;
+            // Atualizar contador local para o próximo ciclo
+            if (p.asin && added > 0) {
+              liveCountByAsin[p.asin] = (liveCountByAsin[p.asin] || 0) + added;
+            }
           }
           if (d?.terms_rejected_low_confidence) totalRejected += d.terms_rejected_low_confidence;
         } catch (err) { errors++; }
