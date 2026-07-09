@@ -437,13 +437,14 @@ Deno.serve(async (req) => {
     // Regras de estoque nativas rodam sempre — mesmo sem regras no banco.
 
     // ── 2. Dados em paralelo ──────────────────────────────────────────────
-    const [keywords, campaigns, products, customSeasonalEvents, metricsRaw, salesDailyRaw] = await Promise.all([
+    const [keywords, campaigns, products, customSeasonalEvents, metricsRaw, salesDailyRaw, unifiedRaw] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
       base44.asServiceRole.entities.SeasonalityCalendar.filter({ amazon_account_id: aid, enabled: true }).catch(() => []),
       base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 200).catch(() => []),
       base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 500).catch(() => []),
+      base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300).catch(() => []),
     ]);
 
     // ── 2b. Agregar SalesDaily por ASIN (últimos 30 dias) ─────────────────
@@ -471,6 +472,38 @@ Deno.serve(async (req) => {
         real_revenue_per_day: s.total_revenue / activeDays,
         has_real_sales: s.total_units > 0,
       });
+    }
+
+    // ── 2c. Agregar UnifiedAdsMetricsDaily por campaign_id (14d) ─────────────
+    // Métricas de qualidade: impressão share, topo de pesquisa, halo, tráfego inválido
+    const unifiedCutoff14d = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+    const unifiedByCampaign = new Map();
+    for (const m of unifiedRaw) {
+      if (!m.campaign_id || !m.date || m.date < unifiedCutoff14d) continue;
+      if (!unifiedByCampaign.has(m.campaign_id)) {
+        unifiedByCampaign.set(m.campaign_id, {
+          impression_share_sum: 0, top_of_search_sum: 0, rows: 0,
+          invalid_clicks: 0, invalid_impressions: 0, clicks: 0, impressions: 0,
+          promoted_sales: 0, halo_purchases: 0, budget_at_risk: false,
+        });
+      }
+      const e = unifiedByCampaign.get(m.campaign_id);
+      if (m.impression_share > 0) e.impression_share_sum += m.impression_share;
+      if (m.top_of_search_impression_share > 0) e.top_of_search_sum += m.top_of_search_impression_share;
+      e.invalid_clicks += m.invalid_clicks || 0;
+      e.invalid_impressions += m.invalid_impressions || 0;
+      e.clicks += m.clicks || 0;
+      e.impressions += m.impressions || 0;
+      e.promoted_sales += m.promoted_sales || 0;
+      e.halo_purchases += m.halo_purchases || 0;
+      if (m.budget_at_risk) e.budget_at_risk = true;
+      e.rows++;
+    }
+    // Calcular médias e taxas
+    for (const [, e] of unifiedByCampaign.entries()) {
+      e.avg_impression_share = e.rows > 0 ? e.impression_share_sum / e.rows : 0;
+      e.avg_top_of_search = e.rows > 0 ? e.top_of_search_sum / e.rows : 0;
+      e.avg_invalid_click_rate = e.clicks > 0 ? e.invalid_clicks / e.clicks : 0;
     }
 
     // TACoS real por ASIN: gasto ads / receita real
@@ -921,6 +954,18 @@ Deno.serve(async (req) => {
           acos_14d: asinAdMetrics14d?.sales > 0 ? (asinAdMetrics14d.spend / asinAdMetrics14d.sales) * 100 : null,
           ctr_14d: asinAdMetrics14d?.impressions > 0 ? asinAdMetrics14d.clicks / asinAdMetrics14d.impressions : 0,
           cvr_14d: asinAdMetrics14d?.clicks > 0 ? (asinAdMetrics14d.orders || 0) / asinAdMetrics14d.clicks : 0,
+          // Métricas unificadas (Unified Reports) — disponíveis se conta tem acesso
+          ...(() => {
+            const u = unifiedByCampaign.get(entity.campaign_id) || null;
+            return {
+              unified_impression_share: u?.avg_impression_share || 0,
+              unified_top_of_search: u?.avg_top_of_search || 0,
+              unified_invalid_click_rate: u?.avg_invalid_click_rate || 0,
+              unified_halo_purchases: u?.halo_purchases || 0,
+              unified_promoted_sales: u?.promoted_sales || 0,
+              unified_budget_at_risk: u?.budget_at_risk || false,
+            };
+          })(),
         };
 
         if (!entityMatchesRule(rule, entityData)) continue;
@@ -1050,6 +1095,10 @@ Deno.serve(async (req) => {
       stats,
       conflicts_resolved: conflicts.length,
       actions_enqueued: actionsToEnqueue.length,
+      unified_enrichment: {
+        campaigns_with_unified_data: unifiedByCampaign.size,
+        records_loaded: unifiedRaw.length,
+      },
     });
 
   } catch (error) {
