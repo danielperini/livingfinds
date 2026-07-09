@@ -300,21 +300,44 @@ export default function AdsManagement() {
     setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
     setKwLoading(true);
     try {
-      const [kws, st, negs] = await Promise.all([
-        base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id }, '-spend', 500),
-        base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id, source: 'search_term' }, '-spend', 200),
-        base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id, status: 'pending' }, '-created_date', 50),
-      ]);
-      setKeywords(kws.filter(k => k.source !== 'search_term'));
-      setSearchTerms(st);
-      setNegSuggestions(negs);
+      // Campanhas podem ter campaign_id = ID interno Base44 ou amazon_campaign_id = ID da Amazon.
+      // Keywords armazenam o campo campaign_id com o amazon_campaign_id (ID real da Amazon).
+      // Buscar pelos dois valores possíveis para garantir o match correto.
+      const possibleIds = [...new Set([campaign.campaign_id, campaign.amazon_campaign_id].filter(Boolean))];
+
+      const kwBatches = await Promise.all(
+        possibleIds.map(cid =>
+          base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid }, '-spend', 500)
+        )
+      );
+      const allKws = kwBatches.flat();
+      // Deduplicar por id
+      const kwMap = new Map(allKws.map(k => [k.id, k]));
+      const dedupedKws = Array.from(kwMap.values());
+
+      const negBatches = await Promise.all(
+        possibleIds.map(cid =>
+          base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid, status: 'pending' }, '-created_date', 50)
+        )
+      );
+      const allNegs = negBatches.flat();
+      const negMap = new Map(allNegs.map(n => [n.id, n]));
+
+      setKeywords(dedupedKws.filter(k => k.source !== 'search_term'));
+      setSearchTerms(dedupedKws.filter(k => k.source === 'search_term'));
+      setNegSuggestions(Array.from(negMap.values()));
       if ((campaign.days_running || 0) >= 30) {
         base44.functions.invoke('analyzeKeywordHourlyPerformance', {
           amazon_account_id: campaign.amazon_account_id,
-          campaign_id: campaign.campaign_id,
+          campaign_id: campaign.amazon_campaign_id || campaign.campaign_id,
         }).then(async () => {
-          const updated = await base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: campaign.campaign_id }, '-spend', 500);
-          setKeywords(updated.filter(k => k.source !== 'search_term'));
+          const updBatches = await Promise.all(
+            possibleIds.map(cid =>
+              base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid }, '-spend', 500)
+            )
+          );
+          const updMap = new Map(updBatches.flat().map(k => [k.id, k]));
+          setKeywords(Array.from(updMap.values()).filter(k => k.source !== 'search_term'));
         }).catch(() => {});
       }
     } catch {
