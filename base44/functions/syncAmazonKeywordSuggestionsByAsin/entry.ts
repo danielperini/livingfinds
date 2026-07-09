@@ -1,11 +1,11 @@
 /**
  * syncAmazonKeywordSuggestionsByAsin
  *
- * Consulta a Amazon Ads API (Keyword Recommendations) para obter sugestões
- * oficiais de keywords por ASIN próprio e ASINs concorrentes.
+ * Busca sugestões oficiais de keywords da Amazon Ads API por ASIN.
+ * Endpoint principal: POST /sp/targets/keywords/recommendations (v4)
+ * Fallback: POST /v2/sp/asins/suggested/keywords
  *
  * REGRA: A IA NÃO gera keywords. Apenas a Amazon Ads API fornece os termos.
- * Salva em KeywordSuggestion com source = AMAZON_ADS_SUGGESTED_KEYWORD ou AMAZON_ADS_SUGGESTED_TARGET.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -35,6 +35,42 @@ async function getAdsToken(refreshToken: string, clientId: string, clientSecret:
 
 function normalizeKeyword(kw: string): string {
   return (kw || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function extractRecommendations(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (data?.keywordRecommendations && Array.isArray(data.keywordRecommendations)) return data.keywordRecommendations;
+  if (data?.recommendations && Array.isArray(data.recommendations)) return data.recommendations;
+  if (data?.suggestedKeywords && Array.isArray(data.suggestedKeywords)) return data.suggestedKeywords;
+  if (data?.keywords && Array.isArray(data.keywords)) return data.keywords;
+  // v4 format may have nested per-ASIN
+  if (data?.keywordsByAsin) {
+    const all: any[] = [];
+    for (const v of Object.values(data.keywordsByAsin) as any[]) {
+      if (Array.isArray(v)) all.push(...v);
+      else if (v?.keywords) all.push(...v.keywords);
+    }
+    return all;
+  }
+  return [];
+}
+
+function extractKeywordText(rec: any): string {
+  return rec?.keyword || rec?.keywordText || rec?.recommendedKeyword || rec?.value || rec?.keyword_text || '';
+}
+
+function extractBid(rec: any): number | null {
+  const bid = rec?.suggestedBid?.suggested ?? rec?.suggestedBid?.median ?? rec?.bid ?? rec?.suggestedCpcBid ?? null;
+  return bid != null ? Number(bid) : null;
+}
+
+async function fetchWithRetry(url: string, opts: RequestInit, maxRetries = 2, delayMs = 5000): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const res = await fetch(url, opts);
+    if (res.status !== 429) return res;
+    if (attempt < maxRetries) await new Promise(r => setTimeout(r, delayMs * (attempt + 1)));
+  }
+  return fetch(url, opts); // last attempt
 }
 
 Deno.serve(async (req) => {
@@ -75,15 +111,17 @@ Deno.serve(async (req) => {
     const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
     const baseUrl = getAdsBaseUrl(region);
 
-    // Buscar concorrentes da entidade CompetitorAsinMap se não vieram no body
+    if (!profileId) return Response.json({ ok: false, error: 'Ads Profile ID não configurado' });
+    if (!clientId || !clientSecret) return Response.json({ ok: false, error: 'Credenciais ADS não configuradas' });
+    if (!refreshToken) return Response.json({ ok: false, error: 'Refresh token não configurado' });
+
+    // Buscar concorrentes
     let allCompetitorAsins = [...competitor_asins];
     try {
-      const storedCompetitors = await base44.asServiceRole.entities.CompetitorAsinMap.filter({
-        amazon_account_id: aid,
-        asin,
-        status: 'active',
+      const stored = await base44.asServiceRole.entities.CompetitorAsinMap.filter({
+        amazon_account_id: aid, asin, status: 'active',
       });
-      for (const c of storedCompetitors) {
+      for (const c of stored) {
         if (c.competitor_asin && !allCompetitorAsins.includes(c.competitor_asin)) {
           allCompetitorAsins.push(c.competitor_asin);
         }
@@ -92,15 +130,21 @@ Deno.serve(async (req) => {
 
     const token = await getAdsToken(refreshToken, clientId, clientSecret);
 
-    // Buscar sugestões existentes para deduplicação
-    const existingSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter({
-      amazon_account_id: aid,
-      asin,
-    }, null, 200).catch(() => []);
+    const authHeaders = {
+      'Authorization': `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': clientId,
+      'Amazon-Advertising-API-Scope': String(profileId),
+    };
 
-    // Índice de deduplicação: normalized_keyword + match_type + source_asin
+    // Deduplicação
+    const existingSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter({
+      amazon_account_id: aid, asin,
+    }, null, 500).catch(() => []);
+
     const existingIndex = new Set(
-      existingSuggestions.map((s: any) => `${s.normalized_keyword}|${(s.match_type || '').toUpperCase()}|${s.source_asin || ''}`)
+      existingSuggestions.map((s: any) =>
+        `${normalizeKeyword(s.keyword)}|${(s.match_type || '').toUpperCase()}|${s.source_asin || ''}`
+      )
     );
 
     const asinsToQuery = [
@@ -113,63 +157,92 @@ Deno.serve(async (req) => {
     const errors: string[] = [];
 
     for (const { asin_val, type } of asinsToQuery) {
+      let recommendations: any[] = [];
+
+      // ── Endpoint primário: v4 ASIN-based (com retry em 429) ──────────────────
       try {
-        // Amazon Ads API v3 — Keyword Recommendations by ASIN
-        const payload = {
-          asins: [asin_val],
-          maxRecommendations: max_suggestions_per_asin,
-          filterOptions: {
-            keywordMatchTypeFilter: match_types,
+        const res = await fetchWithRetry(
+          `${baseUrl}/sp/targets/keywords/recommendations`,
+          {
+            method: 'POST',
+            headers: {
+              ...authHeaders,
+              'Content-Type': 'application/vnd.spkeywordsrecommendation.v4+json',
+              'Accept': 'application/vnd.spkeywordsrecommendation.v4+json',
+            },
+            body: JSON.stringify({
+              asins: [asin_val],
+              maxRecommendations: max_suggestions_per_asin,
+              filterOptions: { keywordMatchTypeFilter: match_types },
+            }),
           },
-        };
+          3, // 3 retries
+          4000 // 4s delay
+        );
 
-        const res = await fetch(`${baseUrl}/sp/targets/keywords/recommendations`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Amazon-Advertising-API-ClientId': clientId,
-            'Amazon-Advertising-API-Scope': String(profileId),
-            'Content-Type': 'application/vnd.spkeywordsrecommendation.v4+json',
-            'Accept': 'application/vnd.spkeywordsrecommendation.v4+json',
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.status === 429) {
-          await new Promise(r => setTimeout(r, 5000));
-          errors.push(`Rate limit para ASIN ${asin_val}`);
-          continue;
+        if (res.ok) {
+          const data = await res.json();
+          recommendations = extractRecommendations(data);
+        } else if (res.status !== 429) {
+          const errText = await res.text().catch(() => '');
+          errors.push(`v4 HTTP ${res.status} para ${asin_val}: ${errText.slice(0, 200)}`);
         }
-        if (!res.ok) {
-          const errText = await res.text();
-          errors.push(`HTTP ${res.status} para ASIN ${asin_val}: ${errText.slice(0, 200)}`);
-          continue;
+      } catch (e: any) {
+        errors.push(`v4 erro para ${asin_val}: ${e.message}`);
+      }
+
+      // ── Fallback: v2 POST (sem suggestBids para evitar 422) ──────────────────
+      if (recommendations.length === 0) {
+        try {
+          const res2 = await fetchWithRetry(
+            `${baseUrl}/v2/sp/asins/suggested/keywords`,
+            {
+              method: 'POST',
+              headers: { ...authHeaders, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: JSON.stringify({ asins: [asin_val], maxNumSuggestions: max_suggestions_per_asin }),
+            },
+            2,
+            3000
+          );
+          if (res2.ok) {
+            const d2 = await res2.json();
+            recommendations = extractRecommendations(d2);
+          }
+        } catch {}
+      }
+
+      if (recommendations.length === 0) {
+        if (!errors.find(e => e.includes(asin_val))) {
+          errors.push(`${asin_val}: sem recomendações retornadas`);
         }
+        // Continuar — não abortar os outros ASINs
+        if (asinsToQuery.length > 1) await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
 
-        const data = await res.json();
-        const recommendations = data?.keywordRecommendations || data?.recommendations || [];
+      // ── Processar e salvar ───────────────────────────────────────────────────
+      const toCreate: any[] = [];
 
-        const toCreate: any[] = [];
+      for (const rec of recommendations) {
+        const keywordText = extractKeywordText(rec);
+        if (!keywordText) continue;
 
-        for (const rec of recommendations) {
-          const keywordText = rec.keyword || rec.keywordText || rec.recommendedKeyword;
-          if (!keywordText) continue;
+        const recMatchType = (rec.matchType || rec.match_type || '').toUpperCase();
+        const matchTypesToUse = recMatchType && match_types.includes(recMatchType)
+          ? [recMatchType]
+          : match_types;
 
-          const matchType = (rec.matchType || 'EXACT').toUpperCase();
+        for (const matchType of matchTypesToUse) {
           const normalized = normalizeKeyword(keywordText);
-
           if (!normalized || normalized.length < 2) continue;
 
           const dedupKey = `${normalized}|${matchType}|${asin_val}`;
-          if (existingIndex.has(dedupKey)) {
-            totalSkipped++;
-            continue;
-          }
+          if (existingIndex.has(dedupKey)) { totalSkipped++; continue; }
           existingIndex.add(dedupKey);
 
-          const bid = rec.suggestedBid?.suggested || rec.bid || null;
-          const bidMin = rec.suggestedBid?.rangeStart || null;
-          const bidMax = rec.suggestedBid?.rangeEnd || null;
+          const bid = extractBid(rec);
+          const bidMin = rec.suggestedBid?.rangeStart ?? rec.suggestedBid?.minimum ?? null;
+          const bidMax = rec.suggestedBid?.rangeEnd ?? rec.suggestedBid?.maximum ?? null;
 
           toCreate.push({
             amazon_account_id: aid,
@@ -181,12 +254,12 @@ Deno.serve(async (req) => {
             match_type: matchType,
             source: 'AMAZON_ADS_SUGGESTED_KEYWORD',
             amazon_suggested_bid: bid,
-            amazon_suggested_bid_min: bidMin,
-            amazon_suggested_bid_max: bidMax,
-            amazon_relevance_score: rec.rankingScore || rec.score || 0,
-            amazon_impression_estimate: rec.impressions || null,
-            amazon_click_estimate: rec.clicks || null,
-            amazon_order_estimate: rec.orders || null,
+            amazon_suggested_bid_min: bidMin != null ? Number(bidMin) : null,
+            amazon_suggested_bid_max: bidMax != null ? Number(bidMax) : null,
+            amazon_relevance_score: rec.rankingScore || rec.score || rec.relevanceScore || 0,
+            amazon_impression_estimate: rec.impressions ?? rec.estimatedImpressions ?? null,
+            amazon_click_estimate: rec.clicks ?? rec.estimatedClicks ?? null,
+            amazon_order_estimate: rec.orders ?? rec.estimatedOrders ?? null,
             amazon_raw_payload: JSON.stringify(rec).slice(0, 1000),
             status: 'suggested',
             target_type: 'keyword',
@@ -194,35 +267,26 @@ Deno.serve(async (req) => {
             created_at: now,
           });
         }
-
-        // Criar em lotes de 50
-        for (let i = 0; i < toCreate.length; i += 50) {
-          await base44.asServiceRole.entities.KeywordSuggestion.bulkCreate(toCreate.slice(i, i + 50));
-          totalCreated += toCreate.slice(i, i + 50).length;
-        }
-
-        // Pausa entre ASINs
-        await new Promise(r => setTimeout(r, 800));
-
-      } catch (e: any) {
-        errors.push(`Erro para ASIN ${asin_val}: ${e.message}`);
       }
+
+      for (let i = 0; i < toCreate.length; i += 50) {
+        const batch = toCreate.slice(i, i + 50);
+        await base44.asServiceRole.entities.KeywordSuggestion.bulkCreate(batch);
+        totalCreated += batch.length;
+      }
+
+      if (asinsToQuery.length > 1) await new Promise(r => setTimeout(r, 800));
     }
 
-    // Atualizar CompetitorAsinMap com concorrentes fornecidos
+    // Registrar concorrentes fornecidos pelo usuário
     for (const competitorAsin of competitor_asins) {
-      const existing = await base44.asServiceRole.entities.CompetitorAsinMap.filter({
+      const exists = await base44.asServiceRole.entities.CompetitorAsinMap.filter({
         amazon_account_id: aid, asin, competitor_asin: competitorAsin,
       }).catch(() => []);
-      if (!existing.length) {
+      if (!exists.length) {
         await base44.asServiceRole.entities.CompetitorAsinMap.create({
-          amazon_account_id: aid,
-          asin,
-          competitor_asin: competitorAsin,
-          source: 'user_input',
-          status: 'active',
-          created_at: now,
-          updated_at: now,
+          amazon_account_id: aid, asin, competitor_asin: competitorAsin,
+          source: 'user_input', status: 'active', created_at: now, updated_at: now,
         }).catch(() => {});
       }
     }

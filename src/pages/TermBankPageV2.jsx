@@ -51,11 +51,8 @@ export default function TermBankPageV2() {
         base44.entities.Product.filter({ amazon_account_id: acc.id }, '-updated_at', 200),
       ]);
 
-      const activeProducts = p.filter(prod =>
-        prod.status === 'active' &&
-        prod.inventory_status !== 'out_of_stock' &&
-        Number(prod.fba_inventory ?? prod.fba_quantity ?? 0) > 0
-      );
+      // Mostrar todos os produtos ativos (independente de estoque) para que sugestões funcionem
+      const activeProducts = p.filter(prod => prod.status !== 'archived' && prod.status !== 'inactive');
       const activeAsins = new Set(activeProducts.map(prod => prod.asin).filter(Boolean));
 
       const validTerms = t
