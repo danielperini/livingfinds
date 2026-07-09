@@ -175,8 +175,8 @@ Deno.serve(async (req) => {
 
     for (const product of relatedProducts) {
       await base44.asServiceRole.entities.Product.update(product.id, {
-        has_campaign: false, campaign_status: 'none',
-        linked_campaign_id: null, ads_paused_at: now,
+        has_campaign: true, campaign_status: 'paused',
+        ads_paused_at: now,
       });
     }
 
