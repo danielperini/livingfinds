@@ -470,9 +470,3 @@ button[title="Criar campanha para este produto"]::after {
   font-size: 0.75rem;
   line-height: 1rem;
 }
-button[title="Pausar campanha"] { font-size: 0; }
-button[title="Pausar campanha"]::after {
-  content: "Pausar todas";
-  font-size: 0.75rem;
-  line-height: 1rem;
-}
