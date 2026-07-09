@@ -60,6 +60,7 @@ export default function Analytics() {
   const [products, setProducts] = useState([]);
   const [metrics, setMetrics] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
+  const [unifiedMetrics, setUnifiedMetrics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedAsin, setSelectedAsin] = useState('all');
   const [period, setPeriod] = useState(30);
@@ -75,19 +76,16 @@ export default function Analytics() {
       if (!acc) return;
 
       const aid = acc.id;
-      const [prods, mets, camps] = await Promise.all([
+      const [prods, mets, camps, unified] = await Promise.all([
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 100),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 2000),
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 500),
+        base44.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 1000).catch(() => []),
       ]);
       setProducts(prods);
       setMetrics(mets);
       setCampaigns(camps);
-      // KPI de decisões pendentes do Autopilot
-      const pendingDecs = await base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 5);
-      if (pendingDecs.length > 0) {
-        console.info(`📋 ${pendingDecs.length} decisões Autopilot pendentes de revisão.`);
-      }
+      setUnifiedMetrics(unified);
     } finally {
       setLoading(false);
     }
@@ -223,6 +221,65 @@ export default function Analytics() {
   const rpc = totClicks > 0 ? totSales / totClicks : 0;
   const ticketMedio = totOrders > 0 ? totSales / totOrders : 0;
 
+  // ── Métricas Unificadas agregadas por data ──────────────────────────────────
+  const unifiedByDate = {};
+  unifiedMetrics
+    .filter(m => m.date && m.date >= cutoff)
+    .forEach(m => {
+      const key = `${m.campaign_id || ''}-${m.date}`;
+      // dedup simples
+      if (!unifiedByDate[key]) {
+        unifiedByDate[key] = m;
+        return;
+      }
+    });
+  const unifiedDeduped = Object.values(unifiedByDate);
+
+  const unifiedDailyMap = {};
+  unifiedDeduped.forEach(m => {
+    const d = m.date;
+    const [yy, mm, dd_] = d.split('-');
+    if (!unifiedDailyMap[d]) unifiedDailyMap[d] = {
+      name: `${dd_}/${mm}`, date: d,
+      invalid_impressions: 0, invalid_clicks: 0, impressions: 0, clicks: 0,
+      promoted_purchases: 0, halo_purchases: 0, halo_sales: 0, promoted_sales: 0,
+      impression_share_sum: 0, top_of_search_sum: 0, rows: 0,
+    };
+    const e = unifiedDailyMap[d];
+    e.invalid_impressions += m.invalid_impressions || 0;
+    e.invalid_clicks += m.invalid_clicks || 0;
+    e.impressions += m.impressions || 0;
+    e.clicks += m.clicks || 0;
+    e.promoted_purchases += m.promoted_purchases || 0;
+    e.halo_purchases += m.halo_purchases || 0;
+    e.halo_sales += m.halo_sales || 0;
+    e.promoted_sales += m.promoted_sales || 0;
+    if (m.impression_share > 0) e.impression_share_sum += m.impression_share;
+    if (m.top_of_search_impression_share > 0) e.top_of_search_sum += m.top_of_search_impression_share;
+    e.rows++;
+  });
+  const unifiedDailyData = Object.values(unifiedDailyMap)
+    .map(e => ({
+      ...e,
+      invalid_impression_rate: e.impressions > 0 ? e.invalid_impressions / e.impressions * 100 : 0,
+      invalid_click_rate: e.clicks > 0 ? e.invalid_clicks / e.clicks * 100 : 0,
+      avg_impression_share: e.rows > 0 ? e.impression_share_sum / e.rows * 100 : 0,
+      avg_top_of_search: e.rows > 0 ? e.top_of_search_sum / e.rows * 100 : 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const hasUnified = unifiedDailyData.length > 0;
+
+  // KPIs unificados totais
+  const totPromotedSales = unifiedDeduped.reduce((s, m) => s + (m.promoted_sales || 0), 0);
+  const totHaloSales = unifiedDeduped.reduce((s, m) => s + (m.halo_sales || 0), 0);
+  const totHaloPurchases = unifiedDeduped.reduce((s, m) => s + (m.halo_purchases || 0), 0);
+  const totInvalidImpressions = unifiedDeduped.reduce((s, m) => s + (m.invalid_impressions || 0), 0);
+  const totInvalidClicks = unifiedDeduped.reduce((s, m) => s + (m.invalid_clicks || 0), 0);
+  const avgImpressionShare = unifiedDailyData.length > 0 ? unifiedDailyData.reduce((s, d) => s + d.avg_impression_share, 0) / unifiedDailyData.length : 0;
+  const avgTopOfSearch = unifiedDailyData.length > 0 ? unifiedDailyData.reduce((s, d) => s + d.avg_top_of_search, 0) / unifiedDailyData.length : 0;
+  const promotedRoas = totSpend > 0 ? totPromotedSales / totSpend : 0;
+
   // Tendência: comparar primeira e segunda metade do período
   const half = Math.floor(dailyData.length / 2);
   const firstHalf = dailyData.slice(0, half);
@@ -282,6 +339,25 @@ export default function Analytics() {
         <KPI label="CTR" value={`${avgCtr.toFixed(3)}%`} loading={loading} />
         <KPI label="Pedidos" value={totOrders.toLocaleString('pt-BR')} loading={loading} />
       </div>
+
+      {/* KPIs dos Unified Reports */}
+      {hasUnified && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wide">Métricas Unificadas Amazon</p>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <KPI label="ROAS Promovido" value={`${promotedRoas.toFixed(2)}x`} loading={loading} />
+            <KPI label="Vendas Promovidas" value={`R$${totPromotedSales.toFixed(2)}`} loading={loading} />
+            <KPI label="Vendas Halo (Aura)" value={`R$${totHaloSales.toFixed(2)}`} loading={loading} />
+            <KPI label="Pedidos Halo" value={totHaloPurchases.toLocaleString('pt-BR')} loading={loading} />
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <KPI label="Parcela de Impressões" value={`${avgImpressionShare.toFixed(1)}%`} loading={loading} />
+            <KPI label="Topo de Pesquisa" value={`${avgTopOfSearch.toFixed(1)}%`} loading={loading} />
+            <KPI label="Impressões Inválidas" value={totInvalidImpressions.toLocaleString('pt-BR')} loading={loading} />
+            <KPI label="Cliques Inválidos" value={totInvalidClicks.toLocaleString('pt-BR')} loading={loading} />
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center h-64">
@@ -375,6 +451,73 @@ export default function Analytics() {
               )}
             </div>
           </div>
+
+          {/* Gráficos Unified Reports */}
+          {hasUnified && (
+            <>
+              {/* Vendas Promovidas vs Halo */}
+              <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                <h2 className="text-sm font-semibold text-slate-300 mb-1">Vendas Promovidas vs Halo (Aura) — {period}d</h2>
+                <p className="text-xs text-slate-500 mb-4">Promovidas = compras diretas do anúncio · Halo = vendas de outros produtos da marca atribuídas ao anúncio</p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={unifiedDailyData}>
+                    <defs>
+                      <linearGradient id="gPromoted" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10B981" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#10B981" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gHalo" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#8B5CF6" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#8B5CF6" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                    <Area type="monotone" dataKey="promoted_sales" name="Vendas Promovidas" stroke="#10B981" fill="url(#gPromoted)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="halo_sales" name="Vendas Halo" stroke="#8B5CF6" fill="url(#gHalo)" strokeWidth={2} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* Parcela de Impressões + Topo de Pesquisa + Tráfego Inválido */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h2 className="text-sm font-semibold text-slate-300 mb-1">Parcela de Impressões & Topo de Pesquisa</h2>
+                  <p className="text-xs text-slate-500 mb-4">% do total disponível de impressões conquistadas no período</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={unifiedDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                      <Line type="monotone" dataKey="avg_impression_share" name="Parcela Impressões %" stroke="#3B82F6" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="avg_top_of_search" name="Topo de Pesquisa %" stroke="#F59E0B" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <h2 className="text-sm font-semibold text-slate-300 mb-1">Taxa de Tráfego Inválido</h2>
+                  <p className="text-xs text-slate-500 mb-4">% de impressões e cliques identificados como inválidos (MRC)</p>
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={unifiedDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+                      <XAxis dataKey="name" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                      <Line type="monotone" dataKey="invalid_impression_rate" name="Impr. Inválidas %" stroke="#EF4444" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="invalid_click_rate" name="Cliques Inválidos %" stroke="#F59E0B" strokeWidth={2} dot={false} strokeDasharray="4 4" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Gráfico Impressões por Dia */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
