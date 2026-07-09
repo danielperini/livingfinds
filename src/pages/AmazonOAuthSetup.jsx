@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   CheckCircle, XCircle, Loader2, ExternalLink, RefreshCw,
@@ -35,9 +35,6 @@ function ConfigPill({ label, value, ok }) {
   );
 }
 
-// Tempo (segundos) antes do auto-redirect quando token está inválido
-const AUTO_REDIRECT_DELAY = 5;
-
 export default function AmazonOAuthSetup() {
   const [info, setInfo]             = useState(null);
   const [loading, setLoading]       = useState(true);
@@ -46,8 +43,7 @@ export default function AmazonOAuthSetup() {
   const [showToken, setShowToken]   = useState(false);
   const [saving, setSaving]         = useState(false);
   const [saveResult, setSaveResult] = useState(null);
-  const [countdown, setCountdown]   = useState(null); // segundos até auto-redirect
-  const countdownRef = useRef(null);
+
 
   const load = async () => {
     setLoading(true);
@@ -63,48 +59,6 @@ export default function AmazonOAuthSetup() {
 
   useEffect(() => { load(); }, []);
 
-  // Auto-redirect quando token está inválido: iniciar contagem regressiva
-  useEffect(() => {
-    if (!info || info.error) return;
-    const tokenInvalid = info.token_status === 'invalid' || info.token_status === 'not_configured';
-    const hasAuthUrl = !!info.auth_url;
-
-    if (tokenInvalid && hasAuthUrl) {
-      setCountdown(AUTO_REDIRECT_DELAY);
-    } else {
-      // Cancelar qualquer countdown ativo se o token ficou válido
-      setCountdown(null);
-      if (countdownRef.current) {
-        clearInterval(countdownRef.current);
-        countdownRef.current = null;
-      }
-    }
-  }, [info]);
-
-  useEffect(() => {
-    if (countdown === null) return;
-
-    if (countdown <= 0) {
-      // Redirecionar para o fluxo OAuth
-      if (info?.auth_url) {
-        window.location.href = info.auth_url;
-      }
-      return;
-    }
-
-    countdownRef.current = setTimeout(() => setCountdown(c => c - 1), 1000);
-    return () => {
-      if (countdownRef.current) clearTimeout(countdownRef.current);
-    };
-  }, [countdown, info]);
-
-  const cancelAutoRedirect = () => {
-    setCountdown(null);
-    if (countdownRef.current) {
-      clearTimeout(countdownRef.current);
-      countdownRef.current = null;
-    }
-  };
 
   const saveToken = async () => {
     const token = pasteToken.trim();
@@ -119,7 +73,6 @@ export default function AmazonOAuthSetup() {
       setSaveResult(res.data);
       if (res.data?.ok) {
         setPasteToken('');
-        setCountdown(null); // cancelar auto-redirect se token foi salvo manualmente
         setTimeout(() => load(), 1500);
       }
     } catch (e) {
@@ -198,31 +151,6 @@ export default function AmazonOAuthSetup() {
 
       {info && !info.error && (
         <>
-          {/* ── AUTO-REDIRECT BANNER ─────────────────────────────────── */}
-          {countdown !== null && countdown > 0 && info.auth_url && (
-            <div className="flex items-center justify-between gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
-              <div className="flex items-center gap-3">
-                <Loader2 className="w-5 h-5 text-amber-400 animate-spin flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-amber-300">Token expirado — redirecionando automaticamente</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Iniciando OAuth em <span className="font-bold text-amber-400">{countdown}s</span>...
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <a href={info.auth_url}
-                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold rounded-lg transition-colors">
-                  Autorizar agora
-                </a>
-                <button onClick={cancelAutoRedirect}
-                  className="px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-xs rounded-lg transition-colors">
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* ── STATUS BANNER ─────────────────────────────────────────── */}
           <div className={`rounded-2xl border p-5 ${
             tokenOk && hasProfiles  ? 'bg-emerald-500/8 border-emerald-500/25' :
