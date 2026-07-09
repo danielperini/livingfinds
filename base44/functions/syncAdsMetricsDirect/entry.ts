@@ -1,14 +1,15 @@
 /**
  * syncAdsMetricsDirect
- * Fase 1 (se não há relatório pendente): solicita relatório diário à Amazon Ads API.
- * Fase 2 (se há relatório pendente): verifica status, baixa e processa os dados.
- * Popula CampaignMetricsDaily e AdsMetricsHistory.
- * A automação roda a cada 30 min — na primeira rodada cria o relatório,
- * nas rodadas seguintes processa quando estiver pronto.
+ * Fase 1 — detecta lacunas nos últimos 30 dias e solicita relatório à Amazon Ads API.
+ *           Nunca solicita se já há um relatório PENDING/IN_PROGRESS no catálogo.
+ * Fase 2 — verifica status do relatório PENDING, baixa e processa quando COMPLETED.
+ *
+ * Garantias:
+ *  - Apenas 1 relatório ativo por conta a qualquer momento.
+ *  - O report_id é sempre salvo imediatamente no catálogo após criação.
+ *  - Após PROCESSED, nova lacuna dispara nova solicitação automaticamente.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-
-const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -79,24 +80,18 @@ Deno.serve(async (req) => {
       try { token = await getAdsToken(account); }
       catch (e: any) { results.push({ account_id: account.id, ok: false, error: `Token: ${e.message}` }); continue; }
 
-      // --- Verificar se já há relatório pendente para esta conta ---
-      const recentReports = await db.entities.AmazonReportCatalog.filter({
+      // --- Buscar entrada no catálogo para esta conta ---
+      const catalogRows = await db.entities.AmazonReportCatalog.filter({
         amazon_account_id: account.id,
         report_key: 'daily_campaign_metrics',
-      }, '-created_date', 5).catch(() => []);
+      }, '-created_date', 1).catch(() => []);
+      const catalogEntry = catalogRows[0] || null;
 
-      // Também aceita PENDING sem report_id se tiver sido criado recentemente (workaround para bug de save)
-      const pendingReport = recentReports.find((r: any) => r.last_status === 'PENDING');
-      // Se o report_id está faltando mas temos um report_id injetado via payload, usar ele
-      if (pendingReport && !pendingReport.report_id && body.force_report_id) {
-        await db.entities.AmazonReportCatalog.update(pendingReport.id, { report_id: body.force_report_id }).catch(() => {});
-        pendingReport.report_id = body.force_report_id;
-      }
-
-      // --- FASE 2: processar relatório pendente ---
-      if (pendingReport?.report_id) {
+      // --- FASE 2: processar relatório PENDING com report_id conhecido ---
+      const isActive = catalogEntry?.last_status === 'PENDING' || catalogEntry?.last_status === 'IN_PROGRESS';
+      if (isActive && catalogEntry?.report_id) {
         const CT_GET = 'application/vnd.getasyncreportresponse.v3+json';
-        const statusRes = await fetch(`${base}/reporting/reports/${pendingReport.report_id}`, {
+        const statusRes = await fetch(`${base}/reporting/reports/${catalogEntry.report_id}`, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Amazon-Advertising-API-ClientId': clientId,
@@ -106,36 +101,25 @@ Deno.serve(async (req) => {
         });
         const statusData = await statusRes.json().catch(() => ({}));
         const status = String(statusData?.status || '').toUpperCase();
-        console.log(`[syncDirect] fase2 report=${pendingReport.report_id} status=${status}`);
+        console.log(`[syncDirect] fase2 report=${catalogEntry.report_id} status=${status}`);
 
         if (status === 'COMPLETED' && statusData?.url) {
-          // Baixar e processar
           const download = await fetch(statusData.url);
           if (!download.ok) throw new Error(`Download falhou HTTP ${download.status}`);
           const rows = await gunzip(download);
-          console.log(`[syncDirect] rows: ${rows.length}`);
+          console.log(`[syncDirect] rows recebidos: ${rows.length}`);
 
-          // Carregar existentes para upsert
+          // Upsert em CampaignMetricsDaily
           const existingCmd = await db.entities.CampaignMetricsDaily.filter(
             { amazon_account_id: account.id }, '-date', 10000
           ).catch(() => []);
-          const existingHist = await db.entities.AdsMetricsHistory.filter(
-            { amazon_account_id: account.id }, '-date', 5000
-          ).catch(() => []);
-
           const cmdMap = new Map<string, any>();
           for (const r of existingCmd) {
             const k = `${r.campaign_id}-${String(r.date).slice(0, 10)}`;
             if (!cmdMap.has(k)) cmdMap.set(k, r);
           }
-          const histMap = new Map<string, any>();
-          for (const r of existingHist) {
-            const k = `${r.campaign_id}-${String(r.date).slice(0, 10)}`;
-            if (!histMap.has(k)) histMap.set(k, r);
-          }
 
           const toCreateCmd: any[] = [], toUpdateCmd: any[] = [];
-          const toCreateHist: any[] = [], toUpdateHist: any[] = [];
           const seen = new Set<string>();
           const now = new Date().toISOString();
 
@@ -153,7 +137,7 @@ Deno.serve(async (req) => {
             const clicks = num(row.clicks);
             const impressions = num(row.impressions);
 
-            const cmdRec = {
+            const rec = {
               amazon_account_id: account.id, campaign_id: campaignId, date,
               impressions, clicks, spend, sales, orders,
               acos: spend > 0 && sales > 0 ? (spend / sales) * 100 : 0,
@@ -162,18 +146,8 @@ Deno.serve(async (req) => {
               cpc: clicks > 0 ? spend / clicks : 0,
               source: 'amazon_ads_api', synced_at: now,
             };
-            const histRec = {
-              amazon_account_id: account.id, campaign_id: campaignId,
-              campaign_name: row.campaignName || null, date,
-              impressions, clicks, spend,
-              sales_30d: sales, orders_30d: orders,
-              report_type: 'campaigns', synced_at: now,
-            };
-
-            const curCmd = cmdMap.get(key);
-            curCmd ? toUpdateCmd.push({ id: curCmd.id, ...cmdRec }) : toCreateCmd.push(cmdRec);
-            const curHist = histMap.get(key);
-            curHist ? toUpdateHist.push({ id: curHist.id, ...histRec }) : toCreateHist.push(histRec);
+            const cur = cmdMap.get(key);
+            cur ? toUpdateCmd.push({ id: cur.id, ...rec }) : toCreateCmd.push(rec);
           }
 
           const BATCH = 100;
@@ -181,13 +155,9 @@ Deno.serve(async (req) => {
             await db.entities.CampaignMetricsDaily.bulkCreate(toCreateCmd.slice(i, i + BATCH));
           for (let i = 0; i < toUpdateCmd.length; i += BATCH)
             await db.entities.CampaignMetricsDaily.bulkUpdate(toUpdateCmd.slice(i, i + BATCH));
-          for (let i = 0; i < toCreateHist.length; i += BATCH)
-            await db.entities.AdsMetricsHistory.bulkCreate(toCreateHist.slice(i, i + BATCH));
-          for (let i = 0; i < toUpdateHist.length; i += BATCH)
-            await db.entities.AdsMetricsHistory.bulkUpdate(toUpdateHist.slice(i, i + BATCH));
 
-          // Marcar relatório como processado
-          await db.entities.AmazonReportCatalog.update(pendingReport.id, {
+          // Marcar como PROCESSED — próxima rodada verifica lacunas e solicita novo se necessário
+          await db.entities.AmazonReportCatalog.update(catalogEntry.id, {
             last_status: 'PROCESSED', last_processed_at: now, record_count_last: rows.length,
           }).catch(() => {});
           await db.entities.AmazonAccount.update(account.id, { last_sync_at: now }).catch(() => {});
@@ -195,25 +165,36 @@ Deno.serve(async (req) => {
             amazon_account_id: account.id, operation: 'sync_ads_metrics_direct',
             status: 'success', trigger_type: body.trigger_type || 'scheduled',
             started_at: startedAt, completed_at: now, records_processed: seen.size,
-            result_summary: JSON.stringify({ rows: rows.length, cmd_created: toCreateCmd.length, cmd_updated: toUpdateCmd.length }).slice(0, 2000),
+            result_summary: JSON.stringify({ rows: rows.length, created: toCreateCmd.length, updated: toUpdateCmd.length }).slice(0, 2000),
           }).catch(() => {});
 
-          results.push({ account_id: account.id, ok: true, phase: 'processed', rows: rows.length, cmd_created: toCreateCmd.length, cmd_updated: toUpdateCmd.length, hist_created: toCreateHist.length });
+          results.push({ account_id: account.id, ok: true, phase: 'processed', rows: rows.length, created: toCreateCmd.length, updated: toUpdateCmd.length });
           continue;
 
         } else if (['FAILURE', 'FAILED', 'CANCELLED'].includes(status)) {
-          await db.entities.AmazonReportCatalog.update(pendingReport.id, { last_status: 'FAILED', last_error: statusData?.failureReason || status }).catch(() => {});
-          // Vai cair na fase 1 para criar novo relatório
-        } else if (status === 'IN_PROGRESS' || status === 'PENDING') {
-          results.push({ account_id: account.id, ok: true, phase: 'waiting', report_id: pendingReport.report_id, status });
+          // Relatório falhou — limpar para permitir nova solicitação
+          await db.entities.AmazonReportCatalog.update(catalogEntry.id, {
+            last_status: 'FAILED', last_error: statusData?.failureReason || status,
+          }).catch(() => {});
+          console.log(`[syncDirect] relatório falhou (${status}), permitindo nova solicitação`);
+          // Cai na Fase 1 abaixo
+        } else {
+          // IN_PROGRESS ou PENDING — aguardar próxima rodada
+          results.push({ account_id: account.id, ok: true, phase: 'waiting', report_id: catalogEntry.report_id, status });
           continue;
         }
       }
 
-      // --- FASE 1: detectar lacunas e solicitar novo relatório ---
+      // Se há relatório PENDING sem report_id (estado inconsistente) — limpar e solicitar novo
+      if (isActive && !catalogEntry?.report_id) {
+        await db.entities.AmazonReportCatalog.update(catalogEntry.id, { last_status: 'FAILED', last_error: 'report_id ausente' }).catch(() => {});
+        console.log(`[syncDirect] catálogo inconsistente (sem report_id), solicitando novo`);
+      }
+
+      // --- FASE 1: detectar lacunas nos últimos 30 dias e solicitar relatório ---
       const today = new Date();
       const yesterday = new Date(today.getTime() - 86400000);
-      const windowStart = new Date(today.getTime() - 14 * 86400000);
+      const windowStart = new Date(today.getTime() - 30 * 86400000);
 
       const existing = await db.entities.CampaignMetricsDaily.filter(
         { amazon_account_id: account.id }, '-date', 5000
@@ -229,13 +210,13 @@ Deno.serve(async (req) => {
       }
 
       if (!missingDates.length) {
-        results.push({ account_id: account.id, ok: true, phase: 'up_to_date', message: 'Sem lacunas nos últimos 14 dias' });
+        results.push({ account_id: account.id, ok: true, phase: 'up_to_date', message: 'Sem lacunas nos últimos 30 dias' });
         continue;
       }
 
       const startDate = missingDates[0];
       const endDate = missingDates[missingDates.length - 1];
-      console.log(`[syncDirect] fase1 solicitando relatório ${startDate}→${endDate} (${missingDates.length} dias)`);
+      console.log(`[syncDirect] fase1 solicitando relatório ${startDate}→${endDate} (${missingDates.length} dias faltando)`);
 
       const CT_CREATE = 'application/vnd.createasyncreportrequest.v3+json';
       const createRes = await fetch(`${base}/reporting/reports`, {
@@ -270,8 +251,8 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Salvar na AmazonReportCatalog para o próximo ciclo processar
-      const catalogEntry: any = {
+      // Salvar imediatamente o report_id no catálogo (upsert)
+      const newEntry = {
         amazon_account_id: account.id,
         report_key: 'daily_campaign_metrics',
         report_type_id: 'spCampaigns',
@@ -284,17 +265,13 @@ Deno.serve(async (req) => {
         notes: `${startDate} → ${endDate}`,
       };
 
-      // Upsert no catálogo
-      const existingCatalog = await db.entities.AmazonReportCatalog.filter({
-        amazon_account_id: account.id, report_key: 'daily_campaign_metrics',
-      }, '-created_date', 1).catch(() => []);
-
-      if (existingCatalog[0]) {
-        await db.entities.AmazonReportCatalog.update(existingCatalog[0].id, catalogEntry).catch(() => {});
+      if (catalogEntry) {
+        await db.entities.AmazonReportCatalog.update(catalogEntry.id, newEntry);
       } else {
-        await db.entities.AmazonReportCatalog.create(catalogEntry).catch(() => {});
+        await db.entities.AmazonReportCatalog.create(newEntry);
       }
 
+      console.log(`[syncDirect] relatório solicitado reportId=${reportId}`);
       results.push({ account_id: account.id, ok: true, phase: 'requested', report_id: reportId, missing_days: missingDates.length, start_date: startDate, end_date: endDate });
     }
 
