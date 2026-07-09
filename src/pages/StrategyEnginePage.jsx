@@ -139,6 +139,12 @@ function DecisionCard({ dec, expanded, onToggle }) {
               <p className="text-xs text-pink-400">Recomendação: {payload.recommendation}</p>
             )}
             <p className="text-[10px] text-slate-500 mt-1">{payload.reason}</p>
+            {(dec.meta_citada || payload.meta_citada) && (
+              <p className="text-[10px] text-cyan/70 mt-1 border-t border-surface-3 pt-1">📐 Meta: {dec.meta_citada || payload.meta_citada}</p>
+            )}
+            {dec.goal_blocked && (
+              <p className="text-[10px] text-amber-400 mt-1">🛡 Bloqueado por: {dec.goal_blocked.replace(/_/g, ' ')}</p>
+            )}
           </div>
 
           {/* Maturação */}
@@ -369,18 +375,47 @@ export default function StrategyEnginePage() {
 
       {/* Resultado da última execução */}
       {result && (
-        <div className={`rounded-xl border p-4 text-xs ${result.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
-          <div className="flex items-center gap-2 mb-2">
+        <div className={`rounded-xl border p-4 space-y-3 ${result.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+          <div className="flex items-center gap-2">
             {result.ok ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-red-400" />}
-            <span className="font-semibold text-slate-200">
-              {result.dry_run ? '(Simulação) ' : ''}{result.decisions_generated} decisões geradas · {result.entities_evaluated} entidades avaliadas
+            <span className="text-xs font-semibold text-slate-200">
+              {result.dry_run ? '(Simulação) ' : ''}{result.decisions_generated} decisões · {result.entities_evaluated} entidades · {result.strategies_checked} estratégias
             </span>
+            <span className="text-[10px] text-slate-500 ml-auto">Fonte: {result.settings_source}</span>
           </div>
-          <div className="flex gap-4 text-slate-400">
-            <span>Estratégias: {result.strategies_checked}</span>
-            <span>Salvas: {result.decisions_saved}</span>
-            <span>Fonte: {result.settings_source}</span>
-          </div>
+          {/* Estado da conta */}
+          {result.account_state && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className={`rounded-lg p-2 text-center border ${result.account_state.tacos_blocks_expansion ? 'bg-red-500/10 border-red-500/20' : result.account_state.tacos_in_attention ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20'}`}>
+                <p className="text-[9px] text-slate-500">TACoS conta</p>
+                <p className={`text-sm font-bold ${result.account_state.tacos_blocks_expansion ? 'text-red-400' : result.account_state.tacos_in_attention ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  {result.account_state.tacos != null ? `${result.account_state.tacos}%` : '—'}
+                </p>
+                <p className="text-[9px] text-slate-500">{result.account_state.tacos_blocks_expansion ? '🔴 bloqueia escala' : result.account_state.tacos_in_attention ? '🟡 atenção' : '🟢 ok'}</p>
+              </div>
+              <div className="rounded-lg p-2 text-center bg-surface-2 border border-surface-3">
+                <p className="text-[9px] text-slate-500">Budget restante</p>
+                <p className="text-sm font-bold text-cyan">R${result.account_state.budget_remaining?.toFixed(2)}</p>
+                <p className="text-[9px] text-slate-500">de R${result.account_state.budget_cap}/dia</p>
+              </div>
+              {result.action_stats && Object.entries(result.action_stats).slice(0, 2).map(([k, v]) => (
+                <div key={k} className="rounded-lg p-2 text-center bg-surface-2 border border-surface-3">
+                  <p className="text-[9px] text-slate-500 truncate">{k.replace(/_/g, ' ')}</p>
+                  <p className="text-sm font-bold text-white">{v}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Guardrails acionados */}
+          {result.blocked_by_guardrail && Object.keys(result.blocked_by_guardrail).length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(result.blocked_by_guardrail).map(([k, v]) => (
+                <span key={k} className="text-[10px] px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                  🛡 {k.replace(/_/g, ' ')}: {v} bloqueio(s)
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

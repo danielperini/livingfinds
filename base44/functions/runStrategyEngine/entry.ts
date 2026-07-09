@@ -1,26 +1,39 @@
 /**
  * runStrategyEngine — Motor de Estratégias de Ads
  *
- * Ciclo: MÉTRICAS → COMPARAÇÃO COM METAS → DECISÃO → AÇÃO → MATURAÇÃO → ANÁLISE
+ * 17 PRINCÍPIOS (fonte única: PerformanceSettings)
+ *  1. Regra faz o básico e obrigatório. IA só decide quando há conflito/ranking.
+ *  2. ACoS manda no motor — meta primária.
+ *  3. ROAS confirma eficiência (gate de escala).
+ *  4. CPC impede bid caro (bloqueio imediato se CPC > max_cpc).
+ *  5. TACoS controla risco da conta (bloqueia expansão se > max_tacos).
+ *  6. Budget R$56 limita expansão (teto absoluto, verificado antes de qualquer aumento).
+ *  7. Bid entre R$0,40 e R$1,00 — clamp aplicado em toda ação.
+ *  8. Ajuste por ciclo ≤ 20%.
+ *  9. Budget só aumenta R$5 por ciclo.
+ * 10. Campanha nova matura 48h antes de corte.
+ * 11. Campanha incompleta: reparar primeiro, nunca otimizar.
+ * 12. Produto sem estoque: não recebe verba — pausar.
+ * 13. Dayparting corta bloco ruim e preserva bloco forte.
+ * 14. Placement com limite 0: só recomenda, não executa.
+ * 15. Keywords apenas de Amazon Ads ou Search Term real — nunca IA.
+ * 16. Toda ação registrada em StrategyExecutionLog para avaliação pós-maturação.
+ *
+ * ORDEM DE PRIORIDADE DO LOOP:
+ *   P0 (bloqueios obrigatórios — interrompem imediatamente):
+ *     sem estoque → pausar | incompleta → reparar | em reparo → bloquear | nova → maturar
+ *   P1 (cortes por limite violado — CPC ou ACoS crítico):
+ *     CPC > max → -20% | ACoS > max → -20%
+ *   P2 (TACoS global — bloqueia expansão):
+ *     TACoS > max_tacos → block_new_campaigns
+ *   P3 (budget pacing — verifica teto antes de aumentar)
+ *   P4 (estratégias específicas por métrica — todas as demais)
  *
  * Articulado com:
- *   - runDeterministicDecisionEngine (bid/budget rules)
- *   - runWeeklyAIDirectivesEngine (revisão semanal IA)
+ *   - runDeterministicDecisionEngine (bid/budget rules diário)
+ *   - runWeeklyAIDirectivesEngine (IA revisão semanal)
  *   - evaluateDecisionOutcomes (pós-maturação)
- *   - AmazonActionQueue (execução Amazon API)
- *
- * REGRAS ABSOLUTAS:
- *   - Bid: R$0,40 ≤ bid ≤ R$1,00
- *   - Variação máxima de bid: 20% por ciclo
- *   - Aumento máximo de budget: R$5/ciclo
- *   - Budget geral: máx R$56/dia
- *   - Sem keyword inventada por IA
- *   - Sem execução de placement se limite = 0
- *   - Sem otimização de campanha incompleta
- *   - Sem campanha para produto sem estoque
- *   - Maturação obrigatória antes de re-julgar
- *
- * Fonte única de metas: PerformanceSettings → AutopilotConfig → defaults
+ *   - AmazonActionQueue (execução Amazon API janela noturna)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -894,31 +907,97 @@ Deno.serve(async (req) => {
     });
 
     // 7. Avaliar estratégias
-    const strategies = strategyFilter
+    // Estratégias são ordenadas por prioridade (P0 primeiro):
+    //   P0=0 bloqueios obrigatórios | P1=1 cortes por limite | P2=2 TACoS global | P3=3 budget | P4=4 demais
+    const PRIORITY_MAP: Record<string, number> = {
+      'S054': 0, 'S057': 0, 'S058': 0, 'S059': 0, 'S050': 0, // P0 bloqueios
+      'S017': 1, 'S015': 1, 'S018': 1, 'S016': 1,             // P1 CPC/ACoS crítico
+      'S026': 2, 'S027': 2, 'S082': 2,                         // P2 TACoS global
+      'S003': 3, 'S032': 3, 'S033': 3, 'S034': 3, 'S037': 3,  // P3 budget pacing
+    };
+    const getPriority = (id: string) => PRIORITY_MAP[id] ?? 4;
+
+    const strategies = (strategyFilter
       ? STRATEGIES.filter(st => st.id === strategyFilter)
-      : STRATEGIES;
+      : [...STRATEGIES]
+    ).sort((a, b) => getPriority(a.id) - getPriority(b.id));
+
+    // Estado global de TACoS — bloqueia ações de escala se acima do máximo
+    const accountEntity = entities.find(e => e.entity_type === 'account');
+    const accountTacos = accountEntity?.tacos ?? null;
+    const tacosBlocksExpansion = accountTacos != null && accountTacos > s.max_tacos;
+    const tacosInAttention = accountTacos != null && accountTacos > s.target_tacos && accountTacos <= s.max_tacos;
+
+    // Ações de escala que devem ser bloqueadas quando TACoS > máximo
+    const SCALE_UP_ACTIONS = new Set(['adjust_bid_up', 'adjust_budget', 'create_manual_exact_campaign', 'create_manual_phrase_campaign', 'create_product_target_campaign', 'increase_discovery']);
+    const isScaleUp = (action: any) => action?.direction === 'up' || (action?.new_bid > (action?._old_bid ?? 0)) || action?.action === 'adjust_budget' || SCALE_UP_ACTIONS.has(action?.action);
 
     const decisions: any[] = [];
-    const seenEntities = new Set<string>(); // uma ação de maior prioridade por entidade
+    const seenEntities = new Set<string>(); // uma decisão por entidade por ciclo
 
     for (const entity of entities) {
+      const entityKey = entity.id;
+      if (seenEntities.has(entityKey)) continue;
+
       for (const strat of strategies) {
         if (!strat.check(entity, s)) continue;
-        const entityKey = entity.id;
-        if (seenEntities.has(entityKey)) break; // já decidiu para esta entidade
+        if (seenEntities.has(entityKey)) break;
+
         const action = strat.build(entity, s);
         if (!action) continue;
-        // Guardrail final de bid
+
+        // ── Guardrail 1: Bid sempre dentro dos limites ────────────────────
         if (action.new_bid !== undefined) {
+          action._old_bid = entity.current_bid;
           action.new_bid = clampBid(action.new_bid, s);
         }
-        if (action.new_budget !== undefined) {
-          action.new_budget = Math.min(action.new_budget, action.new_budget); // apenas garantir não passa teto global
-          if (totalAccountSpend + (action.new_budget - (entity.current_budget || 0)) > s.daily_budget_cap) {
-            action.blocked_reason = `Budget geral R$${s.daily_budget_cap} seria excedido`;
+
+        // ── Guardrail 2: Budget — verificar teto global antes de aumentar ─
+        if (action.action === 'adjust_budget' && action.new_budget !== undefined) {
+          const delta = (action.new_budget - (entity.current_budget || 0));
+          if (delta > s.budget_increment) {
+            action.new_budget = (entity.current_budget || 0) + s.budget_increment;
+          }
+          if (totalAccountSpend + delta > s.daily_budget_cap) {
             action.action = 'hold_for_maturation';
+            action.reason = `Budget geral R$${s.daily_budget_cap}/dia seria excedido — ação bloqueada. Meta: Budget Diário`;
+            action.goal_blocked = 'daily_budget_cap';
           }
         }
+
+        // ── Guardrail 3: TACoS global bloqueia escala ──────────────────────
+        // Princípio 5: TACoS controla risco da conta
+        if (tacosBlocksExpansion && isScaleUp(action) && getPriority(strat.id) >= 2) {
+          action.action = 'hold_for_maturation';
+          action.reason = `TACoS ${accountTacos!.toFixed(1)}% acima do máximo ${s.max_tacos}% — escala bloqueada. Meta: TACoS Máximo`;
+          action.goal_blocked = 'max_tacos';
+        }
+
+        // ── Guardrail 4: CPC máximo — toda ação de aumento passa pelo filtro
+        if (action.new_bid !== undefined && action.new_bid > entity.current_bid && entity.cpc > s.max_cpc && s.max_cpc > 0) {
+          action.action = 'hold_for_maturation';
+          action.reason = `CPC R$${entity.cpc.toFixed(2)} > máximo R$${s.max_cpc} — aumento de bid bloqueado. Meta: CPC Máximo`;
+          action.goal_blocked = 'max_cpc';
+        }
+
+        // ── Construir reason_code com meta citada ─────────────────────────
+        // Toda decisão referencia a meta que motivou a ação (princípio 17)
+        const metasCitadas: string[] = [];
+        if (strat.goal === 'acos') metasCitadas.push(`ACoS alvo: ${s.target_acos}% / máx: ${s.max_acos}%`);
+        if (strat.goal === 'roas') metasCitadas.push(`ROAS alvo: ${s.target_roas}x`);
+        if (strat.goal === 'cpc') metasCitadas.push(`CPC alvo: R$${s.target_cpc} / máx: R$${s.max_cpc}`);
+        if (strat.goal === 'tacos') metasCitadas.push(`TACoS alvo: ${s.target_tacos}% / máx: ${s.max_tacos}%`);
+        if (strat.goal === 'budget') metasCitadas.push(`Budget: R$${s.daily_budget_cap}/dia`);
+        if (strat.goal === 'keyword') metasCitadas.push('Keyword de Amazon Ads / Search Term real');
+        action.meta_citada = metasCitadas.join(' | ');
+
+        // ── Ação usa IA? Marcar contexto ──────────────────────────────────
+        // Princípio 1: IA só ranqueia/resolve conflito, nunca executa direto
+        if (strat.use_ai) {
+          action.requires_ai_ranking = true;
+          action.ai_role = 'ranking_only'; // IA classifica risco, não decide ação
+        }
+
         seenEntities.add(entityKey);
         const matUntil = strat.maturation > 0
           ? new Date(now.getTime() + strat.maturation * 3600000).toISOString()
@@ -945,6 +1024,9 @@ Deno.serve(async (req) => {
           },
           maturation_until: matUntil,
           reason: action.reason,
+          meta_citada: action.meta_citada,
+          goal_blocked: action.goal_blocked ?? null,
+          tacos_state: tacosBlocksExpansion ? 'blocked' : tacosInAttention ? 'attention' : 'ok',
         });
         break; // uma estratégia por entidade por ciclo
       }
@@ -975,22 +1057,45 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Estatísticas por tipo de ação
+    const actionStats: Record<string, number> = {};
+    const blockedByGuardrail: Record<string, number> = {};
+    for (const d of decisions) {
+      actionStats[d.action_type] = (actionStats[d.action_type] || 0) + 1;
+      if (d.goal_blocked) blockedByGuardrail[d.goal_blocked] = (blockedByGuardrail[d.goal_blocked] || 0) + 1;
+    }
+
     return Response.json({
       ok: true,
       dry_run: dryRun,
+      // Estado global da conta — impacta todas as decisões de escala
+      account_state: {
+        tacos: accountTacos != null ? Math.round(accountTacos * 10) / 10 : null,
+        tacos_blocks_expansion: tacosBlocksExpansion,
+        tacos_in_attention: tacosInAttention,
+        total_spend_tracked: Math.round(totalAccountSpend * 100) / 100,
+        budget_cap: s.daily_budget_cap,
+        budget_remaining: Math.max(0, s.daily_budget_cap - totalAccountSpend),
+      },
       settings_source: s.settings_source,
+      // Metas configuradas — citadas em cada decisão
       performance_goals: {
         target_acos: s.target_acos, max_acos: s.max_acos,
-        target_roas: s.target_roas, target_tacos: s.target_tacos,
+        target_roas: s.target_roas, target_tacos: s.target_tacos, max_tacos: s.max_tacos,
         target_cpc: s.target_cpc, max_cpc: s.max_cpc,
         min_bid: s.min_bid, max_bid: s.max_bid,
         daily_budget_cap: s.daily_budget_cap,
+        budget_increment: s.budget_increment,
+        max_bid_increase_pct: s.max_bid_increase_pct,
+        max_bid_decrease_pct: s.max_bid_decrease_pct,
       },
       entities_evaluated: entities.length,
       strategies_checked: strategies.length,
       decisions_generated: decisions.length,
       decisions_saved: saved.length,
-      decisions: decisions.slice(0, 50), // truncar para resposta
+      action_stats: actionStats,
+      blocked_by_guardrail: blockedByGuardrail,
+      decisions: decisions.slice(0, 50),
     });
 
   } catch (err) {
