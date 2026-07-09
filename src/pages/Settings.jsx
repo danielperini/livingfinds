@@ -533,17 +533,43 @@ export default function Settings() {
                   );
                 })}
 
-                {!authStatus?.services?.ads?.ok && (
-                  <div className="flex items-start gap-2 p-3 bg-amber-400/5 border border-amber-400/20 rounded-lg">
-                    <WifiOff className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                    <div className="text-xs text-amber-300 space-y-2">
-                      <p className="font-semibold">Reconectar Amazon Ads via OAuth</p>
-                      <a href="https://www.amazon.com/ap/oa?client_id=amzn1.application-oa2-client.a30fb7e08c524463acb3611c8d7f71e4&scope=advertising::campaign_management&response_type=code&redirect_uri=https://livingfinds-app.base44.app/amazon-ads-callback"
-                        target="_blank" rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg font-semibold transition-colors">
-                        <ExternalLink className="w-3.5 h-3.5" />Autorizar Amazon Ads →
-                      </a>
-                    </div>
+                {(!authStatus?.services?.ads?.ok || !authStatus?.services?.sp?.ok) && (
+                  <div className="mt-3 p-4 bg-red-500/8 border border-red-500/20 rounded-lg space-y-3">
+                    <p className="text-xs font-bold text-red-300">🔑 Tokens expirados — reconexão necessária</p>
+
+                    {!authStatus?.services?.ads?.ok && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-slate-300 font-semibold">Amazon Ads API</p>
+                        <p className="text-[11px] text-slate-400">
+                          {authStatus?.services?.ads?.error_code === 'unauthorized_client'
+                            ? 'O refresh token da API de Anúncios foi revogado ou expirou. É necessário autorizar novamente via OAuth.'
+                            : authStatus?.services?.ads?.error || 'Token inválido.'}
+                        </p>
+                        <a href="/amazon-oauth-setup"
+                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg text-xs font-semibold transition-colors">
+                          <ExternalLink className="w-3 h-3" /> Reconectar Amazon Ads →
+                        </a>
+                      </div>
+                    )}
+
+                    {!authStatus?.services?.sp?.ok && (
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-slate-300 font-semibold">SP-API (Seller Central)</p>
+                        <p className="text-[11px] text-slate-400">
+                          {authStatus?.services?.sp?.error_code === 'invalid_client'
+                            ? 'As credenciais da SP-API (Client ID/Secret) estão incorretas ou a aplicação foi desautorizada no Seller Central.'
+                            : authStatus?.services?.sp?.error || 'Token inválido.'}
+                        </p>
+                        <a href="/sp-api-self-auth"
+                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30 rounded-lg text-xs font-semibold transition-colors">
+                          <ExternalLink className="w-3 h-3" /> Reconectar SP-API →
+                        </a>
+                      </div>
+                    )}
+
+                    <p className="text-[10px] text-slate-600 border-t border-surface-3 pt-2">
+                      Se os erros persistirem, verifique se o app LWA ainda está autorizado em <strong className="text-slate-400">sellercentral.amazon.com.br → Aplicativos</strong> e se as variáveis de ambiente estão corretas no painel do Base44.
+                    </p>
                   </div>
                 )}
               </div>
