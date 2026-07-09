@@ -5,7 +5,8 @@ import {
   Activity, Zap, CheckCircle, XCircle, TrendingUp, TrendingDown,
   Play, Wrench, RotateCcw, ChevronDown, ChevronRight, Trash2,
   Clock, Filter, Search, Download, Package, Key, Rocket,
-  AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings
+  AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings,
+  Pause, PlayCircle
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
@@ -54,6 +55,7 @@ function parseError(err) {
 
 const TABS = [
   { id: 'visao_geral', label: 'Visão Geral' },
+  { id: 'acoes_janela', label: 'Ações da Janela' },
   { id: 'kickoff', label: 'Kick-off' },
   { id: 'alertas', label: 'Alertas' },
   { id: 'fila', label: 'Fila e Execuções' },
@@ -154,6 +156,11 @@ export default function SalaDeComando() {
   // Reparo incompleto
   const [repairRunning, setRepairRunning] = useState(false);
   const [repairMsg, setRepairMsg] = useState(null);
+
+  // Ações da Janela
+  const [windowActions, setWindowActions] = useState([]);
+  const [windowActionsLoading, setWindowActionsLoading] = useState(false);
+  const [actionWorking, setActionWorking] = useState(null); // id da ação em processamento
 
   const intervalRef = useRef(null);
 
@@ -268,6 +275,139 @@ export default function SalaDeComando() {
     } finally { setRunningBidEngine(false); }
   };
 
+  // ── Ações da Janela ──
+  const loadWindowActions = async () => {
+    if (!account) return;
+    setWindowActionsLoading(true);
+    try {
+      // Busca SyncExecutionLog + AdsBidChangeLog + OptimizationDecision das últimas 24h
+      const since24h = new Date(Date.now() - 24 * 3600000).toISOString();
+      const [syncLogs, bidLogs24h, decisions24h, kickoffItems] = await Promise.all([
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: account.id }, '-started_at', 50),
+        base44.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', 50),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 30),
+        base44.entities.ProductKickoffQueue.filter({ amazon_account_id: account.id }, '-scheduled_at', 30),
+      ]);
+
+      const actions = [];
+
+      // Sync logs
+      syncLogs.slice(0, 20).forEach(r => {
+        actions.push({
+          id: `sync-${r.id}`,
+          type: 'sync',
+          label: r.operation || 'Sincronização',
+          status: r.status === 'success' ? 'success' : r.status === 'running' ? 'running' : 'failed',
+          detail: r.records_upserted != null ? `${r.records_upserted} registros` : r.error_message || '',
+          at: r.started_at || r.created_date,
+          raw: r,
+          canRepair: r.status === 'error' || r.status === 'failed',
+          repairFn: 'syncAdsQuick',
+        });
+      });
+
+      // Kickoff items
+      kickoffItems.slice(0, 15).forEach(r => {
+        actions.push({
+          id: `kickoff-${r.id}`,
+          type: 'kickoff',
+          label: `Kick-off ASIN ${r.asin || r.product_name || '—'}`,
+          status: r.status === 'completed' ? 'success' : r.status === 'failed' ? 'failed' : r.status === 'processing' ? 'running' : 'pending',
+          detail: r.last_error || (r.mode ? `Modo: ${r.mode}` : ''),
+          at: r.scheduled_at,
+          raw: r,
+          canRepair: r.status === 'failed',
+          repairEntityId: r.id,
+          repairEntity: 'ProductKickoffQueue',
+          repairFn: 'processProductKickoffQueueV2',
+          asin: r.asin,
+          campaignId: r.campaign_id,
+        });
+      });
+
+      // Bid changes
+      bidLogs24h.slice(0, 15).forEach(r => {
+        actions.push({
+          id: `bid-${r.id}`,
+          type: 'bid',
+          label: `Ajuste bid · ${r.keyword || r.asin || '—'}`,
+          status: r.status === 'executed' ? 'success' : r.status === 'failed' ? 'failed' : 'pending',
+          detail: r.status === 'executed'
+            ? `R$${(r.old_bid||0).toFixed(2)} → R$${(r.new_bid||0).toFixed(2)} (${r.direction})`
+            : r.amazon_response || r.reason || '',
+          at: r.created_at || r.created_date,
+          raw: r,
+          canRepair: r.status === 'failed',
+          repairFn: 'runBidDecisionEngineV2',
+        });
+      });
+
+      // Decisions
+      decisions24h.slice(0, 10).forEach(r => {
+        actions.push({
+          id: `dec-${r.id}`,
+          type: 'decision',
+          label: `Decisão IA · ${r.decision_type || r.action || r.keyword_text || '—'}`,
+          status: r.status === 'executed' ? 'success' : r.status === 'failed' ? 'failed' : r.status === 'pending' ? 'pending' : 'pending',
+          detail: r.rationale?.slice(0, 80) || r.action || '',
+          at: r.created_at,
+          raw: r,
+          canRepair: false,
+        });
+      });
+
+      // Ordenar por data desc
+      actions.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+      setWindowActions(actions);
+    } catch {}
+    finally { setWindowActionsLoading(false); }
+  };
+
+  const repairAction = async (action) => {
+    if (!account || actionWorking) return;
+    setActionWorking(action.id);
+    try {
+      if (action.repairEntityId && action.repairEntity) {
+        await base44.entities[action.repairEntity].update(action.repairEntityId, {
+          status: 'scheduled', last_error: null, attempt_count: 0, scheduled_at: new Date().toISOString(),
+        });
+      }
+      if (action.repairFn) {
+        await base44.functions.invoke(action.repairFn, { amazon_account_id: account.id, force: true });
+      }
+      await loadWindowActions();
+    } catch {}
+    finally { setActionWorking(null); }
+  };
+
+  const pauseAction = async (action, pause) => {
+    if (!account || actionWorking) return;
+    setActionWorking(action.id);
+    try {
+      if (action.type === 'kickoff' && action.repairEntityId) {
+        await base44.entities.ProductKickoffQueue.update(action.repairEntityId, {
+          status: pause ? 'cancelled' : 'scheduled',
+          scheduled_at: new Date().toISOString(),
+        });
+        await loadWindowActions();
+      } else if (action.type === 'sync' || action.type === 'bid') {
+        // Para bids, pausar/retomar via campanha
+        if (action.raw?.campaign_id) {
+          await base44.functions.invoke(pause ? 'pauseCampaign' : 'checkAndEnableCampaigns', {
+            amazon_account_id: account.id,
+            campaign_id: action.raw.campaign_id,
+          });
+          await loadWindowActions();
+        }
+      }
+    } catch {}
+    finally { setActionWorking(null); }
+  };
+
+  useEffect(() => {
+    if (account) loadWindowActions();
+  }, [account]);
+
   // ── Reparo ──
   const runRepair = async () => {
     if (!account || repairRunning) return;
@@ -366,6 +506,7 @@ export default function SalaDeComando() {
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             {t.label}
+            {t.id === 'acoes_janela' && windowActions.filter(a => a.status === 'failed').length > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{windowActions.filter(a => a.status === 'failed').length}</span>}
             {t.id === 'kickoff' && kickoffQueue.filter(i => i.status === 'failed').length > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{kickoffQueue.filter(i => i.status === 'failed').length}</span>}
             {t.id === 'kickoff' && kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length > 0 && kickoffQueue.filter(i => i.status === 'failed').length === 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">{kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length}</span>}
             {t.id === 'alertas' && activeAlerts > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span>}
@@ -476,6 +617,168 @@ export default function SalaDeComando() {
                   </Link>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* ── AÇÕES DA JANELA ──────────────────────────────────────────────── */}
+          {tab === 'acoes_janela' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-white">Ações da Última Janela Operacional</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Atividades executadas nas últimas 24h — sucesso, falha ou pendente.</p>
+                </div>
+                <button onClick={loadWindowActions} disabled={windowActionsLoading}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs rounded-lg transition-colors disabled:opacity-50">
+                  <RefreshCw className={`w-3.5 h-3.5 ${windowActionsLoading ? 'animate-spin' : ''}`} />
+                  Atualizar
+                </button>
+              </div>
+
+              {/* Resumo */}
+              {windowActions.length > 0 && (() => {
+                const total = windowActions.length;
+                const ok = windowActions.filter(a => a.status === 'success').length;
+                const failed = windowActions.filter(a => a.status === 'failed').length;
+                const pending = windowActions.filter(a => a.status === 'pending' || a.status === 'running').length;
+                const pct = total > 0 ? Math.round(ok / total * 100) : 0;
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { label: 'Total de ações', value: total, color: 'text-white' },
+                      { label: '✓ Implementadas', value: `${ok} (${pct}%)`, color: 'text-emerald-400' },
+                      { label: '✗ Com falha', value: failed, color: failed > 0 ? 'text-red-400' : 'text-slate-500' },
+                      { label: '⏳ Pendentes', value: pending, color: pending > 0 ? 'text-amber-400' : 'text-slate-500' },
+                    ].map(k => (
+                      <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl px-4 py-3 text-center">
+                        <p className="text-[10px] text-slate-500 mb-1">{k.label}</p>
+                        <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {windowActionsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-5 h-5 text-cyan animate-spin" />
+                </div>
+              ) : windowActions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
+                  <Activity className="w-8 h-8 text-slate-700" />
+                  <p className="text-sm text-slate-500">Nenhuma ação registrada nas últimas 24h</p>
+                </div>
+              ) : (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/40">
+                          {['Tipo', 'Ação', 'Status', 'Detalhe', 'Data/Hora', 'Ações'].map(h => (
+                            <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {windowActions.map(action => {
+                          const isOk = action.status === 'success';
+                          const isFailed = action.status === 'failed';
+                          const isPending = action.status === 'pending';
+                          const isRunning = action.status === 'running';
+                          const isPaused = action.raw?.status === 'cancelled';
+                          const isWorking = actionWorking === action.id;
+
+                          const typeColors = {
+                            sync: 'text-cyan bg-cyan/10 border-cyan/20',
+                            kickoff: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+                            bid: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                            decision: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+                          };
+                          const typeLabels = { sync: 'Sync', kickoff: 'Kick-off', bid: 'Bid', decision: 'Decisão IA' };
+
+                          return (
+                            <tr key={action.id} className={`border-b border-surface-2/40 transition-colors ${isFailed ? 'bg-red-500/3 hover:bg-red-500/6' : 'hover:bg-surface-2/30'}`}>
+                              <td className="px-4 py-3">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-medium ${typeColors[action.type] || 'text-slate-400 bg-slate-500/10 border-slate-500/20'}`}>
+                                  {typeLabels[action.type] || action.type}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-xs text-white font-medium max-w-[200px] truncate">{action.label}</td>
+                              <td className="px-4 py-3">
+                                {isRunning ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-cyan/10 border-cyan/20 text-cyan font-bold">
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin" /> Rodando
+                                  </span>
+                                ) : isOk ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-emerald-500/10 border-emerald-500/20 text-emerald-400 font-bold">
+                                    <CheckCircle className="w-2.5 h-2.5" /> Sucesso
+                                  </span>
+                                ) : isFailed ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-red-500/10 border-red-500/20 text-red-400 font-bold">
+                                    <XCircle className="w-2.5 h-2.5" /> Falhou
+                                  </span>
+                                ) : isPaused ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-slate-500/10 border-slate-500/20 text-slate-400 font-bold">
+                                    <Pause className="w-2.5 h-2.5" /> Pausado
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/20 text-amber-400 font-bold">
+                                    <Clock className="w-2.5 h-2.5" /> Pendente
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-[10px] text-slate-500 max-w-[200px] truncate">{action.detail || '—'}</td>
+                              <td className="px-4 py-3 text-[10px] text-slate-500 whitespace-nowrap">
+                                {action.at ? new Date(action.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5">
+                                  {/* Reparar — só para falhas */}
+                                  {isFailed && action.canRepair && (
+                                    <button
+                                      onClick={() => repairAction(action)}
+                                      disabled={!!isWorking}
+                                      title="Reparar"
+                                      className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50"
+                                    >
+                                      {isWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                                      Reparar
+                                    </button>
+                                  )}
+                                  {/* Pausar/Despausar — para kickoffs agendados/pausados */}
+                                  {action.type === 'kickoff' && (isPending || isPaused) && (
+                                    isPaused ? (
+                                      <button
+                                        onClick={() => pauseAction(action, false)}
+                                        disabled={!!isWorking}
+                                        title="Despausar"
+                                        className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
+                                      >
+                                        {isWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />}
+                                        Despausar
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => pauseAction(action, true)}
+                                        disabled={!!isWorking}
+                                        title="Pausar"
+                                        className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold bg-slate-500/15 border border-slate-500/30 text-slate-400 hover:bg-slate-500/25 rounded-lg transition-colors disabled:opacity-50"
+                                      >
+                                        {isWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
+                                        Pausar
+                                      </button>
+                                    )
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
