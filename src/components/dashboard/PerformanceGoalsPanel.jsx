@@ -17,14 +17,14 @@ function GoalBadge({ label, value, status }) {
     warn: 'bg-amber-400/10 border-amber-400/20 text-amber-300',
     danger: 'bg-red-400/10 border-red-400/20 text-red-300',
     info: 'bg-cyan/10 border-cyan/20 text-cyan',
-    neutral: 'bg-surface-2 border-surface-3 text-slate-300',
+    neutral: 'bg-surface-2 border-surface-3 text-slate-300'
   };
   return (
     <div className={`flex flex-col gap-0.5 px-3 py-2 rounded-lg border text-center ${colors[status || 'neutral']}`}>
       <span className="text-[10px] opacity-70">{label}</span>
       <span className="text-sm font-bold">{value}</span>
-    </div>
-  );
+    </div>);
+
 }
 
 function MetricCard({ icon: IconComp, label, configured, current, unit = '', goal_name, status }) {
@@ -33,13 +33,13 @@ function MetricCard({ icon: IconComp, label, configured, current, unit = '', goa
     ok: 'border-emerald-400/20 bg-emerald-400/5',
     warn: 'border-amber-400/20 bg-amber-400/5',
     danger: 'border-red-400/20 bg-red-400/5',
-    neutral: 'border-surface-2 bg-surface-1',
+    neutral: 'border-surface-2 bg-surface-1'
   };
   const textColors = {
     ok: 'text-emerald-300',
     warn: 'text-amber-300',
     danger: 'text-red-300',
-    neutral: 'text-slate-300',
+    neutral: 'text-slate-300'
   };
   return (
     <div className={`rounded-lg border p-3 ${statusColors[status || 'neutral']}`}>
@@ -54,12 +54,12 @@ function MetricCard({ icon: IconComp, label, configured, current, unit = '', goa
           </p>
           <p className="text-[10px] text-slate-500 mt-0.5">Meta: {unit}{configured}</p>
         </div>
-        {goal_name && (
-          <span className="text-[9px] text-slate-600 bg-surface-3 px-1.5 py-0.5 rounded">{goal_name}</span>
-        )}
+        {goal_name &&
+        <span className="text-[9px] text-slate-600 bg-surface-3 px-1.5 py-0.5 rounded">{goal_name}</span>
+        }
       </div>
-    </div>
-  );
+    </div>);
+
 }
 
 export default function PerformanceGoalsPanel({ account, metricsData }) {
@@ -68,32 +68,32 @@ export default function PerformanceGoalsPanel({ account, metricsData }) {
 
   useEffect(() => {
     if (!account?.id) return;
-    base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1)
-      .then(list => {
-        if (list.length > 0) { setSettings(list[0]); return; }
-        // Fallback AutopilotConfig
-        return base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1)
-          .then(cfgs => {
-            if (!cfgs.length) return;
-            const c = cfgs[0];
-            setSettings({
-              target_acos: c.target_acos, max_acos: c.maximum_acos, target_roas: c.target_roas,
-              target_tacos: c.target_tacos, max_tacos: c.maximum_tacos,
-              daily_budget_limit: c.total_daily_budget || c.daily_budget_limit,
-              target_cpc: c.target_cpc, max_cpc: c.maximum_cpc, min_bid: c.min_bid,
-              max_bid: c.max_bid, max_bid_increase_pct: c.max_bid_increase_pct,
-              max_bid_decrease_pct: c.max_bid_decrease_pct, minimum_campaign_budget: 15,
-              campaign_budget_increment: 5, weekly_campaign_capacity: 10,
-              pacing_enabled: c.budget_optimization_enabled, dayparting_enabled: c.dayparting_enabled,
-              placement_optimization_enabled: c.placement_optimization_enabled,
-              top_of_search_limit: c.top_of_search_limit, rest_of_search_limit: c.rest_of_search_limit,
-              product_page_limit: c.product_page_limit, ai_auto_optimization: c.ai_auto_optimization,
-              _source: 'AutopilotConfig',
-            });
-          });
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).
+    then((list) => {
+      if (list.length > 0) {setSettings(list[0]);return;}
+      // Fallback AutopilotConfig
+      return base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1).
+      then((cfgs) => {
+        if (!cfgs.length) return;
+        const c = cfgs[0];
+        setSettings({
+          target_acos: c.target_acos, max_acos: c.maximum_acos, target_roas: c.target_roas,
+          target_tacos: c.target_tacos, max_tacos: c.maximum_tacos,
+          daily_budget_limit: c.total_daily_budget || c.daily_budget_limit,
+          target_cpc: c.target_cpc, max_cpc: c.maximum_cpc, min_bid: c.min_bid,
+          max_bid: c.max_bid, max_bid_increase_pct: c.max_bid_increase_pct,
+          max_bid_decrease_pct: c.max_bid_decrease_pct, minimum_campaign_budget: 15,
+          campaign_budget_increment: 5, weekly_campaign_capacity: 10,
+          pacing_enabled: c.budget_optimization_enabled, dayparting_enabled: c.dayparting_enabled,
+          placement_optimization_enabled: c.placement_optimization_enabled,
+          top_of_search_limit: c.top_of_search_limit, rest_of_search_limit: c.rest_of_search_limit,
+          product_page_limit: c.product_page_limit, ai_auto_optimization: c.ai_auto_optimization,
+          _source: 'AutopilotConfig'
+        });
+      });
+    }).
+    catch(() => {}).
+    finally(() => setLoading(false));
   }, [account?.id]);
 
   if (loading) return null;
@@ -150,39 +150,39 @@ export default function PerformanceGoalsPanel({ account, metricsData }) {
       {/* Parâmetros de controle */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 border-t border-surface-2">
         {[
-          { label: 'Bid Mín / Máx', value: `R$${fmt2(s.min_bid)} / R$${fmt2(s.max_bid)}` },
-          { label: 'Aumento/Redução Bid', value: `+${s.max_bid_increase_pct || 20}% / -${s.max_bid_decrease_pct || 20}%` },
-          { label: 'Budget Mín Campanha', value: `R$${s.minimum_campaign_budget || 15} (+R$${s.campaign_budget_increment || 5})` },
-          { label: 'CPC Máx. (Enforç.)', value: s.max_cpc > 0 ? `R$${fmt2(s.max_cpc)} ✓` : 'Inativo' },
-        ].map(({ label, value }) => (
-          <div key={label} className="text-center px-2 py-1.5 bg-surface-2 rounded-lg">
+        { label: 'Bid Mín / Máx', value: `R$${fmt2(s.min_bid)} / R$${fmt2(s.max_bid)}` },
+        { label: 'Aumento/Redução Bid', value: `+${s.max_bid_increase_pct || 20}% / -${s.max_bid_decrease_pct || 20}%` },
+        { label: 'Budget Mín Campanha', value: `R$${s.minimum_campaign_budget || 15} (+R$${s.campaign_budget_increment || 5})` },
+        { label: 'CPC Máx. (Enforç.)', value: s.max_cpc > 0 ? `R$${fmt2(s.max_cpc)} ✓` : 'Inativo' }].
+        map(({ label, value }) =>
+        <div key={label} className="text-center px-2 py-1.5 bg-surface-2 rounded-lg">
             <p className="text-[10px] text-slate-500">{label}</p>
             <p className="text-xs font-semibold text-slate-200 mt-0.5">{value}</p>
           </div>
-        ))}
+        )}
       </div>
 
       {/* Status automações */}
       <div className="flex flex-wrap gap-2 pt-1 border-t border-surface-2">
         {[
-          { label: 'Pacing', active: s.pacing_enabled },
-          { label: 'Dayparting', active: s.dayparting_enabled },
-          { label: 'Placement', active: s.placement_optimization_enabled, note: (s.top_of_search_limit === 0 && s.rest_of_search_limit === 0 && s.product_page_limit === 0) ? '(limites 0)' : null },
-          { label: 'IA Auto', active: s.ai_auto_optimization },
-          { label: 'Meta Impressões', active: s.impressions_goal_enabled },
-        ].map(({ label, active, note }) => (
-          <div key={label} className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border ${active ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-surface-2 border-surface-3 text-slate-500'}`}>
+        { label: 'Pacing', active: s.pacing_enabled },
+        { label: 'Dayparting', active: s.dayparting_enabled },
+        { label: 'Placement', active: s.placement_optimization_enabled, note: s.top_of_search_limit === 0 && s.rest_of_search_limit === 0 && s.product_page_limit === 0 ? '(limites 0)' : null },
+        { label: 'IA Auto', active: s.ai_auto_optimization },
+        { label: 'Meta Impressões', active: s.impressions_goal_enabled }].
+        map(({ label, active, note }) =>
+        <div key={label} className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border hidden ${active ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-surface-2 border-surface-3 text-slate-500'}`}>
             {active ? <CheckCircle className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />}
             {label}{note ? ` ${note}` : ''}
           </div>
-        ))}
-        {s.placement_optimization_enabled && s.top_of_search_limit === 0 && (
-          <div className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border bg-amber-400/10 border-amber-400/20 text-amber-300">
+        )}
+        {s.placement_optimization_enabled && s.top_of_search_limit === 0 &&
+        <div className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border bg-amber-400/10 border-amber-400/20 text-amber-300 hidden">
             <AlertTriangle className="w-2.5 h-2.5" />
             Placement ativo mas limites = 0 (somente sugestões)
           </div>
-        )}
+        }
       </div>
-    </div>
-  );
+    </div>);
+
 }
