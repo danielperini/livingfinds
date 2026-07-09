@@ -89,6 +89,7 @@ Deno.serve(async (request) => {
         results.push({ id: item.id, asin: item.asin, ok: success, retry_scheduled: retry, response: data });
       } catch (error) {
         const retry = attempts < Number(item.max_attempts || 5);
+        const backoffMs = 60000;
         await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
           status: retry ? 'scheduled' : 'failed',
           scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
