@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square, ShieldCheck } from 'lucide-react';
+import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
@@ -73,7 +73,6 @@ export default function Products() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
-  const [syncingTitles, setSyncingTitles] = useState(false);
   const [autoStockRunning, setAutoStockRunning] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
@@ -383,31 +382,7 @@ export default function Products() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
 
-          <button type="button" onClick={async () => {
-              setSyncingTitles(true);
-              setActionMsg({ type: 'info', text: 'Sincronizando estoque e corrigindo vínculos...' });
-              try {
-                const [syncRes] = await Promise.all([
-                  base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id }),
-                  base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: account.id }).catch(() => {}),
-                ]);
-                if (!syncRes?.data?.ok) throw new Error(syncRes?.data?.error || 'Erro ao sincronizar');
-                setActionMsg({ type: 'success', text: `${syncRes.data.total_updated || 0} produtos atualizados.` });
-                const result = await load();
-                if (result?.records && result?.currentAccount) {
-                  await runAutoStockActions(result.records, result.currentAccount);
-                }
-              } catch (error) {
-                setActionMsg({ type: 'error', text: error?.message || 'Erro ao sincronizar.' });
-              } finally {
-                setSyncingTitles(false);
-                setTimeout(() => setActionMsg(null), 10000);
-              }
-            }} disabled={syncingTitles || autoStockRunning || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-            {syncingTitles || autoStockRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-            {syncingTitles ? 'Sincronizando...' : autoStockRunning ? 'Verificando estoque...' : 'Atualizar Estoque'}
-          </button>
+
 
         </div>
       </div>
