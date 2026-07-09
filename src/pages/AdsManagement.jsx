@@ -414,28 +414,28 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
-              <button onClick={checkToken} disabled={tokenCheck === 'checking'}
-              title="Verificar conexão com a API Amazon Ads"
-              className={`flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-lg border transition-colors disabled:opacity-50 hidden ${
-              tokenCheck === null ? 'bg-surface-2 border-surface-3 text-slate-400 hover:text-white' :
-              tokenCheck === 'checking' ? 'bg-surface-2 border-surface-3 text-slate-400' :
-              tokenCheck.ok ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400' :
-              'bg-red-500/15 border-red-500/30 text-red-400'}`
-              }>
-                {tokenCheck === 'checking' ? <Loader2 className="w-3 h-3 animate-spin" /> :
-                tokenCheck?.ok ? <Wifi className="w-3 h-3" /> :
-                tokenCheck?.ok === false ? <WifiOff className="w-3 h-3" /> :
-                <Shield className="w-3 h-3" />}
-                {tokenCheck === 'checking' ? 'Verificando...' :
-                tokenCheck?.ok ? 'API OK' :
-                tokenCheck?.ok === false ? 'Falha' :
-                'Verificar'}
-              </button>
-              <button onClick={forceSync} disabled={syncing || !account}
-              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50 hidden">
-                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Atualizando...' : 'Atualizar'}
-              </button>
+              
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              
+              
+
+
+
+              
             </div>
           </div>
 

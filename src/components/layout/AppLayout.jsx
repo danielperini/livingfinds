@@ -238,15 +238,15 @@ export default function AppLayout() {
           <div className="flex-1 min-w-0">
             {location.pathname === '/products' &&
             <div className="flex items-center gap-3 flex-wrap">
-                <button
-                type="button"
-                onClick={() => executeProductSync('manual')}
-                disabled={productSyncing || !account}
-                className="flex items-center gap-2 px-3 py-2 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg disabled:opacity-60 hidden">
                 
-                  <RefreshCw className={`w-4 h-4 ${productSyncing ? 'animate-spin' : ''}`} />
-                  {productSyncing ? 'Sincronizando...' : 'Sincronizar produtos'}
-                </button>
+
+
+
+
+
+
+
+              
 
                 <div className="min-w-0">
                   <p className="text-[11px] text-slate-400">

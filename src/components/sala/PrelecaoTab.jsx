@@ -138,16 +138,16 @@ export default function PrelecaoTab({ account }) {
           <button onClick={load} disabled={loading} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={() => runPrelection(true)} disabled={running || !account}
-          className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs font-semibold rounded-lg disabled:opacity-50 hidden">
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Simular
-          </button>
-          <button onClick={() => runPrelection(false)} disabled={running || !account}
-          className="flex items-center gap-1.5 px-3 py-2 bg-violet-500/20 border border-violet-500/30 text-violet-300 hover:bg-violet-500/30 text-xs font-semibold rounded-lg disabled:opacity-50 hidden">
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />}
-            Executar Preleção
-          </button>
+          
+
+
+
+          
+          
+
+
+
+          
         </div>
       </div>
 
