@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Loader2, CheckCircle, XCircle, Target, Zap, ChevronDown, ChevronRight, Package, Star, Filter } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Target, Zap, ChevronDown, ChevronRight, Package, Star, Filter, PlusCircle } from 'lucide-react';
 
 const STATUS_CONFIG = {
   suggested: { label: 'Sugerida', color: 'text-slate-400', bg: 'bg-slate-500/10' },
@@ -65,7 +65,7 @@ const VIEW_FILTERS = [
 { key: 'created', label: '✓ Criadas' }];
 
 
-function ProductGroup({ asin, product, suggestions, onReject, workingId, viewFilter }) {
+function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter }) {
   const [open, setOpen] = useState(true);
   const prodName = product?.product_name || product?.display_name || 'Produto';
   const imgUrl = product?.product_image_url;
@@ -135,7 +135,9 @@ function ProductGroup({ asin, product, suggestions, onReject, workingId, viewFil
               const score = getScore(s);
               const tier = getScoreTier(score);
               const isWorking = workingId === s.id;
+              const isCreating = creatingId === s.id;
               const isReady = s.should_create_campaign && conf != null && conf >= 90;
+              const canCreate = !['created', 'archived_by_policy', 'superseded', 'creating'].includes(s.status);
 
               return (
                 <tr key={s.id} className={`border-b border-surface-2/30 transition-colors ${isReady ? 'bg-emerald-500/3 hover:bg-emerald-500/6' : 'hover:bg-surface-2/20'}`}>
@@ -193,19 +195,32 @@ function ProductGroup({ asin, product, suggestions, onReject, workingId, viewFil
                       </span>
                     </td>
                     <td className="px-3 py-2.5">
-                      {!['created', 'archived_by_policy', 'superseded'].includes(s.status) &&
-                    <button
-                      onClick={() => onReject(s)}
-                      disabled={isWorking}
-                      className="rounded p-1 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-50"
-                      title="Rejeitar">
-                      
-                          {isWorking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
-                        </button>
-                    }
-                      {s.status === 'created' && s.amazon_campaign_id &&
-                    <span className="text-emerald-400 text-[10px] font-mono">✓ {s.amazon_campaign_id.slice(-8)}</span>
-                    }
+                      <div className="flex items-center gap-1">
+                        {/* Botão Criar Campanha */}
+                        {canCreate && (
+                          <button
+                            onClick={() => onCreateCampaign(s)}
+                            disabled={isCreating || isWorking}
+                            className="flex items-center gap-1 rounded px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 whitespace-nowrap"
+                            title="Criar campanha (bid R$0,50 · gerida pelo app)">
+                            {isCreating ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlusCircle className="h-3 w-3" />}
+                            {isCreating ? 'Criando...' : 'Criar campanha'}
+                          </button>
+                        )}
+                        {/* Botão Rejeitar */}
+                        {!['created', 'archived_by_policy', 'superseded'].includes(s.status) && (
+                          <button
+                            onClick={() => onReject(s)}
+                            disabled={isWorking || isCreating}
+                            className="rounded p-1 text-slate-600 hover:text-red-400 transition-colors disabled:opacity-50"
+                            title="Rejeitar">
+                            {isWorking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                          </button>
+                        )}
+                        {s.status === 'created' && s.amazon_campaign_id && (
+                          <span className="text-emerald-400 text-[10px] font-mono">✓ {s.amazon_campaign_id.slice(-8)}</span>
+                        )}
+                      </div>
                     </td>
                   </tr>);
 
@@ -220,6 +235,7 @@ function ProductGroup({ asin, product, suggestions, onReject, workingId, viewFil
 
 export default function AmazonSuggestionsTab({ suggestions, products, account, onRefresh }) {
   const [workingId, setWorkingId] = useState(null);
+  const [creatingId, setCreatingId] = useState(null);
   const [message, setMessage] = useState(null);
   const [competitorAsin, setCompetitorAsin] = useState('');
   const [selectedAsin, setSelectedAsin] = useState('');
@@ -332,6 +348,37 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
     {setWorkingId(null);}
   };
 
+  const handleCreateCampaign = async (s) => {
+    if (!account) return;
+    setCreatingId(s.id);
+    setMessage(null);
+    try {
+      // Agendar para próxima janela (03:00-06:00 BRT) via createExactCampaignsFromAmazonSuggestions
+      // com bid inicial fixo de R$0,50 — gerido pelo motor após criação
+      const res = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+        amazon_account_id: account.id,
+        suggestion_ids: [s.id],
+        overrides: { [s.id]: { bid: 0.50, budget: 15.00 } },
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const created = d.results?.find(r => r.id === s.id);
+        if (created?.ok) {
+          setMessage({ type: 'success', text: `✓ Campanha "${created.campaign_name}" criada · bid R$0,50 · gerida pelo app.` });
+        } else {
+          setMessage({ type: 'error', text: created?.error || 'Erro ao criar campanha.' });
+        }
+        onRefresh();
+      } else {
+        setMessage({ type: 'error', text: d?.error || 'Erro ao criar campanha.' });
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setCreatingId(null);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Controles */}
@@ -441,7 +488,9 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
           product={productMap[asin]}
           suggestions={grouped[asin]}
           onReject={handleReject}
+          onCreateCampaign={handleCreateCampaign}
           workingId={workingId}
+          creatingId={creatingId}
           viewFilter={viewFilter} />
 
         )}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2, Megaphone, CheckCircle, Clock } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -15,6 +15,8 @@ export default function TermBankPageV2() {
   const [workingId, setWorkingId] = useState(null);
   const [message, setMessage] = useState(null);
   const [purging, setPurging] = useState(false);
+  const [schedulingId, setSchedulingId] = useState(null);
+  const [scheduledIds, setScheduledIds] = useState({});
 
   const [account, setAccount] = useState(null);
 
@@ -81,6 +83,35 @@ export default function TermBankPageV2() {
   }, []);
 
   useEffect(() => {load();}, [load]);
+
+  const handleScheduleCampaign = useCallback(async (term) => {
+    if (!account || schedulingId) return;
+    setSchedulingId(term.id);
+    setMessage(null);
+    try {
+      const res = await base44.functions.invoke('scheduleManualCampaignFromTerm', {
+        amazon_account_id: account.id,
+        asin: term.asin,
+        keyword: term.term,
+        product_name: term.product_name || term.asin,
+        sku: term.sku || null,
+      });
+      const d = res?.data || {};
+      if (d?.ok) {
+        setMessage({ type: 'success', text: d.message });
+        setScheduledIds(prev => ({ ...prev, [term.id]: d.executed ? 'executed' : 'queued' }));
+      } else if (d?.already_exists) {
+        setMessage({ type: 'info', text: `Campanha já existe para "${term.term}".` });
+        setScheduledIds(prev => ({ ...prev, [term.id]: 'exists' }));
+      } else {
+        setMessage({ type: 'error', text: d?.error || 'Erro ao agendar campanha' });
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setSchedulingId(null);
+    }
+  }, [account, schedulingId]);
 
   const handlePurge = useCallback(async () => {
     if (!account) return;
@@ -178,7 +209,7 @@ export default function TermBankPageV2() {
       </div>
 
       {message &&
-      <div className={`rounded-lg p-3 text-sm ${message.type === 'success' ? 'bg-emerald-400/10 text-emerald-300' : 'bg-red-400/10 text-red-300'}`}>
+      <div className={`rounded-lg p-3 text-sm ${message.type === 'success' ? 'bg-emerald-400/10 text-emerald-300' : message.type === 'info' ? 'bg-amber-400/10 text-amber-300' : 'bg-red-400/10 text-red-300'}`}>
           {message.text}
         </div>
       }
@@ -200,7 +231,7 @@ export default function TermBankPageV2() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Termo', 'Conf.', 'Produto / ASIN', 'Status', 'Pedidos', 'Vendas', 'Gasto', 'ACoS', 'ROAS'].map((h) =>
+                  {['Termo', 'Conf.', 'Produto / ASIN', 'Status', 'Pedidos', 'Vendas', 'Gasto', 'ACoS', 'ROAS', ''].map((h) =>
                 <th key={h} className="px-4 py-3 text-left text-xs uppercase text-slate-500">{h}</th>
                 )}
                 </tr>
@@ -220,6 +251,27 @@ export default function TermBankPageV2() {
                       <td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.spend)}</td>
                       <td className="px-4 py-3 text-xs text-slate-300">{t.acos ? `${fmt(t.acos, 1)}%` : '0%'}</td>
                       <td className="px-4 py-3 text-xs text-slate-300">{t.roas ? `${fmt(t.roas)}x` : '0,00x'}</td>
+                      <td className="px-4 py-3">
+                        {scheduledIds[t.id] === 'executed' ? (
+                          <span className="flex items-center gap-1 text-[10px] text-emerald-400"><CheckCircle className="w-3 h-3" />Criada</span>
+                        ) : scheduledIds[t.id] === 'queued' ? (
+                          <span className="flex items-center gap-1 text-[10px] text-amber-400"><Clock className="w-3 h-3" />Agendada</span>
+                        ) : scheduledIds[t.id] === 'exists' ? (
+                          <span className="text-[10px] text-slate-500">Já existe</span>
+                        ) : (
+                          <button
+                            onClick={() => handleScheduleCampaign(t)}
+                            disabled={schedulingId === t.id}
+                            title="Criar campanha EXACT com bid R$ 0,50"
+                            className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border border-cyan/30 bg-cyan/10 text-cyan hover:bg-cyan/20 disabled:opacity-50 transition-colors whitespace-nowrap"
+                          >
+                            {schedulingId === t.id
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <Megaphone className="w-3 h-3" />}
+                            Criar campanha
+                          </button>
+                        )}
+                      </td>
                     </tr>);
 
               })}
