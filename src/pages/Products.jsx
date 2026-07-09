@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square, Tag } from 'lucide-react';
+import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import ProductRow, {

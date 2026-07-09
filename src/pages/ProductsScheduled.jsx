@@ -10,7 +10,6 @@ import Products from '@/pages/Products';
 import {
   CheckCircle2,
   Clock,
-  RefreshCw,
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 
@@ -1137,19 +1136,7 @@ export default function ProductsScheduled() {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            linkedAccountRef.current =
-              null;
 
-            readStatus();
-          }}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-surface-3 bg-surface-2 text-xs font-semibold text-slate-300 hover:text-white"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Atualizar status
-        </button>
       </div>
 
       <KickoffControlPanel
