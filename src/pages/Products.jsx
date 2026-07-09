@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
+import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square, ShieldCheck } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
@@ -75,6 +75,7 @@ export default function Products() {
   const [bulkActivating, setBulkActivating] = useState(false);
   const [fixingLinks, setFixingLinks] = useState(false);
   const [syncingTitles, setSyncingTitles] = useState(false);
+  const [autoStockRunning, setAutoStockRunning] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
 
@@ -87,9 +88,9 @@ export default function Products() {
       const currentAccount = accounts[0] || null;
       setAccount(currentAccount);
       if (!currentAccount) { setProducts([]); return; }
-      // Ordenação por data mais recente vem do banco via created_date
       const records = await base44.entities.Product.filter({ amazon_account_id: currentAccount.id }, '-created_date', 500);
       setProducts(records || []);
+      return { records, currentAccount };
     } catch (error) {
       setActionMsg({ type: 'error', text: error?.message || 'Erro ao carregar produtos.' });
     } finally {
@@ -97,7 +98,13 @@ export default function Products() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load().then(result => {
+      if (result?.records && result?.currentAccount) {
+        runAutoStockActions(result.records, result.currentAccount);
+      }
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
   // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
@@ -240,6 +247,68 @@ export default function Products() {
     }
   };
 
+  // ── Auto: pausar sem estoque / reativar com estoque ──────────────────────────
+  const runAutoStockActions = useCallback(async (currentProducts, currentAccount) => {
+    if (!currentAccount || autoStockRunning) return;
+    setAutoStockRunning(true);
+    let paused = 0, activated = 0;
+
+    // 1. Pausar campanhas ativas de produtos sem estoque
+    const toPause = currentProducts.filter(p =>
+      isCampaignActiveFn(p) &&
+      productHasCampaign(p) &&
+      (p.inventory_status === 'out_of_stock' || Number(p.fba_inventory || 0) === 0)
+    );
+
+    // 2. Ativar campanhas pausadas de produtos que voltaram ao estoque
+    const toActivate = currentProducts.filter(p =>
+      productHasCampaign(p) &&
+      !isCampaignActiveFn(p) &&
+      p.campaign_status === 'paused' &&
+      (p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('stock')) &&
+      Number(p.fba_inventory || 0) > 0 &&
+      p.inventory_status !== 'out_of_stock'
+    );
+
+    for (const p of toPause) {
+      try {
+        const cid = campaignIdOf(p);
+        const payload = { amazon_account_id: currentAccount.id };
+        if (cid) payload.campaign_id = cid;
+        if (p.asin) payload.asin = p.asin;
+        if (p.sku) payload.sku = p.sku;
+        const r = await base44.functions.invoke('pauseCampaign', payload);
+        if (r?.data?.ok) {
+          await base44.entities.Product.update(p.id, { pause_reason: 'out_of_stock_confirmed' });
+          paused++;
+        }
+      } catch { /* continua */ }
+    }
+
+    for (const p of toActivate) {
+      try {
+        const cid = campaignIdOf(p);
+        const agentAction = await base44.entities.AgentAction.create({
+          amazon_account_id: currentAccount.id, action: 'enable_campaign', asin: p.asin,
+          campaign_id: cid, reason: 'Reativação automática — estoque reposto',
+          evidence: `FBA: ${p.fba_inventory}`, risk_level: 'low', requires_approval: false,
+        });
+        const r = await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
+        if (r?.data?.ok) {
+          await base44.entities.Product.update(p.id, { pause_reason: null });
+          activated++;
+        }
+      } catch { /* continua */ }
+    }
+
+    setAutoStockRunning(false);
+    if (paused > 0 || activated > 0) {
+      setActionMsg({ type: 'success', text: `Auto-estoque: ${paused} pausadas por falta de estoque · ${activated} reativadas com estoque reposto.` });
+      setTimeout(() => setActionMsg(null), 10000);
+      await load();
+    }
+  }, [autoStockRunning, load]);
+
   const fixCampaignLinks = async () => {
     if (!account) return;
     setFixingLinks(true);
@@ -347,6 +416,28 @@ export default function Products() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
 
+          <button type="button" onClick={async () => {
+              setSyncingTitles(true);
+              setActionMsg({ type: 'info', text: 'Sincronizando estoque via SP-API...' });
+              try {
+                const response = await base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id });
+                if (!response?.data?.ok) throw new Error(response?.data?.error || 'Erro ao sincronizar');
+                setActionMsg({ type: 'success', text: `${response.data.total_updated || 0} produtos atualizados.` });
+                const result = await load();
+                if (result?.records && result?.currentAccount) {
+                  await runAutoStockActions(result.records, result.currentAccount);
+                }
+              } catch (error) {
+                setActionMsg({ type: 'error', text: error?.message || 'Erro ao sincronizar.' });
+              } finally {
+                setSyncingTitles(false);
+                setTimeout(() => setActionMsg(null), 10000);
+              }
+            }} disabled={syncingTitles || autoStockRunning || !account}
+            className="flex items-center gap-2 px-3 py-2 bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {syncingTitles || autoStockRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+            {syncingTitles ? 'Sincronizando...' : autoStockRunning ? 'Verificando estoque...' : 'Atualizar Estoque'}
+          </button>
           <button type="button" onClick={fixCampaignLinks} disabled={fixingLinks || !account}
             className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             {fixingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
