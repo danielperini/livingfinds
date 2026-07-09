@@ -180,6 +180,7 @@ export default function Dashboard() {
   const [products, setProducts] = useState([]);
   const [metricsDaily, setMetricsDaily] = useState([]);
   const [decisions, setDecisions] = useState([]);
+  const [allDecisions, setAllDecisions] = useState([]);
   const [syncRuns, setSyncRuns] = useState([]);
   const [bidChanges, setBidChanges] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -208,11 +209,12 @@ export default function Dashboard() {
       const safe_ = async (fn, fb = []) => { try { return await fn(); } catch (e) { if (String(e?.message).includes('429')) return fb; throw e; } };
 
       // Carregar tudo em paralelo — elimina latência sequencial
-      const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs, benchmarks, salesDailyData] = await Promise.all([
+      const [cams, prods, metrics, decs, allDecs, runs, changes, apConfigs, budgCfgs, benchmarks, salesDailyData] = await Promise.all([
         safe_(() => loadAllCampaigns(aid)),
         safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
         safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000)),
         safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10)),
+        safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 2000)),
         safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5)),
         safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 2000)),
         safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
@@ -228,6 +230,7 @@ export default function Dashboard() {
       setProducts(prods);
       setMetricsDaily(metrics);
       setDecisions(decs);
+      setAllDecisions(allDecs);
       setSyncRuns(runs);
       setBidChanges(changes);
       setAutopilotConfig(apConfigs[0] || null);
@@ -991,29 +994,45 @@ export default function Dashboard() {
       )}
 
       {/* ── 8. RESUMO DE DECISÕES ────────────────────────────────────────────── */}
-      {(decisions.length > 0 || bidChanges.length > 0) && (
-        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
-            <Link to="/sala-de-comando" className="text-xs text-cyan hover:underline">Sala de Controle →</Link>
+      {(decisions.length > 0 || allDecisions.length > 0 || bidChanges.length > 0) && (() => {
+        const total = allDecisions.length;
+        const executed = allDecisions.filter(d => d.status === 'executed' || d.status === 'approved').length;
+        const failed = allDecisions.filter(d => d.status === 'failed' || d.status === 'error').length;
+        const pending = allDecisions.filter(d => d.status === 'pending').length;
+        const pctExecuted = total > 0 ? Math.round(executed / total * 100) : 0;
+        const pctFailed = total > 0 ? Math.round(failed / total * 100) : 0;
+        const pctPending = total > 0 ? Math.round(pending / total * 100) : 0;
+        return (
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
+              <Link to="/sala-de-comando" className="text-xs text-cyan hover:underline">Sala de Controle →</Link>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 mb-1">Implementadas</p>
+                <p className="text-xl font-bold text-emerald-400">{executed}</p>
+                <p className="text-[10px] text-slate-600 mt-0.5">{pctExecuted}% do total</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 mb-1">Com erro</p>
+                <p className={`text-xl font-bold ${failed > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{failed}</p>
+                <p className="text-[10px] text-slate-600 mt-0.5">{pctFailed}% do total</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 mb-1">Pendentes</p>
+                <p className={`text-xl font-bold ${pending > 0 ? 'text-amber-400' : 'text-slate-400'}`}>{pending}</p>
+                <p className="text-[10px] text-slate-600 mt-0.5">{pctPending}% do total</p>
+              </div>
+              <div className="bg-surface-2 rounded-lg p-3">
+                <p className="text-[10px] text-slate-500 mb-1">Ajustes de bid (30d)</p>
+                <p className="text-xl font-bold text-white">{totalChanges}</p>
+                <p className="text-[10px] text-slate-600 mt-0.5">AdsBidChangeLog</p>
+              </div>
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Decisões pendentes</p>
-              <p className={`text-xl font-bold ${decisions.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{decisions.length}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Alterações 30d (IA)</p>
-              <p className="text-xl font-bold text-white">{totalChanges}</p>
-            </div>
-            <div className="bg-surface-2 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Alterações automáticas</p>
-              <p className="text-xl font-bold text-white">{totalChanges}</p>
-              <p className="text-[10px] text-slate-600 mt-0.5">últimos 30 dias</p>
-            </div>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
