@@ -116,6 +116,35 @@ Deno.serve(async (req) => {
             synced_at: now,
           }).catch(() => {});
           totalAutoFixed++;
+
+          // PAUSA AGRESSIVA: se zerou estoque e tem campanha ativa → pausar imediatamente no banco
+          const wasInStock = localStock > 0;
+          const nowOutOfStock = amazonStock === 0;
+          const campStatus = String(product.campaign_status || '').toLowerCase();
+          const hasActiveCampaign = ['active', 'enabled'].includes(campStatus);
+
+          if (wasInStock && nowOutOfStock && hasActiveCampaign) {
+            await base44.asServiceRole.entities.Product.update(product.id, {
+              campaign_status: 'paused',
+              pause_reason: 'out_of_stock_confirmed',
+            }).catch(() => {});
+
+            // Pausar também as entidades Campaign vinculadas
+            const linkedCampaigns = await base44.asServiceRole.entities.Campaign.filter(
+              { amazon_account_id: account.id, asin: product.asin }, null, 10
+            ).catch(() => []);
+            for (const lc of linkedCampaigns) {
+              if (['enabled', 'active'].includes(String(lc.status || '').toLowerCase())) {
+                await base44.asServiceRole.entities.Campaign.update(lc.id, {
+                  status: 'paused',
+                  state: 'paused',
+                  is_operational: false,
+                  synced_at: now,
+                }).catch(() => {});
+              }
+            }
+            console.log(`[stock] PAUSA IMEDIATA asin=${product.asin} stock zerou ${localStock}→0`);
+          }
         }
       }
     }
