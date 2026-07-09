@@ -20,81 +20,127 @@
     "normalized_keyword": {
       "type": "string"
     },
-    "tail_type": {
-      "type": "string",
-      "enum": [
-        "medium",
-        "long"
-      ],
-      "default": "medium"
-    },
     "match_type": {
       "type": "string",
       "enum": [
         "exact",
         "phrase",
-        "broad"
+        "broad",
+        "EXACT",
+        "PHRASE",
+        "BROAD"
       ],
       "default": "exact"
     },
-    "intent": {
+    "source": {
       "type": "string",
       "enum": [
-        "commercial",
-        "high_purchase_intent",
-        "informational",
-        "navigational"
+        "AMAZON_ADS_SUGGESTED_KEYWORD",
+        "AMAZON_ADS_SUGGESTED_TARGET",
+        "AMAZON_ADS_RECOMMENDATION",
+        "SEARCH_TERM_PERFORMANCE",
+        "BRAND_ANALYTICS",
+        "AUTOMATIC_SEARCH_TERM",
+        "MANUAL_SEARCH_TERM",
+        "CONVERTED_TERM_EXPANSION",
+        "USER",
+        "OPENAI_TITLE_ANALYSIS",
+        "CLAUDE_PRODUCT_ANALYSIS",
+        "AI_GENERATED",
+        "GPT_TITLE_ANALYSIS",
+        "PRODUCT_ANALYSIS"
       ],
-      "default": "commercial"
+      "default": "AMAZON_ADS_SUGGESTED_KEYWORD"
     },
-    "relevance_score": {
+    "source_asin": {
+      "type": "string"
+    },
+    "source_asin_type": {
+      "type": "string",
+      "enum": [
+        "own",
+        "competitor"
+      ],
+      "default": "own"
+    },
+    "target_type": {
+      "type": "string",
+      "enum": [
+        "keyword",
+        "product"
+      ],
+      "default": "keyword"
+    },
+    "target_asin": {
+      "type": "string"
+    },
+    "amazon_suggested_bid": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_min": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_max": {
+      "type": "number"
+    },
+    "amazon_relevance_score": {
       "type": "number",
       "default": 0
     },
+    "amazon_impression_estimate": {
+      "type": "number"
+    },
+    "amazon_click_estimate": {
+      "type": "number"
+    },
+    "amazon_order_estimate": {
+      "type": "number"
+    },
+    "amazon_raw_payload": {
+      "type": "string"
+    },
+    "ai_rank": {
+      "type": "number"
+    },
+    "ai_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_reason": {
+      "type": "string"
+    },
     "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "relevance_score": {
       "type": "number",
       "default": 0
     },
     "reason": {
       "type": "string"
     },
-    "source": {
+    "risk_level": {
       "type": "string",
       "enum": [
-        "OPENAI_TITLE_ANALYSIS",
-        "AUTOMATIC_SEARCH_TERM",
-        "MANUAL_SEARCH_TERM",
-        "CONVERTED_TERM_EXPANSION",
-        "USER"
+        "low",
+        "medium",
+        "high"
       ],
-      "default": "OPENAI_TITLE_ANALYSIS"
+      "default": "medium"
     },
-    "source_search_term_id": {
-      "type": "string"
-    },
-    "source_campaign_id": {
-      "type": "string"
-    },
-    "status": {
+    "implementation_priority": {
       "type": "string",
       "enum": [
-        "suggested",
-        "approved",
-        "rejected",
-        "creating",
-        "created",
-        "failed",
-        "duplicate",
-        "blocked"
+        "immediate",
+        "next_window",
+        "hold"
       ],
-      "default": "suggested"
+      "default": "next_window"
     },
-    "already_exists": {
+    "should_create_campaign": {
       "type": "boolean",
       "default": false
-    },
-    "duplicate_of": {
-      "type": "string"
     },
     "recommended_bid": {
       "type": "number"
@@ -103,17 +149,47 @@
       "type": "number",
       "default": 5
     },
-    "maximum_profitable_cpc": {
-      "type": "number"
+    "recommended_match_type": {
+      "type": "string",
+      "default": "EXACT"
     },
-    "bid_confidence": {
+    "status": {
       "type": "string",
       "enum": [
-        "high",
-        "medium",
-        "low"
+        "suggested",
+        "ranked",
+        "approved",
+        "rejected",
+        "queued",
+        "creating",
+        "created",
+        "failed",
+        "duplicate",
+        "blocked",
+        "archived_by_policy",
+        "superseded"
       ],
-      "default": "low"
+      "default": "suggested"
+    },
+    "archive_reason": {
+      "type": "string"
+    },
+    "reactivation_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "already_exists": {
+      "type": "boolean",
+      "default": false
+    },
+    "duplicate_of": {
+      "type": "string"
+    },
+    "source_search_term_id": {
+      "type": "string"
+    },
+    "source_campaign_id": {
+      "type": "string"
     },
     "created_campaign_id": {
       "type": "string"
@@ -126,6 +202,38 @@
     },
     "block_reason": {
       "type": "string"
+    },
+    "historical_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_acos": {
+      "type": "number"
+    },
+    "historical_cpc": {
+      "type": "number"
+    },
+    "historical_ctr": {
+      "type": "number"
+    },
+    "historical_cvr": {
+      "type": "number"
+    },
+    "was_negated": {
+      "type": "boolean",
+      "default": false
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "created_at": {
       "type": "string",
