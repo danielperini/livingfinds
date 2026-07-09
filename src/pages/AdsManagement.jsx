@@ -294,46 +294,50 @@ export default function AdsManagement() {
     }
   };
 
-  const selectCampaign = async (campaign) => {
-    setSelectedCampaign(campaign);
-    setPendingBids({});
-    setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
+  const loadKeywordsForCampaign = async (campaign) => {
     setKwLoading(true);
     try {
-      // Campanhas podem ter campaign_id = ID interno Base44 ou amazon_campaign_id = ID da Amazon.
-      // Keywords armazenam o campo campaign_id com o amazon_campaign_id (ID real da Amazon).
-      // Buscar pelos dois valores possíveis para garantir o match correto.
-      const possibleIds = [...new Set([campaign.campaign_id, campaign.amazon_campaign_id].filter(Boolean))];
+      // Buscar por todos os IDs possíveis: campaign_id (Amazon ID), amazon_campaign_id, e o id interno Base44
+      const possibleIds = [...new Set([
+        campaign.campaign_id,
+        campaign.amazon_campaign_id,
+        campaign.id,
+      ].filter(Boolean))];
 
       const kwBatches = await Promise.all(
         possibleIds.map(cid =>
-          base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid }, '-spend', 500)
+          base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
         )
       );
-      const allKws = kwBatches.flat();
-      // Deduplicar por id
+      // Também buscar por ASIN se disponível (fallback para campanhas sem campaign_id linkado)
+      let asinKws = [];
+      if (campaign.asin && account?.id) {
+        asinKws = await base44.entities.Keyword.filter({ amazon_account_id: account.id, asin: campaign.asin }, '-spend', 200).catch(() => []);
+      }
+
+      const allKws = [...kwBatches.flat(), ...asinKws];
       const kwMap = new Map(allKws.map(k => [k.id, k]));
       const dedupedKws = Array.from(kwMap.values());
 
       const negBatches = await Promise.all(
         possibleIds.map(cid =>
-          base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid, status: 'pending' }, '-created_date', 50)
+          base44.entities.NegativeKeywordSuggestion.filter({ campaign_id: cid, status: 'pending' }, '-created_date', 50).catch(() => [])
         )
       );
-      const allNegs = negBatches.flat();
-      const negMap = new Map(allNegs.map(n => [n.id, n]));
+      const negMap = new Map(negBatches.flat().map(n => [n.id, n]));
 
       setKeywords(dedupedKws.filter(k => k.source !== 'search_term'));
       setSearchTerms(dedupedKws.filter(k => k.source === 'search_term'));
       setNegSuggestions(Array.from(negMap.values()));
+
       if ((campaign.days_running || 0) >= 30) {
         base44.functions.invoke('analyzeKeywordHourlyPerformance', {
-          amazon_account_id: campaign.amazon_account_id,
+          amazon_account_id: account?.id,
           campaign_id: campaign.amazon_campaign_id || campaign.campaign_id,
         }).then(async () => {
           const updBatches = await Promise.all(
             possibleIds.map(cid =>
-              base44.entities.Keyword.filter({ amazon_account_id: campaign.amazon_account_id, campaign_id: cid }, '-spend', 500)
+              base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
             )
           );
           const updMap = new Map(updBatches.flat().map(k => [k.id, k]));
@@ -345,6 +349,13 @@ export default function AdsManagement() {
     } finally {
       setKwLoading(false);
     }
+  };
+
+  const selectCampaign = async (campaign) => {
+    setSelectedCampaign(campaign);
+    setPendingBids({});
+    setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
+    await loadKeywordsForCampaign(campaign);
   };
 
   const applyBids = async () => {
@@ -736,10 +747,32 @@ export default function AdsManagement() {
                   {kwLoading ? (
                     <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
                   ) : keywords.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+                    <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
                       <Search className="w-8 h-8 text-slate-600" />
-                      <p className="text-sm text-slate-400">Sem keywords para esta campanha.</p>
-                      <p className="text-xs text-slate-600">Execute um Sync completo para importar keywords.</p>
+                      <div>
+                        <p className="text-sm text-slate-400">Sem keywords para esta campanha.</p>
+                        <p className="text-xs text-slate-600 mt-1">Execute um Sync para importar keywords da Amazon.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={async () => {
+                            setKwLoading(true);
+                            try {
+                              await base44.functions.invoke('syncAdGroupsAndKeywords', { amazon_account_id: account?.id, campaign_id: selectedCampaign?.campaign_id || selectedCampaign?.amazon_campaign_id });
+                            } catch {}
+                            await loadKeywordsForCampaign(selectedCampaign);
+                          }}
+                          className="flex items-center gap-2 px-4 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Sync Keywords
+                        </button>
+                        <button
+                          onClick={() => loadKeywordsForCampaign(selectedCampaign)}
+                          className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Recarregar
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <table className="w-full text-sm">
