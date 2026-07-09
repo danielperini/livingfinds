@@ -5,19 +5,18 @@ const tokenCache: Record<string, { access_token: string; expires_at: number }> =
 
 // Resolve credentials com fallback para variáveis legadas
 function resolveCredentials(service: string) {
-  const isAds = service === 'ads';
-
-  if (isAds) {
-    const clientId     = Deno.env.get('ADS_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '';
-    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
-    const refreshToken = Deno.env.get('ADS_REFRESH_TOKEN') || '';
-    return { clientId, clientSecret, refreshToken };
+  if (service === 'ads') {
+    return {
+      clientId:     Deno.env.get('ADS_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '',
+      clientSecret: Deno.env.get('ADS_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '',
+      refreshToken: Deno.env.get('ADS_REFRESH_TOKEN') || '',
+    };
   } else {
-    // SP-API
-    const clientId     = Deno.env.get('SP_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '';
-    const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
-    const refreshToken = Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN')  || '';
-    return { clientId, clientSecret, refreshToken };
+    return {
+      clientId:     Deno.env.get('SP_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '',
+      clientSecret: Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '',
+      refreshToken: Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN')  || '',
+    };
   }
 }
 
@@ -41,17 +40,15 @@ async function fetchNewToken(clientId: string, clientSecret: string, refreshToke
     });
 
     if (res.status === 429 || res.status >= 500) {
-      const delay = Math.pow(2, attempt) * 500;
-      await new Promise(r => setTimeout(r, delay));
+      await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
       continue;
     }
 
     const data = await res.json();
     if (!res.ok) {
-      throw { code: data.error || 'token_error', message: data.error_description || 'Token fetch failed', status: res.status };
+      throw { code: data.error || 'token_error', message: data.error_description || 'Token fetch failed', status: res.status, needs_reauth: data.error === 'unauthorized_client' || data.error === 'invalid_grant' };
     }
 
-    // Cache: expires_in - 60s buffer
     const expiresAt = Date.now() + (data.expires_in - 60) * 1000;
     tokenCache[service] = { access_token: data.access_token, expires_at: expiresAt };
     return data.access_token;
@@ -67,9 +64,9 @@ async function getToken(service: string, base44Client: any = null, accountId: st
   }
 
   const { clientId, clientSecret } = resolveCredentials(service);
+  let { refreshToken } = resolveCredentials(service);
 
   // Para Ads: preferir token da entidade (fonte de verdade do OAuth) sobre o secret
-  let { refreshToken } = resolveCredentials(service);
   if (service === 'ads' && base44Client && accountId) {
     try {
       const accounts = await base44Client.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
@@ -89,7 +86,29 @@ async function getToken(service: string, base44Client: any = null, accountId: st
     throw { code: 'missing_credentials', message: `Missing credentials for ${service}: ${missing}`, status: 400 };
   }
 
-  return fetchNewToken(clientId, clientSecret, refreshToken, service);
+  try {
+    return await fetchNewToken(clientId, clientSecret, refreshToken, service);
+  } catch (err: any) {
+    // Se o token foi revogado, marcar a conta para reautenticação
+    if (err?.needs_reauth && base44Client && accountId) {
+      base44Client.asServiceRole.entities.AmazonAccount.update(accountId, {
+        status: 'error',
+        error_message: `Token revogado (${err.code}) — reautorize em /amazon-oauth-setup`,
+        needs_reauth: true,
+      }).catch(() => {});
+    } else if (err?.needs_reauth && base44Client) {
+      // Sem accountId, tenta encontrar a conta pelo primeiro resultado
+      base44Client.asServiceRole.entities.AmazonAccount.list('-updated_date', 1).then((accounts: any[]) => {
+        if (accounts[0]) {
+          base44Client.asServiceRole.entities.AmazonAccount.update(accounts[0].id, {
+            status: 'error',
+            error_message: `Token revogado (${err.code}) — reautorize em /amazon-oauth-setup`,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
+    throw err;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -127,6 +146,7 @@ Deno.serve(async (req) => {
       error_code: err.code || 'unknown',
       error: err.message || 'Internal error',
       message: err.message || 'Internal error',
+      needs_reauth: err.needs_reauth === true,
     }, { status: err.status || 500 });
   }
 });
