@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -14,7 +14,7 @@ export default function TermBankPageV2() {
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState(null);
   const [message, setMessage] = useState(null);
-  const [cleaning, setCleaning] = useState(false);
+
   const [account, setAccount] = useState(null);
 
   const toConf100 = (c) => c == null ? 0 : c <= 1 ? Math.round(c * 100) : Math.round(c);
@@ -42,6 +42,7 @@ export default function TermBankPageV2() {
       setAccount(acc);
 
       base44.functions.invoke('updateTermBankFromAutomaticCampaigns', { amazon_account_id: acc.id }).catch(() => {});
+      cleanupLegacy(acc);
 
       const [t, s, p] = await Promise.all([
         base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500),
@@ -77,25 +78,14 @@ export default function TermBankPageV2() {
 
   useEffect(() => { load(); }, [load]);
 
-  const cleanupLegacy = async () => {
-    if (!account) return;
-    setCleaning(true);
-    setMessage(null);
+  const cleanupLegacy = useCallback(async (acc) => {
+    if (!acc) return;
     try {
-      const res = await base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: account.id });
-      const d = res?.data || {};
-      if (d.ok) {
-        setMessage({ type: 'success', text: `✓ ${d.archived || 0} sugestões arquivadas · ${d.migrated_to_termbank || 0} migradas para TermBank · ${d.campaigns_archived || 0} campanhas sem gasto arquivadas.` });
-        await load();
-      } else {
-        setMessage({ type: 'error', text: d.error || 'Erro na limpeza' });
-      }
-    } catch (e) {
-      setMessage({ type: 'error', text: e.message });
-    } finally {
-      setCleaning(false);
+      await base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id });
+    } catch {
+      // silencioso — limpeza em background
     }
-  };
+  }, [cleanupLegacy]);
 
   const amazonSuggestions = suggestions.filter(s =>
     ['AMAZON_ADS_SUGGESTED_KEYWORD', 'AMAZON_ADS_SUGGESTED_TARGET', 'AMAZON_ADS_RECOMMENDATION'].includes(s.source)
@@ -104,12 +94,7 @@ export default function TermBankPageV2() {
   const q = search.toLowerCase();
   const filteredTerms = terms.filter(t => `${t.term||''} ${t.asin||''} ${t.product_name||''}`.toLowerCase().includes(q));
 
-  // Contagem de sugestões legadas ainda não arquivadas
-  const legacyCount = suggestions.filter(s =>
-    ['OPENAI_TITLE_ANALYSIS', 'CLAUDE_PRODUCT_ANALYSIS', 'AI_GENERATED', 'GPT_TITLE_ANALYSIS', 'PRODUCT_ANALYSIS',
-     'AUTOMATIC_SEARCH_TERM', 'MANUAL_SEARCH_TERM', 'CONVERTED_TERM_EXPANSION', 'USER'].includes(s.source) &&
-    !['archived_by_policy', 'superseded'].includes(s.status)
-  ).length;
+
 
   const tabs = [
     { id: 'amazon', label: `🎯 Amazon Ads Suggestions`, count: amazonSuggestions.filter(s => !['archived_by_policy','superseded'].includes(s.status)).length },
@@ -129,16 +114,7 @@ export default function TermBankPageV2() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {legacyCount > 0 && (
-            <button
-              onClick={cleanupLegacy}
-              disabled={cleaning || loading}
-              className="flex items-center gap-2 rounded-lg bg-amber-500/15 border border-amber-500/30 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors disabled:opacity-50"
-            >
-              {cleaning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              {cleaning ? 'Limpando...' : `Limpar ${legacyCount} sugestões IA legadas`}
-            </button>
-          )}
+
           <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
