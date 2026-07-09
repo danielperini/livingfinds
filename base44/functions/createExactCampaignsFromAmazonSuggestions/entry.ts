@@ -9,11 +9,11 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MAX_CAMPAIGNS_PER_PRODUCT = 4;
-const MIN_BUDGET = 5.0;
+const KEYWORDS_PER_CAMPAIGN = 4;  // 1 campanha com 4 keywords
+const MIN_BUDGET = 15.0;           // mínimo por campanha consolidada
 const MIN_BID = 0.35;
 const MAX_BID = 3.0;
-const WINDOW_PAUSE_MS = 14000;
+const WINDOW_PAUSE_MS = 3000;
 
 function getAdsBaseUrl(region: string) {
   const r = (region || 'NA').toUpperCase();
@@ -147,10 +147,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, message: 'Nenhuma sugestão elegível para criar campanha', eligible: 0 });
     }
 
-    // Verificar campanhas ativas para evitar duplicatas
-    const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({
-      amazon_account_id: aid, asin, targeting_type: 'MANUAL',
-    }).catch(() => []);
+    // Verificar keywords já ativas para evitar duplicatas
     const existingKeywords = await base44.asServiceRole.entities.Keyword.filter({
       amazon_account_id: aid,
     }, null, 500).catch(() => []);
@@ -160,16 +157,26 @@ Deno.serve(async (req) => {
         .map((k: any) => (k.keyword_text || k.keyword || '').toLowerCase().trim())
     );
 
-    const toCreate = eligible
-      .filter((s: any) => !activeCampaignKeywords.has((s.normalized_keyword || s.keyword || '').toLowerCase()))
-      .slice(0, Math.min(limit, MAX_CAMPAIGNS_PER_PRODUCT));
+    // KeywordSuggestions já criadas recentemente (evitar duplicata por status)
+    const alreadyCreated = await base44.asServiceRole.entities.KeywordSuggestion.filter({
+      amazon_account_id: aid, asin, status: 'created',
+    }, null, 100).catch(() => []);
+    const createdKeywords = new Set(alreadyCreated.map((s: any) => (s.keyword || '').toLowerCase().trim()));
+
+    const dedupedEligible = eligible.filter((s: any) => {
+      const kw = (s.normalized_keyword || s.keyword || '').toLowerCase().trim();
+      return !activeCampaignKeywords.has(kw) && !createdKeywords.has(kw);
+    });
+
+    // Pegar até KEYWORDS_PER_CAMPAIGN keywords para 1 campanha consolidada
+    const toCreate = dedupedEligible.slice(0, KEYWORDS_PER_CAMPAIGN);
 
     if (!toCreate.length) {
       return Response.json({ ok: true, message: 'Todas as keywords elegíveis já têm campanha ativa', eligible: eligible.length });
     }
 
     if (dry_run) {
-      return Response.json({ ok: true, dry_run: true, would_create: toCreate.length, keywords: toCreate.map((s: any) => s.keyword) });
+      return Response.json({ ok: true, dry_run: true, would_create: 1, keywords: toCreate.map((s: any) => s.keyword) });
     }
 
     const token = await getAdsToken(
@@ -177,183 +184,197 @@ Deno.serve(async (req) => {
       Deno.env.get('ADS_CLIENT_ID') || '',
       Deno.env.get('ADS_CLIENT_SECRET') || '',
     );
-    const baseUrl = getAdsBaseUrl(account.region || 'NA');
+    const baseUrl   = getAdsBaseUrl(account.region || 'NA');
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
+    const clientId  = Deno.env.get('ADS_CLIENT_ID') || '';
 
     const ap = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1)
       .then((r: any[]) => r[0]).catch(() => null);
     const maxBudget = ap?.maximum_campaign_budget || 100;
 
+    // Nome da campanha consolidada com as 4 keywords principais
+    const topKeyword   = toCreate[0].keyword.trim();
+    const campaignName = `SP | MANUAL | EXACT | ${asin} | ${topKeyword}${toCreate.length > 1 ? ' +' + (toCreate.length - 1) : ''}`.slice(0, 128);
+    const adGroupName  = `AG | EXACT | ${asin}`.slice(0, 128);
+    const budget       = Math.min(maxBudget, Math.max(MIN_BUDGET, toCreate[0].recommended_budget || MIN_BUDGET));
+
+    const makeHeaders = (contentType: string) => ({
+      'Authorization': `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': clientId,
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': contentType,
+      'Accept': contentType,
+    });
+
     let created = 0, failed = 0;
     const results: any[] = [];
 
-    for (const s of toCreate) {
-      const keyword = s.keyword.trim();
-      const bid = Math.min(MAX_BID, Math.max(MIN_BID, s.recommended_bid || s.amazon_suggested_bid || 0.50));
-      const budget = Math.min(maxBudget, Math.max(MIN_BUDGET, s.recommended_budget || MIN_BUDGET));
-      const campaignName = `SP | MANUAL | EXACT | ${asin} | ${keyword}`.slice(0, 128);
-      const adGroupName = `AG | EXACT | ${asin}`.slice(0, 128);
-
-      try {
-        // Criar campanha
-        const campRes = await fetch(`${baseUrl}/sp/campaigns`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-            'Amazon-Advertising-API-Scope': String(profileId),
-            'Content-Type': 'application/vnd.spCampaign.v3+json',
-            'Accept': 'application/vnd.spCampaign.v3+json',
-          },
-          body: JSON.stringify({
-            campaigns: [{
-              name: campaignName,
-              targetingType: 'MANUAL',
-              state: 'ENABLED',
-              dynamicBidding: { strategy: 'LEGACY_FOR_SALES' },
-              budget: { budgetType: 'DAILY', budget },
-            }],
-          }),
-        });
-
-        if (campRes.status === 429) {
-          await new Promise(r => setTimeout(r, 10000));
-          failed++;
-          results.push({ keyword, status: 'rate_limited' });
-          await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
-            status: 'queued', error: 'Rate limit — reagendado',
-          }).catch(() => {});
-          continue;
-        }
-
-        const campData = await campRes.json();
-
-        if (campRes.status === 400) {
-          failed++;
-          results.push({ keyword, status: 'bad_request', error: JSON.stringify(campData).slice(0, 200) });
-          await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
-            status: 'failed', error: `400: ${JSON.stringify(campData).slice(0, 300)}`,
-          }).catch(() => {});
-          continue;
-        }
-
-        if (campRes.status === 403) {
-          await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
-            status: 'failed', error: '403: Erro de autorização',
-          }).catch(() => {});
-          return Response.json({ ok: false, error: '403: Erro de autorização Amazon Ads. Verifique o token.', created, failed });
-        }
-
-        const amazonCampaignId = campData?.campaigns?.success?.[0]?.campaignId;
-        if (!amazonCampaignId) {
-          failed++;
-          results.push({ keyword, status: 'no_campaign_id', error: JSON.stringify(campData).slice(0, 200) });
-          await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
-            status: 'failed', error: 'Amazon não retornou campaignId',
-          }).catch(() => {});
-          continue;
-        }
-
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Criar ad group
-        const agRes = await fetch(`${baseUrl}/sp/adGroups`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-            'Amazon-Advertising-API-Scope': String(profileId),
-            'Content-Type': 'application/vnd.spAdGroup.v3+json',
-            'Accept': 'application/vnd.spAdGroup.v3+json',
-          },
-          body: JSON.stringify({
-            adGroups: [{
-              campaignId: amazonCampaignId,
-              name: adGroupName,
-              defaultBid: bid,
-              state: 'ENABLED',
-            }],
-          }),
-        });
-
-        const agData = await agRes.json();
-        const adGroupId = agData?.adGroups?.success?.[0]?.adGroupId;
-        if (!adGroupId) {
-          failed++;
-          results.push({ keyword, status: 'no_adgroup_id', campaign_id: amazonCampaignId });
-          continue;
-        }
-
-        await new Promise(r => setTimeout(r, 2000));
-
-        // Criar keyword
-        const kwRes = await fetch(`${baseUrl}/sp/keywords`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-            'Amazon-Advertising-API-Scope': String(profileId),
-            'Content-Type': 'application/vnd.spKeyword.v3+json',
-            'Accept': 'application/vnd.spKeyword.v3+json',
-          },
-          body: JSON.stringify({
-            keywords: [{
-              campaignId: amazonCampaignId,
-              adGroupId,
-              state: 'ENABLED',
-              keywordText: keyword,
-              matchType: 'EXACT',
-              bid,
-            }],
-          }),
-        });
-
-        const kwData = await kwRes.json();
-        const keywordId = kwData?.keywords?.success?.[0]?.keywordId;
-
-        // Só marcar como criada após Amazon confirmar campaignId
-        await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
-          status: keywordId ? 'created' : 'failed',
-          amazon_campaign_id: amazonCampaignId,
-          created_keyword_id: keywordId || null,
-          executed_at: now,
-          error: keywordId ? null : 'Amazon não retornou keywordId',
-        }).catch(() => {});
-
-        // Salvar campanha localmente
-        if (amazonCampaignId) {
-          await base44.asServiceRole.entities.Campaign.create({
-            amazon_account_id: aid,
-            ads_profile_id: profileId,
-            asin,
-            amazon_campaign_id: amazonCampaignId,
-            campaign_id: amazonCampaignId,
+    try {
+      // ── 1. Criar campanha ──────────────────────────────────────────────────
+      const campRes = await fetch(`${baseUrl}/sp/campaigns`, {
+        method: 'POST',
+        headers: makeHeaders('application/vnd.spCampaign.v3+json'),
+        body: JSON.stringify({
+          campaigns: [{
             name: campaignName,
-            campaign_name: campaignName,
-            campaign_type: 'SP',
-            targeting_type: 'MANUAL',
-            state: 'enabled',
-            status: 'enabled',
-            daily_budget: budget,
-            created_by_app: true,
-            launch_phase: 'new',
-            created_at: now,
-          }).catch(() => {});
-        }
+            targetingType: 'MANUAL',
+            state: 'ENABLED',
+            dynamicBidding: { strategy: 'LEGACY_FOR_SALES' },
+            budget: { budgetType: 'DAILY', budget },
+          }],
+        }),
+      });
 
-        if (keywordId) {
+      if (campRes.status === 429) {
+        return Response.json({ ok: false, error: 'Rate limit Amazon Ads. Tente novamente em 15 minutos.', created: 0, failed: 1 });
+      }
+      if (campRes.status === 403) {
+        return Response.json({ ok: false, error: '403: Erro de autorização Amazon Ads. Verifique o token.', created: 0, failed: 1 });
+      }
+
+      const campData = await campRes.json();
+      const amazonCampaignId = campData?.campaigns?.success?.[0]?.campaignId;
+      if (!amazonCampaignId) {
+        return Response.json({ ok: false, error: `Amazon não retornou campaignId: ${JSON.stringify(campData).slice(0, 300)}`, created: 0, failed: 1 });
+      }
+
+      await new Promise(r => setTimeout(r, 2000));
+
+      // ── 2. Criar ad group ──────────────────────────────────────────────────
+      const agRes = await fetch(`${baseUrl}/sp/adGroups`, {
+        method: 'POST',
+        headers: makeHeaders('application/vnd.spAdGroup.v3+json'),
+        body: JSON.stringify({
+          adGroups: [{
+            campaignId: amazonCampaignId,
+            name: adGroupName,
+            defaultBid: Math.min(MAX_BID, Math.max(MIN_BID, toCreate[0].recommended_bid || toCreate[0].amazon_suggested_bid || 0.50)),
+            state: 'ENABLED',
+          }],
+        }),
+      });
+
+      const agData = await agRes.json();
+      const adGroupId = agData?.adGroups?.success?.[0]?.adGroupId;
+      if (!adGroupId) {
+        return Response.json({ ok: false, error: `Amazon não retornou adGroupId: ${JSON.stringify(agData).slice(0, 200)}`, created: 0, failed: 1 });
+      }
+
+      await new Promise(r => setTimeout(r, 2000));
+
+      // ── 3. Criar todas as keywords no mesmo ad group (bulk) ────────────────
+      const keywordsPayload = toCreate.map((s: any) => ({
+        campaignId: amazonCampaignId,
+        adGroupId,
+        state: 'ENABLED',
+        keywordText: s.keyword.trim(),
+        matchType: 'EXACT',
+        bid: Math.min(MAX_BID, Math.max(MIN_BID, s.recommended_bid || s.amazon_suggested_bid || 0.50)),
+      }));
+
+      const kwRes = await fetch(`${baseUrl}/sp/keywords`, {
+        method: 'POST',
+        headers: makeHeaders('application/vnd.spKeyword.v3+json'),
+        body: JSON.stringify({ keywords: keywordsPayload }),
+      });
+
+      const kwData = await kwRes.json();
+      const successKws: any[] = kwData?.keywords?.success || [];
+      const failedKws: any[]  = kwData?.keywords?.error   || [];
+
+      // Atualizar status de cada sugestão
+      for (const s of toCreate) {
+        const match = successKws.find((k: any) => k.keywordText?.toLowerCase() === s.keyword.toLowerCase().trim());
+        await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
+          status: match ? 'created' : 'failed',
+          amazon_campaign_id: amazonCampaignId,
+          created_keyword_id: match?.keywordId || null,
+          executed_at: now,
+          error: match ? null : `Keyword não confirmada pela Amazon`,
+        }).catch(() => {});
+        if (match) {
           created++;
-          results.push({ keyword, status: 'created', campaign_id: amazonCampaignId, keyword_id: keywordId });
+          results.push({ keyword: s.keyword, status: 'created', keyword_id: match.keywordId });
         } else {
           failed++;
-          results.push({ keyword, status: 'keyword_failed', campaign_id: amazonCampaignId });
+          results.push({ keyword: s.keyword, status: 'keyword_failed' });
         }
+      }
 
-        await new Promise(r => setTimeout(r, WINDOW_PAUSE_MS));
+      // ── 4. Salvar campanha localmente ──────────────────────────────────────
+      const campRecord = await base44.asServiceRole.entities.Campaign.create({
+        amazon_account_id: aid,
+        ads_profile_id: profileId,
+        asin,
+        amazon_campaign_id: amazonCampaignId,
+        campaign_id: amazonCampaignId,
+        name: campaignName,
+        campaign_name: campaignName,
+        campaign_type: 'SP',
+        targeting_type: 'MANUAL',
+        state: 'enabled',
+        status: 'enabled',
+        daily_budget: budget,
+        created_by_app: true,
+        launch_phase: 'new',
+        created_at: now,
+      }).catch(() => null);
 
-      } catch (e: any) {
-        failed++;
-        results.push({ keyword, status: 'error', error: e.message });
+      // ── 5. Negativar TODAS as keywords na campanha AUTO do mesmo ASIN ──────
+      const autoCampaigns = await base44.asServiceRole.entities.Campaign.filter({
+        amazon_account_id: aid, asin, targeting_type: 'AUTO',
+      }).catch(() => []);
+      const autoCampaign = autoCampaigns.find((c: any) => !['archived', 'ARCHIVED'].includes(c.state || c.status || ''));
+
+      if (autoCampaign) {
+        const negPayload = toCreate.map((s: any) => ({
+          campaignId: autoCampaign.campaign_id,
+          keywordText: s.keyword.toLowerCase().trim(),
+          matchType: 'negativeExact',
+          state: 'enabled',
+        }));
+
+        const negRes = await fetch(`${baseUrl}/v2/sp/negativeKeywords`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Amazon-Advertising-API-ClientId': clientId,
+            'Amazon-Advertising-API-Scope': String(profileId),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(negPayload),
+        }).catch(() => null);
+
+        const negOk = negRes ? [200, 201, 207].includes(negRes.status) : false;
+
+        // Registrar cada negativação no OptimizationDecision
+        for (const s of toCreate) {
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: aid,
+            decision_type: 'negative_keyword',
+            entity_type: 'search_term',
+            entity_id: autoCampaign.campaign_id,
+            campaign_id: autoCampaign.campaign_id,
+            keyword_text: s.keyword.toLowerCase().trim(),
+            asin,
+            action: 'negative_exact',
+            rationale: `Negativação automática: keyword criada como MANUAL EXACT (campanha ${amazonCampaignId}). Evitar canibalização na AUTO.`,
+            risk: 'low',
+            requires_approval: false,
+            status: negOk ? 'executed' : 'failed',
+            confidence: 99,
+            executed_at: now,
+            created_at: now,
+            source_function: 'createExactCampaignsFromAmazonSuggestions',
+            idempotency_key: `neg-auto-create-${aid}-${autoCampaign.campaign_id}-${s.keyword.toLowerCase().trim()}-${now.slice(0, 10)}`,
+          }).catch(() => {});
+        }
+      }
+
+    } catch (e: any) {
+      failed = toCreate.length;
+      results.push({ status: 'error', error: e.message });
+      for (const s of toCreate) {
         await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
           status: 'failed', error: e.message.slice(0, 300),
         }).catch(() => {});
@@ -367,6 +388,7 @@ Deno.serve(async (req) => {
       attempted: toCreate.length,
       created,
       failed,
+      keywords_in_campaign: toCreate.length,
       in_window: inWindow,
       results,
     });
