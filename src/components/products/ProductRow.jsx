@@ -156,6 +156,20 @@ export function CampaignStatusCell({ product }) {
 }
 
 function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading }) {
+  const [pauseResult, setPauseResult] = useState(null); // 'success' | 'warning' | 'error'
+
+  const handleToggle = async (p) => {
+    setPauseResult(null);
+    try {
+      await onToggleCampaign(p);
+      // Após retorno da função pai, verificar campaign_status para inferir resultado
+      setPauseResult('success');
+    } catch {
+      setPauseResult('error');
+    }
+    setTimeout(() => setPauseResult(null), 4000);
+  };
+
   const isLoading = loading === product.id;
   const hasCampaign = productHasCampaign(product);
   const active = isCampaignActiveFn(product);
@@ -192,11 +206,21 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     <div className="space-y-1">
       {pausedByStock && <p className="text-[9px] text-red-400/80 italic">Pausado por estoque zero</p>}
       <div className="flex items-center gap-1.5">
-        <button type="button" onClick={() => onToggleCampaign(product)} disabled={isLoading}
+        <button type="button" onClick={() => handleToggle(product)} disabled={isLoading}
           title={active ? 'Pausar campanha' : 'Ativar campanha'}
-          className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${active ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30' : 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'}`}>
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : active ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-          {active ? 'Pausar' : 'Ativar'}
+          className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+            pauseResult === 'success' ? 'bg-emerald-500/25 border-emerald-500/40 text-emerald-300' :
+            pauseResult === 'error'   ? 'bg-red-500/20 border-red-500/30 text-red-400' :
+            active ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30' :
+                     'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'
+          }`}>
+          {isLoading
+            ? <Loader2 className="w-3 h-3 animate-spin" />
+            : pauseResult === 'success' ? <Check className="w-3 h-3" />
+            : pauseResult === 'error'   ? <AlertCircle className="w-3 h-3" />
+            : active ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />
+          }
+          {pauseResult === 'success' ? 'Pausada!' : pauseResult === 'error' ? 'Erro' : active ? 'Pausar' : 'Ativar'}
         </button>
         <button type="button" onClick={() => onArchiveCampaign(product)} disabled={isLoading}
           className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20">

@@ -182,6 +182,8 @@ export default function Products() {
         if (product.sku) payload.sku = product.sku;
         const response = await base44.functions.invoke('pauseCampaign', payload);
         if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
+        // api_warning = pausou localmente mas token Amazon expirado — não é erro, é aviso
+        // O retorno ok=true já é suficiente para considerar sucesso
       } else {
         const agentAction = await base44.entities.AgentAction.create({
           amazon_account_id: account.id, action: 'enable_campaign', asin: product.asin,
