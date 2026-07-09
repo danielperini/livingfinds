@@ -110,14 +110,28 @@ export function OfferStatusBadge({ product }) {
   );
   if (status === 'low_stock') return (
     <div>
-      <span className="flex items-center gap-1 text-xs text-amber-400 font-semibold"><AlertCircle className="w-3.5 h-3.5" />Estoque Baixo ({fba})</span>
-      {staleTag}{dateTag}
+      <span className="flex items-center gap-1 text-xs text-amber-400 font-semibold">
+        <AlertCircle className="w-3.5 h-3.5" />Estoque Baixo ({fba})
+        {freshness === 'stale' && (
+          <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+            desatualizado
+          </span>
+        )}
+      </span>
+      {dateTag}
     </div>
   );
   if (status === 'active') return (
     <div>
-      <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold"><ShoppingBag className="w-3.5 h-3.5" />Em Estoque ({fba > 0 ? fba : '?'})</span>
-      {staleTag}{dateTag}
+      <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold">
+        <ShoppingBag className="w-3.5 h-3.5" />Em Estoque ({fba > 0 ? fba : '?'})
+        {freshness === 'stale' && (
+          <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+            desatualizado
+          </span>
+        )}
+      </span>
+      {dateTag}
     </div>
   );
   if (status === 'archived') return <span className="flex items-center gap-1 text-xs text-slate-500"><XCircle className="w-3.5 h-3.5" />Arquivada</span>;
