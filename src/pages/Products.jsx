@@ -168,12 +168,19 @@ export default function Products() {
   // ── Ações ───────────────────────────────────────────────────────────────────
   const toggleCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
-    if (!campaignId || !account) return;
+    if (!account) return;
     const active = isCampaignActiveFn(product);
     setActionLoading(product.id);
     try {
       if (active) {
-        const response = await base44.functions.invoke('pauseCampaign', { amazon_account_id: account.id, campaign_id: campaignId });
+        // Enviar campaign_id, asin E sku para maximizar as chances de a função backend
+        // localizar a campanha correta na entidade Campaign (o linked_campaign_id pode ser
+        // o ID interno do Base44, mas a API Amazon usa o campo campaign_id da entidade).
+        const payload = { amazon_account_id: account.id };
+        if (campaignId) payload.campaign_id = campaignId;
+        if (product.asin) payload.asin = product.asin;
+        if (product.sku) payload.sku = product.sku;
+        const response = await base44.functions.invoke('pauseCampaign', payload);
         if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
       } else {
         const agentAction = await base44.entities.AgentAction.create({
@@ -283,7 +290,12 @@ export default function Products() {
     let success = 0, failed = 0;
     for (const product of targets) {
       try {
-        const r = await base44.functions.invoke('pauseCampaign', { amazon_account_id: account.id, campaign_id: campaignIdOf(product) });
+        const pausePayload = { amazon_account_id: account.id };
+        const cid = campaignIdOf(product);
+        if (cid) pausePayload.campaign_id = cid;
+        if (product.asin) pausePayload.asin = product.asin;
+        if (product.sku) pausePayload.sku = product.sku;
+        const r = await base44.functions.invoke('pauseCampaign', pausePayload);
         r?.data?.ok ? success++ : failed++;
       } catch { failed++; }
     }

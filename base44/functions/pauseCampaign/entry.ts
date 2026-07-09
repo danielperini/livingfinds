@@ -79,13 +79,17 @@ Deno.serve(async (req) => {
 
     // ── Resolver campanhas relacionadas ────────────────────────────────────
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
-    const seedCampaign = campaign_id ? allCampaigns.find(c => String(c.campaign_id) === String(campaign_id)) : null;
+    // Tentar casar pelo campaign_id (ID Amazon) OU pelo id interno do Base44
+    const seedCampaign = campaign_id
+      ? allCampaigns.find(c => String(c.campaign_id) === String(campaign_id) || String(c.id) === String(campaign_id))
+      : null;
     const targetAsin = asin || seedCampaign?.asin || null;
     const targetSku  = sku  || seedCampaign?.sku  || null;
 
     const related = allCampaigns.filter(c => {
       if (c.archived || c.state === 'archived') return false;
-      if (campaign_id && String(c.campaign_id) === String(campaign_id)) return true;
+      // Casar por campaign_id (ID Amazon) OU id interno Base44
+      if (campaign_id && (String(c.campaign_id) === String(campaign_id) || String(c.id) === String(campaign_id))) return true;
       if (targetAsin && String(c.asin || '') === String(targetAsin)) return true;
       if (targetSku && String(c.sku || '') === String(targetSku)) return true;
       return false;
