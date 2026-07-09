@@ -139,14 +139,14 @@ export default function TermBankPageV2() {
         </div>
         <div className="flex items-center gap-2">
 
-          <button
-            onClick={handlePurge}
-            disabled={purging || !account}
-            className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50 hidden">
-            
-            {purging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-            {purging ? 'Limpando...' : 'Limpar sem performance'}
-          </button>
+          
+
+
+
+
+
+
+          
           <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
