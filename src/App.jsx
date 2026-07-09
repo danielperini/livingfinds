@@ -49,6 +49,7 @@ import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
 import SalaDeComando from '@/pages/SalaDeComando';
 import KickoffQueueMonitor from '@/pages/KickoffQueueMonitor';
 import StrategyEnginePage from '@/pages/StrategyEnginePage';
+import WeeklyPrelectionPage from '@/pages/WeeklyPrelectionPage';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -110,6 +111,7 @@ const AuthenticatedApp = () => {
           <Route path="/sala-de-comando" element={<SalaDeComando />} />
           <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
           <Route path="/strategy-engine" element={<StrategyEnginePage />} />
+          <Route path="/prelecao-semanal" element={<WeeklyPrelectionPage />} />
           {/* Redirecionamentos: rotas removidas da sidebar → Sala de Comando */}
           <Route path="/alerts" element={<Navigate to="/sala-de-comando" replace />} />
           <Route path="/bids-log" element={<Navigate to="/sala-de-comando" replace />} />

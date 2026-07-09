@@ -1,0 +1,180 @@
+{
+  "name": "WeeklyMotorPrelection",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "week_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "week_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "partial"
+      ],
+      "default": "running"
+    },
+    "model_used": {
+      "type": "string"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 10
+    },
+    "max_acos": {
+      "type": "number",
+      "default": 15
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "target_tacos": {
+      "type": "number",
+      "default": 5
+    },
+    "max_tacos": {
+      "type": "number",
+      "default": 10
+    },
+    "daily_budget_cap": {
+      "type": "number",
+      "default": 56
+    },
+    "summary": {
+      "type": "string"
+    },
+    "executive_summary": {
+      "type": "string"
+    },
+    "total_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "total_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos": {
+      "type": "number"
+    },
+    "avg_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "products_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "winning_terms_count": {
+      "type": "number",
+      "default": 0
+    },
+    "losing_terms_count": {
+      "type": "number",
+      "default": 0
+    },
+    "new_manual_campaigns_recommended": {
+      "type": "number",
+      "default": 0
+    },
+    "new_manual_campaigns_created": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_to_pause": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_to_archive": {
+      "type": "number",
+      "default": 0
+    },
+    "rules_reviewed": {
+      "type": "number",
+      "default": 0
+    },
+    "rules_changed": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "requires_manual_review": {
+      "type": "boolean",
+      "default": false
+    },
+    "goal_status": {
+      "type": "object"
+    },
+    "winning_terms": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "losing_campaigns": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "manual_campaigns_created": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "raw_ai_response": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "week_start",
+    "week_end"
+  ]
+}
