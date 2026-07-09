@@ -113,7 +113,7 @@ export default function TermBankPageV2() {
     } catch {
       // silencioso — limpeza em background
     }
-  }, [cleanupLegacy]);
+  }, []);
 
   const amazonSuggestions = suggestions.filter(s =>
     ['AMAZON_ADS_SUGGESTED_KEYWORD', 'AMAZON_ADS_SUGGESTED_TARGET', 'AMAZON_ADS_RECOMMENDATION'].includes(s.source)
