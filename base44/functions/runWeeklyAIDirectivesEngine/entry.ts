@@ -17,6 +17,7 @@ import Anthropic from 'npm:@anthropic-ai/sdk@0.37.0';
 const MIN_BID = 0.10;
 const MAX_BID = 5.0;
 const MAX_BID_CHANGE_PCT = 25; // % máximo de mudança numa diretriz semanal
+// Cooldown mínimo alinhado à janela de percepção de resultados (~3 semanas)
 const ALLOWED_OPERATORS = ['greater_than', 'less_than', 'greater_than_or_equal', 'less_than_or_equal', 'equals', 'not_equals', 'between', 'in'];
 const ALLOWED_ACTION_TYPES = ['increase_bid_percent', 'decrease_bid_percent', 'set_bid', 'pause_campaign', 'pause_keyword'];
 const ALLOWED_SCOPES = ['keyword', 'campaign'];
@@ -43,7 +44,8 @@ function validateAndClampRule(rule: any): { valid: boolean; reason?: string; rul
     rule.action.value = Math.min(MAX_BID, Math.max(MIN_BID, Number(rule.action.value) || MIN_BID));
   }
 
-  rule.cooldown_hours = Math.max(48, Math.min(168, Number(rule.cooldown_hours) || 72));
+  // Cooldown mínimo de 504h (21 dias) — janela de percepção de resultados de alterações de bid
+  rule.cooldown_hours = Math.max(504, Math.min(720, Number(rule.cooldown_hours) || 504));
   return { valid: true, rule };
 }
 
@@ -51,6 +53,7 @@ Deno.serve(async (req) => {
   const now = new Date().toISOString();
   const today = now.slice(0, 10);
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const RESULT_LAG_DAYS = 21; // alterações levam ~3 semanas para resultados serem percebidos
 
   try {
     const base44 = createClientFromRequest(req);
@@ -266,6 +269,15 @@ ${existingRulesSummary.length > 0 ? existingRulesSummary.map(r => `- ${r.rule_ke
 ## TAREFA
 Analise os dados e gere entre 2 e 5 regras de otimização NOVAS ou REVISADAS para o motor determinístico diário.
 
+## PRINCÍPIO FUNDAMENTAL — JANELA DE RESULTADOS
+CADA ALTERAÇÃO DE BID LEVA APROXIMADAMENTE 3 SEMANAS (21 DIAS) PARA TER SEUS RESULTADOS COMPLETAMENTE PERCEBIDOS E ANALISADOS.
+Isso significa:
+- Não faça ajustes agressivos — mudanças pequenas e consistentes são preferíveis.
+- Evite reverter uma decisão antes de 21 dias de dados.
+- Prefira mudanças de 5-10% em vez de 20-25%, para que o sinal seja mais limpo.
+- Uma regra que será avaliada só depois de 3 semanas deve ser conservadora e bem fundamentada.
+- Considere que os dados dos últimos 7 dias podem já refletir alterações feitas há menos de 3 semanas — portanto leia os dados com cautela.
+
 REGRAS IMPORTANTES:
 1. Gere apenas regras baseadas nos dados reais acima — não invente métricas.
 2. Cada regra deve ter condições mensuráveis presentes na entidade Keyword ou Campaign.
@@ -273,8 +285,9 @@ REGRAS IMPORTANTES:
 4. Métricas disponíveis por campaign: spend, sales, orders, acos, daily_budget
 5. Operadores: greater_than, less_than, greater_than_or_equal, less_than_or_equal, equals, not_equals, between
 6. Action types: increase_bid_percent, decrease_bid_percent, set_bid, pause_keyword
-7. Valores de bid change: máximo ${MAX_BID_CHANGE_PCT}%
-8. Cooldown mínimo: 48h, máximo: 168h
+7. Valores de bid change: máximo ${MAX_BID_CHANGE_PCT}% — prefira entre 5-10% dado o lag de 3 semanas
+8. Cooldown mínimo: 504h (21 dias) para respeitar a janela de percepção de resultados
+9. expires_in_days: use 21 como padrão — a regra precisa de ao menos 3 semanas para ser avaliada
 
 Responda APENAS com JSON no formato:
 {
@@ -334,7 +347,8 @@ Responda APENAS com JSON no formato:
 
     const saved: any[] = [];
     const skipped: any[] = [];
-    const expiresAt = new Date(Date.now() + 8 * 86400000).toISOString(); // expira em 8 dias (próxima execução)
+    // Regras ficam ativas por 3 semanas (janela de percepção de resultados) + 1 semana de buffer
+    const expiresAt = new Date(Date.now() + (RESULT_LAG_DAYS + 7) * 86400000).toISOString();
 
     for (const directive of parsed.directives) {
       const validated = validateAndClampRule({ ...directive });
@@ -343,7 +357,8 @@ Responda APENAS com JSON no formato:
         continue;
       }
       const rule = validated.rule!;
-      const expiryDays = Math.min(8, Math.max(1, rule.expires_in_days || 7));
+      // Respeitar a sugestão da IA, mas garantir mínimo de 21 dias (janela de percepção)
+      const expiryDays = Math.min(35, Math.max(RESULT_LAG_DAYS, rule.expires_in_days || RESULT_LAG_DAYS));
       const ruleExpiry = new Date(Date.now() + expiryDays * 86400000).toISOString();
 
       try {
