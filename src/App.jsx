@@ -106,8 +106,9 @@ const AuthenticatedApp = () => {
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
           <Route path="/sala-de-comando" element={<SalaDeComando />} />
           <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
-          <Route path="/strategy-engine" element={<StrategyEnginePage />} />
-          <Route path="/prelecao-semanal" element={<WeeklyPrelectionPage />} />
+          <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
+          <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando?tab=prelecao" replace />} />
+          <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
           {/* Redirecionamentos: rotas consolidadas */}
           <Route path="/recommendations" element={<Navigate to="/autopilot" replace />} />
           <Route path="/dayparting" element={<Navigate to="/autopilot" replace />} />

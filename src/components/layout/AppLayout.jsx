@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2, Brain
+  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -17,8 +17,6 @@ const navItems = [
   { path: '/products', icon: ShoppingBag, label: 'Produtos' },
   { path: '/ads', icon: Megaphone, label: 'Campanhas' },
   { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
-  { path: '/strategy-engine', icon: Zap, label: 'Estratégias Motor' },
-  { path: '/prelecao-semanal', icon: Brain, label: 'Preleção Semanal' },
   { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Controle' },
   { path: '/settings', icon: Settings, label: 'Configurações' },
   { path: '/manual', icon: Book, label: 'Manual' },

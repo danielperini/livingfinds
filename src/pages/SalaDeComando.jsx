@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import {
   Terminal, RefreshCw, Loader2, AlertTriangle, Bell, FileText,
@@ -8,6 +9,8 @@ import {
   AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings,
   Pause, PlayCircle
 } from 'lucide-react';
+import PrelecaoTab from '@/components/sala/PrelecaoTab';
+import EstrategiasTab from '@/components/sala/EstrategiasTab';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import { Link } from 'react-router-dom';
@@ -56,6 +59,8 @@ function parseError(err) {
 const TABS = [
   { id: 'visao_geral', label: 'Visão Geral' },
   { id: 'acoes_janela', label: 'Ações da Janela' },
+  { id: 'prelecao', label: 'Preleção Semanal' },
+  { id: 'estrategias', label: 'Motor de Estratégias' },
   { id: 'kickoff', label: 'Kick-off' },
   { id: 'alertas', label: 'Alertas' },
   { id: 'fila', label: 'Fila e Execuções' },
@@ -64,6 +69,8 @@ const TABS = [
   { id: 'autopilot', label: 'Automação IA' },
   { id: 'reparo', label: 'Reparo de Campanhas' },
 ];
+
+
 
 // ── Subcomponentes ────────────────────────────────────────────────────────────
 
@@ -124,7 +131,9 @@ function QueueRowItem({ item, onDelete, onRetry, retrying }) {
 // ── Página Principal ──────────────────────────────────────────────────────────
 
 export default function SalaDeComando() {
-  const [tab, setTab] = useState('visao_geral');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [tab, setTab] = useState(initialTab && TABS.find(t => t.id === initialTab) ? initialTab : 'visao_geral');
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -781,6 +790,12 @@ export default function SalaDeComando() {
               )}
             </div>
           )}
+
+          {/* ── PRELEÇÃO SEMANAL ─────────────────────────────────────────────── */}
+          {tab === 'prelecao' && <PrelecaoTab account={account} />}
+
+          {/* ── MOTOR DE ESTRATÉGIAS ─────────────────────────────────────────── */}
+          {tab === 'estrategias' && <EstrategiasTab account={account} />}
 
           {/* ── KICK-OFF ─────────────────────────────────────────────────────── */}
           {tab === 'kickoff' && (
