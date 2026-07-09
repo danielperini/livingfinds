@@ -1,1 +1,300 @@
-{"name":"Product","type":"object","properties":{"amazon_account_id":{"type":"string"},"asin":{"type":"string"},"sku":{"type":"string"},"product_name":{"type":"string"},"display_name":{"type":"string"},"product_image_url":{"type":"string"},"brand":{"type":"string"},"status":{"type":"string","enum":["active","inactive","archived"],"default":"active"},"inventory_status":{"type":"string","enum":["in_stock","out_of_stock","low_stock"],"default":"in_stock"},"fba_inventory":{"type":"number","default":0},"reserved_inventory":{"type":"number","default":0},"inbound_inventory":{"type":"number","default":0},"price":{"type":"number"},"first_available_date":{"type":"string","format":"date"},"is_new_asin":{"type":"boolean","default":false},"has_campaign":{"type":"boolean","default":false},"campaign_status":{"type":"string","enum":["active","paused","incomplete","historical","none"],"default":"none"},"should_activate_campaign":{"type":"boolean","default":false},"linked_campaign_id":{"type":"string"},"linked_campaign_name":{"type":"string"},"linked_campaign_count":{"type":"number","default":0},"linked_campaign_ids":{"type":"array","items":{"type":"string"}},"campaign_link_updated_at":{"type":"string","format":"date-time"},"auto_campaign_created_at":{"type":"string","format":"date-time"},"manual_campaign_created_at":{"type":"string","format":"date-time"},"days_since_launch":{"type":"number","default":0},"total_spend_30d":{"type":"number","default":0},"total_sales_30d":{"type":"number","default":0},"total_units_30d":{"type":"number","default":0},"acos":{"type":"number","default":0},"roas":{"type":"number","default":0},"category":{"type":"string"},"catalog_sync_status":{"type":"string","enum":["pending","syncing","success","not_found","error"],"default":"pending"},"catalog_sync_error":{"type":"string"},"catalog_sync_attempts":{"type":"number","default":0},"last_catalog_sync_at":{"type":"string","format":"date-time"},"last_sync_at":{"type":"string","format":"date-time"},"synced_at":{"type":"string","format":"date-time"},"product_cost":{"type":"number"},"extra_cost":{"type":"number","default":0},"cost_confirmed":{"type":"boolean","default":false},"cost_confirmation_required":{"type":"boolean","default":true},"cost_source":{"type":"string","enum":["historical_import","manual","unknown"],"default":"unknown"},"cost_confirmed_at":{"type":"string","format":"date-time"},"cost_confirmed_by":{"type":"string"},"maximum_ad_spend_per_order":{"type":"number","default":0},"break_even_acos_pct":{"type":"number","default":0},"available_profit_per_sale":{"type":"number","default":0},"auto_campaign_eligible":{"type":"boolean","default":false},"keyword_confidence_threshold":{"type":"number","default":0.95},"cost_dialog_seen_at":{"type":"string","format":"date-time"},"amazon_fees":{"type":"number"},"contribution_margin":{"type":"number"},"profit_margin_pct":{"type":"number"},"buy_box_status":{"type":"string","enum":["owned","shared","lost","unknown"],"default":"unknown"},"buy_box_price":{"type":"number"},"stock_days":{"type":"number"},"minimum_stock":{"type":"number","default":5},"organic_sales_30d":{"type":"number","default":0},"ad_sales_30d":{"type":"number","default":0},"tacos":{"type":"number","default":0},"profit_after_ads":{"type":"number"},"sessions_30d":{"type":"number","default":0},"conversion_rate_30d":{"type":"number","default":0}},"required":["amazon_account_id","asin"]}
+{
+  "name": "Product",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string"
+    },
+    "product_image_url": {
+      "type": "string"
+    },
+    "brand": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "inactive",
+        "archived"
+      ],
+      "default": "active"
+    },
+    "inventory_status": {
+      "type": "string",
+      "enum": [
+        "in_stock",
+        "out_of_stock",
+        "low_stock"
+      ],
+      "default": "in_stock"
+    },
+    "previous_inventory_status": {
+      "type": "string",
+      "description": "Status de invent\u00e1rio anterior ao \u00faltimo sync \u2014 usado para detectar reabastecimento"
+    },
+    "previous_fba_inventory": {
+      "type": "number",
+      "default": 0,
+      "description": "Quantidade FBA registrada no sync anterior \u2014 usado para detectar varia\u00e7\u00f5es significativas"
+    },
+    "fba_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "reserved_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "inbound_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "available_quantity": {
+      "type": "number",
+      "default": 0
+    },
+    "total_quantity": {
+      "type": "number",
+      "default": 0
+    },
+    "price": {
+      "type": "number"
+    },
+    "first_available_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "is_new_asin": {
+      "type": "boolean",
+      "default": false
+    },
+    "has_campaign": {
+      "type": "boolean",
+      "default": false
+    },
+    "campaign_status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "incomplete",
+        "historical",
+        "none"
+      ],
+      "default": "none"
+    },
+    "should_activate_campaign": {
+      "type": "boolean",
+      "default": false
+    },
+    "linked_campaign_id": {
+      "type": "string"
+    },
+    "linked_campaign_name": {
+      "type": "string"
+    },
+    "linked_campaign_count": {
+      "type": "number",
+      "default": 0
+    },
+    "linked_campaign_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "campaign_link_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "auto_campaign_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manual_campaign_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "days_since_launch": {
+      "type": "number",
+      "default": 0
+    },
+    "total_spend_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "total_units_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "category": {
+      "type": "string"
+    },
+    "catalog_sync_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "syncing",
+        "success",
+        "not_found",
+        "error"
+      ],
+      "default": "pending"
+    },
+    "catalog_sync_error": {
+      "type": "string"
+    },
+    "catalog_sync_attempts": {
+      "type": "number",
+      "default": 0
+    },
+    "last_catalog_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "product_cost": {
+      "type": "number"
+    },
+    "extra_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_confirmed": {
+      "type": "boolean",
+      "default": false
+    },
+    "cost_confirmation_required": {
+      "type": "boolean",
+      "default": true
+    },
+    "cost_source": {
+      "type": "string",
+      "enum": [
+        "historical_import",
+        "manual",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "cost_confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cost_confirmed_by": {
+      "type": "string"
+    },
+    "maximum_ad_spend_per_order": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "available_profit_per_sale": {
+      "type": "number",
+      "default": 0
+    },
+    "auto_campaign_eligible": {
+      "type": "boolean",
+      "default": false
+    },
+    "keyword_confidence_threshold": {
+      "type": "number",
+      "default": 0.95
+    },
+    "cost_dialog_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_fees": {
+      "type": "number"
+    },
+    "contribution_margin": {
+      "type": "number"
+    },
+    "profit_margin_pct": {
+      "type": "number"
+    },
+    "buy_box_status": {
+      "type": "string",
+      "enum": [
+        "owned",
+        "shared",
+        "lost",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "buy_box_price": {
+      "type": "number"
+    },
+    "stock_days": {
+      "type": "number"
+    },
+    "minimum_stock": {
+      "type": "number",
+      "default": 5
+    },
+    "organic_sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "ad_sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number"
+    },
+    "sessions_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate_30d": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin"
+  ]
+}
