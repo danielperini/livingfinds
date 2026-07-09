@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Loader2, CheckCircle, XCircle, AlertTriangle, Zap, Target, RefreshCw } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, AlertTriangle, Zap, Target } from 'lucide-react';
 
 const STATUS_CONFIG = {
   suggested:          { label: 'Sugerida', color: 'text-slate-400', bg: 'bg-slate-500/10' },
@@ -29,8 +29,6 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
   const [competitorAsin, setCompetitorAsin] = useState('');
   const [selectedAsin, setSelectedAsin] = useState('');
   const [fetching, setFetching] = useState(false);
-  const [fetchingAll, setFetchingAll] = useState(false);
-  const [fetchAllProgress, setFetchAllProgress] = useState('');
   const [ranking, setRanking] = useState(false);
   const [creating, setCreating] = useState(false);
 
@@ -72,33 +70,6 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
     } finally {
       setFetching(false);
     }
-  };
-
-  const handleFetchAll = async () => {
-    if (!account || !products.length) return;
-    setFetchingAll(true);
-    setMessage(null);
-    let totalCreated = 0;
-    let done = 0;
-    for (const prod of products) {
-      setFetchAllProgress(`${done + 1}/${products.length} — ${prod.asin}`);
-      try {
-        const res = await base44.functions.invoke('syncAmazonKeywordSuggestionsByAsin', {
-          amazon_account_id: account.id,
-          asin: prod.asin,
-          max_suggestions_per_asin: 30,
-          match_types: ['EXACT', 'PHRASE', 'BROAD'],
-        });
-        if (res?.data?.ok) totalCreated += res.data.total_created || 0;
-      } catch {}
-      done++;
-      // Pausa entre produtos para evitar rate limit
-      if (done < products.length) await new Promise(r => setTimeout(r, 2000));
-    }
-    setFetchingAll(false);
-    setFetchAllProgress('');
-    setMessage({ type: 'success', text: `✓ ${totalCreated} sugestões importadas para ${products.length} produtos.` });
-    onRefresh();
   };
 
   const handleRank = async () => {
@@ -217,15 +188,7 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
               {creating ? 'Criando...' : `Criar ${Math.min(4, eligible.length)} campanha(s) EXACT`}
             </button>
           )}
-          <button
-            onClick={handleFetchAll}
-            disabled={fetchingAll || fetching || !products.length}
-            className="flex items-center gap-2 rounded-lg bg-slate-500/15 border border-slate-500/30 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-500/25 transition-colors disabled:opacity-50"
-            title="Busca sugestões Amazon para todos os produtos ativos"
-          >
-            {fetchingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {fetchingAll ? fetchAllProgress || 'Buscando todos...' : `Buscar todos (${products.length})`}
-          </button>
+
         </div>
         <p className="text-xs text-slate-500">
           A IA apenas rankeia sugestões oficiais da Amazon — não cria keywords novas.
