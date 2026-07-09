@@ -33,15 +33,20 @@ function validateAndClampRule(rule: any): { valid: boolean; reason?: string; rul
     if (!cond.metric) return { valid: false, reason: 'Condição sem metric' };
   }
 
-  // Clamp valores de bid
+  // Clamp valores usando limites do SISTEMA (não da IA)
+  // MAX_BID_CHANGE_PCT é o limite configurado em Metas de Performance
+  const maxIncrease = rule._settings?.max_bid_increase_percent ?? MAX_BID_CHANGE_PCT;
+  const maxDecrease = rule._settings?.max_bid_decrease_percent ?? MAX_BID_CHANGE_PCT;
+  const minBid = rule._settings?.min_bid ?? MIN_BID;
+  const maxBid = rule._settings?.max_bid ?? MAX_BID;
   if (rule.action.type === 'increase_bid_percent') {
-    rule.action.value = Math.min(MAX_BID_CHANGE_PCT, Math.max(1, Number(rule.action.value) || 5));
+    rule.action.value = Math.min(maxIncrease, Math.max(1, Number(rule.action.value) || 5));
   }
   if (rule.action.type === 'decrease_bid_percent') {
-    rule.action.value = Math.min(MAX_BID_CHANGE_PCT, Math.max(1, Number(rule.action.value) || 5));
+    rule.action.value = Math.min(maxDecrease, Math.max(1, Number(rule.action.value) || 5));
   }
   if (rule.action.type === 'set_bid') {
-    rule.action.value = Math.min(MAX_BID, Math.max(MIN_BID, Number(rule.action.value) || MIN_BID));
+    rule.action.value = Math.min(maxBid, Math.max(minBid, Number(rule.action.value) || minBid));
   }
 
   // Cooldown mínimo de 504h (21 dias) — janela de percepção de resultados de alterações de bid
@@ -76,15 +81,65 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada.' });
     const aid = account.id;
 
-    const [apConfigs, profitLearnings] = await Promise.all([
-      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 50).catch(() => []),
-    ]);
-    const cfg = apConfigs[0] || {};
-    const targetAcos = cfg.target_acos || 10;
-    const maximumAcos = cfg.maximum_acos || 15;
-    const targetRoas = cfg.target_roas || 4;
-    const targetTacos = cfg.target_tacos || 5;
+    // ── Fonte única de metas: PerformanceSettings → AutopilotConfig → defaults ──
+    let perfSettings: any = null;
+    const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+      { amazon_account_id: aid }, '-updated_at', 1
+    ).catch(() => []);
+    if (psList.length > 0) {
+      const ps = psList[0];
+      perfSettings = {
+        target_acos: Number(ps.target_acos ?? 10),
+        max_acos: Number(ps.max_acos ?? 15),
+        target_roas: Number(ps.target_roas ?? 4),
+        target_tacos: Number(ps.target_tacos ?? 5),
+        max_tacos: Number(ps.max_tacos ?? 10),
+        daily_budget_cap: Number(ps.daily_budget_limit ?? 56),
+        target_cpc: Number(ps.target_cpc ?? 0.60),
+        max_cpc: Number(ps.max_cpc ?? 1.00),
+        min_bid: Number(ps.min_bid ?? 0.40),
+        max_bid: Number(ps.max_bid ?? 1.00),
+        max_bid_increase_percent: Number(ps.max_bid_increase_pct ?? 20),
+        max_bid_decrease_percent: Number(ps.max_bid_decrease_pct ?? 20),
+        min_campaign_budget: Number(ps.minimum_campaign_budget ?? 15),
+        budget_increment_allowed: Number(ps.campaign_budget_increment ?? 5),
+        weekly_campaign_capacity: Number(ps.weekly_campaign_capacity ?? 10),
+        ai_auto_optimization_enabled: Boolean(ps.ai_auto_optimization ?? false),
+        settings_source: 'PerformanceSettings',
+      };
+    }
+    if (!perfSettings) {
+      const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []);
+      const cfg = apList[0] || {};
+      perfSettings = {
+        target_acos: Number(cfg.target_acos ?? 10),
+        max_acos: Number(cfg.maximum_acos ?? 15),
+        target_roas: Number(cfg.target_roas ?? 4),
+        target_tacos: Number(cfg.target_tacos ?? 5),
+        max_tacos: Number(cfg.maximum_tacos ?? 10),
+        daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? 56),
+        target_cpc: Number(cfg.target_cpc ?? 0.60),
+        max_cpc: Number(cfg.maximum_cpc ?? 1.00),
+        min_bid: Number(cfg.min_bid ?? 0.40),
+        max_bid: Number(cfg.max_bid ?? 1.00),
+        max_bid_increase_percent: Number(cfg.max_bid_increase_pct ?? 20),
+        max_bid_decrease_percent: Number(cfg.max_bid_decrease_pct ?? 20),
+        min_campaign_budget: 15,
+        budget_increment_allowed: 5,
+        weekly_campaign_capacity: 10,
+        ai_auto_optimization_enabled: Boolean(cfg.ai_auto_optimization ?? false),
+        settings_source: 'AutopilotConfig',
+      };
+    }
+
+    const targetAcos = perfSettings.target_acos;
+    const maximumAcos = perfSettings.max_acos;
+    const targetRoas = perfSettings.target_roas;
+    const targetTacos = perfSettings.target_tacos;
+
+    const profitLearnings = await base44.asServiceRole.entities.ProductProfitabilityLearning.filter(
+      { amazon_account_id: aid }, null, 50
+    ).catch(() => []);
 
     // ── 2. Carregar dados dos últimos 7 dias ──────────────────────────────────
     const [
@@ -224,11 +279,17 @@ Deno.serve(async (req) => {
     // ── 4. Prompt IA (UMA chamada) ────────────────────────────────────────────
     const prompt = `Você é um especialista em Amazon Advertising otimizando campanhas Sponsored Products para um seller brasileiro.
 
-## METAS DO SELLER
-- ACoS alvo: ${targetAcos}% (máximo: ${maximumAcos}%)
+## METAS CONFIGURADAS (FONTE ÚNICA — ${perfSettings.settings_source})
+Estes valores vêm diretamente de Configurações > Metas de Performance. Você NÃO pode sugerir valores fora destes limites.
+- ACoS alvo: ${targetAcos}% | ACoS máximo: ${maximumAcos}%
 - ROAS alvo: ${targetRoas}x
-- TACoS alvo: ${targetTacos}%
-- Orçamento diário: R$50-65
+- TACoS alvo: ${targetTacos}% | TACoS máximo: ${perfSettings.max_tacos}%
+- Orçamento diário geral: R$${perfSettings.daily_budget_cap} (TETO ABSOLUTO)
+- CPC alvo: R$${perfSettings.target_cpc} | CPC máximo: R$${perfSettings.max_cpc} (${perfSettings.max_cpc > 0 ? 'ENFORÇADO' : 'inativo'})
+- Bid mínimo: R$${perfSettings.min_bid} | Bid máximo: R$${perfSettings.max_bid}
+- Aumento máximo de bid: ${perfSettings.max_bid_increase_percent}% | Redução máxima: ${perfSettings.max_bid_decrease_percent}%
+- Budget mínimo por campanha: R$${perfSettings.min_campaign_budget} | Incremento: R$${perfSettings.budget_increment_allowed}
+- Capacidade semanal de campanhas: ${perfSettings.weekly_campaign_capacity}
 
 ## MÉTRICAS DOS ÚLTIMOS 7 DIAS (dados reais)
 
@@ -285,9 +346,10 @@ REGRAS IMPORTANTES:
 4. Métricas disponíveis por campaign: spend, sales, orders, acos, daily_budget
 5. Operadores: greater_than, less_than, greater_than_or_equal, less_than_or_equal, equals, not_equals, between
 6. Action types: increase_bid_percent, decrease_bid_percent, set_bid, pause_keyword
-7. Valores de bid change: máximo ${MAX_BID_CHANGE_PCT}% — prefira entre 5-10% dado o lag de 3 semanas
+7. Valores de bid change: máximo ${perfSettings.max_bid_increase_percent}% (aumento) e ${perfSettings.max_bid_decrease_percent}% (redução) conforme configurado — prefira 5-10%
 8. Cooldown mínimo: 504h (21 dias) para respeitar a janela de percepção de resultados
 9. expires_in_days: use 21 como padrão — a regra precisa de ao menos 3 semanas para ser avaliada
+10. RESTRIÇÕES ABSOLUTAS: bid nunca < R$${perfSettings.min_bid} e nunca > R$${perfSettings.max_bid}; budget diário nunca > R$${perfSettings.daily_budget_cap}
 
 Responda APENAS com JSON no formato:
 {
@@ -351,7 +413,7 @@ Responda APENAS com JSON no formato:
     const expiresAt = new Date(Date.now() + (RESULT_LAG_DAYS + 7) * 86400000).toISOString();
 
     for (const directive of parsed.directives) {
-      const validated = validateAndClampRule({ ...directive });
+      const validated = validateAndClampRule({ ...directive, _settings: perfSettings });
       if (!validated.valid) {
         skipped.push({ rule_key: directive.rule_key, reason: validated.reason });
         continue;

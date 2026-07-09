@@ -4,9 +4,8 @@
  * REGRA ABSOLUTA: Este módulo NÃO chama Claude, nenhum LLM, nenhuma IA.
  * Carrega regras vigentes do banco e executa decisões puramente calculadas.
  *
- * Guardrails financeiros protegidos (codificados — não vêm do banco):
- *   Budget total automático: R$50–R$65
- *   Bid mínimo: R$0.10 | Bid máximo: R$5.00
+ * Guardrails financeiros: lidos de Configurações > Metas de Performance via getPerformanceSettings.
+ *   Fonte única — nenhum valor fixo hardcoded neste motor.
  *   Toda ação passa pela fila com idempotency_key
  *
  * v3: Metodologia oficial Amazon Ads / MRC incorporada:
@@ -20,12 +19,14 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MIN_TOTAL_DAILY_BUDGET = 50;
-const TARGET_TOTAL_DAILY_BUDGET = 60;
-const MAX_TOTAL_DAILY_BUDGET = 65;
-const MIN_BID = 0.10;
-const MAX_BID = 5.0;
-const MAX_BID_CHANGE_PCT = 0.30;
+// ── Constantes de fallback — usadas APENAS se getPerformanceSettings falhar ──
+// Fonte real: Configurações > Metas de Performance (carregado no início do handler)
+const FALLBACK_MIN_BID = 0.40;
+const FALLBACK_MAX_BID = 1.00;
+const FALLBACK_MAX_BID_CHANGE_PCT = 0.20;
+const FALLBACK_DAILY_BUDGET_CAP = 56;
+const FALLBACK_TARGET_ACOS = 10;
+const FALLBACK_MAX_ACOS = 15;
 
 // ── Constantes de qualidade de dados (Metodologia MRC/Amazon Ads) ─────────────
 // Cliques retornados pela API são SEMPRE líquidos pós-GIVT/SIVT — não há cliques brutos
@@ -61,173 +62,202 @@ const CONFLICT_PRIORITY = {
 // Quando não há histórico de vendas (stockVelocity = 0), cobertura = 999 dias
 // mas o produto NÃO entra nas regras de boost — exige pelo menos 1 venda nos 30d.
 
-const STOCK_RULES = [
-  {
-    rule_key: 'stock_zero',
-    label: 'Sem estoque — bid mínimo',
-    cooldown_hours: 24,
-    // Só atua se tem campanha ativa mas estoque zerado
-    matches: (d: any) => d.stock === 0,
-    action: (_d: any) => MIN_BID,
-    reason: 'Produto sem estoque. Bid reduzido ao mínimo para evitar gasto sem capacidade de venda.',
-    is_boost: false,
-  },
-  {
-    rule_key: 'stock_critical_pause',
-    label: 'Estoque crítico (< 7 dias) — reduzir bid 25%',
-    cooldown_hours: 48,
-    matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7,
-    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.75),
-    reason: 'Estoque crítico: < 7 dias de cobertura. Bid reduzido 25% para proteger estoque.',
-    is_boost: false,
-  },
-  {
-    rule_key: 'stock_low_reduce',
-    label: 'Estoque baixo (7–21 dias) — reduzir bid 10%',
-    cooldown_hours: 48,
-    matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 7 && d.stock_coverage_days < 21,
-    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.90),
-    reason: 'Estoque baixo: 7–21 dias de cobertura. Bid reduzido 10% para proteger ritmo de vendas.',
-    is_boost: false,
-  },
-  {
-    rule_key: 'stock_high_boost',
-    label: 'Estoque alto (60–90 dias) — aumentar bid 10%',
-    cooldown_hours: 48,
-    // Exige velocidade de venda real para evitar boost em produto sem histórico
-    matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.10),
-    reason: 'Estoque alto: 60–90 dias de cobertura. Bid aumentado 10% para acelerar giro.',
-    is_boost: true,
-  },
-  {
-    rule_key: 'stock_excess_liquidate',
-    label: 'Excesso de estoque (> 90 dias) — aumentar bid 15%',
-    cooldown_hours: 48,
-    // Exige velocidade de venda real para evitar boost em produto sem histórico
-    matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 90,
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
-    reason: 'Excesso de estoque: > 90 dias de cobertura. Bid aumentado 15% para liquidação agressiva.',
-    is_boost: true,
-  },
-];
+// STOCK_RULES são geradas dinamicamente no handler após carregar settings
+// para usar min_bid/max_bid configurados. Ver função buildStockRules(settings).
 
-// ── Regras nativas de ACoS por produto (30 dias) ─────────────────────────────
-// Calculam o ACoS real por ASIN (spend ads / vendas ads 30d) e comparam com a
-// meta global (AutopilotConfig.target_acos). Ajustam bid proporcionalmente.
-//
-//   ACoS real >> meta (+50%+)  → reduzir bid 15% — produto gastando demais
-//   ACoS real >  meta (+20–50%) → reduzir bid 8% — acima da meta
-//   ACoS real <  meta (-30%–)  → aumentar bid 8% — espaço para crescer
-//   Zona neutra (±20%)          → sem ação
-//
-// Requisitos mínimos: ≥10 cliques E ≥R$5 de spend nos últimos 30d.
-// Cooldown: 72h para evitar oscilação excessiva.
+// ACOS_RULES são geradas dinamicamente no handler após carregar settings.
+// Ver função buildAcosRules(settings).
 
-// ── Regras de ACoS com metodologia MRC ───────────────────────────────────────
-// IMPORTANTE: usa janela de 14d (escopo MRC primário) não 30d para decisões de bid.
-// Evidência mínima: MIN_CLICKS_FOR_DECISION cliques líquidos + MIN_IMPRESSIONS validadas.
-// CVR (conversão click→order) incluído como sinal de qualidade:
-//   CVR < 0.5% com alto gasto → provável tráfego de baixa intenção, reduzir mais agressivamente.
-// CTR mínimo garante que o criativo foi renderizado (sem impressão prévia, clique é descartado pela Amazon).
+// ── Factory de regras nativas — usa settings configurados ─────────────────────
 
-const ACOS_RULES = [
-  {
-    rule_key: 'acos_way_above_target',
-    label: 'ACoS muito acima da meta (>50%) — reduzir bid 15%',
-    cooldown_hours: 72,
-    // Usa clicks_14d e spend_14d alinhado à janela MRC primária (14d)
-    // CTR mínimo: garante evidência de impressão real (clique sem impressão = descartado pela Amazon)
-    matches: (d: any) =>
-      d.acos_14d !== null &&
-      d.target_acos > 0 &&
-      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-      d.acos_14d > d.target_acos * 1.5,
-    action: (d: any) => {
-      // CVR muito baixo (< 0.5%) indica tráfego de baixa intenção → redução mais agressiva
-      const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
-      const factor = cvr < 0.005 && d.spend_14d >= 10 ? 0.80 : 0.85;
-      return Math.max(MIN_BID, d.current_bid * factor);
+function buildStockRules(settings: any) {
+  const MIN_BID = settings.min_bid;
+  const MAX_BID = settings.max_bid;
+  return [
+    {
+      rule_key: 'stock_zero',
+      label: 'Sem estoque — bid mínimo',
+      cooldown_hours: 24,
+      matches: (d: any) => d.stock === 0,
+      action: (_d: any) => MIN_BID,
+      reason: `Produto sem estoque. Bid reduzido ao mínimo configurado (R$${MIN_BID}).`,
+      goal_protected: 'Bid Mínimo',
+      is_boost: false,
     },
-    reason_fn: (d: any) => {
-      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
-      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_14d / d.target_acos - 1) * 100)}%). CVR: ${cvr}% | CTR: ${ctr}%. Bid reduzido. [Cliques líquidos pós-GIVT/SIVT]`;
+    {
+      rule_key: 'stock_critical_pause',
+      label: 'Estoque crítico (< 7 dias) — reduzir bid',
+      cooldown_hours: 48,
+      matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7,
+      action: (d: any) => Math.max(MIN_BID, d.current_bid * (1 - settings.max_bid_decrease_percent / 100 * 0.75)),
+      reason: `Estoque crítico: < 7 dias de cobertura. Bid reduzido respeitando Bid Mínimo R$${MIN_BID}.`,
+      goal_protected: 'Bid Mínimo',
+      is_boost: false,
     },
-    is_boost: false,
-  },
-  {
-    rule_key: 'acos_above_target',
-    label: 'ACoS acima da meta (20–50%) — reduzir bid 8%',
-    cooldown_hours: 72,
-    matches: (d: any) =>
-      d.acos_14d !== null &&
-      d.target_acos > 0 &&
-      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-      d.acos_14d > d.target_acos * 1.2 && d.acos_14d <= d.target_acos * 1.5,
-    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.92),
-    reason_fn: (d: any) => {
-      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
-      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_14d / d.target_acos - 1) * 100)}%). CTR: ${ctr}%. Bid reduzido 8%. [Janela MRC 14d]`;
+    {
+      rule_key: 'stock_low_reduce',
+      label: 'Estoque baixo (7–21 dias) — reduzir bid 10%',
+      cooldown_hours: 48,
+      matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 7 && d.stock_coverage_days < 21,
+      action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.90),
+      reason: `Estoque baixo: 7–21 dias de cobertura. Bid reduzido 10% respeitando mínimo R$${MIN_BID}.`,
+      goal_protected: 'Bid Mínimo',
+      is_boost: false,
     },
-    is_boost: false,
-  },
-  {
-    rule_key: 'acos_below_target',
-    label: 'ACoS abaixo da meta (>30% abaixo) — aumentar bid 8%',
-    cooldown_hours: 72,
-    // Boost só com CVR positivo (≥1 order em 14d) e CTR válido — garante intenção real de compra
-    matches: (d: any) =>
-      d.acos_14d !== null &&
-      d.target_acos > 0 &&
-      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-      (d.orders_14d || 0) >= 1 &&
-      d.sales_14d > 0 &&
-      d.acos_14d < d.target_acos * 0.7,
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.08),
-    reason_fn: (d: any) => {
-      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
-      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (-${Math.round((1 - d.acos_14d / d.target_acos) * 100)}%). CVR: ${cvr}% | CTR: ${ctr}%. Espaço para crescer. Bid +8%. [Janela MRC 14d]`;
+    {
+      rule_key: 'stock_high_boost',
+      label: 'Estoque alto (60–90 dias) — aumentar bid',
+      cooldown_hours: 48,
+      matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
+      action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.10),
+      reason: `Estoque alto: 60–90 dias de cobertura. Bid aumentado 10% respeitando máximo R$${MAX_BID}.`,
+      goal_protected: 'Bid Máximo',
+      is_boost: true,
     },
-    is_boost: true,
-  },
-  {
-    // Nova regra: alto CVR com ACoS dentro da meta → oportunidade de escala
-    rule_key: 'high_cvr_scale_opportunity',
-    label: 'CVR alto + ACoS OK — escalar bid 5%',
-    cooldown_hours: 96,
-    matches: (d: any) => {
-      const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
-      const ctr = d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0;
-      return (
+    {
+      rule_key: 'stock_excess_liquidate',
+      label: 'Excesso de estoque (> 90 dias) — aumentar bid',
+      cooldown_hours: 48,
+      matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 90,
+      action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
+      reason: `Excesso de estoque: > 90 dias de cobertura. Bid aumentado 15% respeitando máximo R$${MAX_BID}.`,
+      goal_protected: 'Bid Máximo',
+      is_boost: true,
+    },
+  ];
+}
+
+function buildAcosRules(settings: any) {
+  const MIN_BID = settings.min_bid;
+  const MAX_BID = settings.max_bid;
+  const MAX_INCREASE_PCT = settings.max_bid_increase_percent / 100;
+  const MAX_DECREASE_PCT = settings.max_bid_decrease_percent / 100;
+  const TARGET_ACOS = settings.target_acos;
+  const MAX_ACOS = settings.max_acos;
+  const TARGET_ROAS = settings.target_roas;
+  const MAX_CPC = settings.max_cpc;
+  const ENFORCE_CPC = settings.enforce_max_cpc;
+
+  return [
+    {
+      rule_key: 'acos_above_max',
+      label: `ACoS acima do máximo (>${MAX_ACOS}%) — reduzir bid ${Math.round(MAX_DECREASE_PCT * 100)}%`,
+      cooldown_hours: 72,
+      matches: (d: any) =>
         d.acos_14d !== null &&
-        d.target_acos > 0 &&
-        d.clicks_14d >= MIN_CLICKS_FOR_DECISION * 2 && // evidência mais forte para boost
-        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION * 2 &&
-        ctr >= MIN_CTR_QUALITY &&
-        cvr >= 0.03 && // CVR ≥ 3% = alta intenção de compra
-        d.acos_14d <= d.target_acos * 0.9 && // ACoS dentro ou abaixo da meta
-        (d.orders_14d || 0) >= 2
-      );
+        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+        d.acos_14d > MAX_ACOS,
+      action: (d: any) => {
+        const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
+        const factor = 1 - (cvr < 0.005 && d.spend_14d >= 10 ? MAX_DECREASE_PCT : MAX_DECREASE_PCT * 0.75);
+        return Math.max(MIN_BID, d.current_bid * factor);
+      },
+      reason_fn: (d: any) => {
+        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% ACIMA do máximo configurado ${MAX_ACOS}%. CVR: ${cvr}%. Bid reduzido. Meta protegida: ACoS Máximo. [Configurações > Metas de Performance]`;
+      },
+      goal_protected: 'ACoS Máximo',
+      is_boost: false,
     },
-    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.05),
-    reason_fn: (d: any) => {
-      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-      return `CVR: ${cvr}% (alta intenção) + ACoS 14d: ${d.acos_14d.toFixed(1)}% dentro da meta. Oportunidade de escala. Bid +5%.`;
+    {
+      rule_key: 'acos_above_target',
+      label: `ACoS entre alvo e máximo (${TARGET_ACOS}%–${MAX_ACOS}%) — reduzir bid levemente`,
+      cooldown_hours: 72,
+      matches: (d: any) =>
+        d.acos_14d !== null &&
+        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+        d.acos_14d > TARGET_ACOS && d.acos_14d <= MAX_ACOS,
+      action: (d: any) => Math.max(MIN_BID, d.current_bid * (1 - Math.min(0.10, MAX_DECREASE_PCT * 0.5))),
+      reason_fn: (d: any) => {
+        const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
+        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% acima do alvo ${TARGET_ACOS}% (zona de atenção). CTR: ${ctr}%. Bid reduzido levemente. Meta protegida: ACoS Alvo. [Configurações > Metas de Performance]`;
+      },
+      goal_protected: 'ACoS Alvo',
+      is_boost: false,
     },
-    is_boost: true,
-  },
-];
+    {
+      rule_key: 'acos_below_target',
+      label: `ACoS abaixo do alvo (<${TARGET_ACOS * 0.7}%) — aumentar bid`,
+      cooldown_hours: 72,
+      matches: (d: any) =>
+        d.acos_14d !== null &&
+        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+        (d.orders_14d || 0) >= 1 &&
+        d.sales_14d > 0 &&
+        d.acos_14d < TARGET_ACOS * 0.7 &&
+        // Guardrails adicionais configurados
+        (!ENFORCE_CPC || MAX_CPC <= 0 || (d.cpc_14d || d.cpc || 0) <= MAX_CPC) &&
+        (TARGET_ROAS <= 0 || (d.roas_14d || 0) >= TARGET_ROAS),
+      action: (d: any) => {
+        const pct = Math.min(MAX_INCREASE_PCT, 0.08);
+        return Math.min(MAX_BID, d.current_bid * (1 + pct));
+      },
+      reason_fn: (d: any) => {
+        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+        const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
+        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% abaixo do alvo ${TARGET_ACOS}% (espaço para crescer). CVR: ${cvr}% | CTR: ${ctr}%. Bid aumentado respeitando máximo R$${MAX_BID}. Meta protegida: ACoS Alvo + Bid Máximo. [Configurações > Metas de Performance]`;
+      },
+      goal_protected: 'ACoS Alvo',
+      is_boost: true,
+    },
+    {
+      rule_key: 'cpc_above_max',
+      label: `CPC acima do máximo (>R$${MAX_CPC}) — reduzir bid`,
+      cooldown_hours: 48,
+      matches: (d: any) =>
+        ENFORCE_CPC && MAX_CPC > 0 &&
+        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+        (d.clicks_14d > 0 ? d.spend_14d / d.clicks_14d : 0) > MAX_CPC,
+      action: (d: any) => {
+        const pct = Math.min(MAX_DECREASE_PCT, 0.20);
+        return Math.max(MIN_BID, d.current_bid * (1 - pct));
+      },
+      reason_fn: (d: any) => {
+        const currentCpc = d.clicks_14d > 0 ? (d.spend_14d / d.clicks_14d).toFixed(2) : '—';
+        return `CPC 14d: R$${currentCpc} ACIMA do máximo configurado R$${MAX_CPC}. Bid reduzido ${Math.round(Math.min(MAX_DECREASE_PCT, 0.20) * 100)}%. Meta protegida: CPC Máximo (Enforçar CPC ativo). [Configurações > Metas de Performance]`;
+      },
+      goal_protected: 'CPC Máximo',
+      is_boost: false,
+    },
+    {
+      rule_key: 'high_cvr_scale_opportunity',
+      label: 'CVR alto + ACoS OK — escalar bid',
+      cooldown_hours: 96,
+      matches: (d: any) => {
+        const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
+        const ctr = d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0;
+        const currentCpc = d.clicks_14d > 0 ? d.spend_14d / d.clicks_14d : 0;
+        return (
+          d.acos_14d !== null &&
+          d.clicks_14d >= MIN_CLICKS_FOR_DECISION * 2 &&
+          d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION * 2 &&
+          ctr >= MIN_CTR_QUALITY &&
+          cvr >= 0.03 &&
+          d.acos_14d <= TARGET_ACOS * 0.9 &&
+          (d.orders_14d || 0) >= 2 &&
+          (!ENFORCE_CPC || MAX_CPC <= 0 || currentCpc <= MAX_CPC)
+        );
+      },
+      action: (d: any) => Math.min(MAX_BID, d.current_bid * Math.min(1 + MAX_INCREASE_PCT * 0.25, 1.05)),
+      reason_fn: (d: any) => {
+        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+        return `CVR: ${cvr}% (alta intenção) + ACoS 14d: ${d.acos_14d.toFixed(1)}% dentro do alvo ${TARGET_ACOS}%. Bid +${Math.round(Math.min(MAX_INCREASE_PCT * 0.25, 0.05) * 100)}% respeitando máximo R$${MAX_BID}. Meta protegida: Bid Máximo + ACoS Alvo. [Configurações > Metas de Performance]`;
+      },
+      goal_protected: 'Bid Máximo',
+      is_boost: true,
+    },
+  ];
+}
 
 function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 
@@ -259,9 +289,13 @@ function entityMatchesRule(rule, entity) {
   return (rule.conditions || []).every(cond => evaluateCondition(cond, entity));
 }
 
-function calculateActionValue(rule, entity) {
+function calculateActionValue(rule, entity, settings: any) {
   const action = rule.action;
   const currentBid = entity.current_bid || entity.bid || 0.25;
+  const MIN_BID = settings.min_bid;
+  const MAX_BID = settings.max_bid;
+  const MAX_BID_CHANGE_PCT = settings.max_bid_increase_percent / 100;
+  const MAX_BID_REDUCE_PCT = settings.max_bid_decrease_percent / 100;
 
   switch (action.type) {
     case 'increase_bid_percent': {
@@ -269,7 +303,7 @@ function calculateActionValue(rule, entity) {
       return Math.min(currentBid * (1 + pct), MAX_BID);
     }
     case 'decrease_bid_percent': {
-      const pct = Math.min(action.value / 100, MAX_BID_CHANGE_PCT);
+      const pct = Math.min(action.value / 100, MAX_BID_REDUCE_PCT);
       return Math.max(currentBid * (1 - pct), MIN_BID);
     }
     case 'set_bid':
@@ -425,6 +459,109 @@ Deno.serve(async (req) => {
     }
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada.' });
     const aid = account.id;
+
+    // ── 0. Carregar Metas de Performance (Fonte Única) ────────────────────
+    // OBRIGATÓRIO: todas as decisões de bid/budget/acos usam esses valores.
+    // Fallback em cascata: PerformanceSettings → AutopilotConfig → defaults do sistema.
+    let settings: any = null;
+    try {
+      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+        { amazon_account_id: aid }, '-updated_at', 1
+      );
+      if (psList.length > 0) {
+        const ps = psList[0];
+        settings = {
+          primary_metric: ps.primary_goal || 'acos',
+          strategic_goal: ps.objective || 'profitability',
+          target_acos: Number(ps.target_acos ?? FALLBACK_TARGET_ACOS),
+          max_acos: Number(ps.max_acos ?? FALLBACK_MAX_ACOS),
+          target_roas: Number(ps.target_roas ?? 4),
+          target_tacos: Number(ps.target_tacos ?? 5),
+          max_tacos: Number(ps.max_tacos ?? 10),
+          daily_budget_cap: Number(ps.daily_budget_limit ?? FALLBACK_DAILY_BUDGET_CAP),
+          target_cpc: Number(ps.target_cpc ?? 0.60),
+          max_cpc: Number(ps.max_cpc ?? 1.00),
+          enforce_max_cpc: ps.max_cpc > 0,
+          impressions_goal_enabled: Boolean(ps.impressions_goal_enabled ?? false),
+          min_bid: Number(ps.min_bid ?? FALLBACK_MIN_BID),
+          max_bid: Number(ps.max_bid ?? FALLBACK_MAX_BID),
+          max_bid_increase_percent: Number(ps.max_bid_increase_pct ?? 20),
+          max_bid_decrease_percent: Number(ps.max_bid_decrease_pct ?? 20),
+          min_campaign_budget: Number(ps.minimum_campaign_budget ?? 15),
+          budget_increment_allowed: Number(ps.campaign_budget_increment ?? 5),
+          weekly_campaign_capacity: Number(ps.weekly_campaign_capacity ?? 10),
+          pacing_enabled: Boolean(ps.pacing_enabled ?? true),
+          dayparting_enabled: Boolean(ps.dayparting_enabled ?? true),
+          placement_optimization_enabled: Boolean(ps.placement_optimization_enabled ?? true),
+          max_top_of_search_adjustment: Number(ps.top_of_search_limit ?? 0),
+          max_rest_of_search_adjustment: Number(ps.rest_of_search_limit ?? 0),
+          max_product_pages_adjustment: Number(ps.product_page_limit ?? 0),
+          ai_auto_optimization_enabled: Boolean(ps.ai_auto_optimization ?? false),
+          settings_source: 'PerformanceSettings',
+        };
+      }
+    } catch {}
+
+    if (!settings) {
+      // Fallback: AutopilotConfig
+      try {
+        const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1);
+        if (apList.length > 0) {
+          const cfg = apList[0];
+          settings = {
+            primary_metric: 'acos',
+            strategic_goal: cfg.objective || 'profitability',
+            target_acos: Number(cfg.target_acos ?? FALLBACK_TARGET_ACOS),
+            max_acos: Number(cfg.maximum_acos ?? FALLBACK_MAX_ACOS),
+            target_roas: Number(cfg.target_roas ?? 4),
+            target_tacos: Number(cfg.target_tacos ?? 5),
+            max_tacos: Number(cfg.maximum_tacos ?? 10),
+            daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? FALLBACK_DAILY_BUDGET_CAP),
+            target_cpc: Number(cfg.target_cpc ?? 0.60),
+            max_cpc: Number(cfg.maximum_cpc ?? 1.00),
+            enforce_max_cpc: Boolean(cfg.cpc_enforcement ?? true),
+            impressions_goal_enabled: Boolean(cfg.impressions_goal_enabled ?? false),
+            min_bid: Number(cfg.min_bid ?? FALLBACK_MIN_BID),
+            max_bid: Number(cfg.max_bid ?? FALLBACK_MAX_BID),
+            max_bid_increase_percent: Number(cfg.max_bid_increase_pct ?? 20),
+            max_bid_decrease_percent: Number(cfg.max_bid_decrease_pct ?? 20),
+            min_campaign_budget: 15,
+            budget_increment_allowed: 5,
+            weekly_campaign_capacity: 10,
+            pacing_enabled: Boolean(cfg.budget_optimization_enabled ?? true),
+            dayparting_enabled: Boolean(cfg.dayparting_enabled ?? true),
+            placement_optimization_enabled: Boolean(cfg.placement_optimization_enabled ?? true),
+            max_top_of_search_adjustment: Number(cfg.top_of_search_limit ?? 0),
+            max_rest_of_search_adjustment: Number(cfg.rest_of_search_limit ?? 0),
+            max_product_pages_adjustment: Number(cfg.product_page_limit ?? 0),
+            ai_auto_optimization_enabled: Boolean(cfg.ai_auto_optimization ?? false),
+            settings_source: 'AutopilotConfig',
+          };
+        }
+      } catch {}
+    }
+
+    // Defaults absolutos se nenhuma configuração encontrada
+    if (!settings) {
+      settings = {
+        primary_metric: 'acos', strategic_goal: 'profitability',
+        target_acos: FALLBACK_TARGET_ACOS, max_acos: FALLBACK_MAX_ACOS,
+        target_roas: 4, target_tacos: 5, max_tacos: 10,
+        daily_budget_cap: FALLBACK_DAILY_BUDGET_CAP,
+        target_cpc: 0.60, max_cpc: 1.00, enforce_max_cpc: true,
+        impressions_goal_enabled: false,
+        min_bid: FALLBACK_MIN_BID, max_bid: FALLBACK_MAX_BID,
+        max_bid_increase_percent: 20, max_bid_decrease_percent: 20,
+        min_campaign_budget: 15, budget_increment_allowed: 5, weekly_campaign_capacity: 10,
+        pacing_enabled: true, dayparting_enabled: true, placement_optimization_enabled: true,
+        max_top_of_search_adjustment: 0, max_rest_of_search_adjustment: 0, max_product_pages_adjustment: 0,
+        ai_auto_optimization_enabled: false, settings_source: 'system_defaults',
+      };
+    }
+
+    // Construir regras nativas com os parâmetros configurados
+    const STOCK_RULES = buildStockRules(settings);
+    const ACOS_RULES = buildAcosRules(settings);
 
     // ── 1. Regras vigentes ────────────────────────────────────────────────
     const allRules = await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' });
@@ -606,11 +743,11 @@ Deno.serve(async (req) => {
       : 999;
     const dataWithin14dWindow = metricDataAge <= ATTRIBUTION_WINDOW_DAYS;
 
-    // ── 5. Guardrail: budget total ────────────────────────────────────────
+    // ── 5. Guardrail: budget total (usa settings configurados) ───────────
     const totalActiveBudget = campaigns
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
       .reduce((s, c) => s + (c.daily_budget || 0), 0);
-    const suggestedTotalBudget = Math.min(MAX_TOTAL_DAILY_BUDGET, Math.max(MIN_TOTAL_DAILY_BUDGET, TARGET_TOTAL_DAILY_BUDGET));
+    const suggestedTotalBudget = settings.daily_budget_cap;
 
     // ── 6. Índices ────────────────────────────────────────────────────────
     const productMap = new Map(products.map(p => [p.asin, p]));
@@ -735,11 +872,12 @@ Deno.serve(async (req) => {
     const ACOS_MIN = 5;              // nunca usar meta abaixo de 5%
     const ACOS_MAX = 30;             // nunca usar meta acima de 30%
 
-    const [apConfigs, profitLearnings] = await Promise.all([
-      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
-    ]);
-    const globalTargetAcos = (apConfigs[0]?.target_acos) || 10;
+    // Meta global de ACoS vem dos settings configurados (não mais do AutopilotConfig diretamente)
+    const globalTargetAcos = settings.target_acos;
+
+    const profitLearnings = await base44.asServiceRole.entities.ProductProfitabilityLearning.filter(
+      { amazon_account_id: aid }, null, 200
+    ).catch(() => []);
 
     // Construir mapa asin → meta_acos calculada por produto
     // Fonte: ProductProfitabilityLearning.gross_margin_pct (margem bruta real dos últimos 30d)
@@ -1018,11 +1156,11 @@ Deno.serve(async (req) => {
           }
         }
 
-        const newValue = calculateActionValue(rule, entityData);
+        const newValue = calculateActionValue(rule, entityData, settings);
         const iKey = `det|${aid}|${rule.rule_key}|${entityId}|${today}`;
         if (usedIdemKeys.has(iKey)) { stats.skipped_dup++; continue; }
 
-        if (rule.action.type === 'redistribute_budget' && totalActiveBudget > MAX_TOTAL_DAILY_BUDGET) continue;
+        if (rule.action.type === 'redistribute_budget' && totalActiveBudget > settings.daily_budget_cap) continue;
 
         actionsToEnqueue.push({
           amazon_account_id: aid,
@@ -1065,7 +1203,21 @@ Deno.serve(async (req) => {
       data_age_hours: Math.round(dataAge),
       total_active_budget: Math.round(totalActiveBudget * 100) / 100,
       suggested_total_budget: suggestedTotalBudget,
-      budget_within_limits: totalActiveBudget <= MAX_TOTAL_DAILY_BUDGET,
+      budget_within_limits: totalActiveBudget <= settings.daily_budget_cap,
+      performance_settings: {
+        source: settings.settings_source,
+        target_acos: settings.target_acos,
+        max_acos: settings.max_acos,
+        target_roas: settings.target_roas,
+        target_tacos: settings.target_tacos,
+        daily_budget_cap: settings.daily_budget_cap,
+        min_bid: settings.min_bid,
+        max_bid: settings.max_bid,
+        max_bid_increase_percent: settings.max_bid_increase_percent,
+        max_bid_decrease_percent: settings.max_bid_decrease_percent,
+        enforce_max_cpc: settings.enforce_max_cpc,
+        max_cpc: settings.max_cpc,
+      },
       seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
       sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
       stock_rules: { applied: stats.stock_rules_applied },

@@ -13,6 +13,7 @@ import {
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
+import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -733,6 +734,21 @@ export default function Dashboard() {
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account && <UnifiedMetricsPanel amazonAccountId={account.id} />}
+
+      {/* ── 3d. METAS DE PERFORMANCE APLICADAS ──────────────────────────────── */}
+      {account && (
+        <PerformanceGoalsPanel
+          account={account}
+          metricsData={{
+            acos: kpis.acos,
+            roas: kpis.roas,
+            tacos: realSalesKpis.tacos,
+            cpc: kpis.cpc,
+            today_spend: spendYesterday,
+            total_budget: autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0,
+          }}
+        />
+      )}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
