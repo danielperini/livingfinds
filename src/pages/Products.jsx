@@ -441,10 +441,7 @@ export default function Products() {
             {syncingTitles || autoStockRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
             {syncingTitles ? 'Sincronizando...' : autoStockRunning ? 'Verificando estoque...' : 'Atualizar Estoque'}
           </button>
-          <button type="button" onClick={load} disabled={loading}
-            className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+
         </div>
       </div>
 
