@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, Megaphone, CheckCircle, Clock } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -169,16 +169,7 @@ export default function TermBankPageV2() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-
-          
-
-
-
-
-
-
-          
-          <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
+          <button onClick={load} disabled={loading} className="rounded-lg border border-surface-3 p-2 text-slate-300 disabled:opacity-50">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>

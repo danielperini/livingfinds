@@ -16,7 +16,7 @@ import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import { Link } from 'react-router-dom';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart as ReBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -600,14 +600,14 @@ export default function SalaDeComando() {
                 <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                   <h3 className="text-sm font-semibold text-slate-300 mb-3">Ajustes de Bid — 14 dias</h3>
                   <ResponsiveContainer width="100%" height={150}>
-                    <BarChart data={bidTrendData}>
+                    <ReBarChart data={bidTrendData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
                       <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
                       <YAxis allowDecimals={false} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
                       <Tooltip contentStyle={{ background: '#111318', border: '1px solid #1A1D26', borderRadius: 8, fontSize: 11 }} />
                       <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[2, 2, 0, 0]} stackId="a" />
                       <Bar dataKey="reducoes" name="Reduções" fill="#EF4444" radius={[2, 2, 0, 0]} stackId="a" />
-                    </BarChart>
+                    </ReBarChart>
                   </ResponsiveContainer>
                 </div>
               )}
