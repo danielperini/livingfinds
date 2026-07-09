@@ -180,19 +180,26 @@ Deno.serve(async (req) => {
           }
         }
 
-        // ── Buscar keywords da campanha via API ──────────────────────────────
-        const kwRes = await adsCall(token, account, 'GET',
-          `/sp/keywords?campaignIdFilter=${campaignId}&stateFilter=ENABLED&maxResults=10`
-        ).catch(() => ({ ok: false, data: {} }));
+        // ── Buscar keywords da campanha via API (v3) ──────────────────────────
+        const kwRes = await adsCall(token, account, 'POST', '/sp/keywords/list', {
+          stateFilter: { include: ['ENABLED', 'PAUSED'] },
+          campaignIdFilter: { include: [campaignId] },
+          maxResults: 20,
+        }).catch(() => ({ ok: false, data: {} }));
 
         const keywords: any[] = kwRes?.data?.keywords || [];
 
-        // ── DECISÃO: sem cliques e sem spend relevante → buscar substituta ──
+        // ── DECISÃO: sem cliques e sem spend relevante → pausar campanha e buscar substituta ──
         if (clicks < 3 && spend < 2.0) {
-          // Pausar keywords atuais da campanha
+          // Pausar a CAMPANHA inteira na Amazon (não apenas as keywords)
+          await adsCall(token, account, 'PUT', '/sp/campaigns', {
+            campaigns: [{ campaignId, state: 'PAUSED' }],
+          }).catch(() => {});
+          // Pausar as keywords individualmente também (redundância segura)
           if (keywords.length > 0) {
-            const pauseBody = { keywords: keywords.map((k: any) => ({ keywordId: k.keywordId, state: 'PAUSED' })) };
-            await adsCall(token, account, 'PUT', '/sp/keywords', pauseBody).catch(() => {});
+            await adsCall(token, account, 'PUT', '/sp/keywords', {
+              keywords: keywords.map((k: any) => ({ keywordId: k.keywordId, state: 'PAUSED' })),
+            }).catch(() => {});
           }
 
           // Buscar próxima sugestão não usada para o mesmo ASIN
@@ -210,10 +217,12 @@ Deno.serve(async (req) => {
 
           if (nextSug) {
             const newBid = Math.min(MAX_BID, Math.max(MIN_BID, nextSug.recommended_bid || nextSug.amazon_suggested_bid || 0.50));
-            // Buscar adGroupId da campanha
-            const agRes = await adsCall(token, account, 'GET',
-              `/sp/adGroups?campaignIdFilter=${campaignId}&stateFilter=ENABLED&maxResults=1`
-            ).catch(() => ({ ok: false, data: {} }));
+            // Buscar adGroupId da campanha (v3 POST list)
+            const agRes = await adsCall(token, account, 'POST', '/sp/adGroups/list', {
+              campaignIdFilter: { include: [campaignId] },
+              stateFilter: { include: ['ENABLED'] },
+              maxResults: 1,
+            }).catch(() => ({ ok: false, data: {} }));
             const adGroupId = agRes?.data?.adGroups?.[0]?.adGroupId;
 
             if (adGroupId) {
@@ -253,7 +262,7 @@ Deno.serve(async (req) => {
           // Gastando mas sem vender → reduzir bid em 20%
           const bidUpdates = keywords.map((k: any) => ({
             keywordId: k.keywordId,
-            bid: Math.max(MIN_BID, Math.round((k.bid || 0.5) * 0.80 * 100) / 100),
+            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || 0.5) * 0.80) * 100) / 100),
           }));
           if (bidUpdates.length > 0) {
             await adsCall(token, account, 'PUT', '/sp/keywords', { keywords: bidUpdates }).catch(() => {});
@@ -269,7 +278,7 @@ Deno.serve(async (req) => {
           // ACoS acima do limite → reduzir bid 15%
           const bidUpdates = keywords.map((k: any) => ({
             keywordId: k.keywordId,
-            bid: Math.max(MIN_BID, Math.round((k.bid || 0.5) * 0.85 * 100) / 100),
+            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || 0.5) * 0.85) * 100) / 100),
           }));
           if (bidUpdates.length > 0) {
             await adsCall(token, account, 'PUT', '/sp/keywords', { keywords: bidUpdates }).catch(() => {});
