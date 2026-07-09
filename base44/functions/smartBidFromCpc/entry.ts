@@ -1,28 +1,38 @@
 /**
- * smartBidFromCpc — Ajuste inteligente de bid baseado no CPC real
+ * smartBidFromCpc — Ajuste de bid baseado no CPC real
  *
- * Regras:
- * 1. Quando uma keyword começa a gerar gasto (spend > 0), o bid é ajustado para 50% do CPC real
- *    Exemplo: CPC = R$1.20 → bid alvo = R$0.60
- * 2. A cada execução (diária), o bid é recalibrado para manter o mínimo viável
- * 3. Se parar de ter impressões → calibrateBidsNoImpressions toma o controle (+R$0.10/24h)
- * 4. Teto: R$5.00 | Piso: R$0.10
+ * REGRAS DE SEGURANÇA (2026-07-09 — revisão pós-auditoria):
  *
- * CPC_BID_RATIO = 0.50 (bid = 50% do CPC médio observado)
- * Tolerância: só ajusta se a diferença for > R$0.05 para evitar micro-oscilações
+ * Para REDUZIR bid:
+ *   - Keyword deve ter >= 10 cliques (evidência estatística mínima)
+ *   - ACoS da keyword deve estar > target_acos * 1.2 (só reduz se realmente acima da meta)
+ *   - Sem vendas E gasto > R$8 → reduz para 50% do CPC
+ *   - Cooldown de 72h entre ajustes (verificado via last_bid_adjusted_at)
+ *   - Diferença mínima de R$0.10 para evitar micro-oscilações
+ *
+ * Para AUMENTAR bid:
+ *   - Keyword deve ter >= 1 venda (conversão confirmada)
+ *   - ACoS deve estar < target_acos * 0.8 (abaixo da meta = espaço para escalar)
+ *   - Cooldown de 96h
+ *
+ * NUNCA ajusta:
+ *   - Keywords sem histórico de gasto (spend = 0)
+ *   - Campanhas arquivadas ou pausadas
+ *   - Produtos sem estoque
+ *   - Keywords com ACoS dentro da meta (±20%) — já está funcionando
+ *   - Se o bid calculado for MAIOR que o atual durante modo de redução
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MAX_BID = 5.00;
-const MIN_BID = 0.25; // piso mínimo — bid nunca cai abaixo de R$0.25
-const CPC_BID_RATIO = 0.50;   // bid = 50% do CPC real
-const MIN_DELTA = 0.05;        // só ajusta se diferença > R$0.05
-
-const tokenCache = {};
+const MIN_BID = 0.40;          // floor absoluto — nunca abaixo de R$0,40
+const MIN_DELTA = 0.10;        // só ajusta se diferença > R$0.10
+const MIN_CLICKS = 10;         // evidência estatística mínima
+const MIN_SPEND_NO_SALES = 8;  // gasto mínimo sem venda para justificar redução
+const COOLDOWN_REDUCE_H = 72;  // horas entre reduções
+const COOLDOWN_INCREASE_H = 96;
 
 async function getAdsToken(refreshToken) {
-  const cached = tokenCache['smart'];
-  if (cached && cached.expires_at > Date.now() + 5000) return cached.access_token;
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -36,7 +46,6 @@ async function getAdsToken(refreshToken) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error_description || data.error || 'Token failed');
-  tokenCache['smart'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
   return data.access_token;
 }
 
@@ -47,8 +56,7 @@ function getAdsBaseUrl() {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsRequest(method, path, body, refreshToken, profileId) {
-  const token = await getAdsToken(refreshToken);
+async function adsRequest(method, path, body, token, profileId) {
   const res = await fetch(`${getAdsBaseUrl()}${path}`, {
     method,
     headers: {
@@ -69,10 +77,11 @@ async function adsRequest(method, path, body, refreshToken, profileId) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const now = new Date();
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    let payload = {};
-    try { payload = await req.clone().json(); } catch {}
+    const now = new Date();
+    const payload = await req.json().catch(() => ({}));
 
     const accounts = payload.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: payload.amazon_account_id })
@@ -82,8 +91,10 @@ Deno.serve(async (req) => {
       accounts_processed: 0,
       keywords_analyzed: 0,
       keywords_adjusted: 0,
-      keywords_skipped_no_cpc: 0,
-      keywords_skipped_small_delta: 0,
+      keywords_skipped_cooldown: 0,
+      keywords_skipped_within_target: 0,
+      keywords_skipped_insufficient_data: 0,
+      keywords_skipped_no_acos_context: 0,
       errors: [],
       adjustments: [],
     };
@@ -94,93 +105,162 @@ Deno.serve(async (req) => {
         const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
         if (!refreshToken || !profileId) continue;
 
-        // Carregar configuração de metas da IA
         const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1);
         const cfg = configs[0] || {};
-        const effectiveMinBid = cfg.min_bid || MIN_BID;
-        const effectiveMaxBid = cfg.max_bid || MAX_BID;
-        const targetAcos = cfg.target_acos || cfg.acos_target || 25;
-        const targetRoas = cfg.target_roas || cfg.roas_target || 4;
-        const priorityMode = cfg.ai_budget_priority_mode || 'acos_first';
-        const budgetEnforcement = cfg.ai_budget_enforcement === true;
-        const dailyBudgetTarget = cfg.ai_daily_budget_target || 0;
-        const targetTacos = cfg.target_tacos || 10;
+        const targetAcos = cfg.target_acos || cfg.acos_target || 10;
+        const effectiveMinBid = Math.max(MIN_BID, cfg.min_bid || MIN_BID);
+        const effectiveMaxBid = Math.min(MAX_BID, cfg.max_bid || MAX_BID);
 
-        // Calcular TACoS da conta se modo tacos_first
-        const accountTacos = account.tacos || 0;
-
-        // Buscar keywords ativas com gasto (cpc > 0 e spend > 0)
+        // Carregar keywords com gasto
         const keywords = await base44.asServiceRole.entities.Keyword.filter(
           { amazon_account_id: account.id, state: 'enabled' },
           '-spend',
           500
         );
 
+        // Carregar campanhas para verificar estado
+        const campaigns = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: account.id }, null, 300
+        );
+        const campaignStateMap = new Map();
+        for (const c of campaigns) {
+          const st = String(c.state || c.status || '').toLowerCase();
+          if (c.campaign_id) campaignStateMap.set(c.campaign_id, st);
+          if (c.amazon_campaign_id) campaignStateMap.set(c.amazon_campaign_id, st);
+        }
+
+        // Carregar produtos para verificar estoque
+        const products = await base44.asServiceRole.entities.Product.filter(
+          { amazon_account_id: account.id }, null, 200
+        );
+        const productMap = new Map(products.map(p => [p.asin, p]));
+
+        // Carregar last executions para cooldown
+        const recentExecs = await base44.asServiceRole.entities.AdsBidChangeLog.filter(
+          { amazon_account_id: account.id }, '-created_at', 2000
+        ).catch(() => []);
+        // Mapa keyword_id → timestamp da última alteração
+        const lastChangedAt = new Map();
+        for (const ex of recentExecs) {
+          if (!ex.keyword_id) continue;
+          const ts = ex.created_at || ex.created_date;
+          if (!ts) continue;
+          const existing = lastChangedAt.get(ex.keyword_id);
+          if (!existing || ts > existing) lastChangedAt.set(ex.keyword_id, ts);
+        }
+
+        const token = await getAdsToken(refreshToken);
         summary.keywords_analyzed += keywords.length;
 
         for (const kw of keywords) {
           const cpc = kw.cpc || 0;
           const spend = kw.spend || 0;
           const clicks = kw.clicks || 0;
-
-          // Só ajusta quando há CPC real (keyword com histórico de gasto)
-          if (cpc <= 0 || spend <= 0 || clicks < 2) {
-            summary.keywords_skipped_no_cpc++;
-            continue;
-          }
-
+          const orders = kw.orders || 0;
+          const sales = kw.sales || 0;
+          const acos = kw.acos || (sales > 0 ? spend / sales * 100 : 0);
           const currentBid = kw.current_bid || kw.bid || 0.25;
 
-          // Ajustar ratio baseado na prioridade da IA configurada
-          let dynamicRatio = CPC_BID_RATIO; // padrão 50%
-          if (priorityMode === 'roas_first') {
-            // ROAS-first: bid mais agressivo se ROAS do keyword está abaixo do alvo
-            const kwRoas = kw.sales > 0 && kw.spend > 0 ? kw.sales / kw.spend : 0;
-            dynamicRatio = kwRoas > 0 && kwRoas >= targetRoas ? 0.55 : 0.45;
-          } else if (priorityMode === 'acos_first') {
-            // ACoS-first: bid baseado em target_acos / acos_atual
-            const kwAcos = kw.acos || 0;
-            if (kwAcos > 0 && kwAcos > targetAcos) {
-              dynamicRatio = Math.max(0.35, CPC_BID_RATIO * (targetAcos / kwAcos));
-            }
-          } else if (priorityMode === 'tacos_first') {
-            // TACoS-first: reduzir ratio se TACoS da conta está acima do alvo
-            dynamicRatio = accountTacos > targetTacos ? 0.40 : 0.55;
-          } else if (priorityMode === 'budget_first' && budgetEnforcement && dailyBudgetTarget > 0) {
-            // Budget-first: ratio inversamente proporcional ao consumo de orçamento
-            const totalSpend = keywords.reduce((s, k) => s + (k.spend || 0), 0);
-            const budgetUsagePct = totalSpend / dailyBudgetTarget;
-            dynamicRatio = budgetUsagePct >= 0.90 ? 0.35 : budgetUsagePct >= 0.70 ? 0.45 : 0.55;
-          }
-
-          // Bid alvo com ratio dinâmico, respeitando piso e teto configurados
-          const targetBid = parseFloat(
-            Math.min(Math.max(cpc * dynamicRatio, effectiveMinBid), effectiveMaxBid).toFixed(2)
-          );
-
-          // Só ajusta se a diferença for relevante (> R$0.05)
-          if (Math.abs(targetBid - currentBid) < MIN_DELTA) {
-            summary.keywords_skipped_small_delta++;
+          // Sem CPC real → pular
+          if (cpc <= 0 || spend <= 0) {
+            summary.keywords_skipped_insufficient_data++;
             continue;
           }
 
-          const direction = targetBid > currentBid ? 'increase' : 'decrease';
-          const reason = `CPC real R$${cpc.toFixed(2)} → bid alvo ${(dynamicRatio * 100).toFixed(0)}% do CPC (modo=${priorityMode}) = R$${targetBid.toFixed(2)} (era R$${currentBid.toFixed(2)})`;
+          // Evidência mínima
+          if (clicks < MIN_CLICKS) {
+            summary.keywords_skipped_insufficient_data++;
+            continue;
+          }
 
-          // budget_first enforcement: bloquear aumentos se orçamento atingido
-          if (priorityMode === 'budget_first' && budgetEnforcement && dailyBudgetTarget > 0 && direction === 'increase') {
-            const totalSpend = keywords.reduce((s, k) => s + (k.spend || 0), 0);
-            if (totalSpend >= dailyBudgetTarget * 0.95) {
-              summary.keywords_skipped_small_delta++;
+          // Campanha não ativa → pular
+          const campState = campaignStateMap.get(kw.campaign_id) || '';
+          if (campState && !['enabled', 'active'].includes(campState)) {
+            summary.keywords_skipped_insufficient_data++;
+            continue;
+          }
+
+          // Produto sem estoque → pular
+          const product = kw.asin ? productMap.get(kw.asin) : null;
+          if (product?.inventory_status === 'out_of_stock' || (product && (product.fba_inventory || 0) === 0)) {
+            summary.keywords_skipped_insufficient_data++;
+            continue;
+          }
+
+          // ACoS dentro da meta (±20%) → NÃO mexer
+          const acosLower = targetAcos * 0.8;
+          const acosUpper = targetAcos * 1.2;
+          if (orders > 0 && acos >= acosLower && acos <= acosUpper) {
+            summary.keywords_skipped_within_target++;
+            continue;
+          }
+
+          // Determinar direção
+          let direction = 'hold';
+
+          // REDUÇÃO: ACoS muito acima da meta OU sem conversão com alto gasto
+          const shouldReduce =
+            (orders > 0 && acos > acosUpper) ||  // com vendas mas ACoS ruim
+            (orders === 0 && spend >= MIN_SPEND_NO_SALES);  // sem venda e gastou muito
+
+          // AUMENTO: ACoS bom + conversão confirmada
+          const shouldIncrease =
+            orders >= 1 &&
+            acos > 0 &&
+            acos < acosLower &&
+            currentBid < effectiveMaxBid * 0.8;  // ainda há espaço para crescer
+
+          if (shouldReduce) direction = 'decrease';
+          else if (shouldIncrease) direction = 'increase';
+          else { summary.keywords_skipped_within_target++; continue; }
+
+          // Cooldown
+          const kwId = kw.keyword_id;
+          const lastTs = kwId ? lastChangedAt.get(kwId) : null;
+          if (lastTs) {
+            const hoursAgo = (Date.now() - new Date(lastTs).getTime()) / 3600000;
+            const cooldown = direction === 'increase' ? COOLDOWN_INCREASE_H : COOLDOWN_REDUCE_H;
+            if (hoursAgo < cooldown) {
+              summary.keywords_skipped_cooldown++;
               continue;
             }
           }
+
+          // Calcular bid alvo
+          let targetBid;
+          if (direction === 'decrease') {
+            // Redução proporcional ao desvio do ACoS
+            // Ex: ACoS=20%, meta=10% → ratio = 10/20 = 0.50 → bid = 50% do CPC
+            const acosRatio = orders > 0 ? Math.min(0.55, Math.max(0.35, targetAcos / acos)) : 0.45;
+            targetBid = parseFloat(Math.max(effectiveMinBid, Math.min(cpc * acosRatio, currentBid - MIN_DELTA)).toFixed(2));
+          } else {
+            // Aumento conservador: +10% do bid atual, sem ultrapassar 60% do CPC
+            const maxFromCpc = Math.min(cpc * 0.60, effectiveMaxBid);
+            targetBid = parseFloat(Math.min(currentBid * 1.10, maxFromCpc).toFixed(2));
+          }
+
+          // Não ajustar se não há diferença real
+          if (Math.abs(targetBid - currentBid) < MIN_DELTA) {
+            summary.keywords_skipped_within_target++;
+            continue;
+          }
+
+          // Garantir que redução não vira aumento por arredondamento
+          if (direction === 'decrease' && targetBid >= currentBid) {
+            summary.keywords_skipped_within_target++;
+            continue;
+          }
+
+          const acosRatioPct = orders > 0 ? Math.round(targetAcos / acos * 100) : 45;
+          const reason = direction === 'decrease'
+            ? `CPC R$${cpc.toFixed(2)} | ACoS ${acos.toFixed(1)}% vs meta ${targetAcos}% → bid ${acosRatioPct}% do CPC = R$${targetBid.toFixed(2)} (era R$${currentBid.toFixed(2)})`
+            : `CPC R$${cpc.toFixed(2)} | ACoS ${acos.toFixed(1)}% abaixo da meta ${targetAcos}% → escalar bid +10% = R$${targetBid.toFixed(2)} (era R$${currentBid.toFixed(2)})`;
 
           // Enviar para Amazon
           const resp = await adsRequest(
             'PUT', '/sp/keywords',
             { keywords: [{ keywordId: kw.keyword_id, bid: targetBid }] },
-            refreshToken, profileId
+            token, profileId
           );
 
           if ([200, 207].includes(resp.status)) {
@@ -201,8 +281,8 @@ Deno.serve(async (req) => {
               change_percent: parseFloat((((targetBid - currentBid) / Math.max(currentBid, 0.01)) * 100).toFixed(1)),
               direction,
               reason,
-              evidence: `clicks=${clicks} spend=${spend.toFixed(2)} cpc=${cpc.toFixed(2)} ratio=${CPC_BID_RATIO}`,
-              ai_confidence: 85,
+              evidence: `clicks=${clicks} orders=${orders} spend=${spend.toFixed(2)} cpc=${cpc.toFixed(2)} acos=${acos.toFixed(1)}% target_acos=${targetAcos}%`,
+              ai_confidence: 80,
               risk_level: 'low',
               status: 'executed',
               created_at: now.toISOString(),
@@ -211,16 +291,18 @@ Deno.serve(async (req) => {
             summary.keywords_adjusted++;
             summary.adjustments.push({
               keyword: kw.keyword_text || kw.keyword,
-              cpc,
+              direction,
               old_bid: currentBid,
               new_bid: targetBid,
-              direction,
+              acos: parseFloat(acos.toFixed(1)),
+              target_acos: targetAcos,
+              orders,
             });
           } else {
             summary.errors.push(`kw ${kw.keyword_id}: HTTP ${resp.status}`);
           }
 
-          // Pausa para rate limits
+          // Rate limit
           await new Promise(r => setTimeout(r, 300));
         }
 
@@ -232,8 +314,11 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      rule: 'smart_bid_dynamic_cpc',
-      cpc_bid_ratio: CPC_BID_RATIO,
+      rule: 'smart_bid_acos_aware',
+      min_bid_floor: MIN_BID,
+      min_clicks_required: MIN_CLICKS,
+      cooldown_reduce_h: COOLDOWN_REDUCE_H,
+      cooldown_increase_h: COOLDOWN_INCREASE_H,
       summary,
       executed_at: now.toISOString(),
     });
