@@ -3,8 +3,9 @@ import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 import {
   Zap, RefreshCw, Play, Loader2, CheckCircle, XCircle,
-  Clock, AlertTriangle, ChevronDown, ChevronRight, Settings, Target
+  Clock, AlertTriangle, ChevronDown, ChevronRight, Settings, Target, History
 } from 'lucide-react';
+import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
 
 const ACTION_LABELS = {
   adjust_bid: 'Ajuste de Bid',
@@ -455,6 +456,20 @@ export default function StrategyEnginePage() {
           ))}
         </div>
       </div>
+
+      {/* Histórico de alterações nas Metas de Performance */}
+      {account && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <History className="w-4 h-4 text-slate-400" />
+            <p className="text-xs font-semibold text-slate-300">Histórico de Metas de Performance</p>
+            <Link to="/settings" className="ml-auto text-[10px] text-cyan hover:underline flex items-center gap-1">
+              <Settings className="w-3 h-3" />Editar metas
+            </Link>
+          </div>
+          <PerformanceSettingsHistoryTable accountId={account.id} />
+        </div>
+      )}
 
       {/* Lista de decisões */}
       {loading ? (

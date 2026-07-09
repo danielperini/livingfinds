@@ -153,13 +153,40 @@ export default function Settings() {
     if (!account) return;
     setGoalsSaving(true);
     try {
-      const payload = { ...goals, amazon_account_id: account.id, updated_at: new Date().toISOString() };
+      const now = new Date().toISOString();
+      const payload = { ...goals, amazon_account_id: account.id, updated_at: now };
+
+      // Detectar campos alterados para o histórico
+      const changedFields = [];
+      if (perfSettings) {
+        const TRACKED = ['target_acos','max_acos','target_roas','target_tacos','max_tacos','daily_budget_limit','target_cpc','max_cpc','min_bid','max_bid','max_bid_increase_pct','max_bid_decrease_pct','objective','primary_goal','dayparting_enabled','placement_optimization_enabled','top_of_search_limit','rest_of_search_limit','product_page_limit','ai_auto_optimization','minimum_campaign_budget','weekly_campaign_capacity'];
+        for (const field of TRACKED) {
+          const oldVal = perfSettings[field];
+          const newVal = goals[field];
+          if (String(oldVal ?? '') !== String(newVal ?? '')) {
+            changedFields.push({ field, old_value: oldVal ?? null, new_value: newVal ?? null });
+          }
+        }
+      }
+
       if (perfSettings) {
         await base44.entities.PerformanceSettings.update(perfSettings.id, payload);
       } else {
         const created = await base44.entities.PerformanceSettings.create(payload);
         setPerfSettings(created);
       }
+
+      // Gravar snapshot no histórico (sempre, mesmo sem diff detectado — primeiro save)
+      const me = user || await base44.auth.me();
+      base44.entities.PerformanceSettingsHistory.create({
+        amazon_account_id: account.id,
+        changed_by_id: me?.id || '',
+        changed_by_name: me?.full_name || '',
+        changed_by_email: me?.email || '',
+        snapshot: { ...goals },
+        changed_fields: changedFields,
+        changed_at: now,
+      }).catch(() => {});
       // Sincronizar com AutopilotConfig para compatibilidade com o motor existente
       const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id });
       const apPayload = {

@@ -1,0 +1,37 @@
+{
+  "name": "PerformanceSettingsHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "changed_by_id": {
+      "type": "string"
+    },
+    "changed_by_name": {
+      "type": "string"
+    },
+    "changed_by_email": {
+      "type": "string"
+    },
+    "snapshot": {
+      "type": "object",
+      "description": "C\u00f3pia completa dos valores salvos"
+    },
+    "changed_fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Lista de { field, old_value, new_value }"
+    },
+    "changed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "changed_at"
+  ]
+}
