@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Brain, RefreshCw, Play, CheckCircle, AlertTriangle, XCircle, Clock, Target, TrendingUp, TrendingDown, Zap, BookOpen, Shield, ChevronDown, ChevronRight } from 'lucide-react';
+import { Brain, RefreshCw, CheckCircle, AlertTriangle, XCircle, Clock, Target, TrendingUp, Zap, Shield, ChevronDown, ChevronRight } from 'lucide-react';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d);
 const fmtBRL = v => `R$${fmt(v)}`;
@@ -186,21 +186,20 @@ export default function WeeklyPrelectionPage() {
             <p className="text-xs text-slate-500">Claude analisa a semana e propõe melhorias — motor determinístico executa daily</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-surface-3 rounded-lg text-[10px] text-slate-400">
-            <Clock className="w-3 h-3" />
-            Próxima: {nextRun}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Último realizado */}
+          {prelections.length > 0 && prelections[0].completed_at && (
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+              <CheckCircle className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+              <span>Último: <span className="text-slate-300 font-medium">{new Date(prelections[0].completed_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</span></span>
+            </div>
+          )}
+          <span className="text-slate-700 hidden sm:inline">·</span>
+          {/* Próxima automática */}
+          <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+            <Clock className="w-3 h-3 flex-shrink-0" />
+            <span>Próxima automática: <span className="text-slate-300 font-medium">{nextRun}</span></span>
           </div>
-          <button onClick={() => runPrelection(true)} disabled={running || !account}
-            className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs rounded-lg transition-colors disabled:opacity-50">
-            <Play className="w-3.5 h-3.5" />
-            Simular
-          </button>
-          <button onClick={() => runPrelection(false)} disabled={running || !account}
-            className="flex items-center gap-1.5 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs rounded-lg transition-colors disabled:opacity-50">
-            {running ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            {running ? 'Executando...' : 'Executar Agora'}
-          </button>
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
