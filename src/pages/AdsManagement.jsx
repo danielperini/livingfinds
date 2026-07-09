@@ -346,19 +346,24 @@ export default function AdsManagement() {
     setCampaignAction('pausing');
     setCampaignActionMsg(null);
     try {
-      await base44.functions.invoke('pauseCampaign', {
+      const response = await base44.functions.invoke('pauseCampaign', {
         amazon_account_id: account.id,
         campaign_id: selectedCampaign.campaign_id,
+        asin: selectedCampaign.asin,
       });
-      await base44.entities.Campaign.update(selectedCampaign.id, { state: 'paused', status: 'paused' });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
+      // Atualizar estado local imediatamente
       setSelectedCampaign(prev => ({ ...prev, state: 'paused', status: 'paused' }));
       setCampaigns(prev => prev.map(c => c.id === selectedCampaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
-      setCampaignActionMsg({ type: 'success', text: 'Campanha pausada.' });
+      const msg = response.data.api_warning
+        ? `Pausada localmente. Sincronização com Amazon pendente.`
+        : 'Campanha pausada com sucesso.';
+      setCampaignActionMsg({ type: 'success', text: msg });
     } catch (e) {
       setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
     } finally {
       setCampaignAction(null);
-      setTimeout(() => setCampaignActionMsg(null), 5000);
+      setTimeout(() => setCampaignActionMsg(null), 7000);
     }
   };
 

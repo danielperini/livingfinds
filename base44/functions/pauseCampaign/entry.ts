@@ -101,60 +101,56 @@ Deno.serve(async (req) => {
     }
 
     // ── Chamar Amazon Ads API v3 — PATCH /sp/campaigns ─────────────────────
-    // A API v3 exige PATCH (não PUT) com Content-Type vnd.spCampaign.v3+json
-    const token = await getAdsToken(refreshToken);
-    const baseUrl = getAdsBaseUrl(account.region);
-    const CT = 'application/vnd.spCampaign.v3+json';
-
-    const amazonResponses: any[] = [];
     const pausedIds: string[] = [];
     const failedItems: any[] = [];
+    let apiAuthError = false;
+    let apiErrorMsg = '';
 
-    for (const batch of chunks(campaignIds, 100)) {
-      const response = await fetch(`${baseUrl}/sp/campaigns`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-          'Amazon-Advertising-API-Scope': String(profileId),
-          'Content-Type': CT,
-          'Accept': CT,
-        },
-        body: JSON.stringify({
-          campaigns: batch.map(id => ({ campaignId: id, state: 'PAUSED' })),
-        }),
-      });
+    try {
+      const token = await getAdsToken(refreshToken);
+      const baseUrl = getAdsBaseUrl(account.region);
+      const CT = 'application/vnd.spCampaign.v3+json';
 
-      const data = await response.json().catch(() => ({}));
-      amazonResponses.push({ status: response.status, data });
+      for (const batch of chunks(campaignIds, 100)) {
+        const response = await fetch(`${baseUrl}/sp/campaigns`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+            'Amazon-Advertising-API-Scope': String(profileId),
+            'Content-Type': CT,
+            'Accept': CT,
+          },
+          body: JSON.stringify({
+            campaigns: batch.map(id => ({ campaignId: id, state: 'PAUSED' })),
+          }),
+        });
 
-      const successes = data?.campaigns?.success || data?.success || [];
-      const errors    = data?.campaigns?.error   || data?.error   || [];
+        const data = await response.json().catch(() => ({}));
+        const successes = data?.campaigns?.success || data?.success || [];
+        const errors    = data?.campaigns?.error   || data?.error   || [];
 
-      for (const s of successes) {
-        const id = s?.campaignId || s?.campaign?.campaignId;
-        if (id) pausedIds.push(String(id));
-      }
-      for (const e of errors) failedItems.push(e);
-
-      // Se HTTP falhou e sem nenhum sucesso parcial — retornar erro
-      if (!response.ok && !successes.length) {
-        // Marcar conta como error para diagnóstico
-        if (response.status === 401 || response.status === 403) {
-          await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
-            status: 'error',
-            error_message: `Token expirado ao pausar campanhas: HTTP ${response.status}`,
-          }).catch(() => {});
+        for (const s of successes) {
+          const id = s?.campaignId || s?.campaign?.campaignId;
+          if (id) pausedIds.push(String(id));
         }
-        return Response.json({
-          ok: false,
-          error: `Amazon retornou HTTP ${response.status}`,
-          amazon_response: data,
-        }, { status: 500 });
+        for (const e of errors) failedItems.push(e);
+
+        if (!response.ok && !successes.length) {
+          if (response.status === 401 || response.status === 403) {
+            apiAuthError = true;
+            apiErrorMsg = `Token sem permissão para pausar (HTTP ${response.status}): ${data?.message || data?.error || 'Not authorized'}`;
+          } else {
+            apiErrorMsg = `Amazon HTTP ${response.status}: ${data?.message || data?.error || ''}`;
+          }
+        }
       }
+    } catch (apiErr: any) {
+      apiErrorMsg = `Erro ao chamar Amazon API: ${apiErr?.message}`;
     }
 
-    // ── Atualizar banco local ───────────────────────────────────────────────
+    // ── Atualizar banco local sempre (pausar localmente independente da API) ─
+    // Se a API falhou, a pausa local garante consistência visual e enfileira retry.
     const confirmedIds = pausedIds.length ? unique(pausedIds) : campaignIds;
     const now = new Date().toISOString();
 
@@ -194,9 +190,34 @@ Deno.serve(async (req) => {
       event_type: 'product_campaigns_paused',
       entity_type: 'product',
       entity_id: String(targetAsin || targetSku || campaign_id),
-      observation: `${confirmedIds.length} campanhas pausadas via PATCH v3. Produto retornou ao Kick-off.`,
+      observation: `${confirmedIds.length} campanhas pausadas localmente. API Amazon: ${apiErrorMsg || 'ok'}.`,
       recorded_at: now,
     }).catch(() => {});
+
+    // Se houve erro de autenticação, marcar conta para diagnóstico mas ainda retornar ok
+    if (apiAuthError) {
+      await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
+        error_message: apiErrorMsg,
+      }).catch(() => {});
+    }
+
+    // Enfileirar ação de pausa para retry via API quando o token for renovado
+    if (apiErrorMsg && !pausedIds.length) {
+      for (const cid of campaignIds) {
+        await base44.asServiceRole.entities.AmazonActionQueue.create({
+          amazon_account_id,
+          action_type: 'pause_campaign',
+          entity_type: 'campaign',
+          entity_id: cid,
+          payload: JSON.stringify({ campaign_id: cid, state: 'PAUSED' }),
+          status: 'pending',
+          priority: 'high',
+          reason: 'Pausa solicitada pelo usuário — API Amazon indisponível no momento',
+          created_at: now,
+          scheduled_for: now,
+        }).catch(() => {});
+      }
+    }
 
     return Response.json({
       ok: true,
@@ -207,7 +228,11 @@ Deno.serve(async (req) => {
       paused_campaign_ids: confirmedIds,
       failed: failedItems,
       product_reset_to_kickoff: true,
-      message: `${confirmedIds.length} campanhas pausadas com sucesso.`,
+      api_synced: pausedIds.length > 0,
+      api_warning: apiErrorMsg || null,
+      message: pausedIds.length > 0
+        ? `${confirmedIds.length} campanhas pausadas com sucesso.`
+        : `${confirmedIds.length} campanhas pausadas localmente. A sincronização com a Amazon ocorrerá automaticamente.`,
     });
 
   } catch (error: any) {
