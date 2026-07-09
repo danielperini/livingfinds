@@ -81,6 +81,17 @@
     },
     "error_message": {
       "type": "string"
+    },
+    "unified_reports_access": {
+      "type": "boolean",
+      "default": false
+    },
+    "unified_reports_last_test_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "unified_reports_last_error": {
+      "type": "string"
     }
   },
   "required": [

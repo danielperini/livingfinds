@@ -3,6 +3,10 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 const STEPS = [
   ['ads_states', 'syncAds'],
   ['ads_performance_metrics_30d', 'syncAdsPerformanceMetricsV2'],
+  ['unified_reports_access_test', 'testUnifiedReportsAccess'],
+  ['unified_reports_daily', 'syncUnifiedAdsReportsDaily'],
+  ['unified_reports_hourly', 'syncUnifiedAdsReportsHourly'],
+  ['reconcile_unified_vs_legacy', 'reconcileUnifiedVsLegacyMetrics'],
   ['reports', 'requestProductReports'],
   ['catalog_inventory', 'syncProductCatalogV2'],
   ['product_campaign_links', 'fixProductCampaignLinks'],
@@ -11,6 +15,7 @@ const STEPS = [
   ['exact_keyword_integrity_scan', 'scanExactKeywordIntegrity'],
   ['exact_keyword_repair_queue', 'processKeywordRepairQueue'],
   ['night_amazon_queue', 'processAmazonNightWindow'],
+  ['bid_decision_v2', 'runBidDecisionEngineV2'],
   ['bid_outcomes', 'evaluateBidChangeOutcomesV2'],
   ['learner', 'runLearnerCycle'],
   ['auto_vs_manual', 'evaluateAutoVsManualCampaigns'],

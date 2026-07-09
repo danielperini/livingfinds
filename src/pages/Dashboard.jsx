@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
+import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -729,6 +730,9 @@ export default function Dashboard() {
       {!loading && (
         <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
       )}
+
+      {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
+      {account && <UnifiedMetricsPanel amazonAccountId={account.id} />}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
