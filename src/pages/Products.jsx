@@ -172,6 +172,14 @@ export default function Products() {
     if (!account) return;
     const active = isCampaignActiveFn(product);
     setActionLoading(product.id);
+
+    // Atualização otimista imediata — reflete pausa antes da API responder
+    if (active) {
+      setProducts(cur => cur.map(p =>
+        p.id === product.id ? { ...p, campaign_status: 'paused', has_campaign: true } : p
+      ));
+    }
+
     try {
       if (active) {
         // Enviar campaign_id, asin E sku para maximizar as chances de a função backend
