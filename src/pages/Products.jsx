@@ -73,7 +73,7 @@ export default function Products() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
-  const [autoStockRunning, setAutoStockRunning] = useState(false);
+
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
 
@@ -99,13 +99,6 @@ export default function Products() {
   useEffect(() => {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Roda pausa/reativação automática sempre que produtos forem atualizados
-  useEffect(() => {
-    if (products.length > 0 && account && !autoStockRunning) {
-      runAutoStockActions(products, account);
-    }
-  }, [products.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
   // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
@@ -233,65 +226,6 @@ export default function Products() {
 
 
 
-  // ── Auto: pausar sem estoque / reativar com estoque ──────────────────────────
-  const runAutoStockActions = async (currentProducts, currentAccount) => {
-    if (!currentAccount) return;
-    setAutoStockRunning(true);
-    let paused = 0, activated = 0;
-
-    const toPause = currentProducts.filter(p =>
-      isCampaignActiveFn(p) && productHasCampaign(p) &&
-      (p.inventory_status === 'out_of_stock' || Number(p.fba_inventory || 0) === 0)
-    );
-
-    const toActivate = currentProducts.filter(p =>
-      productHasCampaign(p) && !isCampaignActiveFn(p) &&
-      p.campaign_status === 'paused' &&
-      (p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('stock')) &&
-      Number(p.fba_inventory || 0) > 0 && p.inventory_status !== 'out_of_stock'
-    );
-
-    for (const p of toPause) {
-      try {
-        const payload = { amazon_account_id: currentAccount.id };
-        const cid = campaignIdOf(p);
-        if (cid) payload.campaign_id = cid;
-        if (p.asin) payload.asin = p.asin;
-        if (p.sku) payload.sku = p.sku;
-        const r = await base44.functions.invoke('pauseCampaign', payload);
-        if (r?.data?.ok) {
-          await base44.entities.Product.update(p.id, { pause_reason: 'out_of_stock_confirmed' });
-          paused++;
-        }
-      } catch { /* continua */ }
-    }
-
-    for (const p of toActivate) {
-      try {
-        const cid = campaignIdOf(p);
-        const agentAction = await base44.entities.AgentAction.create({
-          amazon_account_id: currentAccount.id, action: 'enable_campaign', asin: p.asin,
-          campaign_id: cid, reason: 'Reativação automática — estoque reposto',
-          evidence: `FBA: ${p.fba_inventory}`, risk_level: 'low', requires_approval: false,
-        });
-        const r = await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
-        if (r?.data?.ok) {
-          await base44.entities.Product.update(p.id, { pause_reason: null });
-          activated++;
-        }
-      } catch { /* continua */ }
-    }
-
-    setAutoStockRunning(false);
-    if (paused > 0 || activated > 0) {
-      setActionMsg({ type: 'success', text: `Auto-estoque: ${paused} pausadas · ${activated} reativadas.` });
-      setTimeout(() => setActionMsg(null), 10000);
-    }
-    return { paused, activated };
-  };
-
-
-
   // ── Seleção em massa ────────────────────────────────────────────────────────
   const toggleSelect = (id) => setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const toggleSelectAll = () => selectedIds.size === paginated.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(paginated.map(p => p.id)));
@@ -380,11 +314,7 @@ export default function Products() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
 
-
-
-        </div>
       </div>
 
       {actionMsg && (
