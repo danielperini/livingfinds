@@ -418,11 +418,14 @@ export default function Products() {
 
           <button type="button" onClick={async () => {
               setSyncingTitles(true);
-              setActionMsg({ type: 'info', text: 'Sincronizando estoque via SP-API...' });
+              setActionMsg({ type: 'info', text: 'Sincronizando estoque e corrigindo vínculos...' });
               try {
-                const response = await base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id });
-                if (!response?.data?.ok) throw new Error(response?.data?.error || 'Erro ao sincronizar');
-                setActionMsg({ type: 'success', text: `${response.data.total_updated || 0} produtos atualizados.` });
+                const [syncRes] = await Promise.all([
+                  base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id }),
+                  base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: account.id }).catch(() => {}),
+                ]);
+                if (!syncRes?.data?.ok) throw new Error(syncRes?.data?.error || 'Erro ao sincronizar');
+                setActionMsg({ type: 'success', text: `${syncRes.data.total_updated || 0} produtos atualizados.` });
                 const result = await load();
                 if (result?.records && result?.currentAccount) {
                   await runAutoStockActions(result.records, result.currentAccount);
@@ -437,11 +440,6 @@ export default function Products() {
             className="flex items-center gap-2 px-3 py-2 bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/25 text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
             {syncingTitles || autoStockRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
             {syncingTitles ? 'Sincronizando...' : autoStockRunning ? 'Verificando estoque...' : 'Atualizar Estoque'}
-          </button>
-          <button type="button" onClick={fixCampaignLinks} disabled={fixingLinks || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-            {fixingLinks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-            {fixingLinks ? 'Corrigindo...' : 'Corrigir Vínculos'}
           </button>
           <button type="button" onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
