@@ -1,18 +1,17 @@
 /**
  * runWeeklyMotorPrelection — Preleção Semanal do Motor
  *
- * Executado 1x/semana (segunda 06h ou domingo 22h).
+ * Executado 1x/semana (quinta 03h50 BRT automático).
  * Claude atua como auditor estratégico — NÃO substitui o motor determinístico diário.
  *
  * Fluxo:
  *  1. Carregar metas (PerformanceSettings)
- *  2. Sincronizar dados Amazon (via invoke)
- *  3. Coletar métricas dos últimos 7 dias
- *  4. Preparar payload compacto para Claude
- *  5. Chamar Claude 1x com JSON estruturado
- *  6. Salvar WeeklyMotorPrelection
- *  7. Salvar MotorRuleChangeProposal (confidence >= 0.95 → approved, senão proposed)
- *  8. Enfileirar campanhas manuais recomendadas
+ *  2. Coletar métricas dos últimos 7 dias (banco + relatórios disponíveis + dados dashboard)
+ *  3. Preparar payload compacto para Claude
+ *  4. Chamar Claude 1x com JSON estruturado (sem timeout forçado)
+ *  5. Salvar WeeklyMotorPrelection
+ *  6. Salvar MotorRuleChangeProposal (confidence >= 0.95 → approved, senão proposed)
+ *  7. Enfileirar campanhas manuais recomendadas
  *
  * O QUE CLAUDE NÃO PODE FAZER (enforçado pelo código, não pelo prompt):
  *  - Inventar keywords (só aceita de Search Term ou Amazon Ads oficial)
@@ -30,7 +29,7 @@ const FALLBACK = { target_acos: 10, max_acos: 15, target_roas: 4, target_tacos: 
 
 function weekBounds(offsetWeeks = 0) {
   const now = new Date();
-  const dow = now.getDay(); // 0=dom
+  const dow = now.getDay();
   const daysSinceMonday = (dow + 6) % 7;
   const monday = new Date(now); monday.setDate(now.getDate() - daysSinceMonday - offsetWeeks * 7); monday.setHours(0,0,0,0);
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6); sunday.setHours(23,59,59,999);
@@ -39,12 +38,10 @@ function weekBounds(offsetWeeks = 0) {
 
 function clampBid(bid: number, s: any) { return Math.min(s.max_bid, Math.max(s.min_bid, bid)); }
 function fmt2(v: number) { return Math.round(v * 100) / 100; }
-
 function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2,8)}`; }
 
-// ── Detectar se estamos na janela Amazon de escrita ──
 function isInAmazonWindow(): boolean {
-  const brt = new Date(Date.now() - 3 * 3600000); // BRT = UTC-3
+  const brt = new Date(Date.now() - 3 * 3600000);
   const h = brt.getUTCHours();
   return (h >= 0 && h < 4) || (h >= 13 && h < 14);
 }
@@ -131,42 +128,44 @@ Deno.serve(async (req) => {
     });
     const prelectionId = prelectionRecord.id;
 
-    // ── 5. Sincronização de dados Amazon (antes da análise) ──────────────
+    // ── 5. Sincronização leve de dados Amazon (antes da análise) ──────────
     if (!dryRun) {
-      const syncFns = ['syncAdsQuick', 'fixProductCampaignLinks', 'evaluateDecisionOutcomes'];
-      for (const fn of syncFns) {
-        await base44.functions.invoke(fn, { amazon_account_id: aid }).catch(e => console.warn(`[prelection] sync ${fn} falhou:`, e.message));
-      }
-      // Sync unificado e reparos em paralelo
-      await Promise.allSettled([
-        base44.functions.invoke('syncUnifiedAdsReportsDaily', { amazon_account_id: aid }),
-        base44.functions.invoke('prepareAllCampaignRepairs', { amazon_account_id: aid }),
-        base44.functions.invoke('processAutoCampaignRepairQueueV2', { amazon_account_id: aid }),
-        base44.functions.invoke('processKeywordRepairQueue', { amazon_account_id: aid }),
-      ]);
+      // Serial: aguardar sincronização básica antes de coletar dados
+      await base44.functions.invoke('syncAdsQuick', { amazon_account_id: aid }).catch(e => console.warn('[prelection] syncAdsQuick falhou:', e.message));
+      await base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: aid }).catch(e => console.warn('[prelection] fixProductCampaignLinks falhou:', e.message));
+      await base44.functions.invoke('evaluateDecisionOutcomes', { amazon_account_id: aid }).catch(e => console.warn('[prelection] evaluateDecisionOutcomes falhou:', e.message));
     }
 
-    // ── 6. Coletar dados da semana ───────────────────────────────────────
+    // ── 6. Coletar dados — banco + relatórios + dashboard ────────────────
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0,10);
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0,10);
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
 
-    const [campaigns, products, keywords, metricsWeek, metrics30d, searchTerms, decisions, strategyLogs, bidLogs, unifiedMetrics] = await Promise.all([
+    // Coleta paralela: todas as fontes ao mesmo tempo
+    const [
+      campaigns, products, keywords, metricsWeek, searchTerms,
+      decisions, strategyLogs, bidLogs, unifiedMetrics,
+      activeRules, reportCatalog, benchmarks, syncLogs,
+    ] = await Promise.all([
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 300),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 200),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 500),
-      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 1000),
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders', 300).catch(() => []),
       base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
       base44.asServiceRole.entities.StrategyExecutionLog.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
       base44.asServiceRole.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
       base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 200).catch(() => []),
+      base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' }, null, 50).catch(() => []),
+      // Relatórios disponíveis no catálogo
+      base44.asServiceRole.entities.AmazonReportCatalog.filter({ amazon_account_id: aid }, '-created_at', 20).catch(() => []),
+      // Benchmarks de faturamento real (dados do dashboard)
+      base44.asServiceRole.entities.SellerPerformanceBenchmark.filter({ amazon_account_id: aid }, '-period_end', 4).catch(() => []),
+      // Últimas sincronizações (saúde dos dados)
+      base44.asServiceRole.entities.SyncRun.filter({ amazon_account_id: aid }, '-created_at', 10).catch(() => []),
     ]);
 
     // ── 7. Agregações determinísticas ────────────────────────────────────
 
-    // Métricas da semana
     const weekMetrics = metricsWeek.filter(m => m.date >= sevenDaysAgo && m.date <= yesterday);
     const weekTotals = weekMetrics.reduce((acc, m) => ({
       spend: acc.spend + (m.spend || 0),
@@ -179,6 +178,53 @@ Deno.serve(async (req) => {
     const weekRoas = weekTotals.spend > 0 ? fmt2(weekTotals.sales / weekTotals.spend) : 0;
     const weekCpc = weekTotals.clicks > 0 ? fmt2(weekTotals.spend / weekTotals.clicks) : 0;
 
+    // Unified metrics — agregar semana
+    const unifiedWeek = unifiedMetrics.filter(m => m.date >= sevenDaysAgo && m.date <= yesterday);
+    const unifiedTotals = unifiedWeek.reduce((acc, m) => ({
+      cost: acc.cost + (m.cost || 0),
+      purchases: acc.purchases + (m.purchases || 0),
+      sales: acc.sales + (m.sales || 0),
+      clicks: acc.clicks + (m.clicks || 0),
+      impressions: acc.impressions + (m.impressions || 0),
+      halo_sales: acc.halo_sales + (m.halo_sales || 0),
+      invalid_clicks: acc.invalid_clicks + (m.invalid_clicks || 0),
+    }), { cost: 0, purchases: 0, sales: 0, clicks: 0, impressions: 0, halo_sales: 0, invalid_clicks: 0 });
+
+    // Benchmark de faturamento real (dados do dashboard — evitar subestimação por latência)
+    const latestBenchmark = benchmarks[0] || null;
+    const dashboardRevenue = latestBenchmark ? {
+      period: `${latestBenchmark.period_start} – ${latestBenchmark.period_end}`,
+      gross_revenue: latestBenchmark.gross_revenue,
+      gross_margin_pct: latestBenchmark.gross_margin_pct,
+      tacos_pct: latestBenchmark.tacos_pct,
+      ads_spend: latestBenchmark.ads_spend,
+      units_sold: latestBenchmark.units_sold,
+      sales_count: latestBenchmark.sales_count,
+    } : null;
+
+    // TACoS real se tiver benchmark
+    let tacos: number | null = null;
+    if (dashboardRevenue && dashboardRevenue.gross_revenue > 0 && weekTotals.spend > 0) {
+      tacos = fmt2(weekTotals.spend / dashboardRevenue.gross_revenue * 100);
+    }
+
+    // Relatórios disponíveis (resumo para Claude)
+    const availableReports = reportCatalog.slice(0, 10).map((r: any) => ({
+      type: r.report_type || r.type,
+      status: r.status,
+      date: r.report_date || r.created_at?.slice(0,10),
+      processed: r.processed || false,
+    }));
+
+    // Saúde dos dados de sync
+    const lastSync = syncLogs[0];
+    const dataSyncHealth = lastSync ? {
+      last_sync_at: lastSync.created_at || lastSync.started_at,
+      status: lastSync.status,
+      campaigns_synced: lastSync.campaigns_synced || 0,
+      keywords_synced: lastSync.keywords_synced || 0,
+    } : null;
+
     // Classificar campanhas
     const activeCampaigns = campaigns.filter(c => ['enabled', 'ENABLED'].includes(String(c.state || c.status || '').toUpperCase()) && String(c.state || c.status || '').toLowerCase() !== 'archived');
     const pausedCampaigns = campaigns.filter(c => ['paused', 'PAUSED'].includes(String(c.state || c.status || '').toUpperCase()));
@@ -186,12 +232,10 @@ Deno.serve(async (req) => {
     const autoCampaigns = activeCampaigns.filter(c => (c.targeting_type || '').toLowerCase() === 'auto' || (c.campaign_name || c.name || '').toUpperCase().includes('AUTO'));
     const manualCampaigns = activeCampaigns.filter(c => (c.targeting_type || '').toLowerCase() === 'manual' || (c.campaign_name || c.name || '').toUpperCase().includes('MANUAL'));
 
-    // Produtos
     const activeProducts = products.filter(p => p.status === 'active' && Number(p.fba_inventory || 0) > 0);
     const outOfStockProducts = products.filter(p => Number(p.fba_inventory || 0) === 0);
     const productAsins = new Set(activeProducts.map(p => p.asin).filter(Boolean));
 
-    // Campanhas por ASIN
     const campaignsByAsin = new Map<string, any[]>();
     for (const c of activeCampaigns) {
       if (!c.asin) continue;
@@ -200,7 +244,6 @@ Deno.serve(async (req) => {
     }
     const asinsWithoutCampaign = activeProducts.filter(p => p.asin && !campaignsByAsin.has(p.asin)).map(p => p.asin);
 
-    // Top campanhas por gasto (semana)
     const spendByCampaign = new Map<string, number>();
     const salesByCampaign = new Map<string, number>();
     const ordersByCampaign = new Map<string, number>();
@@ -227,15 +270,10 @@ Deno.serve(async (req) => {
     const topCampsBySpend = campaignPerfRows.slice(0, 20);
     const topCampsBySales = [...campaignPerfRows].sort((a, b) => b.sales - a.sales).slice(0, 20);
 
-    // Campanhas com prejuízo (maturadas, ACoS > max, sem vendas)
     const losingCampaigns = campaignPerfRows.filter(c =>
-      c.matured &&
-      c.spend > 5 &&
-      (c.acos == null || c.acos > s.max_acos) &&
-      c.orders === 0
+      c.matured && c.spend > 5 && (c.acos == null || c.acos > s.max_acos) && c.orders === 0
     ).slice(0, 20);
 
-    // ── Search Terms vencedores ──────────────────────────────────────────
     const winningTerms = searchTerms.filter(t => {
       const orders = t.orders || 0;
       const sales = t.sales || 0;
@@ -251,7 +289,6 @@ Deno.serve(async (req) => {
       const acos = sales > 0 ? fmt2(spend / sales * 100) : 0;
       const roas = spend > 0 ? fmt2(sales / spend) : 0;
       const cpc = clicks > 0 ? fmt2(spend / clicks) : 0;
-      // Classificação determinística
       let classification = 'teste_promissor';
       if (acos <= s.target_acos && (t.orders || 0) >= 3) classification = 'vencedor_forte';
       else if (acos <= s.max_acos && (t.orders || 0) >= 1) classification = 'vencedor_moderado';
@@ -259,7 +296,6 @@ Deno.serve(async (req) => {
       return { search_term: t.query || t.search_term || t.term, asin: t.asin, campaign_id: t.campaign_id, campaign_type: t.campaign_type || 'AUTO', orders: t.orders || 0, sales, spend, acos, roas, cpc, classification };
     });
 
-    // Termos ruins (gasto alto, sem venda)
     const losingTerms = searchTerms.filter(t => {
       const spend = t.spend || 0;
       const orders = t.orders || 0;
@@ -273,25 +309,21 @@ Deno.serve(async (req) => {
       orders: 0,
     }));
 
-    // Bid changes da semana
     const recentBidChanges = bidLogs.filter(b => (b.created_at || b.created_date || '') >= sevenDaysAgo).slice(0, 30).map(b => ({
       keyword: b.keyword, direction: b.direction, old_bid: b.old_bid, new_bid: b.new_bid,
       change_pct: b.change_percent, reason: (b.reason || '').slice(0, 80),
     }));
 
-    // Verificar se algum bid violou limites
     const bidViolations = recentBidChanges.filter(b => b.new_bid < s.min_bid || b.new_bid > s.max_bid);
 
-    // Decisões executadas na semana
     const weekDecisions = decisions.filter(d => (d.created_at || '') >= sevenDaysAgo).slice(0, 30).map(d => ({
       action: d.action_type, status: d.status, reason: (d.reason || '').slice(0, 80), result: d.result_summary,
     }));
 
-    // ── Status de metas (determinístico) ─────────────────────────────────
     const goalStatus = {
       acos: weekAcos === 0 ? 'no_data' : weekAcos <= s.target_acos ? 'ok' : weekAcos <= s.max_acos ? 'warning' : 'critical',
       roas: weekRoas === 0 ? 'no_data' : weekRoas >= s.target_roas ? 'ok' : weekRoas >= s.target_roas * 0.75 ? 'warning' : 'critical',
-      tacos: 'no_data', // calculado se dados disponíveis
+      tacos: tacos == null ? 'no_data' : tacos <= s.target_tacos ? 'ok' : tacos <= s.max_tacos ? 'warning' : 'critical',
       cpc: weekCpc === 0 ? 'no_data' : weekCpc <= s.target_cpc ? 'ok' : weekCpc <= s.max_cpc ? 'warning' : 'critical',
       budget: 'ok',
     };
@@ -304,12 +336,31 @@ Deno.serve(async (req) => {
         target_roas: s.target_roas, target_tacos: s.target_tacos, max_tacos: s.max_tacos,
         daily_budget_cap: s.daily_budget_cap, target_cpc: s.target_cpc, max_cpc: s.max_cpc,
         min_bid: s.min_bid, max_bid: s.max_bid,
-        top_of_search_limit: s.top_of_search_limit, // 0 = não executar
+        top_of_search_limit: s.top_of_search_limit,
         rest_of_search_limit: s.rest_of_search_limit,
         product_page_limit: s.product_page_limit,
       },
       week: { start: weekStart, end: weekEnd },
-      week_metrics: { spend: fmt2(weekTotals.spend), sales: fmt2(weekTotals.sales), orders: weekTotals.orders, clicks: weekTotals.clicks, acos: weekAcos, roas: weekRoas, cpc: weekCpc },
+      week_metrics: {
+        spend: fmt2(weekTotals.spend), sales: fmt2(weekTotals.sales),
+        orders: weekTotals.orders, clicks: weekTotals.clicks,
+        acos: weekAcos, roas: weekRoas, cpc: weekCpc,
+      },
+      // Dados do dashboard (faturamento real sem viés de latência de atribuição)
+      dashboard_revenue: dashboardRevenue,
+      tacos_real: tacos,
+      // Métricas unificadas (qualidade de tráfego — halo, inválidos, parcela de impressões)
+      unified_week_totals: unifiedTotals.cost > 0 ? {
+        cost: fmt2(unifiedTotals.cost),
+        purchases: unifiedTotals.purchases,
+        sales: fmt2(unifiedTotals.sales),
+        halo_sales: fmt2(unifiedTotals.halo_sales),
+        invalid_clicks: unifiedTotals.invalid_clicks,
+        invalid_click_pct: unifiedTotals.clicks > 0 ? fmt2(unifiedTotals.invalid_clicks / unifiedTotals.clicks * 100) : 0,
+      } : null,
+      // Relatórios disponíveis no catálogo (o que foi sincronizado)
+      available_reports: availableReports,
+      data_sync_health: dataSyncHealth,
       goal_status: goalStatus,
       top_campaigns_by_spend: topCampsBySpend,
       top_campaigns_by_sales: topCampsBySales,
@@ -320,16 +371,15 @@ Deno.serve(async (req) => {
       out_of_stock_asins: outOfStockProducts.map(p => p.asin).filter(Boolean).slice(0, 20),
       asins_without_campaign: asinsWithoutCampaign.slice(0, 10),
       incomplete_campaigns_count: incompleteCampaigns.length,
+      paused_campaigns_count: pausedCampaigns.length,
       recent_bid_changes: recentBidChanges.slice(0, 20),
       bid_violations: bidViolations,
       week_decisions: weekDecisions.slice(0, 20),
       strategy_logs: strategyLogs.slice(0, 20).map(l => ({ strategy: l.strategy_id, action: l.action_type, status: l.status, success: l.success })),
-      rules: {
-        total_active: (await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' }, null, 50).catch(() => [])).map(r => ({ key: r.rule_key, name: r.name, scope: r.scope })).slice(0, 30),
-      },
+      active_rules: activeRules.map(r => ({ key: r.rule_key, name: r.name, scope: r.scope })).slice(0, 30),
     };
 
-    // ── 9. Chamar Claude 1 vez ───────────────────────────────────────────
+    // ── 9. Chamar Claude (sem timeout forçado — deixar completar) ─────────
     let aiResponse: any = null;
     let rawAiText = '';
     if (!dryRun) {
@@ -345,11 +395,13 @@ REGRAS ABSOLUTAS (violações são descartadas automaticamente pelo sistema):
 - Produto sem estoque: NÃO recomendar campanha
 - Campanha incompleta: NÃO recomendar otimização
 - Proposta de regra: confidence mínima 0.95 para aprovação automática
+- Use os dados do dashboard_revenue para calcular TACoS real (não estime sem dados)
+- Se unified_week_totals disponível, considere halo_sales e invalid_click_pct nas decisões de bid
 
 Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. Schema obrigatório:
 {
   "week_summary": "string",
-  "goal_status": {"acos": "ok|warning|critical", "roas": "ok|warning|critical", "tacos": "ok|warning|critical", "cpc": "ok|warning|critical", "budget": "ok|warning|critical"},
+  "goal_status": {"acos": "ok|warning|critical", "roas": "ok|warning|critical", "tacos": "ok|warning|critical|no_data", "cpc": "ok|warning|critical", "budget": "ok|warning|critical"},
   "winning_terms": [{"asin": "string", "search_term": "string", "reason": "string", "confidence": 0.0, "recommended_action": "string", "bid": 0.0, "budget": 15}],
   "losing_campaigns": [{"campaign_id": "string", "reason": "string", "confidence": 0.0, "recommended_action": "string"}],
   "rule_change_proposals": [{"rule_name": "string", "current_rule": "string", "proposed_rule": "string", "evidence": "string", "confidence": 0.0, "risk": "low|medium|high", "auto_implement": false}],
@@ -357,6 +409,7 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
   "executive_summary": "string com no máximo 500 caracteres"
 }`;
 
+      // Sem AbortSignal ou timeout — deixar Claude completar naturalmente
       const msg = await client.messages.create({
         model: MODEL,
         max_tokens: 4096,
@@ -364,7 +417,6 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
         messages: [{ role: 'user', content: JSON.stringify(claudePayload) }],
       });
       rawAiText = (msg.content[0] as any).text || '';
-      // Parse JSON — se falhar, tentar extrair de bloco de código
       try {
         aiResponse = JSON.parse(rawAiText);
       } catch {
@@ -372,7 +424,6 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
         if (match) aiResponse = JSON.parse(match[1]);
       }
     } else {
-      // Dry run — simular resposta
       aiResponse = {
         week_summary: `Semana ${weekStart}–${weekEnd}: simulação dry_run. ACoS ${weekAcos}% vs meta ${s.target_acos}%.`,
         goal_status: goalStatus,
@@ -389,26 +440,21 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       return Response.json({ ok: false, error: 'Claude não retornou JSON válido.', raw: rawAiText.slice(0, 500) });
     }
 
-    // ── 10. Guardrails pós-Claude: descartar violações ───────────────────
-
-    // Filtrar campanhas manuais: só aceitar se keyword vem de dados reais, produto com estoque e bid dentro dos limites
+    // ── 10. Guardrails pós-Claude ─────────────────────────────────────────
     const realTermSet = new Set(winningTerms.map(t => t.search_term?.toLowerCase()));
     const validManualCampaigns = (aiResponse.manual_campaigns_to_create || []).filter((c: any) => {
       const keyword = (c.keyword || '').toLowerCase();
-      if (!realTermSet.has(keyword)) return false; // keyword inventada — descartar
-      if (!productAsins.has(c.asin)) return false; // produto sem estoque ou inativo
+      if (!realTermSet.has(keyword)) return false;
+      if (!productAsins.has(c.asin)) return false;
       if (c.bid < s.min_bid || c.bid > s.max_bid) c.bid = clampBid(c.bid, s);
       if (c.budget < s.min_campaign_budget) c.budget = s.min_campaign_budget;
       return (c.confidence || 0) >= 0.90;
     });
-    // Limitar por capacidade semanal
     const campaignsToCreate = validManualCampaigns.slice(0, s.weekly_campaign_capacity);
 
-    // Filtrar propostas de regra: apenas com confidence >= 0.95 e sem violação
     const validProposals = (aiResponse.rule_change_proposals || []).filter((p: any) => {
       const conf = p.confidence || 0;
       if (conf < 0.90) return false;
-      // Verificar que não viola placement com limite 0
       const ruleText = (p.proposed_rule || '').toLowerCase();
       if (s.top_of_search_limit === 0 && ruleText.includes('top_of_search')) return false;
       if (s.rest_of_search_limit === 0 && ruleText.includes('rest_of_search')) return false;
@@ -420,7 +466,6 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
     for (const p of validProposals) {
       const conf = p.confidence || 0;
       const risk = p.risk || 'medium';
-      // Auto-implement: confidence >= 0.95 + risco low/medium
       const autoImplement = conf >= 0.95 && (risk === 'low' || risk === 'medium') && !dryRun && s.ai_auto_optimization;
       const status = autoImplement ? 'approved' : (conf >= 0.95 ? 'approved' : 'proposed');
       const proposal = await base44.asServiceRole.entities.MotorRuleChangeProposal.create({
@@ -469,7 +514,6 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
             campaignCreationResults.push({ keyword: camp.keyword, asin: camp.asin, status: 'error', error: e.message });
           }
         } else {
-          // Fora da janela — enfileirar para próxima janela
           await base44.asServiceRole.entities.AmazonActionQueue.create({
             amazon_account_id: aid,
             action_type: 'create_manual_campaign',
@@ -482,12 +526,11 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       }
     }
 
-    // ── 13. Calcular confidence média ────────────────────────────────────
+    // ── 13. Métricas finais e save ────────────────────────────────────────
     const allConfs = [...(aiResponse.winning_terms || []), ...(aiResponse.losing_campaigns || [])].map((x: any) => x.confidence || 0);
-    const avgConfidence = allConfs.length > 0 ? fmt2(allConfs.reduce((s, c) => s + c, 0) / allConfs.length) : 0;
+    const avgConfidence = allConfs.length > 0 ? fmt2(allConfs.reduce((acc, c) => acc + c, 0) / allConfs.length) : 0;
     const requiresManualReview = savedProposals.some(p => p.requires_manual_approval) || (aiResponse.winning_terms || []).some((t: any) => (t.confidence || 0) < 0.95);
 
-    // ── 14. Salvar preleção completa ─────────────────────────────────────
     const completedAt = new Date().toISOString();
     await base44.asServiceRole.entities.WeeklyMotorPrelection.update(prelectionId, {
       status: 'completed',
@@ -520,12 +563,11 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       raw_ai_response: rawAiText.slice(0, 10000),
     });
 
-    // ── 15. Registrar em StrategyExecutionLog ────────────────────────────
     await base44.asServiceRole.entities.StrategyExecutionLog.create({
       strategy_id: 'weekly_prelection',
       amazon_account_id: aid,
       action_type: 'weekly_ai_audit',
-      before_metrics: { acos: weekAcos, roas: weekRoas, cpc: weekCpc, spend: weekTotals.spend },
+      before_metrics: { acos: weekAcos, roas: weekRoas, cpc: weekCpc, spend: weekTotals.spend, tacos },
       action_taken: { prelection_id: prelectionId, campaigns_created: campaignsCreated, proposals: savedProposals.length },
       maturation_hours: 168,
       maturation_until: new Date(Date.now() + 7 * 86400000).toISOString(),
@@ -540,7 +582,7 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       dry_run: dryRun,
       week: { start: weekStart, end: weekEnd },
       settings_source: s.settings_source,
-      week_metrics: { spend: weekTotals.spend, sales: weekTotals.sales, orders: weekTotals.orders, acos: weekAcos, roas: weekRoas, cpc: weekCpc },
+      week_metrics: { spend: weekTotals.spend, sales: weekTotals.sales, orders: weekTotals.orders, acos: weekAcos, roas: weekRoas, cpc: weekCpc, tacos },
       goal_status: aiResponse.goal_status || goalStatus,
       winning_terms_found: (aiResponse.winning_terms || []).length,
       losing_campaigns_found: (aiResponse.losing_campaigns || []).length,
