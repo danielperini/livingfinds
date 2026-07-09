@@ -8,6 +8,7 @@ import {
   AlertCircle, Check, Eye, DollarSign, Minus, Bot, Settings
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
+import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import { Link } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -56,6 +57,7 @@ const TABS = [
   { id: 'kickoff', label: 'Kick-off' },
   { id: 'alertas', label: 'Alertas' },
   { id: 'fila', label: 'Fila e Execuções' },
+  { id: 'pausas', label: 'Pausas Pendentes' },
   { id: 'historico', label: 'Histórico e Decisões' },
   { id: 'autopilot', label: 'Automação IA' },
   { id: 'reparo', label: 'Reparo de Campanhas' },
@@ -368,6 +370,7 @@ export default function SalaDeComando() {
             {t.id === 'kickoff' && kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length > 0 && kickoffQueue.filter(i => i.status === 'failed').length === 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">{kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length}</span>}
             {t.id === 'alertas' && activeAlerts > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span>}
             {t.id === 'fila' && queueFailed > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span>}
+            {t.id === 'pausas' && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full"><Clock className="w-2.5 h-2.5 inline" /></span>}
             {t.id === 'autopilot' && pendingDecisions > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span>}
           </button>
         ))}
@@ -741,6 +744,11 @@ export default function SalaDeComando() {
                 );
               })}
             </div>
+          )}
+
+          {/* ── PAUSAS PENDENTES ────────────────────────────────────────────── */}
+          {tab === 'pausas' && account && (
+            <PauseQueuePanel accountId={account.id} />
           )}
 
           {/* ── HISTÓRICO E DECISÕES ─────────────────────────────────────────── */}
