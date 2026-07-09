@@ -66,7 +66,9 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
         setMessage({ type: 'error', text: d?.error || 'Erro ao buscar sugestões' });
       }
     } catch (e) {
-      setMessage({ type: 'error', text: e.message });
+      if (!e.message?.includes('App not found')) {
+        setMessage({ type: 'error', text: e.message });
+      }
     } finally {
       setFetching(false);
     }

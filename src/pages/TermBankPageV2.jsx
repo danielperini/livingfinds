@@ -42,8 +42,11 @@ export default function TermBankPageV2() {
       if (!acc) { setLoading(false); return; }
       setAccount(acc);
 
-      base44.functions.invoke('updateTermBankFromAutomaticCampaigns', { amazon_account_id: acc.id }).catch(() => {});
-      cleanupLegacy(acc);
+      // Background tasks — silenciosos, não bloqueiam o carregamento
+      setTimeout(() => {
+        base44.functions.invoke('updateTermBankFromAutomaticCampaigns', { amazon_account_id: acc.id }).catch(() => {});
+        base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id }).catch(() => {});
+      }, 3000);
 
       const [t, s, p] = await Promise.all([
         base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500),
@@ -68,7 +71,10 @@ export default function TermBankPageV2() {
       ));
       setProducts(activeProducts);
     } catch (e) {
-      setMessage({ type: 'error', text: `Erro ao carregar: ${e.message}` });
+      // Ignorar erros "App not found" que são erros de infra não críticos
+      if (!e.message?.includes('App not found')) {
+        setMessage({ type: 'error', text: `Erro ao carregar: ${e.message}` });
+      }
     } finally {
       setLoading(false);
     }
@@ -103,14 +109,7 @@ export default function TermBankPageV2() {
     }
   }, [account, load]);
 
-  const cleanupLegacy = useCallback(async (acc) => {
-    if (!acc) return;
-    try {
-      await base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id });
-    } catch {
-      // silencioso — limpeza em background
-    }
-  }, []);
+
 
   const amazonSuggestions = suggestions.filter(s =>
     ['AMAZON_ADS_SUGGESTED_KEYWORD', 'AMAZON_ADS_SUGGESTED_TARGET', 'AMAZON_ADS_RECOMMENDATION'].includes(s.source)
