@@ -131,9 +131,9 @@ export default function Products() {
 
   // ── Contadores ──────────────────────────────────────────────────────────────
   const counters = useMemo(() => {
-    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active').length;
-    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock').length;
-    const outOfStock = 0; // ocultos permanentemente
+    // "Em Estoque" = com dado fresco E status ativo (excluir desatualizados do contador principal)
+    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active' && stockFreshness(p) === 'fresh').length;
+    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock' && stockFreshness(p) === 'fresh').length;
     const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
     const unknownStock = visibleProducts.filter(p => stockFreshness(p) === 'unknown').length;
     const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
@@ -141,7 +141,7 @@ export default function Products() {
     const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
     const pausedByStock = visibleProducts.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
     const restocked = products.filter(p => p.status === 'active' && Number(p.fba_inventory || 0) > 0 && (p.previous_inventory_status === 'out_of_stock' || (p.campaign_status === 'paused' && p.pause_reason?.includes('stock')))).length;
-    return { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
+    return { activeOffers, lowStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
   }, [products]);
 
   // ── Filtro + Ordenação ──────────────────────────────────────────────────────
@@ -429,8 +429,8 @@ export default function Products() {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <KpiCard label="Em Estoque" value={loading ? '—' : activeOffers} detail={`${lowStock} baixo`} tone="success" />
-        <KpiCard label="Baixo Estoque" value={loading ? '—' : lowStock} detail={`${staleStock} desatualizado`} tone="warning" />
+        <KpiCard label="Em Estoque" value={loading ? '—' : activeOffers} detail={`${lowStock} baixo estoque`} tone="success" />
+        <KpiCard label="Desatualizado" value={loading ? '—' : staleStock} detail="sincronização necessária" tone={staleStock > 0 ? 'warning' : 'default'} />
         <KpiCard label="Ads Ativos" value={loading ? '—' : activeAds} detail={`${pausedAds} pausados`} tone="cyan" />
         <KpiCard label="Sem Campanha" value={loading ? '—' : withoutCampaign} detail={`${eligibleForKickoff} elegíveis p/ Kick-off`} tone={withoutCampaign > 0 ? 'warning' : 'default'} />
         <KpiCard label="Pausados p/ Estoque" value={loading ? '—' : pausedByStock} detail="pausa automática aplicada" tone={pausedByStock > 0 ? 'violet' : 'default'} />
