@@ -73,7 +73,6 @@ export default function Products() {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
-  const [fixingLinks, setFixingLinks] = useState(false);
   const [syncingTitles, setSyncingTitles] = useState(false);
   const [autoStockRunning, setAutoStockRunning] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
@@ -99,12 +98,15 @@ export default function Products() {
   }, []);
 
   useEffect(() => {
-    load().then(result => {
-      if (result?.records && result?.currentAccount) {
-        runAutoStockActions(result.records, result.currentAccount);
-      }
-    });
+    load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Roda pausa/reativação automática sempre que produtos forem atualizados
+  useEffect(() => {
+    if (products.length > 0 && account && !autoStockRunning) {
+      runAutoStockActions(products, account);
+    }
+  }, [products.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
   // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
@@ -230,50 +232,30 @@ export default function Products() {
     }
   };
 
-  const syncTitles = async () => {
-    if (!account) return;
-    setSyncingTitles(true);
-    setActionMsg({ type: 'info', text: 'Sincronizando títulos e estoque via SP-API...' });
-    try {
-      const response = await base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id });
-      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Erro ao sincronizar');
-      setActionMsg({ type: 'success', text: `${response.data.total_updated || 0} produtos atualizados.` });
-      await load();
-    } catch (error) {
-      setActionMsg({ type: 'error', text: error?.message || 'Erro ao sincronizar.' });
-    } finally {
-      setSyncingTitles(false);
-      setTimeout(() => setActionMsg(null), 10000);
-    }
-  };
+
 
   // ── Auto: pausar sem estoque / reativar com estoque ──────────────────────────
-  const runAutoStockActions = useCallback(async (currentProducts, currentAccount) => {
-    if (!currentAccount || autoStockRunning) return;
+  const runAutoStockActions = async (currentProducts, currentAccount) => {
+    if (!currentAccount) return;
     setAutoStockRunning(true);
     let paused = 0, activated = 0;
 
-    // 1. Pausar campanhas ativas de produtos sem estoque
     const toPause = currentProducts.filter(p =>
-      isCampaignActiveFn(p) &&
-      productHasCampaign(p) &&
+      isCampaignActiveFn(p) && productHasCampaign(p) &&
       (p.inventory_status === 'out_of_stock' || Number(p.fba_inventory || 0) === 0)
     );
 
-    // 2. Ativar campanhas pausadas de produtos que voltaram ao estoque
     const toActivate = currentProducts.filter(p =>
-      productHasCampaign(p) &&
-      !isCampaignActiveFn(p) &&
+      productHasCampaign(p) && !isCampaignActiveFn(p) &&
       p.campaign_status === 'paused' &&
       (p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('stock')) &&
-      Number(p.fba_inventory || 0) > 0 &&
-      p.inventory_status !== 'out_of_stock'
+      Number(p.fba_inventory || 0) > 0 && p.inventory_status !== 'out_of_stock'
     );
 
     for (const p of toPause) {
       try {
-        const cid = campaignIdOf(p);
         const payload = { amazon_account_id: currentAccount.id };
+        const cid = campaignIdOf(p);
         if (cid) payload.campaign_id = cid;
         if (p.asin) payload.asin = p.asin;
         if (p.sku) payload.sku = p.sku;
@@ -303,28 +285,13 @@ export default function Products() {
 
     setAutoStockRunning(false);
     if (paused > 0 || activated > 0) {
-      setActionMsg({ type: 'success', text: `Auto-estoque: ${paused} pausadas por falta de estoque · ${activated} reativadas com estoque reposto.` });
-      setTimeout(() => setActionMsg(null), 10000);
-      await load();
-    }
-  }, [autoStockRunning, load]);
-
-  const fixCampaignLinks = async () => {
-    if (!account) return;
-    setFixingLinks(true);
-    setActionMsg({ type: 'info', text: 'Corrigindo vínculos de campanhas...' });
-    try {
-      const response = await base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: account.id });
-      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Erro ao corrigir vínculos.');
-      setActionMsg({ type: 'success', text: `${response.data.updated || 0} produtos corrigidos.` });
-      await load();
-    } catch (error) {
-      setActionMsg({ type: 'error', text: error?.message || 'Erro ao corrigir vínculos.' });
-    } finally {
-      setFixingLinks(false);
+      setActionMsg({ type: 'success', text: `Auto-estoque: ${paused} pausadas · ${activated} reativadas.` });
       setTimeout(() => setActionMsg(null), 10000);
     }
+    return { paused, activated };
   };
+
+
 
   // ── Seleção em massa ────────────────────────────────────────────────────────
   const toggleSelect = (id) => setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
