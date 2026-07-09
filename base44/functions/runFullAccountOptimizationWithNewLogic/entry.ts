@@ -231,7 +231,10 @@ Deno.serve(async (req) => {
         errors: errors.length,
         expected_savings_total: expectedSavings,
         data_quality_score: dataQuality,
-        reports_used: ['spCampaigns', 'spKeywords', 'spSearchTerm', 'spAdvertisedProduct', 'GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA'],
+        // Relatórios dentro do escopo MRC (API de relatórios programáticos — relatórios em massa)
+        // Nota: dados de API são excluídos do escopo de credenciamento MRC para cliques,
+        // mas são a única fonte disponível programaticamente. Métricas refletem cliques líquidos pós-GIVT/SIVT.
+        reports_used: ['spCampaigns', 'spKeywords', 'spSearchTerm', 'spAdvertisedProduct', 'GET_FBA_MYI_UNSUPPRESSED_INVENTORY_DATA', 'SalesDaily'],
         warnings: warnings.slice(0, 20),
         summary,
         actions_enqueued: safe(bids_reduced),

@@ -9,7 +9,14 @@
  *   Bid mínimo: R$0.10 | Bid máximo: R$5.00
  *   Toda ação passa pela fila com idempotency_key
  *
- * v2: Integra contexto sazonal (SeasonalityDecisionContext) em toda decisão.
+ * v3: Metodologia oficial Amazon Ads / MRC incorporada:
+ *   - Cliques usados são SEMPRE líquidos pós-GIVT/SIVT (padrão da API — não confundir com cliques brutos)
+ *   - Janela de atribuição primária: 14 dias (sales14d/orders14d) conforme escopo MRC
+ *   - Evidência mínima: clicks_14d >= 8 E impressions >= 50 (clique exige impressão prévia validada)
+ *   - CVR (clicks→orders) incluído como sinal de qualidade nas regras de ACoS
+ *   - Dados considerados "estáveis" após 30 dias; entre D-1 e D-30 podem sofrer revisão por SIVT retroativo
+ *   - Janela de lookback máxima 90 dias para decisões de rollback/reprocessamento
+ *   - CTR mínimo de 0.05% como filtro de qualidade de impressão (garante renderização real do criativo)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -19,6 +26,18 @@ const MAX_TOTAL_DAILY_BUDGET = 65;
 const MIN_BID = 0.10;
 const MAX_BID = 5.0;
 const MAX_BID_CHANGE_PCT = 0.30;
+
+// ── Constantes de qualidade de dados (Metodologia MRC/Amazon Ads) ─────────────
+// Cliques retornados pela API são SEMPRE líquidos pós-GIVT/SIVT — não há cliques brutos
+// disponíveis via API de relatórios (fora do escopo MRC de relatórios programáticos).
+// Evidência mínima para decisão confiável:
+const MIN_CLICKS_FOR_DECISION = 8;        // cliques líquidos mínimos (14d) — evita ruído estatístico
+const MIN_IMPRESSIONS_FOR_DECISION = 50;  // impressões mínimas — garante criativo renderizado (clique exige impressão prévia)
+const MIN_CTR_QUALITY = 0.0005;           // CTR mínimo 0.05% — descarta tráfego não-humano residual não filtrado
+const ATTRIBUTION_WINDOW_DAYS = 14;       // janela primária de atribuição Amazon SP (sales14d/orders14d)
+const DATA_STABLE_DAYS = 30;              // dados finais e imutáveis após 30 dias (sem mais ajustes SIVT retroativos)
+const DATA_REVISABLE_DAYS = 90;           // janela máxima de reprocessamento por incidentes de qualidade
+const MIN_SPEND_FOR_DECISION = 3.0;       // gasto mínimo em R$ para ter sinal confiável
 
 const CONFLICT_PRIORITY = {
   financial_safety: 1, stock: 2, profit: 3, budget_limit: 4,
@@ -105,32 +124,107 @@ const STOCK_RULES = [
 // Requisitos mínimos: ≥10 cliques E ≥R$5 de spend nos últimos 30d.
 // Cooldown: 72h para evitar oscilação excessiva.
 
+// ── Regras de ACoS com metodologia MRC ───────────────────────────────────────
+// IMPORTANTE: usa janela de 14d (escopo MRC primário) não 30d para decisões de bid.
+// Evidência mínima: MIN_CLICKS_FOR_DECISION cliques líquidos + MIN_IMPRESSIONS validadas.
+// CVR (conversão click→order) incluído como sinal de qualidade:
+//   CVR < 0.5% com alto gasto → provável tráfego de baixa intenção, reduzir mais agressivamente.
+// CTR mínimo garante que o criativo foi renderizado (sem impressão prévia, clique é descartado pela Amazon).
+
 const ACOS_RULES = [
   {
     rule_key: 'acos_way_above_target',
     label: 'ACoS muito acima da meta (>50%) — reduzir bid 15%',
     cooldown_hours: 72,
-    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.acos_30d > d.target_acos * 1.5,
-    action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.85),
-    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_30d / d.target_acos - 1) * 100)}%). Bid reduzido 15%.`,
+    // Usa clicks_14d e spend_14d alinhado à janela MRC primária (14d)
+    // CTR mínimo: garante evidência de impressão real (clique sem impressão = descartado pela Amazon)
+    matches: (d: any) =>
+      d.acos_14d !== null &&
+      d.target_acos > 0 &&
+      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+      d.acos_14d > d.target_acos * 1.5,
+    action: (d: any) => {
+      // CVR muito baixo (< 0.5%) indica tráfego de baixa intenção → redução mais agressiva
+      const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
+      const factor = cvr < 0.005 && d.spend_14d >= 10 ? 0.80 : 0.85;
+      return Math.max(MIN_BID, d.current_bid * factor);
+    },
+    reason_fn: (d: any) => {
+      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
+      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_14d / d.target_acos - 1) * 100)}%). CVR: ${cvr}% | CTR: ${ctr}%. Bid reduzido. [Cliques líquidos pós-GIVT/SIVT]`;
+    },
     is_boost: false,
   },
   {
     rule_key: 'acos_above_target',
     label: 'ACoS acima da meta (20–50%) — reduzir bid 8%',
     cooldown_hours: 72,
-    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.acos_30d > d.target_acos * 1.2 && d.acos_30d <= d.target_acos * 1.5,
+    matches: (d: any) =>
+      d.acos_14d !== null &&
+      d.target_acos > 0 &&
+      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+      d.acos_14d > d.target_acos * 1.2 && d.acos_14d <= d.target_acos * 1.5,
     action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.92),
-    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_30d / d.target_acos - 1) * 100)}%). Bid reduzido 8%.`,
+    reason_fn: (d: any) => {
+      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
+      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (+${Math.round((d.acos_14d / d.target_acos - 1) * 100)}%). CTR: ${ctr}%. Bid reduzido 8%. [Janela MRC 14d]`;
+    },
     is_boost: false,
   },
   {
     rule_key: 'acos_below_target',
     label: 'ACoS abaixo da meta (>30% abaixo) — aumentar bid 8%',
     cooldown_hours: 72,
-    matches: (d: any) => d.acos_30d !== null && d.target_acos > 0 && d.clicks_30d >= 10 && d.spend_30d >= 5 && d.sales_30d > 0 && d.acos_30d < d.target_acos * 0.7,
+    // Boost só com CVR positivo (≥1 order em 14d) e CTR válido — garante intenção real de compra
+    matches: (d: any) =>
+      d.acos_14d !== null &&
+      d.target_acos > 0 &&
+      d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
+      d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
+      d.spend_14d >= MIN_SPEND_FOR_DECISION &&
+      (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
+      (d.orders_14d || 0) >= 1 &&
+      d.sales_14d > 0 &&
+      d.acos_14d < d.target_acos * 0.7,
     action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.08),
-    reason_fn: (d: any) => `ACoS real 30d: ${d.acos_30d.toFixed(1)}% vs meta ${d.target_acos}% (-${Math.round((1 - d.acos_30d / d.target_acos) * 100)}%). Há espaço para crescer. Bid aumentado 8%.`,
+    reason_fn: (d: any) => {
+      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+      const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
+      return `ACoS 14d: ${d.acos_14d.toFixed(1)}% vs meta ${d.target_acos}% (-${Math.round((1 - d.acos_14d / d.target_acos) * 100)}%). CVR: ${cvr}% | CTR: ${ctr}%. Espaço para crescer. Bid +8%. [Janela MRC 14d]`;
+    },
+    is_boost: true,
+  },
+  {
+    // Nova regra: alto CVR com ACoS dentro da meta → oportunidade de escala
+    rule_key: 'high_cvr_scale_opportunity',
+    label: 'CVR alto + ACoS OK — escalar bid 5%',
+    cooldown_hours: 96,
+    matches: (d: any) => {
+      const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
+      const ctr = d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0;
+      return (
+        d.acos_14d !== null &&
+        d.target_acos > 0 &&
+        d.clicks_14d >= MIN_CLICKS_FOR_DECISION * 2 && // evidência mais forte para boost
+        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION * 2 &&
+        ctr >= MIN_CTR_QUALITY &&
+        cvr >= 0.03 && // CVR ≥ 3% = alta intenção de compra
+        d.acos_14d <= d.target_acos * 0.9 && // ACoS dentro ou abaixo da meta
+        (d.orders_14d || 0) >= 2
+      );
+    },
+    action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.05),
+    reason_fn: (d: any) => {
+      const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
+      return `CVR: ${cvr}% (alta intenção) + ACoS 14d: ${d.acos_14d.toFixed(1)}% dentro da meta. Oportunidade de escala. Bid +5%.`;
+    },
     is_boost: true,
   },
 ];
@@ -453,17 +547,31 @@ Deno.serve(async (req) => {
       : null;
     const weekendCtx = { weekend_performs_better: weekendPerformsBetter };
 
-    // ── 4. Validar qualidade dos dados ────────────────────────────────────
+    // ── 4. Validar qualidade dos dados (Metodologia MRC) ─────────────────
+    // Dados Amazon SP são considerados "revisáveis" por até 30 dias (ajustes SIVT retroativos).
+    // Após 30 dias são finais e imutáveis. Incidentes raros podem gerar revisão até 90 dias.
+    // Motor exige sincronização recente (< 48h) para garantir que os dados incluem
+    // os últimos ajustes de filtragem GIVT/SIVT aplicados retroativamente pela Amazon.
     const dataAge = account.last_sync_at
       ? (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000
       : 999;
     if (dataAge > 48) {
       return Response.json({
         ok: false, skipped: true,
-        reason: `Dados desatualizados (${Math.round(dataAge)}h sem sync). Motor bloqueado por segurança.`,
+        reason: `Dados desatualizados (${Math.round(dataAge)}h sem sync). Motor bloqueado: cliques líquidos pós-GIVT/SIVT podem estar desatualizados.`,
         correlationId,
+        mrc_note: 'Amazon Ads aplica filtragem SIVT retroativa em até 30 dias. Dados sem sync recente podem refletir cliques brutos ainda não filtrados.',
       });
     }
+
+    // Verificar se há dados dentro da janela de atribuição MRC (14d)
+    const latestMetricDate = metricsRaw.length > 0
+      ? metricsRaw.reduce((max, m) => m.date > max ? m.date : max, '2000-01-01')
+      : null;
+    const metricDataAge = latestMetricDate
+      ? (Date.now() - new Date(latestMetricDate).getTime()) / 86400000
+      : 999;
+    const dataWithin14dWindow = metricDataAge <= ATTRIBUTION_WINDOW_DAYS;
 
     // ── 5. Guardrail: budget total ────────────────────────────────────────
     const totalActiveBudget = campaigns
@@ -626,18 +734,24 @@ Deno.serve(async (req) => {
 
     const acosTargetSource = acosByAsin.size > 0 ? 'dynamic_per_product' : 'global_config';
 
-    // Agregar métricas de ads por ASIN nos últimos 30 dias (de CampaignMetricsDaily)
-    const adMetricsByAsin = new Map(); // asin → { spend, sales, clicks, orders }
+    // Agregar métricas de ads por ASIN — JANELA 14d (escopo MRC primário de atribuição SP)
+    // Cliques e impressões aqui são LÍQUIDOS pós-GIVT/SIVT (padrão da Amazon Ads API).
+    // A API não expõe cliques brutos — apenas cliques válidos pós-filtragem são reportados.
+    // Dados de D-1 a D-30 podem ainda sofrer ajustes retroativos de SIVT; após 30d são finais.
+    const fourteenDaysAgo = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
+    const adMetricsByAsin = new Map(); // asin → { spend_14d, sales_14d, clicks_14d, orders_14d, impressions_14d }
     for (const m of metricsRaw) {
       if (!m.campaign_id) continue;
+      if (m.date && m.date < fourteenDaysAgo) continue; // apenas janela 14d MRC
       const asin = campaignAsinMap.get(m.campaign_id) || null;
       if (!asin) continue;
-      if (!adMetricsByAsin.has(asin)) adMetricsByAsin.set(asin, { spend: 0, sales: 0, clicks: 0, orders: 0 });
+      if (!adMetricsByAsin.has(asin)) adMetricsByAsin.set(asin, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 });
       const a = adMetricsByAsin.get(asin);
       a.spend += m.spend || 0;
       a.sales += m.sales || 0;
       a.clicks += m.clicks || 0;
       a.orders += m.orders || 0;
+      a.impressions += m.impressions || 0;
     }
 
     // Persistir metas calculadas em Product.break_even_acos_pct (batch, sem bloquear pipeline)
@@ -669,12 +783,25 @@ Deno.serve(async (req) => {
       const effectiveTargetAcos = acosByAsin.get(resolvedAsin) ?? globalTargetAcos;
       if (effectiveTargetAcos <= 0) continue;
 
-      const acos30d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
+      // ACoS calculado na janela 14d (escopo MRC primário) — cliques líquidos pós-GIVT/SIVT
+      const acos14d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
+      const ctr14d = adMetrics.impressions > 0 ? adMetrics.clicks / adMetrics.impressions : 0;
+      const cvr14d = adMetrics.clicks > 0 ? (adMetrics.orders || 0) / adMetrics.clicks : 0;
 
       const entityData = {
         current_bid: kw.current_bid || kw.bid || 0.25,
-        acos_30d: acos30d,
+        // Janela MRC 14d (campos renomeados para clareza)
+        acos_14d: acos14d,
+        spend_14d: adMetrics.spend,
+        sales_14d: adMetrics.sales,
+        clicks_14d: adMetrics.clicks,
+        orders_14d: adMetrics.orders || 0,
+        impressions_14d: adMetrics.impressions,
+        ctr_14d: ctr14d,
+        cvr_14d: cvr14d,
         target_acos: effectiveTargetAcos,
+        // Compatibilidade com regras externas que ainda usam campos 30d
+        acos_30d: acos14d,
         spend_30d: adMetrics.spend,
         sales_30d: adMetrics.sales,
         clicks_30d: adMetrics.clicks,
@@ -764,6 +891,8 @@ Deno.serve(async (req) => {
         // Dias de cobertura: com o estoque atual, quantos dias durariam as vendas
         const stockCoverageDays = stockVelocity > 0 ? stockQty / stockVelocity : 999;
 
+        // Métricas da keyword agregadas na janela 14d do ASIN (cliques líquidos pós-GIVT/SIVT)
+        const asinAdMetrics14d = adMetricsByAsin.get(resolvedAsin || '') || null;
         const entityData = {
           ...entity,
           current_bid: entity.current_bid || entity.bid || 0.25,
@@ -783,6 +912,15 @@ Deno.serve(async (req) => {
           stock_coverage_days: stockCoverageDays,
           // acos da keyword (próprio da entidade keyword)
           acos: entity.acos || (entity.spend > 0 && entity.sales > 0 ? entity.spend / entity.sales * 100 : 0),
+          // Métricas janela 14d (Metodologia MRC — cliques líquidos, atribuição primária SP)
+          clicks_14d: asinAdMetrics14d?.clicks || 0,
+          impressions_14d: asinAdMetrics14d?.impressions || 0,
+          spend_14d: asinAdMetrics14d?.spend || 0,
+          sales_14d: asinAdMetrics14d?.sales || 0,
+          orders_14d: asinAdMetrics14d?.orders || 0,
+          acos_14d: asinAdMetrics14d?.sales > 0 ? (asinAdMetrics14d.spend / asinAdMetrics14d.sales) * 100 : null,
+          ctr_14d: asinAdMetrics14d?.impressions > 0 ? asinAdMetrics14d.clicks / asinAdMetrics14d.impressions : 0,
+          cvr_14d: asinAdMetrics14d?.clicks > 0 ? (asinAdMetrics14d.orders || 0) / asinAdMetrics14d.clicks : 0,
         };
 
         if (!entityMatchesRule(rule, entityData)) continue;
@@ -893,6 +1031,21 @@ Deno.serve(async (req) => {
         dynamic_targets_calculated: acosByAsin.size,
         product_targets_updated: productUpdates.length,
         sample_targets: Array.from(acosByAsin.entries()).slice(0, 5).map(([asin, t]) => ({ asin, target_acos: t })),
+      },
+      // Diagnóstico de qualidade de dados (Metodologia MRC/Amazon Ads)
+      mrc_data_quality: {
+        click_type: 'net_valid_clicks_post_givt_sivt', // API retorna sempre cliques líquidos
+        attribution_window_days: ATTRIBUTION_WINDOW_DAYS,
+        data_stable_after_days: DATA_STABLE_DAYS,
+        data_within_14d_window: dataWithin14dWindow,
+        latest_metric_date: latestMetricDate,
+        metric_data_age_days: Math.round(metricDataAge * 10) / 10,
+        min_clicks_threshold: MIN_CLICKS_FOR_DECISION,
+        min_impressions_threshold: MIN_IMPRESSIONS_FOR_DECISION,
+        min_ctr_quality: MIN_CTR_QUALITY,
+        note: metricDataAge > DATA_STABLE_DAYS
+          ? 'Dados fora da janela revisável (>30d) — considerados finais pela Amazon'
+          : 'Dados dentro da janela revisável SIVT — podem sofrer pequenos ajustes retroativos',
       },
       stats,
       conflicts_resolved: conflicts.length,
