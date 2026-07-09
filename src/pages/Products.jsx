@@ -3,6 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { Filter, Loader2, Package, Pause, RefreshCw, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
+import RestockedAlert from '@/components/products/RestockedAlert';
 import ProductRow, {
   offerStatus, productHasCampaign, isCampaignActiveFn, campaignIdOf,
   isConfirmedOutOfStock, stockFreshness, formatBRL,
@@ -98,8 +99,19 @@ export default function Products() {
 
   useEffect(() => { load(); }, [load]);
 
+  // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
+  // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
+  const restockedProducts = useMemo(() =>
+    products.filter(p =>
+      p.status === 'active' &&
+      Number(p.fba_inventory || 0) > 0 &&
+      (p.previous_inventory_status === 'out_of_stock' ||
+        (p.campaign_status === 'paused' && p.pause_reason?.includes('stock')))
+    ),
+    [products]
+  );
+
   // ── Filtro permanente: apenas produtos ativos com estoque ────────────────────
-  // Oculta permanentemente inativos (status !== 'active') e sem estoque (out_of_stock).
   const visibleProducts = useMemo(() =>
     products.filter(p =>
       p.status !== 'inactive' && p.status !== 'archived' &&
@@ -119,7 +131,8 @@ export default function Products() {
     const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
     const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
     const pausedByStock = visibleProducts.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
-    return { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock };
+    const restocked = products.filter(p => p.status === 'active' && Number(p.fba_inventory || 0) > 0 && (p.previous_inventory_status === 'out_of_stock' || (p.campaign_status === 'paused' && p.pause_reason?.includes('stock')))).length;
+    return { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
   }, [products]);
 
   // ── Filtro + Ordenação ──────────────────────────────────────────────────────
@@ -141,7 +154,8 @@ export default function Products() {
         (filter === 'ads_active' && hasCampaign && active) ||
         (filter === 'ads_paused' && hasCampaign && !active) ||
         (filter === 'no_campaign' && !hasCampaign) ||
-        (filter === 'paused_by_stock' && (product.pause_reason === 'out_of_stock_confirmed'));
+        (filter === 'paused_by_stock' && (product.pause_reason === 'out_of_stock_confirmed')) ||
+        (filter === 'restocked' && Number(product.fba_inventory || 0) > 0 && (product.previous_inventory_status === 'out_of_stock' || (product.campaign_status === 'paused' && product.pause_reason?.includes('stock'))));
       return matchesSearch && matchesFilter;
     });
     return applySort(base, sortBy);
@@ -299,7 +313,7 @@ export default function Products() {
     setTimeout(() => setActionMsg(null), 10000);
   };
 
-  const { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock } = counters;
+  const { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked } = counters;
   const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
 
   return (
@@ -337,6 +351,15 @@ export default function Products() {
         </div>
       )}
 
+      {/* Banner de reabastecimento */}
+      {!loading && restockedProducts.length > 0 && (
+        <RestockedAlert
+          products={restockedProducts}
+          account={account}
+          onDone={load}
+        />
+      )}
+
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <KpiCard label="Em Estoque" value={loading ? '—' : activeOffers} detail={`${lowStock} baixo`} tone="success" />
@@ -363,6 +386,7 @@ export default function Products() {
             { key: 'ads_active', label: `Ads Ativos (${activeAds})` },
             { key: 'ads_paused', label: `Ads Pausados (${pausedAds})` },
             { key: 'no_campaign', label: `Sem Campanha (${withoutCampaign})` },
+            ...(restocked > 0 ? [{ key: 'restocked', label: `🔄 Reabastecidos (${restocked})` }] : []),
           ].map(item => (
             <button type="button" key={item.key} onClick={() => { setFilter(item.key); setPage(1); }}
               className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === item.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
