@@ -85,7 +85,13 @@ Deno.serve(async (req) => {
         report_key: 'daily_campaign_metrics',
       }, '-created_date', 5).catch(() => []);
 
-      const pendingReport = recentReports.find((r: any) => r.last_status === 'PENDING' && r.report_id);
+      // Também aceita PENDING sem report_id se tiver sido criado recentemente (workaround para bug de save)
+      const pendingReport = recentReports.find((r: any) => r.last_status === 'PENDING');
+      // Se o report_id está faltando mas temos um report_id injetado via payload, usar ele
+      if (pendingReport && !pendingReport.report_id && body.force_report_id) {
+        await db.entities.AmazonReportCatalog.update(pendingReport.id, { report_id: body.force_report_id }).catch(() => {});
+        pendingReport.report_id = body.force_report_id;
+      }
 
       // --- FASE 2: processar relatório pendente ---
       if (pendingReport?.report_id) {
