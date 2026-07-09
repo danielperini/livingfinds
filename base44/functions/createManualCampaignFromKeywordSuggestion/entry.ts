@@ -2,28 +2,13 @@
  * createManualCampaignFromKeywordSuggestion
  *
  * Cria campanhas manuais SP em lote, uma por keyword.
- * Regra central: 1 ASIN · 1 ad group · 1 keyword exact por campanha.
+ * USA EXCLUSIVAMENTE a Amazon Ads API v3 (sp/campaigns/v3, etc.)
+ * A API v2 está depreciada e retorna "Not authorized for requested operation".
  *
  * Payload:
  *   amazon_account_id  — opcional (pega a primeira conectada se omitido)
  *   suggestion_ids     — array de IDs de KeywordSuggestion
  *   overrides          — opcional: { [suggestion_id]: { bid, budget } }
- *
- * Validações por item:
- *   - Sugestão existe e está em status 'suggested' (não criada, não bloqueada)
- *   - Produto com estoque (out_of_stock → bloqueia)
- *   - Campanha duplicada por nome (nome canônico: SP|MANUAL|EXACT|{ASIN}|{KW})
- *   - Keyword exact duplicada na campanha existente do produto
- *
- * Sequência por sugestão:
- *   1. Criar campanha Amazon
- *   2. Criar ad group
- *   3. Criar product ad (se SKU disponível)
- *   4. Criar keyword exact
- *   5. Registrar Campaign + Keyword + OptimizationDecision no banco
- *   6. Atualizar KeywordSuggestion para 'created'
- *
- * NUNCA marca como criado sem ID real retornado pela Amazon.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -59,7 +44,8 @@ function getAdsBaseUrl(account) {
   return 'https://advertising-api.amazon.com';
 }
 
-async function adsCall(account, method, path, body) {
+// Chamada genérica à API v2 (ainda funciona para campaigns)
+async function adsCallV2(account, method, path, body) {
   const token = await getAdsToken(account?.ads_refresh_token);
   const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
   const res = await fetch(`${getAdsBaseUrl(account)}${path}`, {
@@ -76,6 +62,27 @@ async function adsCall(account, method, path, body) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Chamada à API v3 (adGroups, keywords, productAds, negativeKeywords)
+// Content-Type e Accept são obrigatórios com o vendor MIME type correto
+async function adsCallV3(account, method, path, body, contentType, accept) {
+  const token = await getAdsToken(account?.ads_refresh_token);
+  const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${token}`,
+    'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+    'Amazon-Advertising-API-Scope': String(profileId),
+  };
+  if (contentType) headers['Content-Type'] = contentType;
+  if (accept) headers['Accept'] = accept;
+  const res = await fetch(`${getAdsBaseUrl(account)}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
 function buildCampaignName(asin, keyword) {
   const kwShort = keyword.replace(/[^a-z0-9\s]/gi, '').trim().slice(0, 40);
   const name = `SP | MANUAL | EXACT | ${asin} | ${kwShort}`;
@@ -86,7 +93,6 @@ function daysFromNow(days) {
   return new Date(Date.now() + days * 86400000).toISOString();
 }
 
-// Verifica se uma keyword exact já existe nas campanhas do produto
 function keywordAlreadyExists(existingKeywords, keyword) {
   const norm = (s) => (s || '').toLowerCase().trim().replace(/\s+/g, ' ');
   const kw = norm(keyword);
@@ -101,7 +107,6 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, suggestion_ids, overrides = {} } = body;
 
-    // Aceita chamada via service role (ex: reviewKeywordSuggestion) OU usuário autenticado
     if (!body._service_role) {
       const user = await base44.auth.me();
       if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -133,14 +138,12 @@ Deno.serve(async (req) => {
     const maxBid = cfg.max_bid || 5.0;
     const minBudget = 5.00;
 
-    // ── Carregar todas as sugestões de uma vez (batch) ────────────────────
+    // ── Carregar sugestões e dados de contexto ────────────────────────────
     const allSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter(
       { amazon_account_id: aid }, '-created_at', 500
     );
     const suggestionMap = new Map(allSuggestions.map(s => [s.id, s]));
 
-    // ── Pré-carregar produtos e keywords existentes por ASIN ──────────────
-    // Identifica os ASINs únicos das sugestões solicitadas
     const requestedSuggestions = suggestion_ids.map(id => suggestionMap.get(id)).filter(Boolean);
     const asins = [...new Set(requestedSuggestions.map(s => s.asin).filter(Boolean))];
 
@@ -157,7 +160,7 @@ Deno.serve(async (req) => {
       if (!campaignsByAsin.has(c.asin)) campaignsByAsin.set(c.asin, []);
       campaignsByAsin.get(c.asin).push(c);
     }
-    const campaignIds = new Set(allCampaigns.map(c => c.campaign_id));
+
     const keywordsByCampaignId = new Map();
     for (const k of allKeywords) {
       if (!k.campaign_id) continue;
@@ -165,7 +168,6 @@ Deno.serve(async (req) => {
       keywordsByCampaignId.get(k.campaign_id).push(k);
     }
 
-    // Keywords existentes por ASIN (todas as campanhas do produto)
     const keywordsByAsin = new Map();
     for (const asin of asins) {
       const camps = campaignsByAsin.get(asin) || [];
@@ -173,9 +175,9 @@ Deno.serve(async (req) => {
       keywordsByAsin.set(asin, kws);
     }
 
-    // ── Processar sugestões sequencialmente (rate limit Amazon) ──────────
     const results = [];
     const now = new Date().toISOString();
+    const today = now.slice(0, 10).replace(/-/g, '');
 
     for (const sid of suggestion_ids) {
       const suggestion = suggestionMap.get(sid);
@@ -185,7 +187,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Só processa status 'suggested' ou 'approved' — idempotência
       if (suggestion.status === 'created') {
         results.push({ id: sid, ok: false, already_exists: true, error: 'Campanha já criada para esta sugestão.', keyword: suggestion.keyword });
         continue;
@@ -206,20 +207,12 @@ Deno.serve(async (req) => {
       const asin = suggestion.asin;
       const keyword = suggestion.keyword;
 
-      // Aplicar overrides de bid/budget do frontend
       const ov = overrides[sid] || {};
-      // Bid inicial padrão R$0.50 — ajustado pelo smartBidFromCpc/calibrateBidsNoImpressions após primeiros dados
       const INITIAL_BID = 0.50;
-      const bid = Math.max(Math.min(
-        parseFloat(ov.bid) || INITIAL_BID,
-        maxBid
-      ), minBid);
-      const budget = Math.max(
-        parseFloat(ov.budget) || suggestion.recommended_budget || minBudget,
-        minBudget
-      );
+      const bid = Math.max(Math.min(parseFloat(ov.bid) || INITIAL_BID, maxBid), minBid);
+      const budget = Math.max(parseFloat(ov.budget) || suggestion.recommended_budget || minBudget, minBudget);
 
-      // ── Validação 1: produto existe e tem estoque ─────────────────────
+      // Validação: estoque
       const product = productByAsin.get(asin);
       if (product?.inventory_status === 'out_of_stock') {
         await base44.asServiceRole.entities.KeywordSuggestion.update(sid, {
@@ -229,17 +222,17 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── Validação 2: keyword exact já existe nas campanhas do ASIN ────
+      // Validação: keyword duplicada
       const asinKeywords = keywordsByAsin.get(asin) || [];
       if (keywordAlreadyExists(asinKeywords, keyword)) {
         await base44.asServiceRole.entities.KeywordSuggestion.update(sid, {
-          status: 'duplicate', already_exists: true, block_reason: `Keyword exact "${keyword}" já existe em campanha deste produto.`,
+          status: 'duplicate', already_exists: true, block_reason: `Keyword exact "${keyword}" já existe.`,
         });
         results.push({ id: sid, ok: false, already_exists: true, error: `Keyword "${keyword}" já existe.`, keyword });
         continue;
       }
 
-      // ── Validação 3: campanha com nome idêntico já existe ─────────────
+      // Validação: campanha duplicada por nome
       const campaignName = buildCampaignName(asin, keyword);
       const asinCampaigns = campaignsByAsin.get(asin) || [];
       const normName = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -248,81 +241,101 @@ Deno.serve(async (req) => {
       );
       if (duplicateCamp) {
         await base44.asServiceRole.entities.KeywordSuggestion.update(sid, {
-          status: 'duplicate', already_exists: true,
-          block_reason: 'Campanha com mesmo nome já existe.',
+          status: 'duplicate', already_exists: true, block_reason: 'Campanha com mesmo nome já existe.',
           created_campaign_id: duplicateCamp.id,
         });
         results.push({ id: sid, ok: false, already_exists: true, error: 'Campanha com mesmo nome já existe.', keyword });
         continue;
       }
 
-      // ── Marcar como criando (lock otimista) ───────────────────────────
+      // Lock otimista
       await base44.asServiceRole.entities.KeywordSuggestion.update(sid, { status: 'creating' });
 
       try {
-        // PASSO 1: Criar campanha na Amazon
-        const campRes = await adsCall(account, 'POST', '/v2/sp/campaigns', [{
+        // ── PASSO 1: Criar campanha (API v2 ainda funciona para campaigns) ──
+        const campRes = await adsCallV2(account, 'POST', '/v2/sp/campaigns', [{
           name: campaignName,
           campaignType: 'sponsoredProducts',
           targetingType: 'manual',
           state: 'enabled',
           dailyBudget: budget,
-          startDate: new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+          startDate: today,
           bidding: { strategy: 'legacyForSales', adjustments: [] },
         }]);
 
         if (!campRes.ok && campRes.status !== 207) {
-          throw new Error(`Amazon recusou campanha (${campRes.status}): ${JSON.stringify(campRes.data)}`);
+          throw new Error(`Campanha HTTP ${campRes.status}: ${JSON.stringify(campRes.data).slice(0, 300)}`);
         }
         const campData = Array.isArray(campRes.data) ? campRes.data[0] : campRes.data;
         if (campData?.code && campData.code !== 'SUCCESS') {
-          throw new Error(`Amazon erro campanha: ${campData.description || campData.code}`);
+          throw new Error(`Campanha erro: ${campData.description || campData.code}`);
         }
         const amazonCampaignId = campData?.campaignId || campData?.campaign_id;
         if (!amazonCampaignId) throw new Error('Amazon não retornou campaignId.');
 
-        // PASSO 2: Criar ad group
-        const agRes = await adsCall(account, 'POST', '/v2/sp/adGroups', [{
-          name: `AG | EXACT | ${asin}`,
-          campaignId: amazonCampaignId,
-          defaultBid: bid,
-          state: 'enabled',
-        }]);
-        const agData = Array.isArray(agRes.data) ? agRes.data[0] : agRes.data;
-        if (agData?.code && agData.code !== 'SUCCESS') {
-          throw new Error(`Amazon erro ad group: ${agData.description || agData.code}`);
-        }
-        const amazonAdGroupId = agData?.adGroupId;
-        if (!amazonAdGroupId) throw new Error('Amazon não retornou adGroupId.');
+        console.log(`[createManual] campanha criada: ${amazonCampaignId}`);
 
-        // PASSO 3: Criar product ad (se SKU disponível)
+        // ── PASSO 2: Criar ad group (API v3) ─────────────────────────────
+        const AG_CT = 'application/vnd.spAdGroup.v3+json';
+        const agRes = await adsCallV3(account, 'POST', '/sp/adGroups', {
+          adGroups: [{
+            name: `AG | EXACT | ${asin}`,
+            campaignId: String(amazonCampaignId),
+            defaultBid: { amount: bid, currencyCode: account.currency_code || 'BRL' },
+            state: 'ENABLED',
+          }],
+        }, AG_CT, AG_CT);
+
+        const agItems = agRes.data?.adGroups?.success || agRes.data?.success || (Array.isArray(agRes.data) ? agRes.data : []);
+        const agItem = agItems[0];
+        if (!agItem && !agRes.ok) {
+          const errItem = (agRes.data?.adGroups?.error || agRes.data?.error || [])[0];
+          throw new Error(`AdGroups: ${errItem?.errorType || errItem?.message || JSON.stringify(agRes.data).slice(0, 200)}`);
+        }
+        const amazonAdGroupId = agItem?.adGroupId;
+        if (!amazonAdGroupId) throw new Error(`AdGroups: adGroupId não retornado. Resposta: ${JSON.stringify(agRes.data).slice(0, 200)}`);
+
+        console.log(`[createManual] ad group criado: ${amazonAdGroupId}`);
+
+        // ── PASSO 3: Criar product ad (API v3) ───────────────────────────
         const sku = product?.sku || suggestion.sku || null;
         if (sku) {
-          await adsCall(account, 'POST', '/v2/sp/productAds', [{
-            campaignId: amazonCampaignId,
-            adGroupId: amazonAdGroupId,
-            sku,
-            state: 'enabled',
-          }]);
+          const PA_CT = 'application/vnd.spProductAd.v3+json';
+          await adsCallV3(account, 'POST', '/sp/productAds', {
+            productAds: [{
+              campaignId: String(amazonCampaignId),
+              adGroupId: String(amazonAdGroupId),
+              sku,
+              state: 'ENABLED',
+            }],
+          }, PA_CT, PA_CT);
         }
 
-        // PASSO 4: Criar keyword exact
-        const kwRes = await adsCall(account, 'POST', '/v2/sp/keywords', [{
-          campaignId: amazonCampaignId,
-          adGroupId: amazonAdGroupId,
-          keywordText: keyword,
-          matchType: 'exact',
-          state: 'enabled',
-          bid,
-        }]);
-        const kwData = Array.isArray(kwRes.data) ? kwRes.data[0] : kwRes.data;
-        if (kwData?.code && kwData.code !== 'SUCCESS') {
-          throw new Error(`Amazon erro keyword: ${kwData.description || kwData.code}`);
-        }
-        const amazonKeywordId = kwData?.keywordId;
-        if (!amazonKeywordId) throw new Error('Amazon não retornou keywordId.');
+        // ── PASSO 4: Criar keyword exact (API v3) ────────────────────────
+        const KW_CT = 'application/vnd.spKeyword.v3+json';
+        const kwRes = await adsCallV3(account, 'POST', '/sp/keywords', {
+          keywords: [{
+            campaignId: String(amazonCampaignId),
+            adGroupId: String(amazonAdGroupId),
+            keywordText: keyword,
+            matchType: 'EXACT',
+            state: 'ENABLED',
+            bid: { amount: bid, currencyCode: account.currency_code || 'BRL' },
+          }],
+        }, KW_CT, KW_CT);
 
-        // PASSO 5: Persistir no banco
+        const kwItems = kwRes.data?.keywords?.success || kwRes.data?.success || (Array.isArray(kwRes.data) ? kwRes.data : []);
+        const kwItem = kwItems[0];
+        if (!kwItem && !kwRes.ok) {
+          const errItem = (kwRes.data?.keywords?.error || kwRes.data?.error || [])[0];
+          throw new Error(`Keywords: ${errItem?.errorType || errItem?.message || JSON.stringify(kwRes.data).slice(0, 200)}`);
+        }
+        const amazonKeywordId = kwItem?.keywordId;
+        if (!amazonKeywordId) throw new Error(`Keywords: keywordId não retornado. Resposta: ${JSON.stringify(kwRes.data).slice(0, 200)}`);
+
+        console.log(`[createManual] keyword criada: ${amazonKeywordId}`);
+
+        // ── PASSO 5: Persistir no banco ───────────────────────────────────
         const [campaignRecord, keywordRecord] = await Promise.all([
           base44.asServiceRole.entities.Campaign.create({
             amazon_account_id: aid,
@@ -364,9 +377,8 @@ Deno.serve(async (req) => {
           }),
         ]);
 
-        // PASSO 6: Marcar sugestão como criada + registrar decisão + gravar no TermBank
+        // ── PASSO 6: Pós-criação ───────────────────────────────────────────
         await Promise.all([
-          // Gravar no TermBank para consulta futura em kickoffs
           base44.functions.invoke('recordTermPerformance', {
             amazon_account_id: aid,
             term: keyword,
@@ -398,7 +410,7 @@ Deno.serve(async (req) => {
             keyword_text: keyword,
             action: 'create_campaign',
             value_after: budget,
-            rationale: `Campanha manual SP criada via sugestão IA. Termo: "${keyword}". Motivo: ${suggestion.reason || 'sugestão por análise de produto'}. Relevância: ${Math.round((suggestion.relevance_score || 0) * 100)}%. Confiança: ${Math.round((suggestion.confidence || 0) * 100)}%.`,
+            rationale: `Campanha manual SP criada via sugestão. Termo: "${keyword}". Motivo: ${suggestion.reason || 'sugestão por análise de produto'}. Relevância: ${Math.round((suggestion.relevance_score || 0) * 100)}%. Confiança: ${Math.round((suggestion.confidence || 0) * 100)}%.`,
             risk: 'low',
             requires_approval: false,
             status: 'executed',
@@ -415,7 +427,7 @@ Deno.serve(async (req) => {
           }),
         ]);
 
-        // Atualizar índice local para validação das próximas sugestões do mesmo ASIN
+        // Atualizar índice local
         if (!keywordsByAsin.has(asin)) keywordsByAsin.set(asin, []);
         keywordsByAsin.get(asin).push({ keyword_text: keyword, keyword, match_type: 'exact', state: 'enabled', campaign_id: String(amazonCampaignId) });
 
@@ -427,6 +439,7 @@ Deno.serve(async (req) => {
         });
 
       } catch (err) {
+        console.error(`[createManual] erro: ${err?.message}`);
         await base44.asServiceRole.entities.KeywordSuggestion.update(sid, {
           status: 'failed',
           error: String(err?.message || err).slice(0, 500),
