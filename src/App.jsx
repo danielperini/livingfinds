@@ -19,7 +19,6 @@ import ResetPassword from '@/pages/ResetPassword';
 import Dashboard from '@/pages/DashboardScheduled';
 import AdsAutopilot from '@/pages/AdsAutopilotScheduled';
 import AdsManagement from '@/pages/AdsManagement';
-import LearnerEngine from '@/pages/LearnerEngine';
 import InventorySales from '@/pages/InventorySales';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
@@ -29,7 +28,6 @@ import Diagnostico from '@/pages/Diagnostico';
 import BidLogs from '@/pages/BidLogs';
 import Analytics from '@/pages/Analytics';
 import AmazonAdsCallback from '@/pages/AmazonAdsCallback';
-import Recommendations from '@/pages/Recommendations';
 import SearchTerms from '@/pages/SearchTerms';
 import MetricsDashboard from '@/pages/MetricsDashboard';
 import SpApiSetup from '@/pages/SpApiSetup';
@@ -83,13 +81,11 @@ const AuthenticatedApp = () => {
           <Route path="/" element={<Dashboard />} />
           <Route path="/ads" element={<AdsManagement />} />
           <Route path="/autopilot" element={<AdsAutopilot />} />
-          <Route path="/learner" element={<LearnerEngine />} />
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/products" element={<Products />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/bid-logs" element={<BidLogs />} />
           <Route path="/metrics" element={<MetricsDashboard />} />
-          <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/search-terms" element={<SearchTerms />} />
           <Route path="/diagnostico" element={<Diagnostico />} />
           <Route path="/report" element={<Report />} />
@@ -112,6 +108,11 @@ const AuthenticatedApp = () => {
           <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
           <Route path="/strategy-engine" element={<StrategyEnginePage />} />
           <Route path="/prelecao-semanal" element={<WeeklyPrelectionPage />} />
+          {/* Redirecionamentos: rotas consolidadas */}
+          <Route path="/recommendations" element={<Navigate to="/autopilot" replace />} />
+          <Route path="/dayparting" element={<Navigate to="/autopilot" replace />} />
+          <Route path="/learner" element={<Navigate to="/autopilot" replace />} />
+          <Route path="/motor-config" element={<Navigate to="/autopilot" replace />} />
           {/* Redirecionamentos: rotas removidas da sidebar → Sala de Comando */}
           <Route path="/alerts" element={<Navigate to="/sala-de-comando" replace />} />
           <Route path="/bids-log" element={<Navigate to="/sala-de-comando" replace />} />
@@ -120,7 +121,6 @@ const AuthenticatedApp = () => {
           <Route path="/eficiencia-ia" element={<Navigate to="/sala-de-comando" replace />} />
           <Route path="/incomplete-campaigns" element={<Navigate to="/sala-de-comando" replace />} />
           <Route path="/transitions" element={<Navigate to="/products" replace />} />
-          <Route path="/motor-config" element={<Navigate to="/learner" replace />} />
         </Route>
       </Route>
       <Route path="*" element={<PageNotFound />} />
