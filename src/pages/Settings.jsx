@@ -534,42 +534,72 @@ export default function Settings() {
                 })}
 
                 {(!authStatus?.services?.ads?.ok || !authStatus?.services?.sp?.ok) && (
-                  <div className="mt-3 p-4 bg-red-500/8 border border-red-500/20 rounded-lg space-y-3">
-                    <p className="text-xs font-bold text-red-300">🔑 Tokens expirados — reconexão necessária</p>
+                  <div className="mt-3 p-4 bg-red-500/8 border border-red-500/20 rounded-lg space-y-4">
+                    <p className="text-xs font-bold text-red-300">🔑 Falha de autenticação — ação necessária</p>
 
                     {!authStatus?.services?.ads?.ok && (
-                      <div className="space-y-1.5">
+                      <div className="space-y-2 pb-3 border-b border-surface-3">
                         <p className="text-xs text-slate-300 font-semibold">Amazon Ads API</p>
-                        <p className="text-[11px] text-slate-400">
-                          {authStatus?.services?.ads?.error_code === 'unauthorized_client'
-                            ? 'O refresh token da API de Anúncios foi revogado ou expirou. É necessário autorizar novamente via OAuth.'
-                            : authStatus?.services?.ads?.error || 'Token inválido.'}
-                        </p>
-                        <a href="/amazon-oauth-setup"
-                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg text-xs font-semibold transition-colors">
-                          <ExternalLink className="w-3 h-3" /> Reconectar Amazon Ads →
-                        </a>
+                        {authStatus?.services?.ads?.error_code === 'unauthorized_client' ? (
+                          <>
+                            <p className="text-[11px] text-slate-400">
+                              O <strong className="text-slate-200">refresh token (ADS_REFRESH_TOKEN)</strong> foi revogado ou expirou.
+                              As credenciais Client ID/Secret estão corretas — só o token precisa ser renovado via OAuth.
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              <a href="/amazon-oauth-setup"
+                                className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg text-xs font-semibold transition-colors">
+                                <ExternalLink className="w-3 h-3" /> Renovar Token (OAuth) →
+                              </a>
+                            </div>
+                          </>
+                        ) : authStatus?.services?.ads?.error_code === 'invalid_client' ? (
+                          <>
+                            <p className="text-[11px] text-slate-400">
+                              <strong className="text-slate-200">ADS_CLIENT_ID</strong> ou <strong className="text-slate-200">ADS_CLIENT_SECRET</strong> estão incorretos.
+                              Verifique as variáveis de ambiente no painel Base44 → Settings → Environment Variables.
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-slate-400">{authStatus?.services?.ads?.message || 'Erro desconhecido.'}</p>
+                        )}
                       </div>
                     )}
 
                     {!authStatus?.services?.sp?.ok && (
-                      <div className="space-y-1.5">
+                      <div className="space-y-2">
                         <p className="text-xs text-slate-300 font-semibold">SP-API (Seller Central)</p>
-                        <p className="text-[11px] text-slate-400">
-                          {authStatus?.services?.sp?.error_code === 'invalid_client'
-                            ? 'As credenciais da SP-API (Client ID/Secret) estão incorretas ou a aplicação foi desautorizada no Seller Central.'
-                            : authStatus?.services?.sp?.error || 'Token inválido.'}
-                        </p>
-                        <a href="/sp-api-self-auth"
-                          className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30 rounded-lg text-xs font-semibold transition-colors">
-                          <ExternalLink className="w-3 h-3" /> Reconectar SP-API →
-                        </a>
+                        {authStatus?.services?.sp?.error_code === 'invalid_client' ? (
+                          <>
+                            <p className="text-[11px] text-slate-400">
+                              <strong className="text-slate-200">SP_CLIENT_ID</strong> ou <strong className="text-slate-200">SP_CLIENT_SECRET</strong> estão incorretos ou desatualizados.
+                              Verifique em Base44 → Settings → Environment Variables se os valores batem com o app LWA no Seller Central.
+                            </p>
+                            <a href="/sp-api-self-auth"
+                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30 rounded-lg text-xs font-semibold transition-colors">
+                              <ExternalLink className="w-3 h-3" /> Reconectar SP-API →
+                            </a>
+                          </>
+                        ) : authStatus?.services?.sp?.error_code === 'unauthorized_client' ? (
+                          <>
+                            <p className="text-[11px] text-slate-400">
+                              O <strong className="text-slate-200">SP_REFRESH_TOKEN</strong> foi revogado. Reautorize o app no Seller Central.
+                            </p>
+                            <a href="/sp-api-self-auth"
+                              className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 border border-blue-500/40 text-blue-300 hover:bg-blue-500/30 rounded-lg text-xs font-semibold transition-colors">
+                              <ExternalLink className="w-3 h-3" /> Reconectar SP-API →
+                            </a>
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-slate-400">{authStatus?.services?.sp?.message || 'Erro desconhecido.'}</p>
+                        )}
                       </div>
                     )}
 
-                    <p className="text-[10px] text-slate-600 border-t border-surface-3 pt-2">
-                      Se os erros persistirem, verifique se o app LWA ainda está autorizado em <strong className="text-slate-400">sellercentral.amazon.com.br → Aplicativos</strong> e se as variáveis de ambiente estão corretas no painel do Base44.
-                    </p>
+                    <div className="text-[10px] text-slate-500 border-t border-surface-3 pt-2 space-y-0.5">
+                      <p>Variáveis usadas: <code className="text-slate-400">ADS_CLIENT_ID</code>, <code className="text-slate-400">ADS_CLIENT_SECRET</code>, <code className="text-slate-400">ADS_REFRESH_TOKEN</code>, <code className="text-slate-400">SP_CLIENT_ID</code>, <code className="text-slate-400">SP_CLIENT_SECRET</code>, <code className="text-slate-400">SP_REFRESH_TOKEN</code></p>
+                      <p>Confirme que o app LWA ainda está autorizado em <strong className="text-slate-400">sellercentral.amazon.com.br → Aplicativos</strong>.</p>
+                    </div>
                   </div>
                 )}
               </div>

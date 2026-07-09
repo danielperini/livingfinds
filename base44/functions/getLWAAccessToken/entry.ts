@@ -1,9 +1,27 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 // In-memory token cache (per-service)
-const tokenCache = {};
+const tokenCache: Record<string, { access_token: string; expires_at: number }> = {};
 
-async function fetchNewToken(clientId, clientSecret, refreshToken, service) {
+// Resolve credentials com fallback para variáveis legadas
+function resolveCredentials(service: string) {
+  const isAds = service === 'ads';
+
+  if (isAds) {
+    const clientId     = Deno.env.get('ADS_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '';
+    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
+    const refreshToken = Deno.env.get('ADS_REFRESH_TOKEN') || '';
+    return { clientId, clientSecret, refreshToken };
+  } else {
+    // SP-API
+    const clientId     = Deno.env.get('SP_CLIENT_ID')     || Deno.env.get('AMAZON_LWA_CLIENT_ID')     || '';
+    const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
+    const refreshToken = Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN')  || '';
+    return { clientId, clientSecret, refreshToken };
+  }
+}
+
+async function fetchNewToken(clientId: string, clientSecret: string, refreshToken: string, service: string): Promise<string> {
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -42,19 +60,17 @@ async function fetchNewToken(clientId, clientSecret, refreshToken, service) {
   throw { code: 'max_retries', message: 'Max retry attempts reached', status: 503 };
 }
 
-async function getToken(service, base44Client = null, accountId = null) {
+async function getToken(service: string, base44Client: any = null, accountId: string | null = null): Promise<string> {
   const cached = tokenCache[service];
   if (cached && cached.expires_at > Date.now()) {
     return cached.access_token;
   }
 
-  const isAds = service === 'ads';
-  const clientId = isAds ? Deno.env.get('ADS_CLIENT_ID') : Deno.env.get('SP_CLIENT_ID');
-  const clientSecret = isAds ? Deno.env.get('ADS_CLIENT_SECRET') : Deno.env.get('SP_CLIENT_SECRET');
+  const { clientId, clientSecret } = resolveCredentials(service);
 
-  // Preferir token da entidade (fonte de verdade do OAuth) sobre o secret
-  let refreshToken = isAds ? Deno.env.get('ADS_REFRESH_TOKEN') : Deno.env.get('SP_REFRESH_TOKEN');
-  if (isAds && base44Client && accountId) {
+  // Para Ads: preferir token da entidade (fonte de verdade do OAuth) sobre o secret
+  let { refreshToken } = resolveCredentials(service);
+  if (service === 'ads' && base44Client && accountId) {
     try {
       const accounts = await base44Client.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
       const entityToken = accounts[0]?.ads_refresh_token;
@@ -65,7 +81,12 @@ async function getToken(service, base44Client = null, accountId = null) {
   }
 
   if (!clientId || !clientSecret || !refreshToken) {
-    throw { code: 'missing_credentials', message: `Missing credentials for service: ${service}`, status: 400 };
+    const missing = [
+      !clientId     && `CLIENT_ID (${service === 'ads' ? 'ADS_CLIENT_ID' : 'SP_CLIENT_ID'})`,
+      !clientSecret && `CLIENT_SECRET (${service === 'ads' ? 'ADS_CLIENT_SECRET' : 'SP_CLIENT_SECRET'})`,
+      !refreshToken && `REFRESH_TOKEN (${service === 'ads' ? 'ADS_REFRESH_TOKEN' : 'SP_REFRESH_TOKEN'})`,
+    ].filter(Boolean).join(', ');
+    throw { code: 'missing_credentials', message: `Missing credentials for ${service}: ${missing}`, status: 400 };
   }
 
   return fetchNewToken(clientId, clientSecret, refreshToken, service);
@@ -76,7 +97,6 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
 
-    // Suporta chamadas internas via _service_role (sem sessão de utilizador)
     const isServiceRole = body._service_role === true;
     if (!isServiceRole) {
       const user = await base44.auth.me();
@@ -97,11 +117,10 @@ Deno.serve(async (req) => {
       ok: true,
       service,
       status: 'active',
-      // Expor o access_token para chamadas internas (service role)
       ...(isServiceRole ? { access_token: token } : {}),
       expires_in: cached ? Math.floor((cached.expires_at - Date.now()) / 1000) : null,
     });
-  } catch (error) {
+  } catch (error: any) {
     const err = error || {};
     return Response.json({
       ok: false,
