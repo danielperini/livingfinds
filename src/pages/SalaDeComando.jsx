@@ -13,6 +13,7 @@ import PrelecaoTab from '@/components/sala/PrelecaoTab';
 import EstrategiasTab from '@/components/sala/EstrategiasTab';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
+import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import { Link } from 'react-router-dom';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -68,6 +69,7 @@ const TABS = [
   { id: 'historico', label: 'Histórico e Decisões' },
   { id: 'autopilot', label: 'Automação IA' },
   { id: 'reparo', label: 'Reparo de Campanhas' },
+  { id: 'sync_monitor', label: 'Monitor de Sync' },
 ];
 
 
@@ -522,6 +524,7 @@ export default function SalaDeComando() {
             {t.id === 'fila' && queueFailed > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span>}
             {t.id === 'pausas' && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full"><Clock className="w-2.5 h-2.5 inline" /></span>}
             {t.id === 'autopilot' && pendingDecisions > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span>}
+            {t.id === 'sync_monitor' && syncRuns.some(r => r.status === 'error') && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">!</span>}
           </button>
         ))}
       </div>
@@ -1250,6 +1253,11 @@ export default function SalaDeComando() {
                 </Link>
               </div>
             </div>
+          )}
+
+          {/* ── MONITOR DE SYNC ──────────────────────────────────────────────── */}
+          {tab === 'sync_monitor' && account && (
+            <SyncFailureMonitor amazonAccountId={account.id} />
           )}
 
           {/* ── REPARO ───────────────────────────────────────────────────────── */}

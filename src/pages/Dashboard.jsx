@@ -11,7 +11,6 @@ import {
   AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
 } from 'lucide-react';
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
-import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
@@ -593,7 +592,7 @@ export default function Dashboard() {
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
       {account && <SyncStatusBanner accountId={account.id} />}
-      {account && <SyncFailureMonitor amazonAccountId={account.id} />}
+
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2">
