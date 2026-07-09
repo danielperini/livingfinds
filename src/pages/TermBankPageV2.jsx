@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle, CheckCheck, Target } from 'lucide-react';
-import SuggestionsPanel from '@/components/termbank/SuggestionsPanel';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2, AlertTriangle } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -16,39 +15,9 @@ export default function TermBankPageV2() {
   const [workingId, setWorkingId] = useState(null);
   const [message, setMessage] = useState(null);
   const [cleaning, setCleaning] = useState(false);
-  const [approveAllRunning, setApproveAllRunning] = useState(false);
   const [account, setAccount] = useState(null);
 
-  const MIN_CONFIDENCE = 75;
-  const MAX_SUGGESTIONS_PER_ASIN = 10;
-
   const toConf100 = (c) => c == null ? 0 : c <= 1 ? Math.round(c * 100) : Math.round(c);
-
-  // Sugestões legadas (origem IA) — separadas das Amazon
-  const legacySuggestions = suggestions.filter(s =>
-    ['OPENAI_TITLE_ANALYSIS', 'CLAUDE_PRODUCT_ANALYSIS', 'AI_GENERATED', 'GPT_TITLE_ANALYSIS', 'PRODUCT_ANALYSIS',
-     'AUTOMATIC_SEARCH_TERM', 'MANUAL_SEARCH_TERM', 'CONVERTED_TERM_EXPANSION', 'USER'].includes(s.source) &&
-    !['archived_by_policy', 'superseded'].includes(s.status)
-  );
-
-  // Top 10 das sugestões legadas
-  const top10Suggestions = (() => {
-    const byAsin = {};
-    for (const s of legacySuggestions) {
-      const conf = toConf100(s.confidence || s.relevance_score);
-      if (conf < MIN_CONFIDENCE) continue;
-      if (!byAsin[s.asin]) byAsin[s.asin] = [];
-      byAsin[s.asin].push({ ...s, _conf100: conf });
-    }
-    const result = [];
-    for (const asin of Object.keys(byAsin)) {
-      const sorted = [...byAsin[asin]].sort((a, b) => b._conf100 - a._conf100);
-      result.push(...sorted.slice(0, 10));
-    }
-    return result;
-  })();
-
-  const excessCount = legacySuggestions.length - top10Suggestions.length;
 
   const isTermIncomplete = (kw) => {
     if (!kw) return true;
@@ -108,23 +77,19 @@ export default function TermBankPageV2() {
 
   useEffect(() => { load(); }, [load]);
 
-  const cleanExcess = async () => {
-    if (excessCount <= 0) return;
+  const cleanupLegacy = async () => {
+    if (!account) return;
     setCleaning(true);
     setMessage(null);
     try {
-      const keepIds = new Set(top10Suggestions.map(s => s.id));
-      const toDelete = legacySuggestions.filter(s => !keepIds.has(s.id));
-      const BATCH = 10;
-      let deleted = 0;
-      for (let i = 0; i < toDelete.length; i += BATCH) {
-        const batch = toDelete.slice(i, i + BATCH);
-        await Promise.all(batch.map(s => base44.entities.KeywordSuggestion.delete(s.id)));
-        deleted += batch.length;
-        if (i + BATCH < toDelete.length) await new Promise(r => setTimeout(r, 300));
+      const res = await base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: account.id });
+      const d = res?.data || {};
+      if (d.ok) {
+        setMessage({ type: 'success', text: `✓ ${d.archived || 0} sugestões arquivadas · ${d.migrated_to_termbank || 0} migradas para TermBank · ${d.campaigns_archived || 0} campanhas sem gasto arquivadas.` });
+        await load();
+      } else {
+        setMessage({ type: 'error', text: d.error || 'Erro na limpeza' });
       }
-      setMessage({ type: 'success', text: `✓ ${deleted} sugestões excedentes removidas.` });
-      await load();
     } catch (e) {
       setMessage({ type: 'error', text: e.message });
     } finally {
@@ -132,64 +97,23 @@ export default function TermBankPageV2() {
     }
   };
 
-  const approveAll = async () => {
-    if (!account || approveAllRunning) return;
-    const pending = top10Suggestions.filter(s => !['created', 'approved'].includes(s.status));
-    if (!pending.length) { setMessage({ type: 'error', text: 'Nenhuma sugestão pendente.' }); return; }
-    setApproveAllRunning(true);
-    setMessage(null);
-    let success = 0, failed = 0;
-    for (const s of pending) {
-      setWorkingId(s.id);
-      try {
-        const res = await base44.functions.invoke('reviewKeywordSuggestion', { suggestion_id: s.id, action: 'approve' });
-        if (res?.data?.ok) success++;
-        else failed++;
-      } catch { failed++; }
-      await new Promise(r => setTimeout(r, 800));
-    }
-    setWorkingId(null);
-    setApproveAllRunning(false);
-    setMessage({ type: success > 0 ? 'success' : 'error', text: `✓ ${success} campanhas criadas${failed > 0 ? ` · ${failed} falhas` : ''}.` });
-    await load();
-  };
-
-  async function review(suggestion, action) {
-    if (action === 'approve' && isTermIncomplete(suggestion.keyword)) {
-      setMessage({ type: 'error', text: `Termo incompleto: "${suggestion.keyword}"` });
-      return;
-    }
-    setWorkingId(suggestion.id);
-    setMessage(null);
-    try {
-      const res = await base44.functions.invoke('reviewKeywordSuggestion', { suggestion_id: suggestion.id, action });
-      const data = res?.data || {};
-      if (!data.ok) throw new Error(data.error || 'Falha ao processar sugestão');
-      if (action === 'approve') {
-        setMessage({ type: 'success', text: `Campanha criada para "${suggestion.keyword}".` });
-      } else {
-        setMessage({ type: 'success', text: 'Sugestão removida.' });
-      }
-      await load();
-    } catch (e) {
-      setMessage({ type: 'error', text: e?.response?.data?.error || e.message });
-    } finally {
-      setWorkingId(null);
-    }
-  }
-
   const amazonSuggestions = suggestions.filter(s =>
     ['AMAZON_ADS_SUGGESTED_KEYWORD', 'AMAZON_ADS_SUGGESTED_TARGET', 'AMAZON_ADS_RECOMMENDATION'].includes(s.source)
   );
 
   const q = search.toLowerCase();
-  const filteredSuggestions = top10Suggestions.filter(s => `${s.keyword||''} ${s.asin||''} ${s.sku||''}`.toLowerCase().includes(q));
   const filteredTerms = terms.filter(t => `${t.term||''} ${t.asin||''} ${t.product_name||''}`.toLowerCase().includes(q));
+
+  // Contagem de sugestões legadas ainda não arquivadas
+  const legacyCount = suggestions.filter(s =>
+    ['OPENAI_TITLE_ANALYSIS', 'CLAUDE_PRODUCT_ANALYSIS', 'AI_GENERATED', 'GPT_TITLE_ANALYSIS', 'PRODUCT_ANALYSIS',
+     'AUTOMATIC_SEARCH_TERM', 'MANUAL_SEARCH_TERM', 'CONVERTED_TERM_EXPANSION', 'USER'].includes(s.source) &&
+    !['archived_by_policy', 'superseded'].includes(s.status)
+  ).length;
 
   const tabs = [
     { id: 'amazon', label: `🎯 Amazon Ads Suggestions`, count: amazonSuggestions.filter(s => !['archived_by_policy','superseded'].includes(s.status)).length },
     { id: 'terms', label: '📚 TermBank', count: terms.length },
-    { id: 'legacy', label: '📦 Sugestões anteriores', count: top10Suggestions.length },
   ];
 
   return (
@@ -205,14 +129,14 @@ export default function TermBankPageV2() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {tab === 'legacy' && top10Suggestions.filter(s => !['created','approved'].includes(s.status)).length > 0 && (
+          {legacyCount > 0 && (
             <button
-              onClick={approveAll}
-              disabled={approveAllRunning || loading}
-              className="flex items-center gap-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 px-3 py-2 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
+              onClick={cleanupLegacy}
+              disabled={cleaning || loading}
+              className="flex items-center gap-2 rounded-lg bg-amber-500/15 border border-amber-500/30 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-500/25 transition-colors disabled:opacity-50"
             >
-              {approveAllRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCheck className="h-3.5 w-3.5" />}
-              {approveAllRunning ? 'Criando...' : `Aprovar todas (${top10Suggestions.filter(s => !['created','approved'].includes(s.status)).length})`}
+              {cleaning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {cleaning ? 'Limpando...' : `Limpar ${legacyCount} sugestões IA legadas`}
             </button>
           )}
           <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
@@ -221,21 +145,7 @@ export default function TermBankPageV2() {
         </div>
       </div>
 
-      {tab === 'legacy' && excessCount > 0 && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" />
-            <p className="text-sm text-amber-300">
-              <strong>{excessCount}</strong> sugestões excedentes ao limite de 10 por produto.
-            </p>
-          </div>
-          <button onClick={cleanExcess} disabled={cleaning}
-            className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/30 transition-colors disabled:opacity-50 flex-shrink-0">
-            {cleaning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            {cleaning ? 'Limpando...' : 'Limpar excesso'}
-          </button>
-        </div>
-      )}
+
 
       <div className="flex gap-1 border-b border-surface-2">
         {tabs.map(t => (
@@ -275,13 +185,6 @@ export default function TermBankPageV2() {
           products={products}
           account={account}
           onRefresh={load}
-        />
-      ) : tab === 'legacy' ? (
-        <SuggestionsPanel
-          suggestions={filteredSuggestions}
-          products={products}
-          workingId={workingId}
-          onReview={review}
         />
       ) : (
         <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1">
