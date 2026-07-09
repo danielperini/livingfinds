@@ -12,13 +12,16 @@ export const THEMES = [
 
 export function ThemeProvider({ children }) {
   const [theme, setThemeState] = useState(() => {
-    return localStorage.getItem('lf_theme') || 'dark';
+    // Ler localStorage síncronamente para evitar flash
+    const saved = localStorage.getItem('lf_theme') || 'dark';
+    // Aplicar imediatamente no <html> antes do primeiro render
+    document.documentElement.setAttribute('data-theme', saved);
+    return saved;
   });
 
-  // Aplicar classe no <html> para as CSS variables funcionarem
+  // Sincronizar sempre que o tema mudar
   useEffect(() => {
-    const root = document.documentElement;
-    root.setAttribute('data-theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('lf_theme', theme);
   }, [theme]);
 
