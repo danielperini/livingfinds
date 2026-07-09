@@ -164,6 +164,43 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.SyncRun.filter({ amazon_account_id: aid }, '-created_at', 10).catch(() => []),
     ]);
 
+    // ── 6b. Carregar campanhas pausadas e seus termos ────────────────────
+    const pausedCampaignsAll = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id: aid }, null, 500
+    ).then((cs: any[]) => cs.filter(c => ['paused','PAUSED'].includes(String(c.state||c.status||'').toUpperCase())));
+
+    // ── 6c. Retroativamente negativar termos de manuais existentes nas AUTOs ──
+    if (!dryRun) {
+      // Para cada campanha MANUAL ativa, pegar suas keywords e negativar na AUTO do mesmo ASIN
+      const manualCampsAll = campaigns.filter((c: any) => (c.targeting_type||'').toUpperCase() === 'MANUAL' && !['archived','ARCHIVED'].includes(String(c.state||c.status||'')));
+      const autoCampsAll   = campaigns.filter((c: any) => (c.targeting_type||'').toUpperCase() === 'AUTO'   && !['archived','ARCHIVED'].includes(String(c.state||c.status||'')));
+      for (const manualC of manualCampsAll.slice(0, 20)) {
+        if (!manualC.asin) continue;
+        const autoC = autoCampsAll.find((c: any) => c.asin === manualC.asin);
+        if (!autoC) continue;
+        const manualKws = keywords.filter((k: any) => {
+          const cids = [manualC.campaign_id, manualC.amazon_campaign_id, manualC.id].filter(Boolean);
+          return cids.includes(k.campaign_id);
+        });
+        for (const kw of manualKws.slice(0, 10)) {
+          const kwText = (kw.keyword_text || kw.keyword || '').toLowerCase().trim();
+          if (!kwText) continue;
+          // Verificar se já negativado
+          const already = await base44.asServiceRole.entities.OptimizationDecision.filter({
+            amazon_account_id: aid, campaign_id: autoC.campaign_id, keyword_text: kwText,
+            decision_type: 'negative_keyword', status: 'executed',
+          }, null, 1).catch(() => []);
+          if (!already.length) {
+            base44.functions.invoke('negateKeywordInAutoCampaign', {
+              amazon_account_id: aid, asin: manualC.asin, keyword_text: kwText,
+              manual_campaign_id: manualC.campaign_id || manualC.id,
+              triggered_by: 'weekly_prelection_retroactive',
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+
     // ── 7. Agregações determinísticas ────────────────────────────────────
 
     const weekMetrics = metricsWeek.filter(m => m.date >= sevenDaysAgo && m.date <= yesterday);
@@ -274,6 +311,39 @@ Deno.serve(async (req) => {
       c.matured && c.spend > 5 && (c.acos == null || c.acos > s.max_acos) && c.orders === 0
     ).slice(0, 20);
 
+    // Campanhas pausadas que tiveram vendas — candidatas a reativar
+    const pausedWithSales: any[] = [];
+    for (const pc of pausedCampaignsAll.slice(0, 50)) {
+      const cid = pc.campaign_id || pc.amazon_campaign_id || pc.id;
+      const pcMetrics = metricsWeek.filter((m: any) => m.campaign_id === cid);
+      const pcOrders = pcMetrics.reduce((s: number, m: any) => s + (m.orders||0), 0);
+      const pcSales  = pcMetrics.reduce((s: number, m: any) => s + (m.sales||0), 0);
+      const pcSpend  = pcMetrics.reduce((s: number, m: any) => s + (m.spend||0), 0);
+      const pcAcos   = pcSales > 0 ? fmt2(pcSpend / pcSales * 100) : null;
+      if (pcOrders > 0) {
+        pausedWithSales.push({ cid, name: (pc.campaign_name||pc.name||cid).slice(0,60), orders: pcOrders, sales: pcSales, spend: pcSpend, acos: pcAcos, asin: pc.asin, type: (pc.targeting_type||'').toUpperCase() });
+      }
+    }
+
+    // Search terms com >= 3 pedidos → candidatos a campanha manual EXACT
+    const strongWinningTerms = searchTerms.filter((t: any) => {
+      const orders = t.orders || 0;
+      const sales  = t.sales  || 0;
+      const spend  = t.spend  || 0;
+      const acos   = sales > 0 ? spend / sales * 100 : null;
+      return orders >= 3 && sales > 0 && (acos == null || acos <= s.max_acos * 1.5);
+    }).slice(0, 20).map((t: any) => ({
+      search_term: t.query || t.search_term || t.term,
+      asin: t.asin,
+      campaign_id: t.campaign_id,
+      campaign_type: t.campaign_type || 'AUTO',
+      orders: t.orders || 0,
+      sales: fmt2(t.sales || 0),
+      spend: fmt2(t.spend || 0),
+      acos: t.sales > 0 ? fmt2((t.spend||0)/(t.sales||1)*100) : null,
+      cpc: (t.clicks||0) > 0 ? fmt2((t.spend||0)/(t.clicks||1)) : 0,
+    }));
+
     const winningTerms = searchTerms.filter(t => {
       const orders = t.orders || 0;
       const sales = t.sales || 0;
@@ -372,6 +442,8 @@ Deno.serve(async (req) => {
       asins_without_campaign: asinsWithoutCampaign.slice(0, 10),
       incomplete_campaigns_count: incompleteCampaigns.length,
       paused_campaigns_count: pausedCampaigns.length,
+      paused_campaigns_with_sales: pausedWithSales,
+      strong_winning_terms: strongWinningTerms,
       recent_bid_changes: recentBidChanges.slice(0, 20),
       bid_violations: bidViolations,
       week_decisions: weekDecisions.slice(0, 20),
@@ -397,6 +469,8 @@ REGRAS ABSOLUTAS (violações são descartadas automaticamente pelo sistema):
 - Proposta de regra: confidence mínima 0.95 para aprovação automática
 - Use os dados do dashboard_revenue para calcular TACoS real (não estime sem dados)
 - Se unified_week_totals disponível, considere halo_sales e invalid_click_pct nas decisões de bid
+- strong_winning_terms: termos com >= 3 pedidos — DEVEM ser incluídos em manual_campaigns_to_create com match_type EXACT se não existir campanha manual para o mesmo ASIN+termo
+- paused_campaigns_with_sales: campanhas pausadas que ainda geraram vendas nesta semana — avalie se devem ir para campaigns_to_reactivate
 
 Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. Schema obrigatório:
 {
@@ -406,7 +480,8 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
   "losing_campaigns": [{"campaign_id": "string", "reason": "string", "confidence": 0.0, "recommended_action": "string"}],
   "rule_change_proposals": [{"rule_name": "string", "current_rule": "string", "proposed_rule": "string", "evidence": "string", "confidence": 0.0, "risk": "low|medium|high", "auto_implement": false}],
   "manual_campaigns_to_create": [{"asin": "string", "keyword": "string", "match_type": "EXACT", "bid": 0.0, "budget": 15, "confidence": 0.0}],
-  "executive_summary": "string com no máximo 500 caracteres"
+  "executive_summary": "string com no máximo 500 caracteres",
+  "campaigns_to_reactivate": [{"campaign_id": "string", "reason": "string", "orders_last_7d": 0}]
 }`;
 
       // Sem AbortSignal ou timeout — deixar Claude completar naturalmente
@@ -526,6 +601,59 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       }
     }
 
+    // ── 12b. Retroativamente criar campanhas manuais de strong_winning_terms ──
+    if (!dryRun && strongWinningTerms.length > 0) {
+      const alreadyManualKws = new Set(
+        keywords.filter((k: any) => (k.match_type||'').toLowerCase() === 'exact').map((k: any) => `${k.asin||''}:${(k.keyword_text||'').toLowerCase().trim()}`)
+      );
+      for (const t of strongWinningTerms.slice(0, s.weekly_campaign_capacity)) {
+        const termKey = `${t.asin||''}:${(t.search_term||'').toLowerCase().trim()}`;
+        if (alreadyManualKws.has(termKey)) continue;
+        if (!productAsins.has(t.asin)) continue;
+        const bid = clampBid(t.cpc || s.target_cpc || 0.60, s);
+        base44.functions.invoke('createManualCampaignV2', {
+          amazon_account_id: aid, asin: t.asin,
+          keyword: t.search_term, match_type: 'EXACT',
+          bid, budget: s.min_campaign_budget,
+          source: 'weekly_prelection_strong_term',
+        }).then((res: any) => {
+          if (res?.data?.ok && t.asin && t.search_term) {
+            // Negativar na AUTO correspondente
+            base44.functions.invoke('negateKeywordInAutoCampaign', {
+              amazon_account_id: aid, asin: t.asin,
+              keyword_text: t.search_term,
+              manual_campaign_id: res.data.campaign_id,
+              triggered_by: 'weekly_prelection_strong_term',
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+    }
+
+    // ── 12c. Reativar campanhas pausadas com vendas (aprovadas pelo Claude) ──
+    let reactivated = 0;
+    if (!dryRun) {
+      const toReactivate = (aiResponse.campaigns_to_reactivate || []).slice(0, 5);
+      for (const rec of toReactivate) {
+        const campRecord = pausedCampaignsAll.find((c: any) => {
+          const cids = [c.campaign_id, c.amazon_campaign_id, c.id].filter(Boolean);
+          return cids.includes(rec.campaign_id);
+        });
+        if (!campRecord) continue;
+        // Reativar localmente
+        await base44.asServiceRole.entities.Campaign.update(campRecord.id, { state: 'enabled', status: 'enabled' }).catch(() => {});
+        // Enfileirar reativação na Amazon
+        await base44.asServiceRole.entities.AmazonActionQueue.create({
+          amazon_account_id: aid,
+          action_type: 'enable_campaign',
+          payload: JSON.stringify({ campaign_id: campRecord.campaign_id || campRecord.amazon_campaign_id, reason: rec.reason }),
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        }).catch(() => {});
+        reactivated++;
+      }
+    }
+
     // ── 13. Métricas finais e save ────────────────────────────────────────
     const allConfs = [...(aiResponse.winning_terms || []), ...(aiResponse.losing_campaigns || [])].map((x: any) => x.confidence || 0);
     const avgConfidence = allConfs.length > 0 ? fmt2(allConfs.reduce((acc, c) => acc + c, 0) / allConfs.length) : 0;
@@ -591,6 +719,9 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
       campaigns_recommended: campaignsToCreate.length,
       campaigns_created: campaignsCreated,
       campaign_results: campaignCreationResults,
+      paused_campaigns_with_sales: pausedWithSales.length,
+      campaigns_reactivated: reactivated,
+      strong_winning_terms_found: strongWinningTerms.length,
       requires_manual_review: requiresManualReview,
       executive_summary: aiResponse.executive_summary || '',
     });

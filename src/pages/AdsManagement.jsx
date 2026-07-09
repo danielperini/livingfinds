@@ -100,7 +100,14 @@ function isAiManaged(campaign) {
   return campaign.created_by_app === true || campaign.learning_eligible !== false;
 }
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading }) {
+const STATE_FILTERS = [
+  { key: 'all', label: 'Todas' },
+  { key: 'enabled', label: 'Ativas' },
+  { key: 'paused', label: 'Pausadas' },
+  { key: 'archived', label: 'Arquivadas' },
+];
+
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter }) {
   return (
     <div className="flex-1 flex flex-col min-w-0 border-r border-surface-2 last:border-r-0">
       {/* Column header */}
@@ -108,6 +115,15 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
         <Icon className={`w-3.5 h-3.5 ${color}`} />
         <span className={`text-xs font-bold uppercase tracking-wider ${color}`}>{title}</span>
         <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
+      </div>
+      {/* State filter per column */}
+      <div className="px-2 py-1.5 border-b border-surface-2 flex gap-1">
+        {STATE_FILTERS.map(f => (
+          <button key={f.key} onClick={() => onStateFilter(f.key)}
+            className={`px-1.5 py-0.5 text-[9px] rounded transition-colors font-medium ${stateFilter === f.key ? `bg-cyan/20 text-cyan border border-cyan/30` : 'text-slate-600 hover:text-slate-300'}`}>
+            {f.label}
+          </button>
+        ))}
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
@@ -190,7 +206,8 @@ export default function AdsManagement() {
   const [pendingBids, setPendingBids] = useState({});
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
-  const [stateFilter, setStateFilter] = useState('all');
+  const [stateFilterAuto, setStateFilterAuto] = useState('all');
+  const [stateFilterManual, setStateFilterManual] = useState('all');
   const [activeTab, setActiveTab] = useState('keywords');
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
@@ -231,12 +248,11 @@ export default function AdsManagement() {
         loadAllCampaigns(acc.id),
         base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
       ]);
-      // is_operational=false exclui arquivadas e incompletas do painel operacional
+      // Excluir apenas incompletas; arquivadas ficam para o filtro por coluna
       const operational = cams.filter(c =>
         c.is_operational !== false &&
-        c.state !== 'archived' && c.status !== 'archived' &&
         c.state !== 'incomplete' &&
-        !c.archived
+        !c.is_incomplete
       );
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
@@ -450,14 +466,14 @@ export default function AdsManagement() {
   const hasPending = Object.keys(pendingBids).length > 0;
 
   // ── Separar AUTO / MANUAL ──────────────────────────────────────────────────
-  const applyFilters = (list) => list.filter(c => {
-    const matchSearch = !search || (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.campaign_name || '').toLowerCase().includes(search.toLowerCase());
-    const matchState = stateFilter === 'all' || c.state === stateFilter || c.status === stateFilter;
-    return matchSearch && matchState;
-  });
+  const applySearch = (list) => list.filter(c =>
+    !search || (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.campaign_name || '').toLowerCase().includes(search.toLowerCase())
+  );
 
-  const autoCampaigns = applyFilters(campaigns.filter(c => (c.targeting_type || '').toUpperCase() === 'AUTO'));
-  const manualCampaigns = applyFilters(campaigns.filter(c => (c.targeting_type || '').toUpperCase() !== 'AUTO'));
+  const autoCampaigns = applySearch(campaigns.filter(c => (c.targeting_type || '').toUpperCase() === 'AUTO'))
+    .filter(c => stateFilterAuto === 'all' || c.state === stateFilterAuto || c.status === stateFilterAuto);
+  const manualCampaigns = applySearch(campaigns.filter(c => (c.targeting_type || '').toUpperCase() !== 'AUTO'))
+    .filter(c => stateFilterManual === 'all' || c.state === stateFilterManual || c.status === stateFilterManual);
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
@@ -546,23 +562,11 @@ export default function AdsManagement() {
           )}
         </div>
 
-        {/* Filters */}
-        <div className="px-3 py-2 border-b border-surface-2 flex items-center gap-2">
-          <div className="flex gap-1">
-            {[
-              { key: 'all', label: 'Todas' },
-              { key: 'enabled', label: 'Ativas' },
-              { key: 'paused', label: 'Pausadas' },
-            ].map(f => (
-              <button key={f.key} onClick={() => setStateFilter(f.key)}
-                className={`px-2 py-1 text-[10px] rounded transition-colors ${stateFilter === f.key ? 'bg-cyan/20 text-cyan border border-cyan/30' : 'bg-surface-2 text-slate-500 hover:text-slate-300'}`}>
-                {f.label}
-              </button>
-            ))}
-          </div>
-          <div className="relative flex-1">
+        {/* Search filter */}
+        <div className="px-3 py-2 border-b border-surface-2">
+          <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar..."
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Pesquisar campanhas..."
               className="w-full pl-6 pr-2 py-1 bg-surface-2 border border-surface-3 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
           </div>
         </div>
@@ -583,6 +587,8 @@ export default function AdsManagement() {
               selectedId={selectedCampaign?.id}
               onSelect={selectCampaign}
               loading={loading}
+              stateFilter={stateFilterAuto}
+              onStateFilter={setStateFilterAuto}
             />
             <CampaignColumn
               title="Manuais"
@@ -593,6 +599,8 @@ export default function AdsManagement() {
               selectedId={selectedCampaign?.id}
               onSelect={selectCampaign}
               loading={loading}
+              stateFilter={stateFilterManual}
+              onStateFilter={setStateFilterManual}
             />
           </div>
         )}
