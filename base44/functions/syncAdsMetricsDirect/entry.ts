@@ -193,7 +193,8 @@ Deno.serve(async (req) => {
 
       // --- FASE 1: detectar lacunas nos últimos 30 dias e solicitar relatório ---
       const today = new Date();
-      const yesterday = new Date(today.getTime() - 86400000);
+      // Amazon tem latência de dados de até 2 dias — usar D-2 como data final segura
+      const reportEnd = new Date(today.getTime() - 2 * 86400000);
       const windowStart = new Date(today.getTime() - 30 * 86400000);
 
       const existing = await db.entities.CampaignMetricsDaily.filter(
@@ -203,7 +204,7 @@ Deno.serve(async (req) => {
       const presentDates = new Set(existing.map((r: any) => String(r.date || '').slice(0, 10)));
       const missingDates: string[] = [];
       const cursor = new Date(windowStart);
-      while (cursor <= yesterday) {
+      while (cursor <= reportEnd) {
         const d = ymd(cursor);
         if (!presentDates.has(d)) missingDates.push(d);
         cursor.setDate(cursor.getDate() + 1);
@@ -216,7 +217,7 @@ Deno.serve(async (req) => {
 
       const startDate = missingDates[0];
       const endDate = missingDates[missingDates.length - 1];
-      console.log(`[syncDirect] fase1 solicitando relatório ${startDate}→${endDate} (${missingDates.length} dias faltando)`);
+      console.log(`[syncDirect] fase1 solicitando relatório ${startDate}→${endDate} (${missingDates.length} dias faltando, janela até D-2=${ymd(reportEnd)})`);
 
       const CT_CREATE = 'application/vnd.createasyncreportrequest.v3+json';
       const createRes = await fetch(`${base}/reporting/reports`, {
