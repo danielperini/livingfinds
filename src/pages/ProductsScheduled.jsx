@@ -12,6 +12,7 @@ import {
   Clock,
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
+import StockDivergenceReport from '@/components/products/StockDivergenceReport';
 
 function getSaoPauloParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -1138,6 +1139,8 @@ export default function ProductsScheduled() {
 
 
       </div>
+
+      <StockDivergenceReport accountId={account?.id} />
 
       <KickoffControlPanel
         accountId={account?.id}
