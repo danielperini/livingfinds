@@ -211,7 +211,7 @@ export default function Dashboard() {
       const [cams, prods, metrics, decs, runs, changes, apConfigs, budgCfgs, benchmarks, salesDailyData] = await Promise.all([
         safe_(() => loadAllCampaigns(aid)),
         safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
-        safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300)),
+        safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 1500)),
         safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10)),
         safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5)),
         safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 2000)),
