@@ -130,13 +130,7 @@ export default function UnifiedMetricsPanel({ amazonAccountId }) {
     return () => { cancelled = true; };
   }, [amazonAccountId]);
 
-  if (loading) return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-      {[...Array(4)].map((_, i) => (
-        <div key={i} className="rounded-xl border border-surface-2 bg-surface-1 p-4 h-32 animate-pulse" />
-      ))}
-    </div>
-  );
+  if (loading) return null;
 
   // Badge de fonte
   const sourceBadge = {
@@ -149,20 +143,11 @@ export default function UnifiedMetricsPanel({ amazonAccountId }) {
 
   const BadgeIcon = sourceBadge.icon;
 
+  if (dataSource !== 'unified' || !metrics) return null;
+
   return (
     <div className="space-y-4">
-      {/* Fonte dos dados */}
-      <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${sourceBadge.bg}`}>
-        <BadgeIcon className={`h-3.5 w-3.5 ${sourceBadge.color} flex-shrink-0`} />
-        <span className={`text-xs font-medium ${sourceBadge.color}`}>Fonte dos dados: {sourceBadge.label}</span>
-        {reconciliation?.warnings > 0 && (
-          <span className="ml-auto text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-0.5">
-            {reconciliation.warnings} camp. divergentes · max {fmt(reconciliation.maxDiff, 1)}%
-          </span>
-        )}
-      </div>
-
-      {dataSource !== 'unified' || !metrics ? null : (
+      {(
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
 
           {/* A: Qualidade de tráfego */}
