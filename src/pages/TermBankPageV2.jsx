@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -14,6 +14,7 @@ export default function TermBankPageV2() {
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState(null);
   const [message, setMessage] = useState(null);
+  const [purging, setPurging] = useState(false);
 
   const [account, setAccount] = useState(null);
 
@@ -78,6 +79,33 @@ export default function TermBankPageV2() {
 
   useEffect(() => { load(); }, [load]);
 
+  const handlePurge = useCallback(async () => {
+    if (!account) return;
+    if (!window.confirm('Isso irá remover todos os termos sem performance real e arquivar campanhas sem gasto. Continuar?')) return;
+    setPurging(true);
+    setMessage({ type: 'info', text: 'Limpando termos e campanhas sem performance...' });
+    try {
+      const res = await base44.functions.invoke('purgeStaleTermsAndCampaigns', {
+        amazon_account_id: account.id,
+        dry_run: false,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        setMessage({
+          type: 'success',
+          text: `✓ ${d.terms_deleted} termos removidos · ${d.suggestions_archived} sugestões arquivadas · ${d.campaigns_archived} campanhas arquivadas${d.campaigns_failed > 0 ? ` · ${d.campaigns_failed} campanhas falharam` : ''}`,
+        });
+        load();
+      } else {
+        setMessage({ type: 'error', text: d?.error || 'Erro ao limpar' });
+      }
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setPurging(false);
+    }
+  }, [account, load]);
+
   const cleanupLegacy = useCallback(async (acc) => {
     if (!acc) return;
     try {
@@ -115,6 +143,14 @@ export default function TermBankPageV2() {
         </div>
         <div className="flex items-center gap-2">
 
+          <button
+            onClick={handlePurge}
+            disabled={purging || !account}
+            className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm font-semibold text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+          >
+            {purging ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            {purging ? 'Limpando...' : 'Limpar sem performance'}
+          </button>
           <button onClick={load} className="rounded-lg border border-surface-3 p-2 text-slate-300">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
