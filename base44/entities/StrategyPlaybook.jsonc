@@ -1,0 +1,125 @@
+{
+  "name": "StrategyPlaybook",
+  "type": "object",
+  "properties": {
+    "strategy_id": {
+      "type": "string"
+    },
+    "strategy_name": {
+      "type": "string"
+    },
+    "goal_targeted": {
+      "type": "string",
+      "enum": [
+        "acos",
+        "roas",
+        "tacos",
+        "cpc",
+        "budget",
+        "dayparting",
+        "placement",
+        "keyword",
+        "campaign",
+        "stock",
+        "margin",
+        "maturation"
+      ]
+    },
+    "trigger_conditions": {
+      "type": "object"
+    },
+    "required_metrics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "action_type": {
+      "type": "string",
+      "enum": [
+        "adjust_bid",
+        "adjust_budget",
+        "create_manual_exact_campaign",
+        "create_manual_phrase_campaign",
+        "create_product_target_campaign",
+        "pause_keyword",
+        "pause_campaign",
+        "archive_campaign",
+        "negative_keyword",
+        "adjust_dayparting",
+        "recommend_placement",
+        "repair_campaign",
+        "hold_for_maturation",
+        "redistribute_budget",
+        "increase_discovery",
+        "reduce_waste",
+        "protect_margin"
+      ]
+    },
+    "action_payload": {
+      "type": "object"
+    },
+    "maturation_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "success_criteria": {
+      "type": "object"
+    },
+    "failure_criteria": {
+      "type": "object"
+    },
+    "next_action_if_success": {
+      "type": "string"
+    },
+    "next_action_if_failure": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "use_ai": {
+      "type": "boolean",
+      "default": false
+    },
+    "use_rule_engine": {
+      "type": "boolean",
+      "default": true
+    },
+    "integration_required": {
+      "type": "boolean",
+      "default": true
+    },
+    "estimated_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "priority": {
+      "type": "number",
+      "default": 50
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "strategy_id",
+    "strategy_name",
+    "action_type"
+  ]
+}
