@@ -239,6 +239,8 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
   const [workingId, setWorkingId] = useState(null);
   const [creatingId, setCreatingId] = useState(null);
   const [message, setMessage] = useState(null);
+  const [batchFetching, setBatchFetching] = useState(false);
+  const [batchProgress, setBatchProgress] = useState(null);
   // Estado local de status por id — sobrescreve o status vindo das props sem recarregar tudo
   const [localStatus, setLocalStatus] = useState({});
   const [competitorAsin, setCompetitorAsin] = useState('');
@@ -293,6 +295,41 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
 
   const ranked = activeSuggestions.filter((s) => s.ai_rank);
   const eligible = ranked.filter((s) => s.should_create_campaign && (s.ai_confidence || 0) >= 0.90);
+
+  const handleBatchFetch = async () => {
+    if (!account) return;
+    setBatchFetching(true);
+    setBatchProgress(null);
+    setMessage(null);
+    try {
+      setBatchProgress('Buscando produtos elegíveis (com estoque, novos ou reabastecidos)...');
+      const res = await base44.functions.invoke('syncAmazonKeywordSuggestionsBatch', {
+        amazon_account_id: account.id,
+        max_suggestions_per_asin: 50,
+        match_types: ['EXACT', 'PHRASE', 'BROAD'],
+        delay_between_asins_ms: 1200,
+        max_asins: 100,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const errors = d.results?.filter(r => r.error).length || 0;
+        setBatchProgress(null);
+        setMessage({
+          type: d.total_created > 0 ? 'success' : 'info',
+          text: `✓ Busca em lote concluída: ${d.processed} ASINs processados · ${d.total_created} novas sugestões · ${d.total_skipped} já existiam${errors > 0 ? ` · ${errors} com erro` : ''}`,
+        });
+        onRefresh();
+      } else {
+        setBatchProgress(null);
+        setMessage({ type: 'error', text: d?.error || 'Erro na busca em lote' });
+      }
+    } catch (e) {
+      setBatchProgress(null);
+      setMessage({ type: 'error', text: e.message });
+    } finally {
+      setBatchFetching(false);
+    }
+  };
 
   const handleFetchSuggestions = async () => {
     if (!account || !selectedAsin) {setMessage({ type: 'error', text: 'Selecione um produto primeiro.' });return;}
@@ -404,7 +441,29 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
   return (
     <div className="space-y-4">
       {/* Controles */}
+      {/* Busca em Lote */}
+      <div className="rounded-xl border border-cyan/20 bg-cyan/5 p-4 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-cyan">Busca em Lote — Todos os Produtos Elegíveis</p>
+          <p className="text-xs text-slate-400 mt-0.5">Busca sugestões Amazon Ads para todos os produtos ativos com estoque, novos ASINs e produtos recém-reabastecidos.</p>
+          {batchProgress && (
+            <p className="text-xs text-amber-400 mt-1 flex items-center gap-1.5">
+              <Loader2 className="w-3 h-3 animate-spin" />{batchProgress}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={handleBatchFetch}
+          disabled={batchFetching}
+          className="flex items-center gap-2 rounded-lg bg-cyan/15 border border-cyan/40 px-4 py-2 text-sm font-semibold text-cyan hover:bg-cyan/25 transition-colors disabled:opacity-50 whitespace-nowrap flex-shrink-0">
+          {batchFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+          {batchFetching ? 'Buscando em lote...' : 'Buscar para todos'}
+        </button>
+      </div>
+
+      {/* Busca Individual */}
       <div className="rounded-xl border border-surface-2 bg-surface-1 p-4 space-y-3">
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Busca Individual por Produto</p>
         <div className="flex flex-wrap gap-3 items-end">
           <div className="flex flex-col gap-1 min-w-[200px]">
             <label className="text-xs text-slate-500">Produto (ASIN)</label>
