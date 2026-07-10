@@ -111,6 +111,12 @@ export default function Products({ externalRefreshTrigger }) {
     }
   }, []);
 
+  const reloadProducts = useCallback(async () => {
+    if (!account) { await load(); return; }
+    const records = await base44.entities.Product.filter({ amazon_account_id: account.id }, '-created_date', 500).catch(() => null);
+    if (records) setProducts(records);
+  }, [account, load]);
+
   useEffect(() => {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -191,12 +197,6 @@ export default function Products({ externalRefreshTrigger }) {
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   // ── Ações ───────────────────────────────────────────────────────────────────
-  const reloadProducts = useCallback(async () => {
-    // Usa account do closure; se ainda não carregou, faz load completo
-    if (!account) { await load(); return; }
-    const records = await base44.entities.Product.filter({ amazon_account_id: account.id }, '-created_date', 500).catch(() => null);
-    if (records) setProducts(records);
-  }, [account, load]);
 
   const toggleCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
