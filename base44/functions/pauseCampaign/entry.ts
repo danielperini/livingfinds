@@ -149,6 +149,35 @@ Deno.serve(async (req) => {
       apiErrorMsg = `Erro ao chamar Amazon API: ${apiErr?.message}`;
     }
 
+    // ── Se API falhou, tentar novamente com refresh de token ─────────────────
+    if (!pausedIds.length && apiErrorMsg && !apiAuthError) {
+      try {
+        const token2 = await getAdsToken(refreshToken);
+        const baseUrl2 = getAdsBaseUrl(account.region);
+        const CT2 = 'application/vnd.spCampaign.v3+json';
+        for (const batch of chunks(campaignIds, 100)) {
+          const resp2 = await fetch(`${baseUrl2}/sp/campaigns`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `Bearer ${token2}`,
+              'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+              'Amazon-Advertising-API-Scope': String(profileId),
+              'Content-Type': CT2,
+              'Accept': CT2,
+            },
+            body: JSON.stringify({ campaigns: batch.map(id => ({ campaignId: id, state: 'PAUSED' })) }),
+          });
+          const data2 = await resp2.json().catch(() => ({}));
+          const successes2 = data2?.campaigns?.success || data2?.success || [];
+          for (const s of successes2) {
+            const id = s?.campaignId || s?.campaign?.campaignId;
+            if (id) pausedIds.push(String(id));
+          }
+        }
+        if (pausedIds.length) apiErrorMsg = '';
+      } catch { /* ignora — continua com pausa local */ }
+    }
+
     // ── Atualizar banco local sempre (pausar localmente independente da API) ─
     // Se a API falhou, a pausa local garante consistência visual e enfileira retry.
     const confirmedIds = pausedIds.length ? unique(pausedIds) : campaignIds;
