@@ -195,15 +195,22 @@ Deno.serve(async (req) => {
     }));
 
     if (metricsRecords.length > 0) {
-      // Coletar datas únicas cobertas por este relatório
+      // Purgar registros com mais de 90 dias (retenção de dados)
+      const cutoff90d = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({
+        amazon_account_id: accountId,
+        date: { $lt: cutoff90d },
+      }).catch(() => {});
+      await sleep(150);
+
+      // Deletar apenas as datas cobertas por este relatório antes de reescrever
       const datesToReplace = [...new Set(metricsRecords.map((r: any) => r.date))];
-      // Deletar apenas os registros das datas que serão substituídas (não toda a conta)
       for (const d of datesToReplace) {
         await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: accountId, date: d }).catch(() => {});
-        await sleep(100);
+        await sleep(80);
       }
       await bulkUpsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
-      console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros em ${datesToReplace.length} datas`);
+      console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros em ${datesToReplace.length} datas (retenção 90d)`);
     }
 
     // ── Keyword (spTargeting) — upsert por keyword_id ──
