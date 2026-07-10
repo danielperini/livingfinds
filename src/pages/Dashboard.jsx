@@ -15,6 +15,8 @@ import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
+import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
+import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -109,22 +111,64 @@ function KpiCard({ label, value, sub, tone = 'default' }) {
   );
 }
 
-const ChartTooltip = ({ active, payload, label }) => {
+const ChartTooltip = ({ active, payload, label, consolidatedChart }) => {
   if (!active || !payload?.length) return null;
+  // Encontrar dados completos do dia pelo label de data
+  const dayData = consolidatedChart?.find(d => d.date === label);
+  const fmtBRL_ = v => v != null ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(v)) : 'Dado não disponível';
+  const fmtNum_ = v => v != null ? Number(v).toLocaleString('pt-BR') : 'Dado não disponível';
+  const fmtPct_ = v => v != null ? `${Number(v).toFixed(2)}%` : 'Dado não disponível';
+
+  const gasto = dayData?.gasto || null;
+  const vendasAds = dayData?.['vendas ads'] || null;
+  const fatReal = dayData?.['faturamento real'] ?? null;
+  const unidades = dayData?._units ?? null;
+  const pedidosAds = dayData?._orders_ads ?? null;
+  const pedidosReais = dayData?._orders_real ?? null;
+  const cliques = dayData?._clicks ?? null;
+  const impressoes = dayData?.impressões ?? null;
+  const aiChanges = dayData?.['alterações IA'] ?? null;
+  const dataStatus = dayData?._data_status ?? null;
+
+  const roas = gasto && vendasAds ? vendasAds / gasto : null;
+  const acos = gasto && vendasAds ? (gasto / vendasAds) * 100 : null;
+  const tacos = gasto && fatReal ? (gasto / fatReal) * 100 : null;
+
+  const statusLabel = { complete: 'Completo', partial: 'Parcial', missing: 'Ausente', stale: 'Desatualizado', error: 'Erro' };
+
   return (
-    <div className="bg-[#111318] border border-surface-2 rounded-lg p-3 text-xs shadow-xl">
-      <p className="text-slate-400 mb-1.5 font-medium">{label}</p>
-      {payload.map((p, i) => (
-        <div key={i} className="flex items-center gap-2 mb-1">
-          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: p.color }} />
-          <span className="text-slate-300">{p.name}:</span>
-          <span className="text-white font-semibold">
-            {['impressões', 'cliques', 'alterações'].some(w => String(p.name).toLowerCase().includes(w))
-              ? Number(p.value).toLocaleString('pt-BR')
-              : new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(p.value))}
-          </span>
-        </div>
-      ))}
+    <div className="bg-[#111318] border border-surface-2 rounded-lg p-3 text-xs shadow-xl max-w-xs">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-slate-300 font-semibold">{label}</p>
+        {dataStatus && (
+          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
+            dataStatus === 'complete' ? 'bg-emerald-500/15 text-emerald-400' :
+            dataStatus === 'partial' ? 'bg-amber-500/15 text-amber-400' :
+            'bg-red-500/15 text-red-400'
+          }`}>{statusLabel[dataStatus] || dataStatus}</span>
+        )}
+      </div>
+      <div className="space-y-1">
+        {[
+          { label: 'Gasto Ads', value: fmtBRL_(gasto) },
+          { label: 'Vendas Ads', value: fmtBRL_(vendasAds) },
+          { label: 'Faturamento real', value: fatReal != null ? fmtBRL_(fatReal) : 'Dado não disponível' },
+          { label: 'Unidades', value: unidades != null ? fmtNum_(unidades) : 'Dado não disponível' },
+          { label: 'Pedidos Ads', value: pedidosAds != null ? fmtNum_(pedidosAds) : 'Dado não disponível' },
+          { label: 'Pedidos reais', value: pedidosReais != null ? fmtNum_(pedidosReais) : 'Dado não disponível' },
+          { label: 'Impressões', value: impressoes != null ? fmtNum_(impressoes) : 'Dado não disponível' },
+          { label: 'Cliques', value: cliques != null ? fmtNum_(cliques) : 'Dado não disponível' },
+          { label: 'ROAS', value: roas != null ? `${roas.toFixed(2)}x` : 'Dado não disponível' },
+          { label: 'ACOS', value: acos != null ? fmtPct_(acos) : 'Dado não disponível' },
+          { label: 'TACoS', value: tacos != null ? fmtPct_(tacos) : 'Dado não disponível' },
+          { label: 'Alterações IA', value: aiChanges != null ? fmtNum_(aiChanges) : '0' },
+        ].map(({ label, value }) => (
+          <div key={label} className="flex items-center justify-between gap-4">
+            <span className="text-slate-500">{label}:</span>
+            <span className={`font-semibold ${value === 'Dado não disponível' ? 'text-slate-600 italic' : 'text-white'}`}>{value}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 };
@@ -483,6 +527,63 @@ export default function Dashboard() {
     return map;
   }, [bidChanges]);
 
+  // Última data de cada API — para data_status
+  const lastAdsDate = useMemo(() => {
+    const dates = allMetrics.map(m => m.date).filter(Boolean).sort();
+    return dates.length > 0 ? dates[dates.length - 1] : null;
+  }, [allMetrics]);
+
+  const lastSpApiDate = useMemo(() => {
+    const dates = salesDaily.map(s => s.date).filter(Boolean).sort();
+    return dates.length > 0 ? dates[dates.length - 1] : null;
+  }, [salesDaily]);
+
+  // Métricas extras por dia: cliques, pedidos ads, pedidos reais, unidades
+  const adsExtraByDate = useMemo(() => {
+    const map = {};
+    for (const m of allMetrics) {
+      if (!m.date) continue;
+      if (!map[m.date]) map[m.date] = { clicks: 0, orders_ads: 0 };
+      map[m.date].clicks += m.clicks || 0;
+      map[m.date].orders_ads += m.orders || 0;
+    }
+    return map;
+  }, [allMetrics]);
+
+  const spExtraByDate = useMemo(() => {
+    const map = {};
+    for (const s of salesDaily) {
+      if (!s.date) continue;
+      if (!map[s.date]) map[s.date] = { units: 0, orders_real: 0 };
+      map[s.date].units += s.units_ordered || 0;
+      // SalesDaily não tem pedidos separados — usar unidades como proxy
+      map[s.date].orders_real += s.units_ordered || 0;
+    }
+    return map;
+  }, [salesDaily]);
+
+  // ─── Cartões extras: unidades, pedidos reais, maior/menor dia, receita/unidade ──
+  const extraKpis = useMemo(() => {
+    let totalUnits = 0, totalRealOrders = 0;
+    for (const s of salesDaily) {
+      if (!s.date || s.date < startDate || s.date > endDate) continue;
+      totalUnits += s.units_ordered || 0;
+      totalRealOrders += s.units_ordered || 0;
+    }
+    const revenue = realSalesKpis.revenue;
+    const revenuePerUnit = totalUnits > 0 ? revenue / totalUnits : null;
+
+    let bestDay = null, worstDay = null;
+    for (const [iso, entry] of Object.entries(salesDailyByDate)) {
+      if (iso < startDate || iso > endDate) continue;
+      if (!adsExtraByDate[iso]) continue; // apenas dias completos
+      const rev = entry.revenue;
+      if (!bestDay || rev > bestDay.revenue) bestDay = { date: iso, revenue: rev, units: entry.units };
+      if (!worstDay || rev < worstDay.revenue) worstDay = { date: iso, revenue: rev, units: entry.units };
+    }
+    return { totalUnits, totalRealOrders, revenuePerUnit, bestDay, worstDay };
+  }, [salesDaily, salesDailyByDate, adsExtraByDate, startDate, endDate, realSalesKpis.revenue]);
+
   const consolidatedChart = useMemo(() => {
     const byDate = {};
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -503,25 +604,41 @@ export default function Dashboard() {
       if (!byDate[isoDate]) byDate[isoDate] = { _isoDate: isoDate, date: label, gasto: 0, 'vendas ads': 0, impressões: 0 };
       byDate[isoDate]['faturamento real'] = v.revenue;
     }
-    // Preencher faturamento real nos dias que já existiam via ads metrics
+    // Preencher faturamento real e campos extras
     for (const entry of Object.values(byDate)) {
-      if (entry['faturamento real'] === undefined && salesDailyByDate[entry._isoDate] !== undefined) {
-        entry['faturamento real'] = salesDailyByDate[entry._isoDate].revenue;
+      const iso = entry._isoDate;
+      if (entry['faturamento real'] === undefined && salesDailyByDate[iso] !== undefined) {
+        entry['faturamento real'] = salesDailyByDate[iso].revenue;
       }
+      // Campos extras para tooltip — null se não disponível (não zero)
+      const adsExtra = adsExtraByDate[iso];
+      const spExtra = spExtraByDate[iso];
+      entry._clicks = adsExtra ? adsExtra.clicks : null;
+      entry._orders_ads = adsExtra ? adsExtra.orders_ads : null;
+      entry._units = spExtra ? spExtra.units : null;
+      entry._orders_real = spExtra ? spExtra.orders_real : null;
+
+      // data_status: complete = ambas APIs têm dados, partial = só uma, missing = nenhuma
+      const hasAds = !!adsExtra;
+      const hasSP = !!spExtra;
+      entry._data_status = hasAds && hasSP ? 'complete' : hasAds || hasSP ? 'partial' : 'missing';
+      // Marcar como stale se a data é mais antiga que a última disponível de cada API
+      if (lastAdsDate && iso > lastAdsDate) entry._data_status = 'missing';
+
       // Integrar alterações da IA por dia
-      const aiCount = aiChangesByDate.get(entry._isoDate);
+      const aiCount = aiChangesByDate.get(iso);
       if (aiCount) entry['alterações IA'] = aiCount;
     }
     // Incluir dias que só têm alterações da IA (sem métricas de ads)
     for (const [isoDate, count] of aiChangesByDate.entries()) {
       if (isoDate > todayStr) continue;
       if (!byDate[isoDate]) {
-        byDate[isoDate] = { _isoDate: isoDate, date: fmtDateBR(isoDate), gasto: 0, 'vendas ads': 0, impressões: 0 };
+        byDate[isoDate] = { _isoDate: isoDate, date: fmtDateBR(isoDate), gasto: 0, 'vendas ads': 0, impressões: 0, _data_status: 'partial' };
       }
       if (!byDate[isoDate]['alterações IA']) byDate[isoDate]['alterações IA'] = count;
     }
     return Object.values(byDate).sort((a, b) => a._isoDate.localeCompare(b._isoDate));
-  }, [allMetrics, salesDailyByDate, aiChangesByDate]);
+  }, [allMetrics, salesDailyByDate, aiChangesByDate, adsExtraByDate, spExtraByDate, lastAdsDate]);
 
   const hasSalesDailyData = salesDaily.length > 0;
 
@@ -592,6 +709,10 @@ export default function Dashboard() {
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
       {account && <SyncStatusBanner accountId={account.id} />}
+      {/* Cartão de sincronização das duas APIs */}
+      {account && !loading && (
+        <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} />
+      )}
 
 
       {error && (
@@ -681,7 +802,7 @@ export default function Dashboard() {
               <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={36}
                 tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
               <YAxis yAxisId="ai" orientation="right" hide />
-              <Tooltip content={<ChartTooltip />} />
+              <Tooltip content={<ChartTooltip consolidatedChart={consolidatedChart} />} />
               {/* Impressões: barras roxas (eixo direito) */}
               <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.3} radius={[1, 1, 0, 0]} />
               {/* Alterações da IA: barras âmbar (eixo ai — escala própria) */}
@@ -810,6 +931,47 @@ export default function Dashboard() {
       </div>
 
 
+
+      {/* ── 5a. CARTÕES EXTRAS SP-API ────────────────────────────────────────── */}
+      {!loading && hasSalesDailyData && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <KpiCard
+            label="Unidades vendidas"
+            value={extraKpis.totalUnits > 0 ? extraKpis.totalUnits.toLocaleString('pt-BR') : '—'}
+            sub={`Período: ${periodLabel}`}
+            tone={extraKpis.totalUnits > 0 ? 'good' : 'default'}
+          />
+          <KpiCard
+            label="Pedidos reais"
+            value={extraKpis.totalRealOrders > 0 ? extraKpis.totalRealOrders.toLocaleString('pt-BR') : '—'}
+            sub="Fonte: SP-API"
+          />
+          <KpiCard
+            label="Receita / unidade"
+            value={extraKpis.revenuePerUnit != null ? fmtBRL(extraKpis.revenuePerUnit) : '—'}
+            sub={extraKpis.totalUnits > 0 ? `${extraKpis.totalUnits} unid.` : 'Sem dados'}
+          />
+          <div className={`bg-surface-1 border rounded-xl p-4 border-surface-2`}>
+            <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Maior / Menor dia</p>
+            {extraKpis.bestDay ? (
+              <div className="space-y-1">
+                <p className="text-xs text-emerald-400 font-semibold">↑ {fmtBRL(extraKpis.bestDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({(() => { const [y,m,d]=extraKpis.bestDay.date.split('-'); return `${d}/${m}`; })()})</span></p>
+                {extraKpis.worstDay && extraKpis.worstDay.date !== extraKpis.bestDay.date && (
+                  <p className="text-xs text-red-400 font-semibold">↓ {fmtBRL(extraKpis.worstDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({(() => { const [y,m,d]=extraKpis.worstDay.date.split('-'); return `${d}/${m}`; })()})</span></p>
+                )}
+                <p className="text-[9px] text-slate-600">Apenas dias com dados completos</p>
+              </div>
+            ) : (
+              <p className="text-sm font-bold text-slate-500">—</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 5a2. ALTERAÇÕES DA IA — segmentadas ──────────────────────────────── */}
+      {!loading && bidChanges.length > 0 && (
+        <AiChangesBreakdown bidChanges={bidChanges} />
+      )}
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
       {!loading && (
