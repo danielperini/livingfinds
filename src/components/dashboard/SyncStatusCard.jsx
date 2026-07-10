@@ -67,13 +67,13 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
         </div>
         <div className="flex items-center gap-1.5">
           {icon}
-          <span className={`text-xs font-semibold hidden ${
-          overallStatus === 'success' ? 'text-emerald-400' :
-          overallStatus === 'partial' ? 'text-amber-400' : 'text-red-400'}`
-          }>
-            {overallStatus === 'success' ? 'Sincronizado' :
-            overallStatus === 'partial' ? 'Parcialmente sincronizado' : 'Erro de sincronização'}
-          </span>
+          
+
+
+
+
+
+          
         </div>
       </div>
 
