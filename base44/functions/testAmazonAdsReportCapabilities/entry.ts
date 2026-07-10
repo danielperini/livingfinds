@@ -32,17 +32,39 @@ function buildPayload(reportTypeId: string, date: string, minimal = false): Reco
     }};
   }
 
+  // spTargeting BR: só permite groupBy=adGroup e colunas de atribuição + matchType + date
+  // NÃO suporta targetingId, targetingExpression, bid, etc.
   if (reportTypeId === 'spTargeting') {
     if (minimal) {
       return { ...base, configuration: {
-        adProduct: 'SPONSORED_PRODUCTS', groupBy: ['targeting'],
-        columns: ['campaignId', 'adGroupId', 'impressions', 'clicks', 'cost'],
+        adProduct: 'SPONSORED_PRODUCTS', groupBy: ['adGroup'],
+        columns: ['date', 'matchType', 'impressions', 'clicks', 'cost'],
         reportTypeId, timeUnit: 'SUMMARY', format: 'GZIP_JSON',
       }};
     }
     return { ...base, configuration: {
-      adProduct: 'SPONSORED_PRODUCTS', groupBy: ['targeting'],
-      columns: ['campaignId', 'adGroupId', 'targetingId', 'keyword', 'keywordType', 'matchType', 'impressions', 'clicks', 'cost', 'purchases7d', 'sales7d'],
+      adProduct: 'SPONSORED_PRODUCTS', groupBy: ['adGroup'],
+      columns: ['date', 'matchType', 'impressions', 'clicks', 'cost',
+        'purchases7d', 'purchases14d', 'purchases30d',
+        'sales7d', 'sales14d', 'sales30d', 'roasClicks14d'],
+      reportTypeId, timeUnit: 'SUMMARY', format: 'GZIP_JSON',
+    }};
+  }
+
+  // spKeywords BR: groupBy=adGroup (não keyword); colunas limitadas — apenas atribuição
+  if (reportTypeId === 'spKeywords') {
+    if (minimal) {
+      return { ...base, configuration: {
+        adProduct: 'SPONSORED_PRODUCTS', groupBy: ['adGroup'],
+        columns: ['date', 'impressions', 'clicks', 'cost'],
+        reportTypeId, timeUnit: 'SUMMARY', format: 'GZIP_JSON',
+      }};
+    }
+    return { ...base, configuration: {
+      adProduct: 'SPONSORED_PRODUCTS', groupBy: ['adGroup'],
+      columns: ['date', 'impressions', 'clicks', 'cost',
+        'purchases7d', 'purchases14d', 'purchases30d',
+        'sales7d', 'sales14d', 'sales30d'],
       reportTypeId, timeUnit: 'SUMMARY', format: 'GZIP_JSON',
     }};
   }
@@ -55,10 +77,11 @@ function buildPayload(reportTypeId: string, date: string, minimal = false): Reco
     }};
   }
 
+  // spPurchasedProduct BR: groupBy deve ser 'asin' (não 'advertiser')
   if (reportTypeId === 'spPurchasedProduct') {
     return { ...base, configuration: {
-      adProduct: 'SPONSORED_PRODUCTS', groupBy: ['advertiser'],
-      columns: ['campaignId', 'adGroupId', 'advertisedAsin', 'purchases7d', 'sales7d', 'unitsSoldClicks7d'],
+      adProduct: 'SPONSORED_PRODUCTS', groupBy: ['asin'],
+      columns: ['date', 'advertisedAsin', 'purchases7d', 'sales7d', 'unitsSoldClicks7d'],
       reportTypeId, timeUnit: 'SUMMARY', format: 'GZIP_JSON',
     }};
   }
@@ -116,8 +139,8 @@ async function testReportType(params: {
     return { status: 'unknown', http_status: r1.status, error_code: '429', error_message: 'Rate limited — reschedule test.', payload: payload1, requestId: r1.requestId };
   }
 
-  // Erro 400/422 → pode ser coluna inválida → tentar payload mínimo para spTargeting
-  if ((r1.status === 400 || r1.status === 422) && reportTypeId === 'spTargeting') {
+  // Erro 400/422 → pode ser coluna inválida → tentar payload mínimo para spTargeting/spKeywords
+  if ((r1.status === 400 || r1.status === 422) && (reportTypeId === 'spTargeting' || reportTypeId === 'spKeywords')) {
     const errMsg = (r1.data?.message || r1.data?.details || '').toLowerCase();
     const isColumnError = errMsg.includes('column') || errMsg.includes('field') || errMsg.includes('invalid') || errMsg.includes('unsupported');
 
@@ -132,7 +155,10 @@ async function testReportType(params: {
       }
 
       if (r2.status === 400 || r2.status === 422 || r2.status === 404) {
-        return { status: 'unsupported', http_status: r2.status, error_code: r2.data?.code || String(r2.status), error_message: (r2.data?.message || r2.data?.details || '').slice(0, 500), payload: payload2, requestId: r2.requestId, notes: `Full payload error: ${(r1.data?.message || '').slice(0, 200)}` };
+        const notes = reportTypeId === 'spTargeting'
+          ? `spTargeting não suportado. Use spKeywords como fallback. Full error: ${(r1.data?.message || '').slice(0, 200)}`
+          : `Full payload error: ${(r1.data?.message || '').slice(0, 200)}`;
+        return { status: 'unsupported', http_status: r2.status, error_code: r2.data?.code || String(r2.status), error_message: (r2.data?.message || r2.data?.details || '').slice(0, 500), payload: payload2, requestId: r2.requestId, notes };
       }
     }
   }
@@ -197,7 +223,7 @@ Deno.serve(async (req) => {
     const accessToken = lwaData.access_token;
 
     const date = yesterday();
-    const REPORT_TYPES = ['spCampaigns', 'spTargeting', 'spSearchTerm', 'spPurchasedProduct'];
+    const REPORT_TYPES = ['spCampaigns', 'spTargeting', 'spKeywords', 'spSearchTerm', 'spPurchasedProduct'];
     const now = new Date().toISOString();
     const results: Record<string, any> = {};
 

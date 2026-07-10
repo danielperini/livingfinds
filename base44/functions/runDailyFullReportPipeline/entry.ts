@@ -112,24 +112,10 @@ const REPORT_CONFIGS = [
       'acosClicks14d','roasClicks14d'],
     filters: null,
   },
-  {
-    // spTargeting com filtro KEYWORD_BID = keyword performance real (exclui product targets)
-    // Filtro: expressionType IN ['broad','exact','phrase'] via API v3
-    key: 'keywords',
-    reportTypeId: 'spTargeting',
-    groupBy: ['targeting'],
-    columns: ['date','campaignId','campaignName','adGroupId','adGroupName',
-      'targetingId','targetingExpression','targetingText','matchType',
-      'bid','targetingStatus',
-      'impressions','clicks','cost',
-      'purchases7d','purchases14d','purchases30d',
-      'sales7d','sales14d','sales30d',
-      'acosClicks14d','roasClicks14d'],
-    // Filtro correto v3 reporting: keywordType para excluir product targets
-    // Docs: "To see only keywords, set keywordType = TARGETING_EXPRESSION_PREDEFINED"
-    // sem filtro retorna todos (keywords + product targets) — filtrar no processamento
-    filters: null,
-  },
+  // NOTA: spTargeting e spKeywords NÃO suportados no marketplace BR (A2Q3Y263D00KWC)
+  // Keywords são sincronizadas via Campaign Management API (SP Keywords List) na Fase 6
+  // O report spTargeting seria útil para métricas por keyword, mas no BR só retorna dados por adGroup
+  // Por isso, keyword-level performance é derivada de spSearchTerm (searchTerm+matchType)
   {
     key: 'searchTerms',
     reportTypeId: 'spSearchTerm',
@@ -152,7 +138,7 @@ const REPORT_CONFIGS = [
       'purchases14d','purchases30d','sales14d','sales30d'],
     filters: null,
   },
-];
+].filter(Boolean) as any[];
 
 // ── Handler principal ─────────────────────────────────────────────────────────
 
@@ -411,7 +397,79 @@ Deno.serve(async (req) => {
       summary.phases.decision_engine = { triggered: false, error: e.message };
     }
 
-    // ── FASE 6: Bids de estoque pendentes ─────────────────────────────────────
+    // ── FASE 6: Sincronizar keywords via SP Keywords API (Campaign Management) ──
+    // No marketplace BR, spTargeting/spKeywords reports não retornam dados por keyword
+    // Usamos a Campaign Management API para listar keywords ativas com bids reais
+    console.log('[Pipeline] Fase 6: sincronizando keywords via Campaign Management API...');
+    try {
+      const kwHeaders = {
+        'Authorization': `Bearer ${adsToken}`,
+        'Amazon-Advertising-API-ClientId': clientId,
+        'Amazon-Advertising-API-Scope': profileId,
+        'Content-Type': 'application/vnd.spKeyword.v3+json',
+        'Accept': 'application/vnd.spKeyword.v3+json',
+      };
+
+      // Listar keywords ativas (SP Keywords API v3)
+      const kwRes = await fetch(`${adsBase}/sp/keywords/list`, {
+        method: 'POST',
+        headers: kwHeaders,
+        body: JSON.stringify({
+          stateFilter: { include: ['ENABLED', 'PAUSED'] },
+          maxResults: 1000,
+        }),
+      });
+
+      if (kwRes.ok) {
+        const kwData = await kwRes.json().catch(() => ({}));
+        const kwItems: any[] = kwData?.keywords || [];
+        const existingKws = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 5000).catch(() => []);
+        const kwById = new Map((existingKws as any[]).map(k => [String(k.keyword_id), k]));
+
+        const kwCreates: any[] = [];
+        const kwUpdates: any[] = [];
+        const nowStr = new Date().toISOString();
+
+        for (const kw of kwItems) {
+          const kid = String(kw.keywordId || '');
+          if (!kid) continue;
+          const record = {
+            amazon_account_id: aid,
+            campaign_id: String(kw.campaignId || ''),
+            ad_group_id: String(kw.adGroupId || ''),
+            keyword_id: kid,
+            keyword_text: kw.keywordText || '',
+            match_type: (kw.matchType || '').toLowerCase(),
+            bid: Number(kw.bid?.value || kw.bid || 0),
+            state: (kw.state || 'enabled').toLowerCase(),
+            synced_at: nowStr,
+          };
+          const existing = kwById.get(kid);
+          if (existing) kwUpdates.push({ id: existing.id, ...record });
+          else kwCreates.push(record);
+        }
+
+        for (let i = 0; i < kwCreates.length; i += BATCH) {
+          await base44.asServiceRole.entities.Keyword.bulkCreate(kwCreates.slice(i, i + BATCH)).catch(() => {});
+          if (i + BATCH < kwCreates.length) await sleep(PAUSE);
+        }
+        for (let i = 0; i < kwUpdates.length; i += BATCH) {
+          await base44.asServiceRole.entities.Keyword.bulkUpdate(kwUpdates.slice(i, i + BATCH)).catch(() => {});
+          if (i + BATCH < kwUpdates.length) await sleep(PAUSE);
+        }
+        summary.phases.keywords_sync = { total: kwItems.length, created: kwCreates.length, updated: kwUpdates.length };
+        console.log(`[Pipeline] Keywords: ${kwCreates.length} criadas + ${kwUpdates.length} atualizadas`);
+      } else {
+        const kwErr = await kwRes.json().catch(() => ({}));
+        console.warn('[Pipeline] SP Keywords list fallback — HTTP', kwRes.status, JSON.stringify(kwErr).slice(0, 200));
+        summary.phases.keywords_sync = { skipped: true, http_status: kwRes.status };
+      }
+    } catch (e: any) {
+      console.warn('[Pipeline] Keywords sync (não crítico):', e.message);
+      summary.phases.keywords_sync = { error: e.message };
+    }
+
+    // ── FASE 7: Bids de estoque pendentes ─────────────────────────────────────
     try {
       const bidRes = await base44.asServiceRole.functions.invoke('executeStockBidRules', { amazon_account_id: aid });
       summary.phases.stock_bid_execution = { executed: bidRes?.executed || 0, failed: bidRes?.failed || 0 };

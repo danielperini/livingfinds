@@ -118,6 +118,7 @@ Deno.serve(async (req) => {
     // Detectar tipo de relatório pelo conteúdo da primeira linha
     const firstRow = rows[0] || {};
     const isTargetingReport = 'targetingId' in firstRow || 'targetingExpression' in firstRow;
+    const isKeywordsReport = 'keywordId' in firstRow && !isTargetingReport;
     const isSearchTermReport = 'searchTerm' in firstRow;
 
     for (const row of rows) {
@@ -125,14 +126,18 @@ Deno.serve(async (req) => {
       const campaignId = String(row.campaignId || '');
       if (!campaignId) continue;
 
-      // spTargeting usa targetingId/targetingText/bid; spKeywords usa keywordId/keyword/keywordBid
+      // spTargeting: targetingId/targetingText/bid — excluir product targets (targetingExpression começa com 'asin=')
+      // spKeywords: keywordId/keyword/keywordBid
+      const targetingExpr = String(row.targetingExpression || '');
+      const isProductTarget = isTargetingReport && (targetingExpr.startsWith('asin=') || targetingExpr.startsWith('similar-product'));
+
       const keywordId = String(row.targetingId || row.keywordId || '');
       const keywordText = row.targetingText || row.keyword || '';
       const bid = Number(row.bid || row.keywordBid) || 0;
       const matchType = (row.matchType || '').toLowerCase();
 
-      // Para relatórios de keyword/targeting: popular entidade Keyword
-      if (isTargetingReport && keywordId && !isSearchTermReport) {
+      // Para relatórios de keyword/targeting (excluindo product targets): popular entidade Keyword
+      if ((isTargetingReport || isKeywordsReport) && keywordId && !isSearchTermReport && !isProductTarget) {
         const kwKey = `kw|${keywordId}|${date}`;
         if (!metricsMap.has(kwKey)) {
           metricsMap.set(kwKey, {
