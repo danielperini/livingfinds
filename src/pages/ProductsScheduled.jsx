@@ -10,6 +10,7 @@ import Products from '@/pages/Products';
 import {
   CheckCircle2,
   Clock,
+  RefreshCw,
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import StockDivergenceReport from '@/components/products/StockDivergenceReport';
@@ -222,6 +223,9 @@ export default function ProductsScheduled() {
 
   const [refreshKey, setRefreshKey] =
     useState(0);
+
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   const [queueByAsin, setQueueByAsin] =
     useState({});
@@ -442,6 +446,30 @@ export default function ProductsScheduled() {
       readQueue,
       refreshCampaignLinks,
     ]);
+
+  const manualSync = useCallback(async () => {
+    if (!account?.id || syncing) return;
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncProductsAdsWindow', {
+        amazon_account_id: account.id,
+        force: true,
+      });
+      if (res?.data?.ok) {
+        setSyncMsg({ type: 'success', text: `✓ Sincronizado: ${res.data.products_synced || 0} produtos · ${res.data.campaigns_synced || 0} campanhas` });
+        setRefreshKey((k) => k + 1);
+        await readStatus();
+      } else {
+        setSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
+      }
+    } catch (e) {
+      setSyncMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncing(false);
+      setTimeout(() => setSyncMsg(null), 10000);
+    }
+  }, [account?.id, syncing, readStatus]);
 
   const retryKickoff =
     useCallback(
@@ -1137,7 +1165,21 @@ export default function ProductsScheduled() {
           </div>
         </div>
 
-
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          <button
+            onClick={manualSync}
+            disabled={syncing || !account}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Sincronizando...' : 'Sincronizar Agora'}
+          </button>
+          {syncMsg && (
+            <p className={`text-xs ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+              {syncMsg.text}
+            </p>
+          )}
+        </div>
       </div>
 
       <StockDivergenceReport accountId={account?.id} />
