@@ -752,7 +752,7 @@ export default function Dashboard() {
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
             <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
             {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {consolidatedChart.reduce((s, d) => s + (d.impressões || 0), 0).toLocaleString('pt-BR')}</span>
             {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
           </div>
         </div>
