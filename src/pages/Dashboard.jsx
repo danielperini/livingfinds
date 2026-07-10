@@ -743,12 +743,13 @@ export default function Dashboard() {
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
-            {dataQuality.quality === 'low' && (
-              <button onClick={runSync} disabled={syncingDashboard}
-                className="ml-auto text-red-400 hover:text-red-300 underline whitespace-nowrap disabled:opacity-50">
-                Sincronizar agora
-              </button>
-            )}
+            <button onClick={runSync} disabled={syncingDashboard}
+              className={`ml-auto underline whitespace-nowrap disabled:opacity-50 flex items-center gap-1 ${
+                dataQuality.quality === 'low' ? 'text-red-400 hover:text-red-300' : 'text-emerald-500/70 hover:text-emerald-400'
+              }`}>
+              {syncingDashboard ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+              {syncingDashboard ? 'Atualizando...' : 'Atualizar agora'}
+            </button>
           </div>
         )}
 
