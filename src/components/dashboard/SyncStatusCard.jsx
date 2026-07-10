@@ -17,11 +17,11 @@ function StatusDot({ status }) {
 export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
   const syncInfo = useMemo(() => {
     // Última data de CampaignMetricsDaily (Ads API)
-    const adsDates = allMetrics.map(m => m.date).filter(Boolean).sort();
+    const adsDates = allMetrics.map((m) => m.date).filter(Boolean).sort();
     const adsThroughDate = adsDates.length > 0 ? adsDates[adsDates.length - 1] : null;
 
     // Última data de SalesDaily (SP-API)
-    const spDates = salesDaily.map(s => s.date).filter(Boolean).sort();
+    const spDates = salesDaily.map((s) => s.date).filter(Boolean).sort();
     const spThroughDate = spDates.length > 0 ? spDates[spDates.length - 1] : null;
 
     // Gap em dias
@@ -33,13 +33,13 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
     }
 
     const adsStatus = adsThroughDate ? 'success' : 'error';
-    const spStatus = spThroughDate
-      ? gapDays !== null && gapDays > 2 ? 'stale' : 'success'
-      : 'error';
+    const spStatus = spThroughDate ?
+    gapDays !== null && gapDays > 2 ? 'stale' : 'success' :
+    'error';
 
     const overallStatus =
-      adsStatus === 'error' || spStatus === 'error' ? 'error' :
-      gapDays !== null && gapDays > 0 ? 'partial' : 'success';
+    adsStatus === 'error' || spStatus === 'error' ? 'error' :
+    gapDays !== null && gapDays > 0 ? 'partial' : 'success';
 
     const lastSyncAt = account?.last_sync_at;
 
@@ -49,14 +49,14 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
   const { adsThroughDate, spThroughDate, gapDays, adsStatus, spStatus, overallStatus, lastSyncAt } = syncInfo;
 
   const borderColor =
-    overallStatus === 'success' ? 'border-emerald-500/20 bg-emerald-500/5' :
-    overallStatus === 'partial' ? 'border-amber-500/20 bg-amber-500/5' :
-    'border-red-500/20 bg-red-500/5';
+  overallStatus === 'success' ? 'border-emerald-500/20 bg-emerald-500/5' :
+  overallStatus === 'partial' ? 'border-amber-500/20 bg-amber-500/5' :
+  'border-red-500/20 bg-red-500/5';
 
   const icon =
-    overallStatus === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> :
-    overallStatus === 'partial' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-400" /> :
-    <XCircle className="w-3.5 h-3.5 text-red-400" />;
+  overallStatus === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> :
+  overallStatus === 'partial' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-400 hidden" /> :
+  <XCircle className="w-3.5 h-3.5 text-red-400" />;
 
   return (
     <div className={`border rounded-xl px-4 py-3 ${borderColor}`}>
@@ -67,12 +67,12 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
         </div>
         <div className="flex items-center gap-1.5">
           {icon}
-          <span className={`text-xs font-semibold ${
-            overallStatus === 'success' ? 'text-emerald-400' :
-            overallStatus === 'partial' ? 'text-amber-400' : 'text-red-400'
-          }`}>
+          <span className={`text-xs font-semibold hidden ${
+          overallStatus === 'success' ? 'text-emerald-400' :
+          overallStatus === 'partial' ? 'text-amber-400' : 'text-red-400'}`
+          }>
             {overallStatus === 'success' ? 'Sincronizado' :
-             overallStatus === 'partial' ? 'Parcialmente sincronizado' : 'Erro de sincronização'}
+            overallStatus === 'partial' ? 'Parcialmente sincronizado' : 'Erro de sincronização'}
           </span>
         </div>
       </div>
@@ -103,8 +103,8 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
         </div>
       </div>
 
-      {gapDays !== null && gapDays > 0 && (
-        <div className="mt-2.5 flex items-start gap-2 px-2 py-1.5 bg-amber-500/10 border border-amber-500/15 rounded-lg">
+      {gapDays !== null && gapDays > 0 &&
+      <div className="mt-2.5 flex items-start gap-2 px-2 py-1.5 bg-amber-500/10 border border-amber-500/15 rounded-lg hidden">
           <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0 mt-0.5" />
           <p className="text-[10px] text-amber-300 leading-relaxed">
             <strong>Gap de {gapDays} dia{gapDays > 1 ? 's' : ''}</strong> entre as APIs.
@@ -112,16 +112,16 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
             Métricas combinadas (TACoS) marcadas como <strong>parciais</strong>.
           </p>
         </div>
-      )}
+      }
 
-      {lastSyncAt && (
-        <div className="mt-1.5 flex items-center gap-1.5">
+      {lastSyncAt &&
+      <div className="mt-1.5 flex items-center gap-1.5">
           <Clock className="w-3 h-3 text-slate-600" />
           <p className="text-[10px] text-slate-500">
             Último sync: {new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
           </p>
         </div>
-      )}
-    </div>
-  );
+      }
+    </div>);
+
 }
