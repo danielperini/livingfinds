@@ -411,6 +411,8 @@ export default function ProductsScheduled() {
 
         const nextValue =
           latest?.completed_at ||
+          current.ads_data_fresh_at ||
+          current.ads_metrics_last_sync_at ||
           current
             .products_ads_last_sync_at ||
           current.last_sync_at ||
@@ -1107,78 +1109,55 @@ export default function ProductsScheduled() {
 
   return (
     <div className="space-y-4">
-      <div className="mx-6 mt-6 rounded-xl border border-cyan/20 bg-cyan/5 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div className="flex items-start gap-3">
-          {status ===
-          'success' ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-400 mt-0.5" />
-          ) : (
-            <Clock className="w-5 h-5 text-cyan mt-0.5" />
-          )}
+      <div className="mx-6 mt-6 rounded-xl border border-cyan/20 bg-cyan/5 p-4 flex items-start gap-3">
+        {status === 'success' ? (
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
+        ) : (
+          <Clock className="w-5 h-5 text-cyan mt-0.5 flex-shrink-0" />
+        )}
 
-          <div>
-            <p className="text-sm font-semibold text-white">
-              Produtos & Ads —
-              atualização automática
-              ativa
-            </p>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-white">
+            Produtos & Ads — atualização automática ativa
+          </p>
 
-            <p className="text-xs text-slate-400 mt-1">
-              Campanhas, catálogo,
-              estoque e vínculos são
-              atualizados
-              automaticamente nas
-              janelas 00:00–04:00 e
-              13:00–14:00.
-            </p>
+          <p className="text-xs text-slate-400 mt-1">
+            Campanhas, catálogo, estoque e vínculos são atualizados automaticamente nas janelas 00:00–04:00 e 13:00–14:00.
+          </p>
 
-            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-slate-500">
-              <span>
-                Última atualização:{' '}
-                {formatDateTime(
-                  lastUpdate
-                )}
+          <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-xs text-slate-500">
+            <span>
+              📊 Ads:{' '}
+              <span className="text-slate-300">
+                {formatDateTime(account?.ads_data_fresh_at || account?.ads_metrics_last_sync_at || lastUpdate)}
               </span>
+            </span>
 
-              <span>
-                Próxima atualização:{' '}
-                {windowInfo.label}
+            <span>
+              📦 SP-API:{' '}
+              <span className="text-slate-300">
+                {formatDateTime(account?.sp_data_last_sync_at || account?.last_sync_at)}
               </span>
+            </span>
 
-              {pendingCount > 0 && (
-                <span className="text-cyan">
-                  Kick-offs aguardando:{' '}
-                  {pendingCount}
-                </span>
-              )}
+            <span>
+              ⏭ Próxima janela:{' '}
+              <span className="text-cyan">{windowInfo.label}</span>
+            </span>
 
-              {account?.status && (
-                <span>
-                  Conta Amazon:{' '}
-                  {account.status ===
-                  'connected'
-                    ? 'conectada'
-                    : account.status}
-                </span>
-              )}
-            </div>
+            {pendingCount > 0 && (
+              <span className="text-cyan">
+                Kick-offs aguardando: {pendingCount}
+              </span>
+            )}
+
+            {account?.status && (
+              <span>
+                Conta:{' '}
+                {account.status === 'connected' ? '🟢 conectada' : account.status}
+              </span>
+            )}
           </div>
-        </div>
-
-        <div className="flex flex-col items-end gap-2 flex-shrink-0">
-          <button
-            onClick={manualSync}
-            disabled={syncing || !account}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
-          >
-            <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Sincronizando...' : 'Sincronizar Agora'}
-          </button>
-          {syncMsg && (
-            <p className={`text-xs ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-              {syncMsg.text}
-            </p>
-          )}
         </div>
       </div>
 
