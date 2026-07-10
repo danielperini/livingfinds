@@ -248,7 +248,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate, selected, onToggleSelect }) {
+export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -270,7 +270,10 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
   };
 
   return (
-    <tr className={`border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors ${selected ? 'bg-cyan/5' : ''}`}>
+    <tr
+      data-product-id={product.id}
+      className={`border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors ${selected ? 'bg-cyan/5' : ''} ${isFocused ? 'ring-2 ring-inset ring-cyan/40' : ''}`}
+    >
       <td className="px-3 py-3 w-10">
         <button type="button" onClick={() => onToggleSelect(product.id)}
           className={`p-0.5 rounded transition-colors ${selected ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
@@ -332,6 +335,11 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
           onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign} loading={actionLoading} />
+        {productMessage && (
+          <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
+            {productMessage.text}
+          </p>
+        )}
       </td>
     </tr>
   );

@@ -1148,7 +1148,7 @@ export default function ProductsScheduled() {
       />
 
       <Products
-        key={refreshKey}
+        externalRefreshTrigger={refreshKey}
       />
     </div>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
@@ -60,7 +60,7 @@ function KpiCard({ label, value, detail, tone = 'default' }) {
   );
 }
 
-export default function Products() {
+export default function Products({ externalRefreshTrigger }) {
   const [account, setAccount] = useState(null);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +76,21 @@ export default function Products() {
 
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
+  const [focusedProductId, setFocusedProductId] = useState(null);
+  const [productMessages, setProductMessages] = useState({}); // {[productId]: {type, text}}
+
+  // Restaura foco no produto após qualquer ação e rola até ele
+  const restoreProductContext = useCallback((productId) => {
+    setFocusedProductId(productId);
+    setTimeout(() => {
+      document.querySelector(`[data-product-id="${productId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+  }, []);
+
+  const setProductMsg = useCallback((productId, msg) => {
+    setProductMessages(prev => ({ ...prev, [productId]: msg }));
+    setTimeout(() => setProductMessages(prev => { const next = { ...prev }; delete next[productId]; return next; }), 8000);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -99,6 +114,15 @@ export default function Products() {
   useEffect(() => {
     load();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Refresh externo (ex: kickoff concluído no ProductsScheduled) sem desmontar o componente
+  const prevExternalTrigger = useRef(externalRefreshTrigger);
+  useEffect(() => {
+    if (externalRefreshTrigger !== prevExternalTrigger.current) {
+      prevExternalTrigger.current = externalRefreshTrigger;
+      reloadProducts();
+    }
+  }, [externalRefreshTrigger, reloadProducts]);
 
   // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
   // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
@@ -167,6 +191,13 @@ export default function Products() {
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   // ── Ações ───────────────────────────────────────────────────────────────────
+  const reloadProducts = useCallback(async () => {
+    // Usa account do closure; se ainda não carregou, faz load completo
+    if (!account) { await load(); return; }
+    const records = await base44.entities.Product.filter({ amazon_account_id: account.id }, '-created_date', 500).catch(() => null);
+    if (records) setProducts(records);
+  }, [account, load]);
+
   const toggleCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
     if (!account) return;
@@ -182,17 +213,12 @@ export default function Products() {
 
     try {
       if (active) {
-        // Enviar campaign_id, asin E sku para maximizar as chances de a função backend
-        // localizar a campanha correta na entidade Campaign (o linked_campaign_id pode ser
-        // o ID interno do Base44, mas a API Amazon usa o campo campaign_id da entidade).
         const payload = { amazon_account_id: account.id };
         if (campaignId) payload.campaign_id = campaignId;
         if (product.asin) payload.asin = product.asin;
         if (product.sku) payload.sku = product.sku;
         const response = await base44.functions.invoke('pauseCampaign', payload);
         if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
-        // api_warning = pausou localmente mas token Amazon expirado — não é erro, é aviso
-        // O retorno ok=true já é suficiente para considerar sucesso
       } else {
         const agentAction = await base44.entities.AgentAction.create({
           amazon_account_id: account.id, action: 'enable_campaign', asin: product.asin,
@@ -201,13 +227,14 @@ export default function Products() {
         });
         await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
       }
-      setActionMsg({ type: 'success', text: active ? `Campanha pausada para ${product.asin}.` : `Campanha ativada para ${product.asin}.` });
-      await load();
+      setProductMsg(product.id, { type: 'success', text: active ? 'Campanha pausada.' : 'Campanha ativada.' });
+      await reloadProducts();
+      restoreProductContext(product.id);
     } catch (error) {
-      setActionMsg({ type: 'error', text: error?.message || 'Erro ao alterar campanha.' });
+      setProductMsg(product.id, { type: 'error', text: error?.message || 'Erro ao alterar campanha.' });
+      restoreProductContext(product.id);
     } finally {
       setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
     }
   };
 
@@ -222,13 +249,14 @@ export default function Products() {
         archive_reason: `Arquivamento manual via interface - ${new Date().toLocaleDateString('pt-BR')}`,
       });
       if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao arquivar campanha.');
-      setActionMsg({ type: 'success', text: `Campanha arquivada para ${product.asin}.` });
-      await load();
+      setProductMsg(product.id, { type: 'success', text: 'Campanha arquivada.' });
+      await reloadProducts();
+      restoreProductContext(product.id);
     } catch (error) {
-      setActionMsg({ type: 'error', text: error?.message || 'Erro ao arquivar campanha.' });
+      setProductMsg(product.id, { type: 'error', text: error?.message || 'Erro ao arquivar campanha.' });
+      restoreProductContext(product.id);
     } finally {
       setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
     }
   };
 
@@ -455,6 +483,8 @@ export default function Products() {
                     actionLoading={actionLoading}
                     selected={selectedIds.has(product.id)}
                     onToggleSelect={toggleSelect}
+                    isFocused={focusedProductId === product.id}
+                    productMessage={productMessages[product.id]}
                     onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
                   />
                 ))}
@@ -475,10 +505,34 @@ export default function Products() {
       )}
 
       {kickoffProduct && (
-        <KickoffModal product={kickoffProduct} account={account} onClose={() => setKickoffProduct(null)} onDone={() => { setKickoffProduct(null); load(); }} />
+        <KickoffModal
+          product={kickoffProduct}
+          account={account}
+          onClose={() => setKickoffProduct(null)}
+          onDone={() => {
+            const pid = kickoffProduct?.id;
+            setKickoffProduct(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Campanha enviada para fila da Amazon. Este produto continuará aberto para acompanhamento.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+            }
+          }}
+        />
       )}
       {acceleratorProduct && (
-        <AcceleratorModal product={acceleratorProduct} account={account} onClose={() => setAcceleratorProduct(null)} onDone={() => { setAcceleratorProduct(null); load(); }} />
+        <AcceleratorModal
+          product={acceleratorProduct}
+          account={account}
+          onClose={() => setAcceleratorProduct(null)}
+          onDone={() => {
+            const pid = acceleratorProduct?.id;
+            setAcceleratorProduct(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Campanha criada e vinculada a este produto.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+            }
+          }}
+        />
       )}
     </div>
   );
