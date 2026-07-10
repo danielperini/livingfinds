@@ -115,23 +115,59 @@ Deno.serve(async (req) => {
     // Construir registros de métricas por data+campanha
     const metricsMap = new Map<string, any>();
 
+    // Detectar tipo de relatório pelo conteúdo da primeira linha
+    const firstRow = rows[0] || {};
+    const isTargetingReport = 'targetingId' in firstRow || 'targetingExpression' in firstRow;
+    const isSearchTermReport = 'searchTerm' in firstRow;
+
     for (const row of rows) {
       const date = row.date || endDate;
       const campaignId = String(row.campaignId || '');
       if (!campaignId) continue;
 
+      // spTargeting usa targetingId/targetingText/bid; spKeywords usa keywordId/keyword/keywordBid
+      const keywordId = String(row.targetingId || row.keywordId || '');
+      const keywordText = row.targetingText || row.keyword || '';
+      const bid = Number(row.bid || row.keywordBid) || 0;
+      const matchType = (row.matchType || '').toLowerCase();
+
+      // Para relatórios de keyword/targeting: popular entidade Keyword
+      if (isTargetingReport && keywordId && !isSearchTermReport) {
+        const kwKey = `kw|${keywordId}|${date}`;
+        if (!metricsMap.has(kwKey)) {
+          metricsMap.set(kwKey, {
+            _type: 'keyword',
+            amazon_account_id: accountId,
+            campaign_id: campaignId,
+            campaign_name: row.campaignName || '',
+            ad_group_id: String(row.adGroupId || ''),
+            ad_group_name: row.adGroupName || '',
+            keyword_id: keywordId,
+            keyword_text: keywordText,
+            match_type: matchType,
+            bid,
+            date,
+            impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0,
+          });
+        }
+        const kw = metricsMap.get(kwKey)!;
+        kw.impressions += Number(row.impressions) || 0;
+        kw.clicks += Number(row.clicks) || 0;
+        kw.spend += Number(row.cost) || 0;
+        kw.sales += Number(row.sales14d || row.sales7d || row.sales30d) || 0;
+        kw.orders += Number(row.purchases14d || row.purchases7d || row.purchases30d) || 0;
+        continue;
+      }
+
       const key = `${campaignId}|${date}`;
       if (!metricsMap.has(key)) {
         metricsMap.set(key, {
+          _type: 'campaign',
           amazon_account_id: accountId,
           campaign_id: campaignId,
           campaign_name: row.campaignName || '',
           date,
-          impressions: 0,
-          clicks: 0,
-          spend: 0,
-          sales: 0,
-          orders: 0,
+          impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0,
         });
       }
 
@@ -143,7 +179,13 @@ Deno.serve(async (req) => {
       m.orders += Number(row.purchases14d || row.purchases7d || row.purchases30d) || 0;
     }
 
-    const metricsRecords = Array.from(metricsMap.values()).map(m => ({
+    // Separar registros por tipo
+    const allEntries = Array.from(metricsMap.values());
+    const keywordEntries = allEntries.filter(m => m._type === 'keyword');
+    const campaignEntries = allEntries.filter(m => m._type !== 'keyword');
+
+    // ── CampaignMetricsDaily ──
+    const metricsRecords = campaignEntries.map(({ _type, ...m }) => ({
       ...m,
       acos: m.sales > 0 ? (m.spend / m.sales * 100) : 0,
       roas: m.spend > 0 ? (m.sales / m.spend) : 0,
@@ -151,12 +193,56 @@ Deno.serve(async (req) => {
       cpc: m.clicks > 0 ? (m.spend / m.clicks) : 0,
     }));
 
-    await bulkUpsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
-    console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros inseridos`);
+    if (metricsRecords.length > 0) {
+      await bulkUpsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
+      console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros`);
+    }
 
-    // Atualizar métricas agregadas em Campaign
+    // ── Keyword (spTargeting) — upsert por keyword_id ──
+    if (keywordEntries.length > 0) {
+      const existingKeywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []);
+      const kwById = new Map((existingKeywords as any[]).map(k => [String(k.keyword_id), k]));
+
+      // Agregar por keyword_id (soma 30d)
+      const kwAgg = new Map<string, any>();
+      for (const kw of keywordEntries) {
+        if (!kwAgg.has(kw.keyword_id)) {
+          kwAgg.set(kw.keyword_id, { ...kw, spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
+        }
+        const a = kwAgg.get(kw.keyword_id)!;
+        a.spend += kw.spend; a.sales += kw.sales; a.clicks += kw.clicks; a.impressions += kw.impressions; a.orders += kw.orders;
+        if (kw.bid > 0) a.bid = kw.bid; // manter bid mais recente
+      }
+
+      const kwCreates: any[] = [];
+      const kwUpdates: any[] = [];
+      for (const [kid, agg] of kwAgg.entries()) {
+        const { _type, date, ...baseFields } = agg;
+        const record = {
+          ...baseFields,
+          acos: agg.sales > 0 ? agg.spend / agg.sales * 100 : 0,
+          roas: agg.spend > 0 ? agg.sales / agg.spend : 0,
+          ctr: agg.impressions > 0 ? agg.clicks / agg.impressions * 100 : 0,
+          cpc: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
+          synced_at: now,
+        };
+        const existing = kwById.get(kid);
+        if (existing) kwUpdates.push({ id: existing.id, ...record });
+        else kwCreates.push(record);
+      }
+      await bulkUpsertBatched(base44.asServiceRole.entities.Keyword, kwCreates);
+      if (kwUpdates.length > 0) {
+        for (let i = 0; i < kwUpdates.length; i += 100) {
+          await base44.asServiceRole.entities.Keyword.bulkUpdate(kwUpdates.slice(i, i + 100)).catch(() => {});
+          if (i + 100 < kwUpdates.length) await sleep(150);
+        }
+      }
+      console.log(`[downloadProcess] Keyword (spTargeting): ${kwCreates.length} criadas + ${kwUpdates.length} atualizadas`);
+    }
+
+    // ── Atualizar métricas agregadas em Campaign ──
     const campAgg = new Map<string, any>();
-    for (const m of metricsRecords) {
+    for (const m of campaignEntries) {
       if (!campAgg.has(m.campaign_id)) campAgg.set(m.campaign_id, { spend: 0, sales: 0, clicks: 0, impressions: 0, orders: 0 });
       const c = campAgg.get(m.campaign_id)!;
       c.spend += m.spend; c.sales += m.sales; c.clicks += m.clicks; c.impressions += m.impressions; c.orders += m.orders;
@@ -191,7 +277,7 @@ Deno.serve(async (req) => {
     await base44.asServiceRole.entities.AmazonAdsReportJob.update(job_id, {
       status: 'processed',
       processed_at: now,
-      records_processed: metricsRecords.length,
+      records_processed: metricsRecords.length + keywordEntries.length,
       updated_at: now,
     }).catch(() => {});
 
