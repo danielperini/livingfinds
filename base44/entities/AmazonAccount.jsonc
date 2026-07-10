@@ -18,7 +18,60 @@
       "type": "string"
     },
     "ads_refresh_token": {
-      "type": "string"
+      "type": "string",
+      "description": "Refresh token Amazon Ads (plain \u2014 mantido por compatibilidade com fun\u00e7\u00f5es legadas)"
+    },
+    "ads_access_token_expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o access_token atual expira (com margem de 5min)"
+    },
+    "ads_last_token_refresh_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "\u00daltima vez que o access_token foi renovado com sucesso"
+    },
+    "ads_refresh_token_created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o refresh_token foi emitido pela Amazon"
+    },
+    "ads_refresh_token_expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o refresh_token expira (se Amazon informar)"
+    },
+    "ads_token_status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "expired",
+        "missing",
+        "revoked",
+        "error",
+        "refreshing"
+      ],
+      "default": "missing",
+      "description": "Status atual do token Amazon Ads"
+    },
+    "ads_token_last_error": {
+      "type": "string",
+      "description": "\u00daltimo erro de token (sem dados sens\u00edveis)"
+    },
+    "ads_token_refresh_in_progress": {
+      "type": "boolean",
+      "default": false,
+      "description": "Lock: evita refresh duplicado simult\u00e2neo"
+    },
+    "ads_token_refresh_started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o refresh em andamento foi iniciado"
+    },
+    "ads_requires_reauth": {
+      "type": "boolean",
+      "default": false,
+      "description": "Sinaliza que o usu\u00e1rio precisa reconectar"
     },
     "region": {
       "type": "string"

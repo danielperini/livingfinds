@@ -6,6 +6,7 @@ import {
   ShieldCheck, RefreshCw, Activity, BookOpen, ExternalLink, KeyRound,
   Zap, ShieldAlert
 } from 'lucide-react';
+import TokenStatusMonitor from '@/components/amazon/TokenStatusMonitor';
 
 function statusIcon(s) {
   if (s === 'PASSED') return <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />;
@@ -324,6 +325,14 @@ export default function AmazonIntegracao() {
           Documentação oficial: Self-Authorization
         </a>
       </div>
+
+      {/* Monitor de token Amazon Ads */}
+      {account && (
+        <TokenStatusMonitor
+          account={account}
+          onReconnect={() => window.location.href = '/amazon-oauth-setup'}
+        />
+      )}
 
       {/* Atalho Amazon Ads OAuth */}
       <Link
