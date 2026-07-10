@@ -67,11 +67,24 @@ async function fetchAccessToken(refreshToken: string): Promise<{ access_token: s
 
   if (!res.ok) {
     const errCode = data.error || 'unknown';
-    const isInvalidGrant = errCode === 'invalid_grant' || errCode === 'unauthorized_client';
+    // Erros que exigem reautorização manual humana — o refresh_token foi revogado ou é inválido
+    const REQUIRES_REAUTH_CODES = new Set([
+      'invalid_grant',          // token revogado, expirado ou já usado
+      'unauthorized_client',    // app não autorizado para este usuário
+      'access_denied',          // usuário revogou o acesso manualmente na Seller Central
+      'invalid_client',         // client_id/client_secret incorretos (config errada)
+      'authorization_code_used', // code LWA já foi trocado
+    ]);
+    const isInvalidGrant = REQUIRES_REAUTH_CODES.has(errCode);
     const isNetworkError = res.status >= 500 || res.status === 429;
+    const errorType = isInvalidGrant ? 'invalid_grant'
+      : isNetworkError ? 'temporary_network_error'
+      : 'token_refresh_denied';
+    console.error(`[tokenManager] Amazon LWA error: ${errCode} — ${data.error_description} (HTTP ${res.status})`);
     throw {
-      error_type: isInvalidGrant ? 'invalid_grant' : isNetworkError ? 'temporary_network_error' : 'token_refresh_denied',
+      error_type: errorType,
       message: data.error_description || data.error || `HTTP ${res.status}`,
+      amazon_error_code: errCode,
       status_code: res.status,
       requires_reauthorization: isInvalidGrant,
       retryable: isNetworkError,
@@ -160,13 +173,17 @@ Deno.serve(async (req) => {
       }
 
       // ── 4. Verificar cache persistente (entidade) ────────────────────────
-      if (!isExpiringSoon(account.ads_access_token_expires_at)) {
-        // Token ainda válido segundo a entidade — mas não temos o access_token em memória
-        // Precisa renovar de qualquer forma para ter o valor (não armazenamos o token na entidade)
-        // Se temos no cache de memória (mesmo expirado), testar; caso contrário, renovar
-        // Decisão: se expires_at no futuro > 5min, mas sem memCache, ainda renovar (necessário)
-        // Este cenário ocorre após restart da instância Deno
-        console.log(`[tokenManager] Cache persistente indica token válido até ${account.ads_access_token_expires_at}, mas sem cache em memória — renovando`);
+      // Se token expira em > 10 min segundo a entidade, ainda precisamos renovar para obter
+      // o valor do access_token (não é armazenado na entidade por segurança).
+      // Mas podemos pular se foi renovado há menos de 50 min (janela segura pré-expiração).
+      if (!isExpiringSoon(account.ads_access_token_expires_at, 600)) {
+        const lastRefresh = account.ads_last_token_refresh_at;
+        const minutesSinceRefresh = lastRefresh
+          ? (Date.now() - new Date(lastRefresh).getTime()) / 60000
+          : Infinity;
+        // Se foi renovado há menos de 50 min, é muito improvável que o access_token tenha expirado.
+        // Nesse caso renovar mesmo assim, pois não temos o token em memória.
+        console.log(`[tokenManager] Token válido até ${account.ads_access_token_expires_at} (renovado há ${minutesSinceRefresh.toFixed(0)}min) — renovando para obter access_token`);
       }
     }
 
@@ -267,7 +284,7 @@ Deno.serve(async (req) => {
       await logTokenEvent(base44, accountId, {
         success: false,
         error_type: errType,
-        error_message: safeMsg,
+        error_message: `[${refreshError?.amazon_error_code || errType}] ${safeMsg}`,
         status_code: refreshError?.status_code,
       });
 
