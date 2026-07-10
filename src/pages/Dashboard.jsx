@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react'; // eslint-disable-line no-unused-vars
+import React, { useState, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
 import { useQueryClient } from '@tanstack/react-query';
@@ -19,6 +19,7 @@ import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel'
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
+import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -232,6 +233,8 @@ export default function Dashboard() {
     decisions, allDecisions,
     bidChanges, syncRuns,
     autopilotConfig, budgetCfg,
+    performanceSettings,
+    canonicalContext, canonicalLoading,
     loading, error,
   } = useAccountData();
 
@@ -570,8 +573,9 @@ export default function Dashboard() {
 
   // ─── Orçamento e pacing ────────────────────────────────────────────────────
 
-  const { active: activeCampsList, active_count, paused_count } = useMemo(() => classifyCampaigns(campaigns), [campaigns]);
-  const officialDailyLimit = budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
+  const { active_count, paused_count } = useMemo(() => classifyCampaigns(campaigns), [campaigns]);
+  // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
+  const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
   const spendYesterday = useMemo(() => {
     const seen = new Set();
     let s = 0;
@@ -589,15 +593,21 @@ export default function Dashboard() {
   const uniqueDates = useMemo(() => new Set(periodMetrics.map(m => m.date)), [periodMetrics]);
   const avgDailySpend = uniqueDates.size > 0 ? safe(kpis.spend / uniqueDates.size) : 0;
 
-  // ─── Metas ────────────────────────────────────────────────────────────────
+  // ─── Metas — usa a MESMA cascata de fallback do motor determinístico ──────
+  // Prioridade: PerformanceSettings → AutopilotConfig → zeros (sem meta)
+  // canonicalContext.settings reflete exatamente o que o motor usou na última execução
 
-  const cfg = autopilotConfig || {};
+  const canonicalSettings = canonicalContext?.settings || null;
+  const cfg = canonicalSettings || performanceSettings || autopilotConfig || {};
+  // PerformanceSettings usa campos diretos; AutopilotConfig usa prefixo "maximum_"
   const targetAcos = cfg.target_acos || 0;
-  const maxAcos = cfg.maximum_acos || 0;
+  const maxAcos = cfg.max_acos || cfg.maximum_acos || 0;
   const targetRoas = cfg.target_roas || 0;
   const targetTacos = cfg.target_tacos || 0;
   const targetCpc = cfg.target_cpc || 0;
-  const maxCpc = cfg.maximum_cpc || 0;
+  const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
+  // Limite diário oficial — mesma fonte que o motor usa para guardrails
+  const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
 
   // ─── Header ───────────────────────────────────────────────────────────────
 
@@ -641,6 +651,14 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* ── 1b. INDICADOR DE CONSISTÊNCIA Dashboard ↔ Motor de IA ───────────── */}
+      {account && !loading && (
+        <DataConsistencyBadge
+          canonicalContext={canonicalContext}
+          loading={canonicalLoading}
+        />
+      )}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
       {account && <SyncStatusBanner accountId={account.id} />}
@@ -785,20 +803,21 @@ export default function Dashboard() {
           </div>
           <PeriodSelector value={activePeriod} onChange={setPeriod} available={availablePeriods} />
         </div>
-        {/* Indicador de qualidade da fonte */}
+        {/* Indicador de qualidade da fonte — usa contexto canônico quando disponível */}
         {!loading && (
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-4 text-[10px] font-medium ${
             dataQuality.quality === 'high'   ? 'bg-emerald-500/8 border border-emerald-500/15 text-emerald-400' :
-            dataQuality.quality === 'medium' ? 'bg-amber-500/8 border border-amber-500/15 text-amber-400' :
             dataQuality.quality === 'low'    ? 'bg-red-500/8 border border-red-500/15 text-red-400' :
                                                'bg-surface-2 border border-surface-3 text-slate-500'
           }`}>
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
               dataQuality.quality === 'high' ? 'bg-emerald-400' :
-              dataQuality.quality === 'medium' ? 'bg-amber-400' :
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
+            {canonicalSettings && (
+              <span className="text-slate-600 hidden sm:inline">· Metas: {canonicalSettings.source}</span>
+            )}
             <button onClick={runSync} disabled={syncingDashboard}
               className={`ml-auto underline whitespace-nowrap disabled:opacity-50 flex items-center gap-1 ${
                 dataQuality.quality === 'low' ? 'text-red-400 hover:text-red-300' : 'text-emerald-500/70 hover:text-emerald-400'

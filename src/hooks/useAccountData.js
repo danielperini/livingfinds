@@ -1,12 +1,21 @@
 /**
  * useAccountData — camada única de dados compartilhada
  *
- * Centraliza todas as chamadas de entidades usadas pelo Dashboard, IA e relatórios.
- * Usa React Query para cache: múltiplos componentes consomem os mesmos dados
- * sem disparar requests duplicados. staleTime de 5 min evita refetch desnecessário.
+ * Centraliza TODAS as chamadas de entidades usadas pelo Dashboard, IA e relatórios.
+ * O contexto canônico (canonicalContext) é produzido pelo backend getCanonicalAccountContext,
+ * que usa EXATAMENTE as mesmas queries e agregações do motor determinístico —
+ * garantindo que o Dashboard exibe os mesmos números que a IA usa para decisões.
  *
  * Uso:
- *   const { account, campaigns, metricsDaily, loading } = useAccountData();
+ *   const { account, campaigns, metricsDaily, canonicalContext, loading } = useAccountData();
+ *
+ * canonicalContext contém:
+ *   - settings: metas de performance (mesma cascata do motor)
+ *   - kpis_14d / kpis_30d / kpis_yesterday: KPIs agregados e deduplificados
+ *   - real_kpis_30d: faturamento real (SP-API)
+ *   - goal_status: metas vs realidade, mesmo cálculo do motor
+ *   - data_quality: diagnóstico de frescor dos dados
+ *   - daily_series: série temporal para gráficos
  */
 
 import { useQuery } from '@tanstack/react-query';
@@ -15,6 +24,7 @@ import { loadAllCampaigns } from '@/lib/campaignUtils';
 
 const STALE_5MIN = 5 * 60 * 1000;
 const STALE_1MIN = 60 * 1000;
+const STALE_2MIN = 2 * 60 * 1000;
 
 // ── Resolve a conta ativa do usuário atual ──────────────────────────────────
 async function fetchAccount() {
@@ -26,7 +36,15 @@ async function fetchAccount() {
   };
 }
 
-// ── Queries filhas — só ativadas quando accountId existe ───────────────────
+// ── Contexto canônico — MESMA visão que o motor de IA usa ──────────────────
+// Backend getCanonicalAccountContext agrega dados com as mesmas queries e filtros
+// de runDeterministicDecisionEngine, garantindo consistência Dashboard↔Motor.
+async function fetchCanonicalContext(accountId) {
+  const res = await base44.functions.invoke('getCanonicalAccountContext', { amazon_account_id: accountId });
+  return res?.data || null;
+}
+
+// ── Queries de entidades brutas (para funcionalidades que precisam de registros individuais) ──
 async function fetchCampaigns(accountId) {
   return loadAllCampaigns(accountId);
 }
@@ -36,7 +54,7 @@ async function fetchMetricsDaily(accountId) {
 }
 
 async function fetchProducts(accountId) {
-  return base44.entities.Product.filter({ amazon_account_id: accountId }, '-fba_inventory', 20);
+  return base44.entities.Product.filter({ amazon_account_id: accountId }, '-fba_inventory', 500);
 }
 
 async function fetchSalesDaily(accountId) {
@@ -74,6 +92,11 @@ async function fetchBudgetConfig(accountId) {
   return cfgs[0] || null;
 }
 
+async function fetchPerformanceSettings(accountId) {
+  const list = await base44.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1);
+  return list[0] || null;
+}
+
 async function fetchSellerBenchmark(accountId) {
   const benchmarks = await base44.entities.SellerPerformanceBenchmark.filter(
     { amazon_account_id: accountId },
@@ -96,7 +119,16 @@ export function useAccountData() {
   const accountId = accountQuery.data?.account?.id ?? null;
   const enabled = !!accountId;
 
-  // 2. Dados dependentes da conta — todos em paralelo após accountId disponível
+  // 2. Contexto canônico — a mesma visão que o motor determinístico usa
+  //    staleTime curto pois reflete decisões do motor que rodam diariamente
+  const canonicalContextQuery = useQuery({
+    queryKey: ['canonicalContext', accountId],
+    queryFn: () => fetchCanonicalContext(accountId),
+    enabled,
+    staleTime: STALE_2MIN,
+  });
+
+  // 3. Dados de entidades brutas — para funcionalidades que precisam de registros individuais
   const campaignsQuery = useQuery({
     queryKey: ['campaigns', accountId],
     queryFn: () => fetchCampaigns(accountId),
@@ -160,6 +192,13 @@ export function useAccountData() {
     staleTime: STALE_5MIN,
   });
 
+  const performanceSettingsQuery = useQuery({
+    queryKey: ['performanceSettings', accountId],
+    queryFn: () => fetchPerformanceSettings(accountId),
+    enabled,
+    staleTime: STALE_5MIN,
+  });
+
   const sellerBenchmarkQuery = useQuery({
     queryKey: ['sellerBenchmark', accountId],
     queryFn: () => fetchSellerBenchmark(accountId),
@@ -183,15 +222,17 @@ export function useAccountData() {
     metricsDailyQuery.error?.message ||
     null;
 
-  // ── Função de invalidação global — força refetch de todos os dados ──────
-  // Útil após sync manual, criação de campanha, etc.
-
   return {
     // Identidade
     user: accountQuery.data?.user ?? null,
     account: accountQuery.data?.account ?? null,
 
-    // Dados principais
+    // ── CONTEXTO CANÔNICO — mesma visão que o motor de IA ──
+    // Usar canonicalContext.kpis_14d e .settings para decisões críticas de exibição
+    canonicalContext: canonicalContextQuery.data ?? null,
+    canonicalLoading: canonicalContextQuery.isLoading,
+
+    // Dados principais (entidades brutas — para listas, tabelas, etc.)
     campaigns: campaignsQuery.data ?? [],
     metricsDaily: metricsDailyQuery.data ?? [],
     products: productsQuery.data ?? [],
@@ -206,6 +247,7 @@ export function useAccountData() {
     syncRuns: syncRunsQuery.data ?? [],
     autopilotConfig: autopilotConfigQuery.data ?? null,
     budgetCfg: budgetConfigQuery.data ?? null,
+    performanceSettings: performanceSettingsQuery.data ?? null,
     sellerBenchmark: sellerBenchmarkQuery.data ?? null,
 
     // Estado
@@ -215,6 +257,7 @@ export function useAccountData() {
     // Queries individuais — para casos que precisam do isLoading específico
     queries: {
       account: accountQuery,
+      canonicalContext: canonicalContextQuery,
       campaigns: campaignsQuery,
       metricsDaily: metricsDailyQuery,
       products: productsQuery,
@@ -224,6 +267,7 @@ export function useAccountData() {
       syncRuns: syncRunsQuery,
       autopilotConfig: autopilotConfigQuery,
       budgetConfig: budgetConfigQuery,
+      performanceSettings: performanceSettingsQuery,
       sellerBenchmark: sellerBenchmarkQuery,
     },
   };
@@ -233,6 +277,7 @@ export function useAccountData() {
 export function invalidateAccountData(queryClient, accountId) {
   const keys = [
     ['account'],
+    ['canonicalContext', accountId],
     ['campaigns', accountId],
     ['metricsDaily', accountId],
     ['products', accountId],
@@ -242,6 +287,7 @@ export function invalidateAccountData(queryClient, accountId) {
     ['syncRuns', accountId],
     ['autopilotConfig', accountId],
     ['budgetConfig', accountId],
+    ['performanceSettings', accountId],
     ['sellerBenchmark', accountId],
   ];
   return Promise.all(keys.map(k => queryClient.invalidateQueries({ queryKey: k })));
