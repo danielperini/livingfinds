@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Activity, AlertTriangle, CheckCircle, Clock, XCircle } from 'lucide-react';
+import { Activity, CheckCircle, Clock, XCircle } from 'lucide-react';
 
 function fmtDateBRFull(iso) {
   if (!iso) return '—';
@@ -55,7 +55,7 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
 
   const icon =
   overallStatus === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> :
-  overallStatus === 'partial' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-400 hidden" /> :
+  overallStatus === 'partial' ? <CheckCircle className="w-3.5 h-3.5 text-amber-400" /> :
   <XCircle className="w-3.5 h-3.5 text-red-400" />;
 
   return (
@@ -67,13 +67,13 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
         </div>
         <div className="flex items-center gap-1.5">
           {icon}
-          
-
-
-
-
-
-          
+          <span className={`text-xs font-semibold hidden ${
+          overallStatus === 'success' ? 'text-emerald-400' :
+          overallStatus === 'partial' ? 'text-amber-400' : 'text-red-400'}`
+          }>
+            {overallStatus === 'success' ? 'Sincronizado' :
+            overallStatus === 'partial' ? 'Parcialmente sincronizado' : 'Erro de sincronização'}
+          </span>
         </div>
       </div>
 
@@ -103,25 +103,29 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
         </div>
       </div>
 
-      {gapDays !== null && gapDays > 0 &&
-      <div className="mt-2.5 flex items-start gap-2 px-2 py-1.5 bg-amber-500/10 border border-amber-500/15 rounded-lg hidden">
-          <AlertTriangle className="w-3 h-3 text-amber-400 flex-shrink-0 mt-0.5" />
-          <p className="text-[10px] text-amber-300 leading-relaxed">
-            <strong>Gap de {gapDays} dia{gapDays > 1 ? 's' : ''}</strong> entre as APIs.
-            Os dados de publicidade e faturamento não estão sincronizados para o mesmo período.
-            Métricas combinadas (TACoS) marcadas como <strong>parciais</strong>.
-          </p>
-        </div>
-      }
-
-      {lastSyncAt &&
-      <div className="mt-1.5 flex items-center gap-1.5">
-          <Clock className="w-3 h-3 text-slate-600" />
-          <p className="text-[10px] text-slate-500">
-            Último sync: {new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-          </p>
-        </div>
-      }
+      <div className="mt-2 flex items-center gap-3 flex-wrap">
+        {lastSyncAt && (
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-3 h-3 text-slate-600" />
+            <p className="text-[10px] text-slate-500">
+              Último sync: {new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        )}
+        {lastSyncAt && (() => {
+          const nextSync = new Date(new Date(lastSyncAt).getTime() + 24 * 3600000);
+          const diffMs = nextSync.getTime() - Date.now();
+          const diffH = Math.floor(diffMs / 3600000);
+          const diffM = Math.floor((diffMs % 3600000) / 60000);
+          const label = diffMs <= 0 ? 'Em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'm' : ''}` : `em ~${diffM}min`;
+          return (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-600">·</span>
+              <p className="text-[10px] text-slate-500">Próxima atualização: <span className="text-slate-400">{label}</span></p>
+            </div>
+          );
+        })()}
+      </div>
     </div>);
 
 }
