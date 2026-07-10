@@ -65,7 +65,7 @@ const VIEW_FILTERS = [
 { key: 'created', label: '✓ Criadas' }];
 
 
-function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter, open, onToggle }) {
+function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter, open, onToggle, localStatus }) {
   const prodName = product?.product_name || product?.display_name || 'Produto';
   const imgUrl = product?.product_image_url;
 
@@ -77,7 +77,8 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
     return list;
   }, [suggestions, viewFilter]);
 
-  const created = suggestions.filter((s) => s.status === 'created').length;
+  const created = suggestions.filter((s) => (localStatus?.[s.id] || s.status) === 'created').length;
+  const queued = suggestions.filter((s) => (localStatus?.[s.id] || s.status) === 'queued').length;
   const ready = suggestions.filter((s) => s.should_create_campaign && (s.ai_confidence || 0) >= 0.90).length;
   const ranked = suggestions.filter((s) => s.ai_rank).length;
   const topScore = suggestions[0] ? getScore(suggestions[0]) : 0;
@@ -110,6 +111,7 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
           <span className="text-xs text-slate-400">{suggestions.length} sugestões</span>
           {ranked > 0 && <span className="px-2 py-0.5 bg-violet-500/15 border border-violet-500/25 text-violet-400 rounded-full text-[10px]">{ranked} ranq.</span>}
           {ready > 0 && <span className="px-2 py-0.5 bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-full text-[10px]">⚡ {ready} prontas</span>}
+          {queued > 0 && <span className="px-2 py-0.5 bg-amber-500/15 border border-amber-500/25 text-amber-400 rounded-full text-[10px]">⏳ {queued} fila</span>}
           {created > 0 && <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 rounded-full text-[10px]">✓ {created}</span>}
         </div>
       </button>
@@ -126,7 +128,8 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
             </thead>
             <tbody>
               {filtered.map((s, idx) => {
-              const statusCfg = STATUS_CONFIG[s.status] || STATUS_CONFIG.suggested;
+              const effectiveStatus = localStatus?.[s.id] || s.status;
+              const statusCfg = STATUS_CONFIG[effectiveStatus] || STATUS_CONFIG.suggested;
               const riskCfg = RISK_CONFIG[s.risk_level] || RISK_CONFIG.medium;
               const conf = s.ai_confidence != null ?
               Math.round(s.ai_confidence <= 1 ? s.ai_confidence * 100 : s.ai_confidence) :
@@ -136,7 +139,7 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
               const isWorking = workingId === s.id;
               const isCreating = creatingId === s.id;
               const isReady = s.should_create_campaign && conf != null && conf >= 90;
-              const canCreate = !['created', 'archived_by_policy', 'superseded', 'creating'].includes(s.status);
+              const canCreate = !['created', 'queued', 'archived_by_policy', 'superseded', 'creating'].includes(effectiveStatus);
 
               return (
                 <tr key={s.id} className={`border-b border-surface-2/30 transition-colors ${isReady ? 'bg-emerald-500/3 hover:bg-emerald-500/6' : 'hover:bg-surface-2/20'}`}>
@@ -216,7 +219,7 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
                             {isWorking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
                           </button>
                         )}
-                        {s.status === 'created' && s.amazon_campaign_id && (
+                        {effectiveStatus === 'created' && s.amazon_campaign_id && (
                           <span className="text-emerald-400 text-[10px] font-mono">✓ {s.amazon_campaign_id.slice(-8)}</span>
                         )}
                       </div>
@@ -236,6 +239,8 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
   const [workingId, setWorkingId] = useState(null);
   const [creatingId, setCreatingId] = useState(null);
   const [message, setMessage] = useState(null);
+  // Estado local de status por id — sobrescreve o status vindo das props sem recarregar tudo
+  const [localStatus, setLocalStatus] = useState({});
   const [competitorAsin, setCompetitorAsin] = useState('');
   const [selectedAsin, setSelectedAsin] = useState('');
   const [fetching, setFetching] = useState(false);
@@ -352,7 +357,7 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
     setWorkingId(s.id);
     try {
       await base44.entities.KeywordSuggestion.update(s.id, { status: 'rejected' });
-      refreshKeepScroll();
+      setLocalStatus((prev) => ({ ...prev, [s.id]: 'rejected' }));
     } catch (e) {setMessage({ type: 'error', text: e.message });} finally
     {setWorkingId(null);}
   };
@@ -362,8 +367,6 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
     setCreatingId(s.id);
     setMessage(null);
     try {
-      // Usa scheduleManualCampaignFromTerm: enfileira no ProductKickoffQueue
-      // respeitando as janelas operacionais (00h-04h e 13h-14h BRT)
       const res = await base44.functions.invoke('scheduleManualCampaignFromTerm', {
         amazon_account_id: account.id,
         asin: s.asin,
@@ -373,20 +376,21 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
       });
       const d = res?.data;
       if (d?.ok) {
+        const newStatus = d.executed ? 'created' : 'queued';
         if (d.executed) {
           setMessage({ type: 'success', text: `✓ Campanha criada agora para "${s.keyword}" · bid R$0,50 · gerida pelo app.` });
         } else {
           setMessage({ type: 'info', text: `⏰ Agendada para "${s.keyword}" — próxima janela: ${d.queue_window || 'em breve'}.` });
         }
-        // Marcar sugestão como queued/created no banco local para feedback visual
-        await base44.entities.KeywordSuggestion.update(s.id, {
-          status: d.executed ? 'created' : 'queued',
-        }).catch(() => {});
-        // Disparar evento global para atualizar o painel de fila (KickoffControlPanel)
+        // Atualiza status local imediatamente — sem recarregar a página
+        setLocalStatus((prev) => ({ ...prev, [s.id]: newStatus }));
+        // Persistir no banco em background
+        base44.entities.KeywordSuggestion.update(s.id, { status: newStatus }).catch(() => {});
+        // Notificar painel de fila
         window.dispatchEvent(new CustomEvent('term-campaign-queued', { detail: { asin: s.asin, keyword: s.keyword } }));
-        refreshKeepScroll();
       } else if (d?.already_exists || d?.already_queued) {
         setMessage({ type: 'info', text: d.error || `Já existe campanha ou fila para "${s.keyword}".` });
+        setLocalStatus((prev) => ({ ...prev, [s.id]: 'queued' }));
       } else {
         setMessage({ type: 'error', text: d?.error || 'Erro ao agendar campanha.' });
       }
@@ -511,7 +515,8 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
           creatingId={creatingId}
           viewFilter={viewFilter}
           open={!!openGroups[asin]}
-          onToggle={() => toggleGroup(asin)} />
+          onToggle={() => toggleGroup(asin)}
+          localStatus={localStatus} />
 
         )}
         </div>
