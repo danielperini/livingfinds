@@ -197,7 +197,6 @@ export default function Products({ externalRefreshTrigger }) {
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   // ── Ações ───────────────────────────────────────────────────────────────────
-
   const toggleCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
     if (!account) return;
