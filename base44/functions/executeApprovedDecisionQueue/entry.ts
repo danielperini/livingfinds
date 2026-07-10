@@ -11,7 +11,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const NIGHT_SLOTS = [0, 1, 2, 3, 4, 5, 6];
+const NIGHT_SLOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const DAY_SLOT = 13;
 
 function currentHourBRT(): number {
@@ -131,7 +131,7 @@ Deno.serve(async (request) => {
       immediate_pauses: pauses.length <= 20 ? pauses.length : 0,
       pause_result: pauseResult,
       slot_distribution: slotCounts,
-      policy: 'slots 00h-07h BRT + 13h BRT; pausas urgentes imediatas ≤ 20',
+      policy: 'slots 00h-12h BRT + 13h BRT; pausas urgentes imediatas ≤ 20',
       duration_ms: Date.now() - t0,
     });
 

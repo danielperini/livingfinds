@@ -19,7 +19,7 @@ function currentHourBRT(): number {
 }
 
 function isOperationalWindow(h: number): boolean {
-  return h >= 0 && h <= 6 || h === 13;
+  return h >= 0 && h <= 12 || h === 13;
 }
 
 function sleep(ms: number): Promise<void> {
