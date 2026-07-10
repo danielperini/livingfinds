@@ -147,11 +147,18 @@ Deno.serve(async (req) => {
       }
     }
 
+    const completedAt = new Date().toISOString();
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: body.amazon_account_id,
       operation: 'sync_product_catalog_v2', status: 'success', trigger_type: body.trigger_type || 'manual',
-      started_at: startedAt, completed_at: new Date().toISOString(), records_processed: created + updated,
+      started_at: startedAt, completed_at: completedAt, records_processed: created + updated,
       result_summary: JSON.stringify({ pages, inventory_asins: items.length, created, updated, corrected, costs_loaded: costsLoaded, pending_cost_confirmation: pendingCostConfirmation }).slice(0, 4000),
+    }).catch(() => {});
+
+    // Sinalizar dado fresco de SP-API para todas as páginas
+    await base44.asServiceRole.entities.AmazonAccount.update(body.amazon_account_id, {
+      sp_data_last_sync_at: completedAt,
+      last_sync_at: completedAt,
     }).catch(() => {});
 
     return Response.json({ ok: true, pages, inventory_asins: items.length, created, updated, corrected_from_out_of_stock: corrected, costs_loaded: costsLoaded, pending_cost_confirmation: pendingCostConfirmation });

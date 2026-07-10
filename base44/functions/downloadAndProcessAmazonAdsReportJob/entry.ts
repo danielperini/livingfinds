@@ -296,10 +296,12 @@ Deno.serve(async (req) => {
       updated_at: now,
     }).catch(() => {});
 
-    // Atualizar last_sync_at da conta
+    // Atualizar last_sync_at da conta + sinalizar dados frescos para todas as páginas
     await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
       last_sync_at: now,
       status: 'connected',
+      ads_metrics_last_sync_at: now,
+      ads_data_fresh_at: now,
     }).catch(() => {});
 
     // Registrar SyncExecutionLog
@@ -315,9 +317,21 @@ Deno.serve(async (req) => {
       duration_ms: Date.now() - t0,
     }).catch(() => {});
 
+    // Disparar motor de decisão com os dados recém-processados
+    // Só para relatórios de campanha (spCampaigns) — são os que têm métricas diárias completas
+    if ((metricsRecords.length > 0 || campUpdates.length > 0) && (job.report_type_id === 'spCampaigns' || !job.report_type_id)) {
+      console.log(`[downloadProcess] Disparando motor de decisão após processamento de ${metricsRecords.length} registros`);
+      base44.asServiceRole.functions.invoke('runFullAccountOptimizationWithNewLogic', {
+        amazon_account_id: accountId,
+        trigger: 'report_processed',
+        _service_role: true,
+      }).catch((e: any) => console.warn('[downloadProcess] Motor de decisão (não crítico):', e.message));
+    }
+
     return Response.json({
       ok: true,
       job_id,
+      report_type_id: job.report_type_id,
       records: metricsRecords.length,
       campaigns_updated: campUpdates.length,
       duration_ms: Date.now() - t0,

@@ -132,6 +132,21 @@
       "type": "string",
       "format": "date-time"
     },
+    "ads_metrics_last_sync_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "\u00daltima vez que m\u00e9tricas de Ads foram processadas de um relat\u00f3rio"
+    },
+    "ads_data_fresh_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp do dado mais recente dispon\u00edvel \u2014 atualizado a cada relat\u00f3rio processado. Todas as p\u00e1ginas usam este campo para saber se h\u00e1 dados novos."
+    },
+    "sp_data_last_sync_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "\u00daltima sincroniza\u00e7\u00e3o de dados SP-API (invent\u00e1rio, pedidos)"
+    },
     "error_message": {
       "type": "string"
     },
