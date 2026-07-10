@@ -7,6 +7,7 @@ import {
   Zap, ShieldAlert
 } from 'lucide-react';
 import TokenStatusMonitor from '@/components/amazon/TokenStatusMonitor';
+import AdsReportJobsPanel from '@/components/amazon/AdsReportJobsPanel';
 
 function statusIcon(s) {
   if (s === 'PASSED') return <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />;
@@ -332,6 +333,13 @@ export default function AmazonIntegracao() {
           account={account}
           onReconnect={() => window.location.href = '/amazon-oauth-setup'}
         />
+      )}
+
+      {/* Painel de relatórios Amazon Ads */}
+      {account && (
+        <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5">
+          <AdsReportJobsPanel amazonAccountId={account.id} />
+        </div>
       )}
 
       {/* Atalho Amazon Ads OAuth */}

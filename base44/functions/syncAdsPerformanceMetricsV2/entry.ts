@@ -1,31 +1,19 @@
+/**
+ * syncAdsPerformanceMetricsV2 — Orquestrador leve de relatórios Amazon Ads v3
+ *
+ * Responsabilidade:
+ * - Delegar criação/reutilização de relatório para requestAmazonAdsReportV3
+ * - NÃO fazer polling longo — retorna pending se relatório ainda não está pronto
+ * - NÃO baixar relatório diretamente — delegado para downloadAndProcessAmazonAdsReportJob
+ * - O polling assíncrono é feito pela automação scheduledAmazonAdsReportPoll (a cada 10 min)
+ */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function ymd(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
-function numberValue(value: unknown) {
-  const n = Number(value || 0);
-  return Number.isFinite(n) ? n : 0;
-}
-
-async function gunzipJson(response: Response) {
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  let text = '';
-  try {
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-    text = await new Response(stream).text();
-  } catch {
-    text = new TextDecoder().decode(bytes);
-  }
-  const parsed = JSON.parse(text || '[]');
-  return Array.isArray(parsed) ? parsed : parsed?.rows || parsed?.data || [];
-}
-
 Deno.serve(async (request) => {
-  const startedAt = new Date().toISOString();
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
@@ -42,184 +30,105 @@ Deno.serve(async (request) => {
     const end = body.end_date ? new Date(body.end_date) : new Date();
     const start = body.start_date ? new Date(body.start_date) : new Date(end.getTime() - 29 * 86400000);
 
-    const createResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-      amazon_account_id: accountId,
-      operation: 'createSponsoredProductsCampaignReport30d',
-      method: 'POST',
-      path: '/reporting/reports',
-      content_type: 'application/vnd.createasyncreportrequest.v3+json',
-      accept: 'application/vnd.createasyncreportrequest.v3+json',
-      queue_type: 'REPORT',
-      payload: {
-        name: `Living Finds SP campaigns ${ymd(start)} ${ymd(end)}`,
-        startDate: ymd(start),
-        endDate: ymd(end),
-        configuration: {
-          adProduct: 'SPONSORED_PRODUCTS',
-          groupBy: ['campaign'],
-          columns: [
-            'date',
-            'campaignId',
-            'campaignName',
-            'campaignStatus',
-            'campaignBudgetAmount',
-            'impressions',
-            'clicks',
-            'cost',
-            'purchases30d',
-            'sales30d'
-          ],
-          reportTypeId: 'spCampaigns',
-          timeUnit: 'DAILY',
-          format: 'GZIP_JSON'
-        }
-      },
-      _service_role: true
-    });
-
-    const created = createResponse?.data || createResponse || {};
-    if (!created?.ok) {
-      throw new Error(created?.errors?.[0]?.message || created?.error || 'Falha ao solicitar relatório de performance Ads');
-    }
-
-    const reportId = created?.payload?.reportId || created?.reportId;
-    if (!reportId) throw new Error('Amazon Ads não retornou reportId');
-
-    let reportPayload: any = null;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (attempt > 0) await wait(10000);
-      const statusResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-        amazon_account_id: accountId,
-        operation: 'getSponsoredProductsCampaignReport30d',
-        method: 'GET',
-        path: `/reporting/reports/${reportId}`,
-        accept: 'application/vnd.getasyncreportresponse.v3+json',
-        queue_type: 'REPORT',
-        _service_role: true
-      });
-      const statusData = statusResponse?.data || statusResponse || {};
-      if (!statusData?.ok) continue;
-      reportPayload = statusData?.payload || statusData;
-      const status = String(reportPayload?.status || '').toUpperCase();
-      if (status === 'COMPLETED') break;
-      if (['FAILURE', 'FAILED', 'CANCELLED'].includes(status)) {
-        throw new Error(reportPayload?.failureReason || `Relatório Amazon Ads terminou como ${status}`);
-      }
-    }
-
-    const location = reportPayload?.url || reportPayload?.location;
-    if (!location) {
-      const now = new Date().toISOString();
-      await base44.asServiceRole.entities.SyncExecutionLog.create({
-        amazon_account_id: accountId,
-        operation: 'sync_ads_performance_metrics_v2',
-        status: 'pending',
-        trigger_type: body.trigger_type || 'scheduled',
-        started_at: startedAt,
-        completed_at: now,
-        records_processed: 0,
-        result_summary: JSON.stringify({ reportId, status: reportPayload?.status || 'PENDING' }).slice(0, 4000)
-      }).catch(() => {});
-      return Response.json({ ok: true, pending: true, report_id: reportId, status: reportPayload?.status || 'PENDING' });
-    }
-
-    const download = await fetch(location);
-    if (!download.ok) throw new Error(`Falha ao baixar relatório Ads: HTTP ${download.status}`);
-    const rows = await gunzipJson(download);
-
-    const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: accountId },
-      '-date',
-      10000
+    // Verificar se já existe job processed recente (últimas 23h)
+    const twentyThreeHoursAgo = new Date(Date.now() - 23 * 3600000).toISOString();
+    const recentProcessed = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
+      { amazon_account_id: accountId, status: 'processed' },
+      '-processed_at',
+      1
     ).catch(() => []);
 
-    const existingByKey = new Map<string, any>();
-    for (const row of existing) {
-      const key = `${String(row.campaign_id || '')}-${String(row.date || '')}`;
-      if (!existingByKey.has(key)) existingByKey.set(key, row);
+    if (recentProcessed[0] && recentProcessed[0].processed_at > twentyThreeHoursAgo) {
+      return Response.json({
+        ok: true,
+        already_processed: true,
+        job_id: recentProcessed[0].id,
+        processed_at: recentProcessed[0].processed_at,
+        message: 'Relatório já processado nas últimas 23h.',
+      });
     }
 
-    const toCreate: any[] = [];
-    const toUpdate: any[] = [];
-    const seen = new Set<string>();
-    const now2 = new Date().toISOString();
+    // Delegar para requestAmazonAdsReportV3
+    const reportRes = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
+      amazon_account_id: accountId,
+      report_type_id: 'spCampaigns',
+      ad_product: 'SPONSORED_PRODUCTS',
+      time_unit: 'DAILY',
+      group_by: ['campaign'],
+      columns: [
+        'date',
+        'campaignId',
+        'campaignName',
+        'campaignStatus',
+        'campaignBudgetAmount',
+        'impressions',
+        'clicks',
+        'cost',
+        'purchases7d',
+        'purchases14d',
+        'purchases30d',
+        'sales7d',
+        'sales14d',
+        'sales30d',
+      ],
+      start_date: ymd(start),
+      end_date: ymd(end),
+      report_name: `Living Finds SP campaigns ${ymd(start)} to ${ymd(end)}`,
+      source_function: 'syncAdsPerformanceMetricsV2',
+    });
 
-    for (const row of rows) {
-      const campaignId = String(row.campaignId || row.campaign_id || '');
-      const date = String(row.date || row.startDate || '').slice(0, 10);
-      if (!campaignId || !date) continue;
-      const key = `${campaignId}-${date}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+    if (!reportRes?.ok && !reportRes?.status_425 && !reportRes?.rate_limited) {
+      return Response.json({
+        ok: false,
+        error: reportRes?.error || 'Falha ao solicitar relatório',
+        requires_reauthorization: reportRes?.requires_reauthorization,
+      });
+    }
 
-      const record: any = {
-        amazon_account_id: accountId,
-        campaign_id: campaignId,
-        campaign_name: row.campaignName || row.campaign_name || null,
-        date,
-        spend: numberValue(row.cost ?? row.spend),
-        sales: numberValue(row.sales30d ?? row.sales14d ?? row.sales7d ?? row.sales),
-        orders: numberValue(row.purchases30d ?? row.purchases14d ?? row.purchases7d ?? row.orders),
-        clicks: numberValue(row.clicks),
-        impressions: numberValue(row.impressions),
-        daily_budget: numberValue(row.campaignBudgetAmount ?? row.budget),
-        campaign_status: String(row.campaignStatus || '').toLowerCase() || null,
-        source: 'amazon_ads_api',
-        synced_at: now2,
-        updated_at: now2,
-      };
+    const status = reportRes?.status;
 
-      const current = existingByKey.get(key);
-      if (current) {
-        toUpdate.push({ id: current.id, ...record });
-      } else {
-        toCreate.push(record);
+    // Se já estava processed ou completed e URL disponível, processar imediatamente
+    if (status === 'completed' && reportRes?.job_id) {
+      const downloadRes = await base44.asServiceRole.functions.invoke('downloadAndProcessAmazonAdsReportJob', {
+        job_id: reportRes.job_id,
+        _service_role: true,
+      });
+      if (downloadRes?.ok) {
+        return Response.json({
+          ok: true,
+          processed: true,
+          job_id: reportRes.job_id,
+          records: downloadRes?.records,
+          message: 'Relatório pronto e processado.',
+        });
       }
     }
 
-    const BATCH = 100;
-    for (let i = 0; i < toCreate.length; i += BATCH) {
-      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkCreate(toCreate.slice(i, i + BATCH));
-    }
-    for (let i = 0; i < toUpdate.length; i += BATCH) {
-      await base44.asServiceRole.entities.CampaignMetricsDaily.bulkUpdate(toUpdate.slice(i, i + BATCH));
+    if (status === 'processed') {
+      return Response.json({
+        ok: true,
+        already_processed: true,
+        reused: reportRes?.reused,
+        job_id: reportRes?.job_id,
+        message: 'Relatório já processado anteriormente.',
+      });
     }
 
-    const createdCount = toCreate.length;
-    const updatedCount = toUpdate.length;
-
-    const now = new Date().toISOString();
-    const summary = {
+    // Pendente — retornar imediatamente, polling será feito pela automação
+    return Response.json({
       ok: true,
-      report_id: reportId,
-      rows_received: rows.length,
-      unique_rows: seen.size,
-      created: createdCount,
-      updated: updatedCount,
-      source: 'amazon_ads_api',
-      start_date: ymd(start),
-      end_date: ymd(end)
-    };
+      pending: true,
+      reused: reportRes?.reused,
+      status_425: reportRes?.status_425,
+      rate_limited: reportRes?.rate_limited,
+      job_id: reportRes?.job_id,
+      report_id: reportRes?.report_id,
+      status,
+      next_poll_at: reportRes?.next_poll_at,
+      message: reportRes?.message || 'Relatório solicitado à Amazon. A geração pode levar alguns minutos. Próxima checagem programada.',
+    });
 
-    await base44.asServiceRole.entities.SyncExecutionLog.create({
-      amazon_account_id: accountId,
-      operation: 'sync_ads_performance_metrics_v2',
-      status: 'success',
-      trigger_type: body.trigger_type || 'scheduled',
-      started_at: startedAt,
-      completed_at: now,
-      records_processed: seen.size,
-      result_summary: JSON.stringify(summary).slice(0, 4000),
-      error_message: null
-    }).catch(() => {});
-
-    await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-      last_sync_at: now,
-      ads_metrics_last_sync_at: now
-    }).catch(() => {});
-
-    return Response.json(summary);
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao sincronizar métricas Amazon Ads' }, { status: 500 });
   }
 });

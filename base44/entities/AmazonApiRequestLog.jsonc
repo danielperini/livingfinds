@@ -1,0 +1,62 @@
+{
+  "name": "AmazonApiRequestLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "api_family": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "method": {
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "http_status": {
+      "type": "number"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "rate_limit_observed": {
+      "type": "string"
+    },
+    "retry_after": {
+      "type": "number"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "attempt_number": {
+      "type": "number",
+      "default": 1
+    },
+    "error_type": {
+      "type": "string"
+    },
+    "error_code": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "operation",
+    "method",
+    "http_status"
+  ]
+}

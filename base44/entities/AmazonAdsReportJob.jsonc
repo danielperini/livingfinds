@@ -1,0 +1,172 @@
+{
+  "name": "AmazonAdsReportJob",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "ads_account_id": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "report_id": {
+      "type": "string"
+    },
+    "report_name": {
+      "type": "string"
+    },
+    "report_type_id": {
+      "type": "string"
+    },
+    "ad_product": {
+      "type": "string"
+    },
+    "time_unit": {
+      "type": "string",
+      "enum": [
+        "DAILY",
+        "SUMMARY",
+        "HOURLY"
+      ]
+    },
+    "format": {
+      "type": "string",
+      "default": "GZIP_JSON"
+    },
+    "group_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "filters": {
+      "type": "string"
+    },
+    "start_date": {
+      "type": "string"
+    },
+    "end_date": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "requested",
+        "pending",
+        "processing",
+        "completed",
+        "downloaded",
+        "processed",
+        "failed",
+        "expired",
+        "cancelled",
+        "stale",
+        "rate_limited",
+        "pending_unknown"
+      ],
+      "default": "requested"
+    },
+    "amazon_status": {
+      "type": "string"
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "url_expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "file_size": {
+      "type": "number"
+    },
+    "created_at_amazon": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generated_at_amazon": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_polled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_poll_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "poll_attempts": {
+      "type": "number",
+      "default": 0
+    },
+    "poll_in_progress": {
+      "type": "boolean",
+      "default": false
+    },
+    "poll_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "downloaded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "processed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "records_processed": {
+      "type": "number",
+      "default": 0
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "retry_after_seconds": {
+      "type": "number"
+    },
+    "cooldown_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_type_id",
+    "start_date",
+    "end_date",
+    "status"
+  ]
+}
