@@ -1,0 +1,132 @@
+{
+  "name": "BackupAuditLog",
+  "type": "object",
+  "properties": {
+    "backup_id": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string",
+      "enum": [
+        "backup",
+        "validate",
+        "cleanup",
+        "restore",
+        "restore_test",
+        "retry"
+      ]
+    },
+    "backup_type": {
+      "type": "string",
+      "enum": [
+        "daily_incremental",
+        "weekly_full",
+        "monthly_full",
+        "manual",
+        "pre_restore"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "completed_with_warnings",
+        "failed",
+        "corrupted"
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "performed_by": {
+      "type": "string"
+    },
+    "drive_folder_id": {
+      "type": "string"
+    },
+    "drive_backup_name": {
+      "type": "string"
+    },
+    "records_processed": {
+      "type": "number",
+      "default": 0
+    },
+    "files_processed": {
+      "type": "number",
+      "default": 0
+    },
+    "total_size_bytes": {
+      "type": "number",
+      "default": 0
+    },
+    "entities_included": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ads_api_data_through": {
+      "type": "string"
+    },
+    "sp_api_data_through": {
+      "type": "string"
+    },
+    "date_gap_days": {
+      "type": "number"
+    },
+    "data_consistency_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "stale",
+        "unknown"
+      ]
+    },
+    "protected": {
+      "type": "boolean",
+      "default": false
+    },
+    "requires_attention": {
+      "type": "boolean",
+      "default": false
+    },
+    "parent_backup_id": {
+      "type": "string"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "manifest_url": {
+      "type": "string"
+    },
+    "checksum_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "retention_expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "operation",
+    "status",
+    "started_at"
+  ]
+}

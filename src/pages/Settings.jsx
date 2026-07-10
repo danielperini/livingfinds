@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
+import BackupPanel from '@/components/backup/BackupPanel';
 
 const PERFORMANCE_DEFAULTS = {
   primary_goal: 'acos',
@@ -457,6 +458,9 @@ export default function Settings() {
           {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar configurações'}
         </button>
       </div>
+
+      {/* ─── BACKUP ─── */}
+      <BackupPanel />
 
       {/* ─── APARÊNCIA ─── */}
       <AppearanceSelector />
