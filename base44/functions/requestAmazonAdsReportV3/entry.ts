@@ -153,19 +153,27 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Obter access token via tokenManager
-    const tokenRes = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
-      amazon_account_id,
-      _service_role: true,
+    // Obter access token diretamente (sem invoke para evitar perda de contexto)
+    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+    if (!refreshToken || !clientId || !clientSecret) {
+      return Response.json({ ok: false, error: 'Credenciais Amazon Ads não configuradas' });
+    }
+    const lwaRes = await fetch('https://api.amazon.com/auth/o2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }).toString(),
     });
-    if (!tokenRes?.ok) {
+    const lwaData = await lwaRes.json().catch(() => ({}));
+    if (!lwaRes.ok || !lwaData.access_token) {
+      const requiresReauth = lwaData.error === 'invalid_grant' || lwaData.error === 'unauthorized_client';
       return Response.json({
         ok: false,
-        error: tokenRes?.message || 'Falha ao obter token Amazon Ads',
-        requires_reauthorization: tokenRes?.requires_reauthorization,
+        error: lwaData.error_description || lwaData.error || `HTTP ${lwaRes.status}`,
+        requires_reauthorization: requiresReauth,
       });
     }
-    const accessToken = tokenRes.access_token;
+    const accessToken = lwaData.access_token;
 
     // Montar payload v3
     const reportPayload: Record<string, any> = {

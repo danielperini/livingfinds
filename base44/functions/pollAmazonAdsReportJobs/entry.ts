@@ -81,16 +81,25 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Obter tokens por conta
+    // Obter tokens por conta diretamente via LWA (sem invoke para preservar contexto)
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
     for (const [accountId, account] of accountMap.entries()) {
-      const tokenRes = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
-        amazon_account_id: accountId,
-        _service_role: true,
+      const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+      if (!refreshToken || !clientId || !clientSecret) {
+        console.error(`[pollReportJobs] Credenciais ausentes para conta ${accountId}`);
+        continue;
+      }
+      const lwaRes = await fetch('https://api.amazon.com/auth/o2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }).toString(),
       });
-      if (tokenRes?.ok) {
-        accountTokenMap.set(accountId, tokenRes.access_token);
+      const lwaData = await lwaRes.json().catch(() => ({}));
+      if (lwaRes.ok && lwaData.access_token) {
+        accountTokenMap.set(accountId, lwaData.access_token);
       } else {
-        console.error(`[pollReportJobs] Sem token para conta ${accountId}: ${tokenRes?.message}`);
+        console.error(`[pollReportJobs] Sem token para conta ${accountId}: ${lwaData.error}`);
       }
     }
 
@@ -139,7 +148,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
         const profileId = job.profile_id || account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
         const region = job.region || account.region || Deno.env.get('ADS_REGION') || 'NA';
 
