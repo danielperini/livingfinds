@@ -1,12 +1,11 @@
 /**
- * amazonAdsCommand v4 — Gateway centralizado Amazon Ads com renovação automática de token
+ * amazonAdsCommand v5 — Gateway centralizado Amazon Ads com renovação automática de token
  *
- * Fluxo:
- * 1. Obter access_token via amazonAdsTokenManager (cache + renovação automática)
- * 2. Executar chamada Amazon Ads
- * 3. Se 401/403: force_refresh + retry único
- * 4. Se 429: registrar rate limit, retornar mensagem amigável
- * 5. Logar resultado (sem tokens)
+ * 1. Obtém access_token via amazonAdsTokenManager.
+ * 2. Executa chamada Amazon Ads.
+ * 3. Em 401/403 força refresh e repete uma única vez.
+ * 4. Em 429 retorna rate-limit controlado.
+ * 5. Propaga erros de credencial/reautorização sem falso positivo.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -18,6 +17,7 @@ const ALLOWED_PATHS = [
   '/v2/sp/campaigns', '/v2/sp/adGroups', '/v2/sp/keywords', '/v2/sp/negativeKeywords',
   '/sp/negativeKeywords', '/sp/negativeKeywords/list',
   '/sp/targets', '/sp/targets/list', '/v2/sp/targets',
+  '/adsApi/v1/create/targets',
   '/v2/profiles',
   '/reporting/reports',
 ];
@@ -36,7 +36,7 @@ async function callAmazonApi(
   headers: Record<string, string>,
   payload: any,
   maxAttempts = 3
-): Promise<{ ok: boolean; status: number; payload: any; errors: any[] }> {
+): Promise<{ ok: boolean; status: number; payload: any; errors: any[]; headers?: Record<string, string | null> }> {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let lastResult: any = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -60,7 +60,12 @@ async function callAmazonApi(
         ok,
         status: response.status,
         payload: parsed,
-        errors: ok ? [] : [{ code: String(response.status), message: text.slice(0, 300) }],
+        headers: {
+          request_id: response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id'),
+          retry_after: response.headers.get('Retry-After'),
+          rate_limit: response.headers.get('x-amzn-RateLimit-Limit'),
+        },
+        errors: ok ? [] : [{ code: String(response.status), message: text.slice(0, 500) }],
       };
 
       if (ok || !retryable || attempt === maxAttempts - 1) break;
@@ -102,7 +107,6 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Endpoint Ads não permitido' }, { status: 403 });
     }
 
-    // ── Buscar conta ─────────────────────────────────────────────────────────
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
       { id: body.amazon_account_id }, null, 1
     );
@@ -112,14 +116,14 @@ Deno.serve(async (request) => {
     }
 
     const profileId = body.profile_id || account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-    if (!profileId) {
+    if (!profileId && path !== '/v2/profiles') {
       return Response.json({ ok: false, error: 'ads_profile_id não configurado' }, { status: 400 });
     }
     const baseUrl = adsBase(account.region);
     const url = `${baseUrl}${path}`;
     const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID');
 
-    // ── Função interna: montar headers com token ─────────────────────────────
     async function buildHeaders(forceRefresh = false): Promise<{ headers: Record<string, string>; tokenResult: any }> {
       const tokenResult = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
         amazon_account_id: body.amazon_account_id,
@@ -132,35 +136,42 @@ Deno.serve(async (request) => {
         throw {
           tokenError: true,
           error_type: tData.error_type || 'token_unavailable',
+          amazon_error_code: tData.amazon_error_code,
           message: tData.message || 'Falha ao obter token Amazon Ads',
           requires_reauthorization: tData.requires_reauthorization,
+          credentials_error: tData.credentials_error,
+          retryable: tData.retryable,
         };
       }
 
-      return {
-        tokenResult: tData,
-        headers: {
-          Authorization: `Bearer ${tData.access_token}`,
-          'Amazon-Advertising-API-ClientId': clientId,
-          'Amazon-Advertising-API-Scope': String(profileId),
-          'Content-Type': body.content_type || 'application/json',
-          Accept: body.accept || body.content_type || 'application/json',
-        },
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${tData.access_token}`,
+        'Amazon-Advertising-API-ClientId': clientId,
+        'Content-Type': body.content_type || 'application/json',
+        Accept: body.accept || body.content_type || 'application/json',
       };
+      if (profileId) headers['Amazon-Advertising-API-Scope'] = String(profileId);
+      if (adsAccountId) headers['Amazon-Ads-AccountId'] = String(adsAccountId);
+
+      return { tokenResult: tData, headers };
     }
 
-    // ── Primeira tentativa ───────────────────────────────────────────────────
     let { headers } = await buildHeaders(false);
     let result = await callAmazonApi(url, method, headers, body.payload ?? null, Number(body.max_attempts || 1));
 
-    // ── Retry único em 401/403 (token expirado mid-request) ─────────────────
     if ((result.status === 401 || result.status === 403)) {
       console.log(`[adsCommand] ${result.status} recebido — forçando refresh e retentando uma vez`);
       try {
-        const { headers: headers2 } = await buildHeaders(true); // force_refresh
+        const { headers: headers2 } = await buildHeaders(true);
         result = await callAmazonApi(url, method, headers2, body.payload ?? null, 1);
         if (result.status === 401 || result.status === 403) {
-          // Falhou mesmo após refresh — reautorização necessária
+          await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
+            ads_token_status: 'revoked',
+            ads_requires_reauth: true,
+            ads_token_last_error: `401/403 após refresh em ${method} ${path}`,
+            status: 'error',
+            error_message: 'Reautorização necessária: Amazon Ads retornou 401/403 após refresh do token.',
+          }).catch(() => {});
           return Response.json({
             ok: false,
             status: result.status,
@@ -174,17 +185,19 @@ Deno.serve(async (request) => {
           return Response.json({
             ok: false,
             error_type: tokenErr.error_type,
+            amazon_error_code: tokenErr.amazon_error_code,
             message: tokenErr.message,
             requires_reauthorization: tokenErr.requires_reauthorization,
-          });
+            credentials_error: tokenErr.credentials_error,
+            retryable: tokenErr.retryable,
+          }, { status: tokenErr.credentials_error ? 400 : 401 });
         }
         throw tokenErr;
       }
     }
 
-    // ── Rate limit (429) ─────────────────────────────────────────────────────
     if (result.status === 429) {
-      console.warn(`[adsCommand] 429 rate limit em ${path}`);
+      const retryAfter = Number(result.headers?.retry_after || body.retry_after_seconds || 60) || 60;
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: account.id,
         operation: `amazon_api:rate_limit:${method}:${path}`,
@@ -193,19 +206,20 @@ Deno.serve(async (request) => {
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
         records_processed: 0,
-        error_message: 'Rate limit Amazon Ads (429)',
+        error_message: `Rate limit Amazon Ads (429). Retry-After=${retryAfter}`,
       }).catch(() => {});
 
       return Response.json({
         ok: false,
         status: 429,
         rate_limited: true,
+        retryable: true,
+        request_id: result.headers?.request_id,
+        retry_after_seconds: retryAfter,
         message: 'Comando recebido. A Amazon limitou a taxa de requisições, então a ação será efetivada em alguns instantes.',
-        retry_after_seconds: 60,
       });
     }
 
-    // ── Log de auditoria (sem tokens) ────────────────────────────────────────
     if (!result.ok) {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: account.id,
@@ -216,6 +230,7 @@ Deno.serve(async (request) => {
         completed_at: new Date().toISOString(),
         records_processed: 0,
         error_message: String(result.errors?.[0]?.message || '').slice(0, 500),
+        result_summary: JSON.stringify({ status: result.status, request_id: result.headers?.request_id }).slice(0, 1000),
       }).catch(() => {});
     }
 
@@ -226,9 +241,12 @@ Deno.serve(async (request) => {
       return Response.json({
         ok: false,
         error_type: error.error_type,
+        amazon_error_code: error.amazon_error_code,
         message: error.message,
         requires_reauthorization: error.requires_reauthorization,
-      }, { status: 401 });
+        credentials_error: error.credentials_error,
+        retryable: error.retryable,
+      }, { status: error.credentials_error ? 400 : 401 });
     }
     return Response.json({
       ok: false,
