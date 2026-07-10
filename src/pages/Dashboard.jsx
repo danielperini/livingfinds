@@ -690,12 +690,21 @@ export default function Dashboard() {
             {loading ? 'Carregando...' : account
               ? <><span className="text-emerald-400/80">{campaigns.length} campanhas</span> · {active_count} ativas · {products.length} produtos</>
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
-            {lastSyncInfo && (
-              <span className="flex items-center gap-1 text-slate-500 ml-1">
-                · <Clock className="w-3 h-3" />
-                Atualizado em {new Date(lastSyncInfo.at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
+            {lastSyncInfo && (() => {
+              const syncDate = new Date(lastSyncInfo.at);
+              const nextSync = new Date(syncDate.getTime() + 24 * 3600000);
+              const diffMs = nextSync.getTime() - Date.now();
+              const diffH = Math.floor(diffMs / 3600000);
+              const diffM = Math.floor((diffMs % 3600000) / 60000);
+              const nextLabel = diffMs <= 0 ? 'em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'min' : ''}` : `em ~${diffM}min`;
+              return (
+                <span className="flex items-center gap-1 text-slate-500 ml-1">
+                  · <Clock className="w-3 h-3" />
+                  Atualizado em {syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  <span className="text-slate-600">· Próximo sync {nextLabel}</span>
+                </span>
+              );
+            })()}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -749,11 +758,11 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
           <h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2>
           <div className="flex items-center gap-3 text-[10px] flex-wrap">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
-            {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {consolidatedChart.reduce((s, d) => s + (d.impressões || 0), 0).toLocaleString('pt-BR')}</span>
-            {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
+          {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+          {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">

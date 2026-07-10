@@ -108,10 +108,6 @@ Deno.serve(async (req) => {
     const accountId = job.amazon_account_id;
     const endDate = job.end_date;
 
-    // Limpar métricas antigas desta conta antes de inserir novas
-    await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: accountId }).catch(() => {});
-    await sleep(200);
-
     // Construir registros de métricas por data+campanha
     const metricsMap = new Map<string, any>();
 
@@ -199,8 +195,15 @@ Deno.serve(async (req) => {
     }));
 
     if (metricsRecords.length > 0) {
+      // Coletar datas únicas cobertas por este relatório
+      const datesToReplace = [...new Set(metricsRecords.map((r: any) => r.date))];
+      // Deletar apenas os registros das datas que serão substituídas (não toda a conta)
+      for (const d of datesToReplace) {
+        await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({ amazon_account_id: accountId, date: d }).catch(() => {});
+        await sleep(100);
+      }
       await bulkUpsertBatched(base44.asServiceRole.entities.CampaignMetricsDaily, metricsRecords);
-      console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros`);
+      console.log(`[downloadProcess] CampaignMetricsDaily: ${metricsRecords.length} registros em ${datesToReplace.length} datas`);
     }
 
     // ── Keyword (spTargeting) — upsert por keyword_id ──
