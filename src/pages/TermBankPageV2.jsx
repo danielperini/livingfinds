@@ -86,6 +86,7 @@ export default function TermBankPageV2() {
 
   const handleScheduleCampaign = useCallback(async (term) => {
     if (!account || schedulingId) return;
+    const scrollY = window.scrollY;
     setSchedulingId(term.id);
     setMessage(null);
     try {
@@ -98,10 +99,10 @@ export default function TermBankPageV2() {
       });
       const d = res?.data || {};
       if (d?.ok) {
-        setMessage({ type: 'success', text: d.message });
+        setMessage({ type: d.executed ? 'success' : 'info', text: d.message });
         setScheduledIds(prev => ({ ...prev, [term.id]: d.executed ? 'executed' : 'queued' }));
-      } else if (d?.already_exists) {
-        setMessage({ type: 'info', text: `Campanha já existe para "${term.term}".` });
+      } else if (d?.already_exists || d?.already_queued) {
+        setMessage({ type: 'info', text: d.error || `Campanha já existe ou está na fila para "${term.term}".` });
         setScheduledIds(prev => ({ ...prev, [term.id]: 'exists' }));
       } else {
         setMessage({ type: 'error', text: d?.error || 'Erro ao agendar campanha' });
@@ -110,6 +111,7 @@ export default function TermBankPageV2() {
       setMessage({ type: 'error', text: e.message });
     } finally {
       setSchedulingId(null);
+      setTimeout(() => window.scrollTo({ top: scrollY, behavior: 'instant' }), 100);
     }
   }, [account, schedulingId]);
 

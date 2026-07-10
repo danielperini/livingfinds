@@ -66,7 +66,7 @@ const VIEW_FILTERS = [
 
 
 function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const prodName = product?.product_name || product?.display_name || 'Produto';
   const imgUrl = product?.product_image_url;
 
@@ -350,32 +350,42 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
 
   const handleCreateCampaign = async (s) => {
     if (!account) return;
+    const scrollY = window.scrollY;
     setCreatingId(s.id);
     setMessage(null);
     try {
-      // Agendar para próxima janela (03:00-06:00 BRT) via createExactCampaignsFromAmazonSuggestions
-      // com bid inicial fixo de R$0,50 — gerido pelo motor após criação
-      const res = await base44.functions.invoke('createManualCampaignFromKeywordSuggestion', {
+      // Usa scheduleManualCampaignFromTerm: enfileira no ProductKickoffQueue
+      // respeitando as janelas operacionais (00h-04h e 13h-14h BRT)
+      const res = await base44.functions.invoke('scheduleManualCampaignFromTerm', {
         amazon_account_id: account.id,
-        suggestion_ids: [s.id],
-        overrides: { [s.id]: { bid: 0.50, budget: 15.00 } },
+        asin: s.asin,
+        keyword: s.keyword,
+        product_name: s.product_name || s.asin,
+        sku: s.sku || null,
       });
       const d = res?.data;
       if (d?.ok) {
-        const created = d.results?.find(r => r.id === s.id);
-        if (created?.ok) {
-          setMessage({ type: 'success', text: `✓ Campanha "${created.campaign_name}" criada · bid R$0,50 · gerida pelo app.` });
+        if (d.executed) {
+          setMessage({ type: 'success', text: `✓ Campanha criada agora para "${s.keyword}" · bid R$0,50 · gerida pelo app.` });
         } else {
-          setMessage({ type: 'error', text: created?.error || 'Erro ao criar campanha.' });
+          setMessage({ type: 'info', text: `⏰ Agendada para "${s.keyword}" — próxima janela: ${d.queue_window || 'em breve'}.` });
         }
+        // Marcar sugestão como queued/created no banco local para feedback visual
+        await base44.entities.KeywordSuggestion.update(s.id, {
+          status: d.executed ? 'created' : 'queued',
+        }).catch(() => {});
         onRefresh();
+      } else if (d?.already_exists || d?.already_queued) {
+        setMessage({ type: 'info', text: d.error || `Já existe campanha ou fila para "${s.keyword}".` });
       } else {
-        setMessage({ type: 'error', text: d?.error || 'Erro ao criar campanha.' });
+        setMessage({ type: 'error', text: d?.error || 'Erro ao agendar campanha.' });
       }
     } catch (e) {
       setMessage({ type: 'error', text: e.message });
     } finally {
       setCreatingId(null);
+      // Restaurar posição de scroll
+      setTimeout(() => window.scrollTo({ top: scrollY, behavior: 'instant' }), 100);
     }
   };
 
