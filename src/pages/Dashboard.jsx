@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo } from 'react'; // eslint-disable-line no-unused-vars
 import { base44 } from '@/api/base44Client';
-import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
+import { classifyCampaigns } from '@/lib/campaignUtils';
+import { useQueryClient } from '@tanstack/react-query';
+import { useAccountData, invalidateAccountData } from '@/hooks/useAccountData';
 import { Link } from 'react-router-dom';
 import {
   ComposedChart, AreaChart, Area, BarChart, Bar, LineChart, Line,
@@ -218,108 +220,32 @@ function GoalRow({ label, real, target, unit = '%', lowerIsBetter = true, realLa
 // ─── Dashboard principal ─────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [user, setUser] = useState(null);
-  const [account, setAccount] = useState(null);
-  const [campaigns, setCampaigns] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [metricsDaily, setMetricsDaily] = useState([]);
-  const [decisions, setDecisions] = useState([]);
-  const [allDecisions, setAllDecisions] = useState([]);
-  const [syncRuns, setSyncRuns] = useState([]);
-  const [bidChanges, setBidChanges] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [autopilotConfig, setAutopilotConfig] = useState(null);
-  const [lastSyncInfo, setLastSyncInfo] = useState(null);
+  const queryClient = useQueryClient();
   const [syncingDashboard, setSyncingDashboard] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
-  const [budgetCfg, setBudgetCfg] = useState(null);
-  const [sellerBenchmark, setSellerBenchmark] = useState(null);
-  const [salesDaily, setSalesDaily] = useState([]);
-  const autoSyncedRef = useRef(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const me = await base44.auth.me();
-      setUser(me);
-      const allAccounts = await base44.entities.AmazonAccount.filter({ user_id: me.id }, '-updated_date', 5);
-      const acc = allAccounts.find(a => a.status === 'connected') || allAccounts[0] || null;
-      setAccount(acc);
-      if (!acc) { setLoading(false); return; }
-      const aid = acc.id;
-      const safe_ = async (fn, fb = []) => { try { return await fn(); } catch (e) { if (String(e?.message).includes('429')) return fb; throw e; } };
+  // Camada única de dados compartilhada — React Query cuida de cache e dedup
+  const {
+    user, account,
+    campaigns, metricsDaily, products, salesDaily,
+    decisions, allDecisions,
+    bidChanges, syncRuns,
+    autopilotConfig, budgetCfg,
+    loading, error,
+  } = useAccountData();
 
-      // Carregar tudo em paralelo — elimina latência sequencial
-      const [cams, prods, metrics, decs, allDecs, runs, changes, apConfigs, budgCfgs, benchmarks, salesDailyData] = await Promise.all([
-        safe_(() => loadAllCampaigns(aid)),
-        safe_(() => base44.entities.Product.filter({ amazon_account_id: aid }, '-fba_inventory', 20)),
-        safe_(() => base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000)),
-        safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'pending' }, '-created_at', 10)),
-        safe_(() => base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 2000)),
-        safe_(() => base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 5)),
-        safe_(() => base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 2000)),
-        safe_(() => base44.entities.AutopilotConfig.filter({ amazon_account_id: aid })),
-        safe_(() => base44.entities.BudgetConfiguration.filter({ amazon_account_id: aid }), []),
-        safe_(() => base44.entities.SellerPerformanceBenchmark.filter({ amazon_account_id: aid }, '-period_end', 5), []),
-        safe_(() => {
-          const since60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
-          return base44.entities.SalesDaily.filter({ amazon_account_id: aid, date: { $gte: since60 } }, '-date', 1000);
-        }, []),
-      ]);
+  const loadData = useCallback(() => {
+    if (!account?.id) return;
+    invalidateAccountData(queryClient, account.id);
+  }, [queryClient, account?.id]);
 
-      setCampaigns(cams);
-      setProducts(prods);
-      setMetricsDaily(metrics);
-      setDecisions(decs);
-      setAllDecisions(allDecs);
-      setSyncRuns(runs);
-      setBidChanges(changes);
-      setAutopilotConfig(apConfigs[0] || null);
-      setBudgetCfg(budgCfgs[0] || null);
-      setSellerBenchmark(benchmarks[0] || null);
-      setSalesDaily(salesDailyData);
-
-      if (acc?.last_sync_at) setLastSyncInfo({ at: acc.last_sync_at });
-      else {
-        const last = runs.find(r => r.status === 'success' || r.status === 'skipped_limit');
-        if (last) setLastSyncInfo({ at: last.completed_at || last.started_at });
-      }
-
-      // Sync automático se gap > 2 dias e ainda não rodou nesta sessão
-      const yesterday_ = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-      const uniqueDatesAll = [...new Set(metrics.map(m => m.date).filter(Boolean))].sort();
-      const lastDataDate = uniqueDatesAll.length > 0 ? uniqueDatesAll[uniqueDatesAll.length - 1] : null;
-      const gapDays = lastDataDate ? Math.round((new Date(yesterday_).getTime() - new Date(lastDataDate).getTime()) / 86400000) : 0;
-      const needsSync = gapDays > 2;
-
-      if (needsSync && !autoSyncedRef.current) {
-        // Verificar cooldown de 23h para não sobrecarregar a API
-        const lastSyncAt = acc?.last_sync_at;
-        const ageHours = lastSyncAt ? (Date.now() - new Date(lastSyncAt).getTime()) / 3600000 : 999;
-        if (ageHours >= 23) {
-        autoSyncedRef.current = true;
-        setSyncingDashboard(true);
-        setSyncError(null);
-        base44.functions.invoke('syncAdsQuick', { amazon_account_id: aid })
-          .then(res => {
-            if (!res?.data?.ok) setSyncError(res?.data?.error || 'Sync automático falhou.');
-            else loadData();
-          })
-          .catch(e => setSyncError(e.message))
-          .finally(() => setSyncingDashboard(false));
-        }
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  // Último sync para subtexto do header
+  const lastSyncInfo = useMemo(() => {
+    if (account?.last_sync_at) return { at: account.last_sync_at };
+    const last = syncRuns.find(r => r.status === 'success' || r.status === 'skipped_limit');
+    return last ? { at: last.completed_at || last.started_at } : null;
+  }, [account, syncRuns]);
 
   const runSync = async () => {
     if (!account || syncingDashboard) return;
@@ -327,7 +253,7 @@ export default function Dashboard() {
     setSyncError(null);
     try {
       const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
-      if (res?.data?.ok) await loadData();
+      if (res?.data?.ok) invalidateAccountData(queryClient, account.id);
       else setSyncError(res?.data?.error || 'Falha no sync.');
     } catch (e) {
       setSyncError(e.message);
