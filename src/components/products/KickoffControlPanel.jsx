@@ -91,7 +91,12 @@ function KickoffRow({ item, onRetry }) {
           <span className={`text-[11px] font-semibold ${cfg.color}`}>{cfg.label}</span>
           {item.mode && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-3 text-slate-500 border border-surface-3">
-              {item.mode === 'auto_plus_four' ? 'AUTO + Manual' : 'Manual'}
+              {item.mode === 'auto_plus_four' ? 'AUTO + Manual' : 'Manual Exact'}
+            </span>
+          )}
+          {item.keyword && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-300 font-mono">
+              {item.keyword}
             </span>
           )}
         </div>
@@ -151,16 +156,20 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
       const records = await base44.entities.ProductKickoffQueue.filter(
         { amazon_account_id: accountId },
         '-created_date',
-        200
+        300
       );
-      // Deduplicar por ASIN — manter o mais recente
-      const byAsin = {};
+      // Deduplicar por ASIN+keyword — manual_only com keyword diferente são itens distintos
+      const seen = new Set();
+      const deduped = [];
       for (const r of records) {
         const asin = String(r.asin || '').trim().toUpperCase();
         if (!asin) continue;
-        if (!byAsin[asin]) byAsin[asin] = r;
+        const key = r.mode === 'manual_only' && r.keyword
+          ? `${asin}|${String(r.keyword).toLowerCase().trim()}`
+          : asin;
+        if (!seen.has(key)) { seen.add(key); deduped.push(r); }
       }
-      setItems(Object.values(byAsin));
+      setItems(deduped);
     } catch {
       setItems([]);
     } finally {
@@ -170,11 +179,15 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Recarregar quando um kickoff for enfileirado
+  // Recarregar quando um kickoff for enfileirado (produtos ou TermBank)
   useEffect(() => {
     const handler = () => setTimeout(load, 800);
     window.addEventListener('product-kickoff-queued', handler);
-    return () => window.removeEventListener('product-kickoff-queued', handler);
+    window.addEventListener('term-campaign-queued', handler);
+    return () => {
+      window.removeEventListener('product-kickoff-queued', handler);
+      window.removeEventListener('term-campaign-queued', handler);
+    };
   }, [load]);
 
   const counts = {

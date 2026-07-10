@@ -374,6 +374,8 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
         await base44.entities.KeywordSuggestion.update(s.id, {
           status: d.executed ? 'created' : 'queued',
         }).catch(() => {});
+        // Disparar evento global para atualizar o painel de fila (KickoffControlPanel)
+        window.dispatchEvent(new CustomEvent('term-campaign-queued', { detail: { asin: s.asin, keyword: s.keyword } }));
         onRefresh();
       } else if (d?.already_exists || d?.already_queued) {
         setMessage({ type: 'info', text: d.error || `Já existe campanha ou fila para "${s.keyword}".` });
@@ -384,7 +386,6 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
       setMessage({ type: 'error', text: e.message });
     } finally {
       setCreatingId(null);
-      // Restaurar posição de scroll
       setTimeout(() => window.scrollTo({ top: scrollY, behavior: 'instant' }), 100);
     }
   };
