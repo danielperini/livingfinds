@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
       'Accept': 'application/json',
     };
 
-    // Verificar status de cada relatório
+    // Verificar status de cada relatório (única chamada — automação faz retry periodicamente)
     console.log(`[adsReportPoll] Verificando ${Object.keys(reportIds).length} relatórios...`);
     const statuses = await Promise.all(
       Object.entries(reportIds).map(async ([key, rid]) => {
@@ -138,7 +138,7 @@ Deno.serve(async (req) => {
 
     console.log(`[adsReportPoll] ready=${ready.length} pending=${pending.length} failed=${failed.length}`);
 
-    // Se ainda há pendentes e nenhum pronto — aguardar próxima chamada
+    // Se ainda há pendentes e nenhum pronto — automação retentará no próximo ciclo
     if (pending.length > 0 && ready.length === 0) {
       return Response.json({ ok: true, ready: false, pending: pending.map(s => s.key), message: 'Relatórios ainda sendo gerados. Tente novamente em 15-20 min.' });
     }
