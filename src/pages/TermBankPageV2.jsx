@@ -101,7 +101,6 @@ export default function TermBankPageV2() {
       if (d?.ok) {
         setMessage({ type: d.executed ? 'success' : 'info', text: d.message });
         setScheduledIds(prev => ({ ...prev, [term.id]: d.executed ? 'executed' : 'queued' }));
-        // Disparar evento global para atualizar o painel de fila
         window.dispatchEvent(new CustomEvent('term-campaign-queued', { detail: { asin: term.asin, keyword: term.term } }));
       } else if (d?.already_exists || d?.already_queued) {
         setMessage({ type: 'info', text: d.error || `Campanha já existe ou está na fila para "${term.term}".` });
@@ -133,7 +132,8 @@ export default function TermBankPageV2() {
           type: 'success',
           text: `✓ ${d.terms_deleted} termos removidos · ${d.suggestions_archived} sugestões arquivadas · ${d.campaigns_archived} campanhas arquivadas${d.campaigns_failed > 0 ? ` · ${d.campaigns_failed} campanhas falharam` : ''}`
         });
-        load();
+        const scrollY = window.scrollY;
+        load().finally(() => requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' })));
       } else {
         setMessage({ type: 'error', text: d?.error || 'Erro ao limpar' });
       }

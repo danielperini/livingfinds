@@ -65,8 +65,7 @@ const VIEW_FILTERS = [
 { key: 'created', label: '✓ Criadas' }];
 
 
-function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter }) {
-  const [open, setOpen] = useState(false);
+function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, workingId, creatingId, viewFilter, open, onToggle }) {
   const prodName = product?.product_name || product?.display_name || 'Produto';
   const imgUrl = product?.product_image_url;
 
@@ -90,7 +89,7 @@ function ProductGroup({ asin, product, suggestions, onReject, onCreateCampaign, 
     <div className="rounded-xl border border-surface-2 bg-surface-1 overflow-hidden">
       {/* Header do grupo */}
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-2/40 transition-colors text-left">
         
         {open ? <ChevronDown className="w-4 h-4 text-slate-500 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-500 flex-shrink-0" />}
@@ -244,6 +243,16 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
   const [creating, setCreating] = useState(false);
   const [viewFilter, setViewFilter] = useState('all');
   const [sortGroupsBy, setSortGroupsBy] = useState('relevance'); // 'relevance' | 'count' | 'ready'
+  const [openGroups, setOpenGroups] = useState({}); // { [asin]: boolean }
+
+  const toggleGroup = (asin) => setOpenGroups((prev) => ({ ...prev, [asin]: !prev[asin] }));
+
+  // Wrapper que preserva scroll antes de chamar onRefresh
+  const refreshKeepScroll = () => {
+    const scrollY = window.scrollY;
+    onRefresh();
+    requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: 'instant' }));
+  };
 
   const productMap = Object.fromEntries(products.map((p) => [p.asin, p]));
 
@@ -343,14 +352,13 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
     setWorkingId(s.id);
     try {
       await base44.entities.KeywordSuggestion.update(s.id, { status: 'rejected' });
-      onRefresh();
+      refreshKeepScroll();
     } catch (e) {setMessage({ type: 'error', text: e.message });} finally
     {setWorkingId(null);}
   };
 
   const handleCreateCampaign = async (s) => {
     if (!account) return;
-    const scrollY = window.scrollY;
     setCreatingId(s.id);
     setMessage(null);
     try {
@@ -376,7 +384,7 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
         }).catch(() => {});
         // Disparar evento global para atualizar o painel de fila (KickoffControlPanel)
         window.dispatchEvent(new CustomEvent('term-campaign-queued', { detail: { asin: s.asin, keyword: s.keyword } }));
-        onRefresh();
+        refreshKeepScroll();
       } else if (d?.already_exists || d?.already_queued) {
         setMessage({ type: 'info', text: d.error || `Já existe campanha ou fila para "${s.keyword}".` });
       } else {
@@ -386,7 +394,6 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
       setMessage({ type: 'error', text: e.message });
     } finally {
       setCreatingId(null);
-      setTimeout(() => window.scrollTo({ top: scrollY, behavior: 'instant' }), 100);
     }
   };
 
@@ -502,7 +509,9 @@ export default function AmazonSuggestionsTab({ suggestions, products, account, o
           onCreateCampaign={handleCreateCampaign}
           workingId={workingId}
           creatingId={creatingId}
-          viewFilter={viewFilter} />
+          viewFilter={viewFilter}
+          open={!!openGroups[asin]}
+          onToggle={() => toggleGroup(asin)} />
 
         )}
         </div>
