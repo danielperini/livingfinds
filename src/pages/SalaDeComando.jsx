@@ -14,6 +14,7 @@ import EstrategiasTab from '@/components/sala/EstrategiasTab';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
+import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
 import {
   BarChart as ReBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -70,6 +71,7 @@ const TABS = [
   { id: 'autopilot', label: 'Automação IA' },
   { id: 'reparo', label: 'Reparo de Campanhas' },
   { id: 'sync_monitor', label: 'Monitor de Sync' },
+  { id: 'backup', label: 'Backup' },
 ];
 
 
@@ -1259,6 +1261,9 @@ export default function SalaDeComando() {
           {tab === 'sync_monitor' && account && (
             <SyncFailureMonitor amazonAccountId={account.id} />
           )}
+
+          {/* ── BACKUP ───────────────────────────────────────────────────────── */}
+          {tab === 'backup' && <BackupPanel />}
 
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
