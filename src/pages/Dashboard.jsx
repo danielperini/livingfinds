@@ -574,6 +574,8 @@ export default function Dashboard() {
   // ─── Orçamento e pacing ────────────────────────────────────────────────────
 
   const { active_count, paused_count } = useMemo(() => classifyCampaigns(campaigns), [campaigns]);
+  // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
+  const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
   const spendYesterday = useMemo(() => {
     const seen = new Set();
     let s = 0;
@@ -606,7 +608,6 @@ export default function Dashboard() {
   const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
   // Limite diário oficial — mesma fonte que o motor usa para guardrails
   const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
-  const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
 
   // ─── Header ───────────────────────────────────────────────────────────────
 
