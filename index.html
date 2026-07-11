@@ -11,6 +11,62 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        const applyDashboardChartAdjustments = () => {
+          const headings = Array.from(document.querySelectorAll('h2'));
+
+          const consolidatedTitle = headings.find((node) =>
+            node.textContent?.trim() === 'Gasto · Vendas · Faturamento Real'
+          );
+
+          if (consolidatedTitle) {
+            consolidatedTitle.textContent = 'Gasto Vendas Cliques Impressões e IA';
+            const card = consolidatedTitle.closest('.bg-surface-1');
+
+            if (card) {
+              const realRevenueLegend = Array.from(card.querySelectorAll('span')).find((node) =>
+                node.textContent?.trim().startsWith('Fat. Real:')
+              );
+              realRevenueLegend?.remove();
+
+              const description = Array.from(card.querySelectorAll('p')).find((node) =>
+                node.textContent?.includes('Todo o histórico disponível')
+              );
+              const orangeCurveLabel = description
+                ? Array.from(description.querySelectorAll('span')).find((node) =>
+                    node.textContent?.includes('curva laranja = faturamento real')
+                  )
+                : null;
+
+              if (orangeCurveLabel) {
+                const previousText = orangeCurveLabel.previousSibling;
+                if (previousText?.nodeType === Node.TEXT_NODE) {
+                  previousText.textContent = previousText.textContent.replace(/\s*·\s*$/, '');
+                }
+                orangeCurveLabel.remove();
+              }
+
+              card.querySelectorAll('svg path[stroke="#FB923C"], svg path[stroke="#fb923c"]').forEach((path) => {
+                path.style.display = 'none';
+              });
+            }
+          }
+
+          const comparisonTitle = headings.find((node) =>
+            node.textContent?.trim() === 'Comparação mês atual vs mês anterior'
+          );
+          if (comparisonTitle) {
+            comparisonTitle.textContent = 'Faturamento Atual x Mês Anterior';
+          }
+        };
+
+        const observer = new MutationObserver(applyDashboardChartAdjustments);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        window.addEventListener('DOMContentLoaded', applyDashboardChartAdjustments);
+        window.setTimeout(applyDashboardChartAdjustments, 500);
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
