@@ -1,6 +1,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
+const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid']);
+const WINDOW_HOURS = [0, 1, 2, 3, 13];
+const MAX_ATTEMPTS = 6;
+const DEFAULT_SPACING_MS = 2500;
+const DEFAULT_RUNTIME_MS = 240000;
 
 function brazilHour() {
   const parts = new Intl.DateTimeFormat('pt-BR', {
@@ -11,11 +16,30 @@ function brazilHour() {
   return Number(parts.find((part) => part.type === 'hour')?.value || 0);
 }
 
+function nextQueueHour(currentHour = brazilHour()) {
+  if (currentHour < 4) return Math.min(3, currentHour + 1);
+  if (currentHour < 13) return 13;
+  return 0;
+}
+
+function nextQueueDate(hour:number) {
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(hour, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
+  return target.toISOString();
+}
+
 function isUsableAccount(account:any) {
   const status = String(account?.status || '').toLowerCase();
   const connected = ['connected', 'active', 'enabled'].includes(status);
   const hasAdsContext = Boolean(account?.ads_profile_id || account?.ads_refresh_token);
   return connected || hasAdsContext;
+}
+
+function isTransientError(value:any) {
+  const text = JSON.stringify(value || '').toLowerCase();
+  return /(^|\D)(429|500|502|503|504|524)(\D|$)|rate.?limit|timeout|temporar|throttl/.test(text);
 }
 
 async function resolveAccounts(base44:any, requestedAccountId?:string|null) {
@@ -34,7 +58,22 @@ async function resolveAccounts(base44:any, requestedAccountId?:string|null) {
   return all.filter(isUsableAccount);
 }
 
+function dueBidDecision(decision:any, hour:number, recoveryMode:boolean) {
+  if (!BID_ACTIONS.has(String(decision?.action || ''))) return false;
+  if (decision?.decision_type && decision.decision_type !== 'bid_change') return false;
+  if (['executed', 'rejected', 'rolled_back', 'skipped'].includes(String(decision?.status || ''))) return false;
+  if (String(decision?.queue_status || '') === 'cancelled') return false;
+  if (Number(decision?.attempt_count || 0) >= MAX_ATTEMPTS) return false;
+
+  const retryAt = decision?.next_retry_at || decision?.scheduled_for;
+  if (retryAt && new Date(retryAt).getTime() > Date.now()) return false;
+  if (recoveryMode) return true;
+
+  return String(decision?.queue_status || '') === 'scheduled' && Number(decision?.queue_hour) === hour;
+}
+
 Deno.serve(async (request) => {
+  const startedAt = Date.now();
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
@@ -42,11 +81,14 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
     }
 
+    const recoveryMode = body.recovery_mode === true;
     const hour = Number(body.hour ?? brazilHour());
-    if (![0, 1, 2, 3, 13].includes(hour)) {
+    if (!recoveryMode && !WINDOW_HOURS.includes(hour)) {
       return Response.json({ ok: true, skipped: true, reason: 'Fora das janelas Amazon', hour });
     }
 
+    const spacingMs = Math.max(1500, Number(body.spacing_ms || DEFAULT_SPACING_MS));
+    const runtimeMs = Math.min(480000, Math.max(60000, Number(body.max_runtime_ms || DEFAULT_RUNTIME_MS)));
     const accounts = await resolveAccounts(base44, body.amazon_account_id || null);
     if (!accounts.length) {
       return Response.json({
@@ -62,12 +104,16 @@ Deno.serve(async (request) => {
         amazon_account_id: account.id,
         account_name: account.name || account.seller_name || null,
         hour,
-        products_ads_sync: null,
-        suggestions: [],
+        recovery_mode: recoveryMode,
         decisions: [],
-        kickoffs: [],
+        total_due: 0,
+        executed: 0,
+        retried: 0,
+        failed: 0,
+        remaining: 0,
       };
 
+      // Mantém sincronização operacional existente antes das escritas.
       try {
         const syncResponse = await base44.asServiceRole.functions.invoke('syncProductsAdsWindow', {
           amazon_account_id: account.id,
@@ -79,100 +125,36 @@ Deno.serve(async (request) => {
         result.products_ads_sync = { ok: false, error: error?.message || String(error) };
       }
 
-      const suggestions = hour === 13
-        ? []
-        : await base44.asServiceRole.entities.KeywordSuggestion.filter({
-            amazon_account_id: account.id,
-            status: 'approved',
-            queue_status: 'scheduled',
-            queue_hour: hour,
-          }, 'approved_at', 5).catch(() => []);
-
-      const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
+      const allDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
         amazon_account_id: account.id,
-        status: 'approved',
-        queue_status: 'scheduled',
-        queue_hour: hour,
-      }, 'created_at', 5).catch(() => []);
+      }, 'created_at', 1000).catch(() => []);
 
-      const kickoffs = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
-        amazon_account_id: account.id,
-        status: 'scheduled',
-        queue_hour: hour,
-      }, 'scheduled_at', 5).catch(() => []);
+      const due = allDecisions
+        .filter((item:any) => dueBidDecision(item, hour, recoveryMode))
+        .sort((a:any, b:any) => new Date(a.queued_at || a.created_at || 0).getTime() - new Date(b.queued_at || b.created_at || 0).getTime());
 
-      for (const item of kickoffs) {
-        if (item.scheduled_at && new Date(item.scheduled_at).getTime() > Date.now()) continue;
-        try {
-          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
-            status: 'processing',
-            started_at: new Date().toISOString(),
-            attempt_count: Number(item.attempt_count || 0) + 1,
-          });
-          const response = item.mode === 'manual_only'
-            ? await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
-                amazon_account_id: account.id,
-                asin: item.asin,
-                sku: item.sku || null,
-                product_name: item.product_name || item.asin,
-                keyword: item.keyword,
-                match_type: 'exact',
-                bid: 0.5,
-                _window_execution: true,
-                _service_role: true,
-              })
-            : await base44.asServiceRole.functions.invoke('autoKickoffProduct', {
-                amazon_account_id: account.id,
-                asin: item.asin,
-                sku: item.sku || null,
-                product_name: item.product_name || item.asin,
-                max_keywords: 4,
-                minimum_ai_confidence: 0.95,
-                _window_execution: true,
-                _service_role: true,
-              });
-          const data = response?.data || response || {};
-          const success = data?.ok !== false;
-          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
-            status: success ? 'completed' : 'failed',
-            completed_at: new Date().toISOString(),
-            last_error: success ? null : data?.error || data?.message || 'Falha no Kick-off',
-          });
-          result.kickoffs.push({ id: item.id, asin: item.asin, ok: success });
-        } catch (error) {
-          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
-            status: 'failed',
-            completed_at: new Date().toISOString(),
-            last_error: error?.message || String(error),
-          }).catch(() => {});
-          result.kickoffs.push({ id: item.id, asin: item.asin, ok: false, error: error?.message || String(error) });
+      result.total_due = due.length;
+
+      for (let index = 0; index < due.length; index++) {
+        if (Date.now() - startedAt >= runtimeMs) {
+          result.remaining = due.length - index;
+          break;
         }
-        await wait(14000);
-      }
 
-      for (const suggestion of suggestions) {
+        const decision = due[index];
         try {
-          const response = await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
-            amazon_account_id: account.id,
-            suggestion_ids: [suggestion.id],
-            _window_execution: true,
-            _service_role: true,
-          });
-          const item = response?.data?.results?.[0] || response?.results?.[0];
-          const success = Boolean(item?.ok || item?.already_exists);
-          await base44.asServiceRole.entities.KeywordSuggestion.update(suggestion.id, {
-            queue_status: success ? 'completed' : 'failed',
-            queue_processed_at: new Date().toISOString(),
-          });
-          result.suggestions.push({ id: suggestion.id, ok: success });
-        } catch (error) {
-          result.suggestions.push({ id: suggestion.id, ok: false, error: error?.message || String(error) });
-        }
-        await wait(14000);
-      }
+          // Recupera decisões antigas/temporariamente falhas antes da execução individual.
+          if (decision.status !== 'approved' || decision.queue_status !== 'scheduled') {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'approved',
+              queue_status: 'scheduled',
+              queue_hour: hour,
+              queue_window: recoveryMode ? 'recuperação imediata' : decision.queue_window,
+              error_message: null,
+              updated_at: new Date().toISOString(),
+            });
+          }
 
-      for (const decision of decisions.filter((item:any) => item.action !== 'pause_campaign')) {
-        try {
           const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
             decision_id: decision.id,
             decision_ids: [decision.id],
@@ -180,26 +162,76 @@ Deno.serve(async (request) => {
             _service_role: true,
           });
           const data = response?.data || response || {};
-          const success = Number(data?.executed || 0) > 0 || data?.results?.some((item:any) => item.ok);
-          result.decisions.push({ id: decision.id, ok: Boolean(success), action: decision.action });
+          const item = data?.results?.find((row:any) => row.id === decision.id) || data?.results?.[0] || data;
+          const success = Number(data?.executed || 0) > 0 || item?.status === 'executed' || item?.ok === true;
+
+          if (success) {
+            result.executed++;
+            result.decisions.push({ id: decision.id, ok: true, status: 'executed', action: decision.action });
+          } else if (isTransientError(item)) {
+            const nextHour = nextQueueHour(hour);
+            const retryAt = nextQueueDate(nextHour);
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'approved',
+              queue_status: 'scheduled',
+              queue_hour: nextHour,
+              queue_window: nextHour === 13 ? '13:00-14:00' : `${String(nextHour).padStart(2, '0')}:00-${String(nextHour + 1).padStart(2, '0')}:00`,
+              scheduled_for: retryAt,
+              next_retry_at: retryAt,
+              error_message: String(item?.error || data?.error || 'Falha temporária Amazon').slice(0, 500),
+              updated_at: new Date().toISOString(),
+            });
+            result.retried++;
+            result.decisions.push({ id: decision.id, ok: false, status: 'retry_scheduled', next_retry_at: retryAt, error: item?.error || data?.error || null });
+          } else {
+            result.failed++;
+            result.decisions.push({ id: decision.id, ok: false, status: 'failed', error: item?.error || data?.error || 'Falha Amazon' });
+          }
         } catch (error) {
-          result.decisions.push({ id: decision.id, ok: false, action: decision.action, error: error?.message || String(error) });
+          const nextHour = nextQueueHour(hour);
+          const retryAt = nextQueueDate(nextHour);
+          const attempts = Number(decision.attempt_count || 0) + 1;
+          if (attempts < MAX_ATTEMPTS) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'approved',
+              queue_status: 'scheduled',
+              queue_hour: nextHour,
+              scheduled_for: retryAt,
+              next_retry_at: retryAt,
+              error_message: String(error?.message || error).slice(0, 500),
+              updated_at: new Date().toISOString(),
+            }).catch(() => {});
+            result.retried++;
+          } else {
+            result.failed++;
+          }
+          result.decisions.push({ id: decision.id, ok: false, status: attempts < MAX_ATTEMPTS ? 'retry_scheduled' : 'failed', error: error?.message || String(error) });
         }
-        await wait(14000);
+
+        if (index < due.length - 1) await wait(spacingMs);
+      }
+
+      if (result.remaining === 0) {
+        const remainingRows = await base44.asServiceRole.entities.OptimizationDecision.filter({
+          amazon_account_id: account.id,
+        }, 'created_at', 1000).catch(() => []);
+        result.remaining = remainingRows.filter((item:any) => dueBidDecision(item, hour, recoveryMode)).length;
       }
 
       output.push(result);
     }
 
+    const totalRemaining = output.reduce((sum, item) => sum + Number(item.remaining || 0), 0);
     return Response.json({
-      ok: true,
+      ok: output.every((item) => item.failed === 0),
       hour,
-      account_resolution: body.amazon_account_id ? 'explicit' : 'automatic',
+      recovery_mode: recoveryMode,
       accounts_processed: accounts.length,
-      windows: ['00:00-04:00', '13:00-14:00'],
-      spacing_seconds: 14,
-      products_ads_auto_sync: true,
-      max_items_per_account: 15,
+      spacing_ms: spacingMs,
+      max_attempts: MAX_ATTEMPTS,
+      queue_policy: 'sequential_until_empty',
+      continuation_required: totalRemaining > 0,
+      remaining: totalRemaining,
       results: output,
     });
   } catch (error) {
