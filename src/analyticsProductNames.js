@@ -34,7 +34,7 @@ async function loadProducts() {
       '-updated_at',
       2000
     );
-    productMap = new Map(products.filter((p) => p.asin).map((p) => [String(p.asin), productName(p)]));
+    productMap = new Map(products.filter((p) => p.asin).map((p) => [String(p.asin).trim(), productName(p)]));
     return productMap;
   } catch {
     return new Map();
@@ -71,7 +71,7 @@ function enhanceProductTable(map) {
   if (!headers.length) return;
 
   let titleIndex = headers.findIndex((cell) => ['Título do produto', 'Nome do produto'].includes(cell.textContent?.trim()));
-  const asinIndex = headers.findIndex((cell) => cell.textContent?.trim() === 'ASIN');
+  let asinIndex = headers.findIndex((cell) => cell.textContent?.trim() === 'ASIN');
   if (asinIndex < 0) return;
 
   if (titleIndex < 0) {
@@ -80,27 +80,42 @@ function enhanceProductTable(map) {
     th.className = headers[asinIndex].className;
     headerRow.insertBefore(th, headers[asinIndex]);
     titleIndex = asinIndex;
+    asinIndex += 1;
   } else {
-    headers[titleIndex].textContent = 'Título do produto';
+    headerRow.children[titleIndex].textContent = 'Título do produto';
   }
 
   table.querySelectorAll('tbody tr').forEach((row) => {
-    if (row.dataset.productNameEnhanced === 'true') return;
     const cells = Array.from(row.children);
-    const adjustedAsinIndex = titleIndex <= asinIndex ? asinIndex + 1 : asinIndex;
-    const asin = cells[adjustedAsinIndex]?.textContent?.trim();
-    if (!asin || !map.has(asin)) return;
+    if (!cells.length || cells.length === 1) return;
 
-    const td = document.createElement('td');
-    td.textContent = map.get(asin);
-    td.title = map.get(asin);
-    td.className = 'px-4 py-3 text-slate-200 min-w-[240px]';
-    row.insertBefore(td, cells[titleIndex] || null);
+    const asinCellIndex = cells.findIndex((cell) => /^B0[A-Z0-9]{8}$/.test(cell.textContent?.trim() || ''));
+    if (asinCellIndex < 0) return;
+
+    const asin = cells[asinCellIndex].textContent.trim();
+    const name = map.get(asin);
+    if (!name) return;
+
+    const existingTitleCell = cells.length === headerRow.children.length ? cells[titleIndex] : null;
+    const existingLooksLikeTitle = existingTitleCell && !/^B0[A-Z0-9]{8}$/.test(existingTitleCell.textContent?.trim() || '');
+
+    if (existingLooksLikeTitle) {
+      existingTitleCell.textContent = name;
+      existingTitleCell.title = name;
+      existingTitleCell.className = 'px-4 py-3 text-slate-200 min-w-[240px]';
+    } else {
+      const td = document.createElement('td');
+      td.textContent = name;
+      td.title = name;
+      td.className = 'px-4 py-3 text-slate-200 min-w-[240px]';
+      row.insertBefore(td, row.children[titleIndex] || null);
+    }
+
     row.dataset.productNameEnhanced = 'true';
   });
 
   const emptyCell = table.querySelector('tbody td[colspan]');
-  if (emptyCell) emptyCell.setAttribute('colspan', '10');
+  if (emptyCell) emptyCell.setAttribute('colspan', String(headerRow.children.length));
 }
 
 async function apply() {
