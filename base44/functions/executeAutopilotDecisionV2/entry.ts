@@ -26,13 +26,27 @@ function evaluationDays(action: string) {
   return 7;
 }
 
+// Mapa de content-type por rota v3
+const V3_CONTENT_TYPES: Record<string, string> = {
+  '/sp/keywords': 'application/vnd.spkeyword.v3+json',
+  '/sp/keywords/list': 'application/vnd.spkeyword.v3+json',
+  '/sp/campaigns': 'application/vnd.spcampaign.v3+json',
+  '/sp/campaigns/list': 'application/vnd.spcampaign.v3+json',
+  '/sp/adGroups': 'application/vnd.spadgroup.v3+json',
+  '/sp/adGroups/list': 'application/vnd.spadgroup.v3+json',
+  '/sp/negativeKeywords': 'application/vnd.spnegativekeyword.v3+json',
+};
+
 async function ads(base44: any, accountId: string, operation: string, method: string, path: string, payload: any) {
+  const ct = V3_CONTENT_TYPES[path] || 'application/json';
   const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
     amazon_account_id: accountId,
     operation,
     method,
     path,
     payload,
+    content_type: ct,
+    accept: ct,
     _service_role: true,
   });
   return response?.data || response || {};
@@ -111,26 +125,50 @@ Deno.serve(async (request) => {
       let response: any;
       if (['reduce_bid', 'increase_bid', 'update_bid'].includes(decision.action)) {
         const isAdGroup = decision.entity_type === 'ad_group';
-        const path = isAdGroup ? '/v2/sp/adGroups' : '/v2/sp/keywords';
-        const payload = isAdGroup
-          ? [{ adGroupId: String(decision.entity_id), defaultBid: Number(decision.value_after) }]
-          : [{ keywordId: String(decision.entity_id || decision.keyword_id), bid: Number(decision.value_after) }];
-        response = await ads(base44, decision.amazon_account_id, 'updateBid', 'PUT', path, payload);
+        if (isAdGroup) {
+          // Ad groups: API v3
+          response = await ads(base44, decision.amazon_account_id, 'updateBid', 'PUT', '/sp/adGroups', {
+            adGroups: [{ adGroupId: String(decision.entity_id), defaultBid: Number(decision.value_after) }],
+          });
+        } else {
+          // Keywords: API v3
+          response = await ads(base44, decision.amazon_account_id, 'updateBid', 'PUT', '/sp/keywords', {
+            keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), bid: Number(decision.value_after) }],
+          });
+          // Normalizar resposta v3 (payload.keywords.success)
+          const v3payload = response?.payload?.keywords;
+          if (v3payload) {
+            const hasSuccess = v3payload.success?.length > 0;
+            const hasError = v3payload.error?.length > 0;
+            response = { ...response, ok: hasSuccess && !hasError, success: v3payload.success, errors: v3payload.error || [] };
+          }
+        }
       } else if (['update_budget', 'reduce_budget', 'increase_budget'].includes(decision.action)) {
-        response = await ads(base44, decision.amazon_account_id, 'updateCampaignBudget', 'PUT', '/v2/sp/campaigns', [{
-          campaignId: String(decision.campaign_id || decision.entity_id),
-          dailyBudget: Number(decision.value_after),
-        }]);
+        // Budgets: API v3
+        response = await ads(base44, decision.amazon_account_id, 'updateCampaignBudget', 'PUT', '/sp/campaigns', {
+          campaigns: [{
+            campaignId: String(decision.campaign_id || decision.entity_id),
+            budget: { budgetType: 'DAILY', budget: Number(decision.value_after) },
+          }],
+        });
       } else if (decision.action === 'pause_campaign' || decision.action === 'enable_campaign') {
-        response = await ads(base44, decision.amazon_account_id, decision.action, 'PUT', '/v2/sp/campaigns', [{
-          campaignId: String(decision.campaign_id || decision.entity_id),
-          state: decision.action === 'pause_campaign' ? 'paused' : 'enabled',
-        }]);
+        // Campanhas: API v3
+        response = await ads(base44, decision.amazon_account_id, decision.action, 'PUT', '/sp/campaigns', {
+          campaigns: [{
+            campaignId: String(decision.campaign_id || decision.entity_id),
+            state: decision.action === 'pause_campaign' ? 'PAUSED' : 'ENABLED',
+          }],
+        });
       } else if (decision.action === 'pause_keyword') {
-        response = await ads(base44, decision.amazon_account_id, 'pauseKeyword', 'PUT', '/v2/sp/keywords', [{
-          keywordId: String(decision.entity_id || decision.keyword_id),
-          state: 'paused',
-        }]);
+        // Pausar keyword: API v3
+        response = await ads(base44, decision.amazon_account_id, 'pauseKeyword', 'PUT', '/sp/keywords', {
+          keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), state: 'PAUSED' }],
+        });
+        const v3payload = response?.payload?.keywords;
+        if (v3payload) {
+          const hasSuccess = v3payload.success?.length > 0;
+          response = { ...response, ok: hasSuccess, success: v3payload.success, errors: v3payload.error || [] };
+        }
       } else if (['negative_exact', 'negative_keyword'].includes(decision.action)) {
         response = await ads(base44, decision.amazon_account_id, 'createNegativeKeyword', 'POST', '/v2/sp/negativeKeywords', [{
           campaignId: String(decision.campaign_id),
