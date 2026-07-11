@@ -27,15 +27,22 @@ function errorText(data: any) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+function stockQuantity(product: any) {
+  return Number(product?.fba_inventory ?? product?.available_quantity ?? product?.fulfillable_quantity ?? 0);
+}
+
 function isOutOfStock(product: any) {
-  const quantity = Number(product?.fba_inventory ?? product?.available_quantity ?? product?.fulfillable_quantity ?? 0);
-  return product?.inventory_status === 'out_of_stock' || quantity <= 0;
+  return !product || product?.inventory_status === 'out_of_stock' || stockQuantity(product) <= 0;
 }
 
 function classify(data: any) {
   const text = errorText(data).toLowerCase();
   const status = Number(data?.status || data?.statusCode || 0);
-  const outOfStock = data?.reason === 'out_of_stock' || text.includes('sem estoque') || text.includes('out_of_stock');
+  const outOfStock = data?.reason === 'out_of_stock'
+    || text.includes('sem estoque')
+    || text.includes('out_of_stock')
+    || text.includes('out of stock')
+    || text.includes('inventory unavailable');
   const duplicate = status === 409 || text.includes('duplicate') || text.includes('already exists') || text.includes('já existe');
   const auth = status === 401 || status === 403 || text.includes('unauthorized') || text.includes('forbidden');
   const timeout = status === 524 || status === 504 || text.includes('524') || text.includes('504') || text.includes('timeout') || text.includes('time limit');
@@ -44,26 +51,41 @@ function classify(data: any) {
   return { text, status, outOfStock, duplicate, auth, timeout, throttled, malformed };
 }
 
+async function setWaitingStock(base44: any, item: any, product: any, reason = 'Produto sem estoque confirmado pela SP-API') {
+  await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+    status: 'waiting_stock',
+    started_at: null,
+    completed_at: null,
+    scheduled_at: null,
+    last_error: reason,
+    waiting_stock_since: item.waiting_stock_since || new Date().toISOString(),
+    stock_quantity_at_wait: stockQuantity(product),
+  }).catch(() => {});
+}
+
 async function cleanupQueue(base44: any, accountId?: string) {
-  const statuses = ['scheduled', 'failed', 'processing'];
+  const statuses = ['scheduled', 'failed', 'processing', 'waiting_stock'];
   const rows: any[] = [];
   for (const status of statuses) {
     const found = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
       ...(accountId ? { amazon_account_id: accountId } : {}),
       status,
-    }, '-scheduled_at', 200).catch(() => []);
+    }, '-scheduled_at', 500).catch(() => []);
     rows.push(...found);
   }
 
   const productCache = new Map<string, any>();
-  let removedOutOfStock = 0;
+  let waitingStock = 0;
+  let resumedFromStock = 0;
   let unlocked = 0;
+  let duplicatesRemoved = 0;
   const seen = new Set<string>();
 
   for (const item of rows) {
     const key = `${item.amazon_account_id}|${item.asin}|${item.mode}|${String(item.keyword || '').trim().toLowerCase()}`;
     if (seen.has(key) && item.status !== 'processing') {
       await base44.asServiceRole.entities.ProductKickoffQueue.delete(item.id).catch(() => {});
+      duplicatesRemoved++;
       continue;
     }
     seen.add(key);
@@ -78,9 +100,24 @@ async function cleanupQueue(base44: any, accountId?: string) {
     }
     const product = productCache.get(productKey);
 
-    if (!product || isOutOfStock(product)) {
-      await base44.asServiceRole.entities.ProductKickoffQueue.delete(item.id).catch(() => {});
-      removedOutOfStock++;
+    if (isOutOfStock(product)) {
+      if (item.status !== 'waiting_stock') {
+        await setWaitingStock(base44, item, product);
+        waitingStock++;
+      }
+      continue;
+    }
+
+    if (item.status === 'waiting_stock') {
+      await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+        status: 'scheduled',
+        scheduled_at: new Date().toISOString(),
+        started_at: null,
+        completed_at: null,
+        last_error: null,
+        stock_restored_at: new Date().toISOString(),
+      }).catch(() => {});
+      resumedFromStock++;
       continue;
     }
 
@@ -98,7 +135,12 @@ async function cleanupQueue(base44: any, accountId?: string) {
     }
   }
 
-  return { removed_out_of_stock: removedOutOfStock, unlocked };
+  return {
+    waiting_stock: waitingStock,
+    resumed_from_stock: resumedFromStock,
+    unlocked,
+    duplicates_removed: duplicatesRemoved,
+  };
 }
 
 Deno.serve(async (request) => {
@@ -114,7 +156,6 @@ Deno.serve(async (request) => {
     }
 
     const cleanup = await cleanupQueue(base44, body.amazon_account_id);
-
     const queue = (await base44.asServiceRole.entities.ProductKickoffQueue.filter({
       ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
       status: 'scheduled',
@@ -129,9 +170,9 @@ Deno.serve(async (request) => {
       }, '-updated_at', 1).catch(() => []);
       const product = products[0];
 
-      if (!product || isOutOfStock(product)) {
-        await base44.asServiceRole.entities.ProductKickoffQueue.delete(item.id).catch(() => {});
-        results.push({ id: item.id, asin: item.asin, ok: true, removed: true, reason: 'out_of_stock' });
+      if (isOutOfStock(product)) {
+        await setWaitingStock(base44, item, product);
+        results.push({ id: item.id, asin: item.asin, ok: true, waiting_stock: true, reason: 'out_of_stock' });
         continue;
       }
 
@@ -172,8 +213,8 @@ Deno.serve(async (request) => {
         const success = data?.ok === true || (flags.duplicate && data?.already_exists === true);
 
         if (flags.outOfStock) {
-          await base44.asServiceRole.entities.ProductKickoffQueue.delete(item.id).catch(() => {});
-          results.push({ id: item.id, asin: item.asin, ok: true, removed: true, reason: 'out_of_stock' });
+          await setWaitingStock(base44, item, product, errorText(data).slice(0, 500));
+          results.push({ id: item.id, asin: item.asin, ok: true, waiting_stock: true, reason: 'out_of_stock' });
           continue;
         }
 
@@ -181,6 +222,7 @@ Deno.serve(async (request) => {
           await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
             status: 'completed',
             completed_at: new Date().toISOString(),
+            started_at: null,
             last_error: null,
           });
           results.push({ id: item.id, asin: item.asin, ok: true, duplicate_resolved: flags.duplicate, response: data });
@@ -195,6 +237,7 @@ Deno.serve(async (request) => {
         await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
           status: retry ? 'scheduled' : 'failed',
           completed_at: retry ? null : new Date().toISOString(),
+          started_at: null,
           scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
           last_error: errorText(data).slice(0, 500),
         });
@@ -203,6 +246,13 @@ Deno.serve(async (request) => {
       } catch (error) {
         const text = String(error?.message || error);
         const flags = classify({ error: text });
+
+        if (flags.outOfStock) {
+          await setWaitingStock(base44, item, product, text.slice(0, 500));
+          results.push({ id: item.id, asin: item.asin, ok: true, waiting_stock: true, reason: 'out_of_stock' });
+          continue;
+        }
+
         const maxAttempts = Number(item.max_attempts || 5);
         const retry = attempts < maxAttempts;
         const backoffMs = flags.timeout ? 15 * 60000 : flags.malformed ? 2 * 60000 : 5 * 60000;
@@ -211,6 +261,7 @@ Deno.serve(async (request) => {
           status: retry ? 'scheduled' : 'failed',
           scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
           completed_at: retry ? null : new Date().toISOString(),
+          started_at: null,
           last_error: text.slice(0, 500),
         });
         results.push({ id: item.id, asin: item.asin, ok: false, retry_scheduled: retry, error: text });
