@@ -1,352 +1,212 @@
 /**
- * amazonAdsTokenManager v5 — Renovação profissional de tokens Amazon Ads
+ * amazonAdsTokenManager v6 — fonte única de access token Amazon Ads.
  *
- * Fonte única do refresh_token: AmazonAccount.ads_refresh_token.
- * ADS_REFRESH_TOKEN no ambiente é apenas migração/diagnóstico; não é usado operacionalmente.
+ * Prioridade do refresh token:
+ * 1. AmazonAccount.ads_refresh_token
+ * 2. ADS_REFRESH_TOKEN apenas como fallback operacional
+ *
+ * O access token é persistido no AmazonAccount para funcionar entre instâncias
+ * serverless diferentes. O lock também é persistido e sempre respeitado.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const memCache: Map<string, { access_token: string; expires_at: number }> = new Map();
+const SAFETY_MARGIN_MS = 5 * 60 * 1000;
+const LOCK_TTL_MS = 90 * 1000;
+const RETRY_DELAYS_MS = [0, 2000, 6000];
+const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function isExpiringSoon(expiresAt: string | undefined | null, marginSeconds = 300): boolean {
-  if (!expiresAt) return true;
-  const expMs = new Date(expiresAt).getTime();
-  if (!Number.isFinite(expMs)) return true;
-  return expMs - Date.now() < marginSeconds * 1000;
+function validRefreshToken(value:any) {
+  const token = String(value || '').trim();
+  return token.startsWith('Atzr|') && token.length >= 50;
 }
 
-function tokenGeneration(account: any): string {
-  return String(account.ads_token_generation || account.ads_refresh_token_updated_at || account.updated_at || 'legacy');
+function validAccessToken(account:any, marginMs = SAFETY_MARGIN_MS) {
+  const token = String(account?.ads_access_token || '').trim();
+  const expires = new Date(account?.ads_access_token_expires_at || 0).getTime();
+  return token.length > 20 && Number.isFinite(expires) && expires > Date.now() + marginMs;
 }
 
-function cacheKey(accountId: string, generation: string): string {
-  return `${accountId}:${generation}`;
-}
-
-function classifyLwaError(data: any, status: number) {
+function classifyLwaError(data:any, status:number) {
   const code = String(data?.error || 'unknown');
   const description = String(data?.error_description || data?.message || data?.error || `HTTP ${status}`);
-
-  if (code === 'invalid_client') {
-    return {
-      error_type: 'credentials_error',
-      message: 'ADS_CLIENT_ID ou ADS_CLIENT_SECRET inválidos para este refresh_token',
-      amazon_error_code: code,
-      status_code: status,
-      requires_reauthorization: false,
-      credentials_error: true,
-      retryable: false,
-      safe_message: description,
-    };
-  }
-
-  if (['invalid_grant', 'unauthorized_client', 'access_denied', 'authorization_code_used'].includes(code)) {
-    return {
-      error_type: 'invalid_grant',
-      message: description,
-      amazon_error_code: code,
-      status_code: status,
-      requires_reauthorization: true,
-      credentials_error: false,
-      retryable: false,
-      safe_message: description,
-    };
-  }
-
-  if (status === 429 || status >= 500) {
-    return {
-      error_type: 'temporary_network_error',
-      message: description,
-      amazon_error_code: code,
-      status_code: status,
-      requires_reauthorization: false,
-      credentials_error: false,
-      retryable: true,
-      safe_message: description,
-    };
-  }
-
-  return {
-    error_type: 'token_refresh_denied',
-    message: description,
-    amazon_error_code: code,
-    status_code: status,
-    requires_reauthorization: false,
-    credentials_error: false,
-    retryable: false,
-    safe_message: description,
-  };
+  if (code === 'invalid_client') return { error_type:'credentials_error', message:description, status_code:status, amazon_error_code:code, credentials_error:true, requires_reauthorization:false, retryable:false };
+  if (['invalid_grant','unauthorized_client','access_denied','authorization_code_used'].includes(code)) return { error_type:'invalid_grant', message:description, status_code:status, amazon_error_code:code, credentials_error:false, requires_reauthorization:true, retryable:false };
+  if (status === 429 || status >= 500) return { error_type:'temporary_network_error', message:description, status_code:status, amazon_error_code:code, credentials_error:false, requires_reauthorization:false, retryable:true };
+  return { error_type:'token_refresh_denied', message:description, status_code:status, amazon_error_code:code, credentials_error:false, requires_reauthorization:false, retryable:false };
 }
 
-async function fetchAccessToken(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+async function requestAccessToken(refreshToken:string) {
+  const clientId = String(Deno.env.get('ADS_CLIENT_ID') || '');
+  const clientSecret = String(Deno.env.get('ADS_CLIENT_SECRET') || '');
+  if (!clientId || !clientSecret) throw { error_type:'missing_credentials', message:'ADS_CLIENT_ID ou ADS_CLIENT_SECRET não configurados', credentials_error:true, requires_reauthorization:false, retryable:false };
 
-  if (!clientId || !clientSecret) {
-    throw {
-      error_type: 'missing_credentials',
-      message: 'ADS_CLIENT_ID ou ADS_CLIENT_SECRET não configurados',
-      requires_reauthorization: false,
-      credentials_error: true,
-      retryable: false,
-    };
-  }
-
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
+  const response = await fetch('https://api.amazon.com/auth/o2/token', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
+    body:new URLSearchParams({ grant_type:'refresh_token', refresh_token:refreshToken, client_id:clientId, client_secret:clientSecret }),
   });
-
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    const classified = classifyLwaError(data, res.status);
-    console.error(`[tokenManager] Amazon LWA error: ${classified.amazon_error_code} | HTTP ${res.status} | ${classified.safe_message}`);
-    throw classified;
-  }
-
-  if (!data?.access_token) {
-    throw {
-      error_type: 'token_refresh_denied',
-      message: 'Amazon LWA não retornou access_token',
-      requires_reauthorization: false,
-      credentials_error: false,
-      retryable: false,
-    };
-  }
-
-  return { access_token: data.access_token, expires_in: Number(data.expires_in || 3600) };
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw classifyLwaError(data, response.status);
+  if (!data?.access_token) throw { error_type:'token_refresh_denied', message:'Amazon LWA não retornou access_token', credentials_error:false, requires_reauthorization:false, retryable:false };
+  return { access_token:String(data.access_token), expires_in:Math.max(600, Number(data.expires_in || 3600)) };
 }
 
-async function logTokenEvent(base44: any, accountId: string, event: {
-  success: boolean;
-  error_type?: string;
-  error_message?: string;
-  status_code?: number;
-}) {
+async function readAccount(base44:any, accountId:string) {
+  const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id:accountId }, null, 1).catch(() => []);
+  return rows[0] || null;
+}
+
+async function logEvent(base44:any, accountId:string, status:string, summary:any) {
+  const now = new Date().toISOString();
   await base44.asServiceRole.entities.SyncExecutionLog.create({
-    amazon_account_id: accountId,
-    operation: `token:${event.success ? 'token_refresh_success' : (event.error_type || 'token_refresh_failed')}`,
-    status: event.success ? 'success' : 'error',
-    trigger_type: 'automatic',
-    started_at: new Date().toISOString(),
-    completed_at: new Date().toISOString(),
-    records_processed: event.success ? 1 : 0,
-    error_message: event.error_message ? event.error_message.slice(0, 500) : null,
+    amazon_account_id:accountId,
+    operation:'amazon_ads:token_manager_v6',
+    status,
+    trigger_type:'automatic',
+    started_at:now,
+    completed_at:now,
+    records_processed:status === 'success' ? 1 : 0,
+    result_summary:status === 'success' ? JSON.stringify(summary).slice(0, 4000) : null,
+    error_message:status === 'success' ? null : String(summary?.message || summary?.error || 'Falha de token').slice(0, 500),
   }).catch(() => {});
 }
 
 Deno.serve(async (req) => {
-  const t0 = Date.now();
+  const startedAt = Date.now();
+  let base44:any = null;
+  let accountId = '';
+  let lockOwned = false;
   try {
-    const base44 = createClientFromRequest(req);
+    base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
+    if (body._service_role !== true) return Response.json({ ok:false, error:'Uso interno apenas' }, { status:403 });
 
-    if (!body._service_role) {
-      return Response.json({ ok: false, error: 'Uso interno apenas' }, { status: 403 });
-    }
-
-    const accountId = body.amazon_account_id;
-    if (!accountId) {
-      return Response.json({ ok: false, error_type: 'missing_account_id', error: 'amazon_account_id obrigatório' }, { status: 400 });
-    }
-
+    accountId = String(body.amazon_account_id || '');
+    if (!accountId) return Response.json({ ok:false, error_type:'missing_account_id', error:'amazon_account_id obrigatório' }, { status:400 });
     const forceRefresh = body.force_refresh === true;
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
-    const account = accounts[0];
 
-    if (!account) {
-      return Response.json({ ok: false, error_type: 'account_not_found', error: 'Conta Amazon não encontrada' }, { status: 404 });
-    }
+    let account = await readAccount(base44, accountId);
+    if (!account) return Response.json({ ok:false, error_type:'account_not_found', error:'Conta Amazon não encontrada' }, { status:404 });
 
-    const dbRefreshToken = String(account.ads_refresh_token || '');
-    const envRefreshToken = String(Deno.env.get('ADS_REFRESH_TOKEN') || '');
-    const activeTokenSource = dbRefreshToken ? 'database' : 'missing';
-    const tokenConflict = !!(dbRefreshToken && envRefreshToken && dbRefreshToken !== envRefreshToken);
-    const generation = tokenGeneration(account);
-    const key = cacheKey(accountId, generation);
+    const dbRefreshToken = String(account.ads_refresh_token || '').trim();
+    const envRefreshToken = String(Deno.env.get('ADS_REFRESH_TOKEN') || '').trim();
+    const refreshToken = validRefreshToken(dbRefreshToken) ? dbRefreshToken : validRefreshToken(envRefreshToken) ? envRefreshToken : '';
+    const activeTokenSource = validRefreshToken(dbRefreshToken) ? 'database' : validRefreshToken(envRefreshToken) ? 'environment_fallback' : 'missing';
+    const tokenConflict = validRefreshToken(dbRefreshToken) && validRefreshToken(envRefreshToken) && dbRefreshToken !== envRefreshToken;
 
-    if (!dbRefreshToken || !dbRefreshToken.startsWith('Atzr|') || dbRefreshToken.length < 50) {
+    if (!refreshToken) {
       await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-        ads_token_status: 'missing',
-        ads_requires_reauth: true,
-        ads_token_last_error: 'refresh_token ausente ou inválido no banco',
-        ads_active_token_source: activeTokenSource,
-        ads_env_token_present: !!envRefreshToken,
-        ads_token_source_conflict: tokenConflict,
+        ads_token_status:'missing', ads_requires_reauth:true, ads_token_last_error:'refresh_token ausente ou inválido', ads_active_token_source:'missing', ads_env_token_present:validRefreshToken(envRefreshToken), ads_token_source_conflict:tokenConflict,
       }).catch(() => {});
-
-      return Response.json({
-        ok: false,
-        error_type: 'missing_refresh_token',
-        requires_reauthorization: true,
-        active_token_source: activeTokenSource,
-        env_token_present: !!envRefreshToken,
-        token_source_conflict: tokenConflict,
-        message: 'Sua autorização Amazon expirou, foi revogada ou não há refresh_token válido no banco. Clique em Reconectar Amazon Ads.',
-      });
+      return Response.json({ ok:false, error_type:'missing_refresh_token', requires_reauthorization:true, active_token_source:'missing', message:'Refresh token Amazon Ads ausente. Reconecte a conta.' });
     }
 
-    if (!forceRefresh) {
-      const mem = memCache.get(key);
-      if (mem && mem.expires_at > Date.now() + 300000) {
-        return Response.json({
-          ok: true,
-          access_token: mem.access_token,
-          expires_at: new Date(mem.expires_at).toISOString(),
-          from_cache: true,
-          source: 'memory',
-          token_generation: generation,
-          active_token_source: activeTokenSource,
-          env_token_present: !!envRefreshToken,
-          token_source_conflict: tokenConflict,
-        });
-      }
+    if (!forceRefresh && validAccessToken(account)) {
+      return Response.json({ ok:true, access_token:account.ads_access_token, expires_at:account.ads_access_token_expires_at, from_cache:true, source:'database', active_token_source:activeTokenSource, token_source_conflict:tokenConflict });
     }
 
-    const lockAge = account.ads_token_refresh_started_at
-      ? Date.now() - new Date(account.ads_token_refresh_started_at).getTime()
-      : Infinity;
-    const lockActive = account.ads_token_refresh_in_progress === true && lockAge < 60000;
-
-    if (lockActive && !forceRefresh) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const refreshed = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
-      const updatedAccount = refreshed[0];
-      const updatedGeneration = tokenGeneration(updatedAccount || account);
-      const updatedKey = cacheKey(accountId, updatedGeneration);
-      const mem2 = memCache.get(updatedKey);
-
-      if (updatedAccount && mem2 && mem2.expires_at > Date.now() + 60000 && !isExpiringSoon(updatedAccount.ads_access_token_expires_at, 60)) {
-        return Response.json({
-          ok: true,
-          access_token: mem2.access_token,
-          expires_at: new Date(mem2.expires_at).toISOString(),
-          from_cache: true,
-          source: 'memory_after_lock_wait',
-          token_generation: updatedGeneration,
-        });
+    const lockStarted = new Date(account.ads_token_refresh_started_at || 0).getTime();
+    const lockActive = account.ads_token_refresh_in_progress === true && Number.isFinite(lockStarted) && Date.now() - lockStarted < LOCK_TTL_MS;
+    if (lockActive) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await wait(1200);
+        account = await readAccount(base44, accountId);
+        if (account && validAccessToken(account, 60_000)) {
+          return Response.json({ ok:true, access_token:account.ads_access_token, expires_at:account.ads_access_token_expires_at, from_cache:true, source:'database_after_lock_wait', active_token_source:activeTokenSource });
+        }
+        if (!account?.ads_token_refresh_in_progress) break;
       }
+      if (account?.ads_token_refresh_in_progress) return Response.json({ ok:false, error_type:'refresh_in_progress', retryable:true, status_code:409, message:'Renovação de token já está em andamento.' }, { status:409 });
     }
 
     await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-      ads_token_refresh_in_progress: true,
-      ads_token_refresh_started_at: new Date().toISOString(),
-      ads_token_status: 'refreshing',
-      ads_active_token_source: activeTokenSource,
-      ads_env_token_present: !!envRefreshToken,
-      ads_token_source_conflict: tokenConflict,
-    }).catch(() => {});
+      ads_token_refresh_in_progress:true,
+      ads_token_refresh_started_at:new Date().toISOString(),
+      ads_token_status:'refreshing',
+      ads_active_token_source:activeTokenSource,
+      ads_env_token_present:validRefreshToken(envRefreshToken),
+      ads_token_source_conflict:tokenConflict,
+    });
+    lockOwned = true;
 
-    let tokenResult: { access_token: string; expires_in: number } | null = null;
-    let refreshError: any = null;
+    // Releitura após o lock evita renovar novamente se outra execução acabou primeiro.
+    account = await readAccount(base44, accountId);
+    if (!forceRefresh && validAccessToken(account)) {
+      await base44.asServiceRole.entities.AmazonAccount.update(accountId, { ads_token_refresh_in_progress:false, ads_token_refresh_started_at:null, ads_token_status:'active' }).catch(() => {});
+      lockOwned = false;
+      return Response.json({ ok:true, access_token:account.ads_access_token, expires_at:account.ads_access_token_expires_at, from_cache:true, source:'database_after_lock', active_token_source:activeTokenSource });
+    }
 
-    try {
-      tokenResult = await fetchAccessToken(dbRefreshToken);
-    } catch (err: any) {
-      refreshError = err;
+    let tokenResult:any = null;
+    let refreshError:any = null;
+    for (const delay of RETRY_DELAYS_MS) {
+      if (delay) await wait(delay);
+      try {
+        tokenResult = await requestAccessToken(refreshToken);
+        refreshError = null;
+        break;
+      } catch (error:any) {
+        refreshError = error;
+        if (error?.retryable !== true) break;
+      }
     }
 
     if (tokenResult) {
-      const expiresAt = new Date(Date.now() + (Math.max(tokenResult.expires_in, 600) - 300) * 1000).toISOString();
-
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + tokenResult.expires_in * 1000).toISOString();
       await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-        ads_token_refresh_in_progress: false,
-        ads_token_refresh_started_at: null,
-        ads_token_status: 'active',
-        ads_access_token_expires_at: expiresAt,
-        ads_last_token_refresh_at: new Date().toISOString(),
-        ads_token_last_error: null,
-        ads_requires_reauth: false,
-        ads_credentials_error: false,
-        ads_last_lwa_error_code: null,
-        ads_active_token_source: activeTokenSource,
-        ads_env_token_present: !!envRefreshToken,
-        ads_token_source_conflict: tokenConflict,
-        status: 'connected',
-        error_message: null,
-      }).catch(() => {});
-
-      memCache.set(key, {
-        access_token: tokenResult.access_token,
-        expires_at: new Date(expiresAt).getTime(),
+        ads_access_token:tokenResult.access_token,
+        ads_access_token_expires_at:expiresAt,
+        ads_last_token_refresh_at:now,
+        ads_last_verified_at:now,
+        ads_token_refresh_in_progress:false,
+        ads_token_refresh_started_at:null,
+        ads_token_status:'active',
+        ads_token_last_error:null,
+        ads_requires_reauth:false,
+        ads_credentials_error:false,
+        ads_last_lwa_error_code:null,
+        ads_last_lwa_status_code:null,
+        ads_active_token_source:activeTokenSource,
+        ads_env_token_present:validRefreshToken(envRefreshToken),
+        ads_token_source_conflict:tokenConflict,
+        status:'connected',
+        error_message:null,
       });
-
-      await logTokenEvent(base44, accountId, { success: true });
-
-      return Response.json({
-        ok: true,
-        access_token: tokenResult.access_token,
-        expires_at: expiresAt,
-        from_cache: false,
-        duration_ms: Date.now() - t0,
-        token_generation: generation,
-        active_token_source: activeTokenSource,
-        env_token_present: !!envRefreshToken,
-        token_source_conflict: tokenConflict,
-      });
+      lockOwned = false;
+      await logEvent(base44, accountId, 'success', { source:activeTokenSource, expires_at:expiresAt, duration_ms:Date.now() - startedAt });
+      return Response.json({ ok:true, access_token:tokenResult.access_token, expires_at:expiresAt, from_cache:false, source:'lwa_refresh', active_token_source:activeTokenSource, token_source_conflict:tokenConflict, duration_ms:Date.now() - startedAt });
     }
 
-    const errType = refreshError?.error_type || 'token_refresh_failed';
-    const safeMsg = String(refreshError?.safe_message || refreshError?.message || 'Erro desconhecido').slice(0, 300);
     const requiresReauth = refreshError?.requires_reauthorization === true;
     const credentialsError = refreshError?.credentials_error === true;
+    const transient = refreshError?.retryable === true;
+    const safeMessage = String(refreshError?.message || 'Falha ao renovar token Amazon Ads').slice(0, 500);
+    const stillUsable = validAccessToken(account, 30_000);
 
     await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-      ads_token_refresh_in_progress: false,
-      ads_token_refresh_started_at: null,
-      ads_token_status: credentialsError ? 'credentials_error' : requiresReauth ? 'revoked' : 'error',
-      ads_token_last_error: safeMsg,
-      ads_last_lwa_error_code: refreshError?.amazon_error_code || errType,
-      ads_last_lwa_status_code: refreshError?.status_code || null,
-      ads_requires_reauth: requiresReauth,
-      ads_credentials_error: credentialsError,
-      ads_active_token_source: activeTokenSource,
-      ads_env_token_present: !!envRefreshToken,
-      ads_token_source_conflict: tokenConflict,
-      ...(requiresReauth || credentialsError
-        ? { status: 'error', error_message: (credentialsError ? 'Erro de credenciais: ' : 'Reautorização necessária: ') + safeMsg }
-        : {}),
+      ads_token_refresh_in_progress:false,
+      ads_token_refresh_started_at:null,
+      ads_token_status:transient && stillUsable ? 'active' : credentialsError ? 'credentials_error' : requiresReauth ? 'revoked' : 'error',
+      ads_token_last_error:safeMessage,
+      ads_last_lwa_error_code:refreshError?.amazon_error_code || refreshError?.error_type || 'token_refresh_failed',
+      ads_last_lwa_status_code:refreshError?.status_code || null,
+      ads_requires_reauth:requiresReauth,
+      ads_credentials_error:credentialsError,
+      ...(requiresReauth || credentialsError ? { status:'error', error_message:safeMessage } : {}),
     }).catch(() => {});
+    lockOwned = false;
+    await logEvent(base44, accountId, transient ? 'warning' : 'error', refreshError || { message:safeMessage });
 
-    await logTokenEvent(base44, accountId, {
-      success: false,
-      error_type: errType,
-      error_message: `[${refreshError?.amazon_error_code || errType}] ${safeMsg}`,
-      status_code: refreshError?.status_code,
-    });
+    if (transient && stillUsable) {
+      return Response.json({ ok:true, access_token:account.ads_access_token, expires_at:account.ads_access_token_expires_at, from_cache:true, degraded:true, source:'database_fallback_after_transient_error', retryable:true, warning:safeMessage });
+    }
 
-    return Response.json({
-      ok: false,
-      error_type: errType,
-      amazon_error_code: refreshError?.amazon_error_code,
-      status_code: refreshError?.status_code,
-      requires_reauthorization: requiresReauth,
-      credentials_error: credentialsError,
-      retryable: refreshError?.retryable === true,
-      active_token_source: activeTokenSource,
-      env_token_present: !!envRefreshToken,
-      token_source_conflict: tokenConflict,
-      message: credentialsError
-        ? 'Credenciais Amazon Ads inválidas. Corrija ADS_CLIENT_ID e ADS_CLIENT_SECRET nos Secrets.'
-        : requiresReauth
-          ? 'Sua autorização Amazon expirou ou foi revogada. Clique em Reconectar Amazon Ads.'
-          : 'Conexão com a Amazon instável. Vamos tentar novamente em instantes.',
-      error_safe: safeMsg,
-      duration_ms: Date.now() - t0,
-    });
-
-  } catch (error: any) {
-    return Response.json({
-      ok: false,
-      error_type: 'internal_error',
-      error: String(error?.message || 'Erro interno no token manager').slice(0, 300),
-    }, { status: 500 });
+    return Response.json({ ok:false, error_type:refreshError?.error_type || 'token_refresh_failed', status_code:refreshError?.status_code, requires_reauthorization:requiresReauth, credentials_error:credentialsError, retryable:transient, active_token_source:activeTokenSource, message:safeMessage }, { status:transient ? 503 : 400 });
+  } catch (error:any) {
+    if (base44 && accountId && lockOwned) {
+      await base44.asServiceRole.entities.AmazonAccount.update(accountId, { ads_token_refresh_in_progress:false, ads_token_refresh_started_at:null, ads_token_status:'error', ads_token_last_error:String(error?.message || error).slice(0, 500) }).catch(() => {});
+    }
+    return Response.json({ ok:false, error_type:'internal_error', error:String(error?.message || 'Erro interno no token manager').slice(0, 500) }, { status:500 });
   }
 });
