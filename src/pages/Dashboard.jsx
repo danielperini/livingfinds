@@ -574,6 +574,8 @@ export default function Dashboard() {
   // ─── Orçamento e pacing ────────────────────────────────────────────────────
 
   const { active_count, paused_count } = useMemo(() => classifyCampaigns(campaigns), [campaigns]);
+  const canonicalSettings = canonicalContext?.settings || null;
+  const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
   // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
   const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
   const spendYesterday = useMemo(() => {
@@ -594,10 +596,6 @@ export default function Dashboard() {
   const avgDailySpend = uniqueDates.size > 0 ? safe(kpis.spend / uniqueDates.size) : 0;
 
   // ─── Metas — usa a MESMA cascata de fallback do motor determinístico ──────
-  // Prioridade: PerformanceSettings → AutopilotConfig → zeros (sem meta)
-  // canonicalContext.settings reflete exatamente o que o motor usou na última execução
-
-  const canonicalSettings = canonicalContext?.settings || null;
   const cfg = canonicalSettings || performanceSettings || autopilotConfig || {};
   // PerformanceSettings usa campos diretos; AutopilotConfig usa prefixo "maximum_"
   const targetAcos = cfg.target_acos || 0;
@@ -606,8 +604,6 @@ export default function Dashboard() {
   const targetTacos = cfg.target_tacos || 0;
   const targetCpc = cfg.target_cpc || 0;
   const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
-  // Limite diário oficial — mesma fonte que o motor usa para guardrails
-  const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
 
   // ─── Header ───────────────────────────────────────────────────────────────
 
