@@ -606,6 +606,38 @@ export default function Dashboard() {
   const targetCpc = cfg.target_cpc || 0;
   const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
 
+  // ─── Decisões — calculado fora do JSX para evitar IIFE ──────────────────
+  const decisionSummary = useMemo(() => {
+    if (!decisions.length && !allDecisions.length && !bidChanges.length) return null;
+    const total = allDecisions.length;
+    const executed = allDecisions.filter(d => d.status === 'executed' || d.status === 'approved').length;
+    const failed = allDecisions.filter(d => d.status === 'failed' || d.status === 'error').length;
+    const pending = allDecisions.filter(d => d.status === 'pending').length;
+    return {
+      total,
+      executed,
+      failed,
+      pending,
+      pctExecuted: total > 0 ? Math.round(executed / total * 100) : 0,
+      pctFailed: total > 0 ? Math.round(failed / total * 100) : 0,
+      pctPending: total > 0 ? Math.round(pending / total * 100) : 0,
+    };
+  }, [decisions, allDecisions, bidChanges]);
+
+  // ─── Próximo sync — calculado fora do JSX para evitar IIFE ──────────────
+  const nextSyncLabel = useMemo(() => {
+    if (!lastSyncInfo) return null;
+    const syncDate = new Date(lastSyncInfo.at);
+    const nextSync = new Date(syncDate.getTime() + 24 * 3600000);
+    const diffMs = nextSync.getTime() - Date.now();
+    const diffH = Math.floor(diffMs / 3600000);
+    const diffM = Math.floor((diffMs % 3600000) / 60000);
+    return {
+      syncDate,
+      label: diffMs <= 0 ? 'em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'min' : ''}` : `em ~${diffM}min`,
+    };
+  }, [lastSyncInfo]);
+
   // ─── Header ───────────────────────────────────────────────────────────────
 
   const hour = new Date().getHours();
@@ -623,21 +655,13 @@ export default function Dashboard() {
             {loading ? 'Carregando...' : account
               ? <><span className="text-emerald-400/80">{campaigns.length} campanhas</span> · {active_count} ativas · {products.length} produtos</>
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
-            {lastSyncInfo && (() => {
-              const syncDate = new Date(lastSyncInfo.at);
-              const nextSync = new Date(syncDate.getTime() + 24 * 3600000);
-              const diffMs = nextSync.getTime() - Date.now();
-              const diffH = Math.floor(diffMs / 3600000);
-              const diffM = Math.floor((diffMs % 3600000) / 60000);
-              const nextLabel = diffMs <= 0 ? 'em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'min' : ''}` : `em ~${diffM}min`;
-              return (
+            {nextSyncLabel && (
                 <span className="flex items-center gap-1 text-slate-500 ml-1">
                   · <Clock className="w-3 h-3" />
-                  Atualizado em {syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                  <span className="text-slate-600">· Próximo sync {nextLabel}</span>
+                  Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  <span className="text-slate-600">· Próximo sync {nextSyncLabel.label}</span>
                 </span>
-              );
-            })()}
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -832,7 +856,7 @@ export default function Dashboard() {
 
         {loading ? (
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-            {Array.from({length: 9}).map((_, i) => (
+            {Array.from({ length: 9 }).map((_, i) => (
               <div key={i} className="h-20 bg-surface-2 rounded-xl animate-pulse" />
             ))}
           </div>
@@ -910,9 +934,9 @@ export default function Dashboard() {
             <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Maior / Menor dia</p>
             {extraKpis.bestDay ? (
               <div className="space-y-1">
-                <p className="text-xs text-emerald-400 font-semibold">↑ {fmtBRL(extraKpis.bestDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({(() => { const [y,m,d]=extraKpis.bestDay.date.split('-'); return `${d}/${m}`; })()})</span></p>
+                <p className="text-xs text-emerald-400 font-semibold">↑ {fmtBRL(extraKpis.bestDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({fmtDateBR(extraKpis.bestDay.date)})</span></p>
                 {extraKpis.worstDay && extraKpis.worstDay.date !== extraKpis.bestDay.date && (
-                  <p className="text-xs text-red-400 font-semibold">↓ {fmtBRL(extraKpis.worstDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({(() => { const [y,m,d]=extraKpis.worstDay.date.split('-'); return `${d}/${m}`; })()})</span></p>
+                  <p className="text-xs text-red-400 font-semibold">↓ {fmtBRL(extraKpis.worstDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({fmtDateBR(extraKpis.worstDay.date)})</span></p>
                 )}
                 <p className="text-[9px] text-slate-600">Apenas dias com dados completos</p>
               </div>
@@ -1113,45 +1137,36 @@ export default function Dashboard() {
       )}
 
       {/* ── 8. RESUMO DE DECISÕES ────────────────────────────────────────────── */}
-      {(decisions.length > 0 || allDecisions.length > 0 || bidChanges.length > 0) && (() => {
-        const total = allDecisions.length;
-        const executed = allDecisions.filter(d => d.status === 'executed' || d.status === 'approved').length;
-        const failed = allDecisions.filter(d => d.status === 'failed' || d.status === 'error').length;
-        const pending = allDecisions.filter(d => d.status === 'pending').length;
-        const pctExecuted = total > 0 ? Math.round(executed / total * 100) : 0;
-        const pctFailed = total > 0 ? Math.round(failed / total * 100) : 0;
-        const pctPending = total > 0 ? Math.round(pending / total * 100) : 0;
-        return (
-          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
-              <Link to="/sala-de-comando" className="text-xs text-cyan hover:underline">Sala de Controle →</Link>
+      {decisionSummary && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
+            <Link to="/sala-de-comando" className="text-xs text-cyan hover:underline">Sala de Controle →</Link>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-surface-2 rounded-lg p-3">
+              <p className="text-[10px] text-slate-500 mb-1">Implementadas</p>
+              <p className="text-xl font-bold text-emerald-400">{decisionSummary.executed}</p>
+              <p className="text-[10px] text-slate-600 mt-0.5">{decisionSummary.pctExecuted}% do total</p>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="bg-surface-2 rounded-lg p-3">
-                <p className="text-[10px] text-slate-500 mb-1">Implementadas</p>
-                <p className="text-xl font-bold text-emerald-400">{executed}</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">{pctExecuted}% do total</p>
-              </div>
-              <div className="bg-surface-2 rounded-lg p-3">
-                <p className="text-[10px] text-slate-500 mb-1">Com erro</p>
-                <p className={`text-xl font-bold ${failed > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{failed}</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">{pctFailed}% do total</p>
-              </div>
-              <div className="bg-surface-2 rounded-lg p-3">
-                <p className="text-[10px] text-slate-500 mb-1">Pendentes</p>
-                <p className={`text-xl font-bold ${pending > 0 ? 'text-amber-400' : 'text-slate-400'}`}>{pending}</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">{pctPending}% do total</p>
-              </div>
-              <div className="bg-surface-2 rounded-lg p-3">
-                <p className="text-[10px] text-slate-500 mb-1">Ajustes de bid (30d)</p>
-                <p className="text-xl font-bold text-white">{totalChanges}</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">AdsBidChangeLog</p>
-              </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <p className="text-[10px] text-slate-500 mb-1">Com erro</p>
+              <p className={`text-xl font-bold ${decisionSummary.failed > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{decisionSummary.failed}</p>
+              <p className="text-[10px] text-slate-600 mt-0.5">{decisionSummary.pctFailed}% do total</p>
+            </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <p className="text-[10px] text-slate-500 mb-1">Pendentes</p>
+              <p className={`text-xl font-bold ${decisionSummary.pending > 0 ? 'text-amber-400' : 'text-slate-400'}`}>{decisionSummary.pending}</p>
+              <p className="text-[10px] text-slate-600 mt-0.5">{decisionSummary.pctPending}% do total</p>
+            </div>
+            <div className="bg-surface-2 rounded-lg p-3">
+              <p className="text-[10px] text-slate-500 mb-1">Ajustes de bid (30d)</p>
+              <p className="text-xl font-bold text-white">{totalChanges}</p>
+              <p className="text-[10px] text-slate-600 mt-0.5">AdsBidChangeLog</p>
             </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
