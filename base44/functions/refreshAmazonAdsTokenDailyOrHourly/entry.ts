@@ -4,11 +4,11 @@
  * Mantém a integração operacional sem depender de usuário online.
  * - Executa por automação/service role.
  * - Processa contas com refresh_token válido mesmo após erro temporário.
- * - Prioriza AmazonAccount.ads_refresh_token; token de ambiente não é operacional.
+ * - Prioriza AmazonAccount.ads_refresh_token.
  * - Repara lock de renovação preso.
  * - Faz retry com backoff somente para falhas temporárias.
  * - Nunca força reautorização por 429/5xx/timeouts.
- * - Registra heartbeat e diagnóstico sem apagar dados existentes.
+ * - Usa somente campos já existentes em AmazonAccount e SyncExecutionLog.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -41,21 +41,22 @@ function isTransient(result: any): boolean {
     || status >= 500
     || type === 'temporary_network_error'
     || type === 'network_error'
-    || type === 'timeout';
+    || type === 'timeout'
+    || type === 'invoke_error';
 }
 
-async function logWatchdog(base44: any, accountId: string, status: string, summary: any) {
+async function logWatchdog(base44: any, accountId: string, success: boolean, summary: any) {
   const now = new Date().toISOString();
   await base44.asServiceRole.entities.SyncExecutionLog.create({
     amazon_account_id: accountId,
     operation: 'amazon_ads:offline_auth_watchdog',
-    status,
+    status: success ? 'success' : 'error',
     trigger_type: 'automatic',
     started_at: now,
     completed_at: now,
-    records_processed: status === 'success' ? 1 : 0,
-    result_summary: status === 'success' ? JSON.stringify(summary).slice(0, 4000) : null,
-    error_message: status === 'success' ? null : String(summary?.message || summary?.error || 'Falha no watchdog').slice(0, 500),
+    records_processed: success ? 1 : 0,
+    result_summary: success ? JSON.stringify(summary).slice(0, 4000) : null,
+    error_message: success ? null : String(summary?.message || summary?.error || 'Falha no watchdog').slice(0, 500),
   }).catch(() => {});
 }
 
@@ -73,8 +74,8 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Não filtrar apenas status=connected: uma falha temporária pode deixar a conta em error.
-    // O refresh_token válido é a condição operacional para recuperação automática.
+    // Não filtrar apenas status=connected: uma falha temporária pode deixar a conta
+    // como error e impedir todas as próximas tentativas automáticas.
     const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', MAX_ACCOUNTS).catch(() => []);
     const eligibleAccounts = accounts.filter(hasValidRefreshToken);
     const results: any[] = [];
@@ -105,13 +106,6 @@ Deno.serve(async (req) => {
         || account.status !== 'connected';
 
       if (!needsRefresh) {
-        const heartbeatAt = new Date().toISOString();
-        await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-          ads_auth_watchdog_last_run_at: heartbeatAt,
-          ads_auth_watchdog_status: 'healthy',
-          ads_auth_watchdog_last_error: null,
-        }).catch(() => {});
-
         results.push({
           account_id: accountId,
           ok: true,
@@ -156,10 +150,8 @@ Deno.serve(async (req) => {
           ads_token_status: 'active',
           ads_requires_reauth: false,
           ads_credentials_error: false,
-          ads_auth_watchdog_last_run_at: now,
-          ads_auth_watchdog_last_success_at: now,
-          ads_auth_watchdog_status: 'healthy',
-          ads_auth_watchdog_last_error: null,
+          ads_last_verified_at: now,
+          ads_token_last_error: null,
           error_message: null,
         }).catch(() => {});
 
@@ -172,7 +164,7 @@ Deno.serve(async (req) => {
           active_token_source: finalResult.active_token_source || 'database',
         };
         results.push(item);
-        await logWatchdog(base44, accountId, 'success', item);
+        await logWatchdog(base44, accountId, true, item);
         continue;
       }
 
@@ -181,16 +173,22 @@ Deno.serve(async (req) => {
       const credentialsError = finalResult?.credentials_error === true;
       const message = String(finalResult?.message || finalResult?.error_safe || finalResult?.error || 'Falha ao renovar autorização').slice(0, 500);
 
+      // Falha temporária não muda status para error e não exige usuário online.
+      // O ciclo seguinte tentará novamente automaticamente.
       const patch: any = {
-        ads_auth_watchdog_last_run_at: now,
-        ads_auth_watchdog_status: transient ? 'retry_pending' : requiresReauth ? 'reauthorization_required' : credentialsError ? 'credentials_error' : 'error',
-        ads_auth_watchdog_last_error: message,
+        ads_last_verified_at: now,
+        ads_token_last_error: message,
       };
 
-      // Falha temporária não deve derrubar a integração nem exigir usuário online.
       if (!transient) {
         patch.ads_requires_reauth = requiresReauth;
         patch.ads_credentials_error = credentialsError;
+        patch.ads_token_status = credentialsError
+          ? 'credentials_error'
+          : requiresReauth
+            ? 'revoked'
+            : 'error';
+
         if (requiresReauth || credentialsError) {
           patch.status = 'error';
           patch.error_message = message;
@@ -211,7 +209,7 @@ Deno.serve(async (req) => {
         message,
       };
       results.push(item);
-      await logWatchdog(base44, accountId, transient ? 'warning' : 'error', item);
+      await logWatchdog(base44, accountId, false, item);
     }
 
     const missingTokenAccounts = accounts.filter((account: any) => !hasValidRefreshToken(account)).length;
