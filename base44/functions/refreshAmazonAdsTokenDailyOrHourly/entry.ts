@@ -1,34 +1,24 @@
 /**
  * refreshAmazonAdsTokenDailyOrHourly — watchdog de autorização Amazon Ads
  *
- * Mantém a integração operacional sem depender de usuário online.
- * - Executa por automação/service role.
- * - Processa contas com refresh_token válido mesmo após erro temporário.
- * - Prioriza AmazonAccount.ads_refresh_token.
- * - Repara lock de renovação preso.
- * - Faz retry com backoff somente para falhas temporárias.
- * - Nunca força reautorização por 429/5xx/timeouts.
- * - Usa somente campos já existentes em AmazonAccount e SyncExecutionLog.
+ * Agendamento obrigatório no Base44: a cada 40 minutos.
+ * Cada execução programada força um refresh real do access token.
+ * O refresh token persistido em AmazonAccount.ads_refresh_token continua sendo
+ * a autorização duradoura; intervenção humana só ocorre quando a Amazon retorna
+ * revogação real/invalid_grant ou quando as credenciais do aplicativo são inválidas.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MAX_ACCOUNTS = 50;
-const REFRESH_MARGIN_MINUTES = 15;
 const STALE_LOCK_MS = 2 * 60 * 1000;
 const RETRY_DELAYS_MS = [0, 2000, 6000];
+const SCHEDULE_INTERVAL_MINUTES = 40;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function hasValidRefreshToken(account: any): boolean {
   const token = String(account?.ads_refresh_token || '');
   return token.startsWith('Atzr|') && token.length >= 50;
-}
-
-function minutesUntil(dateValue: any): number | null {
-  if (!dateValue) return null;
-  const timestamp = new Date(dateValue).getTime();
-  if (!Number.isFinite(timestamp)) return null;
-  return (timestamp - Date.now()) / 60000;
 }
 
 function isTransient(result: any): boolean {
@@ -49,14 +39,16 @@ async function logWatchdog(base44: any, accountId: string, success: boolean, sum
   const now = new Date().toISOString();
   await base44.asServiceRole.entities.SyncExecutionLog.create({
     amazon_account_id: accountId,
-    operation: 'amazon_ads:offline_auth_watchdog',
+    operation: 'amazon_ads:offline_auth_watchdog_40m',
     status: success ? 'success' : 'error',
     trigger_type: 'automatic',
     started_at: now,
     completed_at: now,
     records_processed: success ? 1 : 0,
     result_summary: success ? JSON.stringify(summary).slice(0, 4000) : null,
-    error_message: success ? null : String(summary?.message || summary?.error || 'Falha no watchdog').slice(0, 500),
+    error_message: success
+      ? null
+      : String(summary?.message || summary?.error || 'Falha no watchdog Amazon Ads').slice(0, 500),
   }).catch(() => {});
 }
 
@@ -71,12 +63,16 @@ Deno.serve(async (req) => {
 
     if (!isAutomation && !isServiceRole) {
       const user = await base44.auth.me().catch(() => null);
-      if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      if (!user) {
+        return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+      }
     }
 
-    // Não filtrar apenas status=connected: uma falha temporária pode deixar a conta
-    // como error e impedir todas as próximas tentativas automáticas.
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', MAX_ACCOUNTS).catch(() => []);
+    // Nunca limitar a status=connected. Uma falha temporária não pode remover a
+    // conta dos ciclos futuros e obrigar o usuário a abrir o aplicativo.
+    const accounts = await base44.asServiceRole.entities.AmazonAccount
+      .list('-updated_date', MAX_ACCOUNTS)
+      .catch(() => []);
     const eligibleAccounts = accounts.filter(hasValidRefreshToken);
     const results: any[] = [];
 
@@ -97,25 +93,8 @@ Deno.serve(async (req) => {
         }).catch(() => {});
       }
 
-      const minutesLeft = minutesUntil(account.ads_access_token_expires_at);
-      const needsRefresh = body.force_refresh === true
-        || staleLock
-        || minutesLeft === null
-        || minutesLeft <= REFRESH_MARGIN_MINUTES
-        || account.ads_token_status !== 'active'
-        || account.status !== 'connected';
-
-      if (!needsRefresh) {
-        results.push({
-          account_id: accountId,
-          ok: true,
-          skipped: true,
-          reason: 'token_still_valid',
-          minutes_left: Math.round(minutesLeft || 0),
-        });
-        continue;
-      }
-
+      // Toda execução de 40 minutos renova de verdade. Não confiar apenas no
+      // horário salvo do access token, pois instâncias diferentes não compartilham cache.
       let finalResult: any = null;
       let attempts = 0;
 
@@ -162,6 +141,7 @@ Deno.serve(async (req) => {
           attempts,
           expires_at: finalResult.expires_at,
           active_token_source: finalResult.active_token_source || 'database',
+          next_refresh_recommended_at: new Date(Date.now() + SCHEDULE_INTERVAL_MINUTES * 60000).toISOString(),
         };
         results.push(item);
         await logWatchdog(base44, accountId, true, item);
@@ -171,15 +151,20 @@ Deno.serve(async (req) => {
       const transient = isTransient(finalResult);
       const requiresReauth = finalResult?.requires_reauthorization === true;
       const credentialsError = finalResult?.credentials_error === true;
-      const message = String(finalResult?.message || finalResult?.error_safe || finalResult?.error || 'Falha ao renovar autorização').slice(0, 500);
+      const message = String(
+        finalResult?.message
+        || finalResult?.error_safe
+        || finalResult?.error
+        || 'Falha ao renovar autorização Amazon Ads',
+      ).slice(0, 500);
 
-      // Falha temporária não muda status para error e não exige usuário online.
-      // O ciclo seguinte tentará novamente automaticamente.
       const patch: any = {
         ads_last_verified_at: now,
         ads_token_last_error: message,
       };
 
+      // 429, 5xx, 504, 524 e timeout não revogam a conexão. O próximo ciclo
+      // automático tentará novamente sem depender de intervenção humana.
       if (!transient) {
         patch.ads_requires_reauth = requiresReauth;
         patch.ads_credentials_error = credentialsError;
@@ -204,6 +189,7 @@ Deno.serve(async (req) => {
         transient,
         requires_reauthorization: requiresReauth,
         credentials_error: credentialsError,
+        human_intervention_required: requiresReauth || credentialsError,
         error_type: finalResult?.error_type,
         status_code: finalResult?.status_code,
         message,
@@ -214,19 +200,20 @@ Deno.serve(async (req) => {
 
     const missingTokenAccounts = accounts.filter((account: any) => !hasValidRefreshToken(account)).length;
     const refreshed = results.filter((result) => result.ok && result.refreshed).length;
-    const skipped = results.filter((result) => result.skipped).length;
     const retryPending = results.filter((result) => result.transient).length;
+    const humanInterventionRequired = results.filter((result) => result.human_intervention_required).length;
     const failed = results.filter((result) => !result.ok && !result.transient).length;
 
     return Response.json({
       ok: failed === 0,
-      mode: 'offline_auth_watchdog',
+      mode: 'offline_auth_watchdog_40m',
+      schedule_interval_minutes: SCHEDULE_INTERVAL_MINUTES,
       accounts_found: accounts.length,
       accounts_eligible: eligibleAccounts.length,
       accounts_without_valid_refresh_token: missingTokenAccounts,
       refreshed,
-      skipped,
       retry_pending: retryPending,
+      human_intervention_required: humanInterventionRequired,
       failed,
       results,
       duration_ms: Date.now() - startedAt,
