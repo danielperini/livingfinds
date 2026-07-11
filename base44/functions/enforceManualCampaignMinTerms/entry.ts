@@ -21,6 +21,34 @@ const MIN_BID = 0.35;
 const DEFAULT_BID = 0.50;
 const MAX_BID = 3.00;
 
+/**
+ * Calcula bid ideal baseado nas metas cadastradas (PerformanceSettings).
+ * Fórmula: bid = preço_produto * (target_acos / 100) * CVR_estimada
+ * CVR estimada conservadora = 10% (1 venda a cada 10 cliques)
+ * Fallback: amazon_suggested_bid → avg_cpc * 1.1 → DEFAULT_BID
+ */
+function calcBidFromGoals(settings: any, product: any, fallbackBid: number): number {
+  const targetAcos = settings?.target_acos || 0;
+  const maxBid = settings?.max_bid || MAX_BID;
+  const minBid = settings?.min_bid || MIN_BID;
+  const price = product?.price || 0;
+
+  if (targetAcos > 0 && price > 0) {
+    // bid = preço × (target_acos/100) × CVR_estimada (10%)
+    const bid = price * (targetAcos / 100) * 0.10;
+    return Math.min(maxBid, Math.max(minBid, Math.round(bid * 100) / 100));
+  }
+  return Math.min(maxBid, Math.max(minBid, fallbackBid || DEFAULT_BID));
+}
+
+/** Orçamento diário da campanha — usa o limite configurado nas metas */
+function calcBudgetFromGoals(settings: any): number {
+  // Budget por campanha individual: limit / 10 campanhas estimadas, mínimo R$5
+  const dailyLimit = settings?.daily_budget_limit || 0;
+  if (dailyLimit > 0) return Math.max(5, Math.round(dailyLimit / 10));
+  return 5; // fallback conservador
+}
+
 function hoursAgo(dateStr: string): number {
   if (!dateStr) return 0;
   return (Date.now() - new Date(dateStr).getTime()) / 3600000;
@@ -141,6 +169,17 @@ Deno.serve(async (req) => {
       byAsin.get(asin)!.push(c);
     }
 
+    // ── Carregar metas de performance (fonte única de verdade para bids/budget) ──
+    const perfSettings = await base44.asServiceRole.entities.PerformanceSettings.filter(
+      { amazon_account_id: aid }, null, 1
+    ).then((r: any[]) => r[0] || null).catch(() => null);
+
+    // Carregar produtos para calcular bid por preço
+    const allProducts = await base44.asServiceRole.entities.Product.filter(
+      { amazon_account_id: aid }, null, 500
+    ).catch(() => []);
+    const productByAsin = new Map<string, any>(allProducts.map((p: any) => [p.asin, p]));
+
     // Carregar TermBank e Sugestões uma vez para eficiência
     const allTermBank = await base44.asServiceRole.entities.SearchTerm.filter(
       { amazon_account_id: aid }, '-orders_14d', 2000
@@ -152,6 +191,7 @@ Deno.serve(async (req) => {
     // ── 2. Por ASIN: verificar keywords ativas e fazer enforcement ──────────
     for (const [asin, camps] of byAsin.entries()) {
       stats.asins_checked++;
+      const product = productByAsin.get(asin) || null;
 
       // Buscar keywords ativas via Amazon Ads API para todos as campanhas do ASIN
       const campaignIds = camps
@@ -187,7 +227,8 @@ Deno.serve(async (req) => {
 
         let fillerTerms: { keyword: string; bid: number; source: string }[] = termBankCandidates.map((st: any) => ({
           keyword: (st.search_term || st.keyword_text || '').trim(),
-          bid: Math.min(MAX_BID, Math.max(MIN_BID, st.avg_cpc ? st.avg_cpc * 1.1 : DEFAULT_BID)),
+          // bid orientado pelas metas → avg_cpc histórico como fallback
+          bid: calcBidFromGoals(perfSettings, product, st.avg_cpc ? st.avg_cpc * 1.1 : DEFAULT_BID),
           source: 'termbank',
         }));
 
@@ -206,7 +247,8 @@ Deno.serve(async (req) => {
 
           fillerTerms = fillerTerms.concat(suggCandidates.map((s: any) => ({
             keyword: (s.keyword || '').trim(),
-            bid: Math.min(MAX_BID, Math.max(MIN_BID, s.amazon_suggested_bid || DEFAULT_BID)),
+            // bid orientado pelas metas → bid sugerido Amazon como fallback
+            bid: calcBidFromGoals(perfSettings, product, s.amazon_suggested_bid || DEFAULT_BID),
             source: 'suggestion',
           })));
         }
@@ -224,6 +266,7 @@ Deno.serve(async (req) => {
         const adGroupId = agRes?.data?.adGroups?.[0]?.adGroupId;
 
         if (adGroupId && fillerTerms.length > 0) {
+          // Adicionar diretamente em lote — sem aprovação humana
           const addRes = await adsCall(token, account, 'POST', '/sp/keywords', {
             keywords: fillerTerms.map(t => ({
               campaignId,
@@ -242,7 +285,10 @@ Deno.serve(async (req) => {
             else stats.terms_from_suggestions++;
           }
 
-          // Registrar decisões
+          // Registrar decisões já executadas (sem aprovação)
+          const goalInfo = perfSettings
+            ? `Target ACoS: ${perfSettings.target_acos}% | Max bid: R$${(perfSettings.max_bid || MAX_BID).toFixed(2)}`
+            : 'Sem metas configuradas — bid calculado via fallback';
           await Promise.all(fillerTerms.slice(0, added).map((t: any) =>
             base44.asServiceRole.entities.OptimizationDecision.create({
               amazon_account_id: aid,
@@ -251,17 +297,37 @@ Deno.serve(async (req) => {
               campaign_id: campaignId,
               keyword_text: t.keyword,
               asin,
-              action: `Adicionada keyword "${t.keyword}" (EXACT, bid R$${t.bid.toFixed(2)}) para atingir mínimo de ${MIN_TERMS_PER_ASIN} termos por ASIN`,
-              rationale: `ASIN ${asin} tinha ${currentActiveCount} keywords ativas (mínimo: ${MIN_TERMS_PER_ASIN}). Fonte: ${t.source}.`,
+              action: `Keyword "${t.keyword}" (EXACT, bid R$${t.bid.toFixed(2)}) adicionada automaticamente para mínimo ${MIN_TERMS_PER_ASIN} termos/ASIN`,
+              rationale: `ASIN ${asin} tinha ${currentActiveCount} keywords ativas. ${goalInfo}. Fonte: ${t.source}. Executado sem aprovação humana.`,
               status: 'executed',
               risk: 'low',
               requires_approval: false,
-              confidence: 75,
+              confidence: 80,
               source_function: 'enforceManualCampaignMinTerms',
               executed_at: now,
               created_at: now,
             }).catch(() => {})
           ));
+        } else if (fillerTerms.length > 0 && !adGroupId) {
+          // Não há adGroup — criar campanhas individuais via createManualCampaignV2
+          // (uma campanha por keyword, sem aprovação, usando orçamento das metas)
+          const budget = calcBudgetFromGoals(perfSettings);
+          for (const t of fillerTerms) {
+            const createRes = await base44.asServiceRole.functions.invoke('createManualCampaignV2', {
+              _service_role: true,
+              amazon_account_id: aid,
+              asin,
+              keyword: t.keyword,
+              bid: t.bid,
+              budget,
+            }).catch(() => null);
+            if (createRes?.data?.ok) {
+              stats.keywords_added++;
+              if (t.source === 'termbank') stats.terms_from_termbank++;
+              else stats.terms_from_suggestions++;
+            }
+            await new Promise(r => setTimeout(r, 2000));
+          }
         }
       }
 
@@ -366,7 +432,8 @@ Deno.serve(async (req) => {
 
         let substitutes: { keyword: string; bid: number; source: string }[] = termBankSubs.map((st: any) => ({
           keyword: (st.search_term || st.keyword_text || '').trim(),
-          bid: Math.min(MAX_BID, Math.max(MIN_BID, st.avg_cpc ? st.avg_cpc * 1.1 : DEFAULT_BID)),
+          // bid calculado pelas metas cadastradas
+          bid: calcBidFromGoals(perfSettings, product, st.avg_cpc ? st.avg_cpc * 1.1 : DEFAULT_BID),
           source: 'termbank',
         }));
 
@@ -385,7 +452,8 @@ Deno.serve(async (req) => {
 
           substitutes = substitutes.concat(suggSubs.map((s: any) => ({
             keyword: (s.keyword || '').trim(),
-            bid: Math.min(MAX_BID, Math.max(MIN_BID, s.amazon_suggested_bid || DEFAULT_BID)),
+            // bid calculado pelas metas cadastradas
+            bid: calcBidFromGoals(perfSettings, product, s.amazon_suggested_bid || DEFAULT_BID),
             source: 'suggestion',
           })));
         }
@@ -429,19 +497,22 @@ Deno.serve(async (req) => {
           campaigns: [{ campaignId, state: 'ENABLED' }],
         }).catch(() => {});
 
-        // Registrar decisão de substituição
+        // Registrar decisão de substituição — executada automaticamente pelas metas
+        const goalSummary = perfSettings
+          ? `Metas: ACoS alvo ${perfSettings.target_acos}% | bid max R$${(perfSettings.max_bid || MAX_BID).toFixed(2)} | budget/camp R$${calcBudgetFromGoals(perfSettings).toFixed(2)}`
+          : 'Sem metas configuradas — fallback padrão';
         await base44.asServiceRole.entities.OptimizationDecision.create({
           amazon_account_id: aid,
           decision_type: 'create_keyword',
           entity_type: 'keyword',
           campaign_id: campaignId,
           asin,
-          action: `Substituição: adicionados ${addedSubs} termo(s) após ${Math.round(ageHours)}h sem impressões. Fontes: ${substitutes.map(s => `${s.keyword} (${s.source})`).join(', ')}`,
-          rationale: `Campanha ${campaignId} ficou ${Math.round(ageHours)}h sem impressões. Substituição pelas 2 melhores keywords não usadas (busca: TermBank → Amazon Suggestions).`,
+          action: `Substituição automática: ${addedSubs} keyword(s) novas após ${Math.round(ageHours)}h sem impressões. ${substitutes.slice(0, addedSubs).map(s => `"${s.keyword}" bid R$${s.bid.toFixed(2)} (${s.source})`).join('; ')}`,
+          rationale: `Campanha ${campaignId} ficou ${Math.round(ageHours)}h sem impressões. ${goalSummary}. Busca: TermBank → Amazon Suggestions. Executado sem aprovação humana.`,
           status: 'executed',
           risk: 'low',
           requires_approval: false,
-          confidence: 80,
+          confidence: 85,
           source_function: 'enforceManualCampaignMinTerms',
           executed_at: now,
           created_at: now,
