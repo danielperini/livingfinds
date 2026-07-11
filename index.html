@@ -13,58 +13,91 @@
     <div id="root"></div>
     <script>
       (() => {
+        let applying = false;
+
         const applyDashboardChartAdjustments = () => {
-          const headings = Array.from(document.querySelectorAll('h2'));
+          if (applying) return;
+          applying = true;
 
-          const consolidatedTitle = headings.find((node) =>
-            node.textContent?.trim() === 'Gasto · Vendas · Faturamento Real'
-          );
+          try {
+            const headings = Array.from(document.querySelectorAll('h2'));
 
-          if (consolidatedTitle) {
-            consolidatedTitle.textContent = 'Gasto Vendas Cliques Impressões e IA';
-            const card = consolidatedTitle.closest('.bg-surface-1');
+            const consolidatedTitle = headings.find((node) => {
+              const title = node.textContent?.trim();
+              return title === 'Gasto · Vendas · Faturamento Real'
+                || title === 'Gasto Vendas Cliques Impressões e IA';
+            });
 
-            if (card) {
-              const realRevenueLegend = Array.from(card.querySelectorAll('span')).find((node) =>
-                node.textContent?.trim().startsWith('Fat. Real:')
-              );
-              realRevenueLegend?.remove();
+            if (consolidatedTitle) {
+              consolidatedTitle.textContent = 'Gasto Vendas Cliques Impressões e IA';
+              const card = consolidatedTitle.closest('.bg-surface-1');
 
-              const description = Array.from(card.querySelectorAll('p')).find((node) =>
-                node.textContent?.includes('Todo o histórico disponível')
-              );
-              const orangeCurveLabel = description
-                ? Array.from(description.querySelectorAll('span')).find((node) =>
-                    node.textContent?.includes('curva laranja = faturamento real')
-                  )
-                : null;
+              if (card) {
+                Array.from(card.querySelectorAll('span')).forEach((node) => {
+                  if (node.textContent?.trim().startsWith('Fat. Real:')) node.remove();
+                });
 
-              if (orangeCurveLabel) {
-                const previousText = orangeCurveLabel.previousSibling;
-                if (previousText?.nodeType === Node.TEXT_NODE) {
-                  previousText.textContent = previousText.textContent.replace(/\s*·\s*$/, '');
+                const description = Array.from(card.querySelectorAll('p')).find((node) =>
+                  node.textContent?.includes('Todo o histórico disponível')
+                );
+
+                if (description) {
+                  Array.from(description.querySelectorAll('span')).forEach((node) => {
+                    if (node.textContent?.includes('curva laranja = faturamento real')) {
+                      const previousText = node.previousSibling;
+                      if (previousText?.nodeType === Node.TEXT_NODE) {
+                        previousText.textContent = previousText.textContent.replace(/\s*·\s*$/, '');
+                      }
+                      node.remove();
+                    }
+                  });
                 }
-                orangeCurveLabel.remove();
+
+                card.querySelectorAll(
+                  'svg path[stroke="#FB923C"], svg path[stroke="#fb923c"], svg path[stroke="rgb(251, 146, 60)"]'
+                ).forEach((path) => {
+                  path.style.display = 'none';
+                  path.setAttribute('aria-hidden', 'true');
+                });
               }
-
-              card.querySelectorAll('svg path[stroke="#FB923C"], svg path[stroke="#fb923c"]').forEach((path) => {
-                path.style.display = 'none';
-              });
             }
-          }
 
-          const comparisonTitle = headings.find((node) =>
-            node.textContent?.trim() === 'Comparação mês atual vs mês anterior'
-          );
-          if (comparisonTitle) {
-            comparisonTitle.textContent = 'Faturamento Atual x Mês Anterior';
+            const comparisonTitle = headings.find((node) => {
+              const title = node.textContent?.trim();
+              return title === 'Comparação mês atual vs mês anterior'
+                || title === 'Faturamento Atual x Mês Anterior'
+                || title === 'Faturamento x Mês Anterior';
+            });
+
+            if (comparisonTitle) {
+              comparisonTitle.textContent = 'Faturamento x Mês Anterior';
+              const comparisonCard = comparisonTitle.closest('.bg-surface-1');
+              if (comparisonCard) {
+                Array.from(comparisonCard.querySelectorAll('button')).forEach((button) => {
+                  if (button.textContent?.trim() === 'Faturamento Real') {
+                    button.textContent = 'Faturamento x mês anterior';
+                  }
+                });
+              }
+            }
+          } finally {
+            applying = false;
           }
         };
 
-        const observer = new MutationObserver(applyDashboardChartAdjustments);
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+        const observer = new MutationObserver(() => {
+          window.requestAnimationFrame(applyDashboardChartAdjustments);
+        });
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['stroke'],
+        });
+
         window.addEventListener('DOMContentLoaded', applyDashboardChartAdjustments);
-        window.setTimeout(applyDashboardChartAdjustments, 500);
+        window.setTimeout(applyDashboardChartAdjustments, 250);
+        window.setTimeout(applyDashboardChartAdjustments, 1000);
       })();
     </script>
     <script type="module" src="/src/main.jsx"></script>
