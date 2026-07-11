@@ -525,6 +525,7 @@ export default function Dashboard() {
       byDate[m.date].gasto += m.spend || 0;
       byDate[m.date]['vendas ads'] += m.sales || 0;
       byDate[m.date].impressões += m.impressions || 0;
+      byDate[m.date].cliques = (byDate[m.date].cliques || 0) + (m.clicks || 0);
     }
     // Incluir todos os dias do SalesDaily disponíveis
     for (const [isoDate, v] of Object.entries(salesDailyByDate)) {
@@ -702,13 +703,14 @@ export default function Dashboard() {
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
           {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400/80 inline-block" />Cliques: {kpis.clicks.toLocaleString('pt-BR')}</span>
           {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
           Todo o histórico disponível · Vendas Ads = atribuição Amazon
           {hasSalesDailyData && <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></>}
-          {' · '}barras roxas = impressões · barras âmbar = alterações da IA
+          {' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA
           {activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday() && (
             <> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></>
           )}
@@ -751,9 +753,12 @@ export default function Dashboard() {
               <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={36}
                 tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
               <YAxis yAxisId="ai" orientation="right" hide />
+              <YAxis yAxisId="clicks" orientation="right" hide />
               <Tooltip content={<ChartTooltip consolidatedChart={consolidatedChart} />} />
               {/* Impressões: barras roxas (eixo direito) */}
               <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.3} radius={[1, 1, 0, 0]} />
+              {/* Cliques: barras azul-céu (eixo próprio) */}
+              <Bar yAxisId="clicks" dataKey="cliques" name="Cliques" fill="#38BDF8" opacity={0.6} radius={[1, 1, 0, 0]} />
               {/* Alterações da IA: barras âmbar (eixo ai — escala própria) */}
               <Bar yAxisId="ai" dataKey="alterações IA" name="Alterações IA" fill="#F59E0B" opacity={0.7} radius={[2, 2, 0, 0]} />
               {/* Linhas de valor em R$ */}
