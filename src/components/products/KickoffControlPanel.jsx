@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Rocket, Clock, CheckCircle2, XCircle, Pause, RefreshCw,
-  Loader2, AlertTriangle, ChevronDown, ChevronUp
+  Loader2, AlertTriangle, ChevronDown, ChevronUp, Package, Ban
 } from 'lucide-react';
 
 const STATUS_CONFIG = {
@@ -36,11 +36,18 @@ const STATUS_CONFIG = {
     dot: 'bg-red-400',
   },
   cancelled: {
-    label: 'Pausado',
-    icon: Pause,
+    label: 'Cancelado',
+    icon: Ban,
     color: 'text-slate-400',
     bg: 'bg-slate-400/10 border-slate-400/25',
     dot: 'bg-slate-400',
+  },
+  awaiting_stock: {
+    label: 'Aguardando Estoque',
+    icon: Package,
+    color: 'text-orange-400',
+    bg: 'bg-orange-400/10 border-orange-400/25',
+    dot: 'bg-orange-400',
   },
 };
 
@@ -66,8 +73,14 @@ function StatusTab({ status, count, active, onClick }) {
   );
 }
 
-function KickoffRow({ item, onRetry }) {
-  const status = String(item?.status || '').toLowerCase();
+function KickoffRow({ item, onRetry, onCancel, stockMap }) {
+  const rawStatus = String(item?.status || '').toLowerCase();
+  // Detectar se o produto está sem estoque → tratar como awaiting_stock
+  const outOfStock = stockMap && item.asin && (
+    stockMap[item.asin]?.inventory_status === 'out_of_stock' ||
+    (stockMap[item.asin]?.fba_inventory ?? 1) === 0
+  );
+  const status = (rawStatus === 'failed' && outOfStock) ? 'awaiting_stock' : rawStatus;
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.scheduled;
   const Icon = cfg.icon;
 
@@ -78,6 +91,17 @@ function KickoffRow({ item, onRetry }) {
       day: '2-digit', month: '2-digit',
       hour: '2-digit', minute: '2-digit',
     });
+  };
+
+  // Formatar mensagem de erro de forma mais legível
+  const formatError = (err) => {
+    if (!err) return null;
+    if (err.toLowerCase().includes('out_of_stock') || err.toLowerCase().includes('sem estoque') || err.toLowerCase().includes('inventory')) return 'Produto sem estoque';
+    if (err.toLowerCase().includes('token') || err.toLowerCase().includes('401') || err.toLowerCase().includes('unauthorized')) return 'Erro de autenticação Amazon';
+    if (err.toLowerCase().includes('rate') || err.toLowerCase().includes('429') || err.toLowerCase().includes('throttl')) return 'Limite de requisições Amazon (será reintentado)';
+    if (err.toLowerCase().includes('timeout') || err.toLowerCase().includes('524')) return 'Timeout — será reintentado automaticamente';
+    if (err === 'Falha no Kick-off') return 'Erro na criação da campanha (verifique logs)';
+    return err;
   };
 
   return (
@@ -117,28 +141,44 @@ function KickoffRow({ item, onRetry }) {
               Concluído: <span className="text-slate-300">{formatDate(item.completed_at)}</span>
             </span>
           )}
-          {item.scheduled_at && status === 'scheduled' && (
+          {item.scheduled_at && rawStatus === 'scheduled' && (
             <span className="text-[11px] text-slate-500">
               Agendado: <span className="text-slate-300">{formatDate(item.scheduled_at)}</span>
             </span>
           )}
         </div>
 
-        {status === 'failed' && item.last_error && (
-          <p className="mt-1 text-[11px] text-red-400/90 truncate max-w-[380px]">{item.last_error}</p>
+        {(rawStatus === 'failed' || status === 'awaiting_stock') && (
+          <p className={`mt-1 text-[11px] truncate max-w-[380px] ${status === 'awaiting_stock' ? 'text-orange-400/90' : 'text-red-400/90'}`}>
+            {status === 'awaiting_stock'
+              ? 'Produto sem estoque FBA — o Kick-off será reativado quando o estoque for reposto'
+              : formatError(item.last_error)}
+          </p>
         )}
       </div>
 
-      {status === 'failed' && onRetry && (
-        <button
-          type="button"
-          onClick={() => onRetry(item)}
-          className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border bg-cyan/10 border-cyan/25 text-cyan hover:bg-cyan/20 transition-colors"
-        >
-          <RefreshCw className="w-3 h-3" />
-          Reagendar
-        </button>
-      )}
+      <div className="flex-shrink-0 flex items-center gap-1.5">
+        {rawStatus === 'failed' && status !== 'awaiting_stock' && onRetry && (
+          <button
+            type="button"
+            onClick={() => onRetry(item)}
+            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border bg-cyan/10 border-cyan/25 text-cyan hover:bg-cyan/20 transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Reagendar
+          </button>
+        )}
+        {(rawStatus === 'failed' || rawStatus === 'scheduled') && onCancel && (
+          <button
+            type="button"
+            onClick={() => onCancel(item)}
+            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border bg-red-500/10 border-red-500/25 text-red-400 hover:bg-red-500/20 transition-colors"
+          >
+            <Ban className="w-3 h-3" />
+            Cancelar
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -148,6 +188,8 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
   const [collapsed, setCollapsed] = useState(false);
+  const [stockMap, setStockMap] = useState({});
+  const [cancelling, setCancelling] = useState(null);
 
   const load = useCallback(async () => {
     if (!accountId) return;
@@ -170,12 +212,35 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
         if (!seen.has(key)) { seen.add(key); deduped.push(r); }
       }
       setItems(deduped);
+
+      // Carregar estoque dos ASINs únicos que falharam
+      const failedAsins = [...new Set(deduped.filter(i => i.status === 'failed').map(i => i.asin).filter(Boolean))];
+      if (failedAsins.length > 0) {
+        const products = await base44.entities.Product.filter(
+          { amazon_account_id: accountId, asin: { $in: failedAsins } },
+          null, failedAsins.length + 5
+        );
+        const map = {};
+        for (const p of products) { if (p.asin) map[p.asin] = p; }
+        setStockMap(map);
+      }
     } catch {
       setItems([]);
     } finally {
       setLoading(false);
     }
   }, [accountId]);
+
+  const handleCancel = useCallback(async (item) => {
+    if (!item?.id || cancelling) return;
+    setCancelling(item.id);
+    try {
+      await base44.entities.ProductKickoffQueue.update(item.id, { status: 'cancelled' });
+      setItems(prev => prev.map(i => i.id === item.id ? { ...i, status: 'cancelled' } : i));
+    } finally {
+      setCancelling(null);
+    }
+  }, [cancelling]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -190,19 +255,25 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
     };
   }, [load]);
 
+  // Contar "awaiting_stock" separado de "failed" para a aba
+  const awaitingStockAsins = new Set(
+    items.filter(i => i.status === 'failed' && stockMap[i.asin] && (stockMap[i.asin].inventory_status === 'out_of_stock' || (stockMap[i.asin].fba_inventory ?? 1) === 0)).map(i => i.asin)
+  );
+
   const counts = {
     all: items.length,
     scheduled: items.filter(i => i.status === 'scheduled').length,
     processing: items.filter(i => i.status === 'processing').length,
     completed: items.filter(i => i.status === 'completed').length,
-    failed: items.filter(i => i.status === 'failed').length,
+    failed: items.filter(i => i.status === 'failed' && !awaitingStockAsins.has(i.asin)).length,
+    awaiting_stock: items.filter(i => i.status === 'failed' && awaitingStockAsins.has(i.asin)).length,
     cancelled: items.filter(i => i.status === 'cancelled').length,
   };
 
   const filtered = activeTab === 'all' ? items : items.filter(i => i.status === activeTab);
 
-  // Ordenar: failed > processing > scheduled > completed > cancelled
-  const ORDER = { failed: 0, processing: 1, scheduled: 2, completed: 3, cancelled: 4 };
+  // Ordenar: failed (sem estoque) > failed > processing > scheduled > completed > cancelled
+  const ORDER = { failed: 0, processing: 1, scheduled: 2, completed: 3, cancelled: 4, awaiting_stock: 0 };
   const sorted = [...filtered].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
 
   if (!accountId) return null;
@@ -233,6 +304,12 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-400/15 border border-red-400/25 text-red-400">
                   <AlertTriangle className="w-2.5 h-2.5" />
                   {counts.failed} falha{counts.failed > 1 ? 's' : ''}
+                </span>
+              )}
+              {counts.awaiting_stock > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-400/15 border border-orange-400/25 text-orange-400">
+                  <Package className="w-2.5 h-2.5" />
+                  {counts.awaiting_stock} sem estoque
                 </span>
               )}
             </div>
@@ -273,7 +350,7 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
               </span>
             </button>
 
-            {['scheduled', 'processing', 'failed', 'completed', 'cancelled'].map(s =>
+            {['scheduled', 'processing', 'failed', 'awaiting_stock', 'completed', 'cancelled'].map(s =>
               counts[s] > 0 ? (
                 <StatusTab
                   key={s}
@@ -299,9 +376,11 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
             ) : (
               sorted.map(item => (
                 <KickoffRow
-                  key={item.id || item.asin}
+                  key={item.id || `${item.asin}-${item.keyword}`}
                   item={item}
                   onRetry={onRetry}
+                  onCancel={handleCancel}
+                  stockMap={stockMap}
                 />
               ))
             )}
