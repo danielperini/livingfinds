@@ -32,6 +32,17 @@ function listOf(data: any, key: string) {
   return [];
 }
 
+function amazonError(data: any, fallback: string) {
+  const payload = data?.payload || data || {};
+  return String(
+    payload?.errors?.[0]?.message
+    || payload?.error?.message
+    || payload?.error_description
+    || payload?.message
+    || fallback
+  );
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -40,7 +51,7 @@ Deno.serve(async (request) => {
     if (!body.amazon_account_id || !body.asin || !String(body.keyword || '').trim()) return Response.json({ ok: false, error: 'Conta, ASIN e termo obrigatórios' }, { status: 400 });
 
     const accountId = body.amazon_account_id;
-    const asin = String(body.asin);
+    const asin = String(body.asin).trim().toUpperCase();
     const keyword = String(body.keyword).trim();
     const bid = Math.max(0.25, Number(body.bid || 0.5));
     const budget = Math.max(5, Number(body.budget || 5));
@@ -48,55 +59,61 @@ Deno.serve(async (request) => {
     const clean = keyword.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40);
     const name = `SP | MANUAL | EXACT | ${asin} | ${clean}`.slice(0, 128);
 
+    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_at', 1).catch(() => []);
+    const product = products[0] || {};
+    const stock = Number(product.fba_inventory ?? product.available_quantity ?? product.fulfillable_quantity ?? 0);
+    if (product.inventory_status === 'out_of_stock' || stock <= 0) {
+      return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
+    }
+
     const existing = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, asin, name }, '-created_date', 1).catch(() => []);
     if (existing[0]) {
       const repair = await base44.asServiceRole.functions.invoke('repairExactAdGroupKeywords', { amazon_account_id: accountId, asins: [asin], _window_execution: true, _service_role: true });
       const data = repair?.data || repair || {};
       const complete = data?.results?.some((item: any) => item.campaign_id === String(existing[0].campaign_id) && item.complete === true);
-      return Response.json({ ok: complete, already_exists: true, campaign_id: existing[0].campaign_id, keyword, completion_status: complete ? 'complete' : 'incomplete', repair: data });
+      return Response.json({ ok: complete, already_exists: true, terminal: complete, campaign_id: existing[0].campaign_id, keyword, completion_status: complete ? 'complete' : 'incomplete', repair: data });
     }
-
-    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_at', 1).catch(() => []);
-    const product = products[0] || {};
 
     const campaignResponse = await ads(base44, accountId, 'createManualCampaignV2', 'POST', '/sp/campaigns', {
       campaigns: [{ name, targetingType: 'MANUAL', state: 'ENABLED', budget: { budgetType: 'DAILY', budget }, startDate: now.slice(0, 10) }],
     }, 'application/vnd.spCampaign.v3+json');
     const campaignId = extract(campaignResponse, 'campaigns', 'campaignId');
-    if (!campaignId) return Response.json({ ok: false, completion_status: 'incomplete', error: campaignResponse?.errors?.[0]?.message || 'Amazon não retornou campaignId' });
+    if (!campaignId) return Response.json({ ok: false, completion_status: 'incomplete', error: amazonError(campaignResponse, 'Amazon não retornou campaignId') });
 
     await wait(14000);
     const adGroupResponse = await ads(base44, accountId, 'createManualAdGroupV2', 'POST', '/sp/adGroups', {
-      adGroups: [{ name: `AG | EXACT | ${asin}`, campaignId, defaultBid: bid, state: 'ENABLED' }],
+      adGroups: [{ name: `AG | EXACT | ${asin}`, campaignId: String(campaignId), defaultBid: bid, state: 'ENABLED' }],
     }, 'application/vnd.spAdGroup.v3+json');
     const adGroupId = extract(adGroupResponse, 'adGroups', 'adGroupId');
-    if (!adGroupId) return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), error: adGroupResponse?.errors?.[0]?.message || 'Amazon não retornou adGroupId' });
+    if (!adGroupId) return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), error: amazonError(adGroupResponse, 'Amazon não retornou adGroupId') });
 
     await wait(14000);
     const productAdResponse = await ads(base44, accountId, 'createManualProductAdV2', 'POST', '/sp/productAds', {
-      productAds: [{ campaignId, adGroupId, ...(product?.sku || body.sku ? { sku: product?.sku || body.sku } : { asin }), state: 'ENABLED' }],
+      productAds: [{ campaignId: String(campaignId), adGroupId: String(adGroupId), ...(product?.sku || body.sku ? { sku: product?.sku || body.sku } : { asin }), state: 'ENABLED' }],
     }, 'application/vnd.spProductAd.v3+json');
-    if (!productAdResponse?.ok && productAdResponse?.status !== 207) return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), ad_group_id: String(adGroupId), error: productAdResponse?.errors?.[0]?.message || 'Falha ao criar anúncio do produto' });
+    if (!productAdResponse?.ok && productAdResponse?.status !== 207 && !extract(productAdResponse, 'productAds', 'adId')) {
+      return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), ad_group_id: String(adGroupId), error: amazonError(productAdResponse, 'Falha ao criar anúncio do produto') });
+    }
 
     await wait(14000);
     const keywordResponse = await ads(base44, accountId, 'createExactKeywordV2', 'POST', '/sp/keywords', {
-      keywords: [{ campaignId, adGroupId, keywordText: keyword, matchType: 'EXACT', state: 'ENABLED', bid: { value: bid, bidType: 'DEFAULT' } }],
+      keywords: [{ campaignId: String(campaignId), adGroupId: String(adGroupId), keywordText: keyword, matchType: 'EXACT', state: 'ENABLED', bid }],
     }, 'application/vnd.spKeyword.v3+json');
     const keywordId = extract(keywordResponse, 'keywords', 'keywordId');
-    if (!keywordId && !keywordResponse?.ok) return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), ad_group_id: String(adGroupId), error: keywordResponse?.errors?.[0]?.message || 'Falha ao criar palavra-chave exata' });
+    if (!keywordId && !keywordResponse?.ok) return Response.json({ ok: false, completion_status: 'incomplete', campaign_id: String(campaignId), ad_group_id: String(adGroupId), error: amazonError(keywordResponse, 'Falha ao criar palavra-chave exata') });
 
     await wait(14000);
     const verification = await ads(base44, accountId, 'verifyExactKeywordAfterCreate', 'POST', '/sp/keywords/list', {
       campaignIdFilter: [String(campaignId)],
       adGroupIdFilter: [String(adGroupId)],
-      stateFilter: { include: ['ENABLED'] },
+      stateFilter: ['ENABLED'],
       matchTypeFilter: ['EXACT'],
       maxResults: 100,
     }, 'application/vnd.spKeyword.v3+json');
     const activeKeywords = listOf(verification, 'keywords').filter((item: any) => String(item.state || '').toUpperCase() === 'ENABLED');
-    const complete = activeKeywords.length > 0;
+    const complete = activeKeywords.length > 0 || Boolean(keywordId);
 
-    const localCampaign = await base44.asServiceRole.entities.Campaign.create({ amazon_account_id: accountId, campaign_id: String(campaignId), asin, sku: product?.sku || body.sku || null, name, campaign_name: name, campaign_type: 'SP', targeting_type: 'MANUAL', state: 'enabled', status: complete ? 'enabled' : 'incomplete', daily_budget: budget, created_by_app: true, learning_eligible: true, launch_phase: 'new', completion_status: complete ? 'complete' : 'incomplete', is_incomplete: !complete, keyword_count: activeKeywords.length, ad_group_id: String(adGroupId), created_at: now, synced_at: now });
+    const localCampaign = await base44.asServiceRole.entities.Campaign.create({ amazon_account_id: accountId, campaign_id: String(campaignId), asin, sku: product?.sku || body.sku || null, name, campaign_name: name, campaign_type: 'SP', targeting_type: 'MANUAL', state: 'enabled', status: complete ? 'enabled' : 'incomplete', daily_budget: budget, created_by_app: true, learning_eligible: true, launch_phase: 'new', completion_status: complete ? 'complete' : 'incomplete', is_incomplete: !complete, keyword_count: activeKeywords.length || (keywordId ? 1 : 0), ad_group_id: String(adGroupId), created_at: now, synced_at: now });
 
     await base44.asServiceRole.entities.Keyword.create({ amazon_account_id: accountId, campaign_id: String(campaignId), ad_group_id: String(adGroupId), keyword_id: keywordId ? String(keywordId) : `kw_${Date.now()}`, asin, keyword_text: keyword, keyword, match_type: 'exact', state: complete ? 'enabled' : 'pending', status: complete ? 'enabled' : 'pending', current_bid: bid, bid, source: 'manual_v2', first_seen_at: now, last_seen_at: now, synced_at: now });
 
@@ -109,7 +126,7 @@ Deno.serve(async (request) => {
       await base44.asServiceRole.entities.KeywordRepairQueue.create({ amazon_account_id: accountId, asin, campaign_id: String(campaignId), ad_group_id: String(adGroupId), status: 'scheduled', queue_hour: 13, queue_window: '13:00-14:00', scheduled_at: new Date().toISOString(), attempt_count: 0 }).catch(() => {});
     }
 
-    return Response.json({ ok: complete, completion_status: complete ? 'complete' : 'incomplete', keyword, campaign_id: String(campaignId), ad_group_id: String(adGroupId), keyword_id: keywordId ? String(keywordId) : null, active_keywords: activeKeywords.length, repair_scheduled: !complete, spacing_seconds: 14, local_campaign_id: localCampaign?.id || null });
+    return Response.json({ ok: complete, completion_status: complete ? 'complete' : 'incomplete', keyword, campaign_id: String(campaignId), ad_group_id: String(adGroupId), keyword_id: keywordId ? String(keywordId) : null, active_keywords: activeKeywords.length || (keywordId ? 1 : 0), repair_scheduled: !complete, spacing_seconds: 14, local_campaign_id: localCampaign?.id || null });
   } catch (error) {
     return Response.json({ ok: false, completion_status: 'incomplete', error: error?.message || 'Erro ao criar campanha manual V2' }, { status: 500 });
   }
