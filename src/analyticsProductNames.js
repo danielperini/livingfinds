@@ -50,7 +50,7 @@ function findCard(title) {
 
 function enhanceTopProductsChart(map) {
   const card = findCard('Receita & Spend por Produto');
-  if (!card) return;
+  if (!card || card.dataset.replacedTopFive === 'true') return;
 
   card.querySelectorAll('svg text').forEach((node) => {
     const asin = node.textContent?.trim();
@@ -70,22 +70,24 @@ function enhanceProductTable(map) {
   const headers = Array.from(headerRow?.children || []);
   if (!headers.length) return;
 
-  let nameIndex = headers.findIndex((cell) => cell.textContent?.trim() === 'Nome do produto');
+  let titleIndex = headers.findIndex((cell) => ['Título do produto', 'Nome do produto'].includes(cell.textContent?.trim()));
   const asinIndex = headers.findIndex((cell) => cell.textContent?.trim() === 'ASIN');
   if (asinIndex < 0) return;
 
-  if (nameIndex < 0) {
+  if (titleIndex < 0) {
     const th = document.createElement('th');
-    th.textContent = 'Nome do produto';
+    th.textContent = 'Título do produto';
     th.className = headers[asinIndex].className;
     headerRow.insertBefore(th, headers[asinIndex]);
-    nameIndex = asinIndex;
+    titleIndex = asinIndex;
+  } else {
+    headers[titleIndex].textContent = 'Título do produto';
   }
 
   table.querySelectorAll('tbody tr').forEach((row) => {
     if (row.dataset.productNameEnhanced === 'true') return;
     const cells = Array.from(row.children);
-    const adjustedAsinIndex = nameIndex <= asinIndex ? asinIndex + 1 : asinIndex;
+    const adjustedAsinIndex = titleIndex <= asinIndex ? asinIndex + 1 : asinIndex;
     const asin = cells[adjustedAsinIndex]?.textContent?.trim();
     if (!asin || !map.has(asin)) return;
 
@@ -93,7 +95,7 @@ function enhanceProductTable(map) {
     td.textContent = map.get(asin);
     td.title = map.get(asin);
     td.className = 'px-4 py-3 text-slate-200 min-w-[240px]';
-    row.insertBefore(td, cells[nameIndex] || null);
+    row.insertBefore(td, cells[titleIndex] || null);
     row.dataset.productNameEnhanced = 'true';
   });
 
