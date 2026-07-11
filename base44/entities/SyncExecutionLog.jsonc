@@ -2,66 +2,33 @@
   "name": "SyncExecutionLog",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
+    "amazon_account_id": { "type": "string" },
     "operation": {
       "type": "string",
-      "enum": [
-        "full_sync",
-        "ads_sync",
-        "product_sync",
-        "metrics_sync",
-        "quick_sync"
-      ]
+      "description": "Etapa ou função executada. Mantido aberto para suportar os pipelines Ads, SP-API, reports, filas e OAuth existentes."
     },
     "trigger_type": {
       "type": "string",
-      "enum": [
-        "automatic",
-        "manual"
-      ]
+      "description": "Origem da execução: manual, automatic, dashboard_update_now, scheduler ou outra origem auditável."
     },
     "status": {
       "type": "string",
-      "enum": [
-        "started",
-        "success",
-        "error",
-        "skipped_limit"
-      ]
+      "enum": ["started", "pending", "processing", "success", "completed", "warning", "error", "failed", "skipped", "skipped_limit"],
+      "default": "started"
     },
-    "execution_date": {
-      "type": "string",
-      "format": "date"
-    },
-    "started_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "completed_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "duration_ms": {
-      "type": "number"
-    },
-    "records_processed": {
-      "type": "number",
-      "default": 0
-    },
-    "error_message": {
-      "type": "string"
-    },
-    "daily_count_at_execution": {
-      "type": "number"
-    }
+    "execution_date": { "type": "string", "format": "date" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "duration_ms": { "type": "number" },
+    "records_processed": { "type": "number", "default": 0 },
+    "records_received": { "type": "number", "default": 0 },
+    "records_imported": { "type": "number", "default": 0 },
+    "endpoint": { "type": "string" },
+    "http_status": { "type": "number" },
+    "amazon_request_id": { "type": "string" },
+    "result_summary": { "type": "string" },
+    "error_message": { "type": "string" },
+    "daily_count_at_execution": { "type": "number" }
   },
-  "required": [
-    "amazon_account_id",
-    "operation",
-    "trigger_type",
-    "status",
-    "execution_date"
-  ]
+  "required": ["amazon_account_id", "operation", "status"]
 }

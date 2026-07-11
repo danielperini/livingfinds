@@ -1,16 +1,30 @@
 /**
- * syncAdsPerformanceMetricsV2 — Orquestrador leve de relatórios Amazon Ads v3
+ * syncAdsPerformanceMetricsV2 — orquestrador assíncrono de métricas Amazon Ads v3.
  *
- * Responsabilidade:
- * - Delegar criação/reutilização de relatório para requestAmazonAdsReportV3
- * - NÃO fazer polling longo — retorna pending se relatório ainda não está pronto
- * - NÃO baixar relatório diretamente — delegado para downloadAndProcessAmazonAdsReportJob
- * - O polling assíncrono é feito pela automação scheduledAmazonAdsReportPoll (a cada 10 min)
+ * Regras:
+ * - por padrão solicita somente o dia fechado de ontem em America/Sao_Paulo;
+ * - não faz polling bloqueante;
+ * - reutiliza somente job do mesmo período/configuração;
+ * - delega download/persistência ao pipeline AmazonAdsReportJob;
+ * - preserva dados anteriores enquanto o novo report estiver pendente.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-function ymd(date: Date) {
-  return date.toISOString().slice(0, 10);
+function ymd(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function saoPauloDate(offsetDays = 0) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const base = new Date(`${map.year}-${map.month}-${map.day}T12:00:00Z`);
+  base.setUTCDate(base.getUTCDate() + offsetDays);
+  return ymd(base);
 }
 
 Deno.serve(async (request) => {
@@ -27,28 +41,42 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
     }
 
-    const end = body.end_date ? new Date(body.end_date) : new Date();
-    const start = body.start_date ? new Date(body.start_date) : new Date(end.getTime() - 29 * 86400000);
+    const yesterday = saoPauloDate(-1);
+    const startDate = String(body.start_date || yesterday).slice(0, 10);
+    const endDate = String(body.end_date || yesterday).slice(0, 10);
+    const force = body.force === true;
 
-    // Verificar se já existe job processed recente (últimas 23h)
-    const twentyThreeHoursAgo = new Date(Date.now() - 23 * 3600000).toISOString();
-    const recentProcessed = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
-      { amazon_account_id: accountId, status: 'processed' },
-      '-processed_at',
-      1
-    ).catch(() => []);
-
-    if (recentProcessed[0] && recentProcessed[0].processed_at > twentyThreeHoursAgo) {
-      return Response.json({
-        ok: true,
-        already_processed: true,
-        job_id: recentProcessed[0].id,
-        processed_at: recentProcessed[0].processed_at,
-        message: 'Relatório já processado nas últimas 23h.',
-      });
+    if (startDate > endDate) {
+      return Response.json({ ok: false, error: 'start_date não pode ser posterior a end_date' }, { status: 400 });
     }
 
-    // Delegar para requestAmazonAdsReportV3
+    // Reutilizar somente relatório processado do mesmo período.
+    if (!force) {
+      const recentProcessed = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
+        {
+          amazon_account_id: accountId,
+          report_type_id: 'spCampaigns',
+          time_unit: 'DAILY',
+          start_date: startDate,
+          end_date: endDate,
+          status: 'processed',
+        },
+        '-processed_at',
+        1,
+      ).catch(() => []);
+
+      if (recentProcessed[0]) {
+        return Response.json({
+          ok: true,
+          already_processed: true,
+          job_id: recentProcessed[0].id,
+          processed_at: recentProcessed[0].processed_at,
+          period: { start_date: startDate, end_date: endDate },
+          message: `Métricas fechadas de ${startDate} a ${endDate} já foram processadas.`,
+        });
+      }
+    }
+
     const reportRes = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
       amazon_account_id: accountId,
       report_type_id: 'spCampaigns',
@@ -70,65 +98,72 @@ Deno.serve(async (request) => {
         'sales7d',
         'sales14d',
         'sales30d',
+        'unitsSoldClicks7d',
+        'unitsSoldClicks14d',
+        'unitsSoldClicks30d',
       ],
-      start_date: ymd(start),
-      end_date: ymd(end),
-      report_name: `Living Finds SP campaigns ${ymd(start)} to ${ymd(end)}`,
-      source_function: 'syncAdsPerformanceMetricsV2',
+      start_date: startDate,
+      end_date: endDate,
+      report_name: `Living Finds SP campaigns CLOSED ${startDate} to ${endDate}`,
+      source_function: body.source_function || 'syncAdsPerformanceMetricsV2',
     });
 
-    if (!reportRes?.ok && !reportRes?.status_425 && !reportRes?.rate_limited) {
+    const data = reportRes?.data || reportRes || {};
+    if (!data?.ok && !data?.status_425 && !data?.rate_limited) {
       return Response.json({
         ok: false,
-        error: reportRes?.error || 'Falha ao solicitar relatório',
-        requires_reauthorization: reportRes?.requires_reauthorization,
+        error: data?.error || 'Falha ao solicitar relatório',
+        requires_reauthorization: data?.requires_reauthorization,
+        period: { start_date: startDate, end_date: endDate },
       });
     }
 
-    const status = reportRes?.status;
-
-    // Se já estava processed ou completed e URL disponível, processar imediatamente
-    if (status === 'completed' && reportRes?.job_id) {
-      const downloadRes = await base44.asServiceRole.functions.invoke('downloadAndProcessAmazonAdsReportJob', {
-        job_id: reportRes.job_id,
+    if (data?.status === 'completed' && data?.job_id) {
+      const downloadResponse = await base44.asServiceRole.functions.invoke('downloadAndProcessAmazonAdsReportJob', {
+        job_id: data.job_id,
         _service_role: true,
       });
-      if (downloadRes?.ok) {
+      const download = downloadResponse?.data || downloadResponse || {};
+      if (download?.ok) {
         return Response.json({
           ok: true,
           processed: true,
-          job_id: reportRes.job_id,
-          records: downloadRes?.records,
-          message: 'Relatório pronto e processado.',
+          job_id: data.job_id,
+          records: download.records || 0,
+          period: { start_date: startDate, end_date: endDate },
+          message: 'Relatório fechado pronto e persistido.',
         });
       }
     }
 
-    if (status === 'processed') {
+    if (data?.status === 'processed') {
       return Response.json({
         ok: true,
         already_processed: true,
-        reused: reportRes?.reused,
-        job_id: reportRes?.job_id,
-        message: 'Relatório já processado anteriormente.',
+        reused: data?.reused,
+        job_id: data?.job_id,
+        period: { start_date: startDate, end_date: endDate },
+        message: 'Relatório fechado já processado anteriormente.',
       });
     }
 
-    // Pendente — retornar imediatamente, polling será feito pela automação
     return Response.json({
       ok: true,
       pending: true,
-      reused: reportRes?.reused,
-      status_425: reportRes?.status_425,
-      rate_limited: reportRes?.rate_limited,
-      job_id: reportRes?.job_id,
-      report_id: reportRes?.report_id,
-      status,
-      next_poll_at: reportRes?.next_poll_at,
-      message: reportRes?.message || 'Relatório solicitado à Amazon. A geração pode levar alguns minutos. Próxima checagem programada.',
+      reused: data?.reused,
+      status_425: data?.status_425,
+      rate_limited: data?.rate_limited,
+      job_id: data?.job_id,
+      report_id: data?.report_id,
+      status: data?.status,
+      next_poll_at: data?.next_poll_at,
+      period: { start_date: startDate, end_date: endDate },
+      message: data?.message || 'Relatório fechado solicitado. O polling assíncrono fará o download e a persistência.',
     });
-
   } catch (error: any) {
-    return Response.json({ ok: false, error: error?.message || 'Erro ao sincronizar métricas Amazon Ads' }, { status: 500 });
+    return Response.json({
+      ok: false,
+      error: error?.message || 'Erro ao sincronizar métricas Amazon Ads',
+    }, { status: 500 });
   }
 });
