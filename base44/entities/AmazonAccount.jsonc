@@ -2,167 +2,54 @@
   "name": "AmazonAccount",
   "type": "object",
   "properties": {
-    "user_id": {
-      "type": "string"
-    },
-    "seller_name": {
-      "type": "string"
-    },
-    "seller_id": {
-      "type": "string"
-    },
-    "marketplace_id": {
-      "type": "string"
-    },
-    "ads_profile_id": {
-      "type": "string"
-    },
-    "ads_refresh_token": {
-      "type": "string",
-      "description": "Refresh token Amazon Ads (plain \u2014 mantido por compatibilidade com fun\u00e7\u00f5es legadas)"
-    },
-    "ads_access_token_expires_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Quando o access_token atual expira (com margem de 5min)"
-    },
-    "ads_last_token_refresh_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "\u00daltima vez que o access_token foi renovado com sucesso"
-    },
-    "ads_refresh_token_created_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Quando o refresh_token foi emitido pela Amazon"
-    },
-    "ads_refresh_token_expires_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Quando o refresh_token expira (se Amazon informar)"
-    },
+    "user_id": { "type": "string" },
+    "seller_name": { "type": "string" },
+    "seller_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "ads_profile_id": { "type": "string" },
+    "ads_refresh_token": { "type": "string", "description": "Refresh token Amazon Ads persistido" },
+    "ads_access_token": { "type": "string", "description": "Access token Amazon Ads reutilizável entre instâncias serverless" },
+    "ads_access_token_expires_at": { "type": "string", "format": "date-time", "description": "Expiração real do access token" },
+    "ads_last_token_refresh_at": { "type": "string", "format": "date-time" },
+    "ads_last_verified_at": { "type": "string", "format": "date-time" },
+    "ads_refresh_token_created_at": { "type": "string", "format": "date-time" },
+    "ads_refresh_token_expires_at": { "type": "string", "format": "date-time" },
+    "ads_refresh_token_updated_at": { "type": "string", "format": "date-time" },
+    "ads_token_generation": { "type": "string" },
     "ads_token_status": {
       "type": "string",
-      "enum": [
-        "active",
-        "expired",
-        "missing",
-        "revoked",
-        "error",
-        "refreshing"
-      ],
-      "default": "missing",
-      "description": "Status atual do token Amazon Ads"
+      "enum": ["active", "expired", "missing", "revoked", "error", "refreshing", "checking", "credentials_error"],
+      "default": "missing"
     },
-    "ads_token_last_error": {
-      "type": "string",
-      "description": "\u00daltimo erro de token (sem dados sens\u00edveis)"
-    },
-    "ads_token_refresh_in_progress": {
-      "type": "boolean",
-      "default": false,
-      "description": "Lock: evita refresh duplicado simult\u00e2neo"
-    },
-    "ads_token_refresh_started_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Quando o refresh em andamento foi iniciado"
-    },
-    "ads_requires_reauth": {
-      "type": "boolean",
-      "default": false,
-      "description": "Sinaliza que o usu\u00e1rio precisa reconectar"
-    },
-    "region": {
-      "type": "string"
-    },
-    "status": {
-      "type": "string",
-      "enum": [
-        "connected",
-        "pending",
-        "error",
-        "disconnected"
-      ],
-      "default": "pending"
-    },
-    "country_code": {
-      "type": "string",
-      "default": "BR"
-    },
-    "currency_code": {
-      "type": "string",
-      "default": "BRL"
-    },
-    "currency_symbol": {
-      "type": "string",
-      "default": "R$"
-    },
-    "locale": {
-      "type": "string",
-      "default": "pt-BR"
-    },
-    "profile_validated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "profile_validation_status": {
-      "type": "string",
-      "enum": [
-        "valid",
-        "invalid",
-        "error",
-        "pending"
-      ],
-      "default": "pending"
-    },
-    "ai_auto_optimization": {
-      "type": "boolean",
-      "default": false
-    },
-    "max_daily_budget_limit": {
-      "type": "number",
-      "default": 1000
-    },
-    "max_bid_change_pct": {
-      "type": "number",
-      "default": 20
-    },
-    "last_sync_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "ads_metrics_last_sync_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "\u00daltima vez que m\u00e9tricas de Ads foram processadas de um relat\u00f3rio"
-    },
-    "ads_data_fresh_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Timestamp do dado mais recente dispon\u00edvel \u2014 atualizado a cada relat\u00f3rio processado. Todas as p\u00e1ginas usam este campo para saber se h\u00e1 dados novos."
-    },
-    "sp_data_last_sync_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "\u00daltima sincroniza\u00e7\u00e3o de dados SP-API (invent\u00e1rio, pedidos)"
-    },
-    "error_message": {
-      "type": "string"
-    },
-    "unified_reports_access": {
-      "type": "boolean",
-      "default": false
-    },
-    "unified_reports_last_test_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "unified_reports_last_error": {
-      "type": "string"
-    }
+    "ads_token_last_error": { "type": "string" },
+    "ads_token_refresh_in_progress": { "type": "boolean", "default": false },
+    "ads_token_refresh_started_at": { "type": "string", "format": "date-time" },
+    "ads_requires_reauth": { "type": "boolean", "default": false },
+    "ads_credentials_error": { "type": "boolean", "default": false },
+    "ads_last_lwa_error_code": { "type": "string" },
+    "ads_last_lwa_status_code": { "type": "number" },
+    "ads_active_token_source": { "type": "string", "enum": ["database", "environment_fallback", "missing"] },
+    "ads_env_token_present": { "type": "boolean", "default": false },
+    "ads_token_source_conflict": { "type": "boolean", "default": false },
+    "region": { "type": "string" },
+    "status": { "type": "string", "enum": ["connected", "pending", "error", "disconnected"], "default": "pending" },
+    "country_code": { "type": "string", "default": "BR" },
+    "currency_code": { "type": "string", "default": "BRL" },
+    "currency_symbol": { "type": "string", "default": "R$" },
+    "locale": { "type": "string", "default": "pt-BR" },
+    "profile_validated_at": { "type": "string", "format": "date-time" },
+    "profile_validation_status": { "type": "string", "enum": ["valid", "invalid", "error", "pending"], "default": "pending" },
+    "ai_auto_optimization": { "type": "boolean", "default": false },
+    "max_daily_budget_limit": { "type": "number", "default": 1000 },
+    "max_bid_change_pct": { "type": "number", "default": 20 },
+    "last_sync_at": { "type": "string", "format": "date-time" },
+    "ads_metrics_last_sync_at": { "type": "string", "format": "date-time" },
+    "ads_data_fresh_at": { "type": "string", "format": "date-time" },
+    "sp_data_last_sync_at": { "type": "string", "format": "date-time" },
+    "error_message": { "type": "string" },
+    "unified_reports_access": { "type": "boolean", "default": false },
+    "unified_reports_last_test_at": { "type": "string", "format": "date-time" },
+    "unified_reports_last_error": { "type": "string" }
   },
-  "required": [
-    "user_id"
-  ]
+  "required": ["user_id"]
 }
