@@ -25,6 +25,14 @@ function formatDate(value) {
   return day && month ? `${day}/${month}` : value;
 }
 
+function formatBRL(value) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+    minimumFractionDigits: 2,
+  }).format(Number(value || 0));
+}
+
 function salesRevenue(row) {
   return Number(
     row?.revenue
@@ -45,7 +53,11 @@ function TrendTooltip({ active, payload, label }) {
         <div key={item.dataKey} className="flex items-center justify-between gap-4 mb-1">
           <span className="text-slate-300">{item.name}</span>
           <span className="font-semibold text-white">
-            {item.value == null ? '—' : `${Number(item.value).toFixed(1)}%`}
+            {item.value == null
+              ? '—'
+              : item.dataKey === 'salesSpendDelta'
+                ? formatBRL(item.value)
+                : `${Number(item.value).toFixed(1)}%`}
           </span>
         </div>
       ))}
@@ -121,15 +133,13 @@ export default function AcosTacosTrendChart() {
       const realRevenue = Number(realRevenueByDate.get(date) || 0);
       const acos = ads.sales > 0 ? (ads.spend / ads.sales) * 100 : null;
       const tacos = realRevenue > 0 ? (ads.spend / realRevenue) * 100 : null;
-      const salesSpendDeltaPct = ads.spend > 0
-        ? ((ads.sales - ads.spend) / ads.spend) * 100
-        : null;
+      const salesSpendDelta = Number((ads.sales - ads.spend).toFixed(2));
 
       return {
         date: formatDate(date),
         acos: acos == null ? null : Number(acos.toFixed(2)),
         tacos: tacos == null ? null : Number(tacos.toFixed(2)),
-        salesSpendDeltaPct: salesSpendDeltaPct == null ? null : Number(salesSpendDeltaPct.toFixed(2)),
+        salesSpendDelta,
       };
     });
 
@@ -168,22 +178,23 @@ export default function AcosTacosTrendChart() {
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={230}>
-          <LineChart data={derived.data} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+          <LineChart data={derived.data} margin={{ top: 4, right: 18, bottom: 0, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
             <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
+            <YAxis yAxisId="percent" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} unit="%" />
+            <YAxis yAxisId="currency" orientation="right" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} tickFormatter={(value) => `R$${Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`} />
             <Tooltip content={<TrendTooltip />} />
             <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
-            <ReferenceLine y={TARGET_ACOS} stroke="#64748B" strokeDasharray="4 4" />
-            <ReferenceLine y={0} stroke="#475569" />
-            <Line type="monotone" dataKey="acos" name="ACoS" stroke="#F59E0B" strokeWidth={2} dot={false} connectNulls />
-            <Line type="monotone" dataKey="tacos" name="TACoS" stroke="#22D3EE" strokeWidth={2} dot={false} connectNulls />
-            <Line type="monotone" dataKey="salesSpendDeltaPct" name="Diferença Vendas x Gasto" stroke="#A78BFA" strokeWidth={2} dot={false} connectNulls />
+            <ReferenceLine yAxisId="percent" y={TARGET_ACOS} stroke="#64748B" strokeDasharray="4 4" />
+            <ReferenceLine yAxisId="currency" y={0} stroke="#475569" />
+            <Line yAxisId="percent" type="monotone" dataKey="acos" name="ACoS" stroke="#F59E0B" strokeWidth={2} dot={false} connectNulls />
+            <Line yAxisId="percent" type="monotone" dataKey="tacos" name="TACoS" stroke="#22D3EE" strokeWidth={2} dot={false} connectNulls />
+            <Line yAxisId="currency" type="monotone" dataKey="salesSpendDelta" name="Diferença Vendas x Gasto (R$)" stroke="#A78BFA" strokeWidth={2} dot={false} connectNulls />
           </LineChart>
         </ResponsiveContainer>
       )}
       <p className="text-[10px] text-slate-500 mt-3">
-        Diferença % = ((Vendas Ads − Gasto Ads) ÷ Gasto Ads) × 100. Positivo indica vendas acima do gasto; negativo indica gasto acima das vendas. TACoS usa faturamento real da SP-API.
+        Diferença absoluta = Vendas Ads − Gasto Ads, em reais. Valor positivo indica vendas acima do gasto; valor negativo indica gasto acima das vendas. TACoS usa faturamento real da SP-API.
       </p>
     </div>
   );
