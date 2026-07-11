@@ -62,6 +62,7 @@
     "queued_at": { "type": "string", "format": "date-time" },
     "queue_processed_at": { "type": "string", "format": "date-time" },
     "scheduled_for": { "type": "string", "format": "date-time" },
+    "next_retry_at": { "type": "string", "format": "date-time" },
     "executed_at": { "type": "string", "format": "date-time" },
     "review_date": { "type": "string", "format": "date-time" },
     "amazon_response": { "type": "string" },
