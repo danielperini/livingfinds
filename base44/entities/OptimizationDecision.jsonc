@@ -2,251 +2,93 @@
   "name": "OptimizationDecision",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
-    "run_id": {
-      "type": "string"
-    },
+    "amazon_account_id": { "type": "string" },
+    "run_id": { "type": "string" },
     "decision_type": {
       "type": "string",
-      "enum": [
-        "bid_change",
-        "budget_change",
-        "pause",
-        "enable",
-        "negative_keyword",
-        "create_keyword",
-        "dayparting_rule",
-        "placement_change",
-        "harvest_search_term",
-        "create_campaign"
-      ],
+      "enum": ["bid_change", "budget_change", "pause", "enable", "negative_keyword", "create_keyword", "dayparting_rule", "placement_change", "harvest_search_term", "create_campaign"],
       "default": "bid_change"
     },
     "entity_type": {
       "type": "string",
-      "enum": [
-        "campaign",
-        "ad_group",
-        "keyword",
-        "search_term",
-        "product_target",
-        "account"
-      ],
+      "enum": ["campaign", "ad_group", "keyword", "search_term", "product_target", "account"],
       "default": "keyword"
     },
-    "entity_id": {
-      "type": "string"
-    },
-    "campaign_id": {
-      "type": "string"
-    },
-    "ad_group_id": {
-      "type": "string"
-    },
-    "keyword_id": {
-      "type": "string"
-    },
-    "keyword_text": {
-      "type": "string"
-    },
-    "asin": {
-      "type": "string"
-    },
-    "profile_id": {
-      "type": "string"
-    },
-    "marketplace_id": {
-      "type": "string"
-    },
-    "country_code": {
-      "type": "string",
-      "default": "BR"
-    },
-    "currency_code": {
-      "type": "string",
-      "default": "BRL"
-    },
-    "currency_symbol": {
-      "type": "string",
-      "default": "R$"
-    },
-    "action": {
-      "type": "string"
-    },
-    "value_before": {
-      "type": "number"
-    },
-    "value_after": {
-      "type": "number"
-    },
-    "change_pct": {
-      "type": "number"
-    },
+    "entity_id": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "keyword_id": { "type": "string" },
+    "keyword_text": { "type": "string" },
+    "asin": { "type": "string" },
+    "profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "country_code": { "type": "string", "default": "BR" },
+    "currency_code": { "type": "string", "default": "BRL" },
+    "currency_symbol": { "type": "string", "default": "R$" },
+    "action": { "type": "string" },
+    "value_before": { "type": "number" },
+    "value_after": { "type": "number" },
+    "change_pct": { "type": "number" },
     "objective": {
       "type": "string",
-      "enum": [
-        "launch",
-        "growth",
-        "profitability",
-        "defense",
-        "liquidation",
-        "ranking",
-        "discovery",
-        "maintenance"
-      ],
+      "enum": ["launch", "growth", "profitability", "defense", "liquidation", "ranking", "discovery", "maintenance"],
       "default": "maintenance"
     },
-    "rationale": {
-      "type": "string"
-    },
-    "data_used": {
-      "type": "string"
-    },
-    "period_analyzed": {
-      "type": "string"
-    },
-    "sample_size": {
-      "type": "string"
-    },
-    "confidence": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 100
-    },
+    "rationale": { "type": "string" },
+    "data_used": { "type": "string" },
+    "period_analyzed": { "type": "string" },
+    "sample_size": { "type": "string" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
     "risk": {
       "type": "string",
-      "enum": [
-        "very_low",
-        "low",
-        "medium",
-        "high",
-        "very_high"
-      ],
+      "enum": ["very_low", "low", "medium", "high", "very_high"],
       "default": "medium"
     },
-    "expected_impact": {
-      "type": "string"
-    },
-    "reversible": {
-      "type": "boolean",
-      "default": true
-    },
-    "requires_approval": {
-      "type": "boolean",
-      "default": true
-    },
+    "expected_impact": { "type": "string" },
+    "reversible": { "type": "boolean", "default": true },
+    "requires_approval": { "type": "boolean", "default": true },
     "status": {
       "type": "string",
-      "enum": [
-        "pending",
-        "approved",
-        "rejected",
-        "scheduled",
-        "executing",
-        "executed",
-        "failed",
-        "rolled_back",
-        "skipped"
-      ],
+      "enum": ["pending", "approved", "rejected", "scheduled", "executing", "executed", "failed", "rolled_back", "skipped"],
       "default": "pending"
     },
-    "scheduled_for": {
+    "queue_status": {
       "type": "string",
-      "format": "date-time"
+      "enum": ["pending", "scheduled", "processing", "completed", "failed", "cancelled"],
+      "default": "pending"
     },
-    "executed_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "review_date": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "amazon_response": {
-      "type": "string"
-    },
-    "error_message": {
-      "type": "string"
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "updated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "legacy_source": {
-      "type": "string"
-    },
-    "legacy_id": {
-      "type": "string"
-    },
-    "idempotency_key": {
-      "type": "string"
-    },
-    "trigger": {
-      "type": "string"
-    },
-    "metrics_before": {
-      "type": "string"
-    },
-    "metrics_after": {
-      "type": "string"
-    },
-    "evaluation_due_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "evaluated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
+    "queue_hour": { "type": "number", "minimum": 0, "maximum": 23 },
+    "queue_window": { "type": "string" },
+    "queued_at": { "type": "string", "format": "date-time" },
+    "queue_processed_at": { "type": "string", "format": "date-time" },
+    "scheduled_for": { "type": "string", "format": "date-time" },
+    "executed_at": { "type": "string", "format": "date-time" },
+    "review_date": { "type": "string", "format": "date-time" },
+    "amazon_response": { "type": "string" },
+    "error_message": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "legacy_source": { "type": "string" },
+    "legacy_id": { "type": "string" },
+    "idempotency_key": { "type": "string" },
+    "trigger": { "type": "string" },
+    "metrics_before": { "type": "string" },
+    "metrics_after": { "type": "string" },
+    "evaluation_due_at": { "type": "string", "format": "date-time" },
+    "evaluated_at": { "type": "string", "format": "date-time" },
     "outcome": {
       "type": "string",
-      "enum": [
-        "positive",
-        "neutral",
-        "negative",
-        "insufficient_data"
-      ]
+      "enum": ["positive", "neutral", "negative", "insufficient_data"]
     },
-    "rollback_payload": {
-      "type": "string"
-    },
-    "rollback_status": {
-      "type": "string"
-    },
-    "source_search_term_id": {
-      "type": "string"
-    },
-    "source_campaign_id": {
-      "type": "string"
-    },
-    "source_keyword_id": {
-      "type": "string"
-    },
-    "source_function": {
-      "type": "string"
-    },
-    "amazon_request_id": {
-      "type": "string"
-    },
-    "attempt_count": {
-      "type": "number",
-      "default": 0
-    },
-    "last_attempt_at": {
-      "type": "string",
-      "format": "date-time"
-    }
+    "rollback_payload": { "type": "string" },
+    "rollback_status": { "type": "string" },
+    "source_search_term_id": { "type": "string" },
+    "source_campaign_id": { "type": "string" },
+    "source_keyword_id": { "type": "string" },
+    "source_function": { "type": "string" },
+    "amazon_request_id": { "type": "string" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "last_attempt_at": { "type": "string", "format": "date-time" }
   },
-  "required": [
-    "amazon_account_id",
-    "decision_type",
-    "action",
-    "status"
-  ]
+  "required": ["amazon_account_id", "decision_type", "action", "status"]
 }
