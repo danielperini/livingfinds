@@ -1,14 +1,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const STEPS = [
-  ['ads_states', 'syncAds'],
-  ['ads_performance_metrics_30d', 'syncAdsPerformanceMetricsV2'],
+  ['yesterday_closed_data', 'syncYesterdayClosedData'],
   ['unified_reports_access_test', 'testUnifiedReportsAccess'],
   ['unified_reports_daily', 'syncUnifiedAdsReportsDaily'],
   ['unified_reports_hourly', 'syncUnifiedAdsReportsHourly'],
   ['reconcile_unified_vs_legacy', 'reconcileUnifiedVsLegacyMetrics'],
-  ['reports', 'requestProductReports'],
-  ['catalog_inventory', 'syncProductCatalogV2'],
   ['product_campaign_links', 'fixProductCampaignLinks'],
   ['prepare_all_campaign_repairs', 'prepareAllCampaignRepairs'],
   ['auto_campaign_repair_queue_v2', 'processAutoCampaignRepairQueueV2'],
@@ -127,6 +124,7 @@ Deno.serve(async (request) => {
       amazon_source_of_truth: true,
       ads_metrics_source: 'amazon_ads_api',
       dashboard_metrics_window_days: 30,
+      yesterday_closed_sync: 'automatic',
       amazon_write_policy: 'queued_00_04_and_13_14_except_pause',
       repair_preparation_policy: 'all_incomplete_campaigns_queued_by_campaign_id',
       auto_campaign_integrity: 'campaign_ad_group_product_ad_required',
