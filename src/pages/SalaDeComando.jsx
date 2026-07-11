@@ -13,6 +13,7 @@ import PrelecaoTab from '@/components/sala/PrelecaoTab';
 import EstrategiasTab from '@/components/sala/EstrategiasTab';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
+import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
@@ -74,6 +75,7 @@ const TAB_GROUPS = [
       { id: 'fila', label: 'Fila e Execuções' },
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
+      { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
     ],
   },
   {
@@ -1342,6 +1344,11 @@ export default function SalaDeComando() {
           {/* ── MONITOR DE SYNC ──────────────────────────────────────────────── */}
           {tab === 'sync_monitor' && account && (
             <SyncFailureMonitor amazonAccountId={account.id} />
+          )}
+
+          {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
+          {tab === 'bids_keywords' && (
+            <KeywordBidChangesPanel account={account} />
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
