@@ -97,6 +97,10 @@ Deno.serve(async (req) => {
     log.push(await invoke(base44, 'evaluateNewCampaigns72h', basePayload));
     await wait(3000);
 
+    // ── 11b. Enforcement: mínimo 10 termos por ASIN + substituição de keywords sem impressões ──
+    log.push(await invoke(base44, 'enforceManualCampaignMinTerms', basePayload));
+    await wait(3000);
+
     // ── 12. Fix links produto ↔ campanha ──────────────────────────────────────
     log.push(await invoke(base44, 'fixProductCampaignLinksV2', basePayload));
     await wait(2000);
