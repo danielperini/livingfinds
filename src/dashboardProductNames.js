@@ -53,25 +53,40 @@ function extractAsin(text) {
   return String(text || '').match(/\bB0[A-Z0-9]{8}\b/)?.[0] || null;
 }
 
+function makeAsinLine(tagName, asin) {
+  const line = document.createElement(tagName);
+  line.textContent = asin;
+  line.dataset.generatedProductAsin = 'true';
+  line.setAttribute('aria-hidden', 'true');
+  line.className = tagName === 'p'
+    ? 'text-[9px] text-cyan font-mono mt-0.5 truncate max-w-full overflow-hidden whitespace-nowrap'
+    : 'text-[9px] text-cyan font-mono block truncate max-w-full overflow-hidden whitespace-nowrap';
+  return line;
+}
+
 function enhanceTopCampaigns(map) {
   const card = findCard('Top campanhas por gasto');
   if (!card) return;
 
+  card.style.overflow = 'hidden';
+  card.style.maxWidth = '100%';
+
   card.querySelectorAll('p').forEach((node) => {
+    if (node.dataset.generatedProductAsin === 'true') return;
+    if (node.dataset.productNameEnhanced === 'true') return;
+
     const original = node.textContent?.trim() || '';
     const asin = extractAsin(original);
     const name = asin ? map.get(asin) : null;
-    if (!name || node.dataset.productNameEnhanced === 'true') return;
+    if (!name) return;
 
     const suffix = original.replace(asin, '').replace(/^\s*\|\s*/, '').trim();
     node.textContent = suffix ? `${name} · ${suffix}` : name;
     node.title = `${name} · ${asin}${suffix ? ` · ${suffix}` : ''}`;
     node.dataset.productNameEnhanced = 'true';
+    node.classList.add('truncate', 'max-w-full', 'overflow-hidden', 'whitespace-nowrap');
 
-    const asinLine = document.createElement('p');
-    asinLine.textContent = asin;
-    asinLine.className = 'text-[9px] text-cyan font-mono mt-0.5';
-    node.insertAdjacentElement('afterend', asinLine);
+    node.insertAdjacentElement('afterend', makeAsinLine('p', asin));
   });
 }
 
@@ -79,20 +94,34 @@ function enhanceProductHealth(map) {
   const card = findCard('Saúde dos produtos');
   if (!card) return;
 
+  card.style.overflow = 'hidden';
+  card.style.maxWidth = '100%';
+
   card.querySelectorAll('span').forEach((node) => {
-    const asin = extractAsin(node.textContent?.trim());
+    if (node.dataset.generatedProductAsin === 'true') return;
+    if (node.dataset.productNameEnhanced === 'true') return;
+
+    const original = node.textContent?.trim() || '';
+    const asin = extractAsin(original);
     const name = asin ? map.get(asin) : null;
-    if (!name || node.dataset.productNameEnhanced === 'true') return;
+    if (!name) return;
 
     node.textContent = name;
     node.title = `${name} · ${asin}`;
     node.dataset.productNameEnhanced = 'true';
+    node.classList.add('block', 'truncate', 'max-w-full', 'overflow-hidden', 'whitespace-nowrap');
 
-    const asinLine = document.createElement('span');
-    asinLine.textContent = asin;
-    asinLine.className = 'text-[9px] text-cyan font-mono block';
-    node.insertAdjacentElement('afterend', asinLine);
+    node.insertAdjacentElement('afterend', makeAsinLine('span', asin));
   });
+
+  const attentionLabel = Array.from(card.querySelectorAll('p, span')).find((node) =>
+    node.textContent?.trim() === 'Requer atenção:'
+  );
+  const attentionContainer = attentionLabel?.parentElement;
+  if (attentionContainer) {
+    attentionContainer.style.overflow = 'hidden';
+    attentionContainer.style.maxWidth = '100%';
+  }
 }
 
 async function apply() {
@@ -110,7 +139,18 @@ function schedule() {
   requestAnimationFrame(apply);
 }
 
-new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+const observer = new MutationObserver((mutations) => {
+  const onlyGeneratedNodes = mutations.every((mutation) =>
+    Array.from(mutation.addedNodes || []).every((node) =>
+      node.nodeType !== Node.ELEMENT_NODE
+      || node.dataset?.generatedProductAsin === 'true'
+    )
+  );
+
+  if (!onlyGeneratedNodes) schedule();
+});
+
+observer.observe(document.documentElement, { childList: true, subtree: true });
 window.addEventListener('DOMContentLoaded', schedule);
 window.addEventListener('popstate', schedule);
 window.setTimeout(schedule, 400);
