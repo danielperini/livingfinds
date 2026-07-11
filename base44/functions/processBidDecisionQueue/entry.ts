@@ -6,6 +6,9 @@ const WINDOW_HOURS = [0, 1, 2, 3, 13];
 const MAX_ATTEMPTS = 6;
 const DEFAULT_SPACING_MS = 2500;
 const DEFAULT_RUNTIME_MS = 240000;
+const MIN_KEYWORD_IMPRESSIONS_FOR_REDUCTION = 200;
+const MIN_KEYWORD_CLICKS_FOR_REDUCTION = 10;
+const MIN_KEYWORD_SPEND_FOR_REDUCTION = 12;
 
 function brazilHour() {
   const parts = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).formatToParts(new Date());
@@ -60,6 +63,49 @@ function dueBidDecision(decision:any, hour:number, recoveryMode:boolean) {
   return String(decision?.queue_status || '') === 'scheduled' && Number(decision?.queue_hour) === hour;
 }
 
+async function validateReduction(base44:any, decision:any, targetAcos:number) {
+  if (decision.action !== 'reduce_bid') return { ok: true };
+  const keywordId = String(decision.entity_id || decision.keyword_id || '');
+  if (!keywordId) return { ok: false, reason: 'Redução bloqueada: keyword_id ausente.' };
+
+  const rows = await base44.asServiceRole.entities.Keyword.filter({
+    amazon_account_id: decision.amazon_account_id,
+    keyword_id: keywordId,
+  }, null, 1).catch(() => []);
+  const keyword = rows[0];
+  if (!keyword) return { ok: false, reason: 'Redução bloqueada: não há métricas persistidas da keyword.' };
+
+  const impressions = Number(keyword.impressions || 0);
+  const clicks = Number(keyword.clicks || 0);
+  const spend = Number(keyword.spend || 0);
+  const orders = Number(keyword.orders || 0);
+  const sales = Number(keyword.sales || 0);
+  const acos = Number(keyword.acos || (sales > 0 ? (spend / sales) * 100 : 0));
+
+  if (impressions < MIN_KEYWORD_IMPRESSIONS_FOR_REDUCTION || clicks < MIN_KEYWORD_CLICKS_FOR_REDUCTION || spend < MIN_KEYWORD_SPEND_FOR_REDUCTION) {
+    return {
+      ok: false,
+      reason: `Redução bloqueada por amostra insuficiente da keyword: ${impressions} impressões, ${clicks} cliques, R$ ${spend.toFixed(2)} de gasto.`,
+    };
+  }
+
+  if (orders > 0 && !(acos > targetAcos * 1.2)) {
+    return {
+      ok: false,
+      reason: `Redução bloqueada: keyword possui ${orders} pedido(s) e ACoS ${acos.toFixed(1)}%, sem evidência suficiente acima da meta ${targetAcos}%.`,
+    };
+  }
+
+  if (orders === 0 && spend < Math.max(MIN_KEYWORD_SPEND_FOR_REDUCTION, Number(decision.value_before || 0) * 10)) {
+    return {
+      ok: false,
+      reason: `Redução bloqueada: gasto sem venda ainda abaixo do limite de segurança para o bid atual.`,
+    };
+  }
+
+  return { ok: true };
+}
+
 Deno.serve(async (request) => {
   const startedAt = Date.now();
   try {
@@ -79,7 +125,9 @@ Deno.serve(async (request) => {
     const output:any[] = [];
 
     for (const account of accounts) {
-      const result:any = { amazon_account_id: account.id, hour, recovery_mode: recoveryMode, decisions: [], total_due: 0, executed: 0, retried: 0, failed: 0, remaining: 0 };
+      const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1).catch(() => []);
+      const targetAcos = Number(configs[0]?.target_acos || 10);
+      const result:any = { amazon_account_id: account.id, hour, recovery_mode: recoveryMode, decisions: [], total_due: 0, executed: 0, retried: 0, failed: 0, skipped_unsafe: 0, remaining: 0 };
       const allDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, 'created_at', 1000).catch(() => []);
       const due = allDecisions.filter((item:any) => dueBidDecision(item, hour, recoveryMode)).sort((a:any, b:any) => new Date(a.queued_at || a.created_at || 0).getTime() - new Date(b.queued_at || b.created_at || 0).getTime());
       result.total_due = due.length;
@@ -88,6 +136,19 @@ Deno.serve(async (request) => {
         if (Date.now() - startedAt >= runtimeMs) { result.remaining = due.length - index; break; }
         const decision = due[index];
         try {
+          const validation = await validateReduction(base44, decision, targetAcos);
+          if (!validation.ok) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'skipped',
+              queue_status: 'cancelled',
+              error_message: validation.reason,
+              updated_at: new Date().toISOString(),
+            });
+            result.skipped_unsafe++;
+            result.decisions.push({ id: decision.id, ok: false, status: 'skipped_unsafe', action: decision.action, reason: validation.reason });
+            continue;
+          }
+
           if (decision.status !== 'approved' || decision.queue_status !== 'scheduled') {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
               status: 'approved', queue_status: 'scheduled', queue_hour: hour,
@@ -148,6 +209,11 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: output.every((item) => item.failed === 0), hour, recovery_mode: recoveryMode,
       accounts_processed: accounts.length, spacing_ms: spacingMs, max_attempts: MAX_ATTEMPTS,
+      reduction_guard: {
+        minimum_keyword_impressions: MIN_KEYWORD_IMPRESSIONS_FOR_REDUCTION,
+        minimum_keyword_clicks: MIN_KEYWORD_CLICKS_FOR_REDUCTION,
+        minimum_keyword_spend: MIN_KEYWORD_SPEND_FOR_REDUCTION,
+      },
       queue_policy: 'sequential_until_empty', continuation_required: totalRemaining > 0,
       remaining: totalRemaining, results: output,
     });
