@@ -2,7 +2,9 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid']);
-const WINDOW_HOURS = [0, 1, 2, 3, 13];
+const WINDOW_HOURS = [16, 17];
+const WINDOW_START = 16;
+const WINDOW_END = 18;
 const MAX_ATTEMPTS = 6;
 const DEFAULT_SPACING_MS = 2500;
 const DEFAULT_RUNTIME_MS = 240000;
@@ -15,17 +17,15 @@ function brazilHour() {
   return Number(parts.find((part) => part.type === 'hour')?.value || 0);
 }
 
-function nextQueueHour(currentHour = brazilHour()) {
-  if (currentHour < 4) return Math.min(3, currentHour + 1);
-  if (currentHour < 13) return 13;
-  return 0;
-}
-
-function nextQueueDate(hour:number) {
+function nextWindowDate() {
   const now = new Date();
-  const target = new Date(now);
-  target.setHours(hour, 0, 0, 0);
-  if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const get = (type:string) => Number(parts.find((part) => part.type === type)?.value || 0);
+  const currentHour = get('hour');
+  const target = new Date(Date.UTC(get('year'), get('month') - 1, get('day'), WINDOW_START + 3, 0, 0));
+  if (currentHour >= WINDOW_END) target.setUTCDate(target.getUTCDate() + 1);
   return target.toISOString();
 }
 
@@ -51,7 +51,7 @@ async function resolveAccounts(base44:any, requestedAccountId?:string|null) {
   return all.filter(isUsableAccount);
 }
 
-function dueBidDecision(decision:any, hour:number, recoveryMode:boolean) {
+function dueBidDecision(decision:any, recoveryMode:boolean) {
   if (!BID_ACTIONS.has(String(decision?.action || ''))) return false;
   if (decision?.decision_type && decision.decision_type !== 'bid_change') return false;
   if (['executed', 'rejected', 'rolled_back', 'skipped'].includes(String(decision?.status || ''))) return false;
@@ -60,7 +60,7 @@ function dueBidDecision(decision:any, hour:number, recoveryMode:boolean) {
   const retryAt = decision?.next_retry_at || decision?.scheduled_for;
   if (retryAt && new Date(retryAt).getTime() > Date.now()) return false;
   if (recoveryMode) return true;
-  return String(decision?.queue_status || '') === 'scheduled' && Number(decision?.queue_hour) === hour;
+  return String(decision?.queue_status || '') === 'scheduled';
 }
 
 async function validateReduction(base44:any, decision:any, targetAcos:number) {
@@ -97,10 +97,7 @@ async function validateReduction(base44:any, decision:any, targetAcos:number) {
   }
 
   if (orders === 0 && spend < Math.max(MIN_KEYWORD_SPEND_FOR_REDUCTION, Number(decision.value_before || 0) * 10)) {
-    return {
-      ok: false,
-      reason: `Redução bloqueada: gasto sem venda ainda abaixo do limite de segurança para o bid atual.`,
-    };
+    return { ok: false, reason: 'Redução bloqueada: gasto sem venda ainda abaixo do limite de segurança para o bid atual.' };
   }
 
   return { ok: true };
@@ -116,7 +113,7 @@ Deno.serve(async (request) => {
     const recoveryMode = body.recovery_mode === true;
     const hour = Number(body.hour ?? brazilHour());
     if (!recoveryMode && !WINDOW_HOURS.includes(hour)) {
-      return Response.json({ ok: true, skipped: true, reason: 'Fora das janelas Amazon', hour });
+      return Response.json({ ok: true, skipped: true, reason: 'Fora da janela Amazon 16:00-18:00 BRT', hour, window: '16:00-18:00' });
     }
 
     const spacingMs = Math.max(1500, Number(body.spacing_ms || DEFAULT_SPACING_MS));
@@ -129,7 +126,7 @@ Deno.serve(async (request) => {
       const targetAcos = Number(configs[0]?.target_acos || 10);
       const result:any = { amazon_account_id: account.id, hour, recovery_mode: recoveryMode, decisions: [], total_due: 0, executed: 0, retried: 0, failed: 0, skipped_unsafe: 0, remaining: 0 };
       const allDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, 'created_at', 1000).catch(() => []);
-      const due = allDecisions.filter((item:any) => dueBidDecision(item, hour, recoveryMode)).sort((a:any, b:any) => new Date(a.queued_at || a.created_at || 0).getTime() - new Date(b.queued_at || b.created_at || 0).getTime());
+      const due = allDecisions.filter((item:any) => dueBidDecision(item, recoveryMode)).sort((a:any, b:any) => new Date(a.queued_at || a.created_at || 0).getTime() - new Date(b.queued_at || b.created_at || 0).getTime());
       result.total_due = due.length;
 
       for (let index = 0; index < due.length; index++) {
@@ -139,23 +136,18 @@ Deno.serve(async (request) => {
           const validation = await validateReduction(base44, decision, targetAcos);
           if (!validation.ok) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'skipped',
-              queue_status: 'cancelled',
-              error_message: validation.reason,
-              updated_at: new Date().toISOString(),
+              status: 'skipped', queue_status: 'cancelled', error_message: validation.reason, updated_at: new Date().toISOString(),
             });
             result.skipped_unsafe++;
             result.decisions.push({ id: decision.id, ok: false, status: 'skipped_unsafe', action: decision.action, reason: validation.reason });
             continue;
           }
 
-          if (decision.status !== 'approved' || decision.queue_status !== 'scheduled') {
-            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'approved', queue_status: 'scheduled', queue_hour: hour,
-              queue_window: recoveryMode ? 'recuperação imediata' : decision.queue_window,
-              error_message: null, updated_at: new Date().toISOString(),
-            });
-          }
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
+            queue_window: recoveryMode ? 'recuperação imediata' : '16:00-18:00',
+            error_message: null, updated_at: new Date().toISOString(),
+          });
 
           const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
             decision_id: decision.id, decision_ids: [decision.id], _window_execution: true, _service_role: true,
@@ -168,14 +160,11 @@ Deno.serve(async (request) => {
             result.executed++;
             result.decisions.push({ id: decision.id, ok: true, status: 'executed', action: decision.action });
           } else if (isTransientError(item)) {
-            const nextHour = nextQueueHour(hour);
-            const retryAt = nextQueueDate(nextHour);
+            const retryAt = nextWindowDate();
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'approved', queue_status: 'scheduled', queue_hour: nextHour,
-              queue_window: nextHour === 13 ? '13:00-14:00' : `${String(nextHour).padStart(2, '0')}:00-${String(nextHour + 1).padStart(2, '0')}:00`,
-              scheduled_for: retryAt, next_retry_at: retryAt,
-              error_message: String(item?.error || data?.error || 'Falha temporária Amazon').slice(0, 500),
-              updated_at: new Date().toISOString(),
+              status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
+              queue_window: '16:00-18:00', scheduled_for: retryAt, next_retry_at: retryAt,
+              error_message: String(item?.error || data?.error || 'Falha temporária Amazon').slice(0, 500), updated_at: new Date().toISOString(),
             });
             result.retried++;
             result.decisions.push({ id: decision.id, ok: false, status: 'retry_scheduled', next_retry_at: retryAt, error: item?.error || data?.error || null });
@@ -184,13 +173,12 @@ Deno.serve(async (request) => {
             result.decisions.push({ id: decision.id, ok: false, status: 'failed', error: item?.error || data?.error || 'Falha Amazon' });
           }
         } catch (error) {
-          const nextHour = nextQueueHour(hour);
-          const retryAt = nextQueueDate(nextHour);
+          const retryAt = nextWindowDate();
           const attempts = Number(decision.attempt_count || 0) + 1;
           if (attempts < MAX_ATTEMPTS) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'approved', queue_status: 'scheduled', queue_hour: nextHour,
-              scheduled_for: retryAt, next_retry_at: retryAt,
+              status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
+              queue_window: '16:00-18:00', scheduled_for: retryAt, next_retry_at: retryAt,
               error_message: String(error?.message || error).slice(0, 500), updated_at: new Date().toISOString(),
             }).catch(() => {});
             result.retried++;
@@ -201,13 +189,14 @@ Deno.serve(async (request) => {
       }
 
       const remainingRows = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, 'created_at', 1000).catch(() => []);
-      result.remaining = Math.max(result.remaining, remainingRows.filter((item:any) => dueBidDecision(item, hour, recoveryMode)).length);
+      result.remaining = Math.max(result.remaining, remainingRows.filter((item:any) => dueBidDecision(item, recoveryMode)).length);
       output.push(result);
     }
 
     const totalRemaining = output.reduce((sum, item) => sum + Number(item.remaining || 0), 0);
     return Response.json({
       ok: output.every((item) => item.failed === 0), hour, recovery_mode: recoveryMode,
+      operational_window: '16:00-18:00 America/Sao_Paulo',
       accounts_processed: accounts.length, spacing_ms: spacingMs, max_attempts: MAX_ATTEMPTS,
       reduction_guard: {
         minimum_keyword_impressions: MIN_KEYWORD_IMPRESSIONS_FOR_REDUCTION,

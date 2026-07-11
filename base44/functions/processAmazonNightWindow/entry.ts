@@ -2,12 +2,12 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid']);
+const WINDOW_HOURS = [16, 17];
+const WINDOW_LABEL = '16:00-18:00';
 
 function brazilHour() {
   const parts = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    hour: '2-digit',
-    hour12: false,
+    timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false,
   }).formatToParts(new Date());
   return Number(parts.find((part) => part.type === 'hour')?.value || 0);
 }
@@ -25,7 +25,6 @@ async function resolveAccounts(base44:any, requestedAccountId?:string|null) {
     if (!rows.length) throw new Error(`AmazonAccount não encontrada: ${requestedAccountId}`);
     return rows;
   }
-
   const connected = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }).catch(() => []);
   if (connected.length) return connected;
   const all = await base44.asServiceRole.entities.AmazonAccount.list().catch(() => []);
@@ -39,8 +38,8 @@ Deno.serve(async (request) => {
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
     const hour = Number(body.hour ?? brazilHour());
-    if (![0, 1, 2, 3, 13].includes(hour)) {
-      return Response.json({ ok: true, skipped: true, reason: 'Fora das janelas Amazon', hour });
+    if (!WINDOW_HOURS.includes(hour)) {
+      return Response.json({ ok: true, skipped: true, reason: `Fora da janela Amazon ${WINDOW_LABEL} BRT`, hour, window: WINDOW_LABEL });
     }
 
     const accounts = await resolveAccounts(base44, body.amazon_account_id || null);
@@ -63,54 +62,40 @@ Deno.serve(async (request) => {
 
       try {
         const syncResponse = await base44.asServiceRole.functions.invoke('syncProductsAdsWindow', {
-          amazon_account_id: account.id,
-          _window_execution: true,
-          _service_role: true,
+          amazon_account_id: account.id, _window_execution: true, _service_role: true,
         });
         result.products_ads_sync = syncResponse?.data || syncResponse || {};
       } catch (error) {
         result.products_ads_sync = { ok: false, error: error?.message || String(error) };
       }
 
-      // Bids são drenados por processador dedicado, um a um, sem limite fixo de 5.
       try {
         const bidResponse = await base44.asServiceRole.functions.invoke('processBidDecisionQueue', {
-          amazon_account_id: account.id,
-          hour,
-          spacing_ms: 2500,
-          max_runtime_ms: 240000,
-          _service_role: true,
+          amazon_account_id: account.id, hour, spacing_ms: 2500, max_runtime_ms: 240000, _service_role: true,
         });
         result.bid_queue = bidResponse?.data || bidResponse || {};
       } catch (error) {
         result.bid_queue = { ok: false, error: error?.message || String(error) };
       }
 
-      const suggestions = hour === 13 ? [] : await base44.asServiceRole.entities.KeywordSuggestion.filter({
-        amazon_account_id: account.id,
-        status: 'approved',
-        queue_status: 'scheduled',
-        queue_hour: hour,
-      }, 'approved_at', 5).catch(() => []);
+      // A janela única absorve itens antigos ainda marcados com outros queue_hour.
+      const suggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter({
+        amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled',
+      }, 'approved_at', 100).catch(() => []);
 
       const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
-        amazon_account_id: account.id,
-        status: 'approved',
-        queue_status: 'scheduled',
-        queue_hour: hour,
-      }, 'created_at', 50).catch(() => []);
+        amazon_account_id: account.id, status: 'approved', queue_status: 'scheduled',
+      }, 'created_at', 500).catch(() => []);
 
       const kickoffs = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
-        amazon_account_id: account.id,
-        status: 'scheduled',
-        queue_hour: hour,
-      }, 'scheduled_at', 5).catch(() => []);
+        amazon_account_id: account.id, status: 'scheduled',
+      }, 'scheduled_at', 100).catch(() => []);
 
       for (const item of kickoffs) {
         if (item.scheduled_at && new Date(item.scheduled_at).getTime() > Date.now()) continue;
         try {
           await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
-            status: 'processing', started_at: new Date().toISOString(), attempt_count: Number(item.attempt_count || 0) + 1,
+            status: 'processing', queue_hour: 16, started_at: new Date().toISOString(), attempt_count: Number(item.attempt_count || 0) + 1,
           });
           const response = item.mode === 'manual_only'
             ? await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
@@ -144,10 +129,10 @@ Deno.serve(async (request) => {
           const response = await base44.asServiceRole.functions.invoke('createManualCampaignFromKeywordSuggestion', {
             amazon_account_id: account.id, suggestion_ids: [suggestion.id], _window_execution: true, _service_role: true,
           });
-          const item = response?.data?.results?.[0] || response?.results?.[0];
-          const success = Boolean(item?.ok || item?.already_exists);
+          const responseItem = response?.data?.results?.[0] || response?.results?.[0];
+          const success = Boolean(responseItem?.ok || responseItem?.already_exists);
           await base44.asServiceRole.entities.KeywordSuggestion.update(suggestion.id, {
-            queue_status: success ? 'completed' : 'failed', queue_processed_at: new Date().toISOString(),
+            queue_hour: 16, queue_status: success ? 'completed' : 'failed', queue_processed_at: new Date().toISOString(),
           });
           result.suggestions.push({ id: suggestion.id, ok: success });
         } catch (error) {
@@ -156,14 +141,17 @@ Deno.serve(async (request) => {
         await wait(14000);
       }
 
-      // Mantém outras decisões; bids já foram processados acima.
+      // Bids são tratados pelo processador dedicado; demais escritas seguem uma a uma.
       for (const decision of decisions.filter((item:any) => item.action !== 'pause_campaign' && !BID_ACTIONS.has(String(item.action || '')))) {
         try {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            queue_hour: 16, queue_window: WINDOW_LABEL, updated_at: new Date().toISOString(),
+          }).catch(() => {});
           const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
             decision_id: decision.id, decision_ids: [decision.id], _window_execution: true, _service_role: true,
           });
           const data = response?.data || response || {};
-          const success = Number(data?.executed || 0) > 0 || data?.results?.some((item:any) => item.ok);
+          const success = Number(data?.executed || 0) > 0 || data?.results?.some((row:any) => row.ok);
           result.decisions.push({ id: decision.id, ok: Boolean(success), action: decision.action });
         } catch (error) {
           result.decisions.push({ id: decision.id, ok: false, action: decision.action, error: error?.message || String(error) });
@@ -177,11 +165,13 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: output.every((item) => item.bid_queue?.ok !== false),
       hour,
+      operational_window: `${WINDOW_LABEL} America/Sao_Paulo`,
       account_resolution: body.amazon_account_id ? 'explicit' : 'automatic',
       accounts_processed: accounts.length,
-      windows: ['00:00-04:00', '13:00-14:00'],
+      windows: [WINDOW_LABEL],
       bid_policy: 'all_due_sequentially',
       bid_spacing_seconds: 2.5,
+      other_write_spacing_seconds: 14,
       products_ads_auto_sync: true,
       results: output,
     });

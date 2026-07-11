@@ -1,27 +1,21 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, Clock, Zap } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
-// Janela operacional: 03:00–06:00 BRT
-const WINDOW_START = 3; // hora BRT
-const WINDOW_END = 6;   // hora BRT
+const WINDOW_START = 16;
+const WINDOW_END = 18;
 
-// Pipeline diário de automações na janela 03:00–06:00 BRT
 const PIPELINE = [
-  { time: '03:00', label: 'Relatórios Amazon Ads' },
-  { time: '03:15', label: 'Termos Iniciais (produtos novos)' },
-  { time: '03:30', label: 'Bids & Harvest' },
-  { time: '03:45', label: 'Keyword Discovery' },
-  { time: '04:00', label: 'Inventário + Kick-off' },
-  { time: '04:15', label: 'Aprendizado AUTO' },
-  { time: '04:30', label: 'Motor Determinístico' },
-  { time: '04:45', label: 'Dayparting' },
-  { time: '05:00', label: 'Outcomes de Decisões' },
-  { time: '05:15', label: 'Monitor de Regras' },
+  { time: '16:00', label: 'Leitura dos relatórios recentes' },
+  { time: '16:10', label: 'Motor determinístico e IA' },
+  { time: '16:20', label: 'Alterações de bids' },
+  { time: '16:40', label: 'Keywords e negativas' },
+  { time: '17:00', label: 'Criação e reparo de campanhas' },
+  { time: '17:30', label: 'Budgets, estados e demais edições' },
+  { time: '17:50', label: 'Confirmação e auditoria Amazon' },
 ];
 
 function getBRTHour() {
-  // Offset BRT = UTC-3
   const now = new Date();
   const utcH = now.getUTCHours();
   const utcM = now.getUTCMinutes();
@@ -34,8 +28,7 @@ function getNextWindowInfo() {
     const minutesLeft = Math.round((WINDOW_END - brtHour) * 60);
     return { active: true, minutesLeft };
   }
-  // Calcular tempo até próxima janela
-  let hoursUntil = brtHour < WINDOW_START
+  const hoursUntil = brtHour < WINDOW_START
     ? WINDOW_START - brtHour
     : (24 - brtHour) + WINDOW_START;
   const totalMins = Math.round(hoursUntil * 60);
@@ -44,17 +37,14 @@ function getNextWindowInfo() {
   return { active: false, nextIn: h > 0 ? `${h}h${m > 0 ? `${m}min` : ''}` : `${m}min` };
 }
 
-// Tarefa que estaria rodando agora (ou a última executada)
 function getCurrentTask(brtHour) {
-  const hm = brtHour;
   for (let i = PIPELINE.length - 1; i >= 0; i--) {
     const [h, m] = PIPELINE[i].time.split(':').map(Number);
-    if (hm >= h + m / 60) return PIPELINE[i];
+    if (brtHour >= h + m / 60) return PIPELINE[i];
   }
   return null;
 }
 
-// Calcula % de atividades da última janela que tiveram sucesso (via SyncExecutionLog)
 function useWindowSuccessRate() {
   const [rate, setRate] = useState(null);
   const [lastWindowAt, setLastWindowAt] = useState(null);
@@ -62,31 +52,25 @@ function useWindowSuccessRate() {
   useEffect(() => {
     async function load() {
       try {
-        // Busca os últimos logs de sync
-        const runs = await base44.entities.SyncExecutionLog.filter({}, '-started_at', 30);
-        if (!runs || runs.length === 0) return;
+        const runs = await base44.entities.SyncExecutionLog.filter({}, '-started_at', 50);
+        if (!runs?.length) return;
 
-        // Última janela: define início da última janela 03:00–06:00 BRT
         const now = new Date();
-        // Calcula meia-noite UTC de hoje e adiciona 6h (03h BRT = 06h UTC)
         const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-        const windowEndUTC = new Date(todayUTC.getTime() + 6 * 3600000); // 06:00 UTC = 03:00 BRT
-        const windowStartUTC = new Date(windowEndUTC.getTime() - 3 * 3600000); // janela de 3h
+        // 16:00 BRT = 19:00 UTC; 18:00 BRT = 21:00 UTC.
+        const todayStartUTC = new Date(todayUTC.getTime() + 19 * 3600000);
+        const todayEndUTC = new Date(todayUTC.getTime() + 21 * 3600000);
+        const windowEnd = now.getTime() < todayEndUTC.getTime()
+          ? new Date(todayEndUTC.getTime() - 24 * 3600000)
+          : todayEndUTC;
+        const windowStart = new Date(windowEnd.getTime() - 2 * 3600000);
 
-        // Se ainda não passou a janela de hoje, usa a de ontem
-        const windowEnd = now.getTime() < windowEndUTC.getTime()
-          ? new Date(windowEndUTC.getTime() - 24 * 3600000)
-          : windowEndUTC;
-        const windowStart = new Date(windowEnd.getTime() - 3 * 3600000);
-
-        // Filtra logs dentro da última janela
         const windowRuns = runs.filter(r => {
           const ts = new Date(r.started_at || r.created_date || 0).getTime();
           return ts >= windowStart.getTime() && ts <= windowEnd.getTime();
         });
 
-        if (windowRuns.length === 0) {
-          // Sem logs recentes — usa todos os últimos 10
+        if (!windowRuns.length) {
           const recentRuns = runs.slice(0, 10);
           const successes = recentRuns.filter(r => r.status === 'success' || r.status === 'skipped_limit').length;
           setRate(recentRuns.length > 0 ? Math.round(successes / recentRuns.length * 100) : null);
@@ -110,7 +94,6 @@ export default function AutoWindowStatus() {
   const currentTask = active ? getCurrentTask(brtHour) : null;
   const { rate, lastWindowAt } = useWindowSuccessRate();
 
-  // Formata data/hora da última janela
   const lastWindowStr = lastWindowAt
     ? lastWindowAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -125,12 +108,10 @@ export default function AutoWindowStatus() {
       <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
         <div className="text-[11px]">
-          <span className="text-emerald-300 font-semibold">Janela ativa</span>
+          <span className="text-emerald-300 font-semibold">Janela Amazon ativa 16h–18h</span>
           {currentTask && <span className="text-slate-400 ml-1">· {currentTask.label}</span>}
           <span className="text-slate-500 ml-1">({minutesLeft}min restantes)</span>
-          {rate !== null && (
-            <span className={`ml-1.5 font-semibold ${rateColor}`}>· {rate}% OK</span>
-          )}
+          {rate !== null && <span className={`ml-1.5 font-semibold ${rateColor}`}>· {rate}% OK</span>}
         </div>
       </div>
     );
@@ -141,14 +122,12 @@ export default function AutoWindowStatus() {
       <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
       <div className="text-[11px] flex items-center gap-1 flex-wrap">
         {lastWindowStr ? (
-          <span className="text-slate-400">Atualizado em {lastWindowStr}</span>
+          <span className="text-slate-400">Última janela: {lastWindowStr}</span>
         ) : (
-          <span className="text-slate-400">Automações 03h–06h BRT</span>
+          <span className="text-slate-400">Operações Amazon 16h–18h BRT</span>
         )}
         <span className="text-slate-600">· próxima em {nextIn}</span>
-        {rate !== null && (
-          <span className={`font-bold ${rateColor}`}>· {rate}% implementadas</span>
-        )}
+        {rate !== null && <span className={`font-bold ${rateColor}`}>· {rate}% implementadas</span>}
       </div>
     </div>
   );
