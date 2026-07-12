@@ -14,6 +14,7 @@ import WeeklyLearningTab from '@/components/autopilot/WeeklyLearningTab';
 import WeeklySearchTermPromotionPanel from '@/components/autopilot/WeeklySearchTermPromotionPanel';
 import WasteTermsCleanupPanel from '@/components/autopilot/WasteTermsCleanupPanel';
 import AcosViolationPanel from '@/components/autopilot/AcosViolationPanel';
+import GuardrailsPanel from '@/components/autopilot/GuardrailsPanel';
 import AutoCampaignJourneyPanel from '@/components/autopilot/AutoCampaignJourneyPanel';
 import KeywordLifecyclePanel from '@/components/autopilot/KeywordLifecyclePanel';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -26,6 +27,7 @@ import {
 
 const TABS = [
   { id: 'decisions', label: 'Decisões IA', icon: Brain },
+  { id: 'guardrails', label: '🛡 Guardrails', icon: null },
   { id: 'journey', label: '🚀 Jornada AUTO', icon: null },
   { id: 'weekly_learning', label: '🧬 Aprendizado Semanal', icon: null },
   { id: 'converted', label: 'Termos Convertidos', icon: Search },
@@ -319,6 +321,7 @@ export default function AdsAutopilot() {
     {tab === 'dayparting' && <DaypartingDashboard />}
     {tab === 'ml_learning' && <MLLearningPanel amazonAccountId={account.id} />}
     {tab === 'budget_validation' && <BudgetValidationPanel account={account} />}
+    {tab === 'guardrails' && <GuardrailsPanel accountId={account.id} />}
     {tab === 'rules' && <BiddingRulesPanel amazonAccountId={account.id} />}
     {tab === 'config' && <AutopilotConfigPanel account={account} config={config} onSaved={loadData} />}
     {tab === 'alerts' && <AutopilotAlertsPanel alerts={alerts} onDismiss={dismissAlert} />}
