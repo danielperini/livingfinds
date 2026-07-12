@@ -216,6 +216,30 @@ export default function Settings() {
       }
       setGoalsSaved(true);
       setTimeout(() => setGoalsSaved(false), 3000);
+
+      // ── Pós-save: disparar motor imediatamente + enfileirar recalibração ──
+      // 1. Motor relê os novos parâmetros e gera decisões atualizadas agora
+      base44.functions.invoke('runUnifiedDecisionEngine', {
+        amazon_account_id: account.id,
+        trigger: 'settings_updated',
+        force: true,
+      }).catch(() => {});
+
+      // 2. Enfileirar na OptimizationDecision para a próxima janela de execução
+      base44.entities.OptimizationDecision.create({
+        amazon_account_id: account.id,
+        decision_type: 'bid_change',
+        entity_type: 'account',
+        action: 'reload_settings',
+        status: 'approved',
+        approval_status: 'auto_approved',
+        autopilot_authorized: true,
+        requires_approval: false,
+        rationale: `Metas atualizadas: ACoS=${goals.target_acos}%, ROAS=${goals.target_roas}x, Budget/dia=R$${goals.daily_budget_limit}. Motor recarregará os parâmetros na próxima janela.`,
+        source_function: 'Settings.saveGoals',
+        created_at: new Date().toISOString(),
+      }).catch(() => {});
+
     } catch (err) {
       alert(`Erro ao salvar metas: ${err.message}`);
     } finally {
