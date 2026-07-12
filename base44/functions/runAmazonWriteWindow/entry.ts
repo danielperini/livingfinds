@@ -1,4 +1,11 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+/**
+ * runAmazonWriteWindow — Janela de escrita Amazon Ads
+ *
+ * Dispara operações de escrita na Amazon durante a janela 16:00-18:00 BRT,
+ * incluindo o pipeline de canonização de campanhas manuais.
+ * Sem janela horária rígida para enforce_canonical (pode rodar a qualquer hora).
+ */
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 function brazilHour() {
   const parts = new Intl.DateTimeFormat('pt-BR', {
@@ -14,7 +21,35 @@ Deno.serve(async (request) => {
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
     const hour = Number(body.hour ?? brazilHour());
-    if (![16, 17].includes(hour)) {
+    const force = body.force === true;
+    const operation = body.operation || 'all';
+
+    // ── Pipeline de canonização de campanhas manuais (sem restrição de janela) ──
+    if (operation === 'enforce_canonical' || operation === 'all') {
+      // Verificar se ainda há pendências
+      const pendingLog = await base44.asServiceRole.entities.SyncExecutionLog.filter(
+        { amazon_account_id: body.amazon_account_id || null, operation: 'enforce_canonical_manual_campaigns', status: 'success' },
+        '-started_at', 1
+      ).catch(() => []);
+      const lastResult = pendingLog[0]?.result_summary ? JSON.parse(pendingLog[0].result_summary) : null;
+      const stillPending = lastResult?.remaining > 0 || !lastResult;
+
+      if (stillPending || force) {
+        base44.asServiceRole.functions.invoke('enforceCanonicalManualCampaigns', {
+          amazon_account_id: body.amazon_account_id || null,
+          _service_role: true,
+          dry_run: false,
+          batch_size: 20,
+        }).catch(() => {});
+      }
+
+      if (operation === 'enforce_canonical') {
+        return Response.json({ ok: true, dispatched: 'enforceCanonicalManualCampaigns', still_pending: stillPending });
+      }
+    }
+
+    // ── Janela de escrita padrão (16:00-18:00 BRT) ─────────────────────────
+    if (![16, 17].includes(hour) && !force) {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela 16:00-18:00 BRT' });
     }
 
@@ -31,7 +66,7 @@ Deno.serve(async (request) => {
       hour,
       result: data,
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Falha na janela Amazon' }, { status: 500 });
   }
 });
