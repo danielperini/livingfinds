@@ -107,18 +107,18 @@ export default function DataConsistencyBadge({ canonicalContext, loading, compac
           <span className="text-slate-600">Metas:</span>
           <span className="text-slate-400">{settingsSrc}</span>
         </span>
-        {ageLabel && (
+        {ageLabel ? (
           <span className="flex items-center gap-1">
             <span className="text-slate-600">Ads sync:</span>
             <span className="text-slate-400">{ageLabel} ({fmtDate(dq.ads_last_sync_at)})</span>
           </span>
-        )}
-        {dq.sp_api_latest_date && (
+        ) : null}
+        {dq.sp_api_latest_date ? (
           <span className="flex items-center gap-1">
             <span className="text-slate-600">SP-API:</span>
             <span className="text-slate-400">até {dq.sp_api_latest_date}</span>
           </span>
-        )}
+        ) : null}
         <span className={`font-medium ${dq.motor_would_run ? 'text-emerald-500/80' : 'text-red-400/80'}`}>
           {motorLabel}
         </span>

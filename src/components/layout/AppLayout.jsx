@@ -148,9 +148,7 @@ export default function AppLayout() {
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
-      {mobileOpen &&
-      <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setMobileOpen(false)} />
-      }
+      {mobileOpen ? <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setMobileOpen(false)} /> : null}
 
       <aside
         className={`
@@ -162,19 +160,18 @@ export default function AppLayout() {
         `}>
         
         <div className={`flex items-center h-14 border-b border-surface-2 px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
-          {!collapsed &&
-          <div className="flex items-center gap-2">
+          {!collapsed ? (
+            <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
                 <Zap className="w-4 h-4 text-white" />
               </div>
               <span className="font-heading font-bold text-white text-base">Living Finds</span>
             </div>
-          }
-          {collapsed &&
-          <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
+          ) : (
+            <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
               <Zap className="w-4 h-4 text-white" />
             </div>
-          }
+          )}
           <button
             type="button"
             onClick={() => setCollapsed(!collapsed)}
@@ -209,17 +206,17 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {!collapsed &&
-        <div className="p-4 border-t border-surface-2 space-y-2">
-            {productSyncing &&
-          <div className="flex items-center gap-2 text-[11px] text-cyan">
+        {!collapsed ? (
+          <div className="p-4 border-t border-surface-2 space-y-2">
+            {productSyncing ? (
+              <div className="flex items-center gap-2 text-[11px] text-cyan">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Sincronizando produtos...
               </div>
-          }
+            ) : null}
             <ModeBadge mode={accountMode} />
           </div>
-        }
+        ) : null}
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -235,7 +232,7 @@ export default function AppLayout() {
           </button>
 
           <div className="flex-1 min-w-0">
-            {location.pathname === '/products' &&
+            {location.pathname === '/products' ? (
             <div className="flex items-center gap-3 flex-wrap">
                 
 
@@ -250,14 +247,12 @@ export default function AppLayout() {
                 <div className="min-w-0">
                   <p className="text-[11px] text-slate-400">
                     Última atualização: {formatLastSync(lastSync)}
-                    {lastSync && isSyncFresh() && <span className="ml-1 text-emerald-500">· dados frescos</span>}
+                    {lastSync && isSyncFresh() ? <span className="ml-1 text-emerald-500">· dados frescos</span> : null}
                   </p>
-                  {syncMessage &&
-                <p className="text-[11px] text-cyan truncate max-w-[620px]">{syncMessage}</p>
-                }
+                  {syncMessage ? <p className="text-[11px] text-cyan truncate max-w-[620px]">{syncMessage}</p> : null}
                 </div>
               </div>
-            }
+            ) : null}
           </div>
 
           <div className="flex items-center gap-3">
