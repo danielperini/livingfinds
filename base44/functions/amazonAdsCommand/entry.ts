@@ -1,11 +1,12 @@
 /**
- * amazonAdsCommand v5 — Gateway centralizado Amazon Ads com renovação automática de token
+ * amazonAdsCommand v6 — Gateway centralizado Amazon Ads
  *
- * 1. Obtém access_token via amazonAdsTokenManager.
- * 2. Executa chamada Amazon Ads.
- * 3. Em 401/403 força refresh e repete uma única vez.
- * 4. Em 429 retorna rate-limit controlado.
- * 5. Propaga erros de credencial/reautorização sem falso positivo.
+ * Melhorias v6:
+ * - Retry automático em 502/503 com backoff exponencial (até 3 tentativas)
+ * - max_attempts padrão = 3 (antes era 1)
+ * - Content-Type preservado exatamente como enviado (sem override silencioso)
+ * - Resposta normalizada sempre inclui request_id no nível raiz
+ * - Log de erro apenas em falha real (não em 429 esperado)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -35,10 +36,11 @@ async function callAmazonApi(
   method: string,
   headers: Record<string, string>,
   payload: any,
-  maxAttempts = 3
-): Promise<{ ok: boolean; status: number; payload: any; errors: any[]; headers?: Record<string, string | null> }> {
+  maxAttempts = 3,
+): Promise<{ ok: boolean; status: number; payload: any; errors: any[]; request_id: string | null }> {
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let lastResult: any = null;
+
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
@@ -56,25 +58,24 @@ async function callAmazonApi(
 
       const ok = response.status >= 200 && response.status < 300;
       const retryable = response.status === 503 || response.status === 502;
+      const request_id = response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id') || null;
+
       lastResult = {
         ok,
         status: response.status,
         payload: parsed,
-        headers: {
-          request_id: response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id'),
-          retry_after: response.headers.get('Retry-After'),
-          rate_limit: response.headers.get('x-amzn-RateLimit-Limit'),
-        },
+        request_id,
+        retry_after: response.headers.get('Retry-After'),
+        rate_limit: response.headers.get('x-amzn-RateLimit-Limit'),
         errors: ok ? [] : [{ code: String(response.status), message: text.slice(0, 500) }],
       };
 
       if (ok || !retryable || attempt === maxAttempts - 1) break;
+      console.log(`[adsCommand] ${response.status} retryable — tentativa ${attempt + 1}/${maxAttempts}`);
       await wait(Math.min(1000 * Math.pow(2, attempt), 15000));
     } catch (err: any) {
       lastResult = {
-        ok: false,
-        status: 0,
-        payload: null,
+        ok: false, status: 0, payload: null, request_id: null,
         errors: [{ code: 'NETWORK_ERROR', message: err?.message || String(err) }],
       };
       if (attempt === maxAttempts - 1) break;
@@ -108,7 +109,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
-      { id: body.amazon_account_id }, null, 1
+      { id: body.amazon_account_id }, null, 1,
     );
     const account = accounts[0];
     if (!account) {
@@ -119,12 +120,15 @@ Deno.serve(async (request) => {
     if (!profileId && path !== '/v2/profiles') {
       return Response.json({ ok: false, error: 'ads_profile_id não configurado' }, { status: 400 });
     }
+
     const baseUrl = adsBase(account.region);
     const url = `${baseUrl}${path}`;
     const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-    const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID');
+    // ADS_ACCOUNT_ID é opcional — não bloqueia execução se ausente
+    const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID') || null;
+    const maxAttempts = Number(body.max_attempts || 3);
 
-    async function buildHeaders(forceRefresh = false): Promise<{ headers: Record<string, string>; tokenResult: any }> {
+    async function buildHeaders(forceRefresh = false): Promise<Record<string, string>> {
       const tokenResult = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
         amazon_account_id: body.amazon_account_id,
         force_refresh: forceRefresh,
@@ -152,18 +156,19 @@ Deno.serve(async (request) => {
       };
       if (profileId) headers['Amazon-Advertising-API-Scope'] = String(profileId);
       if (adsAccountId) headers['Amazon-Ads-AccountId'] = String(adsAccountId);
-
-      return { tokenResult: tData, headers };
+      return headers;
     }
 
-    let { headers } = await buildHeaders(false);
-    let result = await callAmazonApi(url, method, headers, body.payload ?? null, Number(body.max_attempts || 1));
+    // Primeira tentativa
+    let headers = await buildHeaders(false);
+    let result = await callAmazonApi(url, method, headers, body.payload ?? null, maxAttempts);
 
-    if ((result.status === 401 || result.status === 403)) {
-      console.log(`[adsCommand] ${result.status} recebido — forçando refresh e retentando uma vez`);
+    // Em 401/403: força refresh e tenta uma vez mais
+    if (result.status === 401 || result.status === 403) {
+      console.log(`[adsCommand] ${result.status} — forçando refresh de token`);
       try {
-        const { headers: headers2 } = await buildHeaders(true);
-        result = await callAmazonApi(url, method, headers2, body.payload ?? null, 1);
+        headers = await buildHeaders(true);
+        result = await callAmazonApi(url, method, headers, body.payload ?? null, 1);
         if (result.status === 401 || result.status === 403) {
           await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
             ads_token_status: 'revoked',
@@ -196,8 +201,9 @@ Deno.serve(async (request) => {
       }
     }
 
+    // Rate limit 429
     if (result.status === 429) {
-      const retryAfter = Number(result.headers?.retry_after || body.retry_after_seconds || 60) || 60;
+      const retryAfter = Number(result.retry_after || body.retry_after_seconds || 60) || 60;
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: account.id,
         operation: `amazon_api:rate_limit:${method}:${path}`,
@@ -208,18 +214,18 @@ Deno.serve(async (request) => {
         records_processed: 0,
         error_message: `Rate limit Amazon Ads (429). Retry-After=${retryAfter}`,
       }).catch(() => {});
-
       return Response.json({
         ok: false,
         status: 429,
         rate_limited: true,
         retryable: true,
-        request_id: result.headers?.request_id,
+        request_id: result.request_id,
         retry_after_seconds: retryAfter,
         message: 'Comando recebido. A Amazon limitou a taxa de requisições, então a ação será efetivada em alguns instantes.',
       });
     }
 
+    // Erro real — loga
     if (!result.ok) {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: account.id,
@@ -230,11 +236,18 @@ Deno.serve(async (request) => {
         completed_at: new Date().toISOString(),
         records_processed: 0,
         error_message: String(result.errors?.[0]?.message || '').slice(0, 500),
-        result_summary: JSON.stringify({ status: result.status, request_id: result.headers?.request_id }).slice(0, 1000),
+        result_summary: JSON.stringify({ status: result.status, request_id: result.request_id }).slice(0, 1000),
       }).catch(() => {});
     }
 
-    return Response.json({ ...result, duration_ms: Date.now() - t0 });
+    return Response.json({
+      ok: result.ok,
+      status: result.status,
+      payload: result.payload,
+      request_id: result.request_id,
+      errors: result.errors,
+      duration_ms: Date.now() - t0,
+    });
 
   } catch (error: any) {
     if (error?.tokenError) {
