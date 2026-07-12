@@ -890,39 +890,112 @@ Deno.serve(async (req) => {
     }
 
     // ── 10. Deduplicação de campanhas AUTO por ASIN ───────────────────────
-    // Regra: apenas 1 campanha AUTO ativa por ASIN. Manter a mais antiga; arquivar localmente as demais.
-    // A pausa na Amazon Ads é delegada a pauseAutoCampaignsNoStock (que já implementa batchSetCampaignState).
+    // Regra: apenas 1 campanha AUTO ativa por ASIN. Manter a mais antiga; pausar+arquivar as demais.
+    // Pausa real na Amazon Ads API v3 SP + arquivamento local.
     const autoDuplicatesArchived: any[] = [];
     {
+      // Identificar duplicatas
       const autoCampaignsByAsin = new Map<string, any[]>();
       for (const c of campaigns) {
         const state = String(c.state || c.status || '').toLowerCase();
         if (state === 'archived') continue;
-        const isAuto = (c.targeting_type || '').toUpperCase() === 'AUTO';
-        if (!isAuto) continue;
+        if ((c.targeting_type || '').toUpperCase() !== 'AUTO') continue;
         const asin = c.asin || campaignAsinMap.get(c.campaign_id || c.amazon_campaign_id) || null;
         if (!asin) continue;
         if (!autoCampaignsByAsin.has(asin)) autoCampaignsByAsin.set(asin, []);
         autoCampaignsByAsin.get(asin)!.push(c);
       }
+
+      const dupsToPause: any[] = [];
       for (const [asin, camps] of autoCampaignsByAsin.entries()) {
         if (camps.length <= 1) continue;
-        // Ordenar por data de criação — manter a mais antiga (índice 0)
         camps.sort((a: any, b: any) =>
           new Date(a.created_at || a.created_date || 0).getTime() -
           new Date(b.created_at || b.created_date || 0).getTime()
         );
-        // Arquivar localmente as mais recentes (fire-and-forget)
         for (let i = 1; i < camps.length; i++) {
           const dup = camps[i];
           const iKey = `auto_dedup_archive|${aid}|${dup.id}`;
           if (usedIdemKeys.has(iKey)) continue;
+          const amazonCampaignId = dup.campaign_id || dup.amazon_campaign_id;
+          if (amazonCampaignId) dupsToPause.push({ dup, asin, amazonCampaignId });
+        }
+      }
+
+      if (dupsToPause.length > 0) {
+        // Obter token Ads para pausar na Amazon
+        const adsClientId = Deno.env.get('ADS_CLIENT_ID') || '';
+        const adsClientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+        const adsRegion = Deno.env.get('ADS_REGION') || 'na';
+        const endpointMap: Record<string, string> = {
+          na: 'https://advertising-api.amazon.com',
+          eu: 'https://advertising-api-eu.amazon.com',
+          fe: 'https://advertising-api-fe.amazon.com',
+        };
+        const adsEndpoint = endpointMap[adsRegion] || endpointMap.na;
+        const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
+        const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+
+        let adsAccessToken: string | null = null;
+        if (refreshToken && adsClientId && profileId) {
+          try {
+            const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: refreshToken,
+                client_id: adsClientId,
+                client_secret: adsClientSecret,
+              }).toString(),
+            });
+            if (tokenRes.ok) adsAccessToken = (await tokenRes.json()).access_token;
+          } catch {}
+        }
+
+        // Pausar em lotes de 10 na Amazon Ads API v3 SP
+        const pausedOnAmazon: string[] = [];
+        const failedOnAmazon: string[] = [];
+        if (adsAccessToken) {
+          for (let i = 0; i < dupsToPause.length; i += 10) {
+            const batch = dupsToPause.slice(i, i + 10);
+            try {
+              const res = await fetch(`${adsEndpoint}/sp/campaigns`, {
+                method: 'PUT',
+                headers: {
+                  'Amazon-Advertising-API-ClientId': adsClientId,
+                  'Amazon-Advertising-API-Scope': profileId,
+                  'Authorization': `Bearer ${adsAccessToken}`,
+                  'Content-Type': 'application/vnd.spCampaign.v3+json',
+                  'Accept': 'application/vnd.spCampaign.v3+json',
+                },
+                body: JSON.stringify({ campaigns: batch.map(b => ({ campaignId: b.amazonCampaignId, state: 'PAUSED' })) }),
+              });
+              if (res.ok) {
+                const data = await res.json();
+                (data?.campaigns?.success || []).forEach((s: any) => pausedOnAmazon.push(s.campaignId));
+                (data?.campaigns?.error || []).forEach((e: any) => failedOnAmazon.push(e.campaignId));
+              } else {
+                batch.forEach(b => failedOnAmazon.push(b.amazonCampaignId));
+              }
+            } catch {
+              batch.forEach(b => failedOnAmazon.push(b.amazonCampaignId));
+            }
+          }
+        }
+
+        // Arquivar localmente (independente do resultado da API)
+        for (const { dup, asin, amazonCampaignId } of dupsToPause) {
           base44.asServiceRole.entities.Campaign.update(dup.id, {
             state: 'archived', status: 'archived', updated_at: now,
           }).catch(() => {});
           autoDuplicatesArchived.push({
-            asin, campaign_id: dup.campaign_id || dup.amazon_campaign_id,
-            name: dup.name || dup.campaign_name, id: dup.id,
+            asin,
+            campaign_id: amazonCampaignId,
+            name: dup.name || dup.campaign_name,
+            id: dup.id,
+            paused_on_amazon: adsAccessToken ? pausedOnAmazon.includes(amazonCampaignId) : null,
+            amazon_pause_skipped: !adsAccessToken,
           });
         }
       }
