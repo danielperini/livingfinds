@@ -159,6 +159,9 @@ Deno.serve(async (req) => {
     if (!eval72hDone || force) push('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
     else skipped.push('evaluate_new_campaigns_72h');
 
+    // Bids iniciais: sempre (idempotente — só processa pendentes, 10 por chamada)
+    push('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
+
     // Backup: 1x/dia (já tem automação própria às 02:00, aqui é redundância de segurança)
     if (!backupDone || force) push('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');

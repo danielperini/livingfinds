@@ -16,7 +16,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const INITIAL_BID = 0.50;
+const INITIAL_BID = 0.60; // fallback se sem sugestão Amazon
 const HOURS_48 = 48;
 const HOURS_72 = 72;
 // Contenção emergencial: >10 cliques + gasto >= R$12 + zero compras
@@ -593,102 +593,15 @@ Deno.serve(async (req) => {
             }
 
             // ── FASE: waiting_48h_review ─────────────────────────────────
+            // Delegado a applyInitialBidsToAllCampaigns (evita timeout).
+            // Aqui apenas sinalizamos que está pronto para o ajuste inicial.
             else if (lcStatus === 'waiting_48h_review') {
-              // Consultar sugestão Amazon
-              let suggestion = { suggested: null as number | null, lower: null as number | null, upper: null as number | null, valid: false };
-              if (hasAdsAccess) {
-                suggestion = await fetchKeywordBidSuggestion(
-                  adsEndpoint, adsToken!, profileId,
-                  kwId, agId, campaignId
-                );
-                await sleep(300); // Throttle para evitar rate limit
-              }
-
-              metricsUpdate.amazon_suggested_bid = suggestion.suggested;
-              metricsUpdate.amazon_suggested_bid_lower = suggestion.lower;
-              metricsUpdate.amazon_suggested_bid_upper = suggestion.upper;
-              metricsUpdate.amazon_suggestion_valid = suggestion.valid;
-              metricsUpdate.amazon_suggestion_fetched_at = now;
-
-              if (suggestion.valid && suggestion.suggested !== null) {
-                // Calcular bid seguro:
-                // post_48h_bid = min(amazon_lower_range, safe_max_cpc, configured_max_cpc)
-                const useLower = suggestion.lower ?? suggestion.suggested;
-                const limits = [useLower];
-                if (safeMaxCpc > 0) limits.push(safeMaxCpc);
-                if (globalMaxCpc > 0) limits.push(globalMaxCpc);
-                if (globalMaxBid > 0) limits.push(globalMaxBid);
-                const effectiveBid = round2(Math.min(...limits));
-                const wasLimited = effectiveBid < useLower;
-                const isSameAsCurrent = Math.abs(effectiveBid - reconciledKwBid) < 0.01;
-
-                if (!isSameAsCurrent && hasAdsAccess && effectiveBid >= globalMinBid) {
-                  // Aplicar bid na keyword
-                  const kwRes = await updateKeywordBidOnAmazon(adsEndpoint, adsToken!, profileId, kwId, effectiveBid);
-                  if (kwRes.success) {
-                    metricsUpdate.post_48h_bid = effectiveBid;
-                    metricsUpdate.post_48h_bid_source = wasLimited ? 'safe_max_cpc_limited' : 'amazon_lower_range';
-                    metricsUpdate.amazon_suggestion_limited_by_guardrail = wasLimited;
-                    metricsUpdate.post_48h_adjusted_at = now;
-                    metricsUpdate.current_keyword_bid = effectiveBid;
-                    metricsUpdate.amazon_confirmed_at = now;
-                    metricsUpdate.amazon_request_id = kwRes.requestId;
-                    metricsUpdate.status = wasLimited ? 'amazon_bid_limited' : 'amazon_bid_applied';
-                    metricsUpdate.last_action = `post_48h_bid_${wasLimited ? 'limited' : 'applied'}_R$${effectiveBid}`;
-                    metricsUpdate.last_action_at = now;
-                    metricsUpdate.review_72h_at = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
-                    metricsUpdate.next_review_at = metricsUpdate.review_72h_at;
-                    metricsUpdate.management_source = 'launch_lifecycle'; // ainda não entregou ao motor
-
-                    // Alinhar default bid do grupo SE grupo tem 1 keyword
-                    if (kwCount === 1) {
-                      const agRes = await updateAdGroupBidOnAmazon(adsEndpoint, adsToken!, profileId, agId, effectiveBid);
-                      if (agRes.success) metricsUpdate.current_ad_group_default_bid = effectiveBid;
-                    }
-
-                    // Registrar na fila de decisões
-                    await base44.asServiceRole.entities.OptimizationDecision.create({
-                      amazon_account_id: aid,
-                      decision_type: 'bid_change',
-                      entity_type: 'keyword',
-                      entity_id: kwId,
-                      campaign_id: campaignId,
-                      keyword_id: kwId,
-                      keyword_text: kw.keyword_text,
-                      asin: campAsin,
-                      action: 'set_bid',
-                      value_before: reconciledKwBid,
-                      value_after: effectiveBid,
-                      rationale: `⏱️ AJUSTE 48H: Sugestão Amazon R$${suggestion.suggested} (faixa R$${suggestion.lower}–R$${suggestion.upper}). ${wasLimited ? `Limitado por guardrail: safe_max_cpc R$${safeMaxCpc}.` : `Menor faixa R$${useLower} aplicada.`} Bid anterior: R$${reconciledKwBid}.`,
-                      status: 'executed',
-                      idempotency_key: `post_48h_bid|${aid}|${kwId}|${now.slice(0, 13)}`,
-                      source_function: 'runManualCampaignBidLifecycle',
-                      created_at: now,
-                    }).catch(() => {});
-
-                    report.post_48h_adjustments++;
-                    report.bids_applied_to_amazon++;
-                  } else {
-                    metricsUpdate.status = 'pending_confirmation';
-                    report.bids_failed++;
-                  }
-                } else {
-                  // Bid já está no valor correto ou sem acesso à API
-                  metricsUpdate.post_48h_bid = effectiveBid;
-                  metricsUpdate.post_48h_bid_source = wasLimited ? 'safe_max_cpc_limited' : 'amazon_lower_range';
-                  metricsUpdate.status = wasLimited ? 'amazon_bid_limited' : 'amazon_bid_applied';
-                  metricsUpdate.post_48h_adjusted_at = now;
-                  metricsUpdate.review_72h_at = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
-                  metricsUpdate.next_review_at = metricsUpdate.review_72h_at;
-                }
-              } else {
-                // Sem sugestão válida → entregar ao motor
-                metricsUpdate.post_48h_bid_source = 'no_suggestion';
-                metricsUpdate.status = 'no_amazon_suggestion';
-                metricsUpdate.management_source = 'unified_decision_engine';
-                metricsUpdate.review_72h_at = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
-                metricsUpdate.next_review_at = metricsUpdate.review_72h_at;
-              }
+              // Não fazer chamadas de sugestão aqui — applyInitialBidsToAllCampaigns
+              // é chamado pelo orquestrador e processa uma keyword por vez com throttle.
+              // Apenas garantir que management_source está marcado corretamente.
+              metricsUpdate.management_source = 'launch_lifecycle';
+              metricsUpdate.next_review_at = now; // pronto para processar agora
+              report.post_48h_adjustments++;
             }
 
             // ── FASE: waiting_72h_review / amazon_bid_applied / amazon_bid_limited ──
@@ -754,7 +667,7 @@ Deno.serve(async (req) => {
             });
           }
 
-          await sleep(100); // Throttle entre keywords para não saturar rate limit
+          await sleep(500); // Throttle entre keywords para não saturar rate limit Amazon
         }
       }
     }
