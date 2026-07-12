@@ -657,7 +657,7 @@ export default function Dashboard() {
           <h1 className="text-lg font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
             {loading ? 'Carregando...' : account
-              ? <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}{active_count} ativas{' · '}{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span>
+              ? <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}<span>{active_count} ativas</span>{' · '}<span>{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span></span>
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
             {nextSyncLabel ? (
                 <span className="flex items-center gap-1 text-slate-500 ml-1">

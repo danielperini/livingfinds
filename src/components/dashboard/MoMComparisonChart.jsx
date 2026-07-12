@@ -203,8 +203,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         <div>
           <h2 className="text-sm font-semibold text-slate-300">Comparação mês atual vs mês anterior</h2>
           <p className="text-[10px] text-slate-500 mt-0.5">
-            {curMonthLabel} (dias 1–{daysInCurMonth}, {daysWithCurData} c/ dados) vs {prevMonthLabel} completo ({daysWithPrevData} c/ dados)
-            · Fonte: relatórios já baixados
+            <span>{curMonthLabel} (dias 1–{daysInCurMonth}, {daysWithCurData} c/ dados) vs {prevMonthLabel} completo ({daysWithPrevData} c/ dados) · Fonte: relatórios já baixados</span>
           </p>
         </div>
         <div className="flex bg-surface-2 border border-surface-3 rounded-lg p-0.5 gap-0.5 flex-wrap">
