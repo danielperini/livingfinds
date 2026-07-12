@@ -129,7 +129,7 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSal
             </p>
           </div>
         )}
-        {lastSyncAt && (() => {
+        {lastSyncAt ? (() => {
           const nextSync = new Date(new Date(lastSyncAt).getTime() + 24 * 3600000);
           const diffMs = nextSync.getTime() - Date.now();
           const diffH = Math.floor(diffMs / 3600000);
@@ -141,7 +141,7 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSal
               <p className="text-[10px] text-slate-500">Próxima atualização: <span className="text-slate-400">{label}</span></p>
             </div>
           );
-        })()}
+        })() : null}
       </div>
     </div>);
 

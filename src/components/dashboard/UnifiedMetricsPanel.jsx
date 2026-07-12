@@ -16,7 +16,7 @@ function MetricItem({ label, value, sub, highlight }) {
     <div className="flex flex-col gap-0.5">
       <span className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</span>
       <span className={`text-sm font-semibold ${highlight ? 'text-amber-400' : 'text-white'}`}>{value}</span>
-      {sub && <span className="text-[10px] text-slate-500">{sub}</span>}
+      {sub ? <span className="text-[10px] text-slate-500">{sub}</span> : null}
     </div>
   );
 }
