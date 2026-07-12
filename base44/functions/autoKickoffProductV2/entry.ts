@@ -148,9 +148,11 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, asin }, '-created_date', 200);
-    let autoCampaign = existingCampaigns.find((campaign:any) => String(campaign.targeting_type || '').toUpperCase() === 'AUTO' && !campaign.archived && !['archived', 'ended'].includes(String(campaign.state || campaign.status).toLowerCase()));
+    const existingAuto = existingCampaigns.find((campaign:any) => String(campaign.targeting_type || '').toUpperCase() === 'AUTO' && !campaign.archived && !['archived', 'ended'].includes(String(campaign.state || campaign.status).toLowerCase()));
+    let autoCampaign = existingAuto;
+    const autoAlreadyExisted = Boolean(existingAuto);
 
-    if (!autoCampaign) {
+    if (!autoAlreadyExisted) {
       const now = new Date().toISOString();
       const name = `AUTO | ${asin} | ${now.slice(0, 10)}`;
       const response = await ads(base44, accountId, 'createAutoCampaign', 'POST', '/sp/campaigns', {
@@ -212,7 +214,7 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: true, asin,
-      auto_campaign: { ok: true, campaign_id: autoCampaign.campaign_id, already_exists: Boolean(existingCampaigns.find((campaign:any) => campaign.id === autoCampaign.id)) },
+      auto_campaign: { ok: true, campaign_id: autoCampaign.campaign_id, already_exists: autoAlreadyExisted },
       manual_campaigns_created: manualCampaigns.filter((item) => item.ok).length,
       manual_campaigns_failed: manualCampaigns.filter((item) => !item.ok).length,
       manual_campaigns_waiting_for_confidence: selected.length < 4,

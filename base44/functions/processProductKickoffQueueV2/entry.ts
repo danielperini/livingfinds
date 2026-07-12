@@ -223,7 +223,9 @@ Deno.serve(async (request) => {
 
         const data = response?.data || response || {};
         const flags = classify(data);
-        const success = data?.ok === true || (flags.duplicate && data?.already_exists === true);
+        // auto_campaign.already_exists = true significa que a AUTO já existia e não foi recriada — sucesso
+        const autoAlreadyExists = data?.auto_campaign?.already_exists === true;
+        const success = data?.ok === true || (flags.duplicate && data?.already_exists === true) || autoAlreadyExists;
 
         if (flags.outOfStock) {
           await setWaitingStock(base44, item, product, errorText(data).slice(0, 500));
