@@ -83,11 +83,11 @@ export default function AiChangesBreakdown({ bidChanges }) {
           <span className="text-xs font-semibold text-slate-300">Alterações de bids</span>
           <span className="text-[10px] text-slate-500">dados confirmados e persistidos</span>
         </div>
-        {stats.total > 0 && (
+        {stats.total > 0 ? (
           <button onClick={() => setExpanded(v => !v)} className="p-1 rounded hover:bg-surface-2" aria-label="Detalhar alterações">
             {expanded ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
           </button>
-        )}
+        ) : null}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -109,7 +109,7 @@ export default function AiChangesBreakdown({ bidChanges }) {
         </div>
       </div>
 
-      {stats.total > 0 && expanded && (
+      {stats.total > 0 && expanded ? (
         <>
           <div className="grid grid-cols-4 gap-2 mt-3">
             {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
@@ -120,7 +120,7 @@ export default function AiChangesBreakdown({ bidChanges }) {
             ))}
           </div>
 
-          {Object.keys(byType).length > 0 && (
+          {Object.keys(byType).length > 0 ? (
             <div className="mt-3 space-y-1.5 border-t border-surface-2 pt-3">
               <p className="text-[10px] text-slate-500 mb-2">Por tipo de alteração:</p>
               {Object.entries(byType).map(([type, counts]) => (
@@ -128,15 +128,15 @@ export default function AiChangesBreakdown({ bidChanges }) {
                   <span className="text-[10px] text-slate-400">{CHANGE_TYPE_LABELS[type] || type}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] text-emerald-400">{counts.executed} exec.</span>
-                    {counts.failed > 0 && <span className="text-[10px] text-red-400">{counts.failed} falha</span>}
+                    {counts.failed > 0 ? <span className="text-[10px] text-red-400">{counts.failed} falha</span> : null}
                     <span className="text-[10px] text-slate-500">{counts.total} total</span>
                   </div>
                 </div>
               ))}
             </div>
-          )}
+          ) : null}
         </>
-      )}
+      ) : null}
     </div>
   );
 }
