@@ -23,7 +23,7 @@ function MetricItem({ label, value, sub, highlight }) {
 
 function Block({ icon: BlockIcon, title, color, children }) {
   return (
-    <div className={`rounded-xl border bg-surface-1 p-4 space-y-3 border-surface-2`}>
+    <div className="rounded-xl border bg-surface-1 p-4 space-y-3 border-surface-2">
       <div className="flex items-center gap-2">
         <BlockIcon className={`h-4 w-4 ${color}`} />
         <span className="text-xs font-semibold text-slate-300">{title}</span>
@@ -131,126 +131,112 @@ export default function UnifiedMetricsPanel({ amazonAccountId }) {
   }, [amazonAccountId]);
 
   if (loading) return null;
-
-  // Badge de fonte
-  const sourceBadge = {
-    unified: { label: 'Amazon Unified Reports', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', icon: CheckCircle },
-    legacy: { label: 'Sponsored Products Legacy', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20', icon: Info },
-    no_access: { label: 'Sem acesso a Relatórios Unificados', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20', icon: AlertTriangle },
-    error: { label: 'Erro ao carregar dados', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20', icon: AlertTriangle },
-    loading: { label: 'Carregando...', color: 'text-slate-400', bg: 'bg-surface-2', icon: Info },
-  }[dataSource] || {};
-
-  const BadgeIcon = sourceBadge.icon;
-
   if (dataSource !== 'unified' || !metrics) return null;
 
   return (
     <div className="space-y-4">
-      {(
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
 
-          {/* A: Qualidade de tráfego */}
-          <Block icon={ShieldAlert} title="Qualidade de Tráfego" color="text-red-400">
-            <MetricItem
-              label="Impressões inválidas"
-              value={metrics.invalid_impressions.toLocaleString('pt-BR')}
-              highlight={metrics.invalid_impression_rate > 0.05}
-            />
-            <MetricItem
-              label="Taxa inv. impr."
-              value={fmtPct(metrics.invalid_impression_rate, 2)}
-              highlight={metrics.invalid_impression_rate > 0.05}
-            />
-            <MetricItem
-              label="Cliques inválidos"
-              value={metrics.invalid_clicks.toLocaleString('pt-BR')}
-              highlight={metrics.invalid_click_rate > 0.08}
-            />
-            <MetricItem
-              label="Taxa inv. cliques"
-              value={fmtPct(metrics.invalid_click_rate, 2)}
-              highlight={metrics.invalid_click_rate > 0.08}
-            />
-          </Block>
+        {/* A: Qualidade de tráfego */}
+        <Block icon={ShieldAlert} title="Qualidade de Tráfego" color="text-red-400">
+          <MetricItem
+            label="Impressões inválidas"
+            value={metrics.invalid_impressions.toLocaleString('pt-BR')}
+            highlight={metrics.invalid_impression_rate > 0.05}
+          />
+          <MetricItem
+            label="Taxa inv. impr."
+            value={fmtPct(metrics.invalid_impression_rate, 2)}
+            highlight={metrics.invalid_impression_rate > 0.05}
+          />
+          <MetricItem
+            label="Cliques inválidos"
+            value={metrics.invalid_clicks.toLocaleString('pt-BR')}
+            highlight={metrics.invalid_click_rate > 0.08}
+          />
+          <MetricItem
+            label="Taxa inv. cliques"
+            value={fmtPct(metrics.invalid_click_rate, 2)}
+            highlight={metrics.invalid_click_rate > 0.08}
+          />
+        </Block>
 
-          {/* B: Entrega e orçamento */}
-          <Block icon={Zap} title="Entrega e Orçamento" color="text-amber-400">
-            <MetricItem
-              label="Taxa de inserção"
-              value={fmtPct(metrics.avg_pacing_rate)}
-              highlight={metrics.avg_pacing_rate < 0.7 || metrics.avg_pacing_rate > 1.1}
-            />
-            <MetricItem
-              label="Orçamento em risco"
-              value={metrics.budget_at_risk_count > 0 ? `${metrics.budget_at_risk_count} camp.` : 'Nenhum'}
-              highlight={metrics.budget_at_risk_count > 0}
-            />
-            <MetricItem
-              label="Gasto projetado"
-              value={fmtCur(metrics.projected_spend_sum)}
-            />
-            <MetricItem
-              label="Gasto diário nec."
-              value={fmtCur(metrics.required_daily_sum)}
-            />
-          </Block>
+        {/* B: Entrega e orçamento */}
+        <Block icon={Zap} title="Entrega e Orçamento" color="text-amber-400">
+          <MetricItem
+            label="Taxa de inserção"
+            value={fmtPct(metrics.avg_pacing_rate)}
+            highlight={metrics.avg_pacing_rate < 0.7 || metrics.avg_pacing_rate > 1.1}
+          />
+          <MetricItem
+            label="Orçamento em risco"
+            value={metrics.budget_at_risk_count > 0 ? `${metrics.budget_at_risk_count} camp.` : 'Nenhum'}
+            highlight={metrics.budget_at_risk_count > 0}
+          />
+          <MetricItem
+            label="Gasto projetado"
+            value={fmtCur(metrics.projected_spend_sum)}
+          />
+          <MetricItem
+            label="Gasto diário nec."
+            value={fmtCur(metrics.required_daily_sum)}
+          />
+        </Block>
 
-          {/* C: Parcela de impressões */}
-          <Block icon={PieChart} title="Parcela de Impressões" color="text-cyan">
-            <MetricItem
-              label="Parcela média"
-              value={fmtPct(metrics.avg_impression_share)}
-              sub="últimos 14 dias"
-            />
-            <MetricItem
-              label="Topo da pesquisa"
-              value={fmtPct(metrics.avg_top_of_search)}
-              highlight={metrics.avg_top_of_search < 0.1}
-            />
-            <MetricItem
-              label="Impressões válidas"
-              value={metrics.impressions.toLocaleString('pt-BR')}
-            />
-            <MetricItem
-              label="Gross impressões"
-              value={metrics.gross_impressions.toLocaleString('pt-BR')}
-            />
-          </Block>
+        {/* C: Parcela de impressões */}
+        <Block icon={PieChart} title="Parcela de Impressões" color="text-cyan">
+          <MetricItem
+            label="Parcela média"
+            value={fmtPct(metrics.avg_impression_share)}
+            sub="últimos 14 dias"
+          />
+          <MetricItem
+            label="Topo da pesquisa"
+            value={fmtPct(metrics.avg_top_of_search)}
+            highlight={metrics.avg_top_of_search < 0.1}
+          />
+          <MetricItem
+            label="Impressões válidas"
+            value={metrics.impressions.toLocaleString('pt-BR')}
+          />
+          <MetricItem
+            label="Gross impressões"
+            value={metrics.gross_impressions.toLocaleString('pt-BR')}
+          />
+        </Block>
 
-          {/* D: Conversão promovida x aura */}
-          <Block icon={ShoppingCart} title="Promovido vs Aura" color="text-violet-400">
-            <MetricItem
-              label="Compras promovidas"
-              value={metrics.promoted_purchases.toLocaleString('pt-BR')}
-            />
-            <MetricItem
-              label="Vendas promovidas"
-              value={fmtCur(metrics.promoted_sales)}
-            />
-            <MetricItem
-              label="ROAS promovido"
-              value={`${fmt(metrics.promoted_roas, 2)}x`}
-              highlight={metrics.promoted_roas < 2}
-            />
-            <MetricItem
-              label="ACoS promovido"
-              value={`${fmt(metrics.promoted_acos, 1)}%`}
-              highlight={metrics.promoted_acos > 20}
-            />
-            <MetricItem
-              label="Compras aura/halo"
-              value={metrics.halo_purchases.toLocaleString('pt-BR')}
-              sub="outros produtos"
-            />
-            <MetricItem
-              label="Vendas aura/halo"
-              value={fmtCur(metrics.halo_sales)}
-            />
-          </Block>
+        {/* D: Conversão promovida x aura */}
+        <Block icon={ShoppingCart} title="Promovido vs Aura" color="text-violet-400">
+          <MetricItem
+            label="Compras promovidas"
+            value={metrics.promoted_purchases.toLocaleString('pt-BR')}
+          />
+          <MetricItem
+            label="Vendas promovidas"
+            value={fmtCur(metrics.promoted_sales)}
+          />
+          <MetricItem
+            label="ROAS promovido"
+            value={`${fmt(metrics.promoted_roas, 2)}x`}
+            highlight={metrics.promoted_roas < 2}
+          />
+          <MetricItem
+            label="ACoS promovido"
+            value={`${fmt(metrics.promoted_acos, 1)}%`}
+            highlight={metrics.promoted_acos > 20}
+          />
+          <MetricItem
+            label="Compras aura/halo"
+            value={metrics.halo_purchases.toLocaleString('pt-BR')}
+            sub="outros produtos"
+          />
+          <MetricItem
+            label="Vendas aura/halo"
+            value={fmtCur(metrics.halo_sales)}
+          />
+        </Block>
 
-        </div>
-      )}
+      </div>
     </div>
   );
 }
