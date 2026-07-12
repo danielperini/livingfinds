@@ -155,11 +155,16 @@ export default function Products({ externalRefreshTrigger }) {
   );
 
   // ── Filtro permanente: apenas produtos ativos com estoque ────────────────────
+  // Mantém na lista produtos que voltaram ao estoque (fba_inventory > 0) mesmo que
+  // inventory_status ainda esteja desatualizado — remove apenas quando claramente zerado.
   const visibleProducts = useMemo(() =>
-    products.filter(p =>
-      p.status !== 'inactive' && p.status !== 'archived' &&
-      offerStatus(p) !== 'out_of_stock'
-    ),
+    products.filter(p => {
+      if (p.status === 'inactive' || p.status === 'archived') return false;
+      // Se há unidades reais registradas, sempre mostra (estoque voltou)
+      if (Number(p.fba_inventory || 0) > 0) return true;
+      // Remove apenas quando confirmadamente sem estoque
+      return offerStatus(p) !== 'out_of_stock';
+    }),
     [products]
   );
 
