@@ -72,9 +72,9 @@ Deno.serve(async (req) => {
       const base = adsBase(account.region);
       const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
 
-      // Detectar quais datas estão faltando (últimos 30 dias)
+      // Detectar quais datas estão faltando (últimos 62 dias — cobre mês atual + mês anterior completo)
       const today = new Date();
-      const thirtyDaysAgo = new Date(today.getTime() - 30 * 86400000);
+      const thirtyDaysAgo = new Date(today.getTime() - 62 * 86400000);
 
       // Pegar datas já presentes no banco
       const existing = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
