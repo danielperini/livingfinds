@@ -66,18 +66,6 @@ export default function ListingEnhancementPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Manter drawer atualizado quando os dados recarregam
-  useEffect(() => {
-    if (!selectedProduct) return;
-    const asin = selectedProduct.product?.asin;
-    if (!asin) return;
-    setSelectedProduct(prev => prev ? ({
-      ...prev,
-      snap: snapByAsin.get(asin) || prev.snap,
-      proposals: proposalsByAsin.get(asin) || prev.proposals,
-    }) : null);
-  }, [snapByAsin, proposalsByAsin]);
-
   // Enfileira todos os produtos não-sincronizados para sync sequencial
   const queueAllForSync = useCallback(() => {
     if (!account) return;
@@ -199,6 +187,20 @@ export default function ListingEnhancementPage() {
     }
     return map;
   }, [proposals]);
+
+  // Manter drawer atualizado quando os dados recarregam
+  useEffect(() => {
+    if (!selectedProduct) return;
+    const asin = selectedProduct.product?.asin;
+    if (!asin) return;
+    setSelectedProduct(prev => prev ? ({
+      ...prev,
+      snap: snapByAsin.get(asin) || prev.snap,
+      proposals: proposalsByAsin.get(asin) || prev.proposals,
+    }) : null);
+  }, [snapByAsin, proposalsByAsin]);
+
+
 
   const prodByAsin = useMemo(() => {
     const map = new Map();
