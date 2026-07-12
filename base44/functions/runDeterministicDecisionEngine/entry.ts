@@ -300,12 +300,12 @@ function classifyProductState(params: {
   if (params.spend_14d < 1) return 'learning';
   if (!params.margin_positive && params.spend_14d > 5) return 'inefficient';
   if (params.acos_14d === null) return 'learning';
-  if (params.acos_14d > params.target_acos * 1.5) return 'inefficient';
+  if (params.target_acos !== null && params.acos_14d > params.target_acos * 1.5) return 'inefficient';
   if (params.trend_3_vs_14 < -0.20) return 'discontinued'; // queda de 20% recente
-  if (params.orders_14d >= 3 && params.acos_14d <= params.target_acos * 0.7
-    && params.roas_14d >= params.target_roas * 1.2) return 'scalable';
-  if (params.orders_14d >= 1 && params.acos_14d <= params.target_acos) return 'profitable';
-  if (params.orders_14d >= 1 && params.acos_14d <= params.target_acos * 1.3) return 'mature';
+  if (params.orders_14d >= 3 && params.target_acos !== null && params.acos_14d <= params.target_acos * 0.7
+    && params.target_roas !== null && params.roas_14d >= params.target_roas * 1.2) return 'scalable';
+  if (params.orders_14d >= 1 && params.target_acos !== null && params.acos_14d <= params.target_acos) return 'profitable';
+  if (params.orders_14d >= 1 && params.target_acos !== null && params.acos_14d <= params.target_acos * 1.3) return 'mature';
   return 'learning';
 }
 
@@ -332,9 +332,9 @@ function isHighPerformanceProtected(kw: any, settings: any, windows: any): {
   const orders30d = windows?.orders_30d ?? kw.orders ?? 0;
 
   // Proteção: estável em múltiplas janelas, ACoS abaixo, ROAS acima, vendas consistentes
-  const acosOk14d = target > 0 && acos14d <= target;
-  const acosOk30d = target > 0 && acos30d <= target * 1.1; // ligeira tolerância
-  const roasOk = targetRoas > 0 && roas14d >= targetRoas * 0.85;
+  const acosOk14d = target !== null && target > 0 && acos14d <= target;
+  const acosOk30d = target !== null && target > 0 && acos30d <= target * 1.1; // ligeira tolerância
+  const roasOk = targetRoas !== null && targetRoas > 0 && roas14d >= targetRoas * 0.85;
   const salesConsistent = orders14d >= 2 && orders30d >= 4;
 
   if (acosOk14d && acosOk30d && salesConsistent) {
@@ -438,28 +438,31 @@ Deno.serve(async (req) => {
       const psList = await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1);
       if (psList.length > 0) {
         const ps = psList[0];
-        // Usar fallback do sistema quando o valor configurado é 0 (não configurado)
-        const psNum = (v: any, fb: number) => { const n = Number(v); return n > 0 ? n : fb; };
+        // psNum: retorna o valor configurado se > 0, ou null se zero/não configurado.
+        // Null = "meta não aplicável" — o motor NÃO usa fallback, apenas ignora a regra.
+        // psRequired: para campos operacionais obrigatórios (bids, pcts) usa fallback.
+        const psNum = (v: any): number | null => { const n = Number(v); return n > 0 ? n : null; };
+        const psReq = (v: any, fb: number): number => { const n = Number(v); return n > 0 ? n : fb; };
         settings = {
           source: 'PerformanceSettings', source_id: ps.id,
-          target_acos: psNum(ps.target_acos, FB.TARGET_ACOS),
-          max_acos: psNum(ps.max_acos, FB.MAX_ACOS),
-          target_roas: psNum(ps.target_roas, FB.TARGET_ROAS),
-          target_tacos: psNum(ps.target_tacos, FB.TARGET_TACOS),
-          min_bid: psNum(ps.min_bid, FB.MIN_BID),
-          max_bid: psNum(ps.max_bid, FB.MAX_BID),
+          target_acos: psNum(ps.target_acos),       // null = não avaliar ACoS
+          max_acos: psNum(ps.max_acos),              // null = não bloquear por ACoS máximo
+          target_roas: psNum(ps.target_roas),        // null = não avaliar ROAS
+          target_tacos: psNum(ps.target_tacos),      // null = não avaliar TACoS
+          min_bid: psReq(ps.min_bid, FB.MIN_BID),
+          max_bid: psReq(ps.max_bid, FB.MAX_BID),
           max_cpc: Number(ps.max_cpc ?? 0),
-          max_bid_increase_pct: psNum(ps.max_bid_increase_pct, FB.MAX_INCREASE_PCT * 100) / 100,
-          max_bid_decrease_pct: psNum(ps.max_bid_decrease_pct, FB.MAX_DECREASE_PCT * 100) / 100,
-          daily_budget_cap: psNum(ps.daily_budget_limit, FB.DAILY_BUDGET_CAP),
-          min_campaign_budget: psNum(ps.minimum_campaign_budget, 15),
+          max_bid_increase_pct: psReq(ps.max_bid_increase_pct, FB.MAX_INCREASE_PCT * 100) / 100,
+          max_bid_decrease_pct: psReq(ps.max_bid_decrease_pct, FB.MAX_DECREASE_PCT * 100) / 100,
+          daily_budget_cap: psReq(ps.daily_budget_limit, FB.DAILY_BUDGET_CAP),
+          min_campaign_budget: psReq(ps.minimum_campaign_budget, 15),
           pacing_enabled: Boolean(ps.pacing_enabled ?? true),
           safety_factor: FB.SAFETY_FACTOR,
           min_confidence: FB.MIN_CONFIDENCE,
           cooldown_hours: FB.COOLDOWN_HOURS,
           maturation_hours: FB.MATURATION_HOURS,
           min_stock_days: FB.MIN_STOCK_DAYS,
-          fallback_cvr: psNum(ps.fallback_conversion_rate, 0.05),
+          fallback_cvr: psReq(ps.fallback_conversion_rate, 0.05),
         };
       }
     } catch {}
@@ -789,9 +792,12 @@ Deno.serve(async (req) => {
       const kw_cpc = kw_clicks > 0 ? kw_spend / kw_clicks : 0;
 
       // Meta por produto ou global
+      // Quando meta global é null (zerada), usa meta dinâmica do produto ou desativa a regra
       const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
-      const effectiveTargetAcos = asinMeta?.target ?? settings.target_acos;
-      const effectiveMaxAcos = asinMeta ? Math.min(asinMeta.break_even, settings.max_acos * 1.5) : settings.max_acos;
+      const effectiveTargetAcos = asinMeta?.target ?? settings.target_acos; // null se ambos ausentes
+      const effectiveMaxAcos = asinMeta
+        ? Math.min(asinMeta.break_even, (settings.max_acos ?? FB.MAX_ACOS) * 1.5)
+        : settings.max_acos; // null se não configurado e sem meta de produto
       const effectiveSafeMaxCpc = asinMeta?.safe_max_cpc || (settings.max_cpc > 0 ? settings.max_cpc : 0);
 
       // Verificar proteção de alta performance
@@ -853,7 +859,7 @@ Deno.serve(async (req) => {
       if (protection.protected) {
         stats.protected++;
         // Só permite aumento suave quando há estoque saudável
-        if (stockCovDays >= settings.min_stock_days && kw_acos !== null && kw_acos <= effectiveTargetAcos * 0.7) {
+        if (stockCovDays >= settings.min_stock_days && kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos * 0.7) {
           const maxIncrease = settings.max_bid_increase_pct * 0.50; // metade do máximo para protegida
           const newBid = clamp(currentBid * (1 + maxIncrease), settings.min_bid, settings.max_bid);
           if (newBid > currentBid * 1.02 && !seasonal.is_high_demand === false) {
@@ -907,7 +913,8 @@ Deno.serve(async (req) => {
       }
 
       // ── Regra: ACoS acima do break-even → reduzir ────────────────────
-      if (kw_acos !== null && kw_acos > effectiveMaxAcos && kw_spend >= MRC.MIN_SPEND) {
+      // Só aplica se effectiveMaxAcos foi configurado (não null)
+      if (kw_acos !== null && effectiveMaxAcos !== null && kw_acos > effectiveMaxAcos && kw_spend >= MRC.MIN_SPEND) {
         const reductionPct = kw_acos > effectiveMaxAcos * 1.5
           ? settings.max_bid_decrease_pct
           : settings.max_bid_decrease_pct * 0.5;
@@ -961,10 +968,11 @@ Deno.serve(async (req) => {
       }
 
       // ── Regra: ACoS abaixo do alvo + vendas → escalar ────────────────
-      if (kw_acos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1 && kw_sales > 0) {
+      // Só aplica se effectiveTargetAcos foi configurado (não null)
+      if (kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1 && kw_sales > 0) {
         // Guardrails de escala
         const cpcOk = effectiveSafeMaxCpc <= 0 || kw_cpc <= effectiveSafeMaxCpc;
-        const roasOk = settings.target_roas <= 0 || (kw_spend > 0 && kw_sales / kw_spend >= settings.target_roas * 0.85);
+        const roasOk = settings.target_roas === null || (kw_spend > 0 && kw_sales / kw_spend >= settings.target_roas * 0.85);
         const stockOk = stockCovDays >= settings.min_stock_days;
         const trendOk = !wm || (wm.trend_3_vs_14 >= -0.15); // não em queda recente
 
