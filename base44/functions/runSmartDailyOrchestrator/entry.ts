@@ -1,12 +1,12 @@
 /**
- * runSmartDailyOrchestrator — Orquestrador Diário Inteligente v3
+ * runSmartDailyOrchestrator — Orquestrador Diário Inteligente v4
  *
  * Retorna < 10s — todas as etapas disparadas em fire-and-forget.
- * Decide o que executar com base no banco (TTL 20h + jobs existentes).
- * Cada etapa tem sua própria automação ou delega a funções especializadas.
- * Em caso de erro, a próxima execução detecta via SyncExecutionLog e tenta novamente.
+ * Guard TTL: 1x/dia por operação (via SyncExecutionLog).
+ * Relatórios: não solicita se jobs do dia já existem.
+ * Falhas: loga no SyncExecutionLog e a próxima execução retenta.
  */
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 function nowIso() { return new Date().toISOString(); }
 function todayBRT() { return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); }
@@ -21,11 +21,11 @@ async function wasRunTodaySuccessfully(base44: any, aid: string, operation: stri
   } catch { return false; }
 }
 
-async function hasValidReportJobsForYesterday(base44: any, aid: string): Promise<boolean> {
+async function hasValidReportJobsForToday(base44: any, aid: string): Promise<boolean> {
   try {
     const yesterday = new Date(Date.now() - 3 * 3600000 - 86400000).toISOString().slice(0, 10);
     const jobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
-      { amazon_account_id: aid }, '-created_date', 20
+      { amazon_account_id: aid }, '-created_date', 30
     );
     const required = ['spCampaigns', 'spSearchTerm', 'spAdvertisedProduct'];
     return required.every(rt =>
@@ -38,6 +38,20 @@ async function hasValidReportJobsForYesterday(base44: any, aid: string): Promise
   } catch { return false; }
 }
 
+async function logStep(base44: any, aid: string, operation: string, status: string, msg: string) {
+  const today = todayBRT();
+  await base44.asServiceRole.entities.SyncExecutionLog.create({
+    amazon_account_id: aid,
+    operation,
+    trigger_type: 'automatic',
+    status,
+    execution_date: today,
+    started_at: nowIso(),
+    completed_at: nowIso(),
+    error_message: msg?.slice(0, 300) || undefined,
+  }).catch(() => {});
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   const startedAt = nowIso();
@@ -46,6 +60,7 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
 
+    // Auth: permite service_role interno OU usuário autenticado
     if (!body._service_role) {
       const user = await base44.auth.me().catch(() => null);
       if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
@@ -54,7 +69,7 @@ Deno.serve(async (req) => {
     const force = body.force === true;
     const today = todayBRT();
 
-    // ── Resolver conta ──────────────────────────────────────────────────────
+    // ── Resolver conta ───────────────────────────────────────────────────────
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
       { status: 'connected' }, '-updated_date', 1
     ).catch(() => []);
@@ -63,7 +78,7 @@ Deno.serve(async (req) => {
     const aid = account.id;
     const bp = { amazon_account_id: aid };
 
-    // ── Guard: já rodou hoje? ───────────────────────────────────────────────
+    // ── Guard global: já rodou hoje? ─────────────────────────────────────────
     if (!force) {
       const alreadyRan = await wasRunTodaySuccessfully(base44, aid, 'smart_daily_orchestrator');
       if (alreadyRan) {
@@ -71,14 +86,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Verificar o que precisa ser feito (paralelo, sem await em cima) ─────
+    // ── Verificar estado de cada etapa em paralelo ───────────────────────────
     const [
       catalogDone, salesDone, allJobsExist, campStateDone,
-      invDone, manualTermsDone, eval72hDone, backupDone
+      invDone, manualTermsDone, eval72hDone, backupDone,
     ] = await Promise.all([
       wasRunTodaySuccessfully(base44, aid, 'sync_catalog'),
       wasRunTodaySuccessfully(base44, aid, 'sync_sales'),
-      hasValidReportJobsForYesterday(base44, aid),
+      hasValidReportJobsForToday(base44, aid),
       wasRunTodaySuccessfully(base44, aid, 'sync_campaign_states'),
       wasRunTodaySuccessfully(base44, aid, 'inventory_kickoff'),
       wasRunTodaySuccessfully(base44, aid, 'manual_campaign_terms'),
@@ -86,143 +101,89 @@ Deno.serve(async (req) => {
       wasRunTodaySuccessfully(base44, aid, 'daily_backup'),
     ]);
 
-    // Verificar jobs pending para poll
     const pendingJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
       { amazon_account_id: aid }, '-created_date', 10
     ).catch(() => []);
     const hasPending = pendingJobs.some((j: any) => ['pending', 'processing'].includes(j.status));
 
-    // ── Montar plano de execução ────────────────────────────────────────────
-    const plan: any[] = [];
-    const taskQueue: Array<{ fn: string; payload: object; label: string }> = [];
+    // ── Montar fila de tarefas ───────────────────────────────────────────────
+    type Task = { fn: string; payload: object; label: string; isTtlStep?: boolean };
+    const taskQueue: Task[] = [];
+    const skipped: string[] = [];
+
+    const push = (fn: string, label: string, extra: object = {}, isTtlStep = false) =>
+      taskQueue.push({ fn, payload: { _service_role: true, ...bp, ...extra }, label, isTtlStep });
 
     // Token: sempre
-    taskQueue.push({ fn: 'refreshAmazonAdsTokenDailyOrHourly', payload: bp, label: 'token_refresh' });
+    push('refreshAmazonAdsTokenDailyOrHourly', 'token_refresh');
 
     // Catálogo: 1x/dia
-    if (!catalogDone || force) {
-      taskQueue.push({ fn: 'syncProductCatalogV2', payload: bp, label: 'sync_catalog' });
-    } else plan.push({ step: 'sync_catalog', skipped: true });
+    if (!catalogDone || force) push('syncProductCatalogV2', 'sync_catalog', {}, true);
+    else skipped.push('sync_catalog');
 
-    // Vendas do SP-API: 1x/dia via relatórios já baixados (rápido, sem polling)
-    if (!salesDone || force) {
-      taskQueue.push({ fn: 'syncSalesDailyFromReports', payload: bp, label: 'sync_sales' });
-    } else plan.push({ step: 'sync_sales', skipped: true });
+    // Vendas: 1x/dia
+    if (!salesDone || force) push('syncSalesDailyFromReports', 'sync_sales', {}, true);
+    else skipped.push('sync_sales');
 
-    // Relatórios: somente se não existirem jobs válidos
-    if ((!allJobsExist) || force) {
-      taskQueue.push({ fn: 'runDailyFullReportPipeline', payload: { ...bp, force: true }, label: 'daily_report_pipeline' });
-    } else plan.push({ step: 'daily_report_pipeline', skipped: true, reason: 'jobs_exist' });
+    // Relatórios: só se não existirem jobs válidos (evita duplicatas)
+    if (!allJobsExist || force) push('runDailyFullReportPipeline', 'daily_report_pipeline', { force: true });
+    else skipped.push('daily_report_pipeline');
 
-    // Poll de jobs pendentes
-    if (hasPending) {
-      taskQueue.push({ fn: 'pollAmazonAdsReportJobs', payload: { ...bp, max_jobs: 5 }, label: 'poll_report_jobs' });
-    } else plan.push({ step: 'poll_report_jobs', skipped: true, reason: 'no_pending' });
+    // Poll: só se há jobs pendentes
+    if (hasPending) push('pollAmazonAdsReportJobs', 'poll_report_jobs', { max_jobs: 5 });
+    else skipped.push('poll_report_jobs');
 
-    // Estados de campanhas: 1x/dia
+    // Estados de campanha: 1x/dia
     if (!campStateDone || force) {
-      taskQueue.push({ fn: 'syncAdsCampaignStatesV2', payload: bp, label: 'sync_campaign_states' });
-      taskQueue.push({ fn: 'syncAdGroupsAndKeywords', payload: bp, label: 'sync_ad_groups_keywords' });
-    } else plan.push({ step: 'sync_campaign_states', skipped: true });
+      push('syncAdsCampaignStatesV2', 'sync_campaign_states', {}, true);
+      push('syncAdGroupsAndKeywords', 'sync_ad_groups_keywords');
+    } else skipped.push('sync_campaign_states');
 
     // Inventário: 1x/dia
-    if (!invDone || force) {
-      taskQueue.push({ fn: 'checkInventoryChangesAndKickoff', payload: bp, label: 'inventory_kickoff' });
-    } else plan.push({ step: 'inventory_kickoff', skipped: true });
+    if (!invDone || force) push('checkInventoryChangesAndKickoff', 'inventory_kickoff', {}, true);
+    else skipped.push('inventory_kickoff');
 
-    // Motor de decisão: sempre (idempotente internamente)
-    taskQueue.push({ fn: 'runUnifiedDecisionEngine', payload: bp, label: 'decision_engine' });
+    // Motor de decisão: sempre (idempotente)
+    push('runUnifiedDecisionEngine', 'decision_engine');
+    push('executeApprovedDecisionQueue', 'execute_decisions');
 
-    // Executar decisões aprovadas
-    taskQueue.push({ fn: 'executeApprovedDecisionQueue', payload: bp, label: 'execute_decisions' });
-
-    // Links de produto + guardrails: sempre
-    taskQueue.push({ fn: 'fixProductCampaignLinksV2', payload: bp, label: 'product_links' });
-    taskQueue.push({ fn: 'runHourlyAdsGuardrails', payload: bp, label: 'guardrails' });
+    // Links e guardrails: sempre
+    push('fixProductCampaignLinksV2', 'product_links');
+    push('runHourlyAdsGuardrails', 'guardrails');
 
     // Termos manuais: 1x/dia
-    if (!manualTermsDone || force) {
-      taskQueue.push({ fn: 'enforceManualCampaignMinTerms', payload: bp, label: 'manual_campaign_terms' });
-    } else plan.push({ step: 'manual_campaign_terms', skipped: true });
+    if (!manualTermsDone || force) push('enforceManualCampaignMinTerms', 'manual_campaign_terms', {}, true);
+    else skipped.push('manual_campaign_terms');
 
     // Avaliação 72h: 1x/dia
-    if (!eval72hDone || force) {
-      taskQueue.push({ fn: 'evaluateNewCampaigns72h', payload: bp, label: 'evaluate_new_campaigns_72h' });
-    } else plan.push({ step: 'evaluate_new_campaigns_72h', skipped: true });
+    if (!eval72hDone || force) push('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
+    else skipped.push('evaluate_new_campaigns_72h');
 
-    // Backup: 1x/dia
-    if (!backupDone || force) {
-      taskQueue.push({ fn: 'runBackupToDrive', payload: { ...bp, backup_type: 'daily_incremental' }, label: 'daily_backup' });
-    } else plan.push({ step: 'daily_backup', skipped: true });
+    // Backup: 1x/dia (já tem automação própria às 02:00, aqui é redundância de segurança)
+    if (!backupDone || force) push('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
+    else skipped.push('daily_backup');
 
-    // ── Disparar todas as tarefas em fire-and-forget ────────────────────────
-    // Registrar o plano antes de disparar
-    const dispatchedAt = nowIso();
-    taskQueue.forEach(t => plan.push({ step: t.label, dispatched: true }));
+    // ── Disparar todas em fire-and-forget ────────────────────────────────────
+    const TTL_STEPS = new Set(taskQueue.filter(t => t.isTtlStep).map(t => t.label));
 
-    // Fire-and-forget: não aguardamos resultado (evita timeout do gateway)
     taskQueue.forEach(t => {
-      base44.asServiceRole.functions.invoke(t.fn, { _service_role: true, ...t.payload })
+      base44.asServiceRole.functions.invoke(t.fn, t.payload)
         .then(async (res: any) => {
           const data = res?.data || res || {};
-          const ok = data?.ok !== false;
+          const ok = data?.ok !== false && !data?.error;
           if (!ok) {
-            // Análise de erro pela IA (assíncrono, não bloqueia)
-            const errMsg = data?.error || 'unknown';
-            try {
-              await base44.asServiceRole.integrations.Core.InvokeLLM({
-                prompt: `LivingFinds motor — Erro na etapa "${t.label}" conta ${aid} em ${today}.\nErro: ${errMsg}\nAnalise se é recuperável e retorne JSON: {can_retry, root_cause, is_recoverable, priority}.`,
-                response_json_schema: {
-                  type: 'object',
-                  properties: {
-                    can_retry: { type: 'boolean' },
-                    root_cause: { type: 'string' },
-                    is_recoverable: { type: 'boolean' },
-                    priority: { type: 'string' },
-                  },
-                },
-              }).then(async (analysis: any) => {
-                await base44.asServiceRole.entities.SyncExecutionLog.create({
-                  amazon_account_id: aid,
-                  operation: `smart_orchestrator:error:${t.label}`,
-                  trigger_type: 'automatic',
-                  status: analysis?.is_recoverable ? 'warning' : 'error',
-                  execution_date: today,
-                  started_at: nowIso(),
-                  completed_at: nowIso(),
-                  error_message: `${errMsg} | root: ${analysis?.root_cause || '?'} | can_retry: ${analysis?.can_retry}`,
-                }).catch(() => {});
-              }).catch(() => {});
-            } catch {}
-          } else if (['sync_catalog', 'sync_sales', 'sync_campaign_states', 'inventory_kickoff', 'manual_campaign_terms', 'evaluate_new_campaigns_72h', 'daily_backup'].includes(t.label)) {
-            // Registrar sucesso para TTL
-            await base44.asServiceRole.entities.SyncExecutionLog.create({
-              amazon_account_id: aid,
-              operation: t.label,
-              trigger_type: 'automatic',
-              status: 'success',
-              execution_date: today,
-              started_at: nowIso(),
-              completed_at: nowIso(),
-              records_processed: data?.records_processed || data?.updated || 0,
-            }).catch(() => {});
+            await logStep(base44, aid, `orchestrator:fail:${t.label}`, 'error', data?.error || 'unknown error');
+          } else if (TTL_STEPS.has(t.label)) {
+            // Marcar TTL: impede execução duplicada no mesmo dia
+            await logStep(base44, aid, t.label, 'success', '');
           }
         })
-        .catch((e: any) => {
-          base44.asServiceRole.entities.SyncExecutionLog.create({
-            amazon_account_id: aid,
-            operation: `smart_orchestrator:error:${t.label}`,
-            trigger_type: 'automatic',
-            status: 'error',
-            execution_date: today,
-            started_at: nowIso(),
-            completed_at: nowIso(),
-            error_message: e?.message?.slice(0, 300) || 'invoke failed',
-          }).catch(() => {});
+        .catch(async (e: any) => {
+          await logStep(base44, aid, `orchestrator:fail:${t.label}`, 'error', e?.message || 'invoke failed');
         });
     });
 
-    // ── Registrar execução do orquestrador como sucesso (o resultado é o plano) ──
+    // ── Registrar orquestrador como sucesso ──────────────────────────────────
     const duration_ms = Date.now() - t0;
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
@@ -231,28 +192,27 @@ Deno.serve(async (req) => {
       status: 'success',
       execution_date: today,
       started_at: startedAt,
-      completed_at: dispatchedAt,
+      completed_at: nowIso(),
       duration_ms,
       records_processed: taskQueue.length,
       result_summary: JSON.stringify({
-        tasks_dispatched: taskQueue.length,
-        tasks_skipped: plan.filter(p => p.skipped).length,
-        jobs_exist: allJobsExist,
-        pending_jobs: hasPending,
+        dispatched: taskQueue.length,
+        skipped: skipped.length,
+        tasks: taskQueue.map(t => t.label),
+        skipped_tasks: skipped,
       }),
     }).catch(() => {});
 
     return Response.json({
       ok: true,
-      orchestrator: 'smart_daily_v3',
+      orchestrator: 'smart_daily_v4',
       account_id: aid,
       date: today,
-      tasks_dispatched: taskQueue.length,
-      tasks_skipped: plan.filter(p => p.skipped).length,
+      dispatched: taskQueue.length,
+      skipped: skipped.length,
       tasks: taskQueue.map(t => t.label),
-      skipped: plan.filter(p => p.skipped).map(p => p.step),
+      skipped_tasks: skipped,
       duration_ms,
-      note: 'Todas as tarefas foram disparadas em background. Resultados em SyncExecutionLog.',
     });
 
   } catch (error: any) {
