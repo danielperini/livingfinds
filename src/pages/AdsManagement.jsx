@@ -481,12 +481,7 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
-              <button onClick={() => pauseNoStockCampaigns(false)} disabled={pausingNoStock || !account}
-              title="Pausa campanhas AUTO cujo produto não tem estoque nem kickoff agendado"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50">
-                {pausingNoStock ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
-                Pausar sem estoque
-              </button>
+
               
 
 
