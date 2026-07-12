@@ -566,18 +566,24 @@ export default function SalaDeComando() {
       {/* Navegação consolidada: áreas principais + funções internas */}
       {(() => {
         const activeGroup = findTabGroup(tab);
-        const renderBadge = (tabId) => (
-          <>
-            {tabId === 'acoes_janela' && windowActions.filter(a => a.status === 'failed').length > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{windowActions.filter(a => a.status === 'failed').length}</span>}
-            {tabId === 'kickoff' && kickoffQueue.filter(i => i.status === 'failed').length > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{kickoffQueue.filter(i => i.status === 'failed').length}</span>}
-            {tabId === 'kickoff' && kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length > 0 && kickoffQueue.filter(i => i.status === 'failed').length === 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">{kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length}</span>}
-            {tabId === 'alertas' && activeAlerts > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span>}
-            {tabId === 'fila' && queueFailed > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span>}
-            {tabId === 'pausas' && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full"><Clock className="w-2.5 h-2.5 inline" /></span>}
-            {tabId === 'autopilot' && pendingDecisions > 0 && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span>}
-            {tabId === 'sync_monitor' && syncRuns.some(r => r.status === 'error') && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">!</span>}
-          </>
-        );
+        const renderBadge = (tabId) => {
+          const windowFailed = windowActions.filter(a => a.status === 'failed').length;
+          const kickoffFailed = kickoffQueue.filter(i => i.status === 'failed').length;
+          const kickoffActive = kickoffQueue.filter(i => i.status === 'scheduled' || i.status === 'processing').length;
+          const hasSyncError = syncRuns.some(r => r.status === 'error');
+          return (
+            <>
+              {tabId === 'acoes_janela' && windowFailed > 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{windowFailed}</span> : null}
+              {tabId === 'kickoff' && kickoffFailed > 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{kickoffFailed}</span> : null}
+              {tabId === 'kickoff' && kickoffActive > 0 && kickoffFailed === 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-violet-500/20 text-violet-400 rounded-full">{kickoffActive}</span> : null}
+              {tabId === 'alertas' && activeAlerts > 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{activeAlerts}</span> : null}
+              {tabId === 'fila' && queueFailed > 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">{queueFailed}</span> : null}
+              {tabId === 'pausas' ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full"><Clock className="w-2.5 h-2.5 inline" /></span> : null}
+              {tabId === 'autopilot' && pendingDecisions > 0 ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded-full">{pendingDecisions}</span> : null}
+              {tabId === 'sync_monitor' && hasSyncError ? <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded-full">!</span> : null}
+            </>
+          );
+        };
 
         return (
           <div className="space-y-2">
@@ -751,7 +757,7 @@ export default function SalaDeComando() {
               </div>
 
               {/* Resumo */}
-              {windowActions.length > 0 && (() => {
+              {windowActions.length > 0 ? (() => {
                 const total = windowActions.length;
                 const ok = windowActions.filter(a => a.status === 'success').length;
                 const failed = windowActions.filter(a => a.status === 'failed').length;
@@ -772,7 +778,7 @@ export default function SalaDeComando() {
                     ))}
                   </div>
                 );
-              })()}
+              })() : null}
 
               {windowActionsLoading ? (
                 <div className="flex items-center justify-center py-16">

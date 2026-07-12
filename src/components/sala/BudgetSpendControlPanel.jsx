@@ -227,7 +227,7 @@ export default function BudgetSpendControlPanel({ account }) {
           <span>Hora BRT: {c?.current_hour_brt != null ? `${String(c.current_hour_brt).padStart(2,'0')}:xx` : '—'}</span>
           <span>·</span>
           <span>Reset: meia-noite BRT</span>
-          {c?.spend_date && <><span>·</span><span>Data: {c.spend_date}</span></>}
+          {c?.spend_date ? <><span>·</span><span>Data: {c.spend_date}</span></> : null}
         </div>
       </div>
 

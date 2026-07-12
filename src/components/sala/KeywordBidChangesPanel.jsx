@@ -626,8 +626,9 @@ export default function KeywordBidChangesPanel({ account }) {
       </div>
 
       {/* Variação média */}
-      {decisions.filter(d => d.status === 'executed' && d.value_before && d.value_after).length > 0 && (() => {
+      {(() => {
         const execs = decisions.filter(d => d.status === 'executed' && d.value_before && d.value_after);
+        if (execs.length === 0) return null;
         const avgPct = execs.reduce((s, d) => s + ((d.value_after - d.value_before) / d.value_before * 100), 0) / execs.length;
         return (
           <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-1 border border-surface-2 rounded-xl text-xs text-slate-400">
