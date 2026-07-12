@@ -37,10 +37,10 @@ function getClosedReportingPeriod(period) {
   const yesterday = getYesterday();
   if (period === 'yesterday') return { startDate: yesterday, endDate: yesterday, label: 'Ontem' };
   const days = Number(period);
-  const start = new Date();
-  start.setDate(start.getDate() - days);
-  start.setHours(0, 0, 0, 0);
-  return { startDate: start.toISOString().slice(0, 10), endDate: yesterday, label: `${days} dias` };
+  // Usar BRT para calcular startDate: yesterday - (days-1) dias = janela fechada de "days" dias
+  const endDate = new Date(yesterday + 'T12:00:00Z');
+  const startDate = new Date(endDate.getTime() - (days - 1) * 86400000);
+  return { startDate: startDate.toISOString().slice(0, 10), endDate: yesterday, label: `${days} dias` };
 }
 
 function safe(v, d = 2) {
@@ -596,9 +596,9 @@ export default function Dashboard() {
     return s;
   }, [allMetrics, yesterday]);
 
-  // Média diária do período selecionado
-  const uniqueDates = useMemo(() => new Set(periodMetrics.map(m => m.date)), [periodMetrics]);
-  const avgDailySpend = uniqueDates.size > 0 ? safe(kpis.spend / uniqueDates.size) : 0;
+  // Média diária do período selecionado — divide pelos dias CALENDÁRIO do período, não pelos dias com dados
+  const periodDays = activePeriod === 'yesterday' ? 1 : Number(activePeriod);
+  const avgDailySpend = periodDays > 0 && kpis.spend > 0 ? safe(kpis.spend / periodDays) : 0;
 
   // ─── Metas — usa a MESMA cascata de fallback do motor determinístico ──────
   const cfg = canonicalSettings || performanceSettings || autopilotConfig || {};
