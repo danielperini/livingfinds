@@ -1,6 +1,20 @@
 import { useMemo } from 'react';
 import { Activity, CheckCircle, Clock, XCircle, AlertTriangle } from 'lucide-react';
 
+function NextSyncLabel({ lastSyncAt }) {
+  const nextSync = new Date(new Date(lastSyncAt).getTime() + 24 * 3600000);
+  const diffMs = nextSync.getTime() - Date.now();
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffM = Math.floor((diffMs % 3600000) / 60000);
+  const label = diffMs <= 0 ? 'Em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'm' : ''}` : `em ~${diffM}min`;
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-[10px] text-slate-600">·</span>
+      <p className="text-[10px] text-slate-500">Próxima atualização: <span className="text-slate-400">{label}</span></p>
+    </div>
+  );
+}
+
 function fmtDateBRFull(iso) {
   if (!iso) return '—';
   const [y, m, d] = iso.split('-');
@@ -129,19 +143,9 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSal
             </p>
           </div>
         ) : null}
-        {lastSyncAt ? (() => {
-          const nextSync = new Date(new Date(lastSyncAt).getTime() + 24 * 3600000);
-          const diffMs = nextSync.getTime() - Date.now();
-          const diffH = Math.floor(diffMs / 3600000);
-          const diffM = Math.floor((diffMs % 3600000) / 60000);
-          const label = diffMs <= 0 ? 'Em breve' : diffH > 0 ? `em ~${diffH}h${diffM > 0 ? diffM + 'm' : ''}` : `em ~${diffM}min`;
-          return (
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] text-slate-600">·</span>
-              <p className="text-[10px] text-slate-500">Próxima atualização: <span className="text-slate-400">{label}</span></p>
-            </div>
-          );
-        })() : null}
+        {lastSyncAt ? (
+          <NextSyncLabel lastSyncAt={lastSyncAt} />
+        ) : null}
       </div>
     </div>);
 

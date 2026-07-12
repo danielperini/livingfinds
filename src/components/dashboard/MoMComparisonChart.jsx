@@ -276,7 +276,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
       <p className="text-[9px] text-slate-600 mt-2">
         Dados do banco atualizados automaticamente pelos relatórios baixados diariamente.
         {daysWithPrevData < daysInPrevMonth ? (
-          <> · <span className="text-amber-500/70">{prevMonthLabel}: apenas {daysWithPrevData}/{daysInPrevMonth} dias com dados</span></>
+          <span> · <span className="text-amber-500/70">{prevMonthLabel}: apenas {daysWithPrevData}/{daysInPrevMonth} dias com dados</span></span>
         ) : null}
       </p>
     </div>

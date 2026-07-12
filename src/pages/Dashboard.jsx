@@ -657,12 +657,11 @@ export default function Dashboard() {
           <h1 className="text-lg font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
             {loading ? 'Carregando...' : account
-              ? <><span className="text-emerald-400/80">{campaigns.length} campanhas</span> · {active_count} ativas · {products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</>
-
+              ? <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}{active_count} ativas{' · '}{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span>
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
             {nextSyncLabel ? (
                 <span className="flex items-center gap-1 text-slate-500 ml-1">
-                  · <Clock className="w-3 h-3" />
+                  {' · '}<Clock className="w-3 h-3" />
                   Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   <span className="text-slate-600">· Próximo sync {nextSyncLabel.label}</span>
                 </span>
@@ -739,10 +738,10 @@ export default function Dashboard() {
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
           Todo o histórico disponível · Vendas Ads = atribuição Amazon
-          {hasSalesDailyData ? <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></> : null}
+          {hasSalesDailyData ? <span> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></span> : null}
           {' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA
           {(activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday()) ? (
-            <> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></>
+            <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>
           ) : null}
         </p>
         {hasSalesDailyData ? (
@@ -1121,7 +1120,7 @@ export default function Dashboard() {
         ) : null}
         {budgetCfg?.next_weekly_recalculation ? (
           <p className="text-[10px] text-slate-600 mt-2">
-            Próximo recálculo: {new Date(budgetCfg.next_weekly_recalculation).toLocaleDateString('pt-BR')}
+            Próximo recálculo: {new Date(String(budgetCfg.next_weekly_recalculation)).toLocaleDateString('pt-BR')}
           </p>
         ) : null}
       </div>
