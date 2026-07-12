@@ -3,19 +3,23 @@ import { base44 } from '@/api/base44Client';
 import { AlertTriangle, CheckCircle, RefreshCw, Wrench, ChevronDown, ChevronUp, Clock, Zap } from 'lucide-react';
 
 const ERROR_LABELS = {
-  lock:   { label: 'Lock travado',      color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/20', dot: 'bg-orange-400' },
-  auth:   { label: 'Token/Auth expirado', color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',    dot: 'bg-red-400' },
-  db:     { label: 'Conexão DB',        color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/20', dot: 'bg-amber-400' },
-  report: { label: 'Relatório Amazon',  color: 'text-violet-400',  bg: 'bg-violet-500/10 border-violet-500/20', dot: 'bg-violet-400' },
-  other:  { label: 'Outro',            color: 'text-slate-400',   bg: 'bg-slate-500/10 border-slate-500/20',  dot: 'bg-slate-400' },
+  lock:       { label: 'Lock travado',       color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/20', dot: 'bg-orange-400',  fix: 'unlockStuckSyncs' },
+  auth:       { label: 'Token/Auth expirado', color: 'text-red-400',   bg: 'bg-red-500/10 border-red-500/20',       dot: 'bg-red-400',     fix: 'keepAmazonConnected' },
+  amazon_api: { label: 'Amazon API',          color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20',   dot: 'bg-amber-400',   fix: null },
+  db:         { label: 'Conexão DB',          color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20',   dot: 'bg-amber-400',   fix: null },
+  report:     { label: 'Relatório Amazon',    color: 'text-violet-400',bg: 'bg-violet-500/10 border-violet-500/20', dot: 'bg-violet-400',  fix: null },
+  other:      { label: 'Outro',               color: 'text-slate-400', bg: 'bg-slate-500/10 border-slate-500/20',   dot: 'bg-slate-400',   fix: null },
 };
 
-function classifyError(msg) {
+function classifyError(msg, operation) {
   const e = String(msg || '').toLowerCase();
-  if (e.includes('lock') || e.includes('liberado')) return 'lock';
-  if (e.includes('403') || e.includes('token') || e.includes('unauthorized') || e.includes('expired') || e.includes('refresh')) return 'auth';
+  const op = String(operation || '').toLowerCase();
+  if (e.includes('lock') || e.includes('liberado') || op.includes('lock')) return 'lock';
+  if (e.includes('403') || e.includes('401') || e.includes('token') || e.includes('unauthorized') || e.includes('expired') || e.includes('refresh') || e.includes('not authorized') || op.includes('token') || op.includes('auth') || op.includes('keepamazon') || op.includes('oauth')) return 'auth';
   if (e.includes('1042') || e.includes('connection')) return 'db';
   if (e.includes('relat') || e.includes('report') || e.includes('pending') || e.includes('425')) return 'report';
+  // Classificar operações conhecidas de API Amazon como 'amazon_api'
+  if (op.includes('keyword') || op.includes('campaign') || op.includes('bid') || op.includes('adgroup') || op.includes('inventory') || op.includes('decision') || op.includes('sync') || op.includes('amazon') || op.includes('ads')) return 'amazon_api';
   return 'other';
 }
 
@@ -28,6 +32,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fixing, setFixing] = useState(false);
+  const [fixingType, setFixingType] = useState(null);
   const [fixResult, setFixResult] = useState(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -56,7 +61,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
   // Agrupa erros por tipo
   const groups = {};
   for (const log of logs) {
-    const type = classifyError(log.error_message);
+    const type = classifyError(log.error_message, log.operation);
     if (!groups[type]) groups[type] = { count: 0, operations: new Set(), lastError: '', lastAt: '' };
     groups[type].count++;
     groups[type].operations.add(log.operation || 'unknown');
@@ -81,6 +86,20 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
       setFixResult({ ok: false, error: e.message });
     } finally {
       setFixing(false);
+    }
+  };
+
+  const fixType = async (type) => {
+    const fn = ERROR_LABELS[type]?.fix;
+    if (!fn) return;
+    setFixingType(type);
+    try {
+      await base44.functions.invoke(fn, { amazon_account_id: amazonAccountId });
+      await load();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setFixingType(null);
     }
   };
 
@@ -151,6 +170,16 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
               </div>
               <p className={`text-xl font-bold ${meta.color}`}>{g.count}</p>
               <p className="text-[10px] text-slate-500 mt-0.5 truncate">{[...g.operations].slice(0, 2).join(', ')}</p>
+              {meta.fix && (
+                <button
+                  onClick={() => fixType(type)}
+                  disabled={fixingType === type}
+                  className={`mt-1.5 flex items-center gap-1 text-[10px] font-semibold underline ${meta.color} disabled:opacity-50`}
+                >
+                  {fixingType === type ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : <Wrench className="w-2.5 h-2.5" />}
+                  {fixingType === type ? 'corrigindo...' : 'corrigir'}
+                </button>
+              )}
             </div>
           );
         })}
@@ -160,7 +189,7 @@ export default function SyncFailureMonitor({ amazonAccountId }) {
       {expanded && (
         <div className="border-t border-surface-2 divide-y divide-surface-2 max-h-64 overflow-y-auto scrollbar-thin">
           {logs.slice(0, 30).map(log => {
-            const type = classifyError(log.error_message);
+            const type = classifyError(log.error_message, log.operation);
             const meta = ERROR_LABELS[type] || ERROR_LABELS.other;
             return (
               <div key={log.id} className="flex items-start gap-3 px-4 py-2.5 hover:bg-surface-2/40 transition-colors">
