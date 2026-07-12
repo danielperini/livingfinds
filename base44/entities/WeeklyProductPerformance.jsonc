@@ -1,0 +1,133 @@
+{
+  "name": "WeeklyProductPerformance",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "weekly_report_id": {
+      "type": "string"
+    },
+    "week_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "week_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "spend_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "ads_sales_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "real_sales_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_7d": {
+      "type": "number"
+    },
+    "roas_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos_7d": {
+      "type": "number"
+    },
+    "profit_before_ads_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads_7d": {
+      "type": "number"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "maximum_profitable_cpa": {
+      "type": "number",
+      "default": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "profitable",
+        "low_profit",
+        "break_even",
+        "unprofitable",
+        "no_sales_with_spend",
+        "insufficient_data",
+        "stock_blocked",
+        "listing_blocked"
+      ],
+      "default": "insufficient_data"
+    },
+    "main_problem": {
+      "type": "string"
+    },
+    "recommended_action": {
+      "type": "string"
+    },
+    "actions_executed": {
+      "type": "number",
+      "default": 0
+    },
+    "next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "weekly_report_id",
+    "asin"
+  ]
+}

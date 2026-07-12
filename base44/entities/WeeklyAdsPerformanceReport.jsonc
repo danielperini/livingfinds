@@ -1,0 +1,139 @@
+{
+  "name": "WeeklyAdsPerformanceReport",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "week_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "week_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "report_status": {
+      "type": "string",
+      "enum": [
+        "generating",
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "default": "generating"
+    },
+    "data_coverage_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "days_complete": {
+      "type": "number",
+      "default": 0
+    },
+    "days_partial": {
+      "type": "number",
+      "default": 0
+    },
+    "total_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "total_ads_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "total_real_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "total_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "total_units": {
+      "type": "number",
+      "default": 0
+    },
+    "account_acos": {
+      "type": "number"
+    },
+    "account_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "account_tacos": {
+      "type": "number"
+    },
+    "total_profit_before_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "total_profit_after_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "products_profitable": {
+      "type": "number",
+      "default": 0
+    },
+    "products_unprofitable": {
+      "type": "number",
+      "default": 0
+    },
+    "products_no_sales_with_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_adjusted": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_adjusted": {
+      "type": "number",
+      "default": 0
+    },
+    "targets_adjusted": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_created": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_executed": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_failed": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_pending_confirmation": {
+      "type": "number",
+      "default": 0
+    },
+    "executive_summary": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "week_start",
+    "week_end"
+  ]
+}
