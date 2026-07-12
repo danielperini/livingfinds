@@ -1022,6 +1022,9 @@ Deno.serve(async (req) => {
       const entityId = kw.keyword_id || kw.id;
       if (!entityId) continue;
       if (entityChangedThisCycle.has(entityId)) continue;
+      // Ignorar keywords negativas — não têm bid alterável na Amazon Ads API
+      const mt = (kw.match_type || '').toLowerCase();
+      if (mt.startsWith('negative') || (kw.keyword_id || '').startsWith('neg_')) continue;
       stats.evaluated++;
 
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
