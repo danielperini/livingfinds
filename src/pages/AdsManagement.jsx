@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { loadAllCampaigns, classifyCampaigns } from '@/lib/campaignUtils';
+import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
 import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
@@ -132,7 +132,7 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
 
                 {/* Metrics row */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <StatusBadge status={c.state || c.status} size="xs" />
+                  <StatusBadge status={campaignState(c) || 'enabled'} size="xs" />
                   <span className="text-[10px] text-slate-500">R${(c.spend || 0).toFixed(0)}</span>
                   {(c.acos || 0) > 0 &&
                 <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span>
@@ -333,7 +333,7 @@ export default function AdsManagement() {
   const selectCampaign = async (campaign) => {
     setSelectedCampaign(campaign);
     setPendingBids({});
-    setActiveTab(campaign.state === 'paused' ? 'history' : 'keywords');
+    setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
     await loadKeywordsForCampaign(campaign);
   };
 
@@ -440,7 +440,7 @@ export default function AdsManagement() {
 
   // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
   const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO'))
-    .filter((c) => stateFilterAuto === 'all' || c.state === stateFilterAuto || c.status === stateFilterAuto);
+    .filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
 
   const autoByAsin = (() => {
     const map = new Map();
@@ -459,7 +459,7 @@ export default function AdsManagement() {
 
   const autoCampaigns = autoByAsin;
   const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO'))
-  .filter((c) => stateFilterManual === 'all' || c.state === stateFilterManual || c.status === stateFilterManual)
+  .filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual)
   .sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
@@ -627,7 +627,7 @@ export default function AdsManagement() {
                   }
                   </div>
                   <div className="flex items-center gap-3 mt-1 flex-wrap">
-                    <StatusBadge status={selectedCampaign.state} />
+                    <StatusBadge status={campaignState(selectedCampaign) || 'enabled'} />
                     <span className="text-xs text-slate-400">Orçamento: <span className="text-white">R${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span></span>
                     <span className="text-xs text-slate-400">Spend: <span className="text-white">R${(selectedCampaign.spend || 0).toFixed(2)}</span></span>
                     <span className="text-xs text-slate-400">Vendas: <span className="text-emerald-400">R${(selectedCampaign.sales || 0).toFixed(2)}</span></span>
@@ -656,7 +656,7 @@ export default function AdsManagement() {
 
                 })()}
                   {/* Pausar */}
-                  {(selectedCampaign.state === 'enabled' || selectedCampaign.status === 'enabled') &&
+                  {campaignState(selectedCampaign) === 'enabled' &&
                 <button onClick={pauseCampaign} disabled={!!campaignAction}
                 className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
                       {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pause className="w-3.5 h-3.5" />}
