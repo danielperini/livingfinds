@@ -925,32 +925,65 @@ export default function SalaDeComando() {
                 ))}
               </div>
 
-              {/* Ações rápidas */}
-              <div className="flex items-center gap-3 flex-wrap">
-                <button
-                  onClick={() => runQueueNow('kickoff', 'processProductKickoffQueueV2')}
-                  disabled={running.kickoff || !account || kickoffQueue.filter(i => i.status === 'scheduled').length === 0}
-                  className="flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-40 transition-colors"
-                >
-                  {running.kickoff ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-                  {running.kickoff ? 'Executando Fila...' : 'Executar Fila Agora'}
-                </button>
-                <button
-                  onClick={() => clearDone('ProductKickoffQueue', kickoffQueue)}
-                  disabled={kickoffQueue.filter(i => ['completed', 'failed', 'cancelled'].includes(i.status)).length === 0}
-                  className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg disabled:opacity-40 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Limpar Concluídos
-                </button>
-                <button
-                  onClick={() => runRepair()}
-                  disabled={repairRunning || !account}
-                  className="flex items-center gap-2 px-4 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-sm font-semibold rounded-lg disabled:opacity-40 transition-colors"
-                >
-                  {repairRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wrench className="w-4 h-4" />}
-                  {repairRunning ? 'Reparando...' : 'Reparar Campanhas AUTO'}
-                </button>
+              {/* Automações ativas */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Executar Fila — coberta pelo pipeline horário */}
+                <div className="flex items-start gap-3 p-3 bg-surface-1 border border-violet-500/20 rounded-xl">
+                  <div className="w-7 h-7 rounded-lg bg-violet-500/15 border border-violet-500/25 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Zap className="w-3.5 h-3.5 text-violet-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-violet-300">Fila de Kick-off</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Automação: Pipeline agressivo — executa a cada hora automaticamente</p>
+                  </div>
+                  <button
+                    onClick={() => runQueueNow('kickoff', 'processProductKickoffQueueV2')}
+                    disabled={running.kickoff || !account || kickoffQueue.filter(i => i.status === 'scheduled').length === 0}
+                    title="Forçar execução agora"
+                    className="flex items-center gap-1 px-2 py-1 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-[10px] font-semibold rounded-lg disabled:opacity-40 transition-colors flex-shrink-0"
+                  >
+                    {running.kickoff ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                    Forçar
+                  </button>
+                </div>
+
+                {/* Limpar Concluídos — ação local sem automação */}
+                <div className="flex items-start gap-3 p-3 bg-surface-1 border border-surface-2 rounded-xl">
+                  <div className="w-7 h-7 rounded-lg bg-slate-500/15 border border-slate-500/25 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-slate-300">Limpar Registros</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Remove itens concluídos, cancelados e com erro da fila local</p>
+                  </div>
+                  <button
+                    onClick={() => clearDone('ProductKickoffQueue', kickoffQueue)}
+                    disabled={kickoffQueue.filter(i => ['completed', 'failed', 'cancelled'].includes(i.status)).length === 0}
+                    className="flex items-center gap-1 px-2 py-1 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-[10px] rounded-lg disabled:opacity-40 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Limpar
+                  </button>
+                </div>
+
+                {/* Reparar Campanhas AUTO — execução manual */}
+                <div className="flex items-start gap-3 p-3 bg-surface-1 border border-amber-500/20 rounded-xl">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Wrench className="w-3.5 h-3.5 text-amber-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-amber-300">Reparar Campanhas AUTO</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Repara campanhas incompletas (sem ad group ou product ads)</p>
+                  </div>
+                  <button
+                    onClick={() => runRepair()}
+                    disabled={repairRunning || !account}
+                    className="flex items-center gap-1 px-2 py-1 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-[10px] font-semibold rounded-lg disabled:opacity-40 transition-colors flex-shrink-0"
+                  >
+                    {repairRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
+                    {repairRunning ? '...' : 'Reparar'}
+                  </button>
+                </div>
               </div>
 
               {repairMsg && (
