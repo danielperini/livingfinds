@@ -106,11 +106,11 @@ export default function WeeklySearchTermPromotionPanel({ account }) {
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-cyan" />
           <h3 className="text-sm font-semibold text-slate-200">Promoção Semanal de Termos</h3>
-          {incomplete > 0 && (
+          {incomplete > 0 ? (
             <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 font-semibold">
               {incomplete} pendentes
             </span>
-          )}
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <button onClick={loadPromos} disabled={loading} className="p-2 bg-surface-2 border border-surface-3 rounded-lg text-slate-400 hover:text-white disabled:opacity-50">
@@ -156,15 +156,15 @@ export default function WeeklySearchTermPromotionPanel({ account }) {
       </div>
 
       {/* Message */}
-      {msg && (
+      {msg ? (
         <div className={`mx-5 mb-4 px-4 py-3 rounded-lg text-xs border flex items-center gap-2 ${msg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
           {msg.type === 'success' ? <CheckCircle className="w-3.5 h-3.5 flex-shrink-0" /> : <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />}
           {msg.text}
         </div>
-      )}
+      ) : null}
 
       {/* Table toggle */}
-      {promos.length > 0 && (
+      {promos.length > 0 ? (
         <div className="border-t border-surface-2">
           <button onClick={() => setExpanded(e => !e)}
             className="w-full flex items-center justify-between px-5 py-3 text-xs text-slate-400 hover:text-slate-200 hover:bg-surface-2/40 transition-colors">
@@ -220,13 +220,13 @@ export default function WeeklySearchTermPromotionPanel({ account }) {
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
-      {!loading && promos.length === 0 && (
+      {!loading && promos.length === 0 ? (
         <div className="px-5 pb-5 text-xs text-slate-600 text-center py-4">
           Nenhuma promoção registrada. Execute a varredura para identificar termos vencedores.
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
