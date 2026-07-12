@@ -92,28 +92,26 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' });
 
     const aid = account.id;
-    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
-    const region = account.region || Deno.env.get('ADS_REGION') || 'na';
-    const endpointMap: Record<string, string> = {
-      na: 'https://advertising-api.amazon.com',
-      eu: 'https://advertising-api-eu.amazon.com',
-      fe: 'https://advertising-api-fe.amazon.com',
-    };
-    const adsEndpoint = endpointMap[region] || endpointMap.na;
-    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    // gateway centralizado não precisa de credenciais diretas — resolvidas internamente
 
-    // ── Carregar todas as keywords ativas ────────────────────────────────
+    // ── Carregar todas as keywords ativas (paginação correta) ────────────
     const allKeywords: any[] = [];
-    let skip = 0;
-    while (true) {
+    const seenIds = new Set<string>();
+    // Buscar enabled e paused/archived separadamente para cobrir todo o dataset
+    // Mas para dedup só nos importam as enabled — buscar em múltiplos passes por sort diferente
+    const passes = [
+      { sort: '-spend', limit: 500 },
+      { sort: 'created_date', limit: 500 },
+      { sort: '-created_date', limit: 500 },
+      { sort: 'keyword_text', limit: 500 },
+    ];
+    for (const pass of passes) {
       const batch = await base44.asServiceRole.entities.Keyword.filter(
-        { amazon_account_id: aid }, '-spend', 200
+        { amazon_account_id: aid, state: 'enabled' }, pass.sort, pass.limit
       ).catch(() => []);
-      if (batch.length === 0) break;
-      allKeywords.push(...batch);
-      if (batch.length < 200) break;
-      skip += 200;
-      if (skip >= 2000) break; // safety
+      for (const kw of batch) {
+        if (!seenIds.has(kw.id)) { seenIds.add(kw.id); allKeywords.push(kw); }
+      }
     }
 
     // ── Construir mapa de deduplicação ────────────────────────────────────
@@ -183,7 +181,6 @@ Deno.serve(async (req) => {
     }
 
     // ── Executar pausas ────────────────────────────────────────────────────
-    const adsToken = await getAdsToken(account);
     const results = { paused_local: 0, paused_amazon: 0, failed_amazon: 0, skipped: 0 };
     const errorLog: string[] = [];
 
@@ -203,37 +200,34 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Pausar na Amazon Ads API v3 em lotes de 10
-    if (adsToken && profileId) {
-      const kwIdsToAmazon = toPauseAll
-        .filter(kw => kw.keyword_id)
-        .map(kw => ({ keywordId: String(kw.keyword_id), state: 'PAUSED' }));
+    // Pausar na Amazon Ads API v3 via gateway centralizado (com retry automático)
+    const kwIdsToAmazon = toPauseAll
+      .filter(kw => kw.keyword_id)
+      .map(kw => ({ keywordId: String(kw.keyword_id), state: 'PAUSED' }));
 
+    if (kwIdsToAmazon.length > 0) {
       for (let i = 0; i < kwIdsToAmazon.length; i += 10) {
         const batch = kwIdsToAmazon.slice(i, i + 10);
         try {
-          const res = await fetch(`${adsEndpoint}/sp/keywords`, {
+          const raw = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+            amazon_account_id: aid,
+            operation: 'pauseKeyword',
             method: 'PUT',
-            headers: {
-              'Amazon-Advertising-API-ClientId': clientId,
-              'Amazon-Advertising-API-Scope': profileId,
-              'Authorization': `Bearer ${adsToken}`,
-              'Content-Type': V3_KW_CT,
-              'Accept': V3_KW_CT,
-            },
-            body: JSON.stringify({ keywords: batch }),
+            path: '/sp/keywords',
+            payload: { keywords: batch },
+            content_type: V3_KW_CT,
+            accept: V3_KW_CT,
+            max_attempts: 3,
+            _service_role: true,
           });
-          if (res.ok) {
-            const data = await res.json();
-            const success = data?.keywords?.success || [];
-            const errors = data?.keywords?.error || [];
-            results.paused_amazon += success.length;
-            results.failed_amazon += errors.length;
-            if (errors.length > 0) {
-              errorLog.push(...errors.slice(0, 3).map((e: any) => JSON.stringify(e).slice(0, 200)));
-            }
-          } else {
-            results.failed_amazon += batch.length;
+          const data = raw?.data || raw || {};
+          const v3 = data?.payload?.keywords || data?.keywords || {};
+          const success = v3?.success || [];
+          const errors = v3?.error || v3?.errors || [];
+          results.paused_amazon += success.length || (errors.length === 0 ? batch.length : 0);
+          results.failed_amazon += errors.length;
+          if (errors.length > 0) {
+            errorLog.push(...errors.slice(0, 3).map((e: any) => JSON.stringify(e).slice(0, 200)));
           }
         } catch (err: any) {
           results.failed_amazon += batch.length;
