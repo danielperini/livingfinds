@@ -794,9 +794,7 @@ export default function Dashboard() {
               {/* Linhas de valor em R$ */}
               <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} dot={false} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} dot={false} />
-              {hasSalesDailyData && (
-                <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={2} dot={false} />
-              )}
+              <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={hasSalesDailyData ? 2 : 0} dot={false} opacity={hasSalesDailyData ? 1 : 0} />
             </ComposedChart>
           </ResponsiveContainer>
         )}
