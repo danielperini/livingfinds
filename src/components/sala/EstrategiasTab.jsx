@@ -401,7 +401,7 @@ export default function EstrategiasTab({ account }) {
       )}
 
       {/* Resultado da execução */}
-      {result && (
+      {result ? (
         <div className={`rounded-xl border p-4 space-y-3 ${result.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
           <div className="flex items-center gap-2 flex-wrap">
             {result.ok ? <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />}
@@ -409,7 +409,7 @@ export default function EstrategiasTab({ account }) {
               {result.decisions_generated || 0} decisões geradas · Dados: {result.data_freshness} ({result.data_age_hours}h) · Motor: {result.engine || 'unified'}
             </span>
           </div>
-          {result.economic_context && (
+          {result.economic_context ? (
             <div className="flex flex-wrap gap-2 text-[10px]">
               <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-400">
                 Gasto ontem: R${(result.economic_context.real_spend_yesterday || 0).toFixed(2)} / cap R${result.economic_context.budget_cap}
@@ -417,14 +417,14 @@ export default function EstrategiasTab({ account }) {
               <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-400">
                 {result.economic_context.products_with_dynamic_target} produtos com meta dinâmica
               </span>
-              {result.seasonal_context?.event && (
+              {result.seasonal_context?.event ? (
                 <span className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400">
                   🗓 {result.seasonal_context.event}
                 </span>
-              )}
+              ) : null}
             </div>
-          )}
-          {result.stats && (
+          ) : null}
+          {result.stats ? (
             <div className="flex flex-wrap gap-3 text-[10px] text-slate-500">
               <span>Avaliadas: {result.stats.evaluated}</span>
               <span>Protegidas: {result.stats.protected}</span>
@@ -432,9 +432,9 @@ export default function EstrategiasTab({ account }) {
               <span>Reduções: {result.stats.bid_reduce}</span>
               <span>Sem dados: {result.stats.held}</span>
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {/* Sub-navegação */}
       <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1 flex-wrap">
@@ -455,7 +455,7 @@ export default function EstrategiasTab({ account }) {
       </div>
 
       {/* ── VISIBILIDADE × VENDAS ───────────────────────────────────────────── */}
-      {activeView === 'visibility' && (
+      {activeView === 'visibility' ? (
         <div className="space-y-4">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-cyan/15 border border-cyan/20 flex items-center justify-center">
@@ -470,12 +470,12 @@ export default function EstrategiasTab({ account }) {
             </button>
           </div>
 
-          {!lastEngineResult && (
+          {!lastEngineResult ? (
             <div className="bg-cyan/5 border border-cyan/20 rounded-xl p-3 flex items-center gap-2 text-xs text-cyan/80">
               <Eye className="w-3.5 h-3.5 flex-shrink-0" />
               Execute o motor de estratégias para ver os visibility scores calculados. Usando dados estimados de sessões enquanto isso.
             </div>
-          )}
+          ) : null}
 
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
             <VisibilityScoreChart
@@ -505,10 +505,10 @@ export default function EstrategiasTab({ account }) {
             <p className="text-[10px] text-slate-600">Score calculado: impressões acumuladas / impressão máxima possível estimada pelo motor. Valores podem variar com a execução do motor.</p>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ── OPORTUNIDADES DE CRESCIMENTO v6 ─────────────────────────────────── */}
-      {activeView === 'opportunities' && (
+      {activeView === 'opportunities' ? (
         <div className="space-y-4">
           {!lastEngineResult ? (
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-10 text-center">
@@ -544,7 +544,7 @@ export default function EstrategiasTab({ account }) {
               </div>
 
               {/* Mini gráfico visibility × vendas inline */}
-              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 && (
+              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 ? (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-xs font-semibold text-slate-300 flex items-center gap-2">
@@ -560,10 +560,10 @@ export default function EstrategiasTab({ account }) {
                     products={products}
                   />
                 </div>
-              )}
+              ) : null}
 
               {/* Distribuição por estado de oportunidade */}
-              {lastEngineResult.opportunity_summary?.by_state && (
+              {lastEngineResult.opportunity_summary?.by_state ? (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                   <p className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-2">
                     <Gauge className="w-3.5 h-3.5 text-cyan" /> Distribuição de Oportunidades
@@ -582,10 +582,10 @@ export default function EstrategiasTab({ account }) {
                       })}
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Tabela de top oportunidades */}
-              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 && (
+              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 ? (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-surface-2">
                     <p className="text-xs font-semibold text-slate-300 flex items-center gap-2">
@@ -611,7 +611,7 @@ export default function EstrategiasTab({ account }) {
                             <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/20 transition-colors">
                               <td className="px-3 py-2.5">
                                 <p className="text-slate-200 font-medium truncate max-w-[140px]" title={opp.keyword_text}>{opp.keyword_text || '—'}</p>
-                                {opp.asin && <p className="font-mono text-cyan text-[9px]">{opp.asin}</p>}
+                                {opp.asin ? <p className="font-mono text-cyan text-[9px]">{opp.asin}</p> : null}
                               </td>
                               <td className="px-3 py-2.5">
                                 <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-semibold ${stateCfg.bg} ${stateCfg.color}`}>
@@ -658,10 +658,10 @@ export default function EstrategiasTab({ account }) {
                     </table>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Stats de crescimento */}
-              {lastEngineResult.stats && (
+              {lastEngineResult.stats ? (
                 <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                   <p className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-2">
                     <Activity className="w-3.5 h-3.5 text-cyan" /> Resultado do Último Ciclo de Crescimento
@@ -684,10 +684,10 @@ export default function EstrategiasTab({ account }) {
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Alertas de erosão de lucro */}
-              {lastEngineResult.profit_after_ads_summary?.erosion_alerts?.length > 0 && (
+              {lastEngineResult.profit_after_ads_summary?.erosion_alerts?.length > 0 ? (
                 <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
                   <p className="text-xs font-semibold text-red-300 mb-2 flex items-center gap-2">
                     <AlertTriangle className="w-3.5 h-3.5" /> Alertas de Erosão de Margem
@@ -702,14 +702,14 @@ export default function EstrategiasTab({ account }) {
                     ))}
                   </div>
                 </div>
-              )}
+              ) : null}
             </>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* ── VISÃO ESTRATÉGICA ────────────────────────────────────────────────── */}
-      {activeView === 'strategic' && !loading && (
+      {activeView === 'strategic' && !loading ? (
         <div className="space-y-4">
           {/* KPIs de Performance 14d */}
           <div>
@@ -723,22 +723,22 @@ export default function EstrategiasTab({ account }) {
           </div>
 
           {/* Alertas estratégicos */}
-          {(strategicMetrics.highAcosCount > 0 || strategicMetrics.noConversionCount > 0) && (
+          {(strategicMetrics.highAcosCount > 0 || strategicMetrics.noConversionCount > 0) ? (
             <div className="space-y-2">
-              {strategicMetrics.highAcosCount > 0 && (
+              {strategicMetrics.highAcosCount > 0 ? (
                 <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/8 border border-red-500/20 text-xs">
                   <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
                   <span className="text-red-300"><strong>{strategicMetrics.highAcosCount}</strong> campanha(s) com ACoS acima da meta — risco de perda de margem</span>
                 </div>
-              )}
-              {strategicMetrics.noConversionCount > 0 && (
+              ) : null}
+              {strategicMetrics.noConversionCount > 0 ? (
                 <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/8 border border-amber-500/20 text-xs">
                   <TrendingDown className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                   <span className="text-amber-300"><strong>{strategicMetrics.noConversionCount}</strong> campanha(s) gastando sem converter — desperdício de orçamento</span>
                 </div>
-              )}
+              ) : null}
             </div>
-          )}
+          ) : null}
 
           {/* Estado estratégico das decisões */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -749,7 +749,7 @@ export default function EstrategiasTab({ account }) {
           </div>
 
           {/* Distribuição de intenção de busca */}
-          {Object.keys(strategicMetrics.intentDist).length > 0 && (
+          {Object.keys(strategicMetrics.intentDist).length > 0 ? (
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
               <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                 <Brain className="w-4 h-4 text-violet-400" />
@@ -775,10 +775,10 @@ export default function EstrategiasTab({ account }) {
               </div>
               <p className="text-[10px] text-slate-600 mt-3">Termos comerciais/transacionais (verde) têm maior intenção de compra e devem ser priorizados.</p>
             </div>
-          )}
+          ) : null}
 
           {/* Produtos por estado */}
-          {products.length > 0 && (
+          {products.length > 0 ? (
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
               <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan" />
@@ -808,12 +808,12 @@ export default function EstrategiasTab({ account }) {
                 })}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {/* ── DECISÕES ────────────────────────────────────────────────────────── */}
-      {activeView === 'decisions' && (
+      {activeView === 'decisions' ? (
         <div className="space-y-4">
           {/* Filtros */}
           <div className="flex flex-wrap gap-2 items-center">
@@ -890,18 +890,18 @@ export default function EstrategiasTab({ account }) {
                   onToggle={() => toggleExpand(dec.id)}
                 />
               ))}
-              {filteredDecisions.length > 100 && (
+              {filteredDecisions.length > 100 ? (
                 <p className="px-5 py-3 text-[10px] text-slate-500 border-t border-surface-2">
                   Mostrando 100 de {filteredDecisions.length} decisões
                 </p>
-              )}
+              ) : null}
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* ── ECONOMIA POR PRODUTO ─────────────────────────────────────────────── */}
-      {activeView === 'economy' && (
+      {activeView === 'economy' ? (
         <div className="space-y-4">
           {/* KPIs econômicos */}
           {(() => {
@@ -968,7 +968,7 @@ export default function EstrategiasTab({ account }) {
                                 {margin != null ? (
                                   <div>
                                     <span className={`font-semibold ${margin > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{`R$${Number(margin).toFixed(2)}`}</span>
-                                    {marginPct != null && <p className="text-slate-500">{Number(marginPct).toFixed(1)}%</p>}
+                                    {marginPct != null ? <p className="text-slate-500">{Number(marginPct).toFixed(1)}%</p> : null}
                                   </div>
                                 ) : '—'}
                               </td>
@@ -1019,10 +1019,10 @@ export default function EstrategiasTab({ account }) {
             );
           })()}
         </div>
-      )}
+      ) : null}
 
       {/* ── METAS & HISTÓRICO ───────────────────────────────────────────────── */}
-      {activeView === 'goals' && (
+      {activeView === 'goals' ? (
         <div className="space-y-5">
           {/* Metas ativas */}
           {perfSettings ? (
@@ -1048,7 +1048,7 @@ export default function EstrategiasTab({ account }) {
                   <div key={m.label} className="bg-surface-2 rounded-lg p-3 text-center">
                     <p className="text-[9px] text-slate-500 mb-0.5">{m.label}</p>
                     <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
-                    {m.sub && <p className="text-[9px] text-slate-600 mt-0.5">{m.sub}</p>}
+                    {m.sub ? <p className="text-[9px] text-slate-600 mt-0.5">{m.sub}</p> : null}
                   </div>
                 ))}
               </div>
@@ -1104,7 +1104,7 @@ export default function EstrategiasTab({ account }) {
           </div>
 
           {/* Histórico de metas */}
-          {account && (
+          {account ? (
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
               <div className="flex items-center gap-2 mb-4">
                 <Eye className="w-4 h-4 text-slate-400" />
@@ -1112,13 +1112,13 @@ export default function EstrategiasTab({ account }) {
               </div>
               <PerformanceSettingsHistoryTable accountId={account.id} />
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
-      {loading && (
+      {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 text-violet-400 animate-spin" /></div>
-      )}
+      ) : null}
     </div>
   );
 }

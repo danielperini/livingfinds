@@ -177,7 +177,7 @@ export default function AcosViolationPanel({ account }) {
             {expanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
-          {expanded && (
+          {expanded ? (
             <div className="px-5 pb-5">
               <div className="flex flex-wrap gap-2 mb-3">
                 {['all', 'watching', 'warning', 'paused', 'recovered'].map(s => (
@@ -237,7 +237,7 @@ export default function AcosViolationPanel({ account }) {
                 {filtered.length === 0 && <p className="py-4 text-center text-xs text-slate-600">Nenhuma violação neste filtro.</p>}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       ) : null}
 
