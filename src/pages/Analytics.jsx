@@ -95,20 +95,24 @@ export default function Analytics() {
 
   // ── Dados para gráficos ──
 
-  // Agregar métricas diárias por data (filtrado por período)
-  const cutoffDate = new Date(Date.now() - period * 86400000);
-  cutoffDate.setHours(0, 0, 0, 0);
+  // Cutoff em BRT (UTC-3) para evitar incluir dados do dia errado
+  const nowBRT = new Date(Date.now() - 3 * 3600000);
+  const todayBRT = nowBRT.toISOString().slice(0, 10);
+  // "Ontem" em BRT = último dia fechado (exclui o dia atual parcial)
+  const yesterdayBRT = new Date(new Date(todayBRT + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
+  const cutoffDate = new Date(todayBRT + 'T00:00:00Z');
+  cutoffDate.setUTCDate(cutoffDate.getUTCDate() - period);
   const cutoff = cutoffDate.toISOString().slice(0, 10);
 
-  const filteredMetrics = metrics.filter(m => m.date && m.date >= cutoff);
+  // Filtrar apenas dias fechados (até ontem em BRT)
+  const filteredMetrics = metrics.filter(m => m.date && m.date >= cutoff && m.date <= yesterdayBRT);
 
-  // Deduplicar por (campaign_id, date) antes de agregar
+  // Deduplicar por (campaign_id, date) — ignorar registros sem campaign_id válido
   const dedupMap = new Map();
   filteredMetrics.forEach(m => {
-    const key = `${m.campaign_id || 'global'}-${m.date}`;
-    if (!dedupMap.has(key)) {
-      dedupMap.set(key, m);
-    }
+    if (!m.campaign_id) return; // ignora registros sem campaign_id (evita double-count de agregados)
+    const key = `${m.campaign_id}-${m.date}`;
+    if (!dedupMap.has(key)) dedupMap.set(key, m);
   });
   const dedupedMetrics = Array.from(dedupMap.values());
 
@@ -224,7 +228,7 @@ export default function Analytics() {
   // ── Métricas Unificadas agregadas por data ──────────────────────────────────
   const unifiedByDate = {};
   unifiedMetrics
-    .filter(m => m.date && m.date >= cutoff)
+    .filter(m => m.date && m.date >= cutoff && m.date <= yesterdayBRT)
     .forEach(m => {
       const key = `${m.campaign_id || ''}-${m.date}`;
       // dedup simples
