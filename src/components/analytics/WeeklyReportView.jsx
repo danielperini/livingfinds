@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Loader2, RefreshCw, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Clock, Play, FileText } from 'lucide-react';
+import { Loader2, RefreshCw, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, Clock, FileText, Database } from 'lucide-react';
 
 const fmt = (v, type = 'currency') => {
   if (v == null || isNaN(v)) return '—';
@@ -46,9 +46,6 @@ export default function WeeklyReportView({ account }) {
   const [decisions, setDecisions] = useState([]);
   const [dailyToday, setDailyToday] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [runningAssessment, setRunningAssessment] = useState(false);
-  const [msg, setMsg] = useState(null);
   const [activeTab, setActiveTab] = useState('produtos');
 
   const load = useCallback(async () => {
@@ -75,40 +72,6 @@ export default function WeeklyReportView({ account }) {
   }, [account]);
 
   useEffect(() => { load(); }, [load]);
-
-  const runAssessment = async () => {
-    if (!account || runningAssessment) return;
-    setRunningAssessment(true);
-    setMsg(null);
-    try {
-      const res = await base44.functions.invoke('runDailyEconomicAssessment', {
-        amazon_account_id: account.id, force: true,
-      });
-      const d = res.data;
-      setMsg(d?.ok
-        ? { type: 'success', text: `✓ Aferição concluída: ${d.stats?.products_evaluated || 0} produtos, ${d.stats?.unprofitable || 0} deficitários, ${d.decisions_signals || 0} sinais` }
-        : { type: 'error', text: d?.error || 'Erro na aferição' });
-      await load();
-    } catch (e) { setMsg({ type: 'error', text: e.message }); }
-    finally { setRunningAssessment(false); setTimeout(() => setMsg(null), 12000); }
-  };
-
-  const runWeeklyReport = async () => {
-    if (!account || generating) return;
-    setGenerating(true);
-    setMsg(null);
-    try {
-      const res = await base44.functions.invoke('runWeeklyAdsPerformanceReport', {
-        amazon_account_id: account.id, force: true,
-      });
-      const d = res.data;
-      setMsg(d?.ok
-        ? { type: 'success', text: `✓ Relatório gerado: ${d.week_start} a ${d.week_end} · ${d.products_analyzed} produtos · cobertura ${d.data_coverage_percent?.toFixed(0)}%` }
-        : { type: 'error', text: d?.error || 'Erro ao gerar relatório' });
-      await load();
-    } catch (e) { setMsg({ type: 'error', text: e.message }); }
-    finally { setGenerating(false); setTimeout(() => setMsg(null), 12000); }
-  };
 
   // ── Aferição de hoje ───────────────────────────────────────────────────────
   const latestAssessmentDate = dailyToday[0]?.assessment_date;
@@ -146,29 +109,19 @@ export default function WeeklyReportView({ account }) {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
           <button onClick={load} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          <button onClick={runAssessment} disabled={runningAssessment || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg disabled:opacity-50">
-            {runningAssessment ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {runningAssessment ? 'Aferindo...' : 'Aferir Hoje'}
-          </button>
-          <button onClick={runWeeklyReport} disabled={generating || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border border-violet-500/20 text-violet-300 hover:bg-violet-500/20 text-xs font-semibold rounded-lg disabled:opacity-50">
-            {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-            {generating ? 'Gerando...' : 'Gerar Relatório Semanal'}
-          </button>
         </div>
       </div>
 
-      {msg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${msg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
-          {msg.text}
-        </div>
-      )}
+      {/* Fonte de dados */}
+      <div className="flex items-center gap-2 text-[10px] text-slate-500 bg-surface-1 border border-surface-2 rounded-lg px-3 py-2">
+        <Database className="w-3 h-3 text-slate-600 flex-shrink-0" />
+        Dados exclusivamente do banco LivingFinds — relatórios diários já processados pelas automações.
+      </div>
 
       {/* ── Aferição de Hoje ─────────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-cyan/20 rounded-xl p-4">
@@ -178,7 +131,7 @@ export default function WeeklyReportView({ account }) {
           {latestAssessmentDate && <span className="text-xs text-slate-500">{latestAssessmentDate}</span>}
         </div>
         {dailyToday.length === 0 ? (
-          <p className="text-xs text-slate-500">Nenhuma aferição diária disponível. Clique em "Aferir Hoje" para processar.</p>
+          <p className="text-xs text-slate-500">Aferição do dia ainda não disponível — processada automaticamente pela automação diária às 08:00.</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-surface-2/50 rounded-lg p-3">
@@ -309,7 +262,7 @@ export default function WeeklyReportView({ account }) {
                       );
                     })}
                     {reportProducts.length === 0 && (
-                      <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500">Nenhum produto avaliado neste período. Execute "Gerar Relatório Semanal" após aferir os dados.</td></tr>
+                      <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500">Nenhum produto avaliado neste período. O relatório semanal é consolidado automaticamente pela automação agendada toda segunda-feira.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -404,7 +357,7 @@ export default function WeeklyReportView({ account }) {
               ))}
               <div className="p-4 bg-surface-1 border border-cyan/15 rounded-xl text-xs text-slate-400">
                 <p className="font-semibold text-slate-300 mb-1">Motor de Decisão Soberano</p>
-                <p>Todas as ações passam obrigatoriamente pelo <span className="text-cyan">runUnifiedDecisionEngine</span>. Ações de baixo risco (redução ≤10%, sugestão Amazon) são executadas automaticamente. Ações de alto risco (aumento &gt;10%, redução &gt;25% acumulada, pausa de campanha) exigem aprovação humana.</p>
+                <p>Todas as ações passam obrigatoriamente pelo <span className="text-cyan">runUnifiedDecisionEngine</span>. Reduções são proporcionais ao gap de ACoS (1ª redução: máx 25%, 2ª: máx 20%, acumulado auto máx 25%). Ações de alto risco (redução acumulada &gt;25%, pausa de campanha vencedora, alteração estrutural) exigem aprovação humana.</p>
               </div>
             </div>
           )}
@@ -415,7 +368,7 @@ export default function WeeklyReportView({ account }) {
         <div className="flex flex-col items-center justify-center py-16 gap-3 bg-surface-1 border border-surface-2 rounded-xl">
           <FileText className="w-10 h-10 text-slate-700" />
           <p className="text-sm text-slate-400 text-center">Nenhum relatório semanal disponível.</p>
-          <p className="text-xs text-slate-500 text-center">Clique em "Aferir Hoje" primeiro para processar os dados do último dia, depois "Gerar Relatório Semanal".</p>
+          <p className="text-xs text-slate-500 text-center">O relatório semanal é gerado automaticamente toda segunda-feira às 09:00 pela automação agendada.</p>
         </div>
       )}
     </div>

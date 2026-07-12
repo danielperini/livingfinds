@@ -37,17 +37,47 @@ const ENDPOINT_MAP: Record<string, string> = {
 const CFG = {
   MIN_CLICKS: 5,
   MIN_SPEND: 0.01,
-  COOLDOWN_48H: 48 * 3600 * 1000,        // ms
-  STABILIZE_COOLDOWN: 72 * 3600 * 1000,  // ms após estabilização
-  FIRST_REDUCTION_PCT: 0.10,             // 10%
-  SECOND_REDUCTION_PCT: 0.05,            // 5%
-  SUGGESTION_MIN_PCT: 0.05,              // Sugestão Amazon: mínimo 5%
-  SUGGESTION_MAX_PCT: 0.15,              // Sugestão Amazon: limitar se > 15%
-  IMPRESSION_DROP_THRESHOLD: 0.40,       // queda > 40% = visibility_drop
-  WINNER_HOLD_MARGIN: 0.10,              // ACoS até 10% acima da meta = hold se lucrativo
-  ACCUMULATION_APPROVAL_THRESHOLD: 0.25, // >25% acumulado = exige aprovação humana
-  MAX_BID_FLOOR: 0.40,                   // nunca abaixo deste valor
+  COOLDOWN_48H: 48 * 3600 * 1000,
+  STABILIZE_COOLDOWN: 72 * 3600 * 1000,
+  // Limites máximos — reduções são proporcionais ao gap, nunca aplicadas integralmente por padrão
+  FIRST_REDUCTION_MAX_PCT: 0.25,          // máximo 25% na primeira redução
+  SECOND_REDUCTION_MAX_PCT: 0.20,         // máximo 20% na segunda redução
+  ACCUMULATION_AUTO_MAX_PCT: 0.25,        // acumulado automático máximo: 25%
+  SUGGESTION_MIN_PCT: 0.05,
+  SUGGESTION_MAX_PCT: 0.25,               // aceitar sugestão Amazon até 25% de redução
+  IMPRESSION_DROP_THRESHOLD: 0.40,
+  WINNER_HOLD_MARGIN: 0.10,
+  MAX_BID_FLOOR: 0.40,
 };
+
+/**
+ * Calcula redução proporcional ao gap de ACoS.
+ * Nunca aplica o máximo automaticamente — usa a gravidade real do desvio.
+ *
+ * Lógica:
+ *   gap_ratio = (acos_atual - target_acos) / target_acos
+ *   reduction_pct = clamp(gap_ratio * 0.5, 0.03, max_allowed)
+ *
+ * Exemplos:
+ *   ACoS 22% vs meta 20% → gap_ratio 10% → redução 5%
+ *   ACoS 30% vs meta 20% → gap_ratio 50% → redução 15% (proporcional)
+ *   ACoS 50% vs meta 20% → gap_ratio 150% → redução 25% (capped)
+ *   ACoS 100% vs meta 20% → gap_ratio 400% → redução 25% (capped)
+ */
+function calcProportionalReduction(
+  currentAcos: number,
+  targetAcos: number,
+  maxPct: number,
+  totalReductionSoFar: number
+): number {
+  const gapRatio = (currentAcos - targetAcos) / targetAcos;
+  // Fator 0.5: reduz pela metade do gap proporcional para ser conservador
+  const raw = gapRatio * 0.5;
+  // Respeitar limite acumulado automático de 25%
+  const remainingAutoRoom = Math.max(0, CFG.ACCUMULATION_AUTO_MAX_PCT - totalReductionSoFar / 100);
+  const effective = Math.min(raw, maxPct, remainingAutoRoom);
+  return Math.max(0.03, Math.round(effective * 1000) / 1000); // mínimo 3%
+}
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function uuid(): string { return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`; }
@@ -383,26 +413,30 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Ainda acima da meta — segunda redução de 5%
+      // Ainda acima da meta — segunda redução proporcional (máx 20%, acumulado auto máx 25%)
       if (postAcos > 0 && target_acos > 0 && postAcos > target_acos && postOrders > 0 && !pendingByKw.has(cyc.keyword_id)) {
         const currentBid = kw.bid || kw.current_bid || 0.25;
         const totalReductionSoFar = cyc.total_reduction_pct || 0;
 
-        // Exigir aprovação humana se redução acumulada > 25%
-        const requiresApproval = totalReductionSoFar + CFG.SECOND_REDUCTION_PCT * 100 > CFG.ACCUMULATION_APPROVAL_THRESHOLD * 100;
+        // Calcular redução proporcional ao gap restante
+        const secondReductionPct = calcProportionalReduction(postAcos, target_acos, CFG.SECOND_REDUCTION_MAX_PCT, totalReductionSoFar);
 
-        const newBid = Math.max(minBid, Math.round(currentBid * (1 - CFG.SECOND_REDUCTION_PCT) * 100) / 100);
+        // Acumulado após esta redução
+        const newCumulativePct = totalReductionSoFar + secondReductionPct * 100;
+        // Exigir aprovação se acumulado ultrapassa limite automático de 25%
+        const requiresApproval = newCumulativePct > CFG.ACCUMULATION_AUTO_MAX_PCT * 100;
+
+        const newBid = Math.max(minBid, Math.round(currentBid * (1 - secondReductionPct) * 100) / 100);
         if (newBid < currentBid - 0.005) {
           updates.cycle_status = requiresApproval ? 'requires_approval' : 'reduced_again';
-          updates.second_reduction_pct = CFG.SECOND_REDUCTION_PCT * 100;
-          updates.total_reduction_pct = totalReductionSoFar + CFG.SECOND_REDUCTION_PCT * 100;
+          updates.second_reduction_pct = Math.round(secondReductionPct * 1000) / 10;
+          updates.total_reduction_pct = Math.round(newCumulativePct * 10) / 10;
           updates.current_bid = newBid;
           updates.requires_human_approval = requiresApproval;
           updates.evaluation_due_at = new Date(now_ms + CFG.COOLDOWN_48H).toISOString();
 
           if (!requiresApproval) {
-            // Criar OptimizationDecision de segunda redução
-            const iKey = `acos_reduce_5pct|${aid}|${cyc.keyword_id}|${today}`;
+            const iKey = `acos_reduce_2nd|${aid}|${cyc.keyword_id}|${today}`;
             const dec = await base44.asServiceRole.entities.OptimizationDecision.create({
               amazon_account_id: aid,
               decision_type: 'bid_change',
@@ -415,11 +449,15 @@ Deno.serve(async (req) => {
               action: 'set_bid',
               value_before: currentBid,
               value_after: newBid,
-              rationale: `[ACoS Reduction -5%] ACoS ${postAcos.toFixed(1)}% ainda acima da meta ${target_acos}% após 48h. Segunda redução -5%: R$${currentBid.toFixed(2)} → R$${newBid.toFixed(2)}. Impressões: ${impressionChangePct > 0 ? '+' : ''}${Math.round(impressionChangePct)}%.`,
-              rule_key: 'acos_bid_reduce_5',
+              rationale: `[ACoS Redução 2ª -${(secondReductionPct * 100).toFixed(1)}%] ACoS ${postAcos.toFixed(1)}% ainda acima da meta ${target_acos}% após 48h. Gap: ${(postAcos - target_acos).toFixed(1)}pp. Bid: R$${currentBid.toFixed(2)} → R$${newBid.toFixed(2)}. Acumulado: ${newCumulativePct.toFixed(1)}%. Impressões: ${impressionChangePct > 0 ? '+' : ''}${Math.round(impressionChangePct)}%.`,
+              rule_key: 'acos_bid_reduce_2nd_proportional',
               risk: 'low',
               status: 'approved',
               requires_approval: false,
+              individual_change_pct: Math.round(secondReductionPct * 1000) / 10,
+              cumulative_reduction_pct: Math.round(newCumulativePct * 10) / 10,
+              original_bid: cyc.initial_bid,
+              cycle_number: (cyc.cycle_number || 1) + 1,
               idempotency_key: iKey,
               source_function: 'runAcosBidReductionEngine',
               created_at: now,
@@ -529,17 +567,20 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── Calcular nova redução de bid ─────────────────────────────────────
+      // ── Calcular redução proporcional ao gap de ACoS (1ª redução, máx 25%) ─
       const currentBid = kw.bid || kw.current_bid || 0.25;
+      const totalReductionSoFar = (activeCycleByKw.get(kwId)?.total_reduction_pct || 0);
+      const firstReductionPct = calcProportionalReduction(acos, target_acos, CFG.FIRST_REDUCTION_MAX_PCT, totalReductionSoFar);
       let newBid = currentBid;
       let usedSuggestion = false;
       let suggestionLimited = false;
       let suggestedBid: number | null = null;
       let suggestedLower: number | null = null;
       let suggestedUpper: number | null = null;
-      let reductionLabel = 'acos_bid_reduce_10';
+      let reductionLabel = 'acos_bid_reduce_proportional';
 
-      // Passo 1: verificar sugestão Amazon
+      // Passo 1: verificar sugestão Amazon já disponível no fluxo normal
+      // A sugestão é usada se for menor que o bid atual e se a redução for entre 5% e 25%
       if (!dry_run && accessToken && profileId && kw.ad_group_id) {
         const suggestion = await fetchAmazonBidSuggestion(accessToken, profileId, kwId, kw.ad_group_id);
         suggestedBid = suggestion.suggested;
@@ -548,31 +589,30 @@ Deno.serve(async (req) => {
 
         if (suggestedBid !== null && suggestedBid < currentBid) {
           const suggReductionPct = (currentBid - suggestedBid) / currentBid;
-          if (suggReductionPct >= CFG.SUGGESTION_MIN_PCT && suggReductionPct <= CFG.SUGGESTION_MAX_PCT) {
-            // Sugestão dentro do intervalo aceitável: usar
+          if (suggReductionPct >= CFG.SUGGESTION_MIN_PCT && suggReductionPct <= CFG.FIRST_REDUCTION_MAX_PCT) {
+            // Sugestão dentro do intervalo aceitável e ≤ 25%: usar diretamente
             newBid = Math.max(minBid, Math.round(suggestedBid * 100) / 100);
             usedSuggestion = true;
             reductionLabel = 'acos_bid_reduce_amazon_suggestion';
             stats.first_reduction_amazon_suggestion++;
-          } else if (suggReductionPct > CFG.SUGGESTION_MAX_PCT) {
-            // Sugestão excessiva: limitar a 10%
-            newBid = Math.max(minBid, Math.round(currentBid * (1 - CFG.FIRST_REDUCTION_PCT) * 100) / 100);
-            usedSuggestion = false;
+          } else if (suggReductionPct > CFG.FIRST_REDUCTION_MAX_PCT) {
+            // Sugestão excessiva (>25%): limitar ao proporcional calculado
+            newBid = Math.max(minBid, Math.round(currentBid * (1 - firstReductionPct) * 100) / 100);
             suggestionLimited = true;
             stats.first_reduction_10pct++;
           } else {
-            // Sugestão menor que 5%: usar redução manual de 10%
-            newBid = Math.max(minBid, Math.round(currentBid * (1 - CFG.FIRST_REDUCTION_PCT) * 100) / 100);
+            // Sugestão <5%: usar redução proporcional
+            newBid = Math.max(minBid, Math.round(currentBid * (1 - firstReductionPct) * 100) / 100);
             stats.first_reduction_10pct++;
           }
         } else {
-          // Sem sugestão ou sugestão >= bid atual: redução manual de 10%
-          newBid = Math.max(minBid, Math.round(currentBid * (1 - CFG.FIRST_REDUCTION_PCT) * 100) / 100);
+          // Sem sugestão ou sugestão >= bid atual: redução proporcional
+          newBid = Math.max(minBid, Math.round(currentBid * (1 - firstReductionPct) * 100) / 100);
           stats.first_reduction_10pct++;
         }
       } else {
-        // Sem acesso a API: redução manual de 10%
-        newBid = Math.max(minBid, Math.round(currentBid * (1 - CFG.FIRST_REDUCTION_PCT) * 100) / 100);
+        // Sem acesso a API: redução proporcional ao gap
+        newBid = Math.max(minBid, Math.round(currentBid * (1 - firstReductionPct) * 100) / 100);
         stats.first_reduction_10pct++;
       }
 
@@ -584,9 +624,10 @@ Deno.serve(async (req) => {
 
       const actualReductionPct = Math.round(((currentBid - newBid) / currentBid) * 1000) / 10;
 
-      // Exigir aprovação se redução acumulada já supera 25%
-      const totalCyclePct = (lastCycle?.total_reduction_pct || 0) + actualReductionPct;
-      const requiresApproval = totalCyclePct > CFG.ACCUMULATION_APPROVAL_THRESHOLD * 100;
+      // Acumulado total: incluindo ciclos anteriores
+      const totalCyclePct = totalReductionSoFar + actualReductionPct;
+      // Exigir aprovação apenas se ultrapassar o limite automático de 25%
+      const requiresApproval = totalCyclePct > CFG.ACCUMULATION_AUTO_MAX_PCT * 100;
 
       // ── Criar OptimizationDecision ───────────────────────────────────────
       const iKey = `${reductionLabel}|${aid}|${kwId}|${today}`;
@@ -609,6 +650,10 @@ Deno.serve(async (req) => {
           risk: requiresApproval ? 'high' : 'low',
           status: requiresApproval ? 'pending' : 'approved',
           requires_approval: requiresApproval,
+          individual_change_pct: actualReductionPct,
+          cumulative_reduction_pct: Math.round(totalCyclePct * 10) / 10,
+          original_bid: currentBid,
+          cycle_number: (lastCycle?.cycle_number || 0) + 1,
           idempotency_key: iKey,
           source_function: 'runAcosBidReductionEngine',
           created_at: now,
@@ -640,7 +685,10 @@ Deno.serve(async (req) => {
         amazon_suggestion_used: usedSuggestion,
         amazon_suggestion_limited: suggestionLimited,
         first_reduction_pct: actualReductionPct,
-        total_reduction_pct: actualReductionPct,
+        individual_change_pct: actualReductionPct,
+        total_reduction_pct: Math.round(totalCyclePct * 10) / 10,
+        cumulative_reduction_pct: Math.round(totalCyclePct * 10) / 10,
+        original_bid: currentBid,
         cycle_number: (lastCycle?.cycle_number || 0) + 1,
         cycle_status: dry_run ? 'detected' : (requiresApproval ? 'requires_approval' : 'executed'),
         executed_at: dry_run ? null : now,
