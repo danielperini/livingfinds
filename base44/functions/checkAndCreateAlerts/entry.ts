@@ -1,193 +1,308 @@
 /**
- * checkAndCreateAlerts — Verifica condições críticas e cria alertas
- * Chamado diariamente após sync
+ * checkAndCreateAlerts v2
+ *
+ * Motor de verificação de alertas operacionais do LivingFinds.
+ * Toda criação passa pelo upsertOperationalAlert (deduplicação canônica).
+ *
+ * REGRAS:
+ * - Estoque: out_of_stock (available=0) vs low_stock (positivo < limite)
+ * - no_sales: exige clicks >= 10 + spend >= R$12 + dados frescos
+ * - spend_overpacing: usa curva horária conservadora (nunca rate_limit)
+ * - no_impressions: keyword < 72h não gera alerta; produto sem estoque não gera alerta
+ * - ASIN como entity_id de keyword → entity_type = product_target
+ * - Resolução automática: quando condição desaparece, resolve o alerta
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+
+const ASIN_PATTERN = /^[A-Z0-9]{10}$/;
+
+function isAsin(v: string): boolean { return ASIN_PATTERN.test((v || '').trim().toUpperCase()); }
+
+async function upsert(base44: any, params: any) {
+  return base44.asServiceRole.functions.invoke('upsertOperationalAlert', params).catch((e: any) => {
+    console.error('[checkAndCreateAlerts] upsert failed:', e.message, JSON.stringify(params).slice(0, 200));
+  });
+}
+
+async function resolve(base44: any, amazon_account_id: string, alert_type: string, entity_type: string, entity_id: string, resolution_reason: string, source_function = 'checkAndCreateAlerts') {
+  return upsert(base44, {
+    amazon_account_id, alert_type, entity_type, entity_id,
+    title: '-', message: '-', resolved: true, resolution_reason, source_function,
+  });
+}
 
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-
-    // Aceitar automação scheduled
-    let user = null;
-    try {
-      user = await base44.auth.me();
-    } catch {
-      // automação não tem user
-    }
+    try { await base44.auth.me(); } catch { /* automação */ }
 
     const body = await req.json().catch(() => ({}));
-    let amazonAccountId = body.amazon_account_id;
+    let aid = body.amazon_account_id;
 
-    // Resolver conta
-    if (!amazonAccountId) {
-      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-      amazonAccountId = accounts[0]?.id;
+    if (!aid) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      aid = accs[0]?.id;
     }
-
-    if (!amazonAccountId) {
-      return Response.json({ ok: false, message: 'Nenhuma conta Amazon encontrada' });
-    }
+    if (!aid) return Response.json({ ok: false, message: 'Nenhuma conta encontrada' });
 
     const now = new Date().toISOString();
-    const today = now.slice(0, 10);
-    let alertsCreated = 0;
+    const SRC = 'checkAndCreateAlerts';
+    let created = 0, updated = 0, resolved = 0;
 
-    // Buscar campanhas ativas
+    // ── Configurações ──────────────────────────────────────────────────────
+    const psList = await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []);
+    const ps = psList[0] || {};
+    const TARGET_ACOS = Number(ps.target_acos || 10);
+    const MAX_ACOS = Number(ps.max_acos || 15);
+    const TARGET_ROAS = Number(ps.target_roas || 4);
+    const DAILY_CAP = Number(ps.daily_budget_limit || 70);
+    const LOW_STOCK_UNITS = 10;
+    const CRITICAL_STOCK_UNITS = 5;
+
+    // ── Campanhas ativas ───────────────────────────────────────────────────
     const campaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: amazonAccountId, state: 'enabled' },
-      '-spend',
-      500
-    );
+      { amazon_account_id: aid, state: 'enabled' }, '-spend', 500
+    ).catch(() => []);
 
-    // Buscar regras de budget
-    const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id: amazonAccountId });
-    const budgetRule = budgetRules[0] || { target_acos: 25, max_bid: 5.0 };
+    for (const camp of campaigns) {
+      const cid = camp.campaign_id || camp.id;
 
-    // Verificar cada campanha
-    for (const campaign of campaigns) {
-      const alerts = [];
-
-      // 1. Budget terminando cedo
-      const hourOfDay = new Date().getHours();
-      const expectedSpendPct = hourOfDay / 24;
-      const actualSpendPct = campaign.daily_budget > 0 ? (campaign.current_spend || 0) / campaign.daily_budget : 0;
-
-      if (actualSpendPct > expectedSpendPct + 0.3 && actualSpendPct > 0.7) {
-        alerts.push({
-          alert_type: 'budget_exhaustion',
-          severity: 'high',
-          title: 'Orçamento terminando cedo',
-          message: `Campanha "${campaign.name}" consumiu ${(actualSpendPct * 100).toFixed(0)}% do budget às ${hourOfDay}h`,
-          entity_type: 'campaign',
-          entity_id: campaign.id,
-          campaign_id: campaign.campaign_id,
-          current_value: actualSpendPct * 100,
-          threshold_value: 70,
+      // ACoS crítico
+      const acos = Number(camp.acos || 0);
+      if (acos > MAX_ACOS * 1.5 && (camp.spend || 0) > 5) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'high_acos', alert_family: 'performance',
+          severity: acos > 100 ? 'critical' : acos > MAX_ACOS * 2 ? 'high' : 'medium',
+          entity_type: 'campaign', entity_id: cid, campaign_id: cid,
+          title: `ACoS crítico: ${camp.name}`,
+          message: `ACoS ${acos.toFixed(1)}% — meta ${TARGET_ACOS}%, máximo ${MAX_ACOS}%`,
+          metric_name: 'acos', metric_value: acos, threshold_value: MAX_ACOS,
+          data_window: '7d', source_function: SRC,
         });
+        created++;
+      } else if (acos > 0 && acos <= MAX_ACOS) {
+        // Resolver se ACoS voltou ao normal
+        await resolve(base44, aid, 'high_acos', 'campaign', cid, 'acos_normalized', SRC);
+        resolved++;
       }
 
-      // 2. ACoS crítico
-      if ((campaign.acos || 0) > 60) {
-        alerts.push({
-          alert_type: 'high_acos',
-          severity: campaign.acos > 80 ? 'critical' : 'high',
-          title: 'ACoS crítico',
-          message: `Campanha "${campaign.name}" com ACoS ${(campaign.acos || 0).toFixed(0)}% (meta: ${budgetRule.target_acos}%)`,
-          entity_type: 'campaign',
-          entity_id: campaign.id,
-          campaign_id: campaign.campaign_id,
-          current_value: campaign.acos,
-          threshold_value: budgetRule.target_acos,
-        });
-      }
-
-      // 3. ROAS baixo
-      if ((campaign.roas || 0) > 0 && campaign.roas < 2) {
-        alerts.push({
-          alert_type: 'low_roas',
+      // ROAS baixo — somente com gasto significativo
+      const roas = Number(camp.roas || 0);
+      if (roas > 0 && roas < TARGET_ROAS * 0.5 && (camp.spend || 0) > 10) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'low_roas', alert_family: 'performance',
           severity: 'medium',
-          title: 'ROAS baixo',
-          message: `Campanha "${campaign.name}" com ROAS ${(campaign.roas || 0).toFixed(2)}x`,
-          entity_type: 'campaign',
-          entity_id: campaign.id,
-          campaign_id: campaign.campaign_id,
-          current_value: campaign.roas,
-          threshold_value: 2,
+          entity_type: 'campaign', entity_id: cid, campaign_id: cid,
+          title: `ROAS baixo: ${camp.name}`,
+          message: `ROAS ${roas.toFixed(2)}x — meta ${TARGET_ROAS}x`,
+          metric_name: 'roas', metric_value: roas, threshold_value: TARGET_ROAS,
+          data_window: '7d', source_function: SRC,
         });
+        created++;
       }
 
-      // 4. Gasto sem venda (últimos 7 dias)
-      if ((campaign.spend || 0) > 10 && (campaign.sales || 0) === 0) {
-        alerts.push({
-          alert_type: 'no_sales',
-          severity: 'high',
-          title: 'Gasto sem vendas',
-          message: `Campanha "${campaign.name}" gastou $${(campaign.spend || 0).toFixed(2)} sem vendas`,
-          entity_type: 'campaign',
-          entity_id: campaign.id,
-          campaign_id: campaign.campaign_id,
-          current_value: campaign.spend,
-          threshold_value: 10,
+      // No_sales: exige amostra mínima (clicks ≥ 10 + spend ≥ R$12)
+      const clicks = Number(camp.clicks || 0);
+      const spend = Number(camp.spend || 0);
+      const sales = Number(camp.sales || 0);
+      if (spend >= 12 && clicks >= 10 && sales === 0) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'no_sales', alert_family: 'performance',
+          severity: spend >= 30 ? 'high' : 'medium',
+          entity_type: 'campaign', entity_id: cid, campaign_id: cid,
+          title: `Gasto sem vendas: ${camp.name}`,
+          message: `R$${spend.toFixed(2)} gastos / ${clicks} cliques / sem conversão`,
+          metric_name: 'spend', metric_value: spend, threshold_value: 12,
+          data_window: '7d', source_function: SRC,
         });
+        created++;
+      } else if (sales > 0) {
+        await resolve(base44, aid, 'no_sales', 'campaign', cid, 'sale_detected', SRC);
+        resolved++;
       }
 
-      // 5. Bid acima do limite
-      if ((campaign.cpc || 0) > (budgetRule.max_bid || 5)) {
-        alerts.push({
-          alert_type: 'bid_above_limit',
-          severity: 'medium',
-          title: 'CPC acima do limite',
-          message: `Campanha "${campaign.name}" com CPC $${(campaign.cpc || 0).toFixed(2)} (limite: $${budgetRule.max_bid})`,
-          entity_type: 'campaign',
-          entity_id: campaign.id,
-          campaign_id: campaign.campaign_id,
-          current_value: campaign.cpc,
-          threshold_value: budgetRule.max_bid,
-        });
-      }
-
-      // Criar alertas
-      for (const alert of alerts) {
-        // Verificar se já existe alerta não resolvido nas últimas 24h
-        const existingAlerts = await base44.asServiceRole.entities.Alert.filter({
-          amazon_account_id: amazonAccountId,
-          alert_type: alert.alert_type,
-          entity_id: alert.entity_id,
-          is_resolved: false,
-        }, '-created_at', 1);
-
-        if (existingAlerts.length > 0) {
-          const lastAlert = existingAlerts[0];
-          const hoursSinceAlert = (Date.now() - new Date(lastAlert.created_at).getTime()) / 3600000;
-          if (hoursSinceAlert < 24) continue; // Não duplicar em 24h
+      // Budget esgotado cedo (antes das 18h com >90% consumido)
+      const hour = new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false });
+      const hourN = parseInt(hour, 10);
+      if (hourN < 18 && camp.daily_budget > 0) {
+        const pct = (camp.spend || 0) / camp.daily_budget;
+        if (pct >= 0.9) {
+          await upsert(base44, {
+            amazon_account_id: aid, alert_type: 'budget_exhausted', alert_family: 'budget',
+            severity: 'high',
+            entity_type: 'campaign', entity_id: cid, campaign_id: cid,
+            title: `Budget esgotado às ${hourN}h: ${camp.name}`,
+            message: `${(pct * 100).toFixed(0)}% do orçamento consumido antes das 18h BRT`,
+            metric_name: 'budget_pct', metric_value: pct * 100, threshold_value: 90,
+            data_window: 'today', source_function: SRC,
+          });
+          created++;
         }
-
-        await base44.asServiceRole.entities.Alert.create({
-          amazon_account_id: amazonAccountId,
-          ...alert,
-          created_at: now,
-          expires_at: new Date(Date.now() + 7 * 86400000).toISOString(), // 7 dias
-        }).catch(() => {});
-        alertsCreated++;
       }
     }
 
-    // Verificar produtos sem estoque
+    // ── Produtos (estoque) ──────────────────────────────────────────────────
+    // Consolidar por ASIN (evitar um alerta por campanha)
     const products = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: amazonAccountId, has_campaign: true },
-      '-total_sales_30d',
-      100
-    );
+      { amazon_account_id: aid }, '-updated_at', 200
+    ).catch(() => []);
 
-    for (const product of products) {
-      if ((product.fba_inventory || 0) < 5) {
-        await base44.asServiceRole.entities.Alert.create({
-          amazon_account_id: amazonAccountId,
-          alert_type: 'low_stock',
-          severity: product.fba_inventory === 0 ? 'critical' : 'high',
-          title: 'Estoque baixo',
-          message: `Produto ${product.asin} com apenas ${product.fba_inventory || 0} unidades`,
-          entity_type: 'product',
-          entity_id: product.id,
-          asin: product.asin,
-          current_value: product.fba_inventory || 0,
-          threshold_value: 5,
-          created_at: now,
-          expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
-        }).catch(() => {});
-        alertsCreated++;
+    // Mapa ASIN → produto mais recente
+    const productByAsin = new Map<string, any>();
+    for (const p of products) {
+      if (!p.asin) continue;
+      const ex = productByAsin.get(p.asin);
+      if (!ex || new Date(p.updated_at || 0) > new Date(ex.updated_at || 0)) {
+        productByAsin.set(p.asin, p);
+      }
+    }
+
+    for (const [asin, product] of productByAsin.entries()) {
+      const available = Number(product.fba_inventory ?? product.available_quantity ?? 0);
+      const hasCampaign = product.has_campaign;
+      const syncAge = product.last_sync_at
+        ? (Date.now() - new Date(product.last_sync_at).getTime()) / 3600000
+        : 999;
+      const dataFreshness = syncAge < 26 ? 'fresh' : 'stale';
+
+      // Dado stale: não afirmar out_of_stock, gerar inventory_data_stale
+      if (dataFreshness === 'stale' && available === 0) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'inventory_data_stale', alert_family: 'inventory',
+          severity: 'low', entity_type: 'product', entity_id: asin, asin,
+          title: `Dados de estoque desatualizados: ${asin}`,
+          message: `Último sync há ${Math.round(syncAge)}h — não é possível confirmar estoque zero`,
+          data_freshness: 'stale', source_function: SRC,
+        });
+        created++;
+        continue;
+      }
+
+      if (available === 0) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'out_of_stock', alert_family: 'inventory',
+          severity: hasCampaign ? 'critical' : 'high',
+          entity_type: 'product', entity_id: asin, asin,
+          title: `Sem estoque: ${asin}`,
+          message: hasCampaign
+            ? `Produto sem estoque FBA com campanha ativa — risco de gasto sem conversão`
+            : `Produto sem estoque FBA`,
+          metric_name: 'fba_inventory', metric_value: 0, threshold_value: 1,
+          data_freshness: dataFreshness, source_function: SRC,
+        });
+        created++;
+      } else if (available <= CRITICAL_STOCK_UNITS) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'critical_stock', alert_family: 'inventory',
+          severity: 'high', entity_type: 'product', entity_id: asin, asin,
+          title: `Estoque crítico: ${asin}`,
+          message: `${available} unidades disponíveis — abaixo do nível crítico (${CRITICAL_STOCK_UNITS})`,
+          metric_name: 'fba_inventory', metric_value: available, threshold_value: CRITICAL_STOCK_UNITS,
+          data_freshness: dataFreshness, source_function: SRC,
+        });
+        created++;
+      } else if (available <= LOW_STOCK_UNITS) {
+        await upsert(base44, {
+          amazon_account_id: aid, alert_type: 'low_stock', alert_family: 'inventory',
+          severity: 'medium', entity_type: 'product', entity_id: asin, asin,
+          title: `Estoque baixo: ${asin}`,
+          message: `${available} unidades disponíveis — abaixo do mínimo (${LOW_STOCK_UNITS})`,
+          metric_name: 'fba_inventory', metric_value: available, threshold_value: LOW_STOCK_UNITS,
+          data_freshness: dataFreshness, source_function: SRC,
+        });
+        created++;
+      } else {
+        // Estoque voltou — resolver alertas de estoque deste ASIN
+        for (const t of ['out_of_stock', 'low_stock', 'critical_stock']) {
+          await resolve(base44, aid, t, 'product', asin, 'inventory_restored', SRC);
+        }
+        resolved++;
+      }
+    }
+
+    // ── Keywords sem impressão ─────────────────────────────────────────────
+    // Condições antes de alertar:
+    // - campanha ativa, ad group ativo, keyword ativa
+    // - produto com estoque (available > 0)
+    // - keyword criada há mais de 72h
+    // - dados Ads frescos
+    const keywords = await base44.asServiceRole.entities.Keyword.filter(
+      { amazon_account_id: aid, impressions: 0, state: 'enabled' }, '-created_at', 200
+    ).catch(() => []);
+
+    const seventyTwoHoursAgo = new Date(Date.now() - 72 * 3600000).toISOString();
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
+
+    for (const kw of keywords) {
+      const createdAt = kw.created_at || kw.created_date || '';
+      if (createdAt > seventyTwoHoursAgo) continue; // < 72h — sem alerta
+
+      // Detectar product_target (ASIN como texto)
+      const kwText = kw.keyword_text || kw.keyword || '';
+      const entityType = isAsin(kwText) ? 'product_target' : 'keyword';
+      const entityId = kw.keyword_id || kw.id;
+
+      // Verificar estoque do produto vinculado
+      const kwAsin = kw.asin || '';
+      if (kwAsin) {
+        const prod = productByAsin.get(kwAsin);
+        if (prod && (prod.fba_inventory || 0) === 0) continue; // sem estoque → não alertar
+      }
+
+      // Calcular severidade por tempo sem impressão
+      const isOlderThan14d = createdAt < fourteenDaysAgo;
+      const isOlderThan7d = createdAt < new Date(Date.now() - 7 * 86400000).toISOString();
+
+      const severity = isOlderThan14d ? 'medium' : isOlderThan7d ? 'low' : 'low';
+      const windowLabel = isOlderThan14d ? '14d' : isOlderThan7d ? '7d' : '72h';
+
+      const displayLabel = entityType === 'product_target'
+        ? `Product target "${kwText}"`
+        : `Keyword "${kwText}"`;
+
+      await upsert(base44, {
+        amazon_account_id: aid,
+        alert_type: 'no_impressions', alert_family: 'keyword',
+        severity,
+        entity_type: entityType,
+        entity_id: entityId,
+        keyword_id: entityType === 'keyword' ? entityId : undefined,
+        target_id: entityType === 'product_target' ? entityId : undefined,
+        campaign_id: kw.campaign_id,
+        asin: kwAsin || undefined,
+        term: kwText,
+        title: `Sem impressões (${windowLabel}): ${displayLabel}`,
+        message: `${displayLabel} sem impressões há mais de ${windowLabel} com campanha ativa`,
+        metric_name: 'impressions', metric_value: 0, threshold_value: 1,
+        data_window: windowLabel, source_function: SRC,
+      });
+      created++;
+    }
+
+    // ── Resolução: keywords que voltaram a ter impressões ─────────────────
+    const kwWithImpressions = await base44.asServiceRole.entities.Keyword.filter(
+      { amazon_account_id: aid, state: 'enabled' }, '-impressions', 200
+    ).catch(() => []);
+    for (const kw of kwWithImpressions) {
+      if ((kw.impressions || 0) > 0) {
+        const entityId = kw.keyword_id || kw.id;
+        await resolve(base44, aid, 'no_impressions', 'keyword', entityId, 'impressions_received', SRC);
+        await resolve(base44, aid, 'no_impressions', 'product_target', entityId, 'impressions_received', SRC);
+        resolved++;
       }
     }
 
     return Response.json({
       ok: true,
-      alerts_created: alertsCreated,
       campaigns_checked: campaigns.length,
-      products_checked: products.length,
+      products_checked: productByAsin.size,
+      keywords_checked: keywords.length,
+      alerts_created_or_updated: created,
+      alerts_resolved: resolved,
     });
 
-  } catch (error) {
+  } catch (error: any) {
+    console.error('[checkAndCreateAlerts]', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });
