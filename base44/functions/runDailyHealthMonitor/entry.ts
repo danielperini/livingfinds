@@ -24,6 +24,8 @@ const REQUIRED_STEPS = [
   { operation: 'inventory_kickoff',          fn: 'checkInventoryChangesAndKickoff',     critical: false },
   { operation: 'decision_engine',            fn: 'runUnifiedDecisionEngine',            critical: true  },
   { operation: 'execute_decisions',          fn: 'executeApprovedDecisionQueue',        critical: true  },
+  { operation: 'confirm_decisions',          fn: 'confirmExecutedDecisions',            critical: false },
+  { operation: 'audit_campaign_states',      fn: 'auditCampaignStateSync',              critical: false },
   { operation: 'product_links',              fn: 'fixProductCampaignLinksV2',           critical: false },
   { operation: 'manual_campaign_terms',      fn: 'enforceManualCampaignMinTerms',       critical: false },
   { operation: 'evaluate_new_campaigns_72h', fn: 'evaluateNewCampaigns72h',             critical: false },

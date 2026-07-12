@@ -149,6 +149,12 @@ Deno.serve(async (req) => {
     // Bids iniciais: idempotente, só processa pendentes
     add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
+    // Confirmação pós-execução: verifica se a Amazon aplicou os valores (sempre — leve)
+    add('confirmExecutedDecisions', 'confirm_decisions');
+
+    // Auditoria de estados de campanha: valida divergências locais vs Amazon
+    add('auditCampaignStateSync', 'audit_campaign_states');
+
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');

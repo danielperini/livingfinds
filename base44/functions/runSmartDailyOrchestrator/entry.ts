@@ -165,6 +165,12 @@ Deno.serve(async (req) => {
     // Bids iniciais: sempre (idempotente — só processa pendentes, 10 por chamada)
     push('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
+    // Confirmação pós-execução: re-lê Amazon e reconcilia divergências de bids/estados/budgets
+    push('confirmExecutedDecisions', 'confirm_decisions');
+
+    // Auditoria de estados: valida estado local vs Amazon para todas as campanhas
+    push('auditCampaignStateSync', 'audit_campaign_states');
+
     // Backup: 1x/dia (já tem automação própria às 02:00, aqui é redundância de segurança)
     if (!backupDone || force) push('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');
