@@ -31,11 +31,11 @@ export default function ListingEnhancementPage() {
   const [proposals, setProposals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(null); // null | '__all__' | '__poll__' | '<asin>' | '<asin>_gen'
-  const [syncQueue, setSyncQueue] = useState([]); // lista de asins aguardando sync
+  const [syncQueue, setSyncQueue] = useState([]);
   const [search, setSearch] = useState('');
   const [filterIssues, setFilterIssues] = useState(false);
   const [filterProposals, setFilterProposals] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [selectedProductAsin, setSelectedProduct] = useState(null);
   const [msg, setMsg] = useState(null);
   const [spApiStatus, setSpApiStatus] = useState('unknown'); // 'ok' | 'error' | 'unknown'
 
@@ -187,18 +187,6 @@ export default function ListingEnhancementPage() {
     }
     return map;
   }, [proposals]);
-
-  // Manter drawer atualizado quando os dados recarregam
-  useEffect(() => {
-    if (!selectedProduct) return;
-    const asin = selectedProduct.product?.asin;
-    if (!asin) return;
-    setSelectedProduct(prev => prev ? ({
-      ...prev,
-      snap: snapByAsin.get(asin) || prev.snap,
-      proposals: proposalsByAsin.get(asin) || prev.proposals,
-    }) : null);
-  }, [snapByAsin, proposalsByAsin]);
 
 
 
@@ -461,11 +449,7 @@ export default function ListingEnhancementPage() {
                               Sugerir
                             </button>
                           )}
-                          <button onClick={() => setSelectedProduct({
-                              product,
-                              snap: snapByAsin.get(product.asin) || null,
-                              proposals: proposalsByAsin.get(product.asin) || [],
-                            })}
+                          <button onClick={() => setSelectedProduct(product.asin)}
                             className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border bg-cyan/10 border-cyan/20 text-cyan hover:bg-cyan/20 transition-colors">
                             <Package className="w-3 h-3" /> Abrir
                           </button>
@@ -480,16 +464,20 @@ export default function ListingEnhancementPage() {
         </div>
       )}
 
-      {selectedProduct && (
-        <ListingEnhancementDrawer
-          product={selectedProduct.product}
-          snapshot={selectedProduct.snap}
-          proposals={selectedProduct.proposals}
-          account={account}
-          onClose={() => setSelectedProduct(null)}
-          onRefresh={load}
-        />
-      )}
+      {selectedProductAsin && (() => {
+        const selProd = prodByAsin.get(selectedProductAsin);
+        if (!selProd) return null;
+        return (
+          <ListingEnhancementDrawer
+            product={selProd}
+            snapshot={snapByAsin.get(selectedProductAsin) || null}
+            proposals={proposalsByAsin.get(selectedProductAsin) || []}
+            account={account}
+            onClose={() => setSelectedProduct(null)}
+            onRefresh={load}
+          />
+        );
+      })()}
     </div>
   );
 }
