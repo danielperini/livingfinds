@@ -737,9 +737,9 @@ export default function Dashboard() {
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
-          Todo o histórico disponível · Vendas Ads = atribuição Amazon
+          <span>Todo o histórico disponível · Vendas Ads = atribuição Amazon</span>
           {hasSalesDailyData ? <span> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></span> : null}
-          {' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA
+          <span>{' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA</span>
           {(activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday()) ? (
             <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>
           ) : null}

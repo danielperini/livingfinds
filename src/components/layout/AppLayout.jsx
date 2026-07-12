@@ -201,7 +201,7 @@ export default function AppLayout() {
                 `}
                 title={collapsed ? label : undefined}>
                 <Icon className={`flex-shrink-0 ${sub ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
-                {!collapsed && <span className={`font-medium ${sub ? 'text-xs' : 'text-sm'}`}>{label}</span>}
+                {!collapsed ? <span className={`font-medium ${sub ? 'text-xs' : 'text-sm'}`}>{label}</span> : null}
               </Link>);
           })}
         </nav>
