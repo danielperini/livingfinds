@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import StockDivergenceReport from '@/components/products/StockDivergenceReport';
+import ProductEconomicsPanel from '@/components/economics/ProductEconomicsPanel';
 
 function getSaoPauloParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -226,6 +227,7 @@ export default function ProductsScheduled() {
 
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [activeTab, setActiveTab] = useState('products');
 
   const [queueByAsin, setQueueByAsin] =
     useState({});
@@ -1161,16 +1163,35 @@ export default function ProductsScheduled() {
         </div>
       </div>
 
-      <StockDivergenceReport accountId={account?.id} />
+      {/* Abas */}
+      <div className="mx-6 flex items-center gap-1 border-b border-surface-2">
+        {[
+          { key: 'products', label: '📦 Produtos & Ads' },
+          { key: 'economics', label: '💰 Banco Econômico' },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      <KickoffControlPanel
-        accountId={account?.id}
-        onRetry={retryKickoff}
-      />
+      {activeTab === 'products' && (
+        <>
+          <StockDivergenceReport accountId={account?.id} />
+          <KickoffControlPanel accountId={account?.id} onRetry={retryKickoff} />
+          <Products externalRefreshTrigger={refreshKey} />
+        </>
+      )}
 
-      <Products
-        externalRefreshTrigger={refreshKey}
-      />
+      {activeTab === 'economics' && account?.id && (
+        <div className="px-6 pb-6">
+          <ProductEconomicsPanel accountId={account.id} />
+        </div>
+      )}
     </div>
   );
 }

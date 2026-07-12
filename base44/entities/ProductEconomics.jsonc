@@ -1,0 +1,223 @@
+{
+  "name": "ProductEconomics",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "normalized_sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "unit_cost": {
+      "type": "number",
+      "default": 0,
+      "description": "Custo unit\u00e1rio do produto (CMV)"
+    },
+    "inbound_freight_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "tax_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "logistics_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "packaging_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "other_variable_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "other_cost_description": {
+      "type": "string"
+    },
+    "total_variable_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "current_price": {
+      "type": "number",
+      "default": 0
+    },
+    "average_sale_price": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_fee_amount": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_fee_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "contribution_margin_amount": {
+      "type": "number",
+      "default": 0
+    },
+    "contribution_margin_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "safe_max_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "maximum_profitable_ad_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_before_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "economic_classification": {
+      "type": "string",
+      "enum": [
+        "highly_profitable",
+        "profitable",
+        "low_margin",
+        "break_even",
+        "unprofitable",
+        "no_sales",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "cost_source": {
+      "type": "string",
+      "default": "unknown",
+      "description": "manual_confirmed, manual_confirmed_import, sp_api_listing, sp_api_sales_average, amazon_fee_report, account_configuration, historical_import, unknown"
+    },
+    "price_source": {
+      "type": "string",
+      "default": "unknown"
+    },
+    "fees_source": {
+      "type": "string",
+      "default": "unknown"
+    },
+    "economics_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing_cost",
+        "missing_price",
+        "missing_fees",
+        "invalid",
+        "stale"
+      ],
+      "default": "partial"
+    },
+    "product_link_status": {
+      "type": "string",
+      "enum": [
+        "linked",
+        "pending",
+        "conflict",
+        "not_found"
+      ],
+      "default": "pending"
+    },
+    "cost_confidence": {
+      "type": "number",
+      "default": 0,
+      "description": "0 a 1"
+    },
+    "price_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "fees_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "final_economic_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "import_batch_id": {
+      "type": "string"
+    },
+    "imported_by": {
+      "type": "string"
+    },
+    "imported_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date"
+    },
+    "effective_to": {
+      "type": "string",
+      "format": "date"
+    },
+    "last_calculated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_prompted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "prompt_dismissed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "sku"
+  ]
+}

@@ -1,0 +1,94 @@
+{
+  "name": "ProductEconomicsHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "normalized_sku": {
+      "type": "string"
+    },
+    "unit_cost_before": {
+      "type": "number",
+      "default": 0
+    },
+    "unit_cost_after": {
+      "type": "number",
+      "default": 0
+    },
+    "additional_cost_before": {
+      "type": "number",
+      "default": 0
+    },
+    "additional_cost_after": {
+      "type": "number",
+      "default": 0
+    },
+    "price_before": {
+      "type": "number",
+      "default": 0
+    },
+    "price_after": {
+      "type": "number",
+      "default": 0
+    },
+    "fee_before": {
+      "type": "number",
+      "default": 0
+    },
+    "fee_after": {
+      "type": "number",
+      "default": 0
+    },
+    "margin_before": {
+      "type": "number",
+      "default": 0
+    },
+    "margin_after": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_before": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_after": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "import_batch_id": {
+      "type": "string"
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date"
+    },
+    "changed_by": {
+      "type": "string"
+    },
+    "changed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "sku",
+    "changed_at"
+  ]
+}
