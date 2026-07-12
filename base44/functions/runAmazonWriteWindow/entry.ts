@@ -18,6 +18,13 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela 16:00-18:00 BRT' });
     }
 
+    const canonicalResponse = await base44.asServiceRole.functions.invoke('enforceCanonicalManualCampaigns', {
+      amazon_account_id: body.amazon_account_id || null,
+      max_per_run: Number(body.canonical_max_per_run || 10),
+      _service_role: true,
+    });
+    const canonical = canonicalResponse?.data || canonicalResponse || {};
+
     const response = await base44.asServiceRole.functions.invoke('processAmazonNightWindow', {
       amazon_account_id: body.amazon_account_id || null,
       hour,
@@ -26,9 +33,11 @@ Deno.serve(async (request) => {
 
     const data = response?.data || response || {};
     return Response.json({
-      ok: data?.ok !== false,
+      ok: canonical?.ok !== false && data?.ok !== false,
       window: '16:00-18:00 America/Sao_Paulo',
       hour,
+      canonical_manual_campaigns: canonical,
+      continuation_required: Boolean(canonical?.continuation_required || data?.continuation_required),
       result: data,
     });
   } catch (error) {
