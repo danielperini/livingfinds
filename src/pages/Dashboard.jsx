@@ -682,11 +682,13 @@ export default function Dashboard() {
       )}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
-      {account && <SyncStatusBanner accountId={account.id} />}
-      {/* Cartão de sincronização das duas APIs */}
-      {account && !loading && (
-        <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} />
-      )}
+      <div key="sync-banners">
+        {account && <SyncStatusBanner accountId={account.id} />}
+        {/* Cartão de sincronização das duas APIs */}
+        {account && !loading && (
+          <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} />
+        )}
+      </div>
 
 
       {error && (

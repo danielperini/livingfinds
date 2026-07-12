@@ -144,13 +144,13 @@ export default function SyncStatusBanner({ accountId }) {
   const showSyncBanner = status !== null && !dismissed && status !== 'ok';
   const showTokenBanner = tokenInvalid && !tokenDismissed;
 
-  if (!showTokenBanner && !showSyncBanner) return null;
-
   const cfg = showSyncBanner ? STATUS_CONFIG[status] : null;
   const Icon = cfg?.icon;
   const lastSuccess = logs.find(l => l.status === 'success' || l.status === 'skipped_limit');
   const errorLogs = logs.filter(l => l.status === 'error');
   const allSelected = errorLogs.length > 0 && selected.size === errorLogs.length;
+
+  if (!showTokenBanner && !showSyncBanner) return null;
 
   return (
     <div className="space-y-2">
