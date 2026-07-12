@@ -686,6 +686,13 @@ Deno.serve(async (req) => {
     const totalRealRevenue30d = Array.from(salesMetricsByAsin.values()).reduce((s, m) => s + m.real_revenue_30d, 0);
     const accountTacos = totalRealRevenue30d > 0 ? (totalAdsSpend30d / totalRealRevenue30d) * 100 : null;
 
+    // ── 2d. Gasto real de ontem (para guardrail de redistribute_budget) ─────
+    // Usa o gasto real reportado nos relatórios diários — não a soma de orçamentos configurados.
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const realSpendYesterday = metricsRaw
+      .filter(m => m.date === yesterday)
+      .reduce((s, m) => s + (m.spend || 0), 0);
+
     // ── 3. Contexto sazonal ───────────────────────────────────────────────
     const seasonalCtx = getSeasonalCtx(today, customSeasonalEvents);
 
@@ -743,11 +750,17 @@ Deno.serve(async (req) => {
       : 999;
     const dataWithin14dWindow = metricDataAge <= ATTRIBUTION_WINDOW_DAYS;
 
-    // ── 5. Guardrail: budget total (usa settings configurados) ───────────
+    // ── 5. Budget: soma dos orçamentos configurados nas campanhas Amazon ─────
+    // IMPORTANTE: total_active_budget (soma de orçamentos por campanha na Amazon) NÃO precisa
+    // ser <= daily_budget_cap. O daily_budget_cap é o teto de GASTO REAL diário (limite de risco),
+    // não uma restrição sobre a soma de budgets configurados — a Amazon controla o gasto real.
+    // O guardrail real é o gasto real de ontem vs o cap.
     const totalActiveBudget = campaigns
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
       .reduce((s, c) => s + (c.daily_budget || 0), 0);
     const suggestedTotalBudget = settings.daily_budget_cap;
+
+
 
     // ── 6. Índices ────────────────────────────────────────────────────────
     const productMap = new Map(products.map(p => [p.asin, p]));
@@ -1160,7 +1173,8 @@ Deno.serve(async (req) => {
         const iKey = `det|${aid}|${rule.rule_key}|${entityId}|${today}`;
         if (usedIdemKeys.has(iKey)) { stats.skipped_dup++; continue; }
 
-        if (rule.action.type === 'redistribute_budget' && totalActiveBudget > settings.daily_budget_cap) continue;
+        // Guardrail redistribute_budget: bloquear apenas se GASTO REAL ontem ultrapassou o cap
+        if (rule.action.type === 'redistribute_budget' && realSpendYesterday > settings.daily_budget_cap) continue;
 
         actionsToEnqueue.push({
           amazon_account_id: aid,
@@ -1202,8 +1216,9 @@ Deno.serve(async (req) => {
       active_rules: activeRules.length,
       data_age_hours: Math.round(dataAge),
       total_active_budget: Math.round(totalActiveBudget * 100) / 100,
-      suggested_total_budget: suggestedTotalBudget,
-      budget_within_limits: totalActiveBudget <= settings.daily_budget_cap,
+      daily_budget_cap: suggestedTotalBudget,
+      real_spend_yesterday: Math.round(realSpendYesterday * 100) / 100,
+      budget_note: 'total_active_budget é a soma dos orçamentos configurados por campanha na Amazon — não precisa ser <= daily_budget_cap. O guardrail real é o gasto diário.',
       performance_settings: {
         source: settings.settings_source,
         target_acos: settings.target_acos,
