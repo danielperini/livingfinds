@@ -56,20 +56,31 @@ const FB = {
   LOW_IMP_REVIEW_DAYS: 7,
   LOW_IMP_SECOND_REVIEW_DAYS: 14,
   LOW_IMP_KEYWORD_PAUSE_DAYS: 21,
-  // Evidência mínima antes de pausar
-  MIN_CLICKS_BEFORE_PAUSE: 20,      // mínimo de 20 cliques antes de qualquer pausa
+  // Evidência mínima antes de pausar/agir
+  MIN_CLICKS_BEFORE_PAUSE: 20,      // minimum_clicks_before_pause = 20
+  MIN_CLICKS_FIRST_REVIEW: 10,      // minimum_clicks_first_review = 10
+  MIN_CLICKS_SECOND_REVIEW: 15,     // minimum_clicks_second_review = 15
+  MIN_IMP_BEFORE_PAUSE: 200,        // minimum_impressions_before_pause = 200
+  // Thresholds de impressões por janela
+  LOW_IMP_THRESHOLD_7D: 50,         // low_impressions_threshold_7d = 50
+  LOW_IMP_THRESHOLD_14D: 150,       // low_impressions_threshold_14d = 150
+  // Freshness e proteção
+  MIN_DATA_FRESHNESS_HOURS: 36,     // minimum_data_freshness_hours = 36
+  RECENT_SALE_PROTECTION_HOURS: 72, // recent_sale_protection_hours = 72
+  WINNER_PROTECTION_ENABLED: true,  // winner_protection_enabled = true
+  PAUSE_MOST_SPECIFIC_FIRST: true,  // pause_most_specific_entity_first = true
 };
 
 // ── MRC ────────────────────────────────────────────────────────────────────────
 const MRC = {
   MIN_CLICKS: 20,                    // minimum_clicks_before_pause = 20
-  MIN_IMPRESSIONS: 200,
+  MIN_IMPRESSIONS: 200,              // minimum_impressions_before_pause = 200
   MIN_SPEND: 12.0,                   // fallback; runtime usa maximum_profitable_cpa quando disponível
   MIN_CTR: 0.0005,
   ATTRIBUTION_WINDOW: 14,
   DATA_STABLE_DAYS: 30,
-  DATA_STALE_HOURS: 48,
-  LOW_VISIBILITY_IMPRESSIONS: 50,
+  DATA_STALE_HOURS: 36,              // minimum_data_freshness_hours = 36
+  LOW_VISIBILITY_IMPRESSIONS: 50,   // = low_impressions_threshold_7d
   LOW_IMPRESSION_SHARE: 0.05,
 };
 
@@ -1158,8 +1169,18 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // ── Proteção de venda recente (recent_sale_protection_hours = 72) ──
+      // Se houve venda nas últimas 72h, bloquear qualquer pausa destrutiva
+      const recentSaleProtected = (() => {
+        if (!FB.WINNER_PROTECTION_ENABLED) return false;
+        const lastSaleTs = kw.last_sale_at || kw.last_order_at;
+        if (!lastSaleTs) return false;
+        return (Date.now() - new Date(lastSaleTs).getTime()) / 3600000 < FB.RECENT_SALE_PROTECTION_HOURS;
+      })();
+
       // ── Evidência mínima ─────────────────────────────────────────────
-      const hasMinEvidence = kw_clicks >= MRC.MIN_CLICKS && kw_impressions >= MRC.MIN_IMPRESSIONS && kw_spend >= MRC.MIN_SPEND;
+      // Exige: min 20 cliques E min 200 impressões E spend >= max_profitable_cpa (ou fallback)
+      const hasMinEvidence = kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && kw_spend >= MRC.MIN_SPEND;
       const hasCtrQuality = kw_impressions > 0 && kw_ctr >= MRC.MIN_CTR;
 
       // ── Dados insuficientes: calibrar se baixíssimas impressões ─────
@@ -1197,9 +1218,12 @@ Deno.serve(async (req) => {
       // ── REGRAS DE PROTEÇÃO (redução) — avaliadas antes do crescimento ─
 
       // CPA acima do máximo lucrável
-      // minimum_spend_before_pause = maximum_profitable_cpa (quando disponível), senão MIN_SPEND
+      // minimum_spend_before_pause = maximum_profitable_cpa | minimum_clicks = 20 | minimum_impressions = 200
       const minSpendBeforePause = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
-      if (funnel.maximum_profitable_cpa > 0 && kw_orders >= 2 && funnel.actual_cpa > funnel.maximum_profitable_cpa && kw_spend >= minSpendBeforePause && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE) {
+      if (!recentSaleProtected && funnel.maximum_profitable_cpa > 0 && kw_orders >= 2
+          && funnel.actual_cpa > funnel.maximum_profitable_cpa
+          && kw_spend >= minSpendBeforePause && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE
+          && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE) {
         const reductionPct = funnel.actual_cpa > funnel.maximum_profitable_cpa * 1.5 ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
         const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
         const iKey = `cpa_above_max|${aid}|${entityId}|${today}`;
@@ -1247,9 +1271,13 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Gasto sem conversão — exige minimum_clicks_before_pause=20 e minimum_spend=maximum_profitable_cpa
+      // Gasto sem conversão — exige: 0 vendas + min 20 cliques + gasto >= CPA máximo lucrativo + dados válidos
+      // pause_most_specific_entity_first = true: pausa a keyword antes de pausar a campanha
       const noConvMinSpend = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
-      if (kw_spend >= noConvMinSpend && kw_orders === 0 && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE) {
+      const noConvDataValid = econStatus.economic_confidence !== 'none' && dataFreshness !== 'stale';
+      if (!recentSaleProtected && kw_spend >= noConvMinSpend && kw_orders === 0
+          && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE
+          && noConvDataValid) {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
           const shouldPause = (kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational') && kw_spend >= MRC.MIN_SPEND * 2;
@@ -1655,7 +1683,7 @@ Deno.serve(async (req) => {
         budget_increase_decisions: stats.budget_increase,
       },
 
-      note: 'Motor v6: crescimento + visibilidade + oportunidade · custo parcial não bloqueia · growth_tolerance_factor 1.05 · simulação antes de aprovar · cooldown 72h pós-aumento',
+      note: 'Motor v6: crescimento + visibilidade + oportunidade · custo parcial não bloqueia · growth_tolerance_factor 1.05 · simulação antes de aprovar · cooldown 48h pós-aumento · min 20 cliques + 200 impressões + CPA máximo antes de pausar · proteção de venda recente 72h · dados frescos ≤36h',
     });
 
   } catch (error: any) {
