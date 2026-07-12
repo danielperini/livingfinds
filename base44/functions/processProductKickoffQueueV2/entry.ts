@@ -176,6 +176,19 @@ Deno.serve(async (request) => {
         continue;
       }
 
+      // ── Guard de escopo: bloquear kickoff para produtos não autorizados ──
+      const scopeStatus = product?.ads_scope_status || 'not_authorized';
+      const eligStatus = product?.ads_eligibility_status || 'unknown';
+      if (scopeStatus !== 'authorized' || eligStatus !== 'eligible') {
+        await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+          status: scopeStatus !== 'authorized' ? 'cancelled' : 'waiting_stock',
+          last_error: `Kickoff bloqueado: ads_scope_status=${scopeStatus}, ads_eligibility_status=${eligStatus}`,
+          scheduled_at: null,
+        }).catch(() => {});
+        results.push({ id: item.id, asin: item.asin, ok: false, blocked: true, reason: `scope=${scopeStatus} eligibility=${eligStatus}` });
+        continue;
+      }
+
       const attempts = Number(item.attempt_count || 0) + 1;
       await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
         status: 'processing',

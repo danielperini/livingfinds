@@ -42,13 +42,11 @@
       "default": "in_stock"
     },
     "previous_inventory_status": {
-      "type": "string",
-      "description": "Status de invent\u00e1rio anterior ao \u00faltimo sync \u2014 usado para detectar reabastecimento"
+      "type": "string"
     },
     "previous_fba_inventory": {
       "type": "number",
-      "default": 0,
-      "description": "Quantidade FBA registrada no sync anterior \u2014 usado para detectar varia\u00e7\u00f5es significativas"
+      "default": 0
     },
     "fba_inventory": {
       "type": "number",
@@ -291,6 +289,110 @@
     "conversion_rate_30d": {
       "type": "number",
       "default": 0
+    },
+    "ads_scope_status": {
+      "type": "string",
+      "enum": [
+        "authorized",
+        "not_authorized",
+        "temporarily_ineligible",
+        "manual_block",
+        "mapping_conflict"
+      ],
+      "default": "not_authorized",
+      "description": "Status de autoriza\u00e7\u00e3o do SKU para participar do fluxo de publicidade"
+    },
+    "ads_authorized_by_user": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = inclu\u00eddo explicitamente na lista autorizada pelo usu\u00e1rio"
+    },
+    "ads_authorized_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi autorizado"
+    },
+    "ads_authorized_by": {
+      "type": "string",
+      "description": "Usu\u00e1rio ou fun\u00e7\u00e3o que autorizou"
+    },
+    "ads_eligibility_status": {
+      "type": "string",
+      "enum": [
+        "eligible",
+        "out_of_stock",
+        "low_stock",
+        "listing_suppressed",
+        "listing_inactive",
+        "offer_inactive",
+        "not_buyable",
+        "mapping_conflict",
+        "not_authorized",
+        "manual_block",
+        "data_stale",
+        "unknown"
+      ],
+      "default": "unknown",
+      "description": "Estado operacional de elegibilidade para Ads. Produto precisa de authorized + eligible para ter Ads ativos."
+    },
+    "ads_ineligibility_reason": {
+      "type": "string",
+      "description": "Motivo detalhado de inelegibilidade"
+    },
+    "ads_last_eligibility_check_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi feita a \u00faltima avalia\u00e7\u00e3o de elegibilidade"
+    },
+    "ads_resume_pending": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = campanha foi pausada pelo sistema e deve ser retomada quando elegibilidade retornar"
+    },
+    "ads_previous_campaign_state": {
+      "type": "string",
+      "description": "Estado anterior da campanha antes da pausa sist\u00eamica (para retomada segura)"
+    },
+    "ads_pause_reason": {
+      "type": "string",
+      "description": "Motivo da pausa sist\u00eamica mais recente"
+    },
+    "ads_paused_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o sistema pausou as campanhas deste produto"
+    },
+    "ads_mapping_conflict_asin": {
+      "type": "string",
+      "description": "ASIN divergente detectado (quando mapping_conflict)"
+    },
+    "ads_mapping_conflict_sku": {
+      "type": "string",
+      "description": "SKU com conflito registrado"
+    },
+    "ads_scope_updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o ads_scope_status foi alterado"
+    },
+    "ads_scope_updated_by": {
+      "type": "string",
+      "description": "Fun\u00e7\u00e3o ou usu\u00e1rio que alterou o escopo"
+    },
+    "listing_buyable": {
+      "type": "boolean",
+      "default": true,
+      "description": "Produto compr\u00e1vel na Amazon (listing n\u00e3o suprimido)"
+    },
+    "offer_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Oferta ativa no marketplace"
+    },
+    "listing_suppressed": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = listing suprimido pela Amazon"
     }
   },
   "required": [

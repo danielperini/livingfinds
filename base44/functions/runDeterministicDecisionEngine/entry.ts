@@ -651,6 +651,22 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── 1b. Carregar guard de escopo autorizado ───────────────────────────
+    // Produtos com ads_scope_status=authorized e ads_eligibility_status=eligible
+    // Qualquer outro estado bloqueia crescimento/criação de campanha.
+    const authorizedEligibleAsins = new Set<string>();
+    const authorizedIneligibleAsins = new Set<string>(); // authorized mas temp. inelegível
+    {
+      const scopedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []);
+      for (const sp of scopedProducts) {
+        if (!sp.asin) continue;
+        const scope = sp.ads_scope_status || 'not_authorized';
+        const elig = sp.ads_eligibility_status || 'unknown';
+        if (scope === 'authorized' && elig === 'eligible') authorizedEligibleAsins.add(sp.asin);
+        else if (scope === 'authorized') authorizedIneligibleAsins.add(sp.asin);
+      }
+    }
+
     // ── 2. Carregar dados em paralelo ─────────────────────────────────────
     const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
     const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
@@ -871,6 +887,22 @@ Deno.serve(async (req) => {
 
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
       const product = resolvedAsin ? productMap.get(resolvedAsin) : null;
+
+      // ── Guard de escopo: bloquear crescimento/criação para não-autorizados ──
+      if (resolvedAsin) {
+        const isEligible = authorizedEligibleAsins.has(resolvedAsin);
+        const isTempIneligible = authorizedIneligibleAsins.has(resolvedAsin);
+        if (!isEligible && !isTempIneligible) {
+          // not_authorized ou mapping_conflict: nenhuma ação de crescimento
+          skipped.push({ entity_id: entityId, reason: 'ads_scope_not_authorized', asin: resolvedAsin });
+          continue;
+        }
+        if (isTempIneligible) {
+          // Autorizado mas temp. inelegível: apenas operações de pausa/monitoramento, não crescimento
+          skipped.push({ entity_id: entityId, reason: 'ads_scope_temporarily_ineligible', asin: resolvedAsin });
+          continue;
+        }
+      }
 
       // Estoque
       const stockQty = product?.fba_inventory || 0;

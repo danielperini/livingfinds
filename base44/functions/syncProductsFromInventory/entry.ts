@@ -105,6 +105,30 @@ Deno.serve(async (req) => {
       if (isNew) newAsinCount++;
 
       const existing = existingAsinMap.get(asin);
+
+      // Recalcular ads_eligibility_status após atualização de estoque
+      // Respeitar ads_scope_status existente; se authorized, derivar elegibilidade real
+      const existingScope = existing?.ads_scope_status || 'not_authorized';
+      let adsEligibilityStatus = existing?.ads_eligibility_status || 'unknown';
+      let adsIneligibilityReason = existing?.ads_ineligibility_reason || '';
+      const availableQty = item.inventoryDetails?.fulfillableQuantity || 0; // apenas disponível
+      if (existingScope === 'authorized') {
+        // Manter estado específico de listing_suppressed/offer_inactive (gerido pela SP-API de listings)
+        const lockedStates = ['listing_suppressed', 'offer_inactive', 'not_buyable', 'mapping_conflict', 'manual_block'];
+        if (!lockedStates.includes(adsEligibilityStatus)) {
+          if (availableQty <= 0) {
+            adsEligibilityStatus = 'out_of_stock';
+            adsIneligibilityReason = `Estoque disponível zero após sync (fulfillable=${availableQty})`;
+          } else if (inventoryStatus === 'low_stock') {
+            adsEligibilityStatus = 'low_stock';
+            adsIneligibilityReason = `Estoque baixo: ${availableQty} unidades`;
+          } else {
+            adsEligibilityStatus = 'eligible';
+            adsIneligibilityReason = '';
+          }
+        }
+      }
+
       const record = {
         amazon_account_id,
         asin,
@@ -113,6 +137,7 @@ Deno.serve(async (req) => {
         status: 'active',
         inventory_status: inventoryStatus,
         fba_inventory: totalQty,
+        available_quantity: availableQty,
         inbound_inventory: inboundQty,
         is_new_asin: isNew,
         has_campaign: existing?.has_campaign || false,
@@ -120,6 +145,13 @@ Deno.serve(async (req) => {
         linked_campaign_id: existing?.linked_campaign_id || null,
         last_sync_at: now,
         synced_at: now,
+        ads_eligibility_status: adsEligibilityStatus,
+        ads_ineligibility_reason: adsIneligibilityReason,
+        ads_last_eligibility_check_at: now,
+        // Preservar ads_resume_pending se era out_of_stock e agora ficou elegível (será retomado pelo pauseAutoCampaigns)
+        ads_resume_pending: existingScope === 'authorized' && adsEligibilityStatus === 'eligible' && existing?.ads_resume_pending === true
+          ? true // manter para o processo de retomada decidir
+          : existing?.ads_resume_pending || false,
       };
 
       if (!existing?.first_available_date) {

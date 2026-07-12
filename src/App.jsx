@@ -46,6 +46,7 @@ import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
 import ListingEnhancementPage from '@/pages/ListingEnhancementPage';
+import AdsAuthorizationPage from '@/pages/AdsAuthorizationPage';
 
 import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
 import SalaDeComando from '@/pages/SalaDeComando';
@@ -151,6 +152,7 @@ const AuthenticatedApp = () => {
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
           <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
+          <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
           <Route path="/sala-de-comando" element={<SalaDeComando />} />
           <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
