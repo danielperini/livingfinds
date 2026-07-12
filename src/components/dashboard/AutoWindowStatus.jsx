@@ -105,13 +105,13 @@ export default function AutoWindowStatus() {
 
   if (active) {
     return (
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg" title={`Pipeline automático: ${PIPELINE.map(p => `${p.time} ${p.label}`).join(' · ')}`}>
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
-        <div className="text-[11px]">
+        <div className="text-[11px] flex items-center gap-1 flex-wrap">
           <span className="text-emerald-300 font-semibold">Janela Amazon ativa 16h–18h</span>
-          {currentTask && <span className="text-slate-400 ml-1">· {currentTask.label}</span>}
-          <span className="text-slate-500 ml-1">({minutesLeft}min restantes)</span>
-          {rate !== null && <span className={`ml-1.5 font-semibold ${rateColor}`}>· {rate}% OK</span>}
+          {currentTask && <span className="text-slate-400">· {currentTask.label}</span>}
+          <span className="text-slate-500">({minutesLeft}min restantes)</span>
+          {rate !== null && <span className={`font-semibold ${rateColor}`}>· {rate}% OK</span>}
         </div>
       </div>
     );

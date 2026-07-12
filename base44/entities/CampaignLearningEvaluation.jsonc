@@ -1,0 +1,98 @@
+{
+  "name": "CampaignLearningEvaluation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "learning_stage_before": {
+      "type": "string"
+    },
+    "learning_stage_after": {
+      "type": "string"
+    },
+    "evaluation_window_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_window_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "recommended_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "decision": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "terms_found": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_promoted": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_paused": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_replaced": {
+      "type": "number",
+      "default": 0
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "learning_stage_before"
+  ]
+}

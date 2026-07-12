@@ -1,0 +1,189 @@
+{
+  "name": "StrategySession",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "acceleration",
+        "turbo",
+        "cruise",
+        "cost_reduction",
+        "custom"
+      ],
+      "description": "acceleration=Condu\u00e7\u00e3o, turbo=Turbo (bid\u00d71.5 72h), cruise=Cruzeiro, cost_reduction=Redu\u00e7\u00e3o, custom=Personalizado"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "planning",
+        "queued",
+        "active",
+        "ending",
+        "rolling_back",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "default": "planning"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ends_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rollback_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rollback_completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "triggered_by": {
+      "type": "string"
+    },
+    "autopilot_authorized": {
+      "type": "boolean",
+      "default": true
+    },
+    "original_state_snapshot_id": {
+      "type": "string"
+    },
+    "strategy_plan": {
+      "type": "string",
+      "description": "JSON do plano + overrides de metas aplicados"
+    },
+    "applied_changes": {
+      "type": "string",
+      "description": "JSON das altera\u00e7\u00f5es aplicadas no rollback"
+    },
+    "created_campaign_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_keyword_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_target_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_negative_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decisions_count": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_executed": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_failed": {
+      "type": "number",
+      "default": 0
+    },
+    "bids_affected": {
+      "type": "number",
+      "default": 0
+    },
+    "budgets_affected": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_created": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_created": {
+      "type": "number",
+      "default": 0
+    },
+    "sessions_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sessions_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "sessions_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sessions_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "last_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "mode",
+    "status"
+  ]
+}

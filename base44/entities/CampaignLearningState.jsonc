@@ -1,0 +1,311 @@
+{
+  "name": "CampaignLearningState",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "campaign_type": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "manual_exact",
+        "manual_phrase",
+        "manual_broad",
+        "manual_product_target"
+      ],
+      "default": "auto"
+    },
+    "strategy_type": {
+      "type": "string",
+      "enum": [
+        "discovery",
+        "exact_scale",
+        "phrase_expansion",
+        "broad_controlled",
+        "product_targeting",
+        "search_term_harvest"
+      ],
+      "default": "discovery"
+    },
+    "learning_stage": {
+      "type": "string",
+      "enum": [
+        "auto_initial_48h",
+        "auto_bid_060_24h",
+        "auto_bid_increment_24h",
+        "auto_collection_3_weeks",
+        "auto_weekly_mature",
+        "manual_initial_48h",
+        "manual_active",
+        "manual_optimizing",
+        "paused",
+        "completed",
+        "blocked",
+        "waiting_candidates"
+      ],
+      "default": "auto_initial_48h"
+    },
+    "campaign_maturity_stage": {
+      "type": "string",
+      "enum": [
+        "initial_learning",
+        "bid_discovery",
+        "term_collection",
+        "early_growth",
+        "mature",
+        "declining",
+        "harvest_exhausted",
+        "structural_issue",
+        "paused_by_autopilot"
+      ],
+      "default": "initial_learning",
+      "description": "Est\u00e1gio de matura\u00e7\u00e3o econ\u00f4mica da campanha"
+    },
+    "profitability_status": {
+      "type": "string",
+      "enum": [
+        "learning",
+        "growing",
+        "healthy",
+        "declining",
+        "spending_without_conversion",
+        "unprofitable",
+        "structural_issue",
+        "paused_by_autopilot"
+      ],
+      "default": "learning",
+      "description": "Status de rentabilidade atual"
+    },
+    "maturity_stage_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "maturity_stage_ends_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_maturity_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_maturity_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "maturity_cycle_number": {
+      "type": "number",
+      "default": 0
+    },
+    "maturity_score": {
+      "type": "number",
+      "default": 0
+    },
+    "profitability_risk_score": {
+      "type": "number",
+      "default": 0
+    },
+    "last_conversion_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_profitable_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hours_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "estimated_profit_per_order": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "max_allowed_spend_without_order": {
+      "type": "number",
+      "default": 0
+    },
+    "learning_stage_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "learning_stage_ends_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cycle_number": {
+      "type": "number",
+      "default": 0
+    },
+    "initial_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "bid_ceiling": {
+      "type": "number",
+      "default": 3.0
+    },
+    "bid_floor": {
+      "type": "number",
+      "default": 0.1
+    },
+    "daily_budget": {
+      "type": "number",
+      "default": 25.0
+    },
+    "bid_increment_count": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "units": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_collected": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_promoted": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_replaced": {
+      "type": "number",
+      "default": 0
+    },
+    "initial_manual_campaign": {
+      "type": "boolean",
+      "default": false
+    },
+    "harvested_manual_campaign": {
+      "type": "boolean",
+      "default": false
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "paused",
+        "completed",
+        "blocked",
+        "error"
+      ],
+      "default": "active"
+    },
+    "blocked_reason": {
+      "type": "string"
+    },
+    "last_decision_id": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "learning_stage"
+  ]
+}
