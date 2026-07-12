@@ -96,7 +96,7 @@ function DecisionRow({ dec, expanded, onToggle }) {
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
-            {dec.keyword_text && (
+            {dec.keyword_text && dec.decision_type !== 'bid_change' && (
               <span className="text-xs font-semibold text-white truncate max-w-[200px]">{dec.keyword_text}</span>
             )}
             {dec.asin && <span className="text-[10px] font-mono text-cyan flex-shrink-0">{dec.asin}</span>}
