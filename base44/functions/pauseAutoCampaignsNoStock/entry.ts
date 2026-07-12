@@ -39,20 +39,29 @@ async function getAdsAccessToken(refreshToken: string): Promise<string> {
 }
 
 async function setCampaignStateOnAmazon(
-  accessToken: string, profileId: string, campaignId: string, state: 'paused' | 'enabled'
+  accessToken: string, profileId: string, campaignId: string, state: 'paused' | 'enabled' | 'archived'
 ): Promise<boolean> {
   const endpoint = ENDPOINT_MAP[ADS_REGION] || ENDPOINT_MAP.na;
-  const res = await fetch(`${endpoint}/v2/sp/campaigns`, {
-    method: 'PUT',
-    headers: {
-      'Amazon-Advertising-API-ClientId': ADS_CLIENT_ID,
-      'Amazon-Advertising-API-Scope': profileId,
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify([{ campaignId, state }]),
-  });
-  return res.ok;
+  // Tentar v4 primeiro, fallback v2
+  for (const url of [`${endpoint}/sp/campaigns/${campaignId}`, `${endpoint}/v2/sp/campaigns`]) {
+    const isV4 = url.includes(`/campaigns/${campaignId}`);
+    const res = await fetch(url, {
+      method: isV4 ? 'PUT' : 'PUT',
+      headers: {
+        'Amazon-Advertising-API-ClientId': ADS_CLIENT_ID,
+        'Amazon-Advertising-API-Scope': profileId,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': isV4 ? 'application/vnd.spCampaign.v3+json' : 'application/json',
+        ...(isV4 ? { 'Accept': 'application/vnd.spCampaign.v3+json' } : {}),
+      },
+      body: isV4
+        ? JSON.stringify({ campaigns: [{ campaignId, state }] })
+        : JSON.stringify([{ campaignId, state }]),
+    });
+    if (res.ok) return true;
+    if (res.status !== 404) return false;
+  }
+  return false;
 }
 
 Deno.serve(async (req) => {
@@ -63,12 +72,71 @@ Deno.serve(async (req) => {
     if (user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
 
     const body = await req.json().catch(() => ({}));
-    const { amazon_account_id, dry_run = false } = body;
+    const { amazon_account_id, dry_run = false, sync_archived = false, campaign_ids_to_archive = [] } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id obrigatório' }, { status: 400 });
 
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id });
     const account = accounts[0];
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
+
+    // Modo: sincronizar campanha já arquivadas localmente → enviar archived para Amazon API
+    if (sync_archived || campaign_ids_to_archive.length > 0) {
+      const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+      let accessToken: string | null = null;
+      try { accessToken = await getAdsAccessToken(refreshToken); } catch (e: any) {
+        return Response.json({ ok: false, error: `Token: ${e.message}` }, { status: 503 });
+      }
+      const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
+      const endpoint = ENDPOINT_MAP[ADS_REGION] || ENDPOINT_MAP.na;
+
+      // Se não passou lista explícita, buscar todas arquivadas localmente
+      let ids: string[] = campaign_ids_to_archive;
+      if (!ids.length) {
+        const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, null, 500);
+        ids = allCampaigns
+          .filter((c: any) => (c.targeting_type || '').toUpperCase() === 'AUTO' && ['archived','ARCHIVED'].includes(c.state || c.status || '') && (c.campaign_id || c.amazon_campaign_id))
+          .map((c: any) => c.campaign_id || c.amazon_campaign_id);
+      }
+
+      // Enviar em lotes de 10
+      const results: any[] = [];
+      for (let i = 0; i < ids.length; i += 10) {
+        // Amazon API v3: archived não é state válido — pausar na API (archived fica só localmente)
+        const batch = ids.slice(i, i + 10).map((id: string) => ({ campaignId: id, state: 'PAUSED' }));
+        try {
+          // Tentar v3 batch, fallback v2
+          let res = await fetch(`${endpoint}/sp/campaigns`, {
+            method: 'PUT',
+            headers: {
+              'Amazon-Advertising-API-ClientId': ADS_CLIENT_ID,
+              'Amazon-Advertising-API-Scope': profileId,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/vnd.spCampaign.v3+json',
+              'Accept': 'application/vnd.spCampaign.v3+json',
+            },
+            body: JSON.stringify({ campaigns: batch }),
+          });
+          if (res.status === 404) {
+            res = await fetch(`${endpoint}/v2/sp/campaigns`, {
+              method: 'PUT',
+              headers: {
+                'Amazon-Advertising-API-ClientId': ADS_CLIENT_ID,
+                'Amazon-Advertising-API-Scope': profileId,
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(batch),
+            });
+          }
+          const data = await res.json();
+          results.push({ batch_start: i, status: res.status, ok: res.ok, response: data });
+        } catch (e: any) {
+          results.push({ batch_start: i, error: e.message });
+        }
+      }
+      const succeeded = results.filter(r => r.ok).reduce((acc, r) => acc + (r.response?.length || 0), 0);
+      return Response.json({ ok: true, mode: 'sync_archived', total_ids: ids.length, batches: results.length, results });
+    }
 
     // Todas campanhas AUTO (ativas e pausadas)
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, null, 500);
