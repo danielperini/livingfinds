@@ -656,14 +656,20 @@ export default function Dashboard() {
         <div>
           <h1 className="text-lg font-bold text-white">{greeting}, {firstName}.</h1>
           <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
-            {loading ? 'Carregando...' : account
-              ? <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}<span>{active_count} ativas</span>{' · '}<span>{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span></span>
-              : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
+            <span>
+              {loading ? (
+                <span>Carregando...</span>
+              ) : account ? (
+                <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}<span>{active_count} ativas</span>{' · '}<span>{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span></span>
+              ) : (
+                <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>
+              )}
+            </span>
             {nextSyncLabel ? (
                 <span className="flex items-center gap-1 text-slate-500 ml-1">
-                  {' · '}<Clock className="w-3 h-3" />
-                  Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                  <span className="text-slate-600">· Próximo sync {nextSyncLabel.label}</span>
+                  <span>{' · '}</span><Clock className="w-3 h-3" />
+                  <span>Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span className="text-slate-600">{'· Próximo sync '}{nextSyncLabel.label}</span>
                 </span>
             ) : null}
           </p>
