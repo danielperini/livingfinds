@@ -78,10 +78,13 @@ Deno.serve(async (req) => {
     const aid = account.id;
     const bp = { amazon_account_id: aid };
 
-    // ── Guard global: já rodou hoje? ─────────────────────────────────────────
+    // ── Guard global: já rodou hoje? (verifica ambos os TTLs para compatibilidade) ─
     if (!force) {
-      const alreadyRan = await wasRunTodaySuccessfully(base44, aid, 'smart_daily_orchestrator');
-      if (alreadyRan) {
+      const [ran1, ran2] = await Promise.all([
+        wasRunTodaySuccessfully(base44, aid, 'smart_daily_orchestrator'),
+        wasRunTodaySuccessfully(base44, aid, 'daily_master_orchestrator'),
+      ]);
+      if (ran1 || ran2) {
         return Response.json({ ok: true, skipped: true, reason: 'already_ran_today', date: today });
       }
     }
