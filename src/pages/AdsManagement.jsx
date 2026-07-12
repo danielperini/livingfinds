@@ -458,8 +458,9 @@ export default function AdsManagement() {
   })();
 
   const autoCampaigns = autoByAsin;
-  const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO')).
-  filter((c) => stateFilterManual === 'all' || c.state === stateFilterManual || c.status === stateFilterManual);
+  const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO'))
+  .filter((c) => stateFilterManual === 'all' || c.state === stateFilterManual || c.status === stateFilterManual)
+  .sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
