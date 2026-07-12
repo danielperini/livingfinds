@@ -1,25 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-function brazilHour() {
-  const parts = new Intl.DateTimeFormat('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    hour: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date());
-  return Number(parts.find((part) => part.type === 'hour')?.value || 0);
-}
-
-function nextQueueHour() {
-  const hour = brazilHour();
-  if (hour < 4) return Math.min(3, hour + 1);
-  if (hour < 13) return 13;
-  return 0;
-}
-
-function isWindow() {
-  return [0, 1, 2, 3, 13].includes(brazilHour());
-}
-
 function evaluationDays(action: string) {
   if (['negative_exact', 'negative_keyword', 'apply_dayparting'].includes(action)) return 14;
   if (action === 'create_keyword') return 3;
@@ -55,11 +35,9 @@ async function ads(base44: any, accountId: string, operation: string, method: st
 }
 
 // Normaliza resposta v3 de qualquer entidade (keywords, campaigns, adGroups)
-// A Amazon retorna 207 com payload.<entity>.success[] / .error[]
 function normalizeV3Response(raw: any, entityKey: string): { ok: boolean; success: any[]; errors: any[]; request_id: string | null } {
   const request_id = raw?.headers?.request_id || raw?.amazon_request_id || raw?.request_id || null;
 
-  // Caminho direto no payload (ex: raw.payload.keywords.success)
   const v3block = raw?.payload?.[entityKey] || raw?.[entityKey] || null;
   if (v3block) {
     const success: any[] = v3block.success || [];
@@ -67,11 +45,9 @@ function normalizeV3Response(raw: any, entityKey: string): { ok: boolean; succes
     return { ok: success.length > 0 && errors.length === 0, success, errors, request_id };
   }
 
-  // Fallback: resposta plana (v2 / legacy)
   if (raw?.ok === false) return { ok: false, success: [], errors: raw?.errors || [{ message: raw?.error || 'Erro desconhecido' }], request_id };
   if (raw?.ok === true || raw?.status === 200) return { ok: true, success: [], errors: [], request_id };
 
-  // 207 sem bloco estruturado — considerar sucesso se não há campo de erro
   if (raw?.status === 207) {
     const hasError = Array.isArray(raw?.errors) && raw.errors.length > 0;
     return { ok: !hasError, success: [], errors: raw?.errors || [], request_id };
@@ -108,23 +84,6 @@ Deno.serve(async (request) => {
       }
       if (!['approved', 'executing'].includes(decision.status)) {
         results.push({ id, ok: false, skipped: true, reason: `status ${decision.status}` });
-        continue;
-      }
-
-      const immediate = ['pause_campaign', 'pause_keyword'].includes(decision.action);
-      if (!immediate && !body._window_execution && !isWindow()) {
-        const queueHour = nextQueueHour();
-        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'approved',
-          queue_status: 'scheduled',
-          queue_hour: queueHour,
-          queue_window: queueHour === 13
-            ? '13:00-14:00'
-            : `${String(queueHour).padStart(2, '0')}:00-${String(queueHour + 1).padStart(2, '0')}:00`,
-          queued_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-        results.push({ id, ok: true, scheduled: true, queue_hour: queueHour });
         continue;
       }
 
@@ -197,7 +156,6 @@ Deno.serve(async (request) => {
           mode: 'hybrid',
           approve: true,
           auto_apply: true,
-          _window_execution: true,
           _service_role: true,
         });
         const d = delegated?.data || delegated || {};
@@ -212,7 +170,6 @@ Deno.serve(async (request) => {
           ad_group_id: decision.ad_group_id,
           bid: decision.value_after,
           asin: decision.asin,
-          _window_execution: true,
           _service_role: true,
         });
         const d = delegated?.data || delegated || {};
@@ -225,7 +182,6 @@ Deno.serve(async (request) => {
       const success = normalized.ok;
       const errorMessage = success ? null : extractErrorMessage(normalized.errors);
 
-      // Atualiza decisão
       await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
         status: success ? 'executed' : 'failed',
         queue_status: success ? 'completed' : 'failed',
@@ -256,7 +212,7 @@ Deno.serve(async (request) => {
         }
       }
 
-      // Sincroniza Campaign local (state e budget)
+      // Sincroniza Campaign local
       if (success && ['pause_campaign', 'enable_campaign', 'update_budget', 'reduce_budget', 'increase_budget', 'set_budget'].includes(decision.action)) {
         const campId = String(decision.campaign_id || decision.entity_id || '');
         if (campId) {
@@ -333,7 +289,6 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: results.every((item) => item.ok || item.skipped),
       executed: results.filter((item) => item.status === 'executed').length,
-      scheduled: results.filter((item) => item.scheduled).length,
       failed: results.filter((item) => item.status === 'failed').length,
       results,
     });
