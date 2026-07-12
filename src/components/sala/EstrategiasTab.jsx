@@ -9,6 +9,7 @@ import {
   Telescope, ArrowUpRight, Gauge, Sparkles
 } from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
+import VisibilityScoreChart from '@/components/strategy/VisibilityScoreChart';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -439,6 +440,7 @@ export default function EstrategiasTab({ account }) {
       <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1 flex-wrap">
         {[
           { id: 'strategic', label: 'Estratégia', icon: BarChart2 },
+          { id: 'visibility', label: 'Visibilidade', icon: Eye },
           { id: 'opportunities', label: `Oportunidades${lastEngineResult?.opportunity_summary?.can_grow > 0 ? ` (${lastEngineResult.opportunity_summary.can_grow})` : ''}`, icon: Telescope },
           { id: 'economy', label: 'Economia', icon: DollarSign },
           { id: 'decisions', label: `Decisões (${decisions.length})`, icon: Zap },
@@ -451,6 +453,59 @@ export default function EstrategiasTab({ account }) {
           </button>
         ))}
       </div>
+
+      {/* ── VISIBILIDADE × VENDAS ───────────────────────────────────────────── */}
+      {activeView === 'visibility' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-cyan/15 border border-cyan/20 flex items-center justify-center">
+              <Eye className="w-4 h-4 text-cyan" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Visibility Score × Volume de Vendas</h3>
+              <p className="text-xs text-slate-500">Impacto da visibilidade de impressões nas vendas por produto/keyword — 14 dias</p>
+            </div>
+            <button onClick={loadData} disabled={loading} className="ml-auto p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {!lastEngineResult && (
+            <div className="bg-cyan/5 border border-cyan/20 rounded-xl p-3 flex items-center gap-2 text-xs text-cyan/80">
+              <Eye className="w-3.5 h-3.5 flex-shrink-0" />
+              Execute o motor de estratégias para ver os visibility scores calculados. Usando dados estimados de sessões enquanto isso.
+            </div>
+          )}
+
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <VisibilityScoreChart
+              opportunities={lastEngineResult?.opportunity_summary?.top_opportunities || []}
+              metrics={metrics}
+              products={products}
+            />
+          </div>
+
+          {/* Interpretação */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 space-y-2">
+            <p className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+              <Brain className="w-3.5 h-3.5 text-violet-400" /> Como interpretar o Visibility Score
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px]">
+              {[
+                { range: '< 0.3', label: 'Baixa visibilidade', desc: 'Impressões insuficientes para estimar intenção real. Bid provavelmente abaixo do mínimo de entrega.', color: 'border-red-500/20 bg-red-500/5 text-red-300' },
+                { range: '0.3 – 0.6', label: 'Visibilidade média', desc: 'Recebendo tráfego mas limitado. Oportunidade de crescimento se CVR e margem permitirem.', color: 'border-amber-500/20 bg-amber-500/5 text-amber-300' },
+                { range: '≥ 0.6', label: 'Alta visibilidade', desc: 'Boa cobertura. Foco em converter o tráfego existente — otimizar listing e preço antes de escalar bid.', color: 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' },
+              ].map(r => (
+                <div key={r.range} className={`rounded-lg p-3 border ${r.color}`}>
+                  <p className="font-bold mb-1">{r.range} — {r.label}</p>
+                  <p className="text-slate-400">{r.desc}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-600">Score calculado: impressões acumuladas / impressão máxima possível estimada pelo motor. Valores podem variar com a execução do motor.</p>
+          </div>
+        </div>
+      )}
 
       {/* ── OPORTUNIDADES DE CRESCIMENTO v6 ─────────────────────────────────── */}
       {activeView === 'opportunities' && (
@@ -487,6 +542,25 @@ export default function EstrategiasTab({ account }) {
                   ))}
                 </div>
               </div>
+
+              {/* Mini gráfico visibility × vendas inline */}
+              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                      <Eye className="w-3.5 h-3.5 text-cyan" /> Visibility Score × Vendas
+                    </p>
+                    <button onClick={() => setActiveView('visibility')} className="text-[10px] text-cyan hover:underline">
+                      Ver análise completa →
+                    </button>
+                  </div>
+                  <VisibilityScoreChart
+                    opportunities={lastEngineResult.opportunity_summary.top_opportunities}
+                    metrics={metrics}
+                    products={products}
+                  />
+                </div>
+              )}
 
               {/* Distribuição por estado de oportunidade */}
               {lastEngineResult.opportunity_summary?.by_state && (
