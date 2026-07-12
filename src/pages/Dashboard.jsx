@@ -112,7 +112,7 @@ function KpiCard({ label, value, sub, tone = 'default' }) {
     <div className={`bg-surface-1 border rounded-xl p-4 ${tones[tone]}`}>
       <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">{label}</p>
       <p className="text-xl font-bold text-white">{value}</p>
-      {sub && <p className="text-[10px] text-slate-500 mt-1">{sub}</p>}
+      {sub ? <p className="text-[10px] text-slate-500 mt-1">{sub}</p> : null}
     </div>
   );
 }
@@ -146,13 +146,13 @@ const ChartTooltip = ({ active, payload, label, consolidatedChart }) => {
     <div className="bg-[#111318] border border-surface-2 rounded-lg p-3 text-xs shadow-xl max-w-xs">
       <div className="flex items-center justify-between mb-2">
         <p className="text-slate-300 font-semibold">{label}</p>
-        {dataStatus && (
+        {dataStatus ? (
           <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${
             dataStatus === 'complete' ? 'bg-emerald-500/15 text-emerald-400' :
             dataStatus === 'partial' ? 'bg-amber-500/15 text-amber-400' :
             'bg-red-500/15 text-red-400'
           }`}>{statusLabel[dataStatus] || dataStatus}</span>
-        )}
+        ) : null}
       </div>
       <div className="space-y-1">
         {[
