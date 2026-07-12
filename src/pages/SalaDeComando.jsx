@@ -153,7 +153,7 @@ function QueueRowItem({ item, onDelete, onRetry, retrying }) {
             {item.campaign_name && <span className="text-xs text-slate-400 truncate max-w-[200px]">{item.campaign_name}</span>}
           </div>
           <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-500 flex-wrap">
-            {(item.attempt_count || 0) > 0 && <span className="text-amber-400">{item.attempt_count}/{item.max_attempts || 5} tentativas</span>}
+            {(item.attempt_count || 0) > 0 ? <span className="text-amber-400">{item.attempt_count}/{item.max_attempts || 5} tentativas</span> : null}
             {item.scheduled_at && <span>Agendado: {new Date(item.scheduled_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
           </div>
           {expanded && isFailed && parsed && (
@@ -544,7 +544,7 @@ export default function SalaDeComando() {
           <div>
             <h1 className="text-lg font-bold text-white">Sala de Controle</h1>
             <p className="text-xs text-slate-400">
-              {criticalAlerts > 0 && <span className="text-red-400 font-semibold">{criticalAlerts} crítico{criticalAlerts > 1 ? 's' : ''} · </span>}
+              {criticalAlerts > 0 ? <span className="text-red-400 font-semibold">{criticalAlerts} crítico{criticalAlerts > 1 ? 's' : ''} · </span> : null}
               {activeAlerts} alerta{activeAlerts !== 1 ? 's' : ''} ativos · {queueFailed} erros na fila · {pendingDecisions} decisões pendentes
             </p>
           </div>
@@ -667,7 +667,7 @@ export default function SalaDeComando() {
                           <span className="text-slate-300 truncate">{r.operation || 'sync'}</span>
                         </div>
                         <div className="flex items-center gap-3 text-slate-500 flex-shrink-0 ml-2">
-                          {r.records_processed != null && r.records_processed > 0 && <span>{r.records_processed} reg.</span>}
+                          {(r.records_processed != null && r.records_processed > 0) ? <span>{r.records_processed} reg.</span> : null}
                           <span>{new Date(r.started_at || r.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                         </div>
                       </div>
@@ -1180,8 +1180,8 @@ export default function SalaDeComando() {
                       <div>
                         <p className="text-sm font-semibold text-white">{q.title}</p>
                         <p className="text-[10px] text-slate-500 mt-0.5">
-                          {qScheduled > 0 && <span className="text-amber-400">{qScheduled} ag. </span>}
-                          {qFailed > 0 && <span className="text-red-400">{qFailed} erro{qFailed !== 1 ? 's' : ''} </span>}
+                          {qScheduled > 0 ? <span className="text-amber-400">{qScheduled} ag. </span> : null}
+                          {qFailed > 0 ? <span className="text-red-400">{qFailed} erro{qFailed !== 1 ? 's' : ''} </span> : null}
                           {q.items.filter(i => i.status === 'completed').length} ok
                         </p>
                       </div>
@@ -1279,7 +1279,7 @@ export default function SalaDeComando() {
               </div>
 
               {/* Decisões IA pendentes */}
-              {decisions.filter(d => d.status === 'pending').length > 0 && (
+              {decisions.filter(d => d.status === 'pending').length > 0 ? (
                 <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4">
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-sm font-semibold text-amber-300">{decisions.filter(d => d.status === 'pending').length} Decisões IA Pendentes</p>
@@ -1292,7 +1292,7 @@ export default function SalaDeComando() {
                     </div>
                   ))}
                 </div>
-              )}
+              ) : null}
 
               {/* Tabela bid logs */}
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
