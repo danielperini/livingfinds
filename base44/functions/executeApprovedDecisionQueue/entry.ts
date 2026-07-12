@@ -12,10 +12,19 @@
  *   4. budget_change
  *   5. outros
  */
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 const MAX_BATCH = 30;        // máx por chamada
 const API_DELAY_MS = 400;    // pausa entre chamadas Amazon
+
+// Detecta qualquer variante de "entidade não encontrada"
+function isEntityNotFound(payload: any): boolean {
+  const s = JSON.stringify(payload || '').toLowerCase();
+  return s.includes('entitynotfounderror') || s.includes('entity_not_found') ||
+    s.includes('invalid keywordid') || s.includes('keywordid does not exist') ||
+    s.includes('"code":"404"') || s.includes('"httpstatuscode":404') ||
+    s.includes('not found') && s.includes('keyword');
+}
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -74,8 +83,34 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
     }
 
+    // Pré-validar keywords: cancelar decisões cujo keyword_id não existe mais no banco
+    const keywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 1000).catch(() => []);
+    const validKwIds = new Set(keywords.map((k: any) => k.keyword_id || k.id).filter(Boolean));
+
+    let preAutoCancel = 0;
+    for (const d of approved) {
+      if (d.keyword_id && !validKwIds.has(d.keyword_id)) {
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'cancelled',
+          error_message: 'CANCELADO: keyword_id não encontrado no banco — entidade removida da Amazon',
+        }).catch(() => {});
+        preAutoCancel++;
+      }
+    }
+
+    // Recarregar após cancelamentos preventivos
+    const stillApproved = preAutoCancel > 0
+      ? await base44.asServiceRole.entities.OptimizationDecision.filter(
+          { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
+        ).catch(() => [])
+      : approved;
+
+    if (stillApproved.length === 0) {
+      return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, duration_ms: Date.now() - t0 });
+    }
+
     // Priorizar e limitar
-    const toProcess = prioritize(approved).slice(0, MAX_BATCH);
+    const toProcess = prioritize(stillApproved).slice(0, MAX_BATCH);
 
     console.log(`[executeApprovedDecisionQueue] Executando ${toProcess.length} decisões para conta ${aid}`);
 
@@ -98,8 +133,7 @@ Deno.serve(async (request) => {
         const ok = data?.executed > 0 || data?.ok === true;
 
         // Detectar ENTITY_NOT_FOUND e cancelar automaticamente (keyword/campanha removida da Amazon)
-        const rawError = JSON.stringify(data);
-        if (!ok && rawError.includes('entityNotFoundError')) {
+        if (!ok && isEntityNotFound(data)) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
             status: 'cancelled',
             error_message: 'CANCELADO: entidade não encontrada na Amazon (ENTITY_NOT_FOUND) — decisão obsoleta',
@@ -133,11 +167,12 @@ Deno.serve(async (request) => {
       duration_ms: Date.now() - t0,
       records_processed: executed,
       error_message: failed > 0 ? `${failed} decisões falharam` : null,
-      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas`,
+      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas`,
     }).catch(() => {});
 
     return Response.json({
       ok: true,
+      pre_cancelled: preAutoCancel,
       total_approved: approved.length,
       processed: toProcess.length,
       executed,
