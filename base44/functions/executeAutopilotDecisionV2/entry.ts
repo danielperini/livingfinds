@@ -123,7 +123,7 @@ Deno.serve(async (request) => {
       });
 
       let response: any;
-      if (['reduce_bid', 'increase_bid', 'update_bid'].includes(decision.action)) {
+      if (['reduce_bid', 'increase_bid', 'update_bid', 'set_bid'].includes(decision.action)) {
         const isAdGroup = decision.entity_type === 'ad_group';
         if (isAdGroup) {
           // Ad groups: API v3
@@ -217,7 +217,7 @@ Deno.serve(async (request) => {
         updated_at: now,
       });
 
-      if (success && ['reduce_bid', 'increase_bid', 'update_bid'].includes(decision.action)) {
+      if (success && ['reduce_bid', 'increase_bid', 'update_bid', 'set_bid'].includes(decision.action)) {
         const keywordRows = await base44.asServiceRole.entities.Keyword.filter({
           amazon_account_id: decision.amazon_account_id,
           keyword_id: String(decision.entity_id || decision.keyword_id),
@@ -231,7 +231,7 @@ Deno.serve(async (request) => {
         }
       }
 
-      if (success && ['reduce_bid', 'increase_bid', 'update_bid', 'update_budget', 'reduce_budget', 'increase_budget'].includes(decision.action)) {
+      if (success && ['reduce_bid', 'increase_bid', 'update_bid', 'set_bid', 'update_budget', 'reduce_budget', 'increase_budget'].includes(decision.action)) {
         await base44.asServiceRole.entities.BidHistory.create({
           amazon_account_id: decision.amazon_account_id,
           entity_type: decision.entity_type,

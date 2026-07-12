@@ -438,26 +438,28 @@ Deno.serve(async (req) => {
       const psList = await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1);
       if (psList.length > 0) {
         const ps = psList[0];
+        // Usar fallback do sistema quando o valor configurado é 0 (não configurado)
+        const psNum = (v: any, fb: number) => { const n = Number(v); return n > 0 ? n : fb; };
         settings = {
           source: 'PerformanceSettings', source_id: ps.id,
-          target_acos: Number(ps.target_acos ?? FB.TARGET_ACOS),
-          max_acos: Number(ps.max_acos ?? FB.MAX_ACOS),
-          target_roas: Number(ps.target_roas ?? FB.TARGET_ROAS),
-          target_tacos: Number(ps.target_tacos ?? FB.TARGET_TACOS),
-          min_bid: Number(ps.min_bid ?? FB.MIN_BID),
-          max_bid: Number(ps.max_bid ?? FB.MAX_BID),
+          target_acos: psNum(ps.target_acos, FB.TARGET_ACOS),
+          max_acos: psNum(ps.max_acos, FB.MAX_ACOS),
+          target_roas: psNum(ps.target_roas, FB.TARGET_ROAS),
+          target_tacos: psNum(ps.target_tacos, FB.TARGET_TACOS),
+          min_bid: psNum(ps.min_bid, FB.MIN_BID),
+          max_bid: psNum(ps.max_bid, FB.MAX_BID),
           max_cpc: Number(ps.max_cpc ?? 0),
-          max_bid_increase_pct: Number(ps.max_bid_increase_pct ?? FB.MAX_INCREASE_PCT * 100) / 100,
-          max_bid_decrease_pct: Number(ps.max_bid_decrease_pct ?? FB.MAX_DECREASE_PCT * 100) / 100,
-          daily_budget_cap: Number(ps.daily_budget_limit ?? FB.DAILY_BUDGET_CAP),
-          min_campaign_budget: Number(ps.minimum_campaign_budget ?? 15),
+          max_bid_increase_pct: psNum(ps.max_bid_increase_pct, FB.MAX_INCREASE_PCT * 100) / 100,
+          max_bid_decrease_pct: psNum(ps.max_bid_decrease_pct, FB.MAX_DECREASE_PCT * 100) / 100,
+          daily_budget_cap: psNum(ps.daily_budget_limit, FB.DAILY_BUDGET_CAP),
+          min_campaign_budget: psNum(ps.minimum_campaign_budget, 15),
           pacing_enabled: Boolean(ps.pacing_enabled ?? true),
           safety_factor: FB.SAFETY_FACTOR,
           min_confidence: FB.MIN_CONFIDENCE,
           cooldown_hours: FB.COOLDOWN_HOURS,
           maturation_hours: FB.MATURATION_HOURS,
-          min_stock_days: Number(ps.min_bid ?? FB.MIN_STOCK_DAYS),
-          fallback_cvr: Number(ps.fallback_conversion_rate ?? 0.05),
+          min_stock_days: FB.MIN_STOCK_DAYS,
+          fallback_cvr: psNum(ps.fallback_conversion_rate, 0.05),
         };
       }
     } catch {}
@@ -690,9 +692,12 @@ Deno.serve(async (req) => {
     }
 
     // ── 7. Gasto real de ontem (guardrail de orçamento) ────────────────────
+    // Somar apenas registros com data de ontem (não acumulado histórico)
     const realSpendYesterday = metricsRaw
-      .filter((m: any) => m.date === yesterday)
+      .filter((m: any) => m.date === yesterday && (m.spend || 0) > 0)
       .reduce((s: number, m: any) => s + (m.spend || 0), 0);
+    // Fallback: se não há dados de ontem, não bloquear por orçamento
+    const budgetGuardrailActive = realSpendYesterday > 0 && realSpendYesterday > settings.daily_budget_cap;
 
     // ── 8. Contexto sazonal ────────────────────────────────────────────────
     const seasonal = getSeasonalContext(today);
@@ -1018,8 +1023,8 @@ Deno.serve(async (req) => {
     }
 
     // ── 10b. Guardrail global de orçamento ────────────────────────────────
-    if (realSpendYesterday > settings.daily_budget_cap) {
-      // Budget excedido: não criar novos aumentos
+    // Só bloqueia se temos dados reais de ontem E excedeu o cap
+    if (budgetGuardrailActive) {
       decisions.forEach((d: any) => {
         if (d.action === 'set_bid' && d.value_after > d.value_before) {
           d.approval_status = 'blocked_budget_cap';
@@ -1162,7 +1167,7 @@ Deno.serve(async (req) => {
         products_with_dynamic_target: acosByAsin.size,
         real_spend_yesterday: Math.round(realSpendYesterday * 100) / 100,
         budget_cap: settings.daily_budget_cap,
-        budget_guardrail_triggered: realSpendYesterday > settings.daily_budget_cap,
+        budget_guardrail_triggered: budgetGuardrailActive,
         products_updated: productUpdates.length,
         sample_dynamic_targets: Array.from(acosByAsin.entries()).slice(0, 5)
           .map(([asin, m]) => ({ asin, target_acos: m.target, break_even: m.break_even, confidence: m.confidence, safe_max_cpc: m.safe_max_cpc })),

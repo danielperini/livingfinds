@@ -1,38 +1,42 @@
 /**
- * executeApprovedDecisionQueue — Distribuidor rápido de decisões (< 5s, sem timeout)
+ * executeApprovedDecisionQueue — Executa decisões aprovadas IMEDIATAMENTE
  *
- * ANTES: Executava todas as decisões em série → 524 timeout (~2min+).
- * AGORA: Apenas distribui slots via updateMany (< 5s). Execução real fica
- *        no runDecisionSlot que roda a cada hora nas janelas 00h-07h + 13h BRT.
+ * MODO AGRESSIVO: não agenda slots noturnos, não espera janelas.
+ * Processa até MAX_BATCH decisões por chamada, com pausa de 400ms entre
+ * chamadas Amazon (rate limit seguro). Pausas urgentes têm prioridade absoluta.
  *
- * Slots disponíveis: 0,1,2,3,4,5,6 (madrugada) + 13 (tarde dayparting)
- * Distribuição: hash determinístico do ID → slot uniforme
- * Pausas urgentes (pause_campaign): executadas imediatamente (lote máx 20)
+ * Prioridade de execução:
+ *   1. pause_campaign / pause_keyword (imediato, crítico)
+ *   2. set_bid com redução (proteção de margem)
+ *   3. set_bid com aumento (escala)
+ *   4. budget_change
+ *   5. outros
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const NIGHT_SLOTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const DAY_SLOT = 13;
+const MAX_BATCH = 30;        // máx por chamada
+const API_DELAY_MS = 400;    // pausa entre chamadas Amazon
 
-function currentHourBRT(): number {
-  return ((new Date().getUTCHours() - 3) + 24) % 24;
-}
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-function assignSlot(id: string, action: string): number {
-  if (action === 'apply_dayparting') return DAY_SLOT;
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
-  return NIGHT_SLOTS[Math.abs(h) % NIGHT_SLOTS.length];
-}
-
-function nextOccurrenceUTC(slotBRT: number): string {
-  const now = new Date();
-  const curBRT = currentHourBRT();
-  let ahead = slotBRT - curBRT;
-  if (ahead <= 0) ahead += 24;
-  const t = new Date(now.getTime() + ahead * 3600000);
-  t.setUTCMinutes(5, 0, 0);
-  return t.toISOString();
+function prioritize(decisions: any[]): any[] {
+  const order: Record<string, number> = {
+    pause_campaign: 0, pause_keyword: 1,
+    set_bid: 2, reduce_bid: 2, increase_bid: 3, update_bid: 3,
+    budget_change: 4, update_budget: 4, reduce_budget: 4, increase_budget: 4,
+  };
+  return [...decisions].sort((a, b) => {
+    const pa = order[a.action] ?? 9;
+    const pb = order[b.action] ?? 9;
+    if (pa !== pb) return pa - pb;
+    // Redução de bid antes de aumento (proteção antes de escala)
+    if (a.action === b.action && a.action === 'set_bid') {
+      const aReduce = (a.value_after || 0) < (a.value_before || 0) ? 0 : 1;
+      const bReduce = (b.value_after || 0) < (b.value_before || 0) ? 0 : 1;
+      return aReduce - bReduce;
+    }
+    return 0;
+  });
 }
 
 Deno.serve(async (request) => {
@@ -45,94 +49,91 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    const accountFilter = body.amazon_account_id
-      ? { amazon_account_id: body.amazon_account_id, status: 'approved' }
-      : { status: 'approved' };
+    // Resolver conta
+    let account: any = null;
+    if (body.amazon_account_id) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1);
+      account = accs[0] || null;
+    }
+    if (!account) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, null, 1);
+      account = accs[0] || null;
+    }
+    if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
 
+    const aid = account.id;
+
+    // Buscar todas as decisões aprovadas pendentes
     const approved = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      accountFilter, 'created_at', 500
+      { amazon_account_id: aid, status: 'approved' },
+      'created_at',
+      MAX_BATCH + 50
     );
 
     if (approved.length === 0) {
-      return Response.json({ ok: true, distributed: 0, immediate_pauses: 0, duration_ms: Date.now() - t0 });
+      return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
     }
 
-    const pauses = approved.filter((d: any) =>
-      d.action === 'pause_campaign' || d.action === 'pause_keyword'
-    );
-    const others = approved.filter((d: any) =>
-      d.action !== 'pause_campaign' && d.action !== 'pause_keyword'
-    );
+    // Priorizar e limitar
+    const toProcess = prioritize(approved).slice(0, MAX_BATCH);
 
-    // ── Distribuir por slot via updateMany (uma chamada por slot = máx 8 calls) ──
-    const slotMap = new Map<number, string[]>();
-    for (const d of others) {
-      const slot = assignSlot(d.id, d.action);
-      if (!slotMap.has(slot)) slotMap.set(slot, []);
-      slotMap.get(slot)!.push(d.id);
-    }
+    console.log(`[executeApprovedDecisionQueue] Executando ${toProcess.length} decisões para conta ${aid}`);
 
-    const slotCounts: Record<number, number> = {};
-    const now = new Date().toISOString();
+    const results: any[] = [];
+    let executed = 0, failed = 0, skipped = 0;
 
-    // Uma chamada updateMany por slot (muito mais rápido que updates individuais)
-    await Promise.all([...slotMap.entries()].map(async ([slot, ids]) => {
-      slotCounts[slot] = ids.length;
-      const window = slot === DAY_SLOT
-        ? '13:00-14:00'
-        : `${String(slot).padStart(2,'0')}:00-${String(slot+1).padStart(2,'0')}:00`;
-      await base44.asServiceRole.entities.OptimizationDecision.updateMany(
-        { id: { $in: ids }, status: 'approved' },
-        {
-          $set: {
-            queue_status: 'scheduled',
-            queue_hour: slot,
-            queue_window: window,
-            queued_at: now,
-            scheduled_for: nextOccurrenceUTC(slot),
-            execution_channel: slot === DAY_SLOT ? 'amazon_api_dayparting' : 'amazon_api_queue',
-          }
-        }
-      );
-    }));
-
-    // ── Pausas urgentes: lote pequeno executado imediatamente ──────────────
-    let pauseResult: any = { skipped: pauses.length, reason: 'too_many' };
-    if (pauses.length > 0 && pauses.length <= 20) {
-      try {
-        const res = await base44.asServiceRole.functions.invoke('executePauseDecisionSafe', {
-          decision_ids: pauses.map((p: any) => p.id),
-          _service_role: true,
-        });
-        pauseResult = res?.data || res || pauseResult;
-      } catch (e: any) {
-        pauseResult = { error: e.message };
+    for (const decision of toProcess) {
+      if (Date.now() - t0 > 90000) {
+        console.warn('[executeApprovedDecisionQueue] Limite de tempo atingido, parando');
+        break;
       }
-    } else if (pauses.length > 20) {
-      // Distribuir pausas no slot 0
-      await base44.asServiceRole.entities.OptimizationDecision.updateMany(
-        { id: { $in: pauses.map((p: any) => p.id) }, status: 'approved' },
-        { $set: { queue_status: 'scheduled', queue_hour: 0, queue_window: '00:00-01:00', queued_at: now, scheduled_for: nextOccurrenceUTC(0) } }
-      );
-      pauseResult = { distributed_slot_0: pauses.length };
+
+      try {
+        const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecisionV2', {
+          decision_ids: [decision.id],
+          _service_role: true,
+          _window_execution: true, // execução imediata — ignora verificação de janela
+        });
+        const data = res?.data || res || {};
+        const ok = data?.executed > 0 || data?.ok === true;
+        results.push({ id: decision.id, action: decision.action, ok });
+        if (ok) executed++; else if (data?.scheduled) skipped++; else failed++;
+      } catch (e: any) {
+        results.push({ id: decision.id, action: decision.action, ok: false, error: e.message });
+        failed++;
+      }
+
+      // Pausa entre chamadas para respeitar rate limit Amazon
+      if (toProcess.indexOf(decision) < toProcess.length - 1) {
+        await sleep(API_DELAY_MS);
+      }
     }
 
-    // Reconciliação assíncrona (fire-and-forget)
-    if (body.amazon_account_id) {
-      base44.asServiceRole.functions.invoke('reconcilePendingBidDecisions', {
-        amazon_account_id: body.amazon_account_id, _service_role: true,
-      }).catch(() => {});
-    }
+    // Log de auditoria
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      amazon_account_id: aid,
+      operation: 'ads_decision_execution',
+      trigger_type: body._service_role ? 'automatic' : 'manual',
+      status: failed === 0 ? 'success' : executed > 0 ? 'warning' : 'error',
+      execution_date: new Date().toISOString().slice(0, 10),
+      started_at: new Date(t0).toISOString(),
+      completed_at: new Date().toISOString(),
+      duration_ms: Date.now() - t0,
+      records_processed: executed,
+      error_message: failed > 0 ? `${failed} decisões falharam` : null,
+      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas`,
+    }).catch(() => {});
 
     return Response.json({
       ok: true,
       total_approved: approved.length,
-      distributed: others.length,
-      immediate_pauses: pauses.length <= 20 ? pauses.length : 0,
-      pause_result: pauseResult,
-      slot_distribution: slotCounts,
-      policy: 'slots 00h-12h BRT + 13h BRT; pausas urgentes imediatas ≤ 20',
+      processed: toProcess.length,
+      executed,
+      failed,
+      skipped,
+      remaining: Math.max(0, approved.length - MAX_BATCH),
       duration_ms: Date.now() - t0,
+      results: results.slice(0, 30),
     });
 
   } catch (error: any) {

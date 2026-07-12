@@ -44,35 +44,37 @@ Deno.serve(async (req) => {
     // ── 2. Verificar AutopilotConfig ──────────────────────────────────────
     const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
     const cfg = configs[0] || {};
-    if (cfg.enabled === false || cfg.dayparting_enabled === false) {
+    // Dayparting obsessivo: só para se explicitamente desabilitado
+    if (cfg.enabled === false && cfg.dayparting_enabled === false) {
       return Response.json({ ok: true, skipped: true, reason: 'Dayparting desabilitado na configuração.' });
     }
 
-    const autonomyLevel = cfg.autonomy_level ?? 3;
+    const autonomyLevel = 3; // sempre nível máximo — execução automática
     const MIN_BID = cfg.min_bid || BID_FLOOR;
 
     // ── 3. Buscar campanhas ativas com tempo suficiente ───────────────────
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
       { amazon_account_id: aid, status: 'enabled' }, '-spend', 200
     );
+    // Obsessivo: campanhas com ≥14 dias (antes eram 30)
     const eligible = allCampaigns.filter(c => {
       const startDate = c.start_date || c.created_at;
-      if (!startDate) return false;
-      return (Date.now() - new Date(startDate).getTime()) / 86400000 >= 30;
+      if (!startDate) return true; // sem data de início = incluir
+      return (Date.now() - new Date(startDate).getTime()) / 86400000 >= 14;
     });
 
     if (eligible.length === 0) {
       return Response.json({ ok: true, skipped: true, reason: `Nenhuma campanha elegível (≥30 dias). Total ativas: ${allCampaigns.length}.` });
     }
 
-    // ── 4. Cooldown: não reaplicar na mesma semana ────────────────────────
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+    // Cooldown obsessivo: só evita reprocessar campanhas nas últimas 23h (reaplica diariamente)
+    const oneDayAgo = new Date(Date.now() - 23 * 3600000).toISOString();
     const recentRules = await base44.asServiceRole.entities.DaypartingRule.filter(
       { amazon_account_id: aid }, '-created_at', 200
     );
     const recentCampaignIds = new Set(
       recentRules
-        .filter(r => r.created_at && r.created_at > sevenDaysAgo && r.status === 'active')
+        .filter(r => r.created_at && r.created_at > oneDayAgo && r.status === 'active')
         .map(r => r.campaign_id)
     );
 
@@ -127,7 +129,7 @@ Deno.serve(async (req) => {
     const errors = [];
 
     // ── 8. Analisar e aplicar por campanha ───────────────────────────────
-    const campaignsToProcess = eligible.slice(0, 50);
+    const campaignsToProcess = eligible.slice(0, 100); // obsessivo: processa até 100 campanhas
     for (const campaign of campaignsToProcess) {
       const cid = campaign.campaign_id;
 
@@ -143,7 +145,8 @@ Deno.serve(async (req) => {
         if (hourlyMetrics.length === 0) { stats.skipped_no_data++; continue; }
 
         const daysWithData = new Set(hourlyMetrics.filter(h => h.impressions > 0).map(h => h.date)).size;
-        if (daysWithData < 14) { stats.skipped_no_data++; continue; }
+        // Obsessivo: mínimo de 7 dias com dados (antes eram 14)
+        if (daysWithData < 7) { stats.skipped_no_data++; continue; }
 
         // ── Métricas globais ────────────────────────────────────────────
         const totalClicks = hourlyMetrics.reduce((s, h) => s + (h.clicks || 0), 0);
@@ -151,7 +154,8 @@ Deno.serve(async (req) => {
         const totalSpend  = hourlyMetrics.reduce((s, h) => s + (h.spend || 0), 0);
         const totalOrders = hourlyMetrics.reduce((s, h) => s + (h.orders || 0), 0);
 
-        if (totalClicks < 50 || totalOrders < 3) { stats.skipped_no_data++; continue; }
+        // Obsessivo: limiar reduzido para incluir mais campanhas
+        if (totalClicks < 20 || totalOrders < 1) { stats.skipped_no_data++; continue; }
 
         const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
         const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 100;
@@ -283,7 +287,8 @@ Deno.serve(async (req) => {
         const estSavings     = deficitWindows.reduce((s, h) => s + (h.spend / Math.max(daysWithData, 1)) * 0.6, 0);
         const estRoasGain    = peakWindows.length * 2.5; // estimativa conservadora
 
-        const autoApplyNow = confidenceScore >= 90 && autonomyLevel >= 2;
+        // Obsessivo: aplica automaticamente com confiança >= 60 (antes era 90)
+        const autoApplyNow = confidenceScore >= 60 && autonomyLevel >= 2;
 
         const decisionPayload = {
           amazon_account_id: aid,
