@@ -1,5 +1,5 @@
 /**
- * runDeterministicDecisionEngine — Motor Estratégico Unificado v4
+ * runDeterministicDecisionEngine — Motor Estratégico Unificado v5
  *
  * FILOSOFIA:
  *   Não apenas reduzir ACoS — maximizar lucro incremental sustentável.
@@ -68,12 +68,44 @@ const PRIORITY = {
   maintenance: 9, scale: 10, expansion: 11, create_campaign: 12,
 };
 
+// ── Calcular funil econômico completo ─────────────────────────────────────────
+// Inclui CPA, eCPM, CTR, CVR e maximum_profitable_cpa
+function calcFunnel(params: {
+  impressions: number; clicks: number; orders: number;
+  spend: number; sales: number;
+  contribution_margin_amount: number; // margem bruta por unidade
+  minimum_profit_per_order?: number;  // padrão: 0 (break-even)
+}): {
+  ctr: number; cvr: number; cpc: number; actual_cpa: number; expected_cpa: number;
+  ecpm: number; impressions_per_order: number;
+  maximum_profitable_cpa: number;
+  profit_after_ads: number; profit_after_ads_percent: number;
+  is_economically_sustainable: boolean;
+  ad_spend_per_order: number;
+} {
+  const { impressions, clicks, orders, spend, sales, contribution_margin_amount, minimum_profit_per_order = 0 } = params;
+  const ctr = impressions > 0 ? clicks / impressions : 0;
+  const cvr = clicks > 0 ? orders / clicks : 0;
+  const cpc = clicks > 0 ? spend / clicks : 0;
+  const actual_cpa = orders > 0 ? spend / orders : 0;
+  const ecpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
+  const impressions_per_order = orders > 0 ? impressions / orders : 0;
+  // CPA esperado = CPC / CVR (projeção com cliques atuais)
+  const expected_cpa = cvr > 0 ? cpc / cvr : (cpc > 0 ? cpc * 20 : 0);
+  // CPA máximo lucrável = margem - lucro mínimo desejado por pedido
+  const maximum_profitable_cpa = Math.max(0, contribution_margin_amount - minimum_profit_per_order);
+  // Lucro pós-ads
+  const ad_spend_per_order = orders > 0 ? spend / orders : spend > 0 ? spend : 0;
+  const profit_after_ads = contribution_margin_amount - (orders > 0 ? ad_spend_per_order : 0);
+  const profit_after_ads_percent = sales > 0 ? (profit_after_ads / (sales / Math.max(1, orders))) * 100 : 0;
+  const is_economically_sustainable = maximum_profitable_cpa > 0
+    && (orders > 0 ? actual_cpa <= maximum_profitable_cpa : expected_cpa <= maximum_profitable_cpa);
+  return { ctr, cvr, cpc, actual_cpa, expected_cpa, ecpm, impressions_per_order, maximum_profitable_cpa, profit_after_ads, profit_after_ads_percent, is_economically_sustainable, ad_spend_per_order };
+}
+
 // ── Calcular Lucro Bruto Pós-ADS por janela ──────────────────────────────────
-// profit_after_ads = profit_before_ads - ad_spend_per_order
-// profit_before_ads = contribution_margin_amount (preço - custo total - taxas Amazon)
-// ad_spend_per_order = spend / orders  (custo real de ads por conversão na janela)
 function calcProfitAfterAds(params: {
-  contribution_margin_amount: number; // margem por unidade sem ads
+  contribution_margin_amount: number;
   spend: number;
   orders: number;
 }): { profit_after_ads: number; ad_spend_per_order: number; profit_after_ads_pct: number; selling_price_ref: number } {
@@ -81,6 +113,23 @@ function calcProfitAfterAds(params: {
   const ad_spend_per_order = params.spend / params.orders;
   const profit_after_ads = params.contribution_margin_amount - ad_spend_per_order;
   return { profit_after_ads, ad_spend_per_order, profit_after_ads_pct: 0, selling_price_ref: 0 };
+}
+
+// ── Classificar status econômico do produto ───────────────────────────────────
+function classifyEconomicStatus(econ: any | null): {
+  status: 'complete' | 'partial' | 'missing_cost' | 'missing_price' | 'negative_margin' | 'unknown';
+  economic_data_incomplete: boolean;
+  block_expansion: boolean;
+  block_reason: string;
+} {
+  if (!econ) return { status: 'missing_cost', economic_data_incomplete: true, block_expansion: true, block_reason: 'economic_data_incomplete: custo não cadastrado' };
+  if (!econ.unit_cost || Number(econ.unit_cost) <= 0) return { status: 'missing_cost', economic_data_incomplete: true, block_expansion: true, block_reason: 'economic_data_incomplete: unit_cost ausente' };
+  if (!econ.current_price || Number(econ.current_price) <= 0) return { status: 'missing_price', economic_data_incomplete: true, block_expansion: true, block_reason: 'economic_data_incomplete: preço ausente' };
+  const margin = Number(econ.contribution_margin_amount || 0);
+  if (margin < 0) return { status: 'negative_margin', economic_data_incomplete: false, block_expansion: true, block_reason: `Margem negativa pré-ADS: R$${margin.toFixed(2)} — revisar custo ou preço` };
+  if (margin === 0) return { status: 'partial', economic_data_incomplete: false, block_expansion: true, block_reason: 'Margem zero pré-ADS — produto no break-even sem ads' };
+  if (!econ.amazon_fee_amount && !econ.amazon_fee_percent) return { status: 'partial', economic_data_incomplete: false, block_expansion: false, block_reason: '' };
+  return { status: 'complete', economic_data_incomplete: false, block_expansion: false, block_reason: '' };
 }
 
 // ── Classificar modo de proteção de lucro ────────────────────────────────────
@@ -999,6 +1048,45 @@ Deno.serve(async (req) => {
         }
       }
 
+      // ── Guardrail: dados econômicos incompletos / margem negativa ────────
+      const econForProduct = resolvedAsin
+        ? (econByNsku.get(normSku(product?.sku || '')) || econByNsku.get(`ASIN:${resolvedAsin}`) || null)
+        : null;
+      const econStatus = classifyEconomicStatus(econForProduct);
+
+      if (econStatus.economic_data_incomplete) {
+        // Sem custo: hold conservador — bid mínimo controlado, sem expansão
+        if (currentBid > settings.min_bid * 1.5) {
+          const iKey = `econ_incomplete_hold|${aid}|${entityId}|${today}`;
+          if (!usedIdemKeys.has(iKey)) {
+            const conservativeBid = Math.min(currentBid, settings.min_bid * 1.3);
+            if (conservativeBid < currentBid - 0.01) {
+              decisions.push(buildDecision(aid, correlationId, {
+                decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+                campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+                keyword_text: kw.keyword_text, action: 'set_bid',
+                value_before: currentBid, value_after: conservativeBid,
+                rationale: `economic_data_incomplete: custo não cadastrado para este produto. Bid limitado a modo conservador R$${conservativeBid.toFixed(2)} até que custo seja informado. Nenhuma expansão permitida.`,
+                rule_key: 'econ_data_incomplete',
+                risk: 'low', priority: PRIORITY.margin,
+                search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+                idempotency_key: iKey,
+              }));
+              entityChangedThisCycle.set(entityId, 'econ_incomplete');
+              stats.skipped_margin++;
+            }
+          }
+        }
+        skipped.push({ entity_id: entityId, reason: 'economic_data_incomplete', asin: resolvedAsin, block_reason: econStatus.block_reason });
+        continue;
+      }
+
+      if (econStatus.block_expansion) {
+        stats.skipped_margin++;
+        skipped.push({ entity_id: entityId, reason: 'econ_block_expansion', asin: resolvedAsin, block_reason: econStatus.block_reason });
+        continue;
+      }
+
       // ── Guardrail: margem ─────────────────────────────────────────────
       if (asinMeta && asinMeta.confidence !== 'fallback') {
         const marginPositive = asinMeta.break_even > 0;
@@ -1116,8 +1204,41 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // ── Calcular funil econômico completo para esta keyword ───────────
+      const funnel = calcFunnel({
+        impressions: kw_impressions, clicks: kw_clicks, orders: kw_orders,
+        spend: kw_spend, sales: kw_sales,
+        contribution_margin_amount: asinMeta?.contribution_margin_amount || 0,
+      });
+
+      // ── Regra: CPA real acima do máximo lucrável → reduzir ────────────
+      // Tem precedência sobre ACoS quando CPA real > maximum_profitable_cpa com dados suficientes
+      if (funnel.maximum_profitable_cpa > 0 && kw_orders >= 2 && funnel.actual_cpa > funnel.maximum_profitable_cpa && kw_spend >= MRC.MIN_SPEND) {
+        const reductionPct = funnel.actual_cpa > funnel.maximum_profitable_cpa * 1.5
+          ? settings.max_bid_decrease_pct
+          : settings.max_bid_decrease_pct * 0.5;
+        const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
+        const iKey = `cpa_above_max|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `CPA atual R$${funnel.actual_cpa.toFixed(2)} está ACIMA do CPA máximo lucrável R$${funnel.maximum_profitable_cpa.toFixed(2)} (margem: R$${(asinMeta?.contribution_margin_amount || 0).toFixed(2)}). eCPM: R$${funnel.ecpm.toFixed(2)}. CVR: ${(funnel.cvr * 100).toFixed(2)}%. O bid será reduzido ${Math.round(reductionPct * 100)}% para proteger margem e aproximar o gasto do limite econômico.`,
+            rule_key: 'cpa_above_profitable_limit',
+            risk: 'high', priority: PRIORITY.margin,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey,
+            economic_audit: { actual_cpa: funnel.actual_cpa, maximum_profitable_cpa: funnel.maximum_profitable_cpa, ecpm: funnel.ecpm, cvr: funnel.cvr, contribution_margin: asinMeta?.contribution_margin_amount, break_even_acos: asinMeta?.break_even, target_acos: asinMeta?.target },
+          }));
+          entityChangedThisCycle.set(entityId, 'cpa_reduce');
+          stats.bid_reduce++;
+        }
+        continue;
+      }
+
       // ── Regra: ACoS acima do break-even → reduzir ────────────────────
-      // Só aplica se effectiveMaxAcos foi configurado (não null)
       if (kw_acos !== null && effectiveMaxAcos !== null && kw_acos > effectiveMaxAcos && kw_spend >= MRC.MIN_SPEND) {
         const reductionPct = kw_acos > effectiveMaxAcos * 1.5
           ? settings.max_bid_decrease_pct
@@ -1131,12 +1252,13 @@ Deno.serve(async (req) => {
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `ACoS real ${kw_acos.toFixed(1)}% ACIMA do máximo econômico ${effectiveMaxAcos.toFixed(1)}% (alvo: ${effectiveTargetAcos ?? 'N/A'}%, break-even: ${asinMeta?.break_even?.toFixed(1) || 'N/A'}%). Gap: ${acosGapLabel}. CVR: ${(kw_cvr * 100).toFixed(2)}%. ${intent_label}. Bid reduzido ${Math.round(reductionPct * 100)}% para proteger margem.`,
+            rationale: `ACoS real ${kw_acos.toFixed(1)}% ACIMA do break-even econômico ${effectiveMaxAcos.toFixed(1)}% (alvo: ${effectiveTargetAcos ?? 'N/A'}%). CPA atual: R$${funnel.actual_cpa.toFixed(2)} vs máximo lucrável: R$${funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa.toFixed(2) : 'N/A'}. eCPM: R$${funnel.ecpm.toFixed(2)}. Gap: ${acosGapLabel}. CVR: ${(kw_cvr * 100).toFixed(2)}%. ${intent_label}. Bid reduzido ${Math.round(reductionPct * 100)}% para proteger margem.`,
             rule_key: 'acos_above_max',
             risk: kw_acos > effectiveMaxAcos * 2 ? 'high' : 'medium',
             priority: PRIORITY.margin,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, trend_3_vs_14: wm?.trend_3_vs_14,
+            economic_audit: { actual_cpa: funnel.actual_cpa, maximum_profitable_cpa: funnel.maximum_profitable_cpa, ecpm: funnel.ecpm, acos: kw_acos, break_even_acos: asinMeta?.break_even },
           }));
           entityChangedThisCycle.set(entityId, 'acos_reduce');
           stats.bid_reduce++;
@@ -1188,13 +1310,24 @@ Deno.serve(async (req) => {
         if (!cpcOk) { skipped.push({ entity_id: entityId, reason: 'cpc_above_safe_max', cpc: kw_cpc, safe_max: effectiveSafeMaxCpc }); continue; }
         if (!stockOk) { stats.skipped_stock++; continue; }
 
+        // Bloquear escala se CPA esperado já supera o máximo lucrável
+        if (funnel.maximum_profitable_cpa > 0 && funnel.expected_cpa > funnel.maximum_profitable_cpa * 1.1) {
+          skipped.push({ entity_id: entityId, reason: 'expected_cpa_blocks_scale', asin: resolvedAsin, expected_cpa: funnel.expected_cpa, max_cpa: funnel.maximum_profitable_cpa });
+          continue;
+        }
+
         // Intenção influencia o tamanho do aumento
         const intentBonus = kwIntent?.purchase_intent === 'high' ? 1.0
           : kwIntent?.purchase_intent === 'medium' ? 0.75 : 0.50;
         const baseIncrease = settings.max_bid_increase_pct * intentBonus;
         // Tendência positiva permite aumento maior
         const trendBonus = wm && wm.trend_3_vs_14 > 0.10 ? 1.15 : 1.0;
-        const finalIncrease = Math.min(settings.max_bid_increase_pct, baseIncrease * trendBonus);
+        // Produto altamente lucrativo + boa conversão + estoque: até 15%
+        const isHighlyProfitable = asinMeta && asinMeta.profit_protection?.mode === 'normal'
+          && asinMeta.profit_after_ads_14d > asinMeta.contribution_margin_amount * 0.5
+          && kw_orders >= 2 && stockCovDays >= 21;
+        const maxIncrease = isHighlyProfitable ? 0.15 : settings.max_bid_increase_pct;
+        const finalIncrease = Math.min(maxIncrease, baseIncrease * trendBonus);
 
         const newBid = clamp(currentBid * (1 + finalIncrease), settings.min_bid, settings.max_bid);
         const iKey = `acos_scale|${aid}|${entityId}|${today}`;
@@ -1205,11 +1338,12 @@ Deno.serve(async (req) => {
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `ACoS real ${kw_acos.toFixed(1)}% ≪ meta ${effectiveTargetAcos}% (gap: ${acosGapLabel}). ${kw_orders}p vendidos. CVR ${(kw_cvr * 100).toFixed(2)}%. ${intentLabel}. Vendas confirmadas — escala segura +${Math.round(finalIncrease * 100)}%.`,
+            rationale: `ACoS real ${kw_acos.toFixed(1)}% ≪ meta ${effectiveTargetAcos}% (gap: ${acosGapLabel}). ${kw_orders}p vendidos. CPA: R$${funnel.actual_cpa.toFixed(2)} vs máx. lucrável: R$${funnel.maximum_profitable_cpa.toFixed(2)}. CVR ${(kw_cvr * 100).toFixed(2)}%. eCPM: R$${funnel.ecpm.toFixed(2)}. ${intentLabel}. Lucro pós-ADS: R$${(asinMeta?.profit_after_ads_14d || 0).toFixed(2)}/ped — escala +${Math.round(finalIncrease * 100)}%.`,
             rule_key: 'acos_scale',
             risk: 'low', priority: PRIORITY.scale,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, trend_3_vs_14: wm?.trend_3_vs_14,
+            economic_audit: { actual_cpa: funnel.actual_cpa, maximum_profitable_cpa: funnel.maximum_profitable_cpa, ecpm: funnel.ecpm, cvr: funnel.cvr, profit_after_ads: asinMeta?.profit_after_ads_14d, break_even_acos: asinMeta?.break_even, target_acos: asinMeta?.target, contribution_margin: asinMeta?.contribution_margin_amount },
           }));
           entityChangedThisCycle.set(entityId, 'acos_scale');
           stats.bid_increase++;
@@ -1284,7 +1418,7 @@ Deno.serve(async (req) => {
           autopilot_authorized: true,
           requires_approval: false,
           idempotency_key: d.idempotency_key,
-          source_function: 'runDeterministicDecisionEngine_v4',
+          source_function: 'runDeterministicDecisionEngine_v5',
           created_at: now,
           // Campos estratégicos
           search_intent_type: d.search_intent?.intent_type,
@@ -1459,7 +1593,39 @@ Deno.serve(async (req) => {
           .map(c => ({ campaign_name: c.campaign_name, real_acos: c.real_acos_14d, target_acos: c.target_acos, gap_pct: c.gap_pct, sales_14d: c.sales_14d })),
       },
 
-      note: 'Motor estratégico v4: ACoS real vs ACoS alvo + intenção de busca + metas econômicas dinâmicas + proteção de alta performance.',
+      funnel_summary: {
+        description: 'Funil econômico agregado — impressões → cliques → pedidos → margem → lucro pós-ADS',
+        ecpm_interpretation: 'eCPM alto + CTR alto + CVR alto + lucro positivo = manter/escalar. eCPM alto + CTR baixo = exposição cara, revisar keyword. eCPM baixo + sem conversão = não escalar.',
+        cpa_interpretation: 'Campanha sustentável quando actual_cpa <= maximum_profitable_cpa. expected_cpa = CPC / CVR (projeção sem pedidos suficientes).',
+        decisions_with_cpa_block: skipped.filter((s: any) => s.reason === 'cpa_above_profitable_limit' || s.reason === 'expected_cpa_blocks_scale').length,
+        decisions_blocked_econ_incomplete: skipped.filter((s: any) => s.reason === 'economic_data_incomplete').length,
+        decisions_blocked_margin: skipped.filter((s: any) => s.reason === 'econ_block_expansion').length,
+      },
+
+      economic_status_by_product: Array.from(acosByAsin.entries()).map(([asin, m]) => {
+        const product = productMap.get(asin);
+        const econ = econByNsku.get(normSku(product?.sku || '')) || econByNsku.get(`ASIN:${asin}`) || null;
+        const status = classifyEconomicStatus(econ);
+        return {
+          asin,
+          sku: product?.sku,
+          economic_status: status.status,
+          economic_data_incomplete: status.economic_data_incomplete,
+          block_expansion: status.block_expansion,
+          block_reason: status.block_reason,
+          contribution_margin_amount: m.contribution_margin_amount,
+          break_even_acos: m.break_even,
+          target_acos: m.target,
+          safe_max_cpc: m.safe_max_cpc,
+          profit_after_ads_14d: Math.round(m.profit_after_ads_14d * 100) / 100,
+          profit_protection_mode: m.profit_protection?.mode,
+          unit_cost: econ?.unit_cost,
+          current_price: econ?.current_price,
+          amazon_fee_amount: econ?.amazon_fee_amount,
+        };
+      }),
+
+      note: 'Motor estratégico v5: custo econômico obrigatório · CPA máximo lucrável · eCPM diagnóstico · funil completo · economic_data_incomplete bloqueia escala · margem negativa bloqueia campanha.',
     });
 
   } catch (error: any) {

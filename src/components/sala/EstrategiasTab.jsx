@@ -151,6 +151,32 @@ function DecisionRow({ dec, expanded, onToggle }) {
             ))}
           </div>
 
+          {/* Dados econômicos da decisão */}
+          {dec.economic_audit && (
+            <div className="bg-violet-500/5 border border-violet-500/15 rounded-lg p-3">
+              <p className="text-[10px] font-semibold text-violet-400 mb-2 flex items-center gap-1.5">
+                <DollarSign className="w-3 h-3" /> Auditoria Econômica
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+                {[
+                  { label: 'CPA Atual', value: dec.economic_audit.actual_cpa > 0 ? `R$${dec.economic_audit.actual_cpa.toFixed(2)}` : '—', color: dec.economic_audit.actual_cpa > dec.economic_audit.maximum_profitable_cpa ? 'text-red-400' : 'text-emerald-400' },
+                  { label: 'CPA Máx. Lucrável', value: dec.economic_audit.maximum_profitable_cpa > 0 ? `R$${dec.economic_audit.maximum_profitable_cpa.toFixed(2)}` : '—', color: 'text-violet-400' },
+                  { label: 'eCPM', value: dec.economic_audit.ecpm > 0 ? `R$${dec.economic_audit.ecpm.toFixed(2)}` : '—', color: 'text-slate-300' },
+                  { label: 'CVR', value: dec.economic_audit.cvr > 0 ? `${(dec.economic_audit.cvr * 100).toFixed(2)}%` : '—', color: 'text-slate-300' },
+                  { label: 'Margem Bruta', value: dec.economic_audit.contribution_margin > 0 ? `R$${dec.economic_audit.contribution_margin.toFixed(2)}` : '—', color: 'text-emerald-400' },
+                  { label: 'Break-even ACoS', value: dec.economic_audit.break_even_acos > 0 ? `${dec.economic_audit.break_even_acos.toFixed(1)}%` : '—', color: 'text-slate-400' },
+                  { label: 'Target ACoS', value: dec.economic_audit.target_acos > 0 ? `${dec.economic_audit.target_acos.toFixed(1)}%` : '—', color: 'text-cyan' },
+                  { label: 'Lucro Pós-ADS', value: dec.economic_audit.profit_after_ads != null ? `R$${Number(dec.economic_audit.profit_after_ads).toFixed(2)}/ped` : '—', color: dec.economic_audit.profit_after_ads < 0 ? 'text-red-400' : 'text-emerald-400' },
+                ].map(m => (
+                  <div key={m.label} className="bg-surface-2 rounded p-1.5 text-center">
+                    <p className="text-slate-500 mb-0.5">{m.label}</p>
+                    <p className={`font-bold ${m.color}`}>{m.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Meta protegida e fonte */}
           <div className="flex flex-wrap gap-2 text-[10px]">
             {dec.settings_source && (
@@ -200,24 +226,27 @@ export default function EstrategiasTab({ account }) {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterRisk, setFilterRisk] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('strategic'); // 'strategic' | 'decisions' | 'goals'
+  const [activeView, setActiveView] = useState('strategic'); // 'strategic' | 'decisions' | 'economy' | 'goals'
+  const [economics, setEconomics] = useState([]);
 
   const loadData = useCallback(async () => {
     if (!account) return;
     setLoading(true);
     try {
-      const [psList, decList, prodList, campList, metList] = await Promise.all([
+      const [psList, decList, prodList, campList, metList, econList] = await Promise.all([
         base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 200).catch(() => []),
         base44.entities.Product.filter({ amazon_account_id: account.id }, null, 100).catch(() => []),
         base44.entities.Campaign.filter({ amazon_account_id: account.id }, null, 100).catch(() => []),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id }, '-date', 100).catch(() => []),
+        base44.entities.ProductEconomics?.filter ? base44.entities.ProductEconomics.filter({ amazon_account_id: account.id }, null, 200).catch(() => []) : Promise.resolve([]),
       ]);
       setPerfSettings(psList[0] || null);
       setDecisions(decList);
       setProducts(prodList);
       setCampaigns(campList);
       setMetrics(metList);
+      setEconomics(econList || []);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, [account]);
@@ -385,11 +414,12 @@ export default function EstrategiasTab({ account }) {
       )}
 
       {/* Sub-navegação */}
-      <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1">
+      <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1 flex-wrap">
         {[
-          { id: 'strategic', label: 'Visão Estratégica', icon: BarChart2 },
+          { id: 'strategic', label: 'Estratégia', icon: BarChart2 },
+          { id: 'economy', label: 'Economia', icon: DollarSign },
           { id: 'decisions', label: `Decisões (${decisions.length})`, icon: Zap },
-          { id: 'goals', label: 'Metas & Histórico', icon: Target },
+          { id: 'goals', label: 'Metas', icon: Target },
         ].map(v => (
           <button key={v.id} onClick={() => setActiveView(v.id)}
             className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeView === v.id ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' : 'text-slate-400 hover:text-slate-200'}`}>
@@ -588,6 +618,127 @@ export default function EstrategiasTab({ account }) {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── ECONOMIA POR PRODUTO ─────────────────────────────────────────────── */}
+      {activeView === 'economy' && (
+        <div className="space-y-4">
+          {/* KPIs econômicos */}
+          {(() => {
+            const normSku = s => (s || '').trim().toUpperCase().replace(/\s+/g, '-').replace(/-{2,}/g, '-');
+            const econBySku = new Map(economics.map(e => [normSku(e.sku), e]));
+            const econByAsin = new Map(economics.map(e => [e.asin, e]));
+            const getEcon = p => econBySku.get(normSku(p.sku)) || econByAsin.get(p.asin) || null;
+            const withCost = products.filter(p => { const e = getEcon(p); return e?.unit_cost > 0; });
+            const withMargin = products.filter(p => { const e = getEcon(p); return e?.contribution_margin_amount > 0; });
+            const negMargin = products.filter(p => { const e = getEcon(p); return e && e.contribution_margin_amount < 0; });
+            const missingCost = products.filter(p => !getEcon(p) || !getEcon(p)?.unit_cost);
+
+            return (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <KpiCard label="Com Custo Cadastrado" value={withCost.length} sub={`de ${products.length} produtos`} tone={withCost.length === products.length ? 'good' : 'warn'} icon={DollarSign} />
+                  <KpiCard label="Margem Positiva" value={withMargin.length} sub="pré-ADS" tone="good" icon={TrendingUp} />
+                  <KpiCard label="Margem Negativa" value={negMargin.length} sub="expansão bloqueada" tone={negMargin.length > 0 ? 'bad' : 'good'} icon={TrendingDown} />
+                  <KpiCard label="Sem Custo" value={missingCost.length} sub="hold conservador" tone={missingCost.length > 0 ? 'warn' : 'good'} icon={AlertTriangle} />
+                </div>
+
+                {/* Tabela de economia por produto */}
+                <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-surface-2">
+                    <p className="text-xs font-semibold text-slate-300">Economia por Produto — Funil & CPA</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Custo · Margem · Break-even · CPA máximo lucrável · Safe Max CPC · Lucro pós-ADS</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/40">
+                          {['ASIN / SKU', 'Custo Unit.', 'Preço', 'Margem', 'Break-even', 'Target ACoS', 'Safe Max CPC', 'CPA Máx. Lucrável', 'Lucro Pós-ADS 14d', 'Status Econ.'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {products.slice(0, 50).map(p => {
+                          const e = getEcon(p);
+                          const hasCost = e?.unit_cost > 0;
+                          const hasPrice = e?.current_price > 0;
+                          const margin = e?.contribution_margin_amount;
+                          const marginPct = e?.contribution_margin_percent;
+                          const breakEven = e?.break_even_acos;
+                          const targetAcos = e?.target_acos;
+                          const safeCpc = e?.safe_max_cpc;
+                          // CPA máximo lucrável = margem bruta (zero lucro mínimo exigido)
+                          const maxCpa = margin > 0 ? margin : null;
+                          const profitAds14d = e?.profit_after_ads_14d;
+                          const protMode = e?.profit_protection_mode || 'normal';
+                          const statusColor = !hasCost ? 'text-amber-400' : margin < 0 ? 'text-red-400' : margin === 0 ? 'text-slate-400' : 'text-emerald-400';
+                          const statusLabel = !hasCost ? '⚠ Sem custo' : !hasPrice ? '⚠ Sem preço' : margin < 0 ? '🔴 Margem neg.' : margin === 0 ? '⚖ Break-even' : '✅ Lucrativo';
+                          const modeColors = { normal: 'text-emerald-400', vigilant: 'text-amber-400', defensive: 'text-orange-400', paused: 'text-red-400' };
+                          const modeIcons = { normal: '✅', vigilant: '👁', defensive: '⚠️', paused: '🚨' };
+                          return (
+                            <tr key={p.id} className="border-b border-surface-2/40 hover:bg-surface-2/20">
+                              <td className="px-3 py-2">
+                                <p className="font-mono text-cyan">{p.asin}</p>
+                                <p className="text-slate-500">{p.sku}</p>
+                              </td>
+                              <td className="px-3 py-2">{hasCost ? `R$${Number(e.unit_cost).toFixed(2)}` : <span className="text-amber-400">—</span>}</td>
+                              <td className="px-3 py-2">{hasPrice ? `R$${Number(e.current_price).toFixed(2)}` : <span className="text-amber-400">—</span>}</td>
+                              <td className="px-3 py-2">
+                                {margin != null ? (
+                                  <div>
+                                    <span className={`font-semibold ${margin > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{`R$${Number(margin).toFixed(2)}`}</span>
+                                    {marginPct != null && <p className="text-slate-500">{Number(marginPct).toFixed(1)}%</p>}
+                                  </div>
+                                ) : '—'}
+                              </td>
+                              <td className="px-3 py-2">{breakEven > 0 ? `${Number(breakEven).toFixed(1)}%` : '—'}</td>
+                              <td className="px-3 py-2 text-cyan">{targetAcos > 0 ? `${Number(targetAcos).toFixed(1)}%` : '—'}</td>
+                              <td className="px-3 py-2">{safeCpc > 0 ? `R$${Number(safeCpc).toFixed(2)}` : '—'}</td>
+                              <td className="px-3 py-2">{maxCpa != null && maxCpa > 0 ? <span className="text-violet-400 font-semibold">{`R$${Number(maxCpa).toFixed(2)}`}</span> : '—'}</td>
+                              <td className="px-3 py-2">
+                                {profitAds14d != null ? (
+                                  <div>
+                                    <span className={`font-semibold ${modeColors[protMode] || 'text-slate-400'}`}>{`R$${Number(profitAds14d).toFixed(2)}/ped`}</span>
+                                    <p className={`${modeColors[protMode] || 'text-slate-400'}`}>{modeIcons[protMode]} {protMode}</p>
+                                  </div>
+                                ) : '—'}
+                              </td>
+                              <td className="px-3 py-2"><span className={`font-semibold ${statusColor}`}>{statusLabel}</span></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Interpretação de funil */}
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-3">
+                  <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-cyan" /> Interpretação do Funil Econômico
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[10px]">
+                    {[
+                      { signal: 'eCPM alto + CTR alto + CVR alto + lucro positivo', action: '✅ Manter ou escalar com cautela', color: 'border-emerald-500/20 bg-emerald-500/5' },
+                      { signal: 'eCPM alto + CTR baixo', action: '⚠️ Exposição cara — revisar keyword/listing, não aumentar bid', color: 'border-amber-500/20 bg-amber-500/5' },
+                      { signal: 'eCPM baixo + sem conversão', action: '🚫 Não escalar — refinar termos, avaliar negativa', color: 'border-red-500/20 bg-red-500/5' },
+                      { signal: 'CTR alto + CVR baixo', action: '🔍 Produto não converte — revisar preço/listing, não aumentar bid', color: 'border-amber-500/20 bg-amber-500/5' },
+                      { signal: 'CTR alto + CVR alto + lucro positivo', action: '🚀 Candidato a escala — CPA ≤ máximo lucrável obrigatório', color: 'border-emerald-500/20 bg-emerald-500/5' },
+                      { signal: 'CPA real > CPA máximo lucrável', action: '🔴 Bid reduzido imediatamente — margem em risco', color: 'border-red-500/20 bg-red-500/5' },
+                    ].map((item, i) => (
+                      <div key={i} className={`rounded-lg p-3 border ${item.color}`}>
+                        <p className="text-slate-400 mb-1">{item.signal}</p>
+                        <p className="font-semibold text-slate-200">{item.action}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-600">eCPM = gasto / impressões × 1000. Nunca usar eCPM isoladamente para pausar ou escalar — sempre cruzar com CVR e CPA máximo lucrável.</p>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
