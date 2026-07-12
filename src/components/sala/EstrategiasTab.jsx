@@ -137,7 +137,7 @@ function DecisionRow({ dec, expanded, onToggle }) {
               </span>
             )}
             <span className={`font-semibold ${statusColor}`}>{dec.status}</span>
-            {dec.confidence > 0 && <span className="text-slate-600">Confiança: {dec.confidence}%</span>}
+            {dec.confidence > 0 ? <span className="text-slate-600">Confiança: {dec.confidence}%</span> : null}
           </div>
         </div>
 
