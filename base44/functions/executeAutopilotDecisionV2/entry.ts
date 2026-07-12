@@ -143,7 +143,7 @@ Deno.serve(async (request) => {
             response = { ...response, ok: hasSuccess && !hasError, success: v3payload.success, errors: v3payload.error || [] };
           }
         }
-      } else if (['update_budget', 'reduce_budget', 'increase_budget'].includes(decision.action)) {
+      } else if (['update_budget', 'reduce_budget', 'increase_budget', 'set_budget'].includes(decision.action)) {
         // Budgets: API v3
         response = await ads(base44, decision.amazon_account_id, 'updateCampaignBudget', 'PUT', '/sp/campaigns', {
           campaigns: [{
