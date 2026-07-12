@@ -37,9 +37,9 @@ export default function AutoWindowStatus() {
         <span className="text-slate-400">
           {lastSyncStr ? `Última atualização: ${lastSyncStr}` : 'Aguardando sync'}
         </span>
-        {successRate !== null ? (
-          <span className={`font-semibold ${rateColor}`}>· {successRate}% OK</span>
-        ) : null}
+        <span className={`font-semibold ${rateColor}`}>
+          {successRate !== null ? `· ${successRate}% OK` : ''}
+        </span>
       </div>
     </div>
   );
