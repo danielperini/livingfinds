@@ -1,0 +1,233 @@
+{
+  "name": "KeywordBidOptimizationCycle",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0,
+      "description": "Meta de ACoS efetiva usada neste ciclo (hierarquia: keyword > produto > campanha > conta > PerformanceSettings)"
+    },
+    "target_acos_source": {
+      "type": "string",
+      "description": "Origem da meta: keyword | product | campaign | account | PerformanceSettings | system_default"
+    },
+    "initial_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "current_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_gap": {
+      "type": "number",
+      "default": 0,
+      "description": "current_acos - target_acos. Positivo = acima da meta."
+    },
+    "acos_status": {
+      "type": "string",
+      "enum": [
+        "below_target",
+        "at_target",
+        "slightly_above_target",
+        "high",
+        "critical"
+      ],
+      "default": "high"
+    },
+    "initial_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_suggested_bid": {
+      "type": "number",
+      "description": "Sugest\u00e3o da Amazon Ads API, se dispon\u00edvel"
+    },
+    "amazon_suggested_bid_lower": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_upper": {
+      "type": "number"
+    },
+    "amazon_suggestion_used": {
+      "type": "boolean",
+      "default": false
+    },
+    "amazon_suggestion_limited": {
+      "type": "boolean",
+      "default": false,
+      "description": "true = sugest\u00e3o Amazon usada mas limitada pelo guardrail (>15%)"
+    },
+    "first_reduction_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Percentual da primeira redu\u00e7\u00e3o (ex: 10 para -10%)"
+    },
+    "second_reduction_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Percentual da segunda redu\u00e7\u00e3o (ex: 5 para -5%)"
+    },
+    "total_reduction_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Redu\u00e7\u00e3o acumulada total em %"
+    },
+    "cycle_number": {
+      "type": "number",
+      "default": 1
+    },
+    "cycle_status": {
+      "type": "string",
+      "enum": [
+        "detected",
+        "suggestion_checked",
+        "scheduled",
+        "executed",
+        "waiting_48h_evaluation",
+        "reevaluating",
+        "reduced_again",
+        "stabilized",
+        "visibility_drop",
+        "zero_impressions",
+        "no_sales_after_reduction",
+        "insufficient_data",
+        "cancelled",
+        "failed",
+        "pending_confirmation",
+        "requires_approval"
+      ],
+      "default": "detected"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_due_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "executed_at + 48h \u2014 quando reavaliar"
+    },
+    "stabilized_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "stop_reason": {
+      "type": "string"
+    },
+    "pre_change_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "post_change_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "pre_change_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "post_change_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "pre_change_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "post_change_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "pre_change_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "post_change_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "impression_change_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Varia\u00e7\u00e3o % de impress\u00f5es ap\u00f3s redu\u00e7\u00e3o"
+    },
+    "acos_change_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Varia\u00e7\u00e3o % do ACoS ap\u00f3s redu\u00e7\u00e3o"
+    },
+    "visibility_drop_detected": {
+      "type": "boolean",
+      "default": false
+    },
+    "amazon_response_status": {
+      "type": "number"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
+    "amazon_response_bid": {
+      "type": "number",
+      "description": "Bid confirmado pela Amazon ap\u00f3s execu\u00e7\u00e3o"
+    },
+    "optimization_decision_id": {
+      "type": "string",
+      "description": "ID da OptimizationDecision gerada"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "requires_human_approval": {
+      "type": "boolean",
+      "default": false
+    },
+    "approval_reason": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_id",
+    "cycle_status"
+  ]
+}

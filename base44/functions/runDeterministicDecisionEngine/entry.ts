@@ -1417,6 +1417,15 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 10e. Motor de redução de ACoS por keyword (fire-and-forget) ──────
+    // Invocado como etapa do motor determinístico — não bloqueia resposta.
+    // runAcosBidReductionEngine é o único responsável pela regra de ACoS gradual.
+    base44.asServiceRole.functions.invoke('runAcosBidReductionEngine', {
+      amazon_account_id: aid,
+      _service_role: true,
+      source_function: 'runDeterministicDecisionEngine',
+    }).catch(() => {});
+
     // ── 10b. Budget increase para campanhas limitadas (Cenário C) ─────────
     const campaignBudgetDecisions: any[] = [];
     if (!budgetGuardrailActive) {
