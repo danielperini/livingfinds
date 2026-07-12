@@ -159,15 +159,17 @@ Deno.serve(async (request) => {
             state: decision.action === 'pause_campaign' ? 'PAUSED' : 'ENABLED',
           }],
         });
-      } else if (decision.action === 'pause_keyword') {
-        // Pausar keyword: API v3
-        response = await ads(base44, decision.amazon_account_id, 'pauseKeyword', 'PUT', '/sp/keywords', {
-          keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), state: 'PAUSED' }],
+      } else if (decision.action === 'pause_keyword' || decision.action === 'enable_keyword') {
+        // Pausar/ativar keyword: API v3
+        const kwState = decision.action === 'pause_keyword' ? 'PAUSED' : 'ENABLED';
+        response = await ads(base44, decision.amazon_account_id, decision.action, 'PUT', '/sp/keywords', {
+          keywords: [{ keywordId: String(decision.entity_id || decision.keyword_id), state: kwState }],
         });
-        const v3payload = response?.payload?.keywords;
-        if (v3payload) {
-          const hasSuccess = v3payload.success?.length > 0;
-          response = { ...response, ok: hasSuccess, success: v3payload.success, errors: v3payload.error || [] };
+        // Normalizar resposta v3 — pode vir em payload.keywords ou keywords
+        const v3kw = response?.payload?.keywords || response?.keywords;
+        if (v3kw) {
+          const hasSuccess = (v3kw.success?.length || 0) > 0;
+          response = { ...response, ok: hasSuccess, success: v3kw.success, errors: v3kw.error || [] };
         }
       } else if (['negative_exact', 'negative_keyword'].includes(decision.action)) {
         response = await ads(base44, decision.amazon_account_id, 'createNegativeKeyword', 'POST', '/v2/sp/negativeKeywords', [{
