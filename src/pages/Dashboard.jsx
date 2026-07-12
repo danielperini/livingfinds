@@ -734,25 +734,25 @@ export default function Dashboard() {
           {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400/80 inline-block" />Cliques: {kpis.clicks.toLocaleString('pt-BR')}</span>
-          {totalChanges > 0 ? <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span> : null}
+          {totalChanges > 0 ? (<span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>) : null}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
           Todo o histórico disponível · Vendas Ads = atribuição Amazon
-          {hasSalesDailyData && <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></>}
+          {hasSalesDailyData ? <> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></> : null}
           {' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA
-          {activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday() && (
+          {(activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday()) ? (
             <> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></>
-          )}
+          ) : null}
         </p>
         {hasSalesDailyData && (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
             <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
             <span className="text-orange-400 font-bold">{fmtBRL(realSalesKpis.revenue)}</span>
             <span className="text-slate-500">{realSalesKpis.units} unid.</span>
-            {realSalesKpis.tacos !== null && (
+            {realSalesKpis.tacos !== null ? (
               <span className="text-slate-400">TACoS: <span className={`font-semibold ${realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'text-red-400' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'text-amber-400' : 'text-emerald-400'}`}>{realSalesKpis.tacos.toFixed(1)}%</span></span>
-            )}
+            ) : null}
             {monthProjection && (
               <>
                 <span className="text-slate-600">·</span>
@@ -991,7 +991,7 @@ export default function Dashboard() {
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[10px] text-cyan">R${(c.spend || 0).toFixed(2)}</span>
                           <span className="text-[10px] text-emerald-400">R${(c.sales || 0).toFixed(2)}</span>
-                          {acos > 0 && <span className={`text-[10px] font-semibold ${acosColor}`}>{acos.toFixed(1)}%</span>}
+                          {acos > 0 ? <span className={`text-[10px] font-semibold ${acosColor}`}>{acos.toFixed(1)}%</span> : null}
                         </div>
                       </div>
                     </div>
@@ -1105,7 +1105,7 @@ export default function Dashboard() {
           <KpiCard label="Média diária" value={fmtBRL(avgDailySpend)} sub={`Período: ${periodLabel}`} />
           <KpiCard label="Campanhas ativas" value={active_count} sub={`${paused_count} pausadas`} />
         </div>
-        {officialDailyLimit > 0 && spendYesterday > 0 && (
+        {(officialDailyLimit > 0 && spendYesterday > 0) ? (
           <div>
             <div className="flex justify-between text-[10px] text-slate-500 mb-1">
               <span>Pacing D-1: {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
@@ -1118,7 +1118,7 @@ export default function Dashboard() {
                 style={{ width: `${Math.min(100, spendYesterday / officialDailyLimit * 100)}%` }} />
             </div>
           </div>
-        )}
+        ) : null}
         {budgetCfg?.next_weekly_recalculation && (
           <p className="text-[10px] text-slate-600 mt-2">
             Próximo recálculo: {new Date(budgetCfg.next_weekly_recalculation).toLocaleDateString('pt-BR')}
@@ -1135,12 +1135,12 @@ export default function Dashboard() {
           </div>
           <div className="space-y-0">
             <GoalRow label="ACoS" real={kpis.acos} target={targetAcos} unit="%" lowerIsBetter />
-            {maxAcos > 0 && <GoalRow label="ACoS máximo" real={kpis.acos} target={maxAcos} unit="%" lowerIsBetter />}
+            {maxAcos > 0 ? <GoalRow label="ACoS máximo" real={kpis.acos} target={maxAcos} unit="%" lowerIsBetter /> : null}
             <GoalRow label="ROAS" real={kpis.roas} target={targetRoas} unit="x" lowerIsBetter={false} realLabel={kpis.roas > 0 ? `${kpis.roas.toFixed(2)}x` : '—'} />
             <GoalRow label="TACoS real" real={realSalesKpis.tacos || 0} target={targetTacos} unit="%" lowerIsBetter realLabel={realSalesKpis.tacos !== null ? `${realSalesKpis.tacos.toFixed(1)}%` : '—'} />
-            {targetCpc > 0 && <GoalRow label="CPC alvo" real={kpis.cpc} target={targetCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} />}
-            {maxCpc > 0 && <GoalRow label="CPC máximo" real={kpis.cpc} target={maxCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} />}
-            {officialDailyLimit > 0 && <GoalRow label="Budget D-1" real={spendYesterday} target={officialDailyLimit} unit="" lowerIsBetter realLabel={fmtBRL(spendYesterday)} />}
+            {targetCpc > 0 ? <GoalRow label="CPC alvo" real={kpis.cpc} target={targetCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} /> : null}
+            {maxCpc > 0 ? <GoalRow label="CPC máximo" real={kpis.cpc} target={maxCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} /> : null}
+            {officialDailyLimit > 0 ? <GoalRow label="Budget D-1" real={spendYesterday} target={officialDailyLimit} unit="" lowerIsBetter realLabel={fmtBRL(spendYesterday)} /> : null}
           </div>
           {!targetAcos && !targetRoas && !targetTacos && (
             <p className="text-xs text-slate-500">
