@@ -1271,26 +1271,53 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Gasto sem conversão — exige: 0 vendas + min 20 cliques + gasto >= CPA máximo lucrativo + dados válidos
-      // pause_most_specific_entity_first = true: pausa a keyword antes de pausar a campanha
+      // Gasto sem conversão
+      // REGRA: tempo sozinho NUNCA pausa. Pausa exige conjuntamente:
+      //   1. Tempo mínimo de exposição (no_sales_first_review_hours = 72h desde criação da campanha)
+      //   2. Amostra estatística válida (≥20 cliques + ≥200 impressões)
+      //   3. Gasto mínimo = maximum_profitable_cpa (ou fallback)
+      //   4. Zero vendas
+      //   5. Dados frescos e econômicos válidos (economic_confidence ≠ none + dataFreshness ≠ stale)
+      //   6. Sem venda recente nas últimas 72h (recent_sale_protection)
       const noConvMinSpend = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
       const noConvDataValid = econStatus.economic_confidence !== 'none' && dataFreshness !== 'stale';
-      if (!recentSaleProtected && kw_spend >= noConvMinSpend && kw_orders === 0
-          && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE
-          && noConvDataValid) {
+      // Tempo mínimo desde criação da campanha (72h = no_sales_first_review_hours)
+      const campCreatedAt = campForKw?.created_at || campForKw?.created_date || null;
+      const campAgeHours = campCreatedAt ? (Date.now() - new Date(campCreatedAt).getTime()) / 3600000 : 999;
+      const hasMinExposureTime = campAgeHours >= FB.NO_SALES_FIRST_REVIEW_HOURS;
+      // Determinar fase de ação baseada na idade da campanha
+      // 72h: primeira revisão — redução de bid (não pausa)
+      // 5 dias: segunda revisão — redução maior
+      // 7 dias: campanha pode ser pausada
+      const campAgeDays = campAgeHours / 24;
+      const canPauseCampaign = campAgeDays >= FB.NO_SALES_CAMPAIGN_PAUSE_DAYS;
+      const isSecondReview = campAgeDays >= FB.NO_SALES_SECOND_REVIEW_DAYS;
+      const isNewProduct = product?.is_new_asin === true || campAgeDays < FB.NEW_PRODUCT_MAX_LEARNING_DAYS;
+
+      if (!recentSaleProtected && hasMinExposureTime && kw_spend >= noConvMinSpend
+          && kw_orders === 0 && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE
+          && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && noConvDataValid) {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
-          const shouldPause = (kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational') && kw_spend >= MRC.MIN_SPEND * 2;
-          const newBid = shouldPause ? settings.min_bid : clamp(currentBid * (1 - settings.max_bid_decrease_pct * 0.7), settings.min_bid, settings.max_bid);
+          // Produto novo em learning: nunca pausar, apenas reduzir conservadoramente
+          // pause_most_specific_entity_first=true: pausa keyword antes da campanha
+          const isLowIntent = kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational';
+          // Pausa: exige 7+ dias + baixa intenção + gasto dobrado + não é produto novo em learning
+          const shouldPause = canPauseCampaign && isLowIntent && kw_spend >= noConvMinSpend * 2 && !isNewProduct;
+          const reductionPct = isSecondReview ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
+          const newBid = shouldPause
+            ? settings.min_bid
+            : clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
+          const phase = canPauseCampaign ? '3ª revisão (7d+)' : isSecondReview ? '2ª revisão (5d+)' : '1ª revisão (72h+)';
           decisions.push(buildDecision(aid, correlationId, {
             decision_type: shouldPause ? 'reduce_waste' : 'bid_change',
             entity_type: 'keyword', entity_id: entityId,
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: shouldPause ? 'pause_keyword' : 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `${kw_clicks} cliques, R$${kw_spend.toFixed(2)} gastos, ZERO conversões. ${kwIntent ? `Intenção: ${kwIntent.intent_type}` : ''}. ${shouldPause ? 'Pausado.' : 'Bid reduzido.'}`,
+            rationale: `[${phase}] ${kw_clicks} cliques, ${kw_impressions} impr, R$${kw_spend.toFixed(2)} gastos (≥ CPA máx R$${noConvMinSpend.toFixed(2)}), ZERO conversões, campanha com ${Math.round(campAgeDays)}d. Intenção: ${kwIntent?.intent_type || 'desconhecida'}. ${shouldPause ? 'PAUSA — todos os critérios atendidos.' : `Bid reduzido ${Math.round(reductionPct * 100)}%.`}`,
             rule_key: shouldPause ? 'no_conversion_pause' : 'no_conversion_reduce',
-            risk: 'medium', priority: PRIORITY.waste_reduction,
+            risk: shouldPause ? 'medium' : 'low', priority: PRIORITY.waste_reduction,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, opportunity_state: 'no_opportunity',
           }));
