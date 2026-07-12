@@ -50,19 +50,61 @@ export default function TermBankPageV2() {
         base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id }).catch(() => {});
       }, 3000);
 
-      const [t, s, p] = await Promise.all([
-      base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500),
-      base44.entities.KeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_at', 500),
-      base44.entities.Product.filter({ amazon_account_id: acc.id }, '-updated_at', 200)]
-      );
+      const [t, s, p, kws, sts] = await Promise.all([
+        base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500),
+        base44.entities.KeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_at', 500),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-updated_at', 200),
+        base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 500).catch(() => []),
+        base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-spend', 500).catch(() => []),
+      ]);
+
+      // Índice de métricas reais por texto do termo (Keyword + SearchTerm)
+      const realMetrics = new Map();
+      const addMetric = (text, m) => {
+        const key = (text || '').toLowerCase().trim();
+        if (!key) return;
+        if (!realMetrics.has(key)) realMetrics.set(key, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0, bids: [] });
+        const e = realMetrics.get(key);
+        e.spend += m.spend || 0;
+        e.sales += m.sales || 0;
+        e.clicks += m.clicks || 0;
+        e.orders += m.orders || 0;
+        e.impressions += m.impressions || 0;
+        if (m.bid > 0) e.bids.push(m.bid);
+      };
+      for (const kw of kws) addMetric(kw.keyword_text, kw);
+      for (const st of sts) addMetric(st.search_term || st.query, st);
 
       // Mostrar todos os produtos ativos (independente de estoque) para que sugestões funcionem
       const activeProducts = p.filter((prod) => prod.status !== 'archived' && prod.status !== 'inactive');
       const activeAsins = new Set(activeProducts.map((prod) => prod.asin).filter(Boolean));
 
-      const validTerms = t.
-      filter((term) => !isTermIncomplete(term.term) && term.asin && activeAsins.has(term.asin)).
-      sort((a, b) => toConf100(b.confidence) - toConf100(a.confidence));
+      const validTerms = t
+        .filter((term) => !isTermIncomplete(term.term) && term.asin && activeAsins.has(term.asin))
+        .map((term) => {
+          // Enriquecer com métricas reais do Keyword/SearchTerm
+          const key = (term.term || '').toLowerCase().trim();
+          const real = realMetrics.get(key);
+          if (!real) return term;
+          const spend = real.spend;
+          const sales = real.sales;
+          const acos = sales > 0 ? spend / sales * 100 : 0;
+          const roas = spend > 0 ? sales / spend : 0;
+          const avgBid = real.bids.length ? real.bids.reduce((a, b) => a + b, 0) / real.bids.length : (term.suggested_bid || 0);
+          return {
+            ...term,
+            spend: spend > 0 ? spend : term.spend,
+            sales: sales > 0 ? sales : term.sales,
+            orders: real.orders > 0 ? real.orders : term.orders,
+            clicks: real.clicks > 0 ? real.clicks : term.clicks,
+            impressions: real.impressions > 0 ? real.impressions : term.impressions,
+            acos: spend > 0 ? acos : term.acos,
+            roas: spend > 0 ? roas : term.roas,
+            suggested_bid: avgBid > 0 ? avgBid : term.suggested_bid,
+            _has_real_data: spend > 0 || real.clicks > 0,
+          };
+        })
+        .sort((a, b) => toConf100(b.confidence) - toConf100(a.confidence));
       setTerms(validTerms);
 
       setSuggestions(s.filter((x) =>
@@ -226,7 +268,7 @@ export default function TermBankPageV2() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Termo', 'Conf.', 'Produto / ASIN', 'Status', 'Pedidos', 'Vendas', 'Gasto', 'ACoS', 'ROAS', ''].map((h) =>
+                  {['Termo', 'Conf.', 'Produto / ASIN', 'Status', 'Cliques', 'Impr.', 'Pedidos', 'Vendas', 'Gasto', 'ACoS', 'ROAS', ''].map((h) =>
                 <th key={h} className="px-4 py-3 text-left text-xs uppercase text-slate-500">{h}</th>
                 )}
                 </tr>
@@ -235,17 +277,24 @@ export default function TermBankPageV2() {
                 {filteredTerms.map((t) => {
                 const conf = toConf100(t.confidence);
                 const confColor = conf >= 90 ? 'text-emerald-400' : conf >= 75 ? 'text-amber-400' : 'text-red-400';
+                const acosNum = Number(t.acos || 0);
+                const acosColor = acosNum === 0 ? 'text-slate-500' : acosNum <= 15 ? 'text-emerald-400' : acosNum <= 25 ? 'text-amber-400' : 'text-red-400';
                 return (
-                  <tr key={t.id} className="border-b border-surface-2/40">
-                      <td className="px-4 py-3 font-semibold text-white">{t.term}</td>
+                  <tr key={t.id} className="border-b border-surface-2/40 hover:bg-surface-2/20 transition-colors">
+                      <td className="px-4 py-3">
+                        <span className="font-semibold text-white">{t.term}</span>
+                        {t._has_real_data && <span className="ml-1.5 text-[9px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1 py-0.5 rounded">real</span>}
+                      </td>
                       <td className="px-4 py-3"><span className={`text-xs font-bold ${confColor}`}>{conf > 0 ? `${conf}%` : '—'}</span></td>
                       <td className="px-4 py-3"><p className="max-w-[200px] truncate text-xs text-slate-200">{t.product_name || 'Produto não identificado'}</p><p className="font-mono text-[10px] text-cyan">{t.asin || 'Sem ASIN'}</p></td>
                       <td className="px-4 py-3 text-xs"><span className={t.status === 'active' ? 'text-emerald-400' : 'text-slate-500'}>{t.status || 'inactive'}</span></td>
+                      <td className="px-4 py-3 text-xs text-slate-300">{(t.clicks || 0).toLocaleString('pt-BR')}</td>
+                      <td className="px-4 py-3 text-xs text-slate-300">{(t.impressions || 0).toLocaleString('pt-BR')}</td>
                       <td className="px-4 py-3 text-cyan">{t.orders || 0}</td>
-                      <td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.sales)}</td>
-                      <td className="px-4 py-3 text-xs text-slate-300">R${fmt(t.spend)}</td>
-                      <td className="px-4 py-3 text-xs text-slate-300">{t.acos ? `${fmt(t.acos, 1)}%` : '0%'}</td>
-                      <td className="px-4 py-3 text-xs text-slate-300">{t.roas ? `${fmt(t.roas)}x` : '0,00x'}</td>
+                      <td className="px-4 py-3 text-xs text-emerald-400">{Number(t.sales) > 0 ? `R$${fmt(t.sales)}` : '—'}</td>
+                      <td className="px-4 py-3 text-xs text-slate-300">{Number(t.spend) > 0 ? `R$${fmt(t.spend)}` : '—'}</td>
+                      <td className="px-4 py-3 text-xs"><span className={acosColor}>{acosNum > 0 ? `${fmt(t.acos, 1)}%` : '—'}</span></td>
+                      <td className="px-4 py-3 text-xs text-slate-300">{Number(t.roas) > 0 ? `${fmt(t.roas)}x` : '—'}</td>
                       <td className="px-4 py-3">
                         {scheduledIds[t.id] === 'executed' ? (
                           <span className="flex items-center gap-1 text-[10px] text-emerald-400"><CheckCircle className="w-3 h-3" />Criada</span>
