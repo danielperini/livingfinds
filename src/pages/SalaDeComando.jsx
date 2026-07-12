@@ -246,7 +246,7 @@ export default function SalaDeComando() {
         base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100),
-        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 10),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 100),
       ]);
 
       setAlerts(alertsData.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4)));
@@ -649,23 +649,30 @@ export default function SalaDeComando() {
                 ))}
               </div>
 
-              {/* Rotinas status */}
+              {/* Rotinas status — exibe apenas rotinas principais, filtrando chamadas de API individuais */}
               <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
                 <h3 className="text-sm font-semibold text-slate-300 mb-3">Status das Rotinas</h3>
                 <div className="space-y-2">
-                  {syncRuns.slice(0, 5).map((r, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-surface-2/50 last:border-0">
-                      <div className="flex items-center gap-2">
-                        {r.status === 'success' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> : r.status === 'running' ? <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin" /> : <XCircle className="w-3.5 h-3.5 text-red-400" />}
-                        <span className="text-slate-300">{r.operation || 'sync'}</span>
+                  {(() => {
+                    const SKIP_PREFIXES = ['amazon_api:', 'amazon_ads:offline_auth', 'amazon_ads:token_manager'];
+                    const filtered = syncRuns.filter(r => {
+                      const op = r.operation || '';
+                      return !SKIP_PREFIXES.some(p => op.startsWith(p));
+                    }).slice(0, 8);
+                    if (filtered.length === 0) return <p className="text-xs text-slate-500">Sem logs de rotinas</p>;
+                    return filtered.map((r, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-surface-2/50 last:border-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          {r.status === 'success' || r.status === 'completed' ? <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" /> : r.status === 'running' || r.status === 'processing' ? <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin flex-shrink-0" /> : r.status === 'warning' ? <AlertCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" /> : <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />}
+                          <span className="text-slate-300 truncate">{r.operation || 'sync'}</span>
+                        </div>
+                        <div className="flex items-center gap-3 text-slate-500 flex-shrink-0 ml-2">
+                          {r.records_processed != null && r.records_processed > 0 && <span>{r.records_processed} reg.</span>}
+                          <span>{new Date(r.started_at || r.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 text-slate-500">
-                        {r.records_upserted != null && <span>{r.records_upserted} registros</span>}
-                        <span>{new Date(r.started_at || r.created_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {syncRuns.length === 0 && <p className="text-xs text-slate-500">Sem logs de sync</p>}
+                    ));
+                  })()}
                 </div>
               </div>
 
