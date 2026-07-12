@@ -13,6 +13,7 @@ import CampaignHistoryTab from '@/components/ads/CampaignHistoryTab';
 import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
 import KickoffModal from '@/components/products/KickoffModal';
 import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
+import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 
 
 const NOW_MS = Date.now();
@@ -526,15 +527,8 @@ export default function AdsManagement() {
       {/* ── Painel de detalhes ────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col min-w-0">
         {!selectedCampaign ?
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-8">
-            <div className="w-16 h-16 rounded-2xl bg-cyan/10 border border-cyan/20 flex items-center justify-center">
-              <Megaphone className="w-8 h-8 text-cyan/50" />
-            </div>
-            <div>
-              <p className="text-base font-semibold text-slate-300">Seleciona uma campanha</p>
-              <p className="text-sm text-slate-500 mt-1">Automáticas (AUTO) ou Manuais — todas geridas pela IA.</p>
-            </div>
-          </div> :
+        <CampaignHealthPanel campaigns={campaigns} products={products} /> :
+
 
         <>
             {/* Campaign header */}
