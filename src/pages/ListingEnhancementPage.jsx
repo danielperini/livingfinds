@@ -235,19 +235,7 @@ export default function ListingEnhancementPage() {
             <p className="text-xs text-slate-400">Sincronize, analise, sugira e publique melhorias nas suas ofertas Amazon via SP-API</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={load} disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-surface-1 border-surface-2 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
-            Recarregar do Banco
-          </button>
-          <button onClick={pollAllProcessing} disabled={!!syncing}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-surface-1 border-surface-2 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
-            {syncing === '__poll__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-            Verificar Status
-          </button>
 
-        </div>
       </div>
 
       {msg && (
