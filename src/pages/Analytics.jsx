@@ -327,7 +327,7 @@ export default function Analytics() {
       {activeMainTab === 'semanal' && (
         account
           ? <WeeklyReportView account={account} />
-          : !loading && <div className="flex items-center justify-center py-16"><p className="text-sm text-slate-500">Conta Amazon não encontrada.</p></div>
+          : !loading ? <div className="flex items-center justify-center py-16"><p className="text-sm text-slate-500">Conta Amazon não encontrada.</p></div> : null
       )}
 
       {/* Tab Métricas */}

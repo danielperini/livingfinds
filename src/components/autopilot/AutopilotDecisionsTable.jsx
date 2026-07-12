@@ -102,7 +102,7 @@ function DecisionRow({ d, onUpdate }) {
           </span>
         </td>
         <td className="px-3 py-3">
-          {d.value_before != null && (
+          {d.value_before != null ? (
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-mono text-slate-400">{currencySymbol}{Number(d.value_before).toFixed(2)}</span>
               <span className={`text-xs font-bold flex items-center gap-0.5 ${isIncrease ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -111,23 +111,23 @@ function DecisionRow({ d, onUpdate }) {
               </span>
               <span className="text-xs font-mono text-white">{currencySymbol}{Number(d.value_after || 0).toFixed(2)}</span>
             </div>
-          )}
-          {d.value_before == null && d.action && (
+          ) : null}
+          {d.value_before == null && d.action ? (
             <span className="text-xs text-slate-500">{ACTION_LABELS[d.action] || d.action}</span>
-          )}
+          ) : null}
         </td>
         <td className="px-3 py-3">
           <div className="flex items-center gap-2 mb-1">
-            {d.confidence != null && (
+            {d.confidence != null ? (
               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${d.confidence >= 75 ? 'bg-emerald-400/15 text-emerald-400' : d.confidence >= 60 ? 'bg-amber-400/15 text-amber-400' : 'bg-red-400/15 text-red-400'}`}>
                 {d.confidence}% conf.
               </span>
-            )}
-            {d.evaluation_due_at && (
+            ) : null}
+            {d.evaluation_due_at ? (
               <span className="text-[10px] text-slate-500">
                 Rev. {new Date(d.evaluation_due_at).toLocaleDateString('pt-BR')}
               </span>
-            )}
+            ) : null}
           </div>
           <button onClick={() => setExpanded(v => !v)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">
             {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -230,13 +230,13 @@ export default function AutopilotDecisionsTable({ decisions, onRefresh }) {
             </button>
           ))}
         </div>
-        {counts.pending > 0 && (
+        {counts.pending > 0 ? (
           <button onClick={approveAll} disabled={bulkLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg disabled:opacity-50 transition-colors">
             {bulkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
             Aprovar baixo risco
           </button>
-        )}
+        ) : null}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
