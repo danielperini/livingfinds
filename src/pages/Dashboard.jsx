@@ -695,15 +695,15 @@ export default function Dashboard() {
       </div>
 
 
-      {error && (
+      {error ? (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
           <p className="text-xs text-red-400">{error}</p>
         </div>
-      )}
+      ) : null}
 
       {/* Erro de sync automático — só aparece quando falha */}
-      {syncError && (
+      {syncError ? (
         <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border bg-red-500/5 border-red-500/20 text-xs">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
@@ -714,7 +714,7 @@ export default function Dashboard() {
             Tentar novamente
           </button>
         </div>
-      )}
+      ) : null}
 
       {/* Decisões pendentes — compacto */}
       {decisions.length > 0 ? (
@@ -731,7 +731,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-3 text-[10px] flex-wrap">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
-          {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
+          {hasSalesDailyData ? <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span> : null}
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400/80 inline-block" />Cliques: {kpis.clicks.toLocaleString('pt-BR')}</span>
           {totalChanges > 0 ? (<span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>) : null}
@@ -745,7 +745,7 @@ export default function Dashboard() {
             <> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></>
           ) : null}
         </p>
-        {hasSalesDailyData && (
+        {hasSalesDailyData ? (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
             <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
             <span className="text-orange-400 font-bold">{fmtBRL(realSalesKpis.revenue)}</span>
@@ -753,15 +753,15 @@ export default function Dashboard() {
             {realSalesKpis.tacos !== null ? (
               <span className="text-slate-400">TACoS: <span className={`font-semibold ${realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'text-red-400' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'text-amber-400' : 'text-emerald-400'}`}>{realSalesKpis.tacos.toFixed(1)}%</span></span>
             ) : null}
-            {monthProjection && (
+            {monthProjection ? (
               <>
                 <span className="text-slate-600">·</span>
                 <span className="text-slate-400">Mês atual: <span className="text-orange-300 font-semibold">{fmtBRL(monthProjection.monthRevenue)}</span> <span className="text-slate-600">({monthProjection.completedPct}% do mês)</span></span>
                 <span className="text-slate-400">Projeção mês: <span className="text-amber-300 font-bold">{fmtBRL(monthProjection.projected)}</span> <span className="text-slate-600">(~{fmtBRL(monthProjection.avgPerDay)}/dia)</span></span>
               </>
-            )}
+            ) : null}
           </div>
-        )}
+        ) : null}
 
         {loading ? (
           <div className="h-56 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
@@ -806,10 +806,10 @@ export default function Dashboard() {
       ) : null}
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
-      {account && <UnifiedMetricsPanel amazonAccountId={account.id} />}
+      {account ? <UnifiedMetricsPanel amazonAccountId={account.id} /> : null}
 
       {/* ── 3d. METAS DE PERFORMANCE APLICADAS ──────────────────────────────── */}
-      {account && (
+      {account ? (
         <PerformanceGoalsPanel
           account={account}
           metricsData={{
@@ -821,7 +821,7 @@ export default function Dashboard() {
             total_budget: autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0,
           }}
         />
-      )}
+      ) : null}
 
       {/* ── 4. RESUMO DE PERFORMANCE ────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
