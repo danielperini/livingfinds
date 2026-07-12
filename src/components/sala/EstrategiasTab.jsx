@@ -5,7 +5,8 @@ import {
   Zap, RefreshCw, Loader2, CheckCircle, XCircle, AlertTriangle,
   Target, TrendingUp, TrendingDown, ChevronDown, ChevronRight,
   Shield, Brain, BarChart2, Settings, Package, Eye, Clock,
-  Activity, DollarSign, ShoppingCart, Layers, Search, Play
+  Activity, DollarSign, ShoppingCart, Layers, Search, Play,
+  Telescope, ArrowUpRight, Gauge, Sparkles
 } from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
 
@@ -43,7 +44,25 @@ const RISK_STYLES = {
   high: 'bg-red-500/10 text-red-400 border-red-500/20',
 };
 
-function KpiCard({ label, value, sub, tone = 'default', icon: CardIcon }) {
+const OPPORTUNITY_STATE_LABELS = {
+  no_opportunity: { label: 'Sem Oportunidade', color: 'text-slate-500', bg: 'bg-slate-500/10' },
+  insufficient_data: { label: 'Dados Insuf.', color: 'text-slate-400', bg: 'bg-slate-500/10' },
+  low_visibility: { label: '👁 Baixa Visib.', color: 'text-amber-400', bg: 'bg-amber-500/10' },
+  emerging_opportunity: { label: '📊 Emergente', color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  profitable_opportunity: { label: '💰 Lucrativa', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+  high_growth_opportunity: { label: '🚀 Alto Crescimento', color: 'text-cyan', bg: 'bg-cyan/10' },
+  budget_constrained: { label: '💸 Budget Limitado', color: 'text-violet-400', bg: 'bg-violet-500/10' },
+  visibility_constrained: { label: '🔭 Visib. Limitada', color: 'text-amber-400', bg: 'bg-amber-500/10' },
+  conversion_constrained: { label: '⚡ CVR Limitado', color: 'text-orange-400', bg: 'bg-orange-500/10' },
+};
+
+const GROWTH_DECISION_TYPES = new Set([
+  'increase_bid_low_visibility', 'increase_bid_profitable_growth', 'increase_bid_high_growth',
+  'increase_budget_constrained', 'increase_top_of_search', 'experimental_growth',
+  'hold_for_listing_improvement', 'hold_for_more_data', 'reduce_waste', 'protect_winner',
+]);
+
+function KpiCard({ label, value, sub, tone = 'default', icon: KpiIcon }) {
   const tones = {
     default: 'border-surface-2',
     good: 'border-emerald-500/25 bg-emerald-500/5',
@@ -55,7 +74,7 @@ function KpiCard({ label, value, sub, tone = 'default', icon: CardIcon }) {
   return (
     <div className={`bg-surface-1 border rounded-xl p-4 ${tones[tone]}`}>
       <div className="flex items-center gap-1.5 mb-1">
-        {CardIcon && <CardIcon className="w-3 h-3 text-slate-500" />}
+        {KpiIcon && <KpiIcon className="w-3 h-3 text-slate-500" />}
         <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">{label}</p>
       </div>
       <p className="text-xl font-bold text-white">{value}</p>
@@ -226,8 +245,9 @@ export default function EstrategiasTab({ account }) {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterRisk, setFilterRisk] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('strategic'); // 'strategic' | 'decisions' | 'economy' | 'goals'
+  const [activeView, setActiveView] = useState('strategic'); // 'strategic' | 'opportunities' | 'decisions' | 'economy' | 'goals'
   const [economics, setEconomics] = useState([]);
+  const [lastEngineResult, setLastEngineResult] = useState(null);
 
   const loadData = useCallback(async () => {
     if (!account) return;
@@ -258,7 +278,9 @@ export default function EstrategiasTab({ account }) {
     setRunning(true); setResult(null); setError(null);
     try {
       const res = await base44.functions.invoke('runUnifiedDecisionEngine', { amazon_account_id: account.id });
-      setResult(res?.data || null);
+      const data = res?.data || null;
+      setResult(data);
+      setLastEngineResult(data);
       await loadData();
     } catch (e) { setError(e.message); }
     finally { setRunning(false); }
@@ -417,6 +439,7 @@ export default function EstrategiasTab({ account }) {
       <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1 flex-wrap">
         {[
           { id: 'strategic', label: 'Estratégia', icon: BarChart2 },
+          { id: 'opportunities', label: `Oportunidades${lastEngineResult?.opportunity_summary?.can_grow > 0 ? ` (${lastEngineResult.opportunity_summary.can_grow})` : ''}`, icon: Telescope },
           { id: 'economy', label: 'Economia', icon: DollarSign },
           { id: 'decisions', label: `Decisões (${decisions.length})`, icon: Zap },
           { id: 'goals', label: 'Metas', icon: Target },
@@ -428,6 +451,188 @@ export default function EstrategiasTab({ account }) {
           </button>
         ))}
       </div>
+
+      {/* ── OPORTUNIDADES DE CRESCIMENTO v6 ─────────────────────────────────── */}
+      {activeView === 'opportunities' && (
+        <div className="space-y-4">
+          {!lastEngineResult ? (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-10 text-center">
+              <Telescope className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+              <p className="text-sm text-slate-500">Execute o motor para identificar oportunidades de crescimento.</p>
+              <button onClick={runEngine} disabled={running || !account}
+                className="mt-4 flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 text-xs font-semibold rounded-lg disabled:opacity-50 mx-auto">
+                {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                {running ? 'Executando...' : 'Executar Motor'}
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Resumo de política de crescimento */}
+              <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="w-4 h-4 text-violet-400" />
+                  <p className="text-xs font-semibold text-violet-300">Política de Crescimento v6</p>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[10px]">
+                  {[
+                    { label: 'Tolerância Econômica', value: `${((lastEngineResult.growth_policy?.growth_tolerance_factor || 1.05) - 1) * 100}% acima do limite` },
+                    { label: 'Custo Parcial Máx.', value: `+${lastEngineResult.growth_policy?.partial_cost_max_increase_pct || 5}%` },
+                    { label: 'Cooldown Pós-Aumento', value: `${lastEngineResult.performance_settings?.growth_cooldown_hours || 72}h` },
+                    { label: 'Oportunidades Ativas', value: lastEngineResult.opportunity_summary?.can_grow || 0 },
+                  ].map(m => (
+                    <div key={m.label} className="bg-surface-2 rounded-lg p-2 text-center">
+                      <p className="text-slate-500 mb-0.5">{m.label}</p>
+                      <p className="font-bold text-violet-300">{m.value}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Distribuição por estado de oportunidade */}
+              {lastEngineResult.opportunity_summary?.by_state && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-2">
+                    <Gauge className="w-3.5 h-3.5 text-cyan" /> Distribuição de Oportunidades
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(lastEngineResult.opportunity_summary.by_state)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([state, count]) => {
+                        const cfg = OPPORTUNITY_STATE_LABELS[state] || { label: state, color: 'text-slate-400', bg: 'bg-slate-500/10' };
+                        return (
+                          <div key={state} className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-surface-3 ${cfg.bg}`}>
+                            <span className={`text-xs font-semibold ${cfg.color}`}>{count}</span>
+                            <span className="text-[10px] text-slate-400">{cfg.label}</span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tabela de top oportunidades */}
+              {lastEngineResult.opportunity_summary?.top_opportunities?.length > 0 && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-surface-2">
+                    <p className="text-xs font-semibold text-slate-300 flex items-center gap-2">
+                      <ArrowUpRight className="w-3.5 h-3.5 text-emerald-400" /> Top Oportunidades de Crescimento
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Keywords com maior potencial baseado em visibilidade, conversão, margem e estoque</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="border-b border-surface-2 bg-surface-2/40">
+                          {['Keyword / ASIN', 'Estado', 'Visib.', 'Impr.', 'CTR', 'CVR', 'ACoS', 'Bid Atual', 'Confiança', 'Score', 'Lucro Pós-ADS'].map(h => (
+                            <th key={h} className="px-3 py-2 text-left font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {lastEngineResult.opportunity_summary.top_opportunities.map((opp, i) => {
+                          const stateCfg = OPPORTUNITY_STATE_LABELS[opp.opportunity_state] || { label: opp.opportunity_state, color: 'text-slate-400', bg: 'bg-slate-500/10' };
+                          const visColor = opp.visibility_score < 0.3 ? 'text-red-400' : opp.visibility_score < 0.6 ? 'text-amber-400' : 'text-emerald-400';
+                          const confColor = { low: 'text-slate-400', moderate: 'text-amber-400', high: 'text-emerald-400', very_high: 'text-cyan', exceptional: 'text-violet-400' }[opp.growth_confidence] || 'text-slate-400';
+                          return (
+                            <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/20 transition-colors">
+                              <td className="px-3 py-2.5">
+                                <p className="text-slate-200 font-medium truncate max-w-[140px]" title={opp.keyword_text}>{opp.keyword_text || '—'}</p>
+                                {opp.asin && <p className="font-mono text-cyan text-[9px]">{opp.asin}</p>}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <span className={`inline-flex px-1.5 py-0.5 rounded text-[9px] font-semibold ${stateCfg.bg} ${stateCfg.color}`}>
+                                  {stateCfg.label}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <span className={`font-bold ${visColor}`}>{opp.visibility_score?.toFixed(2)}</span>
+                                <p className="text-slate-600">{opp.visibility_status}</p>
+                              </td>
+                              <td className="px-3 py-2.5 text-slate-300">{(opp.impressions_14d || 0).toLocaleString('pt-BR')}</td>
+                              <td className="px-3 py-2.5 text-slate-300">{opp.ctr > 0 ? `${opp.ctr.toFixed(2)}%` : '—'}</td>
+                              <td className="px-3 py-2.5">
+                                <span className={opp.cvr > 3 ? 'text-emerald-400' : opp.cvr > 0 ? 'text-amber-400' : 'text-slate-500'}>
+                                  {opp.cvr > 0 ? `${opp.cvr.toFixed(2)}%` : '—'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <span className={opp.acos !== null ? (opp.acos <= 10 ? 'text-emerald-400' : opp.acos <= 15 ? 'text-amber-400' : 'text-red-400') : 'text-slate-600'}>
+                                  {opp.acos !== null ? `${opp.acos}%` : '—'}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2.5 text-slate-300">R${(opp.current_bid || 0).toFixed(2)}</td>
+                              <td className="px-3 py-2.5">
+                                <span className={`font-semibold ${confColor}`}>{opp.growth_confidence || '—'}</span>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-12 h-1.5 bg-surface-3 rounded-full overflow-hidden">
+                                    <div className="h-full bg-violet-500 rounded-full" style={{ width: `${(opp.opportunity_score || 0) * 100}%` }} />
+                                  </div>
+                                  <span className="text-violet-400 font-semibold">{((opp.opportunity_score || 0) * 100).toFixed(0)}%</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                {opp.profit_after_ads != null
+                                  ? <span className={opp.profit_after_ads >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>R${Number(opp.profit_after_ads).toFixed(2)}/ped</span>
+                                  : <span className="text-slate-600">—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Stats de crescimento */}
+              {lastEngineResult.stats && (
+                <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-2">
+                    <Activity className="w-3.5 h-3.5 text-cyan" /> Resultado do Último Ciclo de Crescimento
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { label: 'Baixa Visibilidade', value: lastEngineResult.stats.low_visibility_growth, color: 'text-amber-400' },
+                      { label: 'Emergente', value: lastEngineResult.stats.emerging_growth, color: 'text-blue-400' },
+                      { label: 'Lucrativo', value: lastEngineResult.stats.profitable_growth, color: 'text-emerald-400' },
+                      { label: 'Alto Crescimento', value: lastEngineResult.stats.high_growth, color: 'text-cyan' },
+                      { label: 'Custo Parcial', value: lastEngineResult.stats.partial_cost_growth, color: 'text-violet-400' },
+                      { label: 'Budget Increase', value: lastEngineResult.stats.budget_increase, color: 'text-violet-400' },
+                      { label: 'Reduções', value: lastEngineResult.stats.bid_reduce, color: 'text-red-400' },
+                      { label: 'Protegidos', value: lastEngineResult.stats.protected, color: 'text-slate-400' },
+                    ].map(m => (
+                      <div key={m.label} className="bg-surface-2 rounded-lg p-2 text-center">
+                        <p className="text-[9px] text-slate-500 mb-0.5">{m.label}</p>
+                        <p className={`text-sm font-bold ${m.color}`}>{m.value ?? 0}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Alertas de erosão de lucro */}
+              {lastEngineResult.profit_after_ads_summary?.erosion_alerts?.length > 0 && (
+                <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
+                  <p className="text-xs font-semibold text-red-300 mb-2 flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5" /> Alertas de Erosão de Margem
+                  </p>
+                  <div className="space-y-2">
+                    {lastEngineResult.profit_after_ads_summary.erosion_alerts.map((a, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[10px]">
+                        <span className="font-mono text-cyan flex-shrink-0">{a.asin}</span>
+                        <span className="text-red-300">{a.reason}</span>
+                        <span className="ml-auto text-slate-500 flex-shrink-0">3d: R${a.profit_after_ads_3d}/ped · 14d: R${a.profit_after_ads_14d}/ped</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── VISÃO ESTRATÉGICA ────────────────────────────────────────────────── */}
       {activeView === 'strategic' && !loading && (
