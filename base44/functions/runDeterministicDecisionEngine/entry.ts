@@ -884,14 +884,10 @@ Deno.serve(async (req) => {
     } catch {}
 
     // ── Recalcular daily_budget_cap dinamicamente com base nas 24h ────────
-    // Banda rígida: não sai da faixa [50, userBudgetCap]
-    // Regra:
-    //   - ACoS 24h <= target_acos * 0.8  → pacing eficiente: pode subir até +10% do atual
-    //   - ACoS 24h entre target * 0.8 e target * 1.1 → manter
-    //   - ACoS 24h > target * 1.1 e <= break-even médio → reduzir -5%
-    //   - ACoS 24h > break-even médio ou sem vendas com gasto > 20% cap → reduzir -10%
-    //   - Sem dados suficientes (spend24h < 5) → manter
-    const MIN_BUDGET_CAP = 50;
+    // Sem banda rígida — o motor usa o teto do usuário como limite superior
+    // e R$10 como piso de segurança operacional mínimo.
+    // Ajustes são proporcionais ao desvio real do ACoS.
+    const MIN_BUDGET_CAP = 10; // piso operacional absoluto (evita zerar campanhas)
     const effectiveUserCap = Math.max(MIN_BUDGET_CAP, userBudgetCap);
     const targetAcos24h = settings.target_acos ?? FB.TARGET_ACOS;
     const avgBreakEven = acosByAsin.size > 0
@@ -924,7 +920,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Arredondar para 2 casas e garantir banda
+    // Arredondar para 2 casas — limitar apenas pelo teto do usuário e pelo piso operacional mínimo
     recalculatedBudgetCap = Math.round(Math.min(effectiveUserCap, Math.max(MIN_BUDGET_CAP, recalculatedBudgetCap)) * 100) / 100;
 
     // Aplicar o novo cap ao settings se mudou significativamente (>1%)
