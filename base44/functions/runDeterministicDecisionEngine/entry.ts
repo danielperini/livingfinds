@@ -1780,6 +1780,14 @@ Deno.serve(async (req) => {
       saved += batch.length;
     }
 
+    // ── 11b. Disparar execução imediata (fire-and-forget) ────────────────
+    if (saved > 0) {
+      base44.asServiceRole.functions.invoke('executeApprovedDecisionQueue', {
+        amazon_account_id: aid,
+        _service_role: true,
+      }).catch(() => {});
+    }
+
     // ── 12. RuleExecution (auditoria) ─────────────────────────────────────
     const auditRecords = allDecisions.slice(0, 100).map((d: any) => ({
       amazon_account_id: aid,
