@@ -96,8 +96,20 @@ Deno.serve(async (request) => {
         });
         const data = res?.data || res || {};
         const ok = data?.executed > 0 || data?.ok === true;
-        results.push({ id: decision.id, action: decision.action, ok });
-        if (ok) executed++; else if (data?.scheduled) skipped++; else failed++;
+
+        // Detectar ENTITY_NOT_FOUND e cancelar automaticamente (keyword/campanha removida da Amazon)
+        const rawError = JSON.stringify(data);
+        if (!ok && rawError.includes('entityNotFoundError')) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'cancelled',
+            error_message: 'CANCELADO: entidade não encontrada na Amazon (ENTITY_NOT_FOUND) — decisão obsoleta',
+          }).catch(() => {});
+          results.push({ id: decision.id, action: decision.action, ok: false, cancelled: true });
+          skipped++;
+        } else {
+          results.push({ id: decision.id, action: decision.action, ok });
+          if (ok) executed++; else if (data?.scheduled) skipped++; else failed++;
+        }
       } catch (e: any) {
         results.push({ id: decision.id, action: decision.action, ok: false, error: e.message });
         failed++;
