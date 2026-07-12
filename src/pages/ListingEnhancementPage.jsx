@@ -246,11 +246,7 @@ export default function ListingEnhancementPage() {
             {syncing === '__poll__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
             Verificar Status
           </button>
-          <button onClick={queueAllForSync} disabled={!!syncing || syncQueue.length > 0}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-violet-500/10 border-violet-500/20 text-violet-300 hover:bg-violet-500/20 disabled:opacity-50 transition-colors">
-            <RefreshCw className={`w-3.5 h-3.5 ${syncQueue.length > 0 ? 'animate-spin' : ''}`} />
-            {syncQueue.length > 0 ? `Sincronizando (${syncQueue.length} restantes)` : 'Sincronizar Todos'}
-          </button>
+
         </div>
       </div>
 
