@@ -687,12 +687,11 @@ export default function Dashboard() {
       )}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
-      <div key="sync-banners">
-        {account && <SyncStatusBanner accountId={account.id} />}
-        {/* Cartão de sincronização das duas APIs */}
-        {account && !loading && (
+      <div className="space-y-2">
+        {account ? <SyncStatusBanner accountId={account.id} /> : null}
+        {account && !loading ? (
           <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} adsSales={kpis.sales} spRevenue={realSalesKpis.revenue} />
-        )}
+        ) : null}
       </div>
 
 
