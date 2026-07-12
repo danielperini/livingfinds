@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 import {
   Sparkles, RefreshCw, Search, AlertCircle, CheckCircle2,
-  Clock, ChevronRight, Loader2, ShieldAlert, FileText, Send, RotateCcw
+  Clock, ChevronRight, Loader2, ShieldAlert, FileText, Send, RotateCcw,
+  Database, WifiOff, Info, Package
 } from 'lucide-react';
 import ListingEnhancementDrawer from '@/components/listing/ListingEnhancementDrawer';
 
@@ -29,12 +30,14 @@ export default function ListingEnhancementPage() {
   const [snapshots, setSnapshots] = useState([]);
   const [proposals, setProposals] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(null);
+  const [syncing, setSyncing] = useState(null); // null | '__all__' | '__poll__' | '<asin>' | '<asin>_gen'
+  const [syncQueue, setSyncQueue] = useState([]); // lista de asins aguardando sync
   const [search, setSearch] = useState('');
   const [filterIssues, setFilterIssues] = useState(false);
   const [filterProposals, setFilterProposals] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [spApiStatus, setSpApiStatus] = useState('unknown'); // 'ok' | 'error' | 'unknown'
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,27 +66,30 @@ export default function ListingEnhancementPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const syncAll = useCallback(async () => {
+  // Manter drawer atualizado quando os dados recarregam
+  useEffect(() => {
+    if (!selectedProduct) return;
+    const asin = selectedProduct.product?.asin;
+    if (!asin) return;
+    setSelectedProduct(prev => prev ? ({
+      ...prev,
+      snap: snapByAsin.get(asin) || prev.snap,
+      proposals: proposalsByAsin.get(asin) || prev.proposals,
+    }) : null);
+  }, [snapByAsin, proposalsByAsin]);
+
+  // Enfileira todos os produtos não-sincronizados para sync sequencial
+  const queueAllForSync = useCallback(() => {
     if (!account) return;
-    setSyncing('__all__');
-    setMsg(null);
-    try {
-      const res = await base44.functions.invoke('syncListingEnhancementData', {
-        amazon_account_id: account.id, limit: 20,
-      });
-      if (res?.data?.ok) {
-        setMsg({ type: 'success', text: `${res.data.synced}/${res.data.total} produtos sincronizados.` });
-        await load();
-      } else {
-        setMsg({ type: 'error', text: res?.data?.error || 'Erro ao sincronizar.' });
-      }
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message });
-    } finally {
-      setSyncing(null);
-      setTimeout(() => setMsg(null), 8000);
-    }
-  }, [account, load]);
+    const snapByAsinLocal = new Map(snapshots.map(s => [s.asin, s]));
+    const prodByAsinLocal = new Map();
+    for (const p of products) { if (!prodByAsinLocal.has(p.asin)) prodByAsinLocal.set(p.asin, p); }
+    const unsynced = Array.from(prodByAsinLocal.keys()).filter(asin => !snapByAsinLocal.has(asin));
+    const toQueue = unsynced.length > 0 ? unsynced : Array.from(prodByAsinLocal.keys());
+    setSyncQueue(toQueue);
+    setMsg({ type: 'info', text: `${toQueue.length} produto(s) adicionados à fila de sincronização. O processo ocorre em background.` });
+    setTimeout(() => setMsg(null), 8000);
+  }, [account, products, snapshots]);
 
   const pollAllProcessing = useCallback(async () => {
     if (!account) return;
@@ -105,6 +111,33 @@ export default function ListingEnhancementPage() {
     }
   }, [account, load]);
 
+  // Processa a fila de sync sequencialmente (um por vez para evitar rate limit)
+  useEffect(() => {
+    if (syncQueue.length === 0 || syncing || !account) return;
+    const [nextAsin, ...rest] = syncQueue;
+    const prod = products.find(p => p.asin === nextAsin);
+    if (!prod) { setSyncQueue(rest); return; }
+
+    setSyncing(nextAsin);
+    base44.functions.invoke('syncListingEnhancementData', { amazon_account_id: account.id, asin: nextAsin })
+      .then(res => {
+        if (res?.data?.ok) {
+          setSpApiStatus('ok');
+        } else {
+          const errText = res?.data?.error || '';
+          if (errText.includes('503') || errText.includes('token') || errText.includes('SP-API')) setSpApiStatus('error');
+        }
+        return load();
+      })
+      .catch(e => {
+        if (e.message?.includes('503') || e.message?.includes('token')) setSpApiStatus('error');
+      })
+      .finally(() => {
+        setSyncing(null);
+        setSyncQueue(rest);
+      });
+  }, [syncQueue, syncing, account, products, load]);
+
   const syncProduct = useCallback(async (product) => {
     if (!account) return;
     setSyncing(product.asin);
@@ -114,16 +147,24 @@ export default function ListingEnhancementPage() {
         amazon_account_id: account.id, asin: product.asin,
       });
       if (res?.data?.ok) {
+        setSpApiStatus('ok');
         setMsg({ type: 'success', text: `Sincronizado: ${product.asin}` });
         await load();
       } else {
-        setMsg({ type: 'error', text: res?.data?.error || 'Erro ao sincronizar.' });
+        const errText = res?.data?.error || 'Erro ao sincronizar.';
+        const isSpError = errText.includes('503') || errText.includes('SP-API') || errText.includes('token') || errText.includes('seller_id');
+        if (isSpError) {
+          setSpApiStatus('error');
+        }
+        setMsg({ type: 'error', text: errText });
       }
     } catch (e) {
-      setMsg({ type: 'error', text: e.message });
+      const errText = e.message || '';
+      if (errText.includes('503') || errText.includes('token')) setSpApiStatus('error');
+      setMsg({ type: 'error', text: `Erro: ${errText}` });
     } finally {
       setSyncing(null);
-      setTimeout(() => setMsg(null), 6000);
+      setTimeout(() => setMsg(null), 10000);
     }
   }, [account, load]);
 
@@ -149,16 +190,22 @@ export default function ListingEnhancementPage() {
     }
   }, [account, load]);
 
-  const snapByAsin = new Map(snapshots.map(s => [s.asin, s]));
-  const proposalsByAsin = new Map();
-  for (const p of proposals) {
-    if (!proposalsByAsin.has(p.asin)) proposalsByAsin.set(p.asin, []);
-    proposalsByAsin.get(p.asin).push(p);
-  }
+  const snapByAsin = useMemo(() => new Map(snapshots.map(s => [s.asin, s])), [snapshots]);
+  const proposalsByAsin = useMemo(() => {
+    const map = new Map();
+    for (const p of proposals) {
+      if (!map.has(p.asin)) map.set(p.asin, []);
+      map.get(p.asin).push(p);
+    }
+    return map;
+  }, [proposals]);
 
-  const prodByAsin = new Map();
-  for (const p of products) { if (!prodByAsin.has(p.asin)) prodByAsin.set(p.asin, p); }
-  const uniqueProducts = Array.from(prodByAsin.values());
+  const prodByAsin = useMemo(() => {
+    const map = new Map();
+    for (const p of products) { if (!map.has(p.asin)) map.set(p.asin, p); }
+    return map;
+  }, [products]);
+  const uniqueProducts = useMemo(() => Array.from(prodByAsin.values()), [prodByAsin]);
 
   const term = search.trim().toLowerCase();
   const filtered = uniqueProducts.filter(p => {
@@ -198,23 +245,56 @@ export default function ListingEnhancementPage() {
             <p className="text-xs text-slate-400">Sincronize, analise, sugira e publique melhorias nas suas ofertas Amazon via SP-API</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={load} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-surface-1 border-surface-2 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+            Recarregar do Banco
+          </button>
           <button onClick={pollAllProcessing} disabled={!!syncing}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-surface-1 border-surface-2 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
             {syncing === '__poll__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
             Verificar Status
           </button>
-          <button onClick={syncAll} disabled={!!syncing}
+          <button onClick={queueAllForSync} disabled={!!syncing || syncQueue.length > 0}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-violet-500/10 border-violet-500/20 text-violet-300 hover:bg-violet-500/20 disabled:opacity-50 transition-colors">
-            {syncing === '__all__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            Sincronizar Todos
+            <RefreshCw className={`w-3.5 h-3.5 ${syncQueue.length > 0 ? 'animate-spin' : ''}`} />
+            {syncQueue.length > 0 ? `Sincronizando (${syncQueue.length} restantes)` : 'Sincronizar Todos'}
           </button>
         </div>
       </div>
 
       {msg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${msg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
+        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${
+          msg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300'
+          : msg.type === 'info' ? 'bg-cyan/10 border-cyan/20 text-cyan'
+          : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
           {msg.text}
+        </div>
+      )}
+
+      {spApiStatus === 'error' && (
+        <div className="flex items-start gap-3 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/8">
+          <WifiOff className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-red-300 mb-0.5">Erro na sincronização via SP-API</p>
+            <p className="text-xs text-red-400/80">
+              Causas comuns: <strong>Seller ID não preenchido</strong> (campo seller_id na conta Amazon),
+              credenciais SP-API inválidas/expiradas, ou serviço Amazon temporariamente indisponível.
+              Os dados já no banco continuam visíveis. Verifique em{' '}
+              <Link to="/integracoes/amazon" className="underline text-red-300">Integrações → Amazon</Link>.
+            </p>
+          </div>
+          <button onClick={() => setSpApiStatus('unknown')} className="text-red-600 hover:text-red-400 text-xs flex-shrink-0">✕</button>
+        </div>
+      )}
+
+      {syncQueue.length > 0 && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-cyan/20 bg-cyan/5">
+          <Loader2 className="w-3.5 h-3.5 text-cyan animate-spin flex-shrink-0" />
+          <p className="text-xs text-cyan">
+            Sincronizando em fila: {syncing && syncing !== '__poll__' ? <span className="font-mono font-bold">{syncing}</span> : '...'} · {syncQueue.length} restante(s)
+          </p>
         </div>
       )}
 
@@ -364,10 +444,13 @@ export default function ListingEnhancementPage() {
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <button onClick={() => syncProduct(product)} disabled={!!syncing}
+                          <button
+                            onClick={() => syncProduct(product)}
+                            disabled={!!syncing}
+                            title="Sincronizar via SP-API (requer credenciais SP-API ativas)"
                             className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border bg-surface-2 border-surface-3 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
                             {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                            Sync
+                            Sync SP-API
                           </button>
                           {snap && (
                             <button onClick={() => generateSuggestions(product)} disabled={!!syncing}
@@ -376,9 +459,13 @@ export default function ListingEnhancementPage() {
                               Sugerir
                             </button>
                           )}
-                          <button onClick={() => setSelectedProduct({ product, snap, proposals: productProps })}
+                          <button onClick={() => setSelectedProduct({
+                              product,
+                              snap: snapByAsin.get(product.asin) || null,
+                              proposals: proposalsByAsin.get(product.asin) || [],
+                            })}
                             className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border bg-cyan/10 border-cyan/20 text-cyan hover:bg-cyan/20 transition-colors">
-                            Abrir
+                            <Package className="w-3 h-3" /> Abrir
                           </button>
                         </div>
                       </td>

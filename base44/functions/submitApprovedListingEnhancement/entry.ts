@@ -7,9 +7,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MARKETPLACE_ID = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
-const SP_CLIENT_ID = Deno.env.get('SP_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CLIENT_ID') || '';
-const SP_CLIENT_SECRET = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
-const SP_REFRESH_TOKEN = Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || '';
+const SP_CLIENT_ID = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '';
+const SP_CLIENT_SECRET = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '';
+const SP_REFRESH_TOKEN = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '';
 
 /**
  * BRAND SAFETY — contextos de aplicação:
@@ -169,6 +169,10 @@ Deno.serve(async (req) => {
 
     const sellerId = account.seller_id || Deno.env.get('AMAZON_SELLER_ID') || '';
     const marketplaceId = account.marketplace_id || MARKETPLACE_ID;
+
+    if (!sellerId) {
+      return Response.json({ ok: false, error: 'seller_id não configurado. Configure o Seller ID em Integrações → Amazon (SP-API).' }, { status: 400 });
+    }
 
     let accessToken: string;
     try { accessToken = await getSpAccessToken(); }

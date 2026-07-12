@@ -6,9 +6,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MARKETPLACE_ID = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
-const SP_CLIENT_ID = Deno.env.get('SP_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CLIENT_ID') || '';
-const SP_CLIENT_SECRET = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
-const SP_REFRESH_TOKEN = Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || '';
+const SP_CLIENT_ID = Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '';
+const SP_CLIENT_SECRET = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '';
+const SP_REFRESH_TOKEN = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '';
 
 async function getSpAccessToken(): Promise<string> {
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
