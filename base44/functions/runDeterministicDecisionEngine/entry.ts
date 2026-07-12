@@ -889,6 +889,45 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 10. Deduplicação de campanhas AUTO por ASIN ───────────────────────
+    // Regra: apenas 1 campanha AUTO ativa por ASIN. Manter a mais antiga; arquivar localmente as demais.
+    // A pausa na Amazon Ads é delegada a pauseAutoCampaignsNoStock (que já implementa batchSetCampaignState).
+    const autoDuplicatesArchived: any[] = [];
+    {
+      const autoCampaignsByAsin = new Map<string, any[]>();
+      for (const c of campaigns) {
+        const state = String(c.state || c.status || '').toLowerCase();
+        if (state === 'archived') continue;
+        const isAuto = (c.targeting_type || '').toUpperCase() === 'AUTO';
+        if (!isAuto) continue;
+        const asin = c.asin || campaignAsinMap.get(c.campaign_id || c.amazon_campaign_id) || null;
+        if (!asin) continue;
+        if (!autoCampaignsByAsin.has(asin)) autoCampaignsByAsin.set(asin, []);
+        autoCampaignsByAsin.get(asin)!.push(c);
+      }
+      for (const [asin, camps] of autoCampaignsByAsin.entries()) {
+        if (camps.length <= 1) continue;
+        // Ordenar por data de criação — manter a mais antiga (índice 0)
+        camps.sort((a: any, b: any) =>
+          new Date(a.created_at || a.created_date || 0).getTime() -
+          new Date(b.created_at || b.created_date || 0).getTime()
+        );
+        // Arquivar localmente as mais recentes (fire-and-forget)
+        for (let i = 1; i < camps.length; i++) {
+          const dup = camps[i];
+          const iKey = `auto_dedup_archive|${aid}|${dup.id}`;
+          if (usedIdemKeys.has(iKey)) continue;
+          base44.asServiceRole.entities.Campaign.update(dup.id, {
+            state: 'archived', status: 'archived', updated_at: now,
+          }).catch(() => {});
+          autoDuplicatesArchived.push({
+            asin, campaign_id: dup.campaign_id || dup.amazon_campaign_id,
+            name: dup.name || dup.campaign_name, id: dup.id,
+          });
+        }
+      }
+    }
+
     // ── 10. Gerar decisões ────────────────────────────────────────────────
     const decisions: any[] = [];
     const opportunities: any[] = []; // v6: painel de oportunidades para UI
@@ -899,6 +938,7 @@ Deno.serve(async (req) => {
       bid_increase: 0, bid_reduce: 0, budget_increase: 0, paused: 0,
       skipped_stock: 0, skipped_margin: 0, skipped_cooldown: 0,
       skipped_confidence: 0, skipped_data: 0, created_campaign: 0,
+      auto_duplicates_archived: autoDuplicatesArchived.length,
       // v6
       low_visibility_growth: 0, emerging_growth: 0, profitable_growth: 0,
       high_growth: 0, conservative_growth: 0, partial_cost_growth: 0,
@@ -1708,6 +1748,11 @@ Deno.serve(async (req) => {
       acos_comparison_summary: {
         total_campaigns_analyzed: campWindowMetrics.size,
         budget_increase_decisions: stats.budget_increase,
+      },
+
+      auto_deduplication: {
+        duplicates_archived: autoDuplicatesArchived.length,
+        archived_campaigns: autoDuplicatesArchived,
       },
 
       note: 'Motor v6: crescimento + visibilidade + oportunidade · custo parcial não bloqueia · growth_tolerance_factor 1.05 · simulação antes de aprovar · cooldown 48h pós-aumento · min 20 cliques + 200 impressões + CPA máximo antes de pausar · proteção de venda recente 72h · dados frescos ≤36h',
