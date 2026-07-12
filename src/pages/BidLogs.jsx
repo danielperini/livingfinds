@@ -1,12 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { FileText, Search, Filter, Loader2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ReferenceLine, ResponsiveContainer
+} from 'recharts';
 
 export default function BidLogs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('all'); // all | increase | decrease | unchanged
+  const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [targetAcos, setTargetAcos] = useState(null);
 
   useEffect(() => {
     load();
@@ -15,12 +20,17 @@ export default function BidLogs() {
   const load = async () => {
     setLoading(true);
     try {
-      const allLogs = await base44.entities.CampaignCreationLog.filter(
-        { operation_type: 'update_bid' },
-        '-created_at',
-        200
-      );
+      const [allLogs, accounts] = await Promise.all([
+        base44.entities.CampaignCreationLog.filter({ operation_type: 'update_bid' }, '-created_at', 200),
+        base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, null, 1),
+      ]);
       setLogs(allLogs);
+      if (accounts[0]) {
+        const ps = await base44.asServiceRole.entities.PerformanceSettings.filter(
+          { amazon_account_id: accounts[0].id }, '-updated_at', 1
+        );
+        if (ps[0]?.target_acos > 0) setTargetAcos(ps[0].target_acos);
+      }
     } finally {
       setLoading(false);
     }
@@ -41,6 +51,26 @@ export default function BidLogs() {
     
     return matchFilter && matchSearch;
   });
+
+  // Agrupar por dia: bid médio novo, bid médio antigo, ACoS real médio
+  const chartData = useMemo(() => {
+    const byDate = {};
+    for (const log of logs) {
+      const raw = log.created_at;
+      if (!raw) continue;
+      const day = new Date(raw).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      if (!byDate[day]) byDate[day] = { date: day, bids: [], oldBids: [], acos: [] };
+      if (log.new_bid > 0) byDate[day].bids.push(log.new_bid);
+      if (log.old_bid > 0) byDate[day].oldBids.push(log.old_bid);
+      if (log.acos > 0) byDate[day].acos.push(log.acos);
+    }
+    return Object.values(byDate).slice(-30).map(d => ({
+      date: d.date,
+      'Bid Aplicado': d.bids.length ? +(d.bids.reduce((a, b) => a + b, 0) / d.bids.length).toFixed(2) : null,
+      'Bid Anterior': d.oldBids.length ? +(d.oldBids.reduce((a, b) => a + b, 0) / d.oldBids.length).toFixed(2) : null,
+      ...(d.acos.length ? { 'ACoS Real (%)': +(d.acos.reduce((a, b) => a + b, 0) / d.acos.length).toFixed(1) } : {}),
+    }));
+  }, [logs]);
 
   const stats = {
     total: logs.length,
@@ -87,6 +117,43 @@ export default function BidLogs() {
           <p className="text-xl font-bold text-slate-400">{stats.unchanged}</p>
         </div>
       </div>
+
+      {/* Bid Evolution Chart */}
+      {!loading && chartData.length > 1 && (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+          <div className="mb-3">
+            <h2 className="text-sm font-semibold text-slate-300">Evolução dos Lances</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Bid médio diário aplicado pelo motor vs. bid anterior{targetAcos ? ` · Meta ACoS: ${targetAcos}%` : ''}</p>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={chartData} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <YAxis yAxisId="bid" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={40}
+                tickFormatter={v => `R$${v}`} />
+              {chartData.some(d => d['ACoS Real (%)'] != null) && (
+                <YAxis yAxisId="acos" orientation="right" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={36}
+                  tickFormatter={v => `${v}%`} />
+              )}
+              <Tooltip
+                contentStyle={{ backgroundColor: '#111827', border: '1px solid #263244', borderRadius: 8, fontSize: 11 }}
+                labelStyle={{ color: '#CBD5E1' }}
+                formatter={(val, name) => [name.includes('%') ? `${val}%` : `R$ ${val}`, name]}
+              />
+              <Legend wrapperStyle={{ fontSize: 10, color: '#94A3B8' }} />
+              <Line yAxisId="bid" type="monotone" dataKey="Bid Anterior" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+              <Line yAxisId="bid" type="monotone" dataKey="Bid Aplicado" stroke="#3B82F6" strokeWidth={2} dot={{ r: 3, fill: '#3B82F6' }} connectNulls />
+              {chartData.some(d => d['ACoS Real (%)'] != null) && (
+                <Line yAxisId="acos" type="monotone" dataKey="ACoS Real (%)" stroke="#F59E0B" strokeWidth={1.5} dot={false} connectNulls />
+              )}
+              {targetAcos && (
+                <ReferenceLine yAxisId="acos" y={targetAcos} stroke="#10B981" strokeDasharray="5 3" strokeWidth={1.5}
+                  label={{ value: `Meta ${targetAcos}%`, position: 'insideTopRight', fill: '#10B981', fontSize: 9 }} />
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
