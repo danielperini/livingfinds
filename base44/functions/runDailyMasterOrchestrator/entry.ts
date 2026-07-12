@@ -3,20 +3,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 /**
  * runDailyMasterOrchestrator
  *
- * Orquestrador diário completo — roda uma vez por dia às 03:00 BRT (06:00 UTC).
- * Sequência:
- *   1. Renovar token Amazon Ads
- *   2. Sync de catálogo de produtos (SP-API)
- *   3. Sync de métricas de vendas (SalesDaily)
- *   4. Solicitar + baixar relatórios Amazon Ads (pipeline completo)
- *   5. Sync de campanhas (estados, bids, ad groups)
- *   6. Motor determinístico de decisões
- *   7. Executar fila de decisões aprovadas
- *   8. Processar fila de kick-off de produtos
- *   9. Completar ou arquivar campanhas incompletas
- *  10. Guardrails horários
- *  11. Backup incremental
- *  12. Fix de links produto ↔ campanha
+ * Orquestrador diário completo.
+ * Todas as decisões passam pela entrada canônica runUnifiedDecisionEngine.
  */
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -65,7 +53,7 @@ Deno.serve(async (req) => {
     log.push(await invoke(base44, 'checkInventoryChangesAndKickoff', basePayload));
     await wait(4000);
 
-    log.push(await invoke(base44, 'runDeterministicDecisionEngine', basePayload));
+    log.push(await invoke(base44, 'runUnifiedDecisionEngine', basePayload));
     await wait(4000);
 
     log.push(await invoke(base44, 'executeApprovedDecisionQueue', basePayload));
@@ -78,9 +66,6 @@ Deno.serve(async (req) => {
       if (batch < 2) await wait(15000);
     }
 
-    // Regra definitiva: nenhuma campanha INCOMPLETE pode permanecer ativa no app.
-    // Completa usando TermBank; na falta, KeywordSuggestion (Amazon Ads Suggestions).
-    // Sem produto/estoque, ou se o reparo falhar, arquiva na Amazon e no app.
     log.push(await invoke(base44, 'directAdsRepair', basePayload));
     await wait(5000);
     log.push(await invoke(base44, 'syncAdsCampaignStatesV2', basePayload));
@@ -104,9 +89,10 @@ Deno.serve(async (req) => {
     const errors = log.filter((l) => !l.ok);
 
     return Response.json({
-      ok: true,
+      ok: errors.length === 0,
       started_at,
       completed_at,
+      decision_engine: 'runUnifiedDecisionEngine',
       steps_total: log.length,
       steps_ok: log.filter((l) => l.ok).length,
       steps_error: errors.length,
