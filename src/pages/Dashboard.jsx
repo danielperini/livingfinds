@@ -896,9 +896,19 @@ export default function Dashboard() {
               sub={activePeriod !== 'yesterday' ? `Ontem: ${yesterdayKpis.orders.toLocaleString('pt-BR')}` : undefined}
               tone={kpis.orders > 0 ? 'good' : 'default'} />
             {hasSalesDailyData && (
-              <KpiCard label="Fat. Real (SP-API)" value={fmtBRL(realSalesKpis.revenue)}
-                sub={`${realSalesKpis.units} unidades`}
-                tone={realSalesKpis.revenue > 0 ? 'good' : 'default'} />
+              <div className={`bg-surface-1 border rounded-xl p-4 ${realSalesKpis.revenue > 0 ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-surface-2'}`}>
+                <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Fat. Real (SP-API)</p>
+                <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
+                {realSalesKpis.revenue === 0 ? (
+                  <button onClick={runSync} disabled={syncingDashboard}
+                    className="mt-1 flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50">
+                    {syncingDashboard ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
+                    {syncingDashboard ? 'Atualizando...' : `${realSalesKpis.units} unidades · atualizar`}
+                  </button>
+                ) : (
+                  <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
+                )}
+              </div>
             )}
             {hasSalesDailyData && realSalesKpis.tacos !== null && (
               <KpiCard label="TACoS Real"
