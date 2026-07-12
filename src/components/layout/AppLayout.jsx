@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2 } from
+  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2, Sparkles } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -15,6 +15,7 @@ const navItems = [
 { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
 { path: '/analytics', icon: BarChart2, label: 'Analytics' },
 { path: '/products', icon: ShoppingBag, label: 'Produtos' },
+{ path: '/products/listing-enhancement', icon: Sparkles, label: 'Aprimoramento de Listings', sub: true },
 { path: '/ads', icon: Megaphone, label: 'Campanhas' },
 { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
 { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Controle' },
@@ -186,27 +187,25 @@ export default function AppLayout() {
         </div>
 
         <nav className="flex-1 py-4 overflow-y-auto scrollbar-thin" aria-label="Navegação principal">
-          {navItems.map(({ path, icon: Icon, label }) => {
-            const active = location.pathname === path || path !== '/' && location.pathname.startsWith(path);
+          {navItems.map(({ path, icon: Icon, label, sub }) => {
+            const active = location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
             return (
               <Link
                 key={path}
                 to={path}
                 onClick={() => setMobileOpen(false)}
                 className={`
-                  flex items-center gap-3 mx-2 mb-1 px-3 py-2.5 rounded-lg transition-all duration-150
+                  flex items-center gap-3 mb-1 px-3 py-2.5 rounded-lg transition-all duration-150
+                  ${sub ? 'mx-4' : 'mx-2'}
                   ${active ?
                 'bg-cyan/15 text-cyan border border-cyan/20' :
                 'text-slate-400 hover:text-slate-200 hover:bg-surface-2'}
-                  ${
-                collapsed ? 'justify-center px-0' : ''}
+                  ${collapsed ? 'justify-center px-0' : ''}
                 `}
                 title={collapsed ? label : undefined}>
-                
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                {!collapsed && <span className="text-sm font-medium">{label}</span>}
+                <Icon className={`flex-shrink-0 ${sub ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
+                {!collapsed && <span className={`font-medium ${sub ? 'text-xs' : 'text-sm'}`}>{label}</span>}
               </Link>);
-
           })}
         </nav>
 

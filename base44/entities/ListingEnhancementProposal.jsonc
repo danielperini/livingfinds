@@ -1,0 +1,180 @@
+{
+  "name": "ListingEnhancementProposal",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_type": {
+      "type": "string"
+    },
+    "proposal_type": {
+      "type": "string",
+      "enum": [
+        "organic_terms",
+        "title",
+        "bullet",
+        "description",
+        "attribute",
+        "image",
+        "variation",
+        "price",
+        "offer",
+        "a_plus"
+      ]
+    },
+    "field_name": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "string"
+    },
+    "proposed_value": {
+      "type": "string"
+    },
+    "diff": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "data_sources": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "brand_safety_status": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "brand_review_required",
+        "blocked"
+      ],
+      "default": "clear"
+    },
+    "attribute_validation_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "valid",
+        "invalid",
+        "schema_unsupported"
+      ],
+      "default": "pending"
+    },
+    "schema_validation_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "valid",
+        "invalid",
+        "schema_unsupported"
+      ],
+      "default": "pending"
+    },
+    "approval_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending_review",
+        "approved",
+        "rejected",
+        "cancelled",
+        "conflict"
+      ],
+      "default": "draft"
+    },
+    "submission_status": {
+      "type": "string",
+      "enum": [
+        "not_submitted",
+        "schema_validated",
+        "scheduled",
+        "submitted",
+        "processing",
+        "confirmed",
+        "failed",
+        "cancelled",
+        "schema_unsupported"
+      ],
+      "default": "not_submitted"
+    },
+    "amazon_submission_id": {
+      "type": "string"
+    },
+    "amazon_issues": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "rejected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rejected_by": {
+      "type": "string"
+    },
+    "rejection_reason": {
+      "type": "string"
+    },
+    "submitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "external_change_detected": {
+      "type": "boolean",
+      "default": false
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "proposal_type"
+  ]
+}
