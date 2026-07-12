@@ -21,6 +21,7 @@ const ENTITIES_TO_BACKUP = [
   'SearchTerm', 'AutoCampaignLearning', 'SearchTermPromotion',
   'PerformanceSettings', 'AutopilotConfig', 'ProductKickoffQueue',
   'BackupAuditLog', 'SyncExecutionLog', 'AmazonAdsReportJob',
+  'ListingSnapshot', 'ListingEnhancementProposal', 'ListingEnhancementHistory',
 ];
 
 async function compress(data: string): Promise<Uint8Array> {
