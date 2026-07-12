@@ -130,7 +130,7 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
       </div>
 
       {/* Resultado da execução */}
-      {runResult && (
+      {runResult ? (
         <div className={`px-4 py-3 rounded-xl border text-xs ${runResult.error ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
           {runResult.error ? `Erro: ${runResult.error}` : (
             <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -138,13 +138,13 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
               <span>Keywords: <b>{runResult.keywords_found}</b></span>
               <span>Criados: <b>{runResult.lifecycles_created}</b></span>
               <span>Bids aplicados: <b>{runResult.bids_applied_to_amazon}</b></span>
-              {runResult.emergency_reductions > 0 && <span className="text-red-400">⚠ Emergências: <b>{runResult.emergency_reductions}</b></span>}
-              {runResult.post_48h_adjustments > 0 && <span>48h ajustes: <b>{runResult.post_48h_adjustments}</b></span>}
-              {runResult.delivered_to_engine > 0 && <span>→ Motor: <b>{runResult.delivered_to_engine}</b></span>}
+              {runResult.emergency_reductions > 0 ? <span className="text-red-400">⚠ Emergências: <b>{runResult.emergency_reductions}</b></span> : null}
+              {runResult.post_48h_adjustments > 0 ? <span>48h ajustes: <b>{runResult.post_48h_adjustments}</b></span> : null}
+              {runResult.delivered_to_engine > 0 ? <span>→ Motor: <b>{runResult.delivered_to_engine}</b></span> : null}
             </div>
           )}
         </div>
-      )}
+      ) : null}
 
       {/* Estatísticas */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
@@ -213,7 +213,7 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
                     </td>
                     <td className="py-2 px-2">
                       <p className="text-slate-400 text-[10px] truncate max-w-[100px]">{lc.ad_group_name || lc.ad_group_id?.slice(-8)}</p>
-                      {lc.asin && <p className="text-slate-600 text-[9px]">{lc.asin}</p>}
+                      {lc.asin ? <p className="text-slate-600 text-[9px]">{lc.asin}</p> : null}
                     </td>
                     <td className="py-2 px-2 max-w-[120px]">
                       <p className="text-slate-300 truncate" title={lc.keyword_text}>{lc.keyword_text || '—'}</p>
@@ -234,7 +234,7 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
                       {lc.post_48h_bid
                         ? <span className="text-amber-400 font-mono font-semibold">{fmtBRL(lc.post_48h_bid)}</span>
                         : <span className="text-slate-600">—</span>}
-                      {lc.amazon_suggestion_limited_by_guardrail && <span className="text-[9px] text-orange-400 ml-1">⚠</span>}
+                      {lc.amazon_suggestion_limited_by_guardrail ? <span className="text-[9px] text-orange-400 ml-1">⚠</span> : null}
                     </td>
                     <td className="py-2 px-2 whitespace-nowrap">
                       <span className={lc.current_acos > 0 ? (lc.current_acos > (lc.target_acos || 15) ? 'text-red-400' : 'text-emerald-400') : 'text-slate-600'}>

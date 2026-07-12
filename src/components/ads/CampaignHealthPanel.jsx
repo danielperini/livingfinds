@@ -13,7 +13,7 @@ function MetricCard({ label, value, sub, tone = 'default' }) {
     <div className={`bg-surface-1 border rounded-xl p-4 ${tones[tone]}`}>
       <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">{label}</p>
       <p className="text-xl font-bold text-white">{value}</p>
-      {sub && <p className="text-[10px] text-slate-500 mt-1">{sub}</p>}
+      {sub ? <p className="text-[10px] text-slate-500 mt-1">{sub}</p> : null}
     </div>
   );
 }
@@ -103,33 +103,33 @@ export default function CampaignHealthPanel({ campaigns, products }) {
       </div>
 
       {/* Status rápido */}
-      {issues > 0 && (
+      {issues > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {stats.highAcos > 0 && (
+          {stats.highAcos > 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300">
               <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
               <span><strong>{stats.highAcos}</strong> campanha{stats.highAcos > 1 ? 's' : ''} com ACoS &gt; 40%</span>
             </div>
-          )}
-          {stats.noOrders > 0 && (
+          ) : null}
+          {stats.noOrders > 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
               <ShoppingCart className="w-3.5 h-3.5 text-amber-400" />
               <span><strong>{stats.noOrders}</strong> campanha{stats.noOrders > 1 ? 's' : ''} com gasto sem conversão</span>
             </div>
-          )}
-          {stats.noSpend > 0 && (
+          ) : null}
+          {stats.noSpend > 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3 text-xs text-slate-400">
               <PauseCircle className="w-3.5 h-3.5 text-slate-500" />
               <span><strong>{stats.noSpend}</strong> campanha{stats.noSpend > 1 ? 's' : ''} ativa{stats.noSpend > 1 ? 's' : ''} sem gasto</span>
             </div>
-          )}
-          {issues === 0 && (
+          ) : null}
+          {issues === 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300">
               <CheckCircle className="w-3.5 h-3.5" /> Todas as campanhas saudáveis
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       {/* KPIs principais */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -180,7 +180,7 @@ export default function CampaignHealthPanel({ campaigns, products }) {
       </div>
 
       {/* ACoS por ASIN */}
-      {stats.asinList.length > 0 && (
+      {stats.asinList.length > 0 ? (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
             <Target className="w-4 h-4 text-cyan" /> ACoS por Produto
@@ -191,12 +191,12 @@ export default function CampaignHealthPanel({ campaigns, products }) {
             ))}
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* Campanhas com problema */}
-      {(stats.highAcosList.length > 0 || stats.noSpendList.length > 0) && (
+      {(stats.highAcosList.length > 0 || stats.noSpendList.length > 0) ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {stats.highAcosList.length > 0 && (
+          {stats.highAcosList.length > 0 ? (
             <div className="bg-surface-1 border border-red-500/20 rounded-xl p-4">
               <h3 className="text-xs font-semibold text-red-400 mb-3 flex items-center gap-1.5">
                 <TrendingDown className="w-3.5 h-3.5" /> ACoS crítico (&gt;40%)
@@ -210,8 +210,8 @@ export default function CampaignHealthPanel({ campaigns, products }) {
                 ))}
               </div>
             </div>
-          )}
-          {stats.noSpendList.length > 0 && (
+          ) : null}
+          {stats.noSpendList.length > 0 ? (
             <div className="bg-surface-1 border border-slate-700/50 rounded-xl p-4">
               <h3 className="text-xs font-semibold text-slate-400 mb-3 flex items-center gap-1.5">
                 <DollarSign className="w-3.5 h-3.5" /> Ativas sem gasto
@@ -225,9 +225,9 @@ export default function CampaignHealthPanel({ campaigns, products }) {
                 ))}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
 
       <p className="text-[10px] text-slate-600 text-center">Selecione uma campanha na lista para ver detalhes e editar keywords</p>
     </div>

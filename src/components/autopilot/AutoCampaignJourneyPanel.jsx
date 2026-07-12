@@ -97,16 +97,16 @@ function LearningRow({ record, onExpand, expanded }) {
             <p className="text-xs font-bold text-white">R${(record.current_bid || 0).toFixed(2)}</p>
             <p className="text-[9px] text-slate-500">bid atual</p>
           </div>
-          {record.terms_pending_promotion > 0 && (
+          {record.terms_pending_promotion > 0 ? (
             <span className="flex items-center gap-1 text-[10px] text-violet-400 bg-violet-500/15 border border-violet-500/30 px-1.5 py-0.5 rounded-full">
               <Tag className="w-3 h-3" /> {record.terms_pending_promotion}
             </span>
-          )}
+          ) : null}
           <StateBadge state={record.learning_state} />
         </div>
       </button>
 
-      {expanded && (
+      {expanded ? (
         <div className="px-4 pb-4 pt-3 border-t border-surface-3 space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
             {[
@@ -139,14 +139,14 @@ function LearningRow({ record, onExpand, expanded }) {
             <div className="text-slate-500">Próxima revisão: <span className="text-slate-300">{record.next_review_at ? new Date(record.next_review_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span></div>
             <div className="text-slate-500">Última análise: <span className="text-slate-300">{record.last_analysis_at ? new Date(record.last_analysis_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</span></div>
           </div>
-          {record.block_reason && (
+          {record.block_reason ? (
             <div className="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
               <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
               Bloqueada: {record.block_reason}
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -171,9 +171,9 @@ function PromotionRow({ promo, onPromote, promoting }) {
         <div className="flex items-center gap-2 mb-1.5 flex-wrap">
           <p className="text-xs font-semibold text-white">{promo.source_search_term}</p>
           <span className="text-[9px] text-slate-500 font-mono bg-surface-3 px-1.5 py-0.5 rounded">{promo.asin}</span>
-          {promo.ai_validated && (
+          {promo.ai_validated ? (
             <span className="text-[9px] text-violet-400 bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded">IA ✓</span>
-          )}
+          ) : null}
         </div>
 
         {/* Métricas */}
@@ -181,8 +181,8 @@ function PromotionRow({ promo, onPromote, promoting }) {
           <span className="text-emerald-400 font-semibold">{conversions} conv.</span>
           <span>Clicks: {promo.clicks || 0}</span>
           <span>CPC: R${cpc.toFixed(2)}</span>
-          {promo.acos > 0 && <span>ACoS: {promo.acos.toFixed(1)}%</span>}
-          {promo.sales > 0 && <span>Vendas: R${promo.sales.toFixed(2)}</span>}
+          {promo.acos > 0 ? <span>ACoS: {promo.acos.toFixed(1)}%</span> : null}
+          {promo.sales > 0 ? <span>Vendas: R${promo.sales.toFixed(2)}</span> : null}
         </div>
 
         {/* Fluxo de promoção */}
@@ -194,20 +194,20 @@ function PromotionRow({ promo, onPromote, promoting }) {
           ) : (
             <span>Campanha MANUAL EXACT</span>
           )}
-          {promo.negative_keyword_id && (
+          {promo.negative_keyword_id ? (
             <>
               <ArrowRight className="w-3 h-3" />
               <span className="text-red-400">Negativado ✓</span>
             </>
-          )}
+          ) : null}
         </div>
 
         {/* Erros */}
-        {promo.last_error && (
+        {promo.last_error ? (
           <p className="mt-1 text-[10px] text-red-400 bg-red-500/10 px-2 py-1 rounded truncate" title={promo.last_error}>
             ⚠ {promo.last_error}
           </p>
-        )}
+        ) : null}
       </div>
 
       <div className="flex flex-col items-end gap-2 flex-shrink-0">
@@ -216,30 +216,30 @@ function PromotionRow({ promo, onPromote, promoting }) {
           <p className="text-[9px] text-slate-500">bid alvo</p>
         </div>
         <PromoStatusBadge status={promo.promotion_status} />
-        {canPromote && !busy && (
+        {canPromote && !busy ? (
           <button
             onClick={() => onPromote(promo)}
             className="flex items-center gap-1.5 text-[10px] text-violet-300 bg-violet-500/20 border border-violet-500/30 hover:bg-violet-500/30 px-2 py-1 rounded-lg transition-colors"
           >
             <Zap className="w-3 h-3" /> Criar EXACT
           </button>
-        )}
-        {canRetry && !busy && (
+        ) : null}
+        {canRetry && !busy ? (
           <button
             onClick={() => onPromote(promo)}
             className="flex items-center gap-1.5 text-[10px] text-amber-300 bg-amber-500/15 border border-amber-500/25 hover:bg-amber-500/25 px-2 py-1 rounded-lg transition-colors"
           >
             <RefreshCw className="w-3 h-3" /> Retry
           </button>
-        )}
-        {busy && (
+        ) : null}
+        {busy ? (
           <span className="flex items-center gap-1 text-[10px] text-cyan">
             <Loader2 className="w-3 h-3 animate-spin" /> Criando…
           </span>
-        )}
-        {promo.retry_count > 0 && (
+        ) : null}
+        {promo.retry_count > 0 ? (
           <span className="text-[9px] text-slate-500">{promo.retry_count} tentativa(s)</span>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -385,12 +385,12 @@ export default function AutoCampaignJourneyPanel({ account }) {
           ))}
         </div>
 
-        {runMsg && (
+        {runMsg ? (
           <div className={`mt-3 flex items-center gap-2 p-2.5 rounded-lg text-xs ${runMsg.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-red-500/10 border border-red-500/20 text-red-400'}`}>
             {runMsg.type === 'success' ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
             {runMsg.text}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Tabs */}
@@ -414,7 +414,7 @@ export default function AutoCampaignJourneyPanel({ account }) {
       ) : (
         <>
           {/* Campanhas AUTO */}
-          {tab === 'campaigns' && (
+          {tab === 'campaigns' ? (
             <div className="space-y-2">
               {learningRecords.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-sm">
@@ -426,10 +426,10 @@ export default function AutoCampaignJourneyPanel({ account }) {
                 <LearningRow key={r.id} record={r} onExpand={toggleExpand} expanded={expandedIds.has(r.id)} />
               ))}
             </div>
-          )}
+          ) : null}
 
           {/* Termos pendentes → EXACT */}
-          {tab === 'promotions' && (
+          {tab === 'promotions' ? (
             <div className="space-y-2">
               {pendingPromos.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-sm">
@@ -449,10 +449,10 @@ export default function AutoCampaignJourneyPanel({ account }) {
                 </>
               )}
             </div>
-          )}
+          ) : null}
 
           {/* Concluídos */}
-          {tab === 'completed' && (
+          {tab === 'completed' ? (
             <div className="space-y-2">
               {completedPromos.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-sm">
@@ -463,10 +463,10 @@ export default function AutoCampaignJourneyPanel({ account }) {
                 <PromotionRow key={p.id} promo={p} onPromote={handlePromote} promoting={promoting} />
               ))}
             </div>
-          )}
+          ) : null}
 
           {/* Falhas */}
-          {tab === 'failed' && (
+          {tab === 'failed' ? (
             <div className="space-y-2">
               {failedPromos.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-sm">
@@ -482,10 +482,10 @@ export default function AutoCampaignJourneyPanel({ account }) {
                 </>
               )}
             </div>
-          )}
+          ) : null}
 
           {/* Histórico de Bids */}
-          {tab === 'history' && (
+          {tab === 'history' ? (
             <div>
               {bidHistory.length === 0 ? (
                 <div className="text-center py-12 text-slate-500 text-sm">
@@ -545,7 +545,7 @@ export default function AutoCampaignJourneyPanel({ account }) {
                 </div>
               )}
             </div>
-          )}
+          ) : null}
         </>
       )}
     </div>
