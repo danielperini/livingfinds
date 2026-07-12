@@ -15,7 +15,6 @@ import BudgetSpendControlPanel from '@/components/sala/BudgetSpendControlPanel';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
-import AcosBidReductionPanel from '@/components/sala/AcosBidReductionPanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
@@ -78,7 +77,6 @@ const TAB_GROUPS = [
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
       { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
-      { id: 'acos_reduction', label: 'Otimização de ACoS' },
     ],
   },
   {
@@ -1372,11 +1370,6 @@ export default function SalaDeComando() {
           {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
           {tab === 'bids_keywords' && (
             <KeywordBidChangesPanel account={account} />
-          )}
-
-          {/* ── OTIMIZAÇÃO ACOS ─────────────────────────────────────────────── */}
-          {tab === 'acos_reduction' && (
-            <AcosBidReductionPanel account={account} />
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
