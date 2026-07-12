@@ -195,7 +195,7 @@ export default function SyncStatusBanner({ accountId }) {
                   className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-slate-200 rounded-lg bg-white/5 hover:bg-white/10 transition-colors"
                 >
                   {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                  {errorLogs.length} erro{errorLogs.length > 1 ? 's' : ''}
+                  <span>{errorLogs.length} erro{errorLogs.length > 1 ? 's' : ''}</span>
                 </button>
               ) : null}
               <button onClick={loadStatus} title="Verificar novamente"

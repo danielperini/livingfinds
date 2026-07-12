@@ -127,9 +127,9 @@ export default function AiChangesBreakdown({ bidChanges }) {
                 <div key={type} className="flex items-center justify-between">
                   <span className="text-[10px] text-slate-400">{CHANGE_TYPE_LABELS[type] || type}</span>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-emerald-400">{counts.executed} exec.</span>
-                    {counts.failed > 0 ? <span className="text-[10px] text-red-400">{counts.failed} falha</span> : null}
-                    <span className="text-[10px] text-slate-500">{counts.total} total</span>
+                    <span className="text-[10px] text-emerald-400">{String(counts.executed)} exec.</span>
+                    {counts.failed > 0 ? <span className="text-[10px] text-red-400">{String(counts.failed)} falha</span> : null}
+                    <span className="text-[10px] text-slate-500">{String(counts.total)} total</span>
                   </div>
                 </div>
               ))}

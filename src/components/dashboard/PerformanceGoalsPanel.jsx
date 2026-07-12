@@ -171,7 +171,7 @@ export default function PerformanceGoalsPanel({ account, metricsData }) {
         map(({ label, active, note }) =>
         <div key={label} className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border hidden ${active ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-surface-2 border-surface-3 text-slate-500'}`}>
             {active ? <CheckCircle className="w-2.5 h-2.5" /> : <Clock className="w-2.5 h-2.5" />}
-            {label}{note ? ` ${note}` : ''}
+            <span>{label}{note ? ` ${note}` : ''}</span>
           </div>
         )}
         {(s.placement_optimization_enabled && s.top_of_search_limit === 0) ? (
