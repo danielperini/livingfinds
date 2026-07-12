@@ -24,10 +24,13 @@ import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
 function getYesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  d.setHours(0, 0, 0, 0);
-  return d.toISOString().slice(0, 10);
+  // Usa timezone BRT (UTC-3) para determinar "ontem" corretamente
+  const nowBRT = new Date(Date.now() - 3 * 3600000);
+  const d = nowBRT.toISOString().slice(0, 10);
+  // Subtrai 1 dia
+  const date = new Date(d + 'T12:00:00Z');
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function getClosedReportingPeriod(period) {
@@ -580,10 +583,11 @@ export default function Dashboard() {
   // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
   const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
   const spendYesterday = useMemo(() => {
+    // Filtra estritamente pela data de ontem em BRT e deduplica por campaign_id+date
     const seen = new Set();
     let s = 0;
     for (const m of allMetrics) {
-      if (m.date !== yesterday) continue;
+      if (!m.date || m.date !== yesterday) continue;
       const k = `${m.campaign_id}-${m.date}`;
       if (seen.has(k)) continue;
       seen.add(k);
@@ -1088,8 +1092,8 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <KpiCard label="Limite diário geral" value={officialDailyLimit > 0 ? fmtBRL(officialDailyLimit) : '—'} tone="cyan" />
-          <KpiCard label="Gasto D-1 (ontem)" value={fmtBRL(spendYesterday)}
-            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : undefined}
+          <KpiCard label={`Gasto D-1 (${yesterday})`} value={fmtBRL(spendYesterday)}
+            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === yesterday).length} registros`}
             tone={officialDailyLimit > 0 && spendYesterday > officialDailyLimit ? 'bad' : 'default'} />
           <KpiCard label="Média diária" value={fmtBRL(avgDailySpend)} sub={`Período: ${periodLabel}`} />
           <KpiCard label="Campanhas ativas" value={active_count} sub={`${paused_count} pausadas`} />
