@@ -1296,10 +1296,38 @@ Deno.serve(async (req) => {
       const hasMinEvidence = kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && kw_spend >= MRC.MIN_SPEND;
       const hasCtrQuality = kw_impressions > 0 && kw_ctr >= MRC.MIN_CTR;
 
-      // ── Dados insuficientes: calibrar se baixíssimas impressões ─────
+      // ── Dados insuficientes: zero impressões após 72h → pausar keyword ─
       if (!hasMinEvidence) {
         stats.held++;
-        if (kw_impressions < 50 && kw_spend < 1 && stockCovDays >= settings.min_stock_days && !growthCooldownActive) {
+
+        // Keyword criada há mais de 72h com zero impressões → palavra irrelevante, pausar
+        const kwCreatedAt = kw.created_at || kw.created_date || null;
+        const kwAgeHours = kwCreatedAt ? (Date.now() - new Date(kwCreatedAt).getTime()) / 3600000 : 0;
+        const hasZeroImpressions = (kw_impressions ?? 0) === 0;
+        const isStale72h = kwAgeHours >= FB.ZERO_IMP_FIRST_REVIEW_HOURS; // 72h
+
+        if (hasZeroImpressions && isStale72h && stockCovDays > 0) {
+          // Pausar: zero impressões após 72h indica palavra sem relevância para o algoritmo Amazon
+          const iKey = `zero_imp_pause_72h|${aid}|${entityId}|${today}`;
+          if (!usedIdemKeys.has(iKey)) {
+            decisions.push(buildDecision(aid, correlationId, {
+              decision_type: 'reduce_waste', entity_type: 'keyword', entity_id: entityId,
+              campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+              keyword_text: kw.keyword_text, action: 'pause_keyword',
+              value_before: currentBid, value_after: currentBid,
+              rationale: `⛔ ZERO IMPRESSÕES após ${Math.round(kwAgeHours)}h no ar. Bid R$${currentBid.toFixed(2)} já não é baixo — aumentar não resolve se a Amazon não exibe a keyword. Palavra irrelevante ou fora da categoria. PAUSANDO para substituição.`,
+              rule_key: 'zero_impressions_pause_72h', risk: 'low', priority: PRIORITY.waste_reduction,
+              search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+              idempotency_key: iKey, opportunity_state: 'no_opportunity',
+            }));
+            entityChangedThisCycle.set(entityId, 'zero_imp_pause');
+            stats.paused++;
+          }
+          continue;
+        }
+
+        // Keyword nova (<72h) com zero impressões e bid baixo → calibrar uma vez
+        if (!isStale72h && kw_spend < 1 && stockCovDays >= settings.min_stock_days && !growthCooldownActive) {
           if (currentBid <= settings.min_bid * 1.2) {
             const iKey = `calibrate_bid|${aid}|${entityId}|${today}`;
             if (!usedIdemKeys.has(iKey)) {
@@ -1308,7 +1336,7 @@ Deno.serve(async (req) => {
                 campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
                 keyword_text: kw.keyword_text, action: 'set_bid',
                 value_before: currentBid, value_after: settings.min_bid * 1.1,
-                rationale: `Sem impressões suficientes. Bid calibrado para gerar dados mínimos.`,
+                rationale: `Keyword nova (${Math.round(kwAgeHours)}h), bid muito baixo, sem impressões ainda. Calibrando uma vez para gerar dados iniciais.`,
                 rule_key: 'calibrate_no_impressions', risk: 'low', priority: PRIORITY.maintenance,
                 search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
                 idempotency_key: iKey, opportunity_state: 'insufficient_data',
