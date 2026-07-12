@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock, ChevronUp, ChevronDown } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -19,6 +19,16 @@ export default function TermBankPageV2() {
   const [scheduledIds, setScheduledIds] = useState({});
 
   const [account, setAccount] = useState(null);
+  const [sortKey, setSortKey] = useState('confidence');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const handleSort = (key) => {
+    setSortKey(prev => {
+      if (prev === key) { setSortDir(d => d === 'desc' ? 'asc' : 'desc'); return key; }
+      setSortDir('desc');
+      return key;
+    });
+  };
 
   const toConf100 = (c) => c == null ? 0 : c <= 1 ? Math.round(c * 100) : Math.round(c);
 
@@ -193,7 +203,24 @@ export default function TermBankPageV2() {
   );
 
   const q = search.toLowerCase();
-  const filteredTerms = terms.filter((t) => `${t.term || ''} ${t.asin || ''} ${t.product_name || ''}`.toLowerCase().includes(q));
+  const SORT_FIELDS = {
+    confidence: t => toConf100(t.confidence),
+    clicks: t => t.clicks || 0,
+    impressions: t => t.impressions || 0,
+    orders: t => t.orders || 0,
+    sales: t => t.sales || 0,
+    spend: t => t.spend || 0,
+    acos: t => t.acos || 0,
+    roas: t => t.roas || 0,
+  };
+  const filteredTerms = terms
+    .filter((t) => `${t.term || ''} ${t.asin || ''} ${t.product_name || ''}`.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const fn = SORT_FIELDS[sortKey];
+      if (!fn) return 0;
+      const diff = fn(a) - fn(b);
+      return sortDir === 'desc' ? -diff : diff;
+    });
 
 
 
@@ -268,9 +295,37 @@ export default function TermBankPageV2() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Termo', 'Conf.', 'Produto / ASIN', 'Status', 'Cliques', 'Impr.', 'Pedidos', 'Vendas', 'Gasto', 'ACoS', 'ROAS', ''].map((h) =>
-                <th key={h} className="px-4 py-3 text-left text-xs uppercase text-slate-500">{h}</th>
-                )}
+                  {[
+                    { label: 'Termo', key: null },
+                    { label: 'Conf.', key: 'confidence' },
+                    { label: 'Produto / ASIN', key: null },
+                    { label: 'Status', key: null },
+                    { label: 'Cliques', key: 'clicks' },
+                    { label: 'Impr.', key: 'impressions' },
+                    { label: 'Pedidos', key: 'orders' },
+                    { label: 'Vendas', key: 'sales' },
+                    { label: 'Gasto', key: 'spend' },
+                    { label: 'ACoS', key: 'acos' },
+                    { label: 'ROAS', key: 'roas' },
+                    { label: '', key: null },
+                  ].map(({ label, key }) => (
+                    <th
+                      key={label || '_action'}
+                      onClick={key ? () => handleSort(key) : undefined}
+                      className={`px-4 py-3 text-left text-xs uppercase text-slate-500 whitespace-nowrap select-none ${key ? 'cursor-pointer hover:text-slate-300 transition-colors' : ''}`}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        {label}
+                        {key && (
+                          sortKey === key
+                            ? sortDir === 'desc'
+                              ? <ChevronDown className="w-3 h-3 text-cyan" />
+                              : <ChevronUp className="w-3 h-3 text-cyan" />
+                            : <ChevronDown className="w-3 h-3 opacity-25" />
+                        )}
+                      </span>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
