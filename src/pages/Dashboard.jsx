@@ -660,13 +660,13 @@ export default function Dashboard() {
               ? <><span className="text-emerald-400/80">{campaigns.length} campanhas</span> · {active_count} ativas · {products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</>
 
               : <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>}
-            {nextSyncLabel && (
+            {nextSyncLabel ? (
                 <span className="flex items-center gap-1 text-slate-500 ml-1">
                   · <Clock className="w-3 h-3" />
                   Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   <span className="text-slate-600">· Próximo sync {nextSyncLabel.label}</span>
                 </span>
-            )}
+            ) : null}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -679,12 +679,12 @@ export default function Dashboard() {
       </div>
 
       {/* ── 1b. INDICADOR DE CONSISTÊNCIA Dashboard ↔ Motor de IA ───────────── */}
-      {account && !loading && (
+      {account && !loading ? (
         <DataConsistencyBadge
           canonicalContext={canonicalContext}
           loading={canonicalLoading}
         />
-      )}
+      ) : null}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
       <div className="space-y-2">
@@ -801,9 +801,9 @@ export default function Dashboard() {
       </div>
 
       {/* ── 3b. COMPARAÇÃO MÊS ATUAL VS MÊS ANTERIOR ───────────────────────── */}
-      {!loading && (
+      {!loading ? (
         <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
-      )}
+      ) : null}
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account && <UnifiedMetricsPanel amazonAccountId={account.id} />}
@@ -833,7 +833,7 @@ export default function Dashboard() {
           <PeriodSelector value={activePeriod} onChange={setPeriod} available={availablePeriods} />
         </div>
         {/* Indicador de qualidade da fonte — usa contexto canônico quando disponível */}
-        {!loading && (
+        {!loading ? (
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-4 text-[10px] font-medium ${
             dataQuality.quality === 'high'   ? 'bg-emerald-500/8 border border-emerald-500/15 text-emerald-400' :
             dataQuality.quality === 'low'    ? 'bg-red-500/8 border border-red-500/15 text-red-400' :
@@ -844,9 +844,9 @@ export default function Dashboard() {
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
-            {canonicalSettings && (
+            {canonicalSettings ? (
               <span className="text-slate-600 hidden sm:inline">· Metas: {canonicalSettings.source}</span>
-            )}
+            ) : null}
             <button onClick={runSync} disabled={syncingDashboard}
               className={`ml-auto underline whitespace-nowrap disabled:opacity-50 flex items-center gap-1 ${
                 dataQuality.quality === 'low' ? 'text-red-400 hover:text-red-300' : 'text-emerald-500/70 hover:text-emerald-400'
@@ -855,7 +855,7 @@ export default function Dashboard() {
               {syncingDashboard ? 'Atualizando...' : 'Atualizar agora'}
             </button>
           </div>
-        )}
+        ) : null}
 
 
         {loading ? (
@@ -892,7 +892,7 @@ export default function Dashboard() {
             <KpiCard label="Pedidos" value={kpis.orders.toLocaleString('pt-BR')}
               sub={activePeriod !== 'yesterday' ? `Ontem: ${yesterdayKpis.orders.toLocaleString('pt-BR')}` : undefined}
               tone={kpis.orders > 0 ? 'good' : 'default'} />
-            {hasSalesDailyData && (
+            {hasSalesDailyData ? (
               <div className={`bg-surface-1 border rounded-xl p-4 ${realSalesKpis.revenue > 0 ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-surface-2'}`}>
                 <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Fat. Real (SP-API)</p>
                 <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
@@ -906,19 +906,19 @@ export default function Dashboard() {
                   <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
                 )}
               </div>
-            )}
-            {hasSalesDailyData && realSalesKpis.tacos !== null && (
+            ) : null}
+            {hasSalesDailyData && realSalesKpis.tacos !== null ? (
               <KpiCard label="TACoS Real"
                 value={kpis.sales > 0 && realSalesKpis.revenue === 0 ? '⚠ pendente' : `${realSalesKpis.tacos.toFixed(1)}%`}
                 sub={kpis.sales > 0 && realSalesKpis.revenue === 0 ? 'Divergência Ads × SP-API' : targetTacos > 0 ? `Meta: ${targetTacos}%` : 'Gasto Ads / Fat. Real'}
                 tone={kpis.sales > 0 && realSalesKpis.revenue === 0 ? 'warn' : realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'bad' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'warn' : 'good'} />
-            )}
-            {monthProjection && (
+            ) : null}
+            {monthProjection ? (
               <KpiCard label="Projeção do Mês"
                 value={fmtBRL(monthProjection.projected)}
                 sub={`${monthProjection.completedPct}% concluído · ${fmtBRL(monthProjection.avgPerDay)}/dia`}
                 tone="cyan" />
-            )}
+            ) : null}
           </div>
         )}
       </div>
@@ -926,7 +926,7 @@ export default function Dashboard() {
 
 
       {/* ── 5a. CARTÕES EXTRAS SP-API ────────────────────────────────────────── */}
-      {!loading && hasSalesDailyData && (
+      {!loading && hasSalesDailyData ? (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <KpiCard
             label="Unidades vendidas"
@@ -949,9 +949,9 @@ export default function Dashboard() {
             {extraKpis.bestDay ? (
               <div className="space-y-1">
                 <p className="text-xs text-emerald-400 font-semibold">↑ {fmtBRL(extraKpis.bestDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({fmtDateBR(extraKpis.bestDay.date)})</span></p>
-                {extraKpis.worstDay && extraKpis.worstDay.date !== extraKpis.bestDay.date && (
+                {extraKpis.worstDay && extraKpis.worstDay.date !== extraKpis.bestDay.date ? (
                   <p className="text-xs text-red-400 font-semibold">↓ {fmtBRL(extraKpis.worstDay.revenue)} <span className="text-slate-500 font-normal text-[10px]">({fmtDateBR(extraKpis.worstDay.date)})</span></p>
-                )}
+                ) : null}
                 <p className="text-[9px] text-slate-600">Apenas dias com dados completos</p>
               </div>
             ) : (
@@ -959,7 +959,7 @@ export default function Dashboard() {
             )}
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ── 5a2. ALTERAÇÕES DA IA — segmentadas ──────────────────────────────── */}
       {!loading && bidChanges.length > 0 ? (
@@ -967,7 +967,7 @@ export default function Dashboard() {
       ) : null}
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
-      {!loading && (
+      {!loading ? (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
           {/* Top campanhas por gasto */}
@@ -1087,15 +1087,15 @@ export default function Dashboard() {
             <p className="text-[9px] text-slate-600 mt-3">Período: {periodLabel}</p>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ── 6. ORÇAMENTO E PACING ────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-slate-300">Orçamento e pacing</h2>
-          {officialDailyLimit === 0 && (
+          {officialDailyLimit === 0 ? (
             <Link to="/settings" className="text-xs text-amber-400 hover:underline">Configurar limite →</Link>
-          )}
+          ) : null}
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <KpiCard label="Limite diário geral" value={officialDailyLimit > 0 ? fmtBRL(officialDailyLimit) : '—'} tone="cyan" />
@@ -1119,11 +1119,11 @@ export default function Dashboard() {
             </div>
           </div>
         ) : null}
-        {budgetCfg?.next_weekly_recalculation && (
+        {budgetCfg?.next_weekly_recalculation ? (
           <p className="text-[10px] text-slate-600 mt-2">
             Próximo recálculo: {new Date(budgetCfg.next_weekly_recalculation).toLocaleDateString('pt-BR')}
           </p>
-        )}
+        ) : null}
       </div>
 
       {/* ── 7. METAS VS REALIDADE ────────────────────────────────────────────── */}
@@ -1146,7 +1146,7 @@ export default function Dashboard() {
       ) : null}
 
       {/* ── 8. RESUMO DE DECISÕES ────────────────────────────────────────────── */}
-      {decisionSummary != null && (
+      {decisionSummary != null ? (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
@@ -1175,7 +1175,7 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
