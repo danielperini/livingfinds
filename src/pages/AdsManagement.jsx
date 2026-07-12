@@ -228,12 +228,11 @@ export default function AdsManagement() {
       loadAllCampaigns(acc.id),
       base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500)]
       );
-      // Excluir apenas incompletas; arquivadas ficam para o filtro por coluna
-      const operational = cams.filter((c) =>
-      c.is_operational !== false &&
-      c.state !== 'incomplete' &&
-      !c.is_incomplete
-      );
+      // Excluir apenas arquivadas e incompletas; is_operational não é critério de exibição
+      const operational = cams.filter((c) => {
+        const state = (c.state || c.status || '').toLowerCase();
+        return state !== 'incomplete' && !c.is_incomplete;
+      });
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
       const toEnable = operational.filter((c) => !c.created_by_app && c.learning_eligible === false);
