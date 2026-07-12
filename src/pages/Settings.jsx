@@ -422,18 +422,45 @@ export default function Settings() {
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Automações</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
           {[
-            { key: 'pacing_enabled', label: 'Pacing do Orçamento', hint: 'Controla ritmo do gasto ao longo do dia' },
-            { key: 'dayparting_enabled', label: 'Dayparting', hint: 'Ajusta bids por horário de performance' },
-            { key: 'placement_optimization_enabled', label: 'Otimização de Posicionamento', hint: 'Ajusta exposição por placement' },
-          ].map(({ key, label, hint }) => (
-            <div key={key} className="flex items-center justify-between p-3 bg-surface-2 rounded-lg border border-surface-3">
-              <div>
-                <p className="text-xs font-medium text-slate-300">{label}</p>
-                <p className="text-[10px] text-slate-600 mt-0.5">{hint}</p>
+            {
+              key: 'pacing_enabled',
+              label: 'Pacing do Orçamento',
+              hint: 'Controla ritmo do gasto ao longo do dia',
+              activeNote: 'Motor aplica guardrail de orçamento a cada hora',
+              inactiveNote: 'Gasto diário não é controlado pelo motor',
+            },
+            {
+              key: 'dayparting_enabled',
+              label: 'Dayparting',
+              hint: 'Ajusta bids por horário de performance',
+              activeNote: 'Bids reduzidos em horários de baixo desempenho automaticamente',
+              inactiveNote: 'Bids não variam por horário',
+            },
+            {
+              key: 'placement_optimization_enabled',
+              label: 'Otimização de Posicionamento',
+              hint: 'Ajusta exposição por placement',
+              activeNote: 'Ajustes de Top of Search / Product Pages ativos',
+              inactiveNote: 'Nenhum ajuste de placement aplicado',
+            },
+          ].map(({ key, label, hint, activeNote, inactiveNote }) => {
+            const isOn = !!goals[key];
+            return (
+              <div key={key} className={`flex flex-col p-3 bg-surface-2 rounded-lg border transition-colors ${isOn ? 'border-emerald-500/30' : 'border-surface-3'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isOn ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+                    <p className="text-xs font-medium text-slate-300">{label}</p>
+                  </div>
+                  <Toggle value={isOn} onChange={v => setGoal(key, v)} />
+                </div>
+                <p className="text-[10px] text-slate-500 mb-1.5">{hint}</p>
+                <div className={`text-[10px] px-2 py-1 rounded ${isOn ? 'bg-emerald-500/10 text-emerald-400' : 'bg-surface-3 text-slate-600'}`}>
+                  {isOn ? `✓ ${activeNote}` : `✗ ${inactiveNote}`}
+                </div>
               </div>
-              <Toggle value={goals[key]} onChange={v => setGoal(key, v)} />
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Top of Search / Placement */}
