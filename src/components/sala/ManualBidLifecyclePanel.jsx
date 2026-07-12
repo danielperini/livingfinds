@@ -24,7 +24,7 @@ function AgeChip({ createdAt }) {
   if (!createdAt) return <span className="text-slate-600">—</span>;
   const h = Math.round((Date.now() - new Date(createdAt).getTime()) / 3600000);
   const color = h < 24 ? 'text-blue-400' : h < 48 ? 'text-yellow-400' : h < 72 ? 'text-orange-400' : 'text-slate-400';
-  return <span className={`text-xs font-mono ${color}`}>{h < 24 ? `${h}h` : `${Math.floor(h/24)}d${h%24>0?` ${h%24}h`:''}` }</span>;
+  return <span className={`text-xs font-mono ${color}`}>{h < 24 ? `${h}h` : `${Math.floor(h/24)}d${h%24>0?` ${h%24}h`:''}`}</span>;
 }
 
 function StatusBadge({ status }) {
@@ -99,7 +99,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
     return lifecycles;
   }, [lifecycles, filter]);
 
-  // Estatísticas
   const stats = useMemo(() => ({
     total: lifecycles.length,
     in_48h: lifecycles.filter(lc => lc.status === 'launch_0_48h').length,
@@ -111,7 +110,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-300">Campanhas Manuais — Ciclo Inicial de Bids</h3>
@@ -129,7 +127,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
         </div>
       </div>
 
-      {/* Resultado da execução */}
       {runResult ? (
         <div className={`px-4 py-3 rounded-xl border text-xs ${runResult.error ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'}`}>
           {runResult.error ? `Erro: ${runResult.error}` : (
@@ -146,7 +143,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
         </div>
       ) : null}
 
-      {/* Estatísticas */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
         {[
           { label: 'Total', value: stats.total, color: 'text-slate-300' },
@@ -163,7 +159,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
         ))}
       </div>
 
-      {/* Filtros */}
       <div className="flex gap-1.5 flex-wrap">
         {[
           { key: 'all', label: 'Todos' },
@@ -178,7 +173,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
         ))}
       </div>
 
-      {/* Tabela */}
       {loading ? (
         <div className="h-32 flex items-center justify-center text-slate-500 text-xs">Carregando...</div>
       ) : filtered.length === 0 ? (
@@ -199,9 +193,6 @@ export default function ManualBidLifecyclePanel({ amazonAccountId }) {
               {filtered.map(lc => {
                 const nextReview = lc.next_review_at ? new Date(lc.next_review_at) : null;
                 const reviewIn = nextReview ? Math.round((nextReview.getTime() - Date.now()) / 3600000) : null;
-                const suggText = lc.amazon_suggested_bid
-                  ? `${fmtBRL(lc.amazon_suggested_bid_lower || lc.amazon_suggested_bid)} – ${fmtBRL(lc.amazon_suggested_bid_upper)}`
-                  : lc.amazon_suggestion_fetched_at ? 'Sem sugestão' : '—';
 
                 return (
                   <tr key={lc.id} className="border-b border-surface-2/50 hover:bg-surface-2/30 transition-colors">

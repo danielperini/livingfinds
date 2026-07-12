@@ -55,12 +55,10 @@ export default function CampaignHealthPanel({ campaigns, products }) {
     const globalAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
     const globalRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
 
-    // Campanhas com problemas
     const noSpend = active.filter(c => (c.spend || 0) === 0);
     const highAcos = active.filter(c => (c.acos || 0) > 40 && (c.spend || 0) > 0);
     const noOrders = active.filter(c => (c.spend || 0) > 5 && (c.orders || 0) === 0);
 
-    // Por ASIN
     const byAsin = new Map();
     for (const c of campaigns) {
       if (!c.asin) continue;
@@ -96,13 +94,11 @@ export default function CampaignHealthPanel({ campaigns, products }) {
 
   return (
     <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
-      {/* Header */}
       <div>
         <h2 className="text-base font-bold text-white">Painel de Saúde das Campanhas</h2>
         <p className="text-xs text-slate-500 mt-0.5">Resumo operacional · {stats.total} campanhas carregadas</p>
       </div>
 
-      {/* Status rápido */}
       {issues > 0 ? (
         <div className="flex flex-wrap gap-2">
           {stats.highAcos > 0 ? (
@@ -123,15 +119,13 @@ export default function CampaignHealthPanel({ campaigns, products }) {
               <span><strong>{stats.noSpend}</strong> campanha{stats.noSpend > 1 ? 's' : ''} ativa{stats.noSpend > 1 ? 's' : ''} sem gasto</span>
             </div>
           ) : null}
-          {issues === 0 ? (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300">
-              <CheckCircle className="w-3.5 h-3.5" /> Todas as campanhas saudáveis
-            </div>
-          ) : null}
         </div>
-      ) : null}
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300">
+          <CheckCircle className="w-3.5 h-3.5" /> Todas as campanhas saudáveis
+        </div>
+      )}
 
-      {/* KPIs principais */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <MetricCard label="Gasto Total" value={`R$${stats.totalSpend.toFixed(0)}`} sub={`${stats.totalClicks.toLocaleString('pt-BR')} cliques`} tone="cyan" />
         <MetricCard label="Vendas Ads" value={`R$${stats.totalSales.toFixed(0)}`} sub={`${stats.totalOrders} pedidos`} tone={stats.totalSales > 0 ? 'good' : 'default'} />
@@ -139,7 +133,6 @@ export default function CampaignHealthPanel({ campaigns, products }) {
         <MetricCard label="ROAS Geral" value={stats.globalRoas > 0 ? `${stats.globalRoas.toFixed(2)}x` : '—'} sub="Vendas / Spend" tone={stats.globalRoas >= 4 ? 'good' : stats.globalRoas >= 2 ? 'warn' : 'default'} />
       </div>
 
-      {/* Tipo de campanha */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0">
@@ -179,7 +172,6 @@ export default function CampaignHealthPanel({ campaigns, products }) {
         </div>
       </div>
 
-      {/* ACoS por ASIN */}
       {stats.asinList.length > 0 ? (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
@@ -193,7 +185,6 @@ export default function CampaignHealthPanel({ campaigns, products }) {
         </div>
       ) : null}
 
-      {/* Campanhas com problema */}
       {(stats.highAcosList.length > 0 || stats.noSpendList.length > 0) ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {stats.highAcosList.length > 0 ? (
