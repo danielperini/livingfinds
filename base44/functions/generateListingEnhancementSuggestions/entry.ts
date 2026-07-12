@@ -13,22 +13,90 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import Anthropic from 'npm:@anthropic-ai/sdk@0.30.1';
 
+/**
+ * BRAND SAFETY — contextos de aplicação:
+ *
+ * BLOQUEIO ABSOLUTO (organic_content):
+ *   organic_terms, listing_title, bullet_points, description,
+ *   backend_search_terms, a_plus_content
+ *
+ * PERMITIDO COM CONTROLE (paid_keyword):
+ *   keyword paga, product targeting — marcas de terceiros são válidas
+ *   como segmentação competitiva, NÃO devem aparecer no conteúdo do listing.
+ *
+ * Ref: Amazon Sponsored Products — keyword targeting policy.
+ */
 const THIRD_PARTY_BRANDS = [
   'samsung','apple','xiaomi','lg','sony','intelbras','philips','nike','adidas',
-  'motorola','huawei','positivo','multilaser','britânia','britania','mondial',
+  'motorola','huawei','positivo','multilaser','britania','britânia','mondial',
   'electrolux','brastemp','consul','whirlpool','bosch','siemens','panasonic',
   'toshiba','dell','hp','lenovo','asus','acer','microsoft','google','amazon',
 ];
 
+/**
+ * Valida conteúdo orgânico (listing, termos orgânicos, bullets, descrição).
+ * Marcas de terceiros são BLOQUEADAS neste contexto.
+ */
 function validateNoThirdPartyBrand(text: string): { safe: boolean; detected: string[] } {
   const normalized = (text || '').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/[-_./]/g, ' ');
   const detected: string[] = [];
   for (const brand of THIRD_PARTY_BRANDS) {
-    if (new RegExp(`\\b${brand}\\b`, 'i').test(normalized)) detected.push(brand);
+    if (new RegExp(`\\b${brand}\\b`).test(normalized)) detected.push(brand);
   }
   return { safe: detected.length === 0, detected };
+}
+
+/**
+ * Classifica uma keyword paga pelo tipo de marca envolvida.
+ * Marcas de terceiros em paid keywords são PERMITIDAS como segmentação competitiva.
+ * Retorna competitor_brand_keyword, own_brand_keyword ou generic_keyword.
+ * NUNCA usar este resultado para conteúdo do listing — apenas para campanhas pagas.
+ */
+function classifyPaidKeyword(text: string, ownBrandTerms: string[] = []): {
+  keyword_type: 'generic_keyword' | 'own_brand_keyword' | 'competitor_brand_keyword';
+  detected_brand: string | null;
+  requires_human_approval: boolean;
+  allowed_match_types: string[];
+  risk_level: 'low' | 'medium' | 'high';
+  note: string;
+} {
+  const normalized = (text || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[-_./]/g, ' ');
+
+  // Própria marca
+  for (const own of ownBrandTerms) {
+    if (normalized.includes(own.toLowerCase())) {
+      return {
+        keyword_type: 'own_brand_keyword', detected_brand: own,
+        requires_human_approval: false,
+        allowed_match_types: ['EXACT', 'PHRASE', 'BROAD'],
+        risk_level: 'low', note: 'Keyword da própria marca — sem restrições.',
+      };
+    }
+  }
+
+  // Marca de terceiro (competidor)
+  for (const brand of THIRD_PARTY_BRANDS) {
+    if (new RegExp(`\\b${brand}\\b`).test(normalized)) {
+      return {
+        keyword_type: 'competitor_brand_keyword', detected_brand: brand,
+        requires_human_approval: true,
+        allowed_match_types: ['EXACT'], // somente EXACT para competidor
+        risk_level: 'high',
+        note: `Keyword contém marca concorrente "${brand}". Requer aprovação humana, campanha separada, match EXACT, bid reduzido e avaliação após 72h. NUNCA inserir a marca no listing.`,
+      };
+    }
+  }
+
+  return {
+    keyword_type: 'generic_keyword', detected_brand: null,
+    requires_human_approval: false,
+    allowed_match_types: ['EXACT', 'PHRASE', 'BROAD'],
+    risk_level: 'low', note: 'Keyword genérica — sem restrição de marca.',
+  };
 }
 
 function buildOrganicTermProposals(params: {
@@ -71,6 +139,7 @@ function buildOrganicTermProposals(params: {
   let totalBytes = 0;
 
   for (const [term, meta] of sorted) {
+    // Contexto: organic_terms → bloqueio absoluto de marcas de terceiros
     const brandCheck = validateNoThirdPartyBrand(term);
     if (!brandCheck.safe) { blocked.push(term); continue; }
     if (currentTerms.some(t => t.toLowerCase() === term)) continue;

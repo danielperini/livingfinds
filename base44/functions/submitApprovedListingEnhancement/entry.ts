@@ -11,12 +11,33 @@ const SP_CLIENT_ID = Deno.env.get('SP_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CL
 const SP_CLIENT_SECRET = Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
 const SP_REFRESH_TOKEN = Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || '';
 
+/**
+ * BRAND SAFETY — contextos de aplicação:
+ *
+ * BLOQUEIO ABSOLUTO em conteúdo orgânico (listing):
+ *   organic_terms, item_name (título), bullet_point, product_description,
+ *   generic_keyword (backend), a_plus_content
+ *
+ * PERMITIDO EM CAMPANHAS PAGAS (paid keywords):
+ *   Marcas de terceiros são válidas como segmentação competitiva.
+ *   Regras: campanha separada, match EXACT, aprovação humana, bid reduzido.
+ *   A marca do concorrente NUNCA deve aparecer no conteúdo do listing.
+ *
+ * Esta função cobre SOMENTE conteúdo orgânico (listing/organic_terms).
+ * Para validação de paid keywords, use classifyPaidKeyword (no motor de campanhas).
+ */
 const THIRD_PARTY_BRANDS = [
   'samsung','apple','xiaomi','lg','sony','intelbras','philips','nike','adidas',
   'motorola','huawei','positivo','multilaser','britannia','britania','mondial',
   'electrolux','brastemp','consul','whirlpool','bosch','siemens','panasonic',
   'toshiba','dell','hp','lenovo','asus','acer','microsoft','google','amazon',
 ];
+
+// Campos de listing onde marcas de terceiros são BLOQUEADAS.
+const ORGANIC_CONTENT_FIELDS = new Set([
+  'item_name', 'bullet_point', 'product_description',
+  'generic_keyword', 'a_plus_content', 'organic_terms',
+]);
 
 function validateNoThirdPartyBrand(text: string): { safe: boolean; detected: string[] } {
   const normalized = (text || '').toLowerCase()
@@ -116,15 +137,27 @@ Deno.serve(async (req) => {
     if (!dry_run && ['submitted', 'processing', 'confirmed'].includes(proposal.submission_status || ''))
       return Response.json({ ok: false, error: `Proposta já submetida. Status: ${proposal.submission_status}` }, { status: 409 });
 
-    // Validação de marca antes de submeter
-    const brandCheck = validateNoThirdPartyBrand(proposal.proposed_value || '');
-    if (!brandCheck.safe) {
-      await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-        brand_safety_status: 'blocked', submission_status: 'failed',
-        amazon_issues: JSON.stringify([{ message: `Marca de terceiro bloqueada: ${brandCheck.detected.join(', ')}` }]),
-        updated_at: new Date().toISOString(),
-      });
-      return Response.json({ ok: false, error: `Marca de terceiro bloqueada: ${brandCheck.detected.join(', ')}` }, { status: 422 });
+    // Validação de marca — aplica SOMENTE em campos de conteúdo orgânico do listing.
+    // Paid keywords (competitor_brand_keyword) NÃO passam por esta validação aqui.
+    const fieldName = proposal.field_name || '';
+    const isOrganicContentField = ORGANIC_CONTENT_FIELDS.has(fieldName);
+    if (isOrganicContentField) {
+      const brandCheck = validateNoThirdPartyBrand(proposal.proposed_value || '');
+      if (!brandCheck.safe) {
+        await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
+          brand_safety_status: 'blocked', submission_status: 'failed',
+          amazon_issues: JSON.stringify([{
+            message: `Marca de terceiro bloqueada no conteúdo orgânico: ${brandCheck.detected.join(', ')}. Marcas de terceiros são proibidas em título, bullets, descrição e termos orgânicos.`,
+          }]),
+          updated_at: new Date().toISOString(),
+        });
+        return Response.json({
+          ok: false,
+          error: `Marca de terceiro bloqueada em campo orgânico (${fieldName}): ${brandCheck.detected.join(', ')}`,
+          context: 'organic_content_block',
+          note: 'Marcas de terceiros podem ser usadas como keywords pagas em campanha separada, mas nunca em conteúdo do listing.',
+        }, { status: 422 });
+      }
     }
 
     if (!proposal.proposed_value?.trim())
