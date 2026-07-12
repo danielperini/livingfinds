@@ -644,6 +644,43 @@ Deno.serve(async (req) => {
       campWindowMetrics.set(cid, { d3, d7: derive(wm.d7), d14, d30, trend_3_vs_14, trend_7_vs_30, trend_14_vs_30 });
     }
 
+    // ── 4b. Comparação ACoS Real vs ACoS Alvo por campanha ───────────────
+    // Alimenta decisões com o gap real e orienta escala/redução
+    const acosComparisonByCampaign = new Map<string, {
+      campaign_id: string; campaign_name: string; asin: string | null;
+      real_acos_14d: number | null; real_acos_7d: number | null;
+      target_acos: number | null; gap_pct: number | null;
+      status: 'below_target' | 'on_target' | 'above_target' | 'critical' | 'no_data';
+      sales_14d: number; spend_14d: number; orders_14d: number;
+    }>();
+    for (const c of campaigns) {
+      const cid = c.campaign_id || c.amazon_campaign_id;
+      if (!cid) continue;
+      const st = String(c.state || c.status || '').toLowerCase();
+      if (st === 'archived') continue;
+      const wm = campWindowMetrics.get(cid);
+      const asin = c.asin || campaignAsinMap.get(cid) || null;
+      const asinMeta = asin ? acosByAsin.get(asin) : null;
+      const effectiveTarget = asinMeta?.target ?? settings.target_acos;
+      const real14d = wm?.d14?.acos ?? null;
+      const real7d = wm?.d7?.acos ?? null;
+      let compStatus: 'below_target' | 'on_target' | 'above_target' | 'critical' | 'no_data' = 'no_data';
+      let gap_pct: number | null = null;
+      if (real14d !== null && effectiveTarget !== null) {
+        gap_pct = real14d - effectiveTarget; // positivo = acima da meta (ruim), negativo = abaixo (bom)
+        if (real14d <= effectiveTarget * 0.75) compStatus = 'below_target';
+        else if (real14d <= effectiveTarget * 1.05) compStatus = 'on_target';
+        else if (real14d <= effectiveTarget * 1.5) compStatus = 'above_target';
+        else compStatus = 'critical';
+      }
+      acosComparisonByCampaign.set(cid, {
+        campaign_id: cid, campaign_name: c.campaign_name || c.name || cid,
+        asin, real_acos_14d: real14d, real_acos_7d: real7d,
+        target_acos: effectiveTarget, gap_pct, status: compStatus,
+        sales_14d: wm?.d14?.sales ?? 0, spend_14d: wm?.d14?.spend ?? 0, orders_14d: wm?.d14?.orders ?? 0,
+      });
+    }
+
     // ── 5. Métricas por ASIN (para TACoS e metas dinâmicas) ───────────────
     const salesByAsin = new Map<string, { revenue: number; units: number; days: Set<string> }>();
     for (const s of salesDailyRaw) {
@@ -795,6 +832,12 @@ Deno.serve(async (req) => {
       // Quando meta global é null (zerada), usa meta dinâmica do produto ou desativa a regra
       const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
       const effectiveTargetAcos = asinMeta?.target ?? settings.target_acos; // null se ambos ausentes
+      // Gap ACoS real vs alvo para usar no rationale e score
+      const campComp = kw.campaign_id ? acosComparisonByCampaign.get(kw.campaign_id) : null;
+      const acosGapLabel = campComp?.gap_pct != null
+        ? (campComp.gap_pct > 0 ? `+${campComp.gap_pct.toFixed(1)}pp acima da meta` : `${campComp.gap_pct.toFixed(1)}pp abaixo da meta`)
+        : '';
+      const acosCompStatus = campComp?.status || 'no_data';
       const effectiveMaxAcos = asinMeta
         ? Math.min(asinMeta.break_even, (settings.max_acos ?? FB.MAX_ACOS) * 1.5)
         : settings.max_acos; // null se não configurado e sem meta de produto
@@ -927,7 +970,7 @@ Deno.serve(async (req) => {
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `ACoS ${kw_acos.toFixed(1)}% ACIMA do máximo econômico ${effectiveMaxAcos.toFixed(1)}% (break-even ${asinMeta?.break_even?.toFixed(1) || 'N/A'}%). CVR: ${(kw_cvr * 100).toFixed(2)}%. ${intent_label}. Bid reduzido ${Math.round(reductionPct * 100)}% para proteger margem.`,
+            rationale: `ACoS real ${kw_acos.toFixed(1)}% ACIMA do máximo econômico ${effectiveMaxAcos.toFixed(1)}% (alvo: ${effectiveTargetAcos ?? 'N/A'}%, break-even: ${asinMeta?.break_even?.toFixed(1) || 'N/A'}%). Gap: ${acosGapLabel}. CVR: ${(kw_cvr * 100).toFixed(2)}%. ${intent_label}. Bid reduzido ${Math.round(reductionPct * 100)}% para proteger margem.`,
             rule_key: 'acos_above_max',
             risk: kw_acos > effectiveMaxAcos * 2 ? 'high' : 'medium',
             priority: PRIORITY.margin,
@@ -996,7 +1039,7 @@ Deno.serve(async (req) => {
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `ACoS ${kw_acos.toFixed(1)}% ≪ meta ${effectiveTargetAcos}%. ${kw_orders}p vendidos. CVR ${(kw_cvr * 100).toFixed(2)}%. ${intentLabel}. Escala segura +${Math.round(finalIncrease * 100)}%.`,
+            rationale: `ACoS real ${kw_acos.toFixed(1)}% ≪ meta ${effectiveTargetAcos}% (gap: ${acosGapLabel}). ${kw_orders}p vendidos. CVR ${(kw_cvr * 100).toFixed(2)}%. ${intentLabel}. Vendas confirmadas — escala segura +${Math.round(finalIncrease * 100)}%.`,
             rule_key: 'acos_scale',
             risk: 'low', priority: PRIORITY.scale,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
@@ -1214,7 +1257,26 @@ Deno.serve(async (req) => {
         data_stale_threshold_hours: MRC.DATA_STALE_HOURS,
       },
 
-      note: 'Motor estratégico v4: intenção de busca + metas econômicas dinâmicas + proteção de alta performance + janelas múltiplas.',
+      acos_comparison_summary: {
+        total_campaigns_analyzed: acosComparisonByCampaign.size,
+        below_target: Array.from(acosComparisonByCampaign.values()).filter(c => c.status === 'below_target').length,
+        on_target: Array.from(acosComparisonByCampaign.values()).filter(c => c.status === 'on_target').length,
+        above_target: Array.from(acosComparisonByCampaign.values()).filter(c => c.status === 'above_target').length,
+        critical: Array.from(acosComparisonByCampaign.values()).filter(c => c.status === 'critical').length,
+        no_data: Array.from(acosComparisonByCampaign.values()).filter(c => c.status === 'no_data').length,
+        worst_campaigns: Array.from(acosComparisonByCampaign.values())
+          .filter(c => c.gap_pct !== null && c.gap_pct > 0 && c.spend_14d > 5)
+          .sort((a, b) => (b.gap_pct ?? 0) - (a.gap_pct ?? 0))
+          .slice(0, 5)
+          .map(c => ({ campaign_name: c.campaign_name, real_acos: c.real_acos_14d, target_acos: c.target_acos, gap_pct: c.gap_pct, spend_14d: c.spend_14d, orders_14d: c.orders_14d })),
+        best_campaigns: Array.from(acosComparisonByCampaign.values())
+          .filter(c => c.gap_pct !== null && c.gap_pct < 0 && c.orders_14d > 0)
+          .sort((a, b) => (a.gap_pct ?? 0) - (b.gap_pct ?? 0))
+          .slice(0, 5)
+          .map(c => ({ campaign_name: c.campaign_name, real_acos: c.real_acos_14d, target_acos: c.target_acos, gap_pct: c.gap_pct, sales_14d: c.sales_14d })),
+      },
+
+      note: 'Motor estratégico v4: ACoS real vs ACoS alvo + intenção de busca + metas econômicas dinâmicas + proteção de alta performance.',
     });
 
   } catch (error: any) {

@@ -8,6 +8,7 @@ import {
   Activity, DollarSign, ShoppingCart, Layers, Search, Play
 } from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
+import AcosComparisonPanel from '@/components/sala/AcosComparisonPanel';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -438,6 +439,9 @@ export default function EstrategiasTab({ account }) {
             <KpiCard label="Produtos Lucrativos" value={strategicMetrics.profitableProducts} sub="Com campanha ativa" tone="cyan" icon={Package} />
             <KpiCard label="Escaláveis" value={strategicMetrics.scalableProducts} sub="ACoS abaixo da meta" tone="violet" icon={TrendingUp} />
           </div>
+
+          {/* ACoS Real vs ACoS Alvo */}
+          <AcosComparisonPanel campaigns={campaigns} metrics={metrics} perfSettings={perfSettings} />
 
           {/* Distribuição de intenção de busca */}
           {Object.keys(strategicMetrics.intentDist).length > 0 && (
