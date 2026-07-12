@@ -30,8 +30,19 @@ function isNew24h(campaign) {
 }
 
 function isAiManaged(campaign) {
-  // Gerido pela IA: criado pelo app OU learning_eligible não desativado explicitamente
   return campaign.created_by_app === true || campaign.learning_eligible !== false;
+}
+
+// Extrai ASIN do nome da campanha (ex: "AUTO | B0FCYPPG2M | ...")
+function extractAsinFromName(name) {
+  if (!name) return null;
+  const m = name.match(/\b(B0[A-Z0-9]{8})\b/);
+  return m ? m[1] : null;
+}
+
+// Retorna o ASIN canônico da campanha (campo ou extraído do nome)
+function getCampaignAsin(c) {
+  return c.asin || extractAsinFromName(c.name || c.campaign_name) || null;
 }
 
 const STATE_FILTERS = [
@@ -87,8 +98,15 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
               
                 {/* Name + badges */}
                 <div className="flex items-start gap-1.5 mb-1">
-                  <p className="text-[11px] font-medium text-white truncate flex-1 leading-tight">{c.name || c.campaign_name}</p>
+                  <p className="text-[11px] font-medium text-white truncate flex-1 leading-tight">
+                    {c._asin_resolved ? `AUTO | ${c._asin_resolved}` : (c.name || c.campaign_name)}
+                  </p>
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {c._group_count > 1 &&
+                  <span title={`${c._group_count} campanhas para este ASIN`} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30 leading-none">
+                        ×{c._group_count}
+                      </span>
+                  }
                     {isNew &&
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
                         NEW
@@ -108,8 +126,8 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                     <span className="text-cyan font-mono">{prod.asin}</span>
                     {prod.sku ? <span className="ml-1">· {prod.sku}</span> : null}
                   </p> :
-              c.asin ?
-              <p className="text-[9px] font-mono text-slate-600 mb-1">{c.asin}</p> :
+              (c.asin || c._asin_resolved) ?
+              <p className="text-[9px] font-mono text-slate-500 mb-1">{c.asin || c._asin_resolved}</p> :
               null}
 
                 {/* Metrics row */}
@@ -390,8 +408,26 @@ export default function AdsManagement() {
   !search || (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.campaign_name || '').toLowerCase().includes(search.toLowerCase())
   );
 
-  const autoCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO')).
-  filter((c) => stateFilterAuto === 'all' || c.state === stateFilterAuto || c.status === stateFilterAuto);
+  // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
+  const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO'))
+    .filter((c) => stateFilterAuto === 'all' || c.state === stateFilterAuto || c.status === stateFilterAuto);
+
+  const autoByAsin = (() => {
+    const map = new Map();
+    for (const c of rawAuto) {
+      const asin = getCampaignAsin(c) || c.id;
+      if (!map.has(asin)) { map.set(asin, []); }
+      map.get(asin).push(c);
+    }
+    return Array.from(map.values()).map(group => {
+      // Priorizar enabled, depois mais recente
+      const enabled = group.filter(c => (c.state || c.status) === 'enabled');
+      const representative = enabled.length > 0 ? enabled[0] : group[0];
+      return { ...representative, _asin_resolved: getCampaignAsin(representative) || representative.id, _group_count: group.length, _group_all: group };
+    });
+  })();
+
+  const autoCampaigns = autoByAsin;
   const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO')).
   filter((c) => stateFilterManual === 'all' || c.state === stateFilterManual || c.status === stateFilterManual);
 
