@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2 } from 'lucide-react';
 import WeeklyReportView from '@/components/analytics/WeeklyReportView';
+import AcosEvolutionPanel from '@/components/analytics/AcosEvolutionPanel';
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
@@ -569,6 +570,13 @@ export default function Analytics() {
                   </ResponsiveContainer>
                 )}
               </div>
+
+              <AcosEvolutionPanel
+                metrics={metrics}
+                campaigns={campaigns}
+                products={products}
+                period={period}
+              />
 
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
                 <div className="px-5 py-4 border-b border-surface-2">
