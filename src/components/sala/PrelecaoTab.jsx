@@ -32,11 +32,11 @@ function TermRow({ term, idx }) {
         <td className="px-3 py-2.5 text-xs text-slate-300">{term.roas ? `${fmt(term.roas)}x` : '—'}</td>
         <td className="px-3 py-2.5 text-slate-500">{expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}</td>
       </tr>
-      {expanded &&
-      <tr className="bg-surface-2/20">
+      {expanded ? (
+        <tr className="bg-surface-2/20">
           <td colSpan={9} className="px-4 py-2 text-[10px] text-slate-400">{term.reason || 'Sem detalhes.'}</td>
         </tr>
-      }
+      ) : null}
     </>);
 
 }

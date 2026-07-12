@@ -207,15 +207,15 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
                 placeholder={key === 'executed' ? '—' : 'Aguardando execução'}
               />
             </div>
-            {decision.value_before != null && decision.value_after != null && (
+            {decision.value_before != null && decision.value_after != null ? (
               <div className="mt-2 text-xs text-slate-500">
                 Variação sugerida: <BidDeltaInline before={decision.value_before} after={decision.value_after} />
               </div>
-            )}
+            ) : null}
           </Section>
 
           {/* Métricas usadas */}
-          {metricsUsed && (
+          {metricsUsed ? (
             <Section title="Métricas utilizadas">
               <div className="grid grid-cols-3 gap-3 text-xs">
                 {Object.entries(metricsUsed).slice(0, 12).map(([k, v]) => (
@@ -225,11 +225,11 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
                   </div>
                 ))}
               </div>
-              {decision.period_analyzed && (
+              {decision.period_analyzed ? (
                 <p className="text-[10px] text-slate-500 mt-1">Período: {decision.period_analyzed} · Amostra: {decision.sample_size || '—'}</p>
-              )}
+              ) : null}
             </Section>
-          )}
+          ) : null}
 
           {/* Decisão */}
           <Section title="Decisão">
@@ -252,22 +252,22 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
           </Section>
 
           {/* Amazon Response */}
-          {amazonResp && (
+          {amazonResp ? (
             <Section title="Resposta Amazon">
               <pre className="bg-surface-2 rounded-lg p-3 text-[10px] text-slate-300 overflow-x-auto max-h-40 scrollbar-thin">
                 {typeof amazonResp === 'string' ? amazonResp : JSON.stringify(amazonResp, null, 2)}
               </pre>
             </Section>
-          )}
+          ) : null}
 
           {/* Erros */}
-          {decision.error_message && (
+          {decision.error_message ? (
             <Section title="Último erro">
               <div className="bg-red-500/8 border border-red-500/20 rounded-lg p-3">
                 <p className="text-xs text-red-300">{decision.error_message}</p>
               </div>
             </Section>
-          )}
+          ) : null}
 
           {/* Tentativas */}
           <Section title="Tentativas">
@@ -276,7 +276,7 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
           </Section>
 
           {/* BidHistory vinculada */}
-          {bh && (
+          {bh ? (
             <Section title="BidHistory vinculada">
               <Row label="ID" value={<span className="font-mono text-[10px]">{bh.id}</span>} />
               <Row label="Bid anterior" value={fmtBRL(bh.old_bid)} />
@@ -286,10 +286,10 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
               <Row label="Executado em" value={fmtDate(bh.executed_at)} />
               <Row label="Aplicado por" value={bh.applied_by || '—'} />
             </Section>
-          )}
+          ) : null}
 
           {/* RuleExecution vinculada */}
-          {re && (
+          {re ? (
             <Section title="RuleExecution vinculada">
               <Row label="Rule key" value={re.rule_key || '—'} />
               <Row label="Versão" value={re.rule_version ?? '—'} />
@@ -297,7 +297,7 @@ function DetailModal({ decision, bidHistory, ruleExecution, onClose, products })
               <Row label="Executado em" value={fmtDate(re.executed_at)} />
               <Row label="Outcome" value={re.outcome || '—'} />
             </Section>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
@@ -640,11 +640,11 @@ export default function KeywordBidChangesPanel({ account }) {
       })()}
 
       {/* Mensagem de ação */}
-      {actionMsg && (
+      {actionMsg ? (
         <div className={`px-4 py-2.5 rounded-xl border text-xs font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
           {actionMsg.text}
         </div>
-      )}
+      ) : null}
 
       {/* Filtros */}
       <div className="flex flex-wrap items-center gap-2">
@@ -840,53 +840,53 @@ export default function KeywordBidChangesPanel({ account }) {
                           </button>
 
                           {/* Aprovar — pendente */}
-                          {isPending && (
-                            <button onClick={() => approveDecision(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-40"
-                              title="Aprovar">
-                              {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
+                          {isPending ? (
+                           <button onClick={() => approveDecision(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-40"
+                             title="Aprovar">
+                             {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                           </button>
+                          ) : null}
                           {/* Rejeitar — pendente */}
-                          {isPending && (
-                            <button onClick={() => rejectDecision(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
-                              title="Rejeitar">
-                              <XCircle className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          {isPending ? (
+                           <button onClick={() => rejectDecision(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                             title="Rejeitar">
+                             <XCircle className="w-3.5 h-3.5" />
+                           </button>
+                          ) : null}
                           {/* Agendar — aprovado */}
-                          {isApproved && (
-                            <button onClick={() => scheduleDecision(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-violet-400 hover:bg-violet-500/10 transition-colors disabled:opacity-40"
-                              title="Agendar">
-                              {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Clock className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
+                          {isApproved ? (
+                           <button onClick={() => scheduleDecision(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-violet-400 hover:bg-violet-500/10 transition-colors disabled:opacity-40"
+                             title="Agendar">
+                             {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Clock className="w-3.5 h-3.5" />}
+                           </button>
+                          ) : null}
                           {/* Executar agora — aprovado */}
-                          {isApproved && (
-                            <button onClick={() => executeNow(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-cyan hover:bg-cyan/10 transition-colors disabled:opacity-40"
-                              title="Executar agora">
-                              {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
+                          {isApproved ? (
+                           <button onClick={() => executeNow(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-cyan hover:bg-cyan/10 transition-colors disabled:opacity-40"
+                             title="Executar agora">
+                             {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                           </button>
+                          ) : null}
                           {/* Tentar novamente — falha */}
-                          {isFailed && (
-                            <button onClick={() => retryDecision(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40"
-                              title="Tentar novamente">
-                              {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
+                          {isFailed ? (
+                           <button onClick={() => retryDecision(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-amber-400 hover:bg-amber-500/10 transition-colors disabled:opacity-40"
+                             title="Tentar novamente">
+                             {isWorking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                           </button>
+                          ) : null}
                           {/* Cancelar — agendado */}
-                          {isScheduled && (
-                            <button onClick={() => cancelSchedule(d)} disabled={isWorking}
-                              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-500/10 transition-colors disabled:opacity-40"
-                              title="Cancelar agendamento">
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          {isScheduled ? (
+                           <button onClick={() => cancelSchedule(d)} disabled={isWorking}
+                             className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-500/10 transition-colors disabled:opacity-40"
+                             title="Cancelar agendamento">
+                             <X className="w-3.5 h-3.5" />
+                           </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -895,16 +895,16 @@ export default function KeywordBidChangesPanel({ account }) {
               </tbody>
             </table>
           </div>
-          {filtered.length > 200 && (
+          {filtered.length > 200 ? (
             <div className="px-4 py-2.5 border-t border-surface-2 text-center text-[10px] text-slate-500">
               Exibindo 200 de {filtered.length} registros. Use os filtros para refinar.
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
       {/* Modal de detalhe */}
-      {selectedDecision && (
+      {selectedDecision ? (
         <DetailModal
           decision={selectedDecision.decision}
           bidHistory={selectedDecision.bidHistory}
@@ -912,7 +912,7 @@ export default function KeywordBidChangesPanel({ account }) {
           products={products}
           onClose={() => setSelectedDecision(null)}
         />
-      )}
+      ) : null}
     </div>
   );
 }
