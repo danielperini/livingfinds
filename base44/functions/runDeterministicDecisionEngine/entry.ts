@@ -64,9 +64,54 @@ const MRC = {
 // ── Hierarquia de prioridade de conflitos ────────────────────────────────────
 const PRIORITY = {
   account_security: 1, data_quality: 2, stock: 3, offer_availability: 4,
-  margin: 5, budget_global: 6, protect_high_performance: 7, waste_reduction: 8,
+  margin: 5, profit_erosion: 5, budget_global: 6, protect_high_performance: 7, waste_reduction: 8,
   maintenance: 9, scale: 10, expansion: 11, create_campaign: 12,
 };
+
+// ── Calcular Lucro Bruto Pós-ADS por janela ──────────────────────────────────
+// profit_after_ads = profit_before_ads - ad_spend_per_order
+// profit_before_ads = contribution_margin_amount (preço - custo total - taxas Amazon)
+// ad_spend_per_order = spend / orders  (custo real de ads por conversão na janela)
+function calcProfitAfterAds(params: {
+  contribution_margin_amount: number; // margem por unidade sem ads
+  spend: number;
+  orders: number;
+}): { profit_after_ads: number; ad_spend_per_order: number; profit_after_ads_pct: number; selling_price_ref: number } {
+  if (params.orders <= 0) return { profit_after_ads: params.contribution_margin_amount, ad_spend_per_order: 0, profit_after_ads_pct: 0, selling_price_ref: 0 };
+  const ad_spend_per_order = params.spend / params.orders;
+  const profit_after_ads = params.contribution_margin_amount - ad_spend_per_order;
+  return { profit_after_ads, ad_spend_per_order, profit_after_ads_pct: 0, selling_price_ref: 0 };
+}
+
+// ── Classificar modo de proteção de lucro ────────────────────────────────────
+function classifyProfitProtection(params: {
+  profit_after_ads_14d: number;
+  profit_after_ads_3d: number;
+  profit_before_ads: number; // margem teórica (sem ads)
+}): { mode: 'normal' | 'vigilant' | 'defensive' | 'paused'; erosion_velocity: number; alert: boolean; reason: string } {
+  const { profit_after_ads_14d, profit_after_ads_3d, profit_before_ads } = params;
+
+  if (profit_before_ads <= 0) return { mode: 'normal', erosion_velocity: 0, alert: false, reason: 'no_margin_data' };
+
+  // Erosão = quanto o lucro piorou de 14d para 3d (relativo à margem base)
+  const erosion_velocity = profit_before_ads > 0
+    ? (profit_after_ads_3d - profit_after_ads_14d) / profit_before_ads
+    : 0;
+
+  // Paused: lucro pós-ads negativo em 3d
+  if (profit_after_ads_3d < 0) {
+    return { mode: 'paused', erosion_velocity, alert: true, reason: `Lucro pós-ADS negativo: R$${profit_after_ads_3d.toFixed(2)}/pedido em 3d` };
+  }
+  // Defensive: lucro positivo mas erosão acelerada > 30% da margem em 3d vs 14d
+  if (erosion_velocity < -0.30 && profit_after_ads_14d > 0) {
+    return { mode: 'defensive', erosion_velocity, alert: true, reason: `Erosão de ${Math.abs(erosion_velocity * 100).toFixed(0)}% da margem em 3d vs 14d` };
+  }
+  // Vigilant: lucro < 20% da margem teórica
+  if (profit_after_ads_14d < profit_before_ads * 0.20 && profit_after_ads_14d >= 0) {
+    return { mode: 'vigilant', erosion_velocity, alert: false, reason: `Lucro pós-ADS baixo: R$${profit_after_ads_14d.toFixed(2)}/pedido (${((profit_after_ads_14d / profit_before_ads) * 100).toFixed(0)}% da margem)` };
+  }
+  return { mode: 'normal', erosion_velocity, alert: false, reason: 'margin_healthy' };
+}
 
 // ── Score final de decisão ────────────────────────────────────────────────────
 // decision_priority_score = economic_impact * confidence * urgency * data_quality * inventory * search_intent * goal_alignment
@@ -546,7 +591,7 @@ Deno.serve(async (req) => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
     const [keywords, campaigns, products, metricsRaw, salesDailyRaw,
-           termBankRaw, suggestionRaw, profitLearnings, recentExecs
+           termBankRaw, suggestionRaw, profitLearnings, recentExecs, productEconomicsRaw
     ] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
@@ -557,6 +602,7 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: aid, status: 'ranked' }, null, 200).catch(() => []),
       base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
       base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 500).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
     ]);
 
     // ── 3. Construir índices ───────────────────────────────────────────────
@@ -589,6 +635,14 @@ Deno.serve(async (req) => {
     const profitByAsin = new Map<string, any>();
     for (const pl of profitLearnings) {
       if (pl.asin) profitByAsin.set(pl.asin, pl);
+    }
+
+    // ProductEconomics: sku_normalized → economics (fonte de margem de contribuição)
+    const normSku = (s: string) => (s || '').trim().toUpperCase().replace(/\s+/g, '-').replace(/-{2,}/g, '-');
+    const econByNsku = new Map<string, any>();
+    for (const e of productEconomicsRaw) {
+      if (e.sku) econByNsku.set(normSku(e.sku), e);
+      if (e.asin) econByNsku.set(`ASIN:${e.asin}`, e); // fallback por ASIN
     }
 
     // ── 4. Agregar métricas por janelas (3d, 7d, 14d, 30d) por keyword ───
@@ -663,31 +717,92 @@ Deno.serve(async (req) => {
       if (s.date) e.days.add(s.date);
     }
 
-    // ── 6. Meta econômica dinâmica por produto ─────────────────────────────
-    // break_even_acos = contribution_margin_pct
-    // target_acos_asin = break_even_acos * safety_factor
-    const acosByAsin = new Map<string, { target: number; break_even: number; safe_max_cpc: number; confidence: string }>();
+    // ── 6. Meta econômica dinâmica por produto + Lucro Pós-ADS ───────────
+    const acosByAsin = new Map<string, {
+      target: number; break_even: number; safe_max_cpc: number; confidence: string;
+      contribution_margin_amount: number;
+      profit_after_ads_14d: number; profit_after_ads_3d: number;
+      profit_protection: ReturnType<typeof classifyProfitProtection>;
+    }>();
+
     for (const p of products) {
       if (!p.asin) continue;
       const pl = profitByAsin.get(p.asin);
-      const margin = Number(p.break_even_acos_pct || pl?.gross_margin_pct || p.net_margin_percent || 0);
+      // Buscar ProductEconomics pelo SKU do produto ou ASIN
+      const econ = econByNsku.get(normSku(p.sku || '')) || econByNsku.get(`ASIN:${p.asin}`) || null;
+
+      const margin = Number(
+        econ?.contribution_margin_percent ||
+        p.break_even_acos_pct || pl?.gross_margin_pct || p.net_margin_percent || 0
+      );
+      const contribution_margin_amount = Number(econ?.contribution_margin_amount || 0);
+
       if (margin > 0) {
-        const break_even = margin; // margem bruta % = break-even ACoS %
+        const break_even = margin;
         const target = Math.min(FB.MAX_ACOS * 2, Math.max(5, break_even * settings.safety_factor));
-        // Estimar safe_max_cpc
-        const selling_price = Number(p.price || 0);
+        const selling_price = Number(econ?.current_price || p.price || 0);
         const salesM = salesByAsin.get(p.asin);
         const cvr = salesM && salesM.units > 0 && salesM.days.size > 3
-          ? salesM.units / (salesM.units + 50) // estimativa conservadora
-          : settings.fallback_cvr;
+          ? salesM.units / (salesM.units + 50) : settings.fallback_cvr;
         const safe_cpc = calcSafeMaxCpc({ selling_price, gross_margin_pct: margin, cvr_estimate: cvr, safety_factor: settings.safety_factor });
+
+        // Calcular Lucro Pós-ADS por janela real (usando métricas de campanha agregadas por ASIN)
+        const campIds = campaigns
+          .filter((c: any) => c.asin === p.asin)
+          .map((c: any) => c.campaign_id || c.amazon_campaign_id).filter(Boolean);
+
+        let spend14d = 0, orders14d = 0, spend3d = 0, orders3d = 0;
+        for (const cid of campIds) {
+          const wm = campWindowMetrics.get(cid);
+          if (wm) {
+            spend14d += wm.d14.spend || 0;
+            orders14d += wm.d14.orders || 0;
+            spend3d += wm.d3.spend || 0;
+            orders3d += wm.d3.orders || 0;
+          }
+        }
+
+        const r14 = calcProfitAfterAds({ contribution_margin_amount, spend: spend14d, orders: orders14d });
+        const r3 = calcProfitAfterAds({ contribution_margin_amount, spend: spend3d, orders: orders3d });
+
+        const profit_protection = classifyProfitProtection({
+          profit_after_ads_14d: r14.profit_after_ads,
+          profit_after_ads_3d: r3.profit_after_ads,
+          profit_before_ads: contribution_margin_amount,
+        });
+
         acosByAsin.set(p.asin, {
           target: Math.round(target * 10) / 10,
           break_even: Math.round(break_even * 10) / 10,
           safe_max_cpc: safe_cpc,
-          confidence: pl ? 'confirmed' : margin > 0 ? 'estimated' : 'fallback',
+          confidence: econ ? 'confirmed' : pl ? 'confirmed' : 'estimated',
+          contribution_margin_amount,
+          profit_after_ads_14d: r14.profit_after_ads,
+          profit_after_ads_3d: r3.profit_after_ads,
+          profit_protection,
         });
       }
+    }
+
+    // Persistir profit_protection em ProductEconomics (fire-and-forget)
+    const econUpdates: any[] = [];
+    for (const [asin, meta] of acosByAsin.entries()) {
+      const econ = econByNsku.get(`ASIN:${asin}`) || null;
+      if (econ?.id && meta.profit_protection) {
+        econUpdates.push({
+          id: econ.id,
+          profit_after_ads_14d: Math.round(meta.profit_after_ads_14d * 100) / 100,
+          profit_after_ads_3d: Math.round(meta.profit_after_ads_3d * 100) / 100,
+          profit_erosion_velocity: Math.round(meta.profit_protection.erosion_velocity * 1000) / 1000,
+          profit_erosion_alert: meta.profit_protection.alert,
+          profit_protection_mode: meta.profit_protection.mode,
+          profit_protection_reason: meta.profit_protection.reason,
+          last_calculated_at: now,
+        });
+      }
+    }
+    if (econUpdates.length > 0) {
+      base44.asServiceRole.entities.ProductEconomics.bulkUpdate(econUpdates).catch(() => {});
     }
 
     // ── 6b. Preencher acosComparisonByCampaign (usa acosByAsin já declarado acima) ─
@@ -894,6 +1009,52 @@ Deno.serve(async (req) => {
         }
       }
 
+      // ── Guardrail: Lucro Bruto Pós-ADS (proteção de evasão de margem) ──
+      // Se o produto está em modo defensive/paused, aplica redução de bid
+      // independente do ACoS — o lucro real já está sendo consumido pelos ads.
+      if (asinMeta?.profit_protection?.mode === 'paused' && kw_spend >= MRC.MIN_SPEND * 0.5) {
+        const newBid = clamp(currentBid * (1 - settings.max_bid_decrease_pct), settings.min_bid, settings.max_bid);
+        const iKey = `profit_eroded_paused|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `🚨 LUCRO PÓS-ADS NEGATIVO: R$${asinMeta.profit_after_ads_3d.toFixed(2)}/pedido em 3d. Margem bruta: R$${asinMeta.contribution_margin_amount.toFixed(2)}. Ads estão consumindo mais do que o produto gera. Bid reduzido ${Math.round(settings.max_bid_decrease_pct * 100)}% para deter evasão de lucro. ${asinMeta.profit_protection.reason}`,
+            rule_key: 'profit_erosion_paused',
+            risk: 'high', priority: PRIORITY.profit_erosion,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey,
+          }));
+          entityChangedThisCycle.set(entityId, 'profit_eroded');
+          stats.bid_reduce++;
+        }
+        continue;
+      }
+
+      if (asinMeta?.profit_protection?.mode === 'defensive' && kw_spend >= MRC.MIN_SPEND) {
+        const reductionPct = settings.max_bid_decrease_pct * 0.6; // redução moderada
+        const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
+        const iKey = `profit_erosion_defensive|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `⚠️ EVASÃO DE LUCRO DETECTADA: ${asinMeta.profit_protection.reason}. Lucro pós-ADS 3d: R$${asinMeta.profit_after_ads_3d.toFixed(2)} vs 14d: R$${asinMeta.profit_after_ads_14d.toFixed(2)}. Bid reduzido ${Math.round(reductionPct * 100)}% para deter erosão. Monitorar se vender com redução — manter vigilância para 1ª página.`,
+            rule_key: 'profit_erosion_defensive',
+            risk: 'medium', priority: PRIORITY.profit_erosion,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey,
+          }));
+          entityChangedThisCycle.set(entityId, 'profit_defensive');
+          stats.bid_reduce++;
+        }
+        continue;
+      }
+
       // ── Evidência mínima para decisão ─────────────────────────────────
       const hasMinEvidence = kw_clicks >= MRC.MIN_CLICKS && kw_impressions >= MRC.MIN_IMPRESSIONS && kw_spend >= MRC.MIN_SPEND;
       const hasCtrQuality = kw_impressions > 0 && (kw_clicks / kw_impressions) >= MRC.MIN_CTR;
@@ -1013,6 +1174,11 @@ Deno.serve(async (req) => {
       // ── Regra: ACoS abaixo do alvo + vendas → escalar ────────────────
       // Só aplica se effectiveTargetAcos foi configurado (não null)
       if (kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1 && kw_sales > 0) {
+        // Bloquear escala se lucro pós-ads em modo vigilant — ads já comprimindo margem
+        if (asinMeta?.profit_protection?.mode === 'vigilant') {
+          skipped.push({ entity_id: entityId, reason: 'profit_vigilant_blocks_scale', asin: resolvedAsin, mode: 'vigilant' });
+          continue;
+        }
         // Guardrails de escala
         const cpcOk = effectiveSafeMaxCpc <= 0 || kw_cpc <= effectiveSafeMaxCpc;
         const roasOk = settings.target_roas === null || (kw_spend > 0 && kw_sales / kw_spend >= settings.target_roas * 0.85);
@@ -1220,8 +1386,25 @@ Deno.serve(async (req) => {
         budget_cap: settings.daily_budget_cap,
         budget_guardrail_triggered: budgetGuardrailActive,
         products_updated: productUpdates.length,
+        econ_records_updated: econUpdates.length,
         sample_dynamic_targets: Array.from(acosByAsin.entries()).slice(0, 5)
-          .map(([asin, m]) => ({ asin, target_acos: m.target, break_even: m.break_even, confidence: m.confidence, safe_max_cpc: m.safe_max_cpc })),
+          .map(([asin, m]) => ({ asin, target_acos: m.target, break_even: m.break_even, confidence: m.confidence, safe_max_cpc: m.safe_max_cpc, profit_after_ads_14d: m.profit_after_ads_14d, profit_protection_mode: m.profit_protection?.mode })),
+      },
+
+      profit_after_ads_summary: {
+        products_analyzed: acosByAsin.size,
+        mode_normal: Array.from(acosByAsin.values()).filter(m => m.profit_protection?.mode === 'normal').length,
+        mode_vigilant: Array.from(acosByAsin.values()).filter(m => m.profit_protection?.mode === 'vigilant').length,
+        mode_defensive: Array.from(acosByAsin.values()).filter(m => m.profit_protection?.mode === 'defensive').length,
+        mode_paused: Array.from(acosByAsin.values()).filter(m => m.profit_protection?.mode === 'paused').length,
+        erosion_alerts: Array.from(acosByAsin.entries())
+          .filter(([, m]) => m.profit_protection?.alert)
+          .map(([asin, m]) => ({
+            asin, mode: m.profit_protection.mode, reason: m.profit_protection.reason,
+            profit_after_ads_14d: Math.round(m.profit_after_ads_14d * 100) / 100,
+            profit_after_ads_3d: Math.round(m.profit_after_ads_3d * 100) / 100,
+            contribution_margin: Math.round(m.contribution_margin_amount * 100) / 100,
+          })),
       },
 
       search_intent_summary: {

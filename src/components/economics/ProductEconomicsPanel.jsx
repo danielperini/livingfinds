@@ -161,7 +161,7 @@ export default function ProductEconomicsPanel({ accountId }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['SKU / ASIN', 'Custo Total', 'Preço', 'Margem', 'Break-even', 'Target ACoS', 'Safe CPC', 'Classificação', 'Status', ''].map(h => (
+                  {['SKU / ASIN', 'Custo Total', 'Preço', 'Margem', 'Lucro Pós-ADS', 'Break-even', 'Target ACoS', 'Safe CPC', 'Classificação', 'Status', ''].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -193,6 +193,24 @@ export default function ProductEconomicsPanel({ accountId }) {
                         {e?.contribution_margin_amount != null && (
                           <p className={`text-[10px] ${marginColor}`}>{fmt(e.contribution_margin_amount)}</p>
                         )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {(() => {
+                          const mode = e?.profit_protection_mode || 'normal';
+                          const val14 = e?.profit_after_ads_14d;
+                          const val3 = e?.profit_after_ads_3d;
+                          const modeColors = { normal: 'text-emerald-400', vigilant: 'text-amber-400', defensive: 'text-orange-400', paused: 'text-red-400' };
+                          const modeIcons = { normal: '✅', vigilant: '👁', defensive: '⚠️', paused: '🚨' };
+                          const color = modeColors[mode] || 'text-slate-500';
+                          if (val14 == null) return <span className="text-[10px] text-slate-500">—</span>;
+                          return (
+                            <div>
+                              <span className={`text-xs font-semibold ${color}`}>{fmt(val14)}<span className="text-[9px] ml-0.5 opacity-70">/ped</span></span>
+                              {val3 != null && <p className={`text-[10px] ${color} opacity-80`}>3d: {fmt(val3)}</p>}
+                              <span className={`text-[9px] font-bold ${color}`}>{modeIcons[mode]} {mode}</span>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2.5 text-slate-300">{e?.break_even_acos > 0 ? fmtPct(e.break_even_acos) : '—'}</td>
                       <td className="px-3 py-2.5 text-cyan font-medium">{e?.target_acos > 0 ? fmtPct(e.target_acos) : '—'}</td>

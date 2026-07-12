@@ -101,15 +101,71 @@
     },
     "profit_before_ads": {
       "type": "number",
-      "default": 0
+      "default": 0,
+      "description": "Lucro bruto por unidade antes dos ADS (margem de contribui\u00e7\u00e3o)"
     },
     "profit_after_ads": {
       "type": "number",
-      "default": 0
+      "default": 0,
+      "description": "Lucro bruto p\u00f3s-ADS: profit_before_ads - (ad_spend / orders). Zero = produto no limite."
     },
     "profit_after_ads_percent": {
       "type": "number",
-      "default": 0
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS como % do pre\u00e7o de venda"
+    },
+    "profit_after_ads_14d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 14d real de m\u00e9tricas"
+    },
+    "profit_after_ads_7d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 7d real"
+    },
+    "profit_after_ads_3d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 3d (alerta r\u00e1pido)"
+    },
+    "profit_erosion_velocity": {
+      "type": "number",
+      "default": 0,
+      "description": "Taxa de eros\u00e3o: (profit_3d - profit_14d) / profit_14d. Negativo = evas\u00e3o acelerada."
+    },
+    "profit_erosion_alert": {
+      "type": "boolean",
+      "default": false,
+      "description": "True se eros\u00e3o > 30% em 3d vs 14d"
+    },
+    "ad_spend_per_order_14d": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto m\u00e9dio de ads por pedido nos \u00faltimos 14d"
+    },
+    "ad_spend_per_order_3d": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto m\u00e9dio de ads por pedido nos \u00faltimos 3d (detector de acelera\u00e7\u00e3o)"
+    },
+    "profit_protection_mode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "vigilant",
+        "defensive",
+        "paused"
+      ],
+      "default": "normal",
+      "description": "normal=saud\u00e1vel, vigilant=lucro reduzindo mas ainda positivo, defensive=bid reduzido aguardando estabiliza\u00e7\u00e3o, paused=lucro negativo"
+    },
+    "profit_protection_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profit_protection_reason": {
+      "type": "string"
     },
     "economic_classification": {
       "type": "string",
@@ -126,8 +182,7 @@
     },
     "cost_source": {
       "type": "string",
-      "default": "unknown",
-      "description": "manual_confirmed, manual_confirmed_import, sp_api_listing, sp_api_sales_average, amazon_fee_report, account_configuration, historical_import, unknown"
+      "default": "unknown"
     },
     "price_source": {
       "type": "string",
@@ -162,8 +217,7 @@
     },
     "cost_confidence": {
       "type": "number",
-      "default": 0,
-      "description": "0 a 1"
+      "default": 0
     },
     "price_confidence": {
       "type": "number",
