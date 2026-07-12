@@ -81,10 +81,11 @@ export default function Settings() {
   const setGoal = (key, val) => setGoals(p => ({ ...p, [key]: val }));
 
   useEffect(() => {
-    base44.auth.me().then(me => {
+    async function load() {
+      const me = await base44.auth.me();
       setUser(me);
-      return base44.entities.AmazonAccount.filter({ user_id: me.id });
-    }).then(accounts => {
+
+      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       if (!accounts.length) return;
       const acc = accounts[0];
       setAccount(acc);
@@ -94,41 +95,39 @@ export default function Settings() {
         ads_profile_id: acc.ads_profile_id || '',
         region: acc.region || 'NA',
       });
+
       // Carregar PerformanceSettings (fonte única de metas)
-      return base44.entities.PerformanceSettings.filter({ amazon_account_id: acc.id });
-    }).then(settings => {
-      if (!settings || !settings.length) {
-        // fallback: tentar carregar do AutopilotConfig para migração
-        if (account?.id) {
-          base44.entities.AutopilotConfig.filter({ amazon_account_id: account?.id }).then(cfgs => {
-            if (cfgs.length) {
-              const cfg = cfgs[0];
-              setGoals(p => ({
-                ...p,
-                target_acos: cfg.target_acos ?? p.target_acos,
-                max_acos: cfg.maximum_acos ?? p.max_acos,
-                target_roas: cfg.target_roas ?? p.target_roas,
-                target_tacos: cfg.target_tacos ?? p.target_tacos,
-                max_tacos: cfg.maximum_tacos ?? p.max_tacos,
-                daily_budget_limit: cfg.total_daily_budget ?? cfg.daily_budget_target ?? p.daily_budget_limit,
-                target_cpc: cfg.target_cpc ?? 0,
-                max_cpc: cfg.maximum_cpc ?? 0,
-                min_bid: cfg.min_bid ?? p.min_bid,
-                max_bid: cfg.max_bid ?? p.max_bid,
-                max_bid_increase_pct: cfg.max_bid_increase_pct ?? p.max_bid_increase_pct,
-                max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? p.max_bid_decrease_pct,
-                objective: cfg.objective ?? p.objective,
-                ai_auto_optimization: cfg.ai_auto_optimization ?? false,
-              }));
-            }
-          }).catch(() => {});
+      const settings = await base44.entities.PerformanceSettings.filter({ amazon_account_id: acc.id });
+      if (settings && settings.length) {
+        const s = settings[0];
+        setPerfSettings(s);
+        setGoals({ ...PERFORMANCE_DEFAULTS, ...s });
+      } else {
+        // fallback: AutopilotConfig para migração
+        const cfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }).catch(() => []);
+        if (cfgs.length) {
+          const cfg = cfgs[0];
+          setGoals(p => ({
+            ...p,
+            target_acos: cfg.target_acos ?? p.target_acos,
+            max_acos: cfg.maximum_acos ?? p.max_acos,
+            target_roas: cfg.target_roas ?? p.target_roas,
+            target_tacos: cfg.target_tacos ?? p.target_tacos,
+            max_tacos: cfg.maximum_tacos ?? p.max_tacos,
+            daily_budget_limit: cfg.total_daily_budget ?? cfg.daily_budget_target ?? p.daily_budget_limit,
+            target_cpc: cfg.target_cpc ?? 0,
+            max_cpc: cfg.maximum_cpc ?? 0,
+            min_bid: cfg.min_bid ?? p.min_bid,
+            max_bid: cfg.max_bid ?? p.max_bid,
+            max_bid_increase_pct: cfg.max_bid_increase_pct ?? p.max_bid_increase_pct,
+            max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? p.max_bid_decrease_pct,
+            objective: cfg.objective ?? p.objective,
+            ai_auto_optimization: cfg.ai_auto_optimization ?? false,
+          }));
         }
-        return;
       }
-      const s = settings[0];
-      setPerfSettings(s);
-      setGoals({ ...PERFORMANCE_DEFAULTS, ...s });
-    }).catch(console.error);
+    }
+    load().catch(console.error);
   }, []);
 
   const saveAccount = async () => {
@@ -228,6 +227,8 @@ export default function Settings() {
     setAuthChecking(true);
     setAuthStatus(null);
     try {
+      // Renovar token antes de testar
+      await base44.functions.invoke('refreshAmazonAdsTokenDailyOrHourly', { force: true }).catch(() => {});
       const res = await base44.functions.invoke('testAuthHealth', {});
       setAuthStatus(res?.data || null);
     } catch (e) {
