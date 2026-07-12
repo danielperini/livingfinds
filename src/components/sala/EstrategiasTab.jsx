@@ -1,152 +1,320 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 import {
-  Zap, RefreshCw, Play, Loader2, CheckCircle, XCircle,
-  Clock, AlertTriangle, ChevronDown, ChevronRight, Settings, Target, History } from
-'lucide-react';
+  Zap, RefreshCw, Loader2, CheckCircle, XCircle, AlertTriangle,
+  Target, TrendingUp, TrendingDown, ChevronDown, ChevronRight,
+  Shield, Brain, BarChart2, Settings, Package, Eye, Clock,
+  Activity, DollarSign, ShoppingCart, Layers, Search, Play
+} from 'lucide-react';
 import PerformanceSettingsHistoryTable from '@/components/strategy/PerformanceSettingsHistoryTable';
 
-const ACTION_LABELS = {
-  adjust_bid: 'Ajuste de Bid', adjust_budget: 'Ajuste de Budget',
-  create_manual_exact_campaign: 'Criar EXACT', pause_keyword: 'Pausar Keyword',
-  pause_campaign: 'Pausar Campanha', negative_keyword: 'Negativar Termo',
-  repair_campaign: 'Reparar Campanha', hold_for_maturation: 'Aguardar Maturação',
-  redistribute_budget: 'Redistribuir Budget', protect_margin: 'Proteger Margem'
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtBRL(v) { return v == null || isNaN(v) ? '—' : `R$${Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
+function fmtPct(v) { return v == null || isNaN(v) ? '—' : `${Number(v).toFixed(1)}%`; }
+function fmtNum(v) { return v == null ? '—' : Number(v).toLocaleString('pt-BR'); }
+
+const INTENT_LABELS = {
+  brand: 'Marca', category: 'Categoria', problem: 'Problema',
+  benefit: 'Benefício', feature: 'Atributo', comparison: 'Comparação',
+  competitor: 'Concorrente', commercial: 'Comercial', transactional: 'Transacional',
+  informational: 'Informacional', long_tail: 'Cauda Longa', product_specific: 'Produto Específico',
+};
+const INTENT_COLORS = {
+  high: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+  medium: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+  low: 'text-slate-400 bg-slate-500/10 border-slate-500/20',
+};
+const PRODUCT_STATE_LABELS = {
+  unavailable: { label: 'Indisponível', color: 'text-red-400', bg: 'bg-red-500/10' },
+  critical_stock: { label: 'Estoque Crítico', color: 'text-red-400', bg: 'bg-red-500/10' },
+  low_stock: { label: 'Estoque Baixo', color: 'text-amber-400', bg: 'bg-amber-500/10' },
+  learning: { label: 'Aprendendo', color: 'text-blue-400', bg: 'bg-blue-500/10' },
+  inefficient: { label: 'Ineficiente', color: 'text-orange-400', bg: 'bg-orange-500/10' },
+  profitable: { label: 'Lucrativo', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
+  scalable: { label: 'Escalável', color: 'text-cyan bg-cyan/10', bg: 'bg-cyan/10' },
+  mature: { label: 'Maduro', color: 'text-violet-400', bg: 'bg-violet-500/10' },
+  discontinued: { label: 'Declínio', color: 'text-slate-500', bg: 'bg-slate-500/10' },
 };
 const RISK_STYLES = {
   low: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
   medium: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  high: 'bg-red-500/10 text-red-400 border-red-500/20'
-};
-const GOAL_STYLES = {
-  acos: 'text-red-400', roas: 'text-emerald-400', cpc: 'text-violet-400',
-  budget: 'text-cyan', keyword: 'text-amber-400', campaign: 'text-blue-400'
+  high: 'bg-red-500/10 text-red-400 border-red-500/20',
 };
 
-function fmtBRL(v) {return v == null || isNaN(v) ? '—' : `R$${Number(v).toFixed(2)}`;}
-function fmtPct(v) {return v == null || isNaN(v) ? '—' : `${Number(v).toFixed(1)}%`;}
-
-function DecisionCard({ dec, expanded, onToggle }) {
-  const before = dec.before_metrics || {};
-  const payload = dec.action_taken || dec.action_payload || {};
-  const statusStyle = { pending: 'bg-amber-500/10 text-amber-400', maturing: 'bg-blue-500/10 text-blue-400', success: 'bg-emerald-500/10 text-emerald-400', failed: 'bg-red-500/10 text-red-400' }[dec.status] || 'bg-slate-500/10 text-slate-400';
+function KpiCard({ label, value, sub, tone = 'default', icon: CardIcon }) {
+  const tones = {
+    default: 'border-surface-2',
+    good: 'border-emerald-500/25 bg-emerald-500/5',
+    warn: 'border-amber-500/25 bg-amber-500/5',
+    bad: 'border-red-500/25 bg-red-500/5',
+    cyan: 'border-cyan/20 bg-cyan/5',
+    violet: 'border-violet-500/20 bg-violet-500/5',
+  };
   return (
-    <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-      <button onClick={onToggle} className="w-full flex items-start gap-3 p-4 hover:bg-surface-2/40 transition-colors text-left">
+    <div className={`bg-surface-1 border rounded-xl p-4 ${tones[tone]}`}>
+      <div className="flex items-center gap-1.5 mb-1">
+        {CardIcon && <CardIcon className="w-3 h-3 text-slate-500" />}
+        <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+      </div>
+      <p className="text-xl font-bold text-white">{value}</p>
+      {sub && <p className="text-[10px] text-slate-500 mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+function IntentBadge({ intent_type, purchase_intent }) {
+  const label = INTENT_LABELS[intent_type] || intent_type || '—';
+  const color = INTENT_COLORS[purchase_intent] || INTENT_COLORS.low;
+  return (
+    <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium whitespace-nowrap ${color}`}>
+      {label}
+    </span>
+  );
+}
+
+function DecisionRow({ dec, expanded, onToggle }) {
+  const isIncrease = dec.value_after > dec.value_before;
+  const isDecrease = dec.value_after < dec.value_before;
+  const isPause = dec.action === 'pause_keyword' || dec.action === 'pause_campaign';
+  const statusColor = {
+    approved: 'text-cyan', executed: 'text-emerald-400', failed: 'text-red-400',
+    pending: 'text-amber-400', skipped: 'text-slate-500',
+  }[dec.status] || 'text-slate-400';
+
+  return (
+    <div className="border-b border-surface-2/50 last:border-0">
+      <button onClick={onToggle} className="w-full flex items-start gap-3 px-5 py-3 hover:bg-surface-2/30 transition-colors text-left">
+        {/* Ícone de direção */}
+        <div className="flex-shrink-0 mt-0.5">
+          {isPause ? <Shield className="w-4 h-4 text-amber-400" />
+            : isIncrease ? <TrendingUp className="w-4 h-4 text-emerald-400" />
+            : isDecrease ? <TrendingDown className="w-4 h-4 text-red-400" />
+            : <Activity className="w-4 h-4 text-slate-500" />}
+        </div>
+
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${RISK_STYLES[dec.risk_level] || RISK_STYLES.medium}`}>{dec.risk_level?.toUpperCase()}</span>
-            <span className={`text-xs font-semibold ${GOAL_STYLES[dec.goal_targeted] || 'text-slate-300'}`}>{(dec.goal_targeted || '').toUpperCase()}</span>
-            <span className="text-xs font-semibold text-slate-200">{ACTION_LABELS[dec.action_type] || dec.action_type}</span>
-            {dec.status && <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${statusStyle}`}>{dec.status}</span>}
+            {dec.keyword_text && (
+              <span className="text-xs font-semibold text-white truncate max-w-[200px]">{dec.keyword_text}</span>
+            )}
+            {dec.asin && <span className="text-[10px] font-mono text-cyan flex-shrink-0">{dec.asin}</span>}
+            {dec.search_intent_type && (
+              <IntentBadge intent_type={dec.search_intent_type} purchase_intent={dec.purchase_intent} />
+            )}
+            {dec.risk && (
+              <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${RISK_STYLES[dec.risk] || RISK_STYLES.medium}`}>
+                {dec.risk.toUpperCase()}
+              </span>
+            )}
           </div>
-          <p className="text-xs text-slate-300 truncate">{dec.strategy_name || dec.strategy_id}</p>
-          <p className="text-[10px] text-slate-500 mt-0.5 line-clamp-1">{payload.reason || dec.reason}</p>
+          <div className="flex items-center gap-3 text-[10px] flex-wrap">
+            <span className="text-slate-500">{dec.decision_type || dec.action}</span>
+            {dec.value_before != null && dec.value_after != null && (
+              <span className={isIncrease ? 'text-emerald-400' : isDecrease ? 'text-red-400' : 'text-slate-400'}>
+                R${(dec.value_before || 0).toFixed(2)} → R${(dec.value_after || 0).toFixed(2)}
+              </span>
+            )}
+            <span className={`font-semibold ${statusColor}`}>{dec.status}</span>
+            {dec.confidence > 0 && <span className="text-slate-600">Confiança: {dec.confidence}%</span>}
+          </div>
         </div>
-        <div className="flex-shrink-0">{expanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}</div>
-      </button>
-      {expanded &&
-      <div className="border-t border-surface-2 p-4 space-y-3">
-          <div className="text-xs text-slate-400 space-y-0.5">
-            {dec.keyword_text && <p>🔑 Keyword: <span className="text-white font-semibold">{dec.keyword_text}</span></p>}
-            {dec.campaign_id && <p>📢 Campanha: <span className="font-mono text-[10px]">{dec.campaign_id}</span></p>}
-            {dec.asin && <p>📦 ASIN: <span className="font-mono text-[10px] text-cyan">{dec.asin}</span></p>}
-          </div>
-          <div className="bg-surface-2 rounded-lg p-3 space-y-1">
-            <p className="text-[10px] font-semibold text-slate-400 uppercase">Ação proposta</p>
-            <p className="text-xs font-bold text-white">{ACTION_LABELS[dec.action_type] || dec.action_type}</p>
-            {payload.new_bid != null && <p className="text-xs text-cyan">Bid: <span className="font-bold">{fmtBRL(payload.new_bid)}</span>{before.bid && <span className="text-slate-500 ml-1">← era {fmtBRL(before.bid)}</span>}</p>}
-            {payload.new_budget != null && <p className="text-xs text-amber-400">Budget: <span className="font-bold">{fmtBRL(payload.new_budget)}</span></p>}
-            <p className="text-[10px] text-slate-500">{payload.reason}</p>
-            {dec.goal_blocked && <p className="text-[10px] text-amber-400">🛡 Bloqueado por: {dec.goal_blocked.replace(/_/g, ' ')}</p>}
-          </div>
-          {dec.maturation_hours > 0 &&
-        <div className="flex items-center gap-2 text-xs text-blue-400">
-              <Clock className="w-3.5 h-3.5 flex-shrink-0" />
-              <span>Maturação: {dec.maturation_hours}h · {dec.maturation_until ? new Date(dec.maturation_until).toLocaleString('pt-BR') : '—'}</span>
-            </div>
-        }
-          {dec.success != null &&
-        <div className={`flex items-center gap-2 text-xs font-semibold ${dec.success ? 'text-emerald-400' : 'text-red-400'}`}>
-              {dec.success ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-              {dec.success ? 'Estratégia bem-sucedida' : `Falha: ${dec.failure_reason || 'sem detalhes'}`}
-            </div>
-        }
-        </div>
-      }
-    </div>);
 
+        <div className="flex-shrink-0">
+          {expanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-5 pb-4 space-y-3">
+          {/* Rationale explicado */}
+          <div className="bg-surface-2/50 rounded-lg p-3">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase mb-1.5 flex items-center gap-1.5">
+              <Brain className="w-3 h-3" /> Por que esta decisão?
+            </p>
+            <p className="text-xs text-slate-300 leading-relaxed">{dec.rationale || '—'}</p>
+          </div>
+
+          {/* Métricas antes/depois */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+            {[
+              { label: 'Bid antes', value: dec.value_before != null ? `R$${(dec.value_before).toFixed(2)}` : '—', color: 'text-slate-400' },
+              { label: 'Bid depois', value: dec.value_after != null ? `R$${(dec.value_after).toFixed(2)}` : '—', color: isIncrease ? 'text-emerald-400' : 'text-red-400' },
+              { label: 'Intenção', value: INTENT_LABELS[dec.search_intent_type] || '—', color: 'text-slate-300' },
+              { label: 'Cluster', value: dec.search_intent_cluster || '—', color: 'text-violet-400' },
+            ].map(m => (
+              <div key={m.label} className="bg-surface-2 rounded p-2 text-center">
+                <p className="text-slate-500 mb-0.5">{m.label}</p>
+                <p className={`font-bold text-xs ${m.color}`}>{m.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Meta protegida e fonte */}
+          <div className="flex flex-wrap gap-2 text-[10px]">
+            {dec.settings_source && (
+              <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-500">
+                Fonte: {dec.settings_source}
+              </span>
+            )}
+            {dec.data_quality && (
+              <span className={`px-2 py-1 rounded-lg ${
+                dec.data_quality === 'fresh' ? 'bg-emerald-500/10 text-emerald-400'
+                : dec.data_quality === 'acceptable' ? 'bg-amber-500/10 text-amber-400'
+                : 'bg-red-500/10 text-red-400'}`}>
+                Dados: {dec.data_quality}
+              </span>
+            )}
+            {dec.stock_coverage_days != null && (
+              <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-500">
+                Estoque: {Math.round(dec.stock_coverage_days)}d
+              </span>
+            )}
+            {dec.created_at && (
+              <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-500">
+                {new Date(dec.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
+
+// ── Componente principal ──────────────────────────────────────────────────────
 
 export default function EstrategiasTab({ account }) {
   const [perfSettings, setPerfSettings] = useState(null);
-  const [logs, setLogs] = useState([]);
+  const [decisions, setDecisions] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [metrics, setMetrics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [expandedIds, setExpandedIds] = useState(new Set());
-  const [filterGoal, setFilterGoal] = useState('all');
+  const [filterIntent, setFilterIntent] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [dryRun, setDryRun] = useState(true);
+  const [filterRisk, setFilterRisk] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeView, setActiveView] = useState('strategic'); // 'strategic' | 'decisions' | 'goals'
 
   const loadData = useCallback(async () => {
     if (!account) return;
     setLoading(true);
     try {
-      const [psList, logsList] = await Promise.all([
-      base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
-      base44.entities.StrategyExecutionLog.filter({ amazon_account_id: account.id }, '-created_at', 100).catch(() => [])]
-      );
+      const [psList, decList, prodList, campList, metList] = await Promise.all([
+        base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 200).catch(() => []),
+        base44.entities.Product.filter({ amazon_account_id: account.id }, null, 100).catch(() => []),
+        base44.entities.Campaign.filter({ amazon_account_id: account.id }, null, 100).catch(() => []),
+        base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id }, '-date', 100).catch(() => []),
+      ]);
       setPerfSettings(psList[0] || null);
-      setLogs(logsList);
-    } catch (e) {setError(e.message);} finally
-    {setLoading(false);}
+      setDecisions(decList);
+      setProducts(prodList);
+      setCampaigns(campList);
+      setMetrics(metList);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   }, [account]);
 
-  useEffect(() => {loadData();}, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
   const runEngine = async () => {
     if (!account || running) return;
-    setRunning(true);setResult(null);setError(null);
+    setRunning(true); setResult(null); setError(null);
     try {
-      const res = await base44.functions.invoke('runStrategyEngine', { amazon_account_id: account.id, dry_run: dryRun });
-      setResult(res?.data || null);
-      if (!dryRun) await loadData();
-    } catch (e) {setError(e.message);} finally
-    {setRunning(false);}
-  };
-
-  const evaluateMaturations = async () => {
-    if (!account || running) return;
-    setRunning(true);
-    try {
-      const res = await base44.functions.invoke('runStrategyEngine', { amazon_account_id: account.id, evaluate_only: true });
+      const res = await base44.functions.invoke('runUnifiedDecisionEngine', { amazon_account_id: account.id });
       setResult(res?.data || null);
       await loadData();
-    } catch (e) {setError(e.message);} finally
-    {setRunning(false);}
+    } catch (e) { setError(e.message); }
+    finally { setRunning(false); }
   };
 
-  const toggleExpand = (id) => setExpandedIds((prev) => {const next = new Set(prev);next.has(id) ? next.delete(id) : next.add(id);return next;});
+  const toggleExpand = (id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
-  const displayItems = logs.map((l) => ({ ...l, before_metrics: l.before_metrics || {}, action_payload: l.action_taken || {}, strategy_name: l.strategy_id, goal_targeted: l.action_type?.includes('bid') ? 'acos' : 'campaign', risk_level: l.risk_level || 'medium', use_ai: false }));
-  const allDecisions = result?.decisions || [];
-  const allItems = allDecisions.length > 0 ? allDecisions.map((d) => ({ ...d, id: `dec-${d.strategy_id}-${Math.random()}` })) : displayItems;
+  // ── Métricas estratégicas calculadas ─────────────────────────────────────
+  const strategicMetrics = useMemo(() => {
+    const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+    const recentMetrics = metrics.filter(m => m.date >= cutoff14d);
 
-  const goals = ['all', 'acos', 'roas', 'cpc', 'budget', 'keyword', 'campaign'];
-  const statuses = ['all', 'pending', 'maturing', 'success', 'failed'];
+    const totalSpend = recentMetrics.reduce((s, m) => s + (m.spend || 0), 0);
+    const totalSales = recentMetrics.reduce((s, m) => s + (m.sales || 0), 0);
+    const totalOrders = recentMetrics.reduce((s, m) => s + (m.orders || 0), 0);
+    const globalAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 0;
+    const globalRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
 
-  const filtered = allItems.filter((d) => {
-    if (filterGoal !== 'all' && d.goal_targeted !== filterGoal) return false;
-    if (filterStatus !== 'all' && d.status !== filterStatus && !allDecisions.length) return false;
-    return true;
-  });
+    const productsByState = {};
+    for (const p of products) {
+      // Contagem simples por estado de estoque
+      const state = p.fba_inventory <= 0 ? 'unavailable'
+        : p.inventory_status === 'low_stock' ? 'low_stock'
+        : p.has_campaign ? 'profitable' : 'learning';
+      productsByState[state] = (productsByState[state] || 0) + 1;
+    }
+
+    // Campanhas com ACoS problemático
+    const activeCamps = campaigns.filter(c => c.state === 'enabled' || c.status === 'enabled');
+    const highAcosCount = activeCamps.filter(c => (c.acos || 0) > (perfSettings?.target_acos || 10) * 1.5 && (c.spend || 0) > 5).length;
+    const noConversionCount = activeCamps.filter(c => (c.spend || 0) > 5 && (c.orders || 0) === 0).length;
+
+    // Decisões recentes
+    const recentDecisions = decisions.filter(d => {
+      const created = d.created_at;
+      if (!created) return false;
+      return (Date.now() - new Date(created).getTime()) < 24 * 3600000;
+    });
+
+    // Intent distribution nos decisions
+    const intentDist = {};
+    for (const d of decisions) {
+      if (d.search_intent_type) {
+        intentDist[d.search_intent_type] = (intentDist[d.search_intent_type] || 0) + 1;
+      }
+    }
+
+    return {
+      totalSpend, totalSales, totalOrders, globalAcos, globalRoas,
+      productsByState, highAcosCount, noConversionCount,
+      recentDecisionsCount: recentDecisions.length,
+      pendingCount: decisions.filter(d => d.status === 'approved' || d.status === 'pending').length,
+      executedCount: decisions.filter(d => d.status === 'executed').length,
+      intentDist,
+      scalableProducts: products.filter(p => p.has_campaign && p.fba_inventory > 0 && (p.acos || 0) < (perfSettings?.target_acos || 10)).length,
+      profitableProducts: products.filter(p => p.has_campaign && p.fba_inventory > 0).length,
+    };
+  }, [metrics, products, campaigns, decisions, perfSettings]);
+
+  // ── Filtrar decisões ───────────────────────────────────────────────────────
+  const filteredDecisions = useMemo(() => {
+    return decisions.filter(d => {
+      if (filterIntent !== 'all' && d.purchase_intent !== filterIntent) return false;
+      if (filterStatus !== 'all' && d.status !== filterStatus) return false;
+      if (filterRisk !== 'all' && d.risk !== filterRisk) return false;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        if (!(d.keyword_text || '').toLowerCase().includes(q) &&
+            !(d.asin || '').includes(q) &&
+            !(d.rationale || '').toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [decisions, filterIntent, filterStatus, filterRisk, searchTerm]);
 
   const ps = perfSettings || {};
-  const maturingCount = displayItems.filter((l) => l.status === 'maturing').length;
-  const successCount = displayItems.filter((l) => l.status === 'success').length;
+  const acosColor = strategicMetrics.globalAcos === 0 ? 'default'
+    : strategicMetrics.globalAcos <= (ps.target_acos || 10) ? 'good'
+    : strategicMetrics.globalAcos <= (ps.max_acos || 15) ? 'warn' : 'bad';
 
   return (
     <div className="space-y-5">
@@ -157,153 +325,370 @@ export default function EstrategiasTab({ account }) {
             <Zap className="w-5 h-5 text-violet-400" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-white">Motor de Estratégias</h2>
-            <p className="text-xs text-slate-500">100 estratégias · Ciclo MÉTRICAS → METAS → DECISÃO → MATURAÇÃO → ANÁLISE</p>
+            <h2 className="text-base font-bold text-white">Motor Estratégico de Decisões</h2>
+            <p className="text-xs text-slate-500">Intenção de busca · Lucratividade · Proteção de margem · Escala sustentável</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={loadData} disabled={loading} className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
+          <button onClick={loadData} disabled={loading}
+            className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
-          
-
-
-          
-          
-
-
-
-
-
-          
-          
-
-
-
-          
+          <button onClick={runEngine} disabled={running || !account}
+            className="flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors">
+            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+            {running ? 'Executando Motor...' : 'Executar Motor'}
+          </button>
         </div>
       </div>
 
-      {error &&
-      <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2 text-xs text-red-400">
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2 text-xs text-red-400">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
         </div>
-      }
+      )}
 
-      {perfSettings &&
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Target className="w-4 h-4 text-cyan" />
-            <p className="text-xs font-semibold text-slate-300">Metas ativas — fonte única do motor</p>
-            <Link to="/settings" className="ml-auto text-[10px] text-cyan hover:underline flex items-center gap-1"><Settings className="w-3 h-3" />Editar</Link>
-          </div>
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-            {[
-          { label: 'ACoS alvo', value: `${ps.target_acos || 10}%`, color: 'text-cyan' },
-          { label: 'ACoS máx.', value: `${ps.max_acos || 15}%`, color: 'text-red-400' },
-          { label: 'ROAS alvo', value: `${ps.target_roas || 4}x`, color: 'text-emerald-400' },
-          { label: 'CPC máx.', value: ps.max_cpc ? `R$${Number(ps.max_cpc).toFixed(2)}` : '—', color: 'text-violet-400' },
-          { label: 'Bid máx.', value: ps.max_bid ? `R$${Number(ps.max_bid).toFixed(2)}` : '—', color: 'text-amber-400' },
-          { label: 'Budget/dia', value: `R$${ps.daily_budget_limit || 56}`, color: 'text-slate-300' }].
-          map((m) =>
-          <div key={m.label} className="bg-surface-2 rounded-lg p-2 text-center">
-                <p className="text-[9px] text-slate-500 mb-0.5">{m.label}</p>
-                <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
-              </div>
-          )}
-          </div>
-        </div>
-      }
-
-      {result &&
-      <div className={`rounded-xl border p-4 space-y-3 ${result.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
-          <div className="flex items-center gap-2">
-            {result.ok ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <XCircle className="w-4 h-4 text-red-400" />}
+      {/* Resultado da execução */}
+      {result && (
+        <div className={`rounded-xl border p-4 space-y-3 ${result.ok ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-red-500/5 border-red-500/20'}`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            {result.ok ? <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" /> : <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />}
             <span className="text-xs font-semibold text-slate-200">
-              {result.dry_run ? '(Simulação) ' : ''}{result.decisions_generated} decisões · {result.entities_evaluated} entidades · {result.strategies_checked} estratégias
+              {result.decisions_generated || 0} decisões geradas · Dados: {result.data_freshness} ({result.data_age_hours}h) · Motor: {result.engine || 'unified'}
             </span>
           </div>
-          {result.blocked_by_guardrail && Object.keys(result.blocked_by_guardrail).length > 0 &&
-        <div className="flex flex-wrap gap-2">
-              {Object.entries(result.blocked_by_guardrail).map(([k, v]) =>
-          <span key={k} className="text-[10px] px-2 py-1 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                  🛡 {k.replace(/_/g, ' ')}: {v} bloqueio(s)
+          {result.economic_context && (
+            <div className="flex flex-wrap gap-2 text-[10px]">
+              <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-400">
+                Gasto ontem: R${(result.economic_context.real_spend_yesterday || 0).toFixed(2)} / cap R${result.economic_context.budget_cap}
+              </span>
+              <span className="px-2 py-1 bg-surface-2 rounded-lg text-slate-400">
+                {result.economic_context.products_with_dynamic_target} produtos com meta dinâmica
+              </span>
+              {result.seasonal_context?.event && (
+                <span className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400">
+                  🗓 {result.seasonal_context.event}
                 </span>
-          )}
+              )}
             </div>
-        }
-        </div>
-      }
-
-      {!loading &&
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-        { label: 'Total de execuções', value: displayItems.length, color: 'text-white' },
-        { label: 'Em maturação', value: maturingCount, color: 'text-blue-400' },
-        { label: 'Bem-sucedidas', value: successCount, color: 'text-emerald-400' },
-        { label: 'Estratégias disponíveis', value: 100, color: 'text-violet-400' }].
-        map((k) =>
-        <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-              <p className="text-[10px] text-slate-500 mb-1 uppercase">{k.label}</p>
-              <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
+          )}
+          {result.stats && (
+            <div className="flex flex-wrap gap-3 text-[10px] text-slate-500">
+              <span>Avaliadas: {result.stats.evaluated}</span>
+              <span>Protegidas: {result.stats.protected}</span>
+              <span>Aumentos: {result.stats.bid_increase}</span>
+              <span>Reduções: {result.stats.bid_reduce}</span>
+              <span>Sem dados: {result.stats.held}</span>
             </div>
-        )}
+          )}
         </div>
-      }
+      )}
 
-      <div className="flex flex-wrap gap-2">
-        <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
-          {goals.map((g) =>
-          <button key={g} onClick={() => setFilterGoal(g)}
-          className={`px-2.5 py-1 rounded text-[10px] font-semibold transition-all capitalize ${filterGoal === g ? 'bg-cyan text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-              {g === 'all' ? 'Todos' : g.toUpperCase()}
-            </button>
-          )}
-        </div>
-        <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
-          {statuses.map((st) =>
-          <button key={st} onClick={() => setFilterStatus(st)}
-          className={`px-2.5 py-1 rounded text-[10px] font-semibold transition-all ${filterStatus === st ? 'bg-cyan text-white' : 'text-slate-400 hover:text-slate-200'}`}>
-              {st === 'all' ? 'Todos' : st}
-            </button>
-          )}
-        </div>
+      {/* Sub-navegação */}
+      <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-xl p-1">
+        {[
+          { id: 'strategic', label: 'Visão Estratégica', icon: BarChart2 },
+          { id: 'decisions', label: `Decisões (${decisions.length})`, icon: Zap },
+          { id: 'goals', label: 'Metas & Histórico', icon: Target },
+        ].map(v => (
+          <button key={v.id} onClick={() => setActiveView(v.id)}
+            className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeView === v.id ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' : 'text-slate-400 hover:text-slate-200'}`}>
+            <v.icon className="w-3.5 h-3.5" />
+            {v.label}
+          </button>
+        ))}
       </div>
 
-      {account &&
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <History className="w-4 h-4 text-slate-400" />
-            <p className="text-xs font-semibold text-slate-300">Histórico de Metas de Performance</p>
-            <Link to="/settings" className="ml-auto text-[10px] text-cyan hover:underline flex items-center gap-1">
-              <Settings className="w-3 h-3" />Editar metas
-            </Link>
+      {/* ── VISÃO ESTRATÉGICA ────────────────────────────────────────────────── */}
+      {activeView === 'strategic' && !loading && (
+        <div className="space-y-4">
+          {/* KPIs de Performance 14d */}
+          <div>
+            <p className="text-xs font-semibold text-slate-400 mb-3">Performance — últimos 14 dias</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <KpiCard label="Gasto Ads" value={fmtBRL(strategicMetrics.totalSpend)} sub="14 dias" tone="cyan" icon={DollarSign} />
+              <KpiCard label="Vendas Ads" value={fmtBRL(strategicMetrics.totalSales)} sub={`${strategicMetrics.totalOrders} pedidos`} tone={strategicMetrics.totalSales > 0 ? 'good' : 'default'} icon={ShoppingCart} />
+              <KpiCard label="ACoS" value={fmtPct(strategicMetrics.globalAcos)} sub={`Meta: ${ps.target_acos || 10}%`} tone={acosColor} icon={Target} />
+              <KpiCard label="ROAS" value={strategicMetrics.globalRoas > 0 ? `${strategicMetrics.globalRoas.toFixed(2)}x` : '—'} sub={`Meta: ${ps.target_roas || 4}x`} tone={strategicMetrics.globalRoas >= (ps.target_roas || 4) ? 'good' : 'default'} icon={TrendingUp} />
+            </div>
           </div>
-          <PerformanceSettingsHistoryTable accountId={account.id} />
+
+          {/* Alertas estratégicos */}
+          {(strategicMetrics.highAcosCount > 0 || strategicMetrics.noConversionCount > 0) && (
+            <div className="space-y-2">
+              {strategicMetrics.highAcosCount > 0 && (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/8 border border-red-500/20 text-xs">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+                  <span className="text-red-300"><strong>{strategicMetrics.highAcosCount}</strong> campanha(s) com ACoS acima da meta — risco de perda de margem</span>
+                </div>
+              )}
+              {strategicMetrics.noConversionCount > 0 && (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/8 border border-amber-500/20 text-xs">
+                  <TrendingDown className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <span className="text-amber-300"><strong>{strategicMetrics.noConversionCount}</strong> campanha(s) gastando sem converter — desperdício de orçamento</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Estado estratégico das decisões */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <KpiCard label="Decisões Pendentes" value={strategicMetrics.pendingCount} sub="Na fila aprovada" tone={strategicMetrics.pendingCount > 0 ? 'warn' : 'good'} icon={Clock} />
+            <KpiCard label="Executadas" value={strategicMetrics.executedCount} tone="good" sub="Total histórico" icon={CheckCircle} />
+            <KpiCard label="Produtos Lucrativos" value={strategicMetrics.profitableProducts} sub="Com campanha ativa" tone="cyan" icon={Package} />
+            <KpiCard label="Escaláveis" value={strategicMetrics.scalableProducts} sub="ACoS abaixo da meta" tone="violet" icon={TrendingUp} />
+          </div>
+
+          {/* Distribuição de intenção de busca */}
+          {Object.keys(strategicMetrics.intentDist).length > 0 && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                <Brain className="w-4 h-4 text-violet-400" />
+                Distribuição de Intenção de Busca — Decisões
+              </h3>
+              <div className="space-y-2">
+                {Object.entries(strategicMetrics.intentDist)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([intent, count]) => {
+                    const total = Object.values(strategicMetrics.intentDist).reduce((s, v) => s + v, 0);
+                    const pct = total > 0 ? Math.round(count / total * 100) : 0;
+                    const isHigh = ['long_tail', 'transactional', 'commercial', 'product_specific'].includes(intent);
+                    return (
+                      <div key={intent} className="flex items-center gap-3">
+                        <span className="text-[10px] text-slate-400 w-28 flex-shrink-0">{INTENT_LABELS[intent] || intent}</span>
+                        <div className="flex-1 h-1.5 bg-surface-3 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${isHigh ? 'bg-emerald-500' : 'bg-slate-500'}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-[10px] text-slate-500 w-12 text-right flex-shrink-0">{count} ({pct}%)</span>
+                      </div>
+                    );
+                  })}
+              </div>
+              <p className="text-[10px] text-slate-600 mt-3">Termos comerciais/transacionais (verde) têm maior intenção de compra e devem ser priorizados.</p>
+            </div>
+          )}
+
+          {/* Produtos por estado */}
+          {products.length > 0 && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-cyan" />
+                Produtos por Estado Estratégico
+              </h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {Object.entries(
+                  products.reduce((acc, p) => {
+                    const state = p.fba_inventory <= 0 ? 'unavailable'
+                      : p.inventory_status === 'low_stock' ? 'low_stock'
+                      : p.inventory_status === 'out_of_stock' ? 'unavailable'
+                      : !p.has_campaign ? 'learning'
+                      : (p.acos || 0) > (ps.target_acos || 10) * 1.5 ? 'inefficient'
+                      : (p.acos || 0) > 0 && (p.acos || 0) <= (ps.target_acos || 10) * 0.7 ? 'scalable'
+                      : p.has_campaign ? 'profitable' : 'learning';
+                    acc[state] = (acc[state] || 0) + 1;
+                    return acc;
+                  }, {})
+                ).map(([state, count]) => {
+                  const cfg = PRODUCT_STATE_LABELS[state] || { label: state, color: 'text-slate-400', bg: 'bg-slate-500/10' };
+                  return (
+                    <div key={state} className={`rounded-lg p-3 text-center ${cfg.bg} border border-surface-3/50`}>
+                      <p className={`text-xl font-bold ${cfg.color}`}>{count}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">{cfg.label}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
-      }
+      )}
 
-      {loading ?
-      <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 text-violet-400 animate-spin" /></div> :
-      filtered.length === 0 ?
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-8 text-center">
-          <Zap className="w-8 h-8 text-slate-600 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">Nenhuma decisão encontrada.</p>
-          <p className="text-xs text-slate-600 mt-1">Execute o motor para gerar estratégias baseadas nas metas.</p>
-        </div> :
+      {/* ── DECISÕES ────────────────────────────────────────────────────────── */}
+      {activeView === 'decisions' && (
+        <div className="space-y-4">
+          {/* Filtros */}
+          <div className="flex flex-wrap gap-2 items-center">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Keyword, ASIN..."
+                className="pl-7 pr-3 py-1.5 bg-surface-2 border border-surface-3 rounded-lg text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50 w-40" />
+            </div>
 
-      <div className="space-y-2">
-          <p className="text-[10px] text-slate-500">{filtered.length} decisões</p>
-          {filtered.map((dec) =>
-        <DecisionCard
-          key={dec.id || dec.strategy_id}
-          dec={dec}
-          expanded={expandedIds.has(dec.id || dec.strategy_id)}
-          onToggle={() => toggleExpand(dec.id || dec.strategy_id)} />
+            {/* Intenção */}
+            <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
+              {[
+                { k: 'all', l: 'Todas' },
+                { k: 'high', l: '🎯 Alta' },
+                { k: 'medium', l: '⚡ Média' },
+                { k: 'low', l: '💬 Baixa' },
+              ].map(f => (
+                <button key={f.k} onClick={() => setFilterIntent(f.k)}
+                  className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${filterIntent === f.k ? 'bg-violet-500/20 text-violet-300' : 'text-slate-400 hover:text-slate-200'}`}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
 
-        )}
+            {/* Status */}
+            <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
+              {[
+                { k: 'all', l: 'Todos' },
+                { k: 'approved', l: 'Aprovadas' },
+                { k: 'executed', l: 'Executadas' },
+                { k: 'failed', l: 'Falharam' },
+              ].map(f => (
+                <button key={f.k} onClick={() => setFilterStatus(f.k)}
+                  className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${filterStatus === f.k ? 'bg-cyan/20 text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+
+            {/* Risco */}
+            <div className="flex gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
+              {[{ k: 'all', l: 'Risco' }, { k: 'low', l: '🟢' }, { k: 'medium', l: '🟡' }, { k: 'high', l: '🔴' }].map(f => (
+                <button key={f.k} onClick={() => setFilterRisk(f.k)}
+                  className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${filterRisk === f.k ? 'bg-surface-3 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                  {f.l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-[10px] text-slate-500">{filteredDecisions.length} decisões</p>
+
+          {loading ? (
+            <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 text-violet-400 animate-spin" /></div>
+          ) : filteredDecisions.length === 0 ? (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-10 text-center">
+              <Zap className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+              <p className="text-sm text-slate-500">Nenhuma decisão encontrada com este filtro.</p>
+              <p className="text-xs text-slate-600 mt-1">Execute o motor para gerar decisões baseadas nas metas econômicas e intenção de busca.</p>
+              <button onClick={runEngine} disabled={running || !account}
+                className="mt-4 flex items-center gap-2 px-4 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 text-xs font-semibold rounded-lg disabled:opacity-50 mx-auto">
+                {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                {running ? 'Executando...' : 'Executar Agora'}
+              </button>
+            </div>
+          ) : (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+              {filteredDecisions.slice(0, 100).map(dec => (
+                <DecisionRow
+                  key={dec.id}
+                  dec={dec}
+                  expanded={expandedIds.has(dec.id)}
+                  onToggle={() => toggleExpand(dec.id)}
+                />
+              ))}
+              {filteredDecisions.length > 100 && (
+                <p className="px-5 py-3 text-[10px] text-slate-500 border-t border-surface-2">
+                  Mostrando 100 de {filteredDecisions.length} decisões
+                </p>
+              )}
+            </div>
+          )}
         </div>
-      }
-    </div>);
+      )}
 
+      {/* ── METAS & HISTÓRICO ───────────────────────────────────────────────── */}
+      {activeView === 'goals' && (
+        <div className="space-y-5">
+          {/* Metas ativas */}
+          {perfSettings ? (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Target className="w-4 h-4 text-cyan" />
+                <p className="text-sm font-semibold text-slate-300">Metas de Performance — Fonte Única do Motor</p>
+                <Link to="/settings" className="ml-auto text-[10px] text-cyan hover:underline flex items-center gap-1">
+                  <Settings className="w-3 h-3" /> Editar
+                </Link>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: 'ACoS alvo', value: `${ps.target_acos || 10}%`, color: 'text-cyan', sub: 'Meta principal' },
+                  { label: 'ACoS máx.', value: `${ps.max_acos || 15}%`, color: 'text-red-400', sub: 'Limite de segurança' },
+                  { label: 'ROAS alvo', value: `${ps.target_roas || 4}x`, color: 'text-emerald-400', sub: 'Retorno esperado' },
+                  { label: 'CPC máx.', value: ps.max_cpc ? fmtBRL(ps.max_cpc) : '—', color: 'text-violet-400', sub: 'Safe max CPC' },
+                  { label: 'Bid mín.', value: ps.min_bid ? fmtBRL(ps.min_bid) : fmtBRL(0.40), color: 'text-slate-300', sub: 'Piso de lance' },
+                  { label: 'Bid máx.', value: ps.max_bid ? fmtBRL(ps.max_bid) : '—', color: 'text-amber-400', sub: 'Teto de lance' },
+                  { label: 'Budget/dia', value: fmtBRL(ps.daily_budget_limit || 56), color: 'text-slate-300', sub: 'Guardrail real' },
+                  { label: 'Safety Factor', value: '80%', color: 'text-slate-300', sub: 'Reserva de margem' },
+                ].map(m => (
+                  <div key={m.label} className="bg-surface-2 rounded-lg p-3 text-center">
+                    <p className="text-[9px] text-slate-500 mb-0.5">{m.label}</p>
+                    <p className={`text-sm font-bold ${m.color}`}>{m.value}</p>
+                    {m.sub && <p className="text-[9px] text-slate-600 mt-0.5">{m.sub}</p>}
+                  </div>
+                ))}
+              </div>
+
+              {/* Nota sobre safety factor */}
+              <div className="mt-4 px-3 py-2.5 rounded-lg bg-violet-500/8 border border-violet-500/15 text-[10px] text-violet-300">
+                <strong>Proteção econômica:</strong> break_even_acos = margem bruta do produto.
+                target_acos_asin = break_even × 80% (safety_factor).
+                safe_max_cpc = preço × margem × cvr × safety_factor.
+                Margem negativa bloqueia expansão. Estoque zero bloqueia campanhas.
+              </div>
+            </div>
+          ) : (
+            <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4 flex items-center gap-3">
+              <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-semibold text-amber-300">Metas de Performance não configuradas</p>
+                <p className="text-xs text-slate-400 mt-0.5">O motor está usando valores padrão do sistema. Configure metas reais para decisões mais precisas.</p>
+              </div>
+              <Link to="/settings" className="ml-auto px-3 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold rounded-lg hover:bg-amber-500/25 whitespace-nowrap">
+                Configurar
+              </Link>
+            </div>
+          )}
+
+          {/* Hierarquia de decisão */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+            <h3 className="text-sm font-semibold text-slate-300 mb-4 flex items-center gap-2">
+              <Shield className="w-4 h-4 text-cyan" /> Hierarquia Estratégica de Prioridade
+            </h3>
+            <div className="space-y-1.5">
+              {[
+                { priority: 1, label: 'Segurança da conta', desc: 'Token, autenticação', color: 'text-red-400' },
+                { priority: 2, label: 'Qualidade dos dados', desc: 'Sync recente, métricas válidas', color: 'text-orange-400' },
+                { priority: 3, label: 'Estoque', desc: 'Zero = bid mínimo; crítico = reduzir', color: 'text-amber-400' },
+                { priority: 4, label: 'Disponibilidade da oferta', desc: 'Produto ativo, buybox', color: 'text-yellow-400' },
+                { priority: 5, label: 'Margem', desc: 'Break-even por produto, safe_max_cpc', color: 'text-lime-400' },
+                { priority: 6, label: 'Orçamento global', desc: 'Guardrail de gasto real diário', color: 'text-green-400' },
+                { priority: 7, label: 'Proteção de alta performance', desc: 'Vencedores não são pausados', color: 'text-emerald-400' },
+                { priority: 8, label: 'Redução de desperdício', desc: 'Sem conversão = reduzir/pausar', color: 'text-cyan' },
+                { priority: 9, label: 'Manutenção', desc: 'Ajustes finos de bid', color: 'text-blue-400' },
+                { priority: 10, label: 'Escala', desc: 'ACoS abaixo da meta + intenção alta', color: 'text-violet-400' },
+                { priority: 11, label: 'Expansão', desc: 'Novos termos, clusters semânticos', color: 'text-purple-400' },
+                { priority: 12, label: 'Criação de campanhas', desc: 'Confiança ≥ 95%, relevância ≥ 95%', color: 'text-pink-400' },
+              ].map(r => (
+                <div key={r.priority} className="flex items-center gap-3">
+                  <span className={`text-[10px] font-bold w-5 flex-shrink-0 ${r.color}`}>{r.priority}</span>
+                  <span className={`text-xs font-semibold ${r.color}`}>{r.label}</span>
+                  <span className="text-[10px] text-slate-600">{r.desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Histórico de metas */}
+          {account && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <Eye className="w-4 h-4 text-slate-400" />
+                <p className="text-sm font-semibold text-slate-300">Histórico de Metas de Performance</p>
+              </div>
+              <PerformanceSettingsHistoryTable accountId={account.id} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {loading && (
+        <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 text-violet-400 animate-spin" /></div>
+      )}
+    </div>
+  );
 }

@@ -1,442 +1,412 @@
 /**
- * runDeterministicDecisionEngine — Módulo B: Motor Determinístico Diário
+ * runDeterministicDecisionEngine — Motor Estratégico Unificado v4
  *
- * REGRA ABSOLUTA: Este módulo NÃO chama Claude, nenhum LLM, nenhuma IA.
- * Carrega regras vigentes do banco e executa decisões puramente calculadas.
+ * FILOSOFIA:
+ *   Não apenas reduzir ACoS — maximizar lucro incremental sustentável.
+ *   A função principal é:
+ *     atrair o comprador certo → para o produto certo → com a intenção certa
+ *     → no custo economicamente sustentável → mantendo margem e estoque
  *
- * Guardrails financeiros: lidos de Configurações > Metas de Performance via getPerformanceSettings.
- *   Fonte única — nenhum valor fixo hardcoded neste motor.
- *   Toda ação passa pela fila com idempotency_key
+ * ARQUITETURA:
+ *   Fonte única: PerformanceSettings → AutopilotConfig → system_defaults
+ *   Fila única: OptimizationDecision (RuleExecution apenas para auditoria)
+ *   Motor único: nenhum motor paralelo gera decisões neste ciclo
  *
- * v3: Metodologia oficial Amazon Ads / MRC incorporada:
- *   - Cliques usados são SEMPRE líquidos pós-GIVT/SIVT (padrão da API — não confundir com cliques brutos)
- *   - Janela de atribuição primária: 14 dias (sales14d/orders14d) conforme escopo MRC
- *   - Evidência mínima: clicks_14d >= 8 E impressions >= 50 (clique exige impressão prévia validada)
- *   - CVR (clicks→orders) incluído como sinal de qualidade nas regras de ACoS
- *   - Dados considerados "estáveis" após 30 dias; entre D-1 e D-30 podem sofrer revisão por SIVT retroativo
- *   - Janela de lookback máxima 90 dias para decisões de rollback/reprocessamento
- *   - CTR mínimo de 0.05% como filtro de qualidade de impressão (garante renderização real do criativo)
+ * METODOLOGIA MRC/AMAZON ADS:
+ *   Cliques líquidos pós-GIVT/SIVT, janela primária 14d, evidência mínima validada.
+ *   Janelas múltiplas: 3d, 7d, 14d, 30d, 60d, 90d — decisão nunca por janela isolada.
+ *
+ * PROTEÇÕES ECONÔMICAS:
+ *   - break_even_acos = contribution_margin_pct
+ *   - target_acos_asin = break_even_acos * safety_factor (default 0.80)
+ *   - safe_max_cpc = break_even_acos / CVR_estimado
+ *   - Margem negativa bloqueia expansão
+ *   - Estoque zero bloqueia campanhas
+ *   - Dados stale (>48h) bloqueiam aumentos
+ *
+ * INTENÇÃO DE BUSCA:
+ *   Classificação por tipo e purchase_intent_score.
+ *   Termos informativos/genéricos recebem score inferior.
+ *   Termos de cauda longa comercial têm prioridade.
+ *
+ * PROTEÇÃO DE ALTA PERFORMANCE:
+ *   Campanhas/keywords com vendas consistentes, ACoS abaixo da meta,
+ *   e estabilidade em múltiplas janelas são protegidas contra pausa e redução agressiva.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-// ── Constantes de fallback — usadas APENAS se getPerformanceSettings falhar ──
-// Fonte real: Configurações > Metas de Performance (carregado no início do handler)
-const FALLBACK_MIN_BID = 0.40;
-const FALLBACK_MAX_BID = 1.00;
-const FALLBACK_MAX_BID_CHANGE_PCT = 0.20;
-const FALLBACK_DAILY_BUDGET_CAP = 56;
-const FALLBACK_TARGET_ACOS = 10;
-const FALLBACK_MAX_ACOS = 15;
-
-// ── Constantes de qualidade de dados (Metodologia MRC/Amazon Ads) ─────────────
-// Cliques retornados pela API são SEMPRE líquidos pós-GIVT/SIVT — não há cliques brutos
-// disponíveis via API de relatórios (fora do escopo MRC de relatórios programáticos).
-// Evidência mínima para decisão confiável:
-const MIN_CLICKS_FOR_DECISION = 8;        // cliques líquidos mínimos (14d) — evita ruído estatístico
-const MIN_IMPRESSIONS_FOR_DECISION = 50;  // impressões mínimas — garante criativo renderizado (clique exige impressão prévia)
-const MIN_CTR_QUALITY = 0.0005;           // CTR mínimo 0.05% — descarta tráfego não-humano residual não filtrado
-const ATTRIBUTION_WINDOW_DAYS = 14;       // janela primária de atribuição Amazon SP (sales14d/orders14d)
-const DATA_STABLE_DAYS = 30;              // dados finais e imutáveis após 30 dias (sem mais ajustes SIVT retroativos)
-const DATA_REVISABLE_DAYS = 90;           // janela máxima de reprocessamento por incidentes de qualidade
-const MIN_SPEND_FOR_DECISION = 3.0;       // gasto mínimo em R$ para ter sinal confiável
-
-const CONFLICT_PRIORITY = {
-  financial_safety: 1, stock: 2, profit: 3, budget_limit: 4,
-  protected_rules: 5, dedup: 6, pause_loss: 7, reduce_bid: 8,
-  maintenance: 9, increase_bid: 10, expansion: 11, campaign_creation: 12,
+// ── Fallbacks do sistema ────────────────────────────────────────────────────
+const FB = {
+  MIN_BID: 0.40, MAX_BID: 1.00,
+  MAX_INCREASE_PCT: 0.15, MAX_DECREASE_PCT: 0.20,
+  DAILY_BUDGET_CAP: 56,
+  TARGET_ACOS: 10, MAX_ACOS: 15,
+  TARGET_ROAS: 4, TARGET_TACOS: 5,
+  SAFETY_FACTOR: 0.80,         // margem reservada para lucro líquido
+  MIN_CONFIDENCE: 0.95,         // confiança mínima para criar campanha
+  MIN_RELEVANCE: 0.95,          // relevância mínima produto/termo
+  COOLDOWN_HOURS: 72,
+  MATURATION_HOURS: 72,
+  MIN_STOCK_DAYS: 7,
 };
 
-// ── Regras nativas de estoque ────────────────────────────────────────────────
-// Executadas automaticamente em TODOS os ciclos, independente do banco de regras.
-// Prioridade máxima (priority: 2 = stock) — sobrescrevem regras externas para o
-// mesmo entity neste ciclo. Cooldown por chave de idempotência diária.
-//
-// Classificação por dias de cobertura (estoque ÷ velocidade de venda):
-//   ZERADO   :   0 un  → bid mínimo (MIN_BID) — não anunciar sem produto
-//   CRÍTICO  : < 7 dias → reduzir bid 25% — preservar estoque residual
-//   BAIXO    : 7–21 dias → reduzir bid 10% — desacelerar saída
-//   SAUDÁVEL : 21–60 dias → sem ação (zona neutra)
-//   ALTO     : 60–90 dias → aumentar bid 10% — acelerar giro
-//   EXCESSO  : > 90 dias → aumentar bid 15% — liquidação agressiva
-//
-// Quando não há histórico de vendas (stockVelocity = 0), cobertura = 999 dias
-// mas o produto NÃO entra nas regras de boost — exige pelo menos 1 venda nos 30d.
+// ── Metodologia MRC ────────────────────────────────────────────────────────
+const MRC = {
+  MIN_CLICKS: 10,
+  MIN_IMPRESSIONS: 200,
+  MIN_SPEND: 12.0,
+  MIN_CTR: 0.0005,
+  ATTRIBUTION_WINDOW: 14,
+  DATA_STABLE_DAYS: 30,
+  DATA_STALE_HOURS: 48,
+};
 
-// STOCK_RULES são geradas dinamicamente no handler após carregar settings
-// para usar min_bid/max_bid configurados. Ver função buildStockRules(settings).
+// ── Hierarquia de prioridade de conflitos ────────────────────────────────────
+const PRIORITY = {
+  account_security: 1, data_quality: 2, stock: 3, offer_availability: 4,
+  margin: 5, budget_global: 6, protect_high_performance: 7, waste_reduction: 8,
+  maintenance: 9, scale: 10, expansion: 11, create_campaign: 12,
+};
 
-// ACOS_RULES são geradas dinamicamente no handler após carregar settings.
-// Ver função buildAcosRules(settings).
-
-// ── Factory de regras nativas — usa settings configurados ─────────────────────
-
-function buildStockRules(settings: any) {
-  const MIN_BID = settings.min_bid;
-  const MAX_BID = settings.max_bid;
-  return [
-    {
-      rule_key: 'stock_zero',
-      label: 'Sem estoque — bid mínimo',
-      cooldown_hours: 24,
-      matches: (d: any) => d.stock === 0,
-      action: (_d: any) => MIN_BID,
-      reason: `Produto sem estoque. Bid reduzido ao mínimo configurado (R$${MIN_BID}).`,
-      goal_protected: 'Bid Mínimo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'stock_critical_pause',
-      label: 'Estoque crítico (< 7 dias) — reduzir bid',
-      cooldown_hours: 48,
-      matches: (d: any) => d.stock > 0 && d.stock_coverage_days < 7,
-      action: (d: any) => Math.max(MIN_BID, d.current_bid * (1 - settings.max_bid_decrease_percent / 100 * 0.75)),
-      reason: `Estoque crítico: < 7 dias de cobertura. Bid reduzido respeitando Bid Mínimo R$${MIN_BID}.`,
-      goal_protected: 'Bid Mínimo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'stock_low_reduce',
-      label: 'Estoque baixo (7–21 dias) — reduzir bid 10%',
-      cooldown_hours: 48,
-      matches: (d: any) => d.stock > 0 && d.stock_coverage_days >= 7 && d.stock_coverage_days < 21,
-      action: (d: any) => Math.max(MIN_BID, d.current_bid * 0.90),
-      reason: `Estoque baixo: 7–21 dias de cobertura. Bid reduzido 10% respeitando mínimo R$${MIN_BID}.`,
-      goal_protected: 'Bid Mínimo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'stock_high_boost',
-      label: 'Estoque alto (60–90 dias) — aumentar bid',
-      cooldown_hours: 48,
-      matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 60 && d.stock_coverage_days < 90,
-      action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.10),
-      reason: `Estoque alto: 60–90 dias de cobertura. Bid aumentado 10% respeitando máximo R$${MAX_BID}.`,
-      goal_protected: 'Bid Máximo',
-      is_boost: true,
-    },
-    {
-      rule_key: 'stock_excess_liquidate',
-      label: 'Excesso de estoque (> 90 dias) — aumentar bid',
-      cooldown_hours: 48,
-      matches: (d: any) => d.stock > 0 && d.stock_velocity > 0 && d.stock_coverage_days >= 90,
-      action: (d: any) => Math.min(MAX_BID, d.current_bid * 1.15),
-      reason: `Excesso de estoque: > 90 dias de cobertura. Bid aumentado 15% respeitando máximo R$${MAX_BID}.`,
-      goal_protected: 'Bid Máximo',
-      is_boost: true,
-    },
-  ];
+// ── Score final de decisão ────────────────────────────────────────────────────
+// decision_priority_score = economic_impact * confidence * urgency * data_quality * inventory * search_intent * goal_alignment
+function calcDecisionScore(factors: {
+  economic_impact: number; confidence: number; urgency: number;
+  data_quality: number; inventory: number; search_intent: number; goal_alignment: number;
+}): number {
+  return factors.economic_impact * factors.confidence * factors.urgency
+    * factors.data_quality * factors.inventory * factors.search_intent * factors.goal_alignment;
 }
 
-function buildAcosRules(settings: any) {
-  const MIN_BID = settings.min_bid;
-  const MAX_BID = settings.max_bid;
-  const MAX_INCREASE_PCT = settings.max_bid_increase_percent / 100;
-  const MAX_DECREASE_PCT = settings.max_bid_decrease_percent / 100;
-  const TARGET_ACOS = settings.target_acos;
-  const MAX_ACOS = settings.max_acos;
-  const TARGET_ROAS = settings.target_roas;
-  const MAX_CPC = settings.max_cpc;
-  const ENFORCE_CPC = settings.enforce_max_cpc;
+// ── Classificação de intenção de busca ────────────────────────────────────────
+type IntentType = 'brand' | 'category' | 'problem' | 'benefit' | 'feature' | 'comparison'
+  | 'competitor' | 'commercial' | 'transactional' | 'informational' | 'long_tail' | 'product_specific';
+type PurchaseIntent = 'high' | 'medium' | 'low';
 
-  return [
-    {
-      rule_key: 'acos_above_max',
-      label: `ACoS acima do máximo (>${MAX_ACOS}%) — reduzir bid ${Math.round(MAX_DECREASE_PCT * 100)}%`,
-      cooldown_hours: 72,
-      matches: (d: any) =>
-        d.acos_14d !== null &&
-        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-        d.acos_14d > MAX_ACOS,
-      action: (d: any) => {
-        const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
-        const factor = 1 - (cvr < 0.005 && d.spend_14d >= 10 ? MAX_DECREASE_PCT : MAX_DECREASE_PCT * 0.75);
-        return Math.max(MIN_BID, d.current_bid * factor);
-      },
-      reason_fn: (d: any) => {
-        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% ACIMA do máximo configurado ${MAX_ACOS}%. CVR: ${cvr}%. Bid reduzido. Meta protegida: ACoS Máximo. [Configurações > Metas de Performance]`;
-      },
-      goal_protected: 'ACoS Máximo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'acos_above_target',
-      label: `ACoS entre alvo e máximo (${TARGET_ACOS}%–${MAX_ACOS}%) — reduzir bid levemente`,
-      cooldown_hours: 72,
-      matches: (d: any) =>
-        d.acos_14d !== null &&
-        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-        d.acos_14d > TARGET_ACOS && d.acos_14d <= MAX_ACOS,
-      action: (d: any) => Math.max(MIN_BID, d.current_bid * (1 - Math.min(0.10, MAX_DECREASE_PCT * 0.5))),
-      reason_fn: (d: any) => {
-        const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
-        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% acima do alvo ${TARGET_ACOS}% (zona de atenção). CTR: ${ctr}%. Bid reduzido levemente. Meta protegida: ACoS Alvo. [Configurações > Metas de Performance]`;
-      },
-      goal_protected: 'ACoS Alvo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'acos_below_target',
-      label: `ACoS abaixo do alvo (<${TARGET_ACOS * 0.7}%) — aumentar bid`,
-      cooldown_hours: 72,
-      matches: (d: any) =>
-        d.acos_14d !== null &&
-        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-        d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION &&
-        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-        (d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0) >= MIN_CTR_QUALITY &&
-        (d.orders_14d || 0) >= 1 &&
-        d.sales_14d > 0 &&
-        d.acos_14d < TARGET_ACOS * 0.7 &&
-        // Guardrails adicionais configurados
-        (!ENFORCE_CPC || MAX_CPC <= 0 || (d.cpc_14d || d.cpc || 0) <= MAX_CPC) &&
-        (TARGET_ROAS <= 0 || (d.roas_14d || 0) >= TARGET_ROAS),
-      action: (d: any) => {
-        const pct = Math.min(MAX_INCREASE_PCT, 0.08);
-        return Math.min(MAX_BID, d.current_bid * (1 + pct));
-      },
-      reason_fn: (d: any) => {
-        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-        const ctr = d.impressions_14d > 0 ? (d.clicks_14d / d.impressions_14d * 100).toFixed(3) : '0.000';
-        return `ACoS 14d: ${d.acos_14d.toFixed(1)}% abaixo do alvo ${TARGET_ACOS}% (espaço para crescer). CVR: ${cvr}% | CTR: ${ctr}%. Bid aumentado respeitando máximo R$${MAX_BID}. Meta protegida: ACoS Alvo + Bid Máximo. [Configurações > Metas de Performance]`;
-      },
-      goal_protected: 'ACoS Alvo',
-      is_boost: true,
-    },
-    {
-      rule_key: 'cpc_above_max',
-      label: `CPC acima do máximo (>R$${MAX_CPC}) — reduzir bid`,
-      cooldown_hours: 48,
-      matches: (d: any) =>
-        ENFORCE_CPC && MAX_CPC > 0 &&
-        d.clicks_14d >= MIN_CLICKS_FOR_DECISION &&
-        d.spend_14d >= MIN_SPEND_FOR_DECISION &&
-        (d.clicks_14d > 0 ? d.spend_14d / d.clicks_14d : 0) > MAX_CPC,
-      action: (d: any) => {
-        const pct = Math.min(MAX_DECREASE_PCT, 0.20);
-        return Math.max(MIN_BID, d.current_bid * (1 - pct));
-      },
-      reason_fn: (d: any) => {
-        const currentCpc = d.clicks_14d > 0 ? (d.spend_14d / d.clicks_14d).toFixed(2) : '—';
-        return `CPC 14d: R$${currentCpc} ACIMA do máximo configurado R$${MAX_CPC}. Bid reduzido ${Math.round(Math.min(MAX_DECREASE_PCT, 0.20) * 100)}%. Meta protegida: CPC Máximo (Enforçar CPC ativo). [Configurações > Metas de Performance]`;
-      },
-      goal_protected: 'CPC Máximo',
-      is_boost: false,
-    },
-    {
-      rule_key: 'high_cvr_scale_opportunity',
-      label: 'CVR alto + ACoS OK — escalar bid',
-      cooldown_hours: 96,
-      matches: (d: any) => {
-        const cvr = d.clicks_14d > 0 ? (d.orders_14d || 0) / d.clicks_14d : 0;
-        const ctr = d.impressions_14d > 0 ? d.clicks_14d / d.impressions_14d : 0;
-        const currentCpc = d.clicks_14d > 0 ? d.spend_14d / d.clicks_14d : 0;
-        return (
-          d.acos_14d !== null &&
-          d.clicks_14d >= MIN_CLICKS_FOR_DECISION * 2 &&
-          d.impressions_14d >= MIN_IMPRESSIONS_FOR_DECISION * 2 &&
-          ctr >= MIN_CTR_QUALITY &&
-          cvr >= 0.03 &&
-          d.acos_14d <= TARGET_ACOS * 0.9 &&
-          (d.orders_14d || 0) >= 2 &&
-          (!ENFORCE_CPC || MAX_CPC <= 0 || currentCpc <= MAX_CPC)
-        );
-      },
-      action: (d: any) => Math.min(MAX_BID, d.current_bid * Math.min(1 + MAX_INCREASE_PCT * 0.25, 1.05)),
-      reason_fn: (d: any) => {
-        const cvr = d.clicks_14d > 0 ? ((d.orders_14d || 0) / d.clicks_14d * 100).toFixed(2) : '0.00';
-        return `CVR: ${cvr}% (alta intenção) + ACoS 14d: ${d.acos_14d.toFixed(1)}% dentro do alvo ${TARGET_ACOS}%. Bid +${Math.round(Math.min(MAX_INCREASE_PCT * 0.25, 0.05) * 100)}% respeitando máximo R$${MAX_BID}. Meta protegida: Bid Máximo + ACoS Alvo. [Configurações > Metas de Performance]`;
-      },
-      goal_protected: 'Bid Máximo',
-      is_boost: true,
-    },
-  ];
+interface SearchIntentResult {
+  intent_type: IntentType;
+  purchase_intent: PurchaseIntent;
+  purchase_intent_score: number; // 0-1
+  is_long_tail: boolean;
+  word_count: number;
+  has_size: boolean;
+  has_material: boolean;
+  has_brand: boolean;
+  has_qualifier: boolean;
+  cluster: string;
 }
 
-function uuid() { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+function classifySearchIntent(term: string): SearchIntentResult {
+  const t = (term || '').toLowerCase().trim();
+  const words = t.split(/\s+/).filter(Boolean);
+  const wc = words.length;
 
-function evaluateCondition(cond, entity) {
-  // null/undefined métricas: retornar false imediatamente para evitar comparações incorretas
-  const rawVal = entity[cond.metric];
-  if (rawVal === null || rawVal === undefined) return false;
-  const val = rawVal;
-  switch (cond.operator) {
-    case 'equals': return val === cond.value;
-    case 'not_equals': return val !== cond.value;
-    case 'greater_than': return val > cond.value;
-    case 'greater_than_or_equal': return val >= cond.value;
-    case 'less_than': return val < cond.value;
-    case 'less_than_or_equal': return val <= cond.value;
-    case 'between': return val >= cond.value[0] && val <= cond.value[1];
-    case 'in': return Array.isArray(cond.value) && cond.value.includes(val);
-    case 'not_in': return Array.isArray(cond.value) && !cond.value.includes(val);
-    case 'days_since': {
-      if (!entity[cond.metric]) return false;
-      const ageDays = (Date.now() - new Date(entity[cond.metric]).getTime()) / 86400000;
-      return ageDays >= (cond.value || 0);
-    }
-    default: return false;
+  // Indicadores de alta intenção comercial/transacional
+  const buySignals = ['comprar', 'melhor', 'barato', 'preço', 'oferta', 'kit', 'conjunto', 'com', 'sem', 'para'];
+  const sizeWords = ['litro', 'litros', 'l ', 'ml', 'cm', 'metro', 'metros', 'kg', 'gramas', 'polegada', 'inch', '10l', '11l', '12l', '13l', '18l', '20l', '30l', '50l', 'pequeno', 'grande', 'médio', 'mini', 'maxi'];
+  const materialWords = ['inox', 'aço', 'plástico', 'alumínio', 'metal', 'madeira', 'vidro', 'silicone', 'borracha'];
+  const problemWords = ['antiodor', 'anti-odor', 'antivazamento', 'silencioso', 'sem ruído', 'vedado', 'hermético'];
+  const benefitWords = ['automático', 'automática', 'sensor', 'inteligente', 'smart', 'wifi', 'bluetooth', 'recarregável', 'touch'];
+  const locationWords = ['banheiro', 'cozinha', 'escritório', 'quarto', 'sala', 'jardim', 'externo', 'interno', 'pet'];
+  const infoWords = ['como', 'o que é', 'qual', 'quando', 'por que', 'tutorial', 'dica', 'review', 'avaliação', 'comparação'];
+  const competitorWords = ['vs', 'versus', 'melhor que', 'alternativa'];
+
+  const hasBuySignal = buySignals.some(w => t.includes(w));
+  const hasSize = sizeWords.some(w => t.includes(w));
+  const hasMaterial = materialWords.some(w => t.includes(w));
+  const hasProblem = problemWords.some(w => t.includes(w));
+  const hasBenefit = benefitWords.some(w => t.includes(w));
+  const hasLocation = locationWords.some(w => t.includes(w));
+  const hasInfo = infoWords.some(w => t.startsWith(w) || t.includes(' ' + w + ' '));
+  const hasCompetitor = competitorWords.some(w => t.includes(w));
+  const hasQualifier = hasMaterial || hasProblem || hasBenefit || hasLocation || hasSize;
+
+  // Determinar tipo de intenção
+  let intent_type: IntentType;
+  let purchase_intent: PurchaseIntent;
+  let purchase_intent_score: number;
+
+  if (hasInfo) {
+    intent_type = 'informational';
+    purchase_intent = 'low';
+    purchase_intent_score = 0.20;
+  } else if (hasCompetitor) {
+    intent_type = 'comparison';
+    purchase_intent = 'medium';
+    purchase_intent_score = 0.50;
+  } else if (wc >= 3 && (hasSize || hasMaterial) && (hasBenefit || hasProblem || hasLocation)) {
+    // Termo muito específico: categoria + atributo + qualificador
+    intent_type = 'long_tail';
+    purchase_intent = 'high';
+    purchase_intent_score = 0.95;
+  } else if (wc >= 3 && hasQualifier) {
+    intent_type = hasBenefit ? 'benefit' : hasProblem ? 'problem' : hasLocation ? 'feature' : 'commercial';
+    purchase_intent = 'high';
+    purchase_intent_score = 0.88;
+  } else if (wc >= 2 && (hasSize || hasMaterial || hasLocation)) {
+    intent_type = hasSize ? 'feature' : hasLocation ? 'feature' : 'commercial';
+    purchase_intent = 'high';
+    purchase_intent_score = 0.82;
+  } else if (hasBenefit && wc >= 2) {
+    intent_type = 'benefit';
+    purchase_intent = 'medium';
+    purchase_intent_score = 0.70;
+  } else if (wc === 1 || (wc === 2 && !hasQualifier && !hasBuySignal)) {
+    intent_type = 'category';
+    purchase_intent = 'low';
+    purchase_intent_score = 0.35;
+  } else {
+    intent_type = 'commercial';
+    purchase_intent = 'medium';
+    purchase_intent_score = 0.60;
   }
-}
 
-function entityMatchesRule(rule, entity) {
-  return (rule.conditions || []).every(cond => evaluateCondition(cond, entity));
-}
+  // Determinar cluster semântico
+  let cluster = 'categoria';
+  if (hasSize) cluster = 'tamanho';
+  else if (hasMaterial) cluster = 'material';
+  else if (hasProblem) cluster = 'problema';
+  else if (hasBenefit) cluster = 'beneficio';
+  else if (hasLocation) cluster = 'uso';
+  else if (hasCompetitor) cluster = 'comparacao';
+  else if (intent_type === 'long_tail') cluster = 'cauda_longa';
+  else if (intent_type === 'informational') cluster = 'informacional';
 
-function calculateActionValue(rule, entity, settings: any) {
-  const action = rule.action;
-  const currentBid = entity.current_bid || entity.bid || 0.25;
-  const MIN_BID = settings.min_bid;
-  const MAX_BID = settings.max_bid;
-  const MAX_BID_CHANGE_PCT = settings.max_bid_increase_percent / 100;
-  const MAX_BID_REDUCE_PCT = settings.max_bid_decrease_percent / 100;
-
-  switch (action.type) {
-    case 'increase_bid_percent': {
-      const pct = Math.min(action.value / 100, MAX_BID_CHANGE_PCT);
-      return Math.min(currentBid * (1 + pct), MAX_BID);
-    }
-    case 'decrease_bid_percent': {
-      const pct = Math.min(action.value / 100, MAX_BID_REDUCE_PCT);
-      return Math.max(currentBid * (1 - pct), MIN_BID);
-    }
-    case 'set_bid':
-      return Math.min(Math.max(action.value, MIN_BID), MAX_BID);
-    default:
-      return action.value;
-  }
-}
-
-function resolveRuleConflicts(ruleA, ruleB) {
-  const typeA = ruleA.action?.type || '';
-  const typeB = ruleB.action?.type || '';
-  const categoryOf = (t) => {
-    if (['pause_campaign', 'pause_keyword'].includes(t)) return 'pause_loss';
-    if (['decrease_bid_percent', 'set_bid'].includes(t)) return 'reduce_bid';
-    if (['increase_bid_percent'].includes(t)) return 'increase_bid';
-    if (['create_exact_keyword', 'create_phrase_keyword', 'create_broad_keyword', 'create_campaign'].includes(t)) return 'expansion';
-    return 'maintenance';
+  return {
+    intent_type, purchase_intent, purchase_intent_score,
+    is_long_tail: wc >= 3 && hasQualifier,
+    word_count: wc,
+    has_size: hasSize, has_material: hasMaterial,
+    has_brand: false, has_qualifier: hasQualifier,
+    cluster,
   };
-  const prioA = CONFLICT_PRIORITY[categoryOf(typeA)] || 99;
-  const prioB = CONFLICT_PRIORITY[categoryOf(typeB)] || 99;
-  return prioA <= prioB ? { execute: ruleA, skip: ruleB } : { execute: ruleB, skip: ruleA };
 }
 
-// ── Sazonalidade inline ───────────────────────────────────────────────────────
+// ── Calcular score de uma keyword/termo ──────────────────────────────────────
+interface TermScore {
+  product_relevance_score: number;
+  purchase_intent_score: number;
+  historical_performance_score: number;
+  conversion_score: number;
+  economic_score: number;
+  inventory_score: number;
+  amazon_suggestion_score: number;
+  final_confidence: number;
+  intent: SearchIntentResult;
+  blocked: boolean;
+  block_reason: string;
+}
 
-function getBrazilEventsForYear(year) {
-  function lastFridayNov(y) {
+function scoreKeyword(params: {
+  keyword_text: string;
+  has_sales: boolean;
+  acos_14d: number | null;
+  target_acos: number;
+  cvr_14d: number;
+  cpc_14d: number;
+  safe_max_cpc: number;
+  stock_days: number;
+  margin_confidence: number;
+  from_term_bank: boolean;
+  from_amazon_suggestion: boolean;
+  spend_14d: number;
+  clicks_14d: number;
+  impressions_14d: number;
+  product_match: boolean; // se o produto claramente atende o termo
+}): TermScore {
+  const intent = classifySearchIntent(params.keyword_text);
+
+  // Product relevance: presença de termos específicos do produto
+  const product_relevance_score = params.product_match ? 0.98 : (intent.purchase_intent_score > 0.7 ? 0.85 : 0.60);
+
+  // Historical performance
+  let historical_performance_score = 0.5;
+  if (params.has_sales && params.acos_14d !== null && params.target_acos > 0) {
+    const ratio = params.acos_14d / params.target_acos;
+    historical_performance_score = ratio <= 0.7 ? 1.0 : ratio <= 1.0 ? 0.85 : ratio <= 1.3 ? 0.60 : 0.30;
+  } else if (params.clicks_14d >= MRC.MIN_CLICKS) {
+    historical_performance_score = 0.65; // tem dados mas sem vendas
+  } else if (params.from_term_bank) {
+    historical_performance_score = 0.70; // banco de termos = evidência histórica
+  }
+
+  // Conversion score
+  const conversion_score = params.cvr_14d > 0
+    ? Math.min(1.0, params.cvr_14d * 20) // 5% CVR = 1.0
+    : (params.has_sales ? 0.60 : 0.40);
+
+  // Economic score
+  const economic_score = params.acos_14d !== null && params.target_acos > 0
+    ? Math.max(0, 1 - (params.acos_14d / (params.target_acos * 1.5)))
+    : (params.margin_confidence > 0.5 ? 0.65 : 0.45);
+
+  // Inventory score
+  const inventory_score = params.stock_days <= 0 ? 0.0
+    : params.stock_days < 7 ? 0.30
+    : params.stock_days < 21 ? 0.60
+    : 1.0;
+
+  // Amazon suggestion score
+  const amazon_suggestion_score = params.from_term_bank ? 0.90
+    : params.from_amazon_suggestion ? 0.70 : 0.50;
+
+  // Fórmula ponderada
+  const final_confidence =
+    product_relevance_score * 0.25 +
+    intent.purchase_intent_score * 0.20 +
+    historical_performance_score * 0.20 +
+    conversion_score * 0.15 +
+    economic_score * 0.10 +
+    inventory_score * 0.05 +
+    amazon_suggestion_score * 0.05;
+
+  // Regras de bloqueio
+  let blocked = false;
+  let block_reason = '';
+  if (product_relevance_score < FB.MIN_RELEVANCE && !params.has_sales) {
+    blocked = true; block_reason = `product_relevance_score ${product_relevance_score.toFixed(2)} < ${FB.MIN_RELEVANCE}`;
+  } else if (final_confidence < FB.MIN_CONFIDENCE && !params.has_sales) {
+    blocked = true; block_reason = `final_confidence ${final_confidence.toFixed(2)} < ${FB.MIN_CONFIDENCE}`;
+  } else if (params.stock_days <= 0) {
+    blocked = true; block_reason = 'stock_zero';
+  } else if (intent.purchase_intent === 'low' && !params.has_sales) {
+    blocked = true; block_reason = `low_purchase_intent: ${intent.intent_type}`;
+  }
+
+  return {
+    product_relevance_score, purchase_intent_score: intent.purchase_intent_score,
+    historical_performance_score, conversion_score, economic_score,
+    inventory_score, amazon_suggestion_score, final_confidence,
+    intent, blocked, block_reason,
+  };
+}
+
+// ── Classificar estado estratégico do produto ─────────────────────────────────
+type ProductState = 'unavailable' | 'critical_stock' | 'low_stock' | 'learning'
+  | 'inefficient' | 'profitable' | 'scalable' | 'mature' | 'discontinued';
+
+function classifyProductState(params: {
+  stock: number; stock_days: number;
+  has_campaign: boolean; days_since_launch: number;
+  acos_14d: number | null; target_acos: number;
+  roas_14d: number; target_roas: number;
+  margin_positive: boolean; spend_14d: number;
+  orders_14d: number; trend_3_vs_14: number;
+}): ProductState {
+  if (params.stock <= 0) return 'unavailable';
+  if (params.stock_days < 7) return 'critical_stock';
+  if (params.stock_days < 21) return 'low_stock';
+  if (!params.has_campaign || params.days_since_launch < 14) return 'learning';
+  if (params.spend_14d < 1) return 'learning';
+  if (!params.margin_positive && params.spend_14d > 5) return 'inefficient';
+  if (params.acos_14d === null) return 'learning';
+  if (params.acos_14d > params.target_acos * 1.5) return 'inefficient';
+  if (params.trend_3_vs_14 < -0.20) return 'discontinued'; // queda de 20% recente
+  if (params.orders_14d >= 3 && params.acos_14d <= params.target_acos * 0.7
+    && params.roas_14d >= params.target_roas * 1.2) return 'scalable';
+  if (params.orders_14d >= 1 && params.acos_14d <= params.target_acos) return 'profitable';
+  if (params.orders_14d >= 1 && params.acos_14d <= params.target_acos * 1.3) return 'mature';
+  return 'learning';
+}
+
+// ── Verificar proteção de alta performance ────────────────────────────────────
+function isHighPerformanceProtected(kw: any, settings: any, windows: any): {
+  protected: boolean; reason: string;
+} {
+  const target = settings.target_acos;
+  const targetRoas = settings.target_roas;
+
+  // Sem vendas: não é alta performance
+  if (!((kw.orders || 0) > 0 || (kw.sales || 0) > 0)) {
+    return { protected: false, reason: 'no_sales' };
+  }
+  // ACoS zero sem vendas = não protegida
+  if ((kw.acos || 0) === 0 && (kw.orders || 0) === 0) {
+    return { protected: false, reason: 'acos_zero_no_sales' };
+  }
+
+  const acos14d = windows?.acos_14d ?? kw.acos ?? 999;
+  const acos30d = windows?.acos_30d ?? kw.acos ?? 999;
+  const roas14d = windows?.roas_14d ?? kw.roas ?? 0;
+  const orders14d = windows?.orders_14d ?? kw.orders ?? 0;
+  const orders30d = windows?.orders_30d ?? kw.orders ?? 0;
+
+  // Proteção: estável em múltiplas janelas, ACoS abaixo, ROAS acima, vendas consistentes
+  const acosOk14d = target > 0 && acos14d <= target;
+  const acosOk30d = target > 0 && acos30d <= target * 1.1; // ligeira tolerância
+  const roasOk = targetRoas > 0 && roas14d >= targetRoas * 0.85;
+  const salesConsistent = orders14d >= 2 && orders30d >= 4;
+
+  if (acosOk14d && acosOk30d && salesConsistent) {
+    return { protected: true, reason: `consistent_performer: ${orders30d}p/30d, ACoS ${acos14d.toFixed(0)}%` };
+  }
+  if (roasOk && salesConsistent) {
+    return { protected: true, reason: `high_roas_performer: ROAS ${roas14d.toFixed(2)}x, ${orders14d}p/14d` };
+  }
+  return { protected: false, reason: 'criteria_not_met' };
+}
+
+// ── Calcular safe_max_cpc por produto ─────────────────────────────────────────
+function calcSafeMaxCpc(params: {
+  selling_price: number; gross_margin_pct: number;
+  cvr_estimate: number; safety_factor: number;
+}): number {
+  if (params.selling_price <= 0 || params.gross_margin_pct <= 0) return 0;
+  // safe_max_cpc = selling_price * gross_margin_pct * safety_factor * cvr_estimate
+  const cpc = params.selling_price * (params.gross_margin_pct / 100) * params.safety_factor * params.cvr_estimate;
+  return Math.round(cpc * 100) / 100;
+}
+
+// ── Calendário sazonal brasileiro ─────────────────────────────────────────────
+function getBrazilEvents(year: number) {
+  function lastFriNov(y: number) {
     const d = new Date(y, 11, 0);
     while (d.getDay() !== 5) d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
   }
-  function secondSunday(y, month) {
+  function nthSunday(y: number, month: number, n: number) {
     const d = new Date(y, month - 1, 1);
     let s = 0;
-    while (s < 2) { if (d.getDay() === 0) s++; if (s < 2) d.setDate(d.getDate() + 1); }
+    while (s < n) { if (d.getDay() === 0) s++; if (s < n) d.setDate(d.getDate() + 1); }
     return d.toISOString().slice(0, 10);
   }
-  const bf = lastFridayNov(year);
+  const bf = lastFriNov(year);
   const cm = new Date(bf); cm.setDate(cm.getDate() + 3);
   return [
-    { name: 'Ano Novo', type: 'holiday', date: `${year}-01-01`, pre: 3, post: 2, demand: 'moderate_peak', cpc: 'low' },
-    { name: 'Tiradentes', type: 'holiday', date: `${year}-04-21`, pre: 1, post: 1, demand: 'low_demand', cpc: 'none' },
-    { name: 'Dia do Trabalho', type: 'holiday', date: `${year}-05-01`, pre: 1, post: 1, demand: 'low_demand', cpc: 'none' },
-    { name: 'Dia dos Namorados', type: 'valentines_day', date: `${year}-06-12`, pre: 14, post: 2, demand: 'moderate_peak', cpc: 'moderate' },
-    { name: 'Independência', type: 'holiday', date: `${year}-09-07`, pre: 1, post: 1, demand: 'low_demand', cpc: 'none' },
-    { name: 'Dia das Crianças', type: 'childrens_day', date: `${year}-10-12`, pre: 21, post: 2, demand: 'high_peak', cpc: 'high' },
-    { name: 'Finados', type: 'holiday', date: `${year}-11-02`, pre: 1, post: 1, demand: 'low_demand', cpc: 'none' },
-    { name: 'Proclamação da República', type: 'holiday', date: `${year}-11-15`, pre: 1, post: 1, demand: 'low_demand', cpc: 'none' },
-    { name: 'Black Friday', type: 'black_friday', date: bf, pre: 14, post: 3, demand: 'very_high_peak', cpc: 'very_high' },
-    { name: 'Cyber Monday', type: 'cyber_monday', date: cm.toISOString().slice(0, 10), pre: 0, post: 2, demand: 'very_high_peak', cpc: 'very_high' },
-    { name: 'Pré-Natal', type: 'pre_christmas', date: `${year}-12-24`, pre: 30, post: 0, demand: 'high_peak', cpc: 'high' },
-    { name: 'Natal', type: 'christmas', date: `${year}-12-25`, pre: 0, post: 3, demand: 'high_peak', cpc: 'very_high' },
-    { name: 'Reveillon', type: 'new_year', date: `${year}-12-31`, pre: 5, post: 3, demand: 'moderate_peak', cpc: 'moderate' },
-    { name: 'Dia das Mães', type: 'mothers_day', date: secondSunday(year, 5), pre: 21, post: 2, demand: 'high_peak', cpc: 'high' },
-    { name: 'Dia dos Pais', type: 'fathers_day', date: secondSunday(year, 8), pre: 14, post: 2, demand: 'high_peak', cpc: 'moderate' },
-    { name: 'Volta às Aulas Fev', type: 'back_to_school', date: `${year}-02-01`, pre: 14, post: 7, demand: 'moderate_peak', cpc: 'low' },
-    { name: 'Volta às Aulas Ago', type: 'back_to_school', date: `${year}-08-01`, pre: 14, post: 7, demand: 'moderate_peak', cpc: 'low' },
+    { date: `${year}-01-01`, name: 'Ano Novo', demand: 'moderate_peak', pre: 3, post: 2 },
+    { date: nthSunday(year, 5, 2), name: 'Dia das Mães', demand: 'high_peak', pre: 21, post: 2 },
+    { date: `${year}-06-12`, name: 'Dia dos Namorados', demand: 'moderate_peak', pre: 14, post: 2 },
+    { date: nthSunday(year, 8, 2), name: 'Dia dos Pais', demand: 'high_peak', pre: 14, post: 2 },
+    { date: `${year}-10-12`, name: 'Dia das Crianças', demand: 'high_peak', pre: 21, post: 2 },
+    { date: bf, name: 'Black Friday', demand: 'very_high_peak', pre: 14, post: 3 },
+    { date: cm.toISOString().slice(0, 10), name: 'Cyber Monday', demand: 'very_high_peak', pre: 0, post: 2 },
+    { date: `${year}-12-25`, name: 'Natal', demand: 'high_peak', pre: 30, post: 3 },
   ];
 }
 
-function getSeasonalCtx(dateStr, customEvents) {
+function getSeasonalContext(dateStr: string) {
   const date = new Date(dateStr + 'T12:00:00');
-  const dow = date.getDay();
-  const dom = parseInt(dateStr.slice(8, 10));
-  const year = parseInt(dateStr.slice(0, 4));
-  const isWeekend = dow === 0 || dow === 6;
-  const allEvents = [
-    ...getBrazilEventsForYear(year - 1),
-    ...getBrazilEventsForYear(year),
-    ...getBrazilEventsForYear(year + 1),
-    ...(customEvents || []),
-  ];
-  const matched = [];
-  for (const ev of allEvents) {
-    const evDate = new Date((ev.peak_date || ev.date) + 'T12:00:00');
-    const preMs = (ev.pre || ev.pre_event_days || 0) * 86400000;
-    const postMs = (ev.post || ev.post_event_days || 0) * 86400000;
-    const endDate = ev.end ? new Date(ev.end + 'T12:00:00') : evDate;
-    if (date >= new Date(evDate.getTime() - preMs) && date <= new Date(endDate.getTime() + postMs)) {
+  const year = date.getFullYear();
+  const events = [...getBrazilEvents(year - 1), ...getBrazilEvents(year), ...getBrazilEvents(year + 1)];
+  for (const ev of events) {
+    const evDate = new Date(ev.date + 'T12:00:00');
+    const preMs = ev.pre * 86400000;
+    const postMs = ev.post * 86400000;
+    if (date >= new Date(evDate.getTime() - preMs) && date <= new Date(evDate.getTime() + postMs)) {
       const daysTo = Math.round((evDate.getTime() - date.getTime()) / 86400000);
-      const phase = daysTo > 0 ? 'pre_event' : (date > endDate ? 'post_event' : 'active');
-      matched.push({ name: ev.name, type: ev.event_type || ev.type, phase, days_to: daysTo, demand: ev.demand || 'normal', cpc: ev.cpc || 'none' });
+      return { event: ev.name, demand: ev.demand, days_to: daysTo, is_high_demand: ['very_high_peak', 'high_peak'].includes(ev.demand) };
     }
   }
-  const prio = { very_high_peak: 5, high_peak: 4, moderate_peak: 3, normal: 2, uncertain: 1, low_demand: 0 };
-  matched.sort((a, b) => (prio[b.demand] || 0) - (prio[a.demand] || 0));
-  const primary = matched[0] || null;
-  const demandLevel = primary?.demand || (isWeekend ? 'uncertain' : 'normal');
-  return {
-    is_weekend: isWeekend,
-    is_saturday: dow === 6,
-    is_sunday: dow === 0,
-    is_holiday: matched.some(e => ['holiday', 'christmas', 'new_year'].includes(e.type)),
-    is_start_of_month: dom <= 5,
-    is_end_of_month: dom >= 26,
-    is_payday_week: dom >= 4 && dom <= 10,
-    seasonal_event_name: primary?.name || null,
-    seasonal_phase: primary?.phase || 'normal',
-    expected_demand_level: demandLevel,
-    expected_cpc_pressure: primary?.cpc || 'none',
-    is_strong_event: ['very_high_peak', 'high_peak'].includes(demandLevel),
-    is_pre_event: primary?.phase === 'pre_event',
-    is_low_demand: demandLevel === 'low_demand',
-  };
+  const dow = date.getDay();
+  return { event: null, demand: (dow === 0 || dow === 6) ? 'uncertain' : 'normal', days_to: null, is_high_demand: false };
 }
 
-// Retorna true se ação de aumento deve ser bloqueada por sazonalidade
-function seasonalBlocksIncrease(seasonalCtx, weekendCtx, hasSales, hasStock, stockDays) {
-  const hasAdequateStock = hasStock && (stockDays == null || stockDays >= 7);
-  // Bloquear em baixa demanda
-  if (seasonalCtx.is_low_demand) return true;
-  // Bloquear em feriado sem vendas
-  if (seasonalCtx.is_holiday && !hasSales) return true;
-  // Bloquear em fim de semana com histórico ruim
-  if (seasonalCtx.is_weekend && weekendCtx?.weekend_performs_better === false) return true;
-  // Bloquear se estoque insuficiente em evento forte
-  if (seasonalCtx.is_strong_event && !hasAdequateStock) return true;
-  return false;
-}
+// ── Funções utilitárias ────────────────────────────────────────────────────────
+function uuid(): string { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
+function clamp(v: number, min: number, max: number): number { return Math.min(max, Math.max(min, v)); }
+function currentHourBRT(): number { return ((new Date().getUTCHours() - 3) + 24) % 24; }
 
-function buildSeasonalContextPayload(seasonalCtx) {
-  return JSON.stringify({
-    is_weekend: seasonalCtx.is_weekend,
-    is_holiday: seasonalCtx.is_holiday,
-    seasonal_event_name: seasonalCtx.seasonal_event_name,
-    seasonal_phase: seasonalCtx.seasonal_phase,
-    expected_demand_level: seasonalCtx.expected_demand_level,
-    expected_cpc_pressure: seasonalCtx.expected_cpc_pressure,
-  });
-}
-
-// ── Handler principal ────────────────────────────────────────────────────────
+// ── HANDLER PRINCIPAL ────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   const correlationId = uuid();
   const now = new Date().toISOString();
@@ -448,7 +418,9 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
-    let account = null;
+
+    // ── Resolver conta ────────────────────────────────────────────────────
+    let account: any = null;
     if (body.amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
       account = accs[0];
@@ -460,816 +432,809 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada.' });
     const aid = account.id;
 
-    // ── 0. Carregar Metas de Performance (Fonte Única) ────────────────────
-    // OBRIGATÓRIO: todas as decisões de bid/budget/acos usam esses valores.
-    // Fallback em cascata: PerformanceSettings → AutopilotConfig → defaults do sistema.
+    // ── 0. Carregar Metas de Performance (Fonte Única Absoluta) ───────────
     let settings: any = null;
     try {
-      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
-        { amazon_account_id: aid }, '-updated_at', 1
-      );
+      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1);
       if (psList.length > 0) {
         const ps = psList[0];
         settings = {
-          primary_metric: ps.primary_goal || 'acos',
-          strategic_goal: ps.objective || 'profitability',
-          target_acos: Number(ps.target_acos ?? FALLBACK_TARGET_ACOS),
-          max_acos: Number(ps.max_acos ?? FALLBACK_MAX_ACOS),
-          target_roas: Number(ps.target_roas ?? 4),
-          target_tacos: Number(ps.target_tacos ?? 5),
-          max_tacos: Number(ps.max_tacos ?? 10),
-          daily_budget_cap: Number(ps.daily_budget_limit ?? FALLBACK_DAILY_BUDGET_CAP),
-          target_cpc: Number(ps.target_cpc ?? 0.60),
-          max_cpc: Number(ps.max_cpc ?? 1.00),
-          enforce_max_cpc: ps.max_cpc > 0,
-          impressions_goal_enabled: Boolean(ps.impressions_goal_enabled ?? false),
-          min_bid: Number(ps.min_bid ?? FALLBACK_MIN_BID),
-          max_bid: Number(ps.max_bid ?? FALLBACK_MAX_BID),
-          max_bid_increase_percent: Number(ps.max_bid_increase_pct ?? 20),
-          max_bid_decrease_percent: Number(ps.max_bid_decrease_pct ?? 20),
+          source: 'PerformanceSettings', source_id: ps.id,
+          target_acos: Number(ps.target_acos ?? FB.TARGET_ACOS),
+          max_acos: Number(ps.max_acos ?? FB.MAX_ACOS),
+          target_roas: Number(ps.target_roas ?? FB.TARGET_ROAS),
+          target_tacos: Number(ps.target_tacos ?? FB.TARGET_TACOS),
+          min_bid: Number(ps.min_bid ?? FB.MIN_BID),
+          max_bid: Number(ps.max_bid ?? FB.MAX_BID),
+          max_cpc: Number(ps.max_cpc ?? 0),
+          max_bid_increase_pct: Number(ps.max_bid_increase_pct ?? FB.MAX_INCREASE_PCT * 100) / 100,
+          max_bid_decrease_pct: Number(ps.max_bid_decrease_pct ?? FB.MAX_DECREASE_PCT * 100) / 100,
+          daily_budget_cap: Number(ps.daily_budget_limit ?? FB.DAILY_BUDGET_CAP),
           min_campaign_budget: Number(ps.minimum_campaign_budget ?? 15),
-          budget_increment_allowed: Number(ps.campaign_budget_increment ?? 5),
-          weekly_campaign_capacity: Number(ps.weekly_campaign_capacity ?? 10),
           pacing_enabled: Boolean(ps.pacing_enabled ?? true),
-          dayparting_enabled: Boolean(ps.dayparting_enabled ?? true),
-          placement_optimization_enabled: Boolean(ps.placement_optimization_enabled ?? true),
-          max_top_of_search_adjustment: Number(ps.top_of_search_limit ?? 0),
-          max_rest_of_search_adjustment: Number(ps.rest_of_search_limit ?? 0),
-          max_product_pages_adjustment: Number(ps.product_page_limit ?? 0),
-          ai_auto_optimization_enabled: Boolean(ps.ai_auto_optimization ?? false),
-          settings_source: 'PerformanceSettings',
+          safety_factor: FB.SAFETY_FACTOR,
+          min_confidence: FB.MIN_CONFIDENCE,
+          cooldown_hours: FB.COOLDOWN_HOURS,
+          maturation_hours: FB.MATURATION_HOURS,
+          min_stock_days: Number(ps.min_bid ?? FB.MIN_STOCK_DAYS),
+          fallback_cvr: Number(ps.fallback_conversion_rate ?? 0.05),
         };
       }
     } catch {}
 
     if (!settings) {
-      // Fallback: AutopilotConfig
       try {
         const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1);
         if (apList.length > 0) {
           const cfg = apList[0];
           settings = {
-            primary_metric: 'acos',
-            strategic_goal: cfg.objective || 'profitability',
-            target_acos: Number(cfg.target_acos ?? FALLBACK_TARGET_ACOS),
-            max_acos: Number(cfg.maximum_acos ?? FALLBACK_MAX_ACOS),
-            target_roas: Number(cfg.target_roas ?? 4),
-            target_tacos: Number(cfg.target_tacos ?? 5),
-            max_tacos: Number(cfg.maximum_tacos ?? 10),
-            daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? FALLBACK_DAILY_BUDGET_CAP),
-            target_cpc: Number(cfg.target_cpc ?? 0.60),
-            max_cpc: Number(cfg.maximum_cpc ?? 1.00),
-            enforce_max_cpc: Boolean(cfg.cpc_enforcement ?? true),
-            impressions_goal_enabled: Boolean(cfg.impressions_goal_enabled ?? false),
-            min_bid: Number(cfg.min_bid ?? FALLBACK_MIN_BID),
-            max_bid: Number(cfg.max_bid ?? FALLBACK_MAX_BID),
-            max_bid_increase_percent: Number(cfg.max_bid_increase_pct ?? 20),
-            max_bid_decrease_percent: Number(cfg.max_bid_decrease_pct ?? 20),
+            source: 'AutopilotConfig', source_id: cfg.id,
+            target_acos: Number(cfg.target_acos ?? FB.TARGET_ACOS),
+            max_acos: Number(cfg.maximum_acos ?? FB.MAX_ACOS),
+            target_roas: Number(cfg.target_roas ?? FB.TARGET_ROAS),
+            target_tacos: Number(cfg.target_tacos ?? FB.TARGET_TACOS),
+            min_bid: Number(cfg.min_bid ?? FB.MIN_BID),
+            max_bid: Number(cfg.max_bid ?? FB.MAX_BID),
+            max_cpc: Number(cfg.maximum_cpc ?? 0),
+            max_bid_increase_pct: Number(cfg.max_bid_increase_pct ?? FB.MAX_INCREASE_PCT * 100) / 100,
+            max_bid_decrease_pct: Number(cfg.max_bid_decrease_pct ?? FB.MAX_DECREASE_PCT * 100) / 100,
+            daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? FB.DAILY_BUDGET_CAP),
             min_campaign_budget: 15,
-            budget_increment_allowed: 5,
-            weekly_campaign_capacity: 10,
-            pacing_enabled: Boolean(cfg.budget_optimization_enabled ?? true),
-            dayparting_enabled: Boolean(cfg.dayparting_enabled ?? true),
-            placement_optimization_enabled: Boolean(cfg.placement_optimization_enabled ?? true),
-            max_top_of_search_adjustment: Number(cfg.top_of_search_limit ?? 0),
-            max_rest_of_search_adjustment: Number(cfg.rest_of_search_limit ?? 0),
-            max_product_pages_adjustment: Number(cfg.product_page_limit ?? 0),
-            ai_auto_optimization_enabled: Boolean(cfg.ai_auto_optimization ?? false),
-            settings_source: 'AutopilotConfig',
+            pacing_enabled: true,
+            safety_factor: FB.SAFETY_FACTOR,
+            min_confidence: FB.MIN_CONFIDENCE,
+            cooldown_hours: FB.COOLDOWN_HOURS,
+            maturation_hours: FB.MATURATION_HOURS,
+            min_stock_days: FB.MIN_STOCK_DAYS,
+            fallback_cvr: 0.05,
           };
         }
       } catch {}
     }
 
-    // Defaults absolutos se nenhuma configuração encontrada
     if (!settings) {
       settings = {
-        primary_metric: 'acos', strategic_goal: 'profitability',
-        target_acos: FALLBACK_TARGET_ACOS, max_acos: FALLBACK_MAX_ACOS,
-        target_roas: 4, target_tacos: 5, max_tacos: 10,
-        daily_budget_cap: FALLBACK_DAILY_BUDGET_CAP,
-        target_cpc: 0.60, max_cpc: 1.00, enforce_max_cpc: true,
-        impressions_goal_enabled: false,
-        min_bid: FALLBACK_MIN_BID, max_bid: FALLBACK_MAX_BID,
-        max_bid_increase_percent: 20, max_bid_decrease_percent: 20,
-        min_campaign_budget: 15, budget_increment_allowed: 5, weekly_campaign_capacity: 10,
-        pacing_enabled: true, dayparting_enabled: true, placement_optimization_enabled: true,
-        max_top_of_search_adjustment: 0, max_rest_of_search_adjustment: 0, max_product_pages_adjustment: 0,
-        ai_auto_optimization_enabled: false, settings_source: 'system_defaults',
+        source: 'system_defaults', source_id: null,
+        target_acos: FB.TARGET_ACOS, max_acos: FB.MAX_ACOS,
+        target_roas: FB.TARGET_ROAS, target_tacos: FB.TARGET_TACOS,
+        min_bid: FB.MIN_BID, max_bid: FB.MAX_BID, max_cpc: 0,
+        max_bid_increase_pct: FB.MAX_INCREASE_PCT,
+        max_bid_decrease_pct: FB.MAX_DECREASE_PCT,
+        daily_budget_cap: FB.DAILY_BUDGET_CAP,
+        min_campaign_budget: 15, pacing_enabled: true,
+        safety_factor: FB.SAFETY_FACTOR,
+        min_confidence: FB.MIN_CONFIDENCE,
+        cooldown_hours: FB.COOLDOWN_HOURS,
+        maturation_hours: FB.MATURATION_HOURS,
+        min_stock_days: FB.MIN_STOCK_DAYS,
+        fallback_cvr: 0.05,
       };
     }
 
-    // Construir regras nativas com os parâmetros configurados
-    const STOCK_RULES = buildStockRules(settings);
-    const ACOS_RULES = buildAcosRules(settings);
+    const settingsSnapshot = JSON.stringify({ ...settings, captured_at: now });
 
-    // ── 1. Regras vigentes ────────────────────────────────────────────────
-    const allRules = await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' });
-    const activeRules = allRules.filter(r => {
-      if (r.effective_from && new Date(r.effective_from) > new Date()) return false;
-      if (r.effective_until && new Date(r.effective_until) < new Date()) return false;
-      return true;
-    }).sort((a, b) => (a.priority || 100) - (b.priority || 100));
+    // ── 1. Validar qualidade dos dados ────────────────────────────────────
+    const dataAge = account.last_sync_at
+      ? (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000 : 999;
+    const dataFreshness: 'fresh' | 'acceptable' | 'stale' =
+      dataAge <= 24 ? 'fresh' : dataAge <= 48 ? 'acceptable' : 'stale';
 
-    // Regras de estoque nativas rodam sempre — mesmo sem regras no banco.
+    if (dataAge > MRC.DATA_STALE_HOURS) {
+      return Response.json({
+        ok: false, skipped: true, correlationId,
+        reason: `Dados desatualizados (${Math.round(dataAge)}h). Dados stale bloqueiam aumentos. Execute sync primeiro.`,
+        data_freshness: dataFreshness,
+        mrc_note: 'Cliques líquidos pós-GIVT/SIVT podem estar desatualizados.'
+      });
+    }
 
-    // ── 2. Dados em paralelo ──────────────────────────────────────────────
-    const [keywords, campaigns, products, customSeasonalEvents, metricsRaw, salesDailyRaw, unifiedRaw] = await Promise.all([
+    // ── 2. Carregar dados em paralelo ─────────────────────────────────────
+    const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+    const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const cutoff7d  = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const cutoff3d  = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+    const [keywords, campaigns, products, metricsRaw, salesDailyRaw,
+           termBankRaw, suggestionRaw, profitLearnings, recentExecs
+    ] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
-      base44.asServiceRole.entities.SeasonalityCalendar.filter({ amazon_account_id: aid, enabled: true }).catch(() => []),
-      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 200).catch(() => []),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300).catch(() => []),
       base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 500).catch(() => []),
-      base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300).catch(() => []),
+      base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid, status: 'active' }, '-score', 200).catch(() => []),
+      base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: aid, status: 'ranked' }, null, 200).catch(() => []),
+      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
+      base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 500).catch(() => []),
     ]);
 
-    // ── 2b. Agregar SalesDaily por ASIN (últimos 30 dias) ─────────────────
-    // Métricas reais de pedidos vindas do SP-API Orders Report
-    const salesByAsin = new Map(); // asin → { total_revenue, total_units, orders_count, avg_ticket, dates: Set }
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    for (const s of salesDailyRaw) {
-      if (!s.asin || s.date < thirtyDaysAgo) continue;
-      if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { total_revenue: 0, total_units: 0, orders_count: 0, dates: new Set() });
-      const entry = salesByAsin.get(s.asin);
-      entry.total_revenue += s.ordered_product_sales || 0;
-      entry.total_units += s.units_ordered || 0;
-      if ((s.units_ordered || 0) > 0) entry.orders_count++;
-      if (s.date) entry.dates.add(s.date);
-    }
-    // Finalizar métricas derivadas por ASIN
-    const salesMetricsByAsin = new Map();
-    for (const [asin, s] of salesByAsin.entries()) {
-      const activeDays = s.dates.size || 1;
-      salesMetricsByAsin.set(asin, {
-        real_revenue_30d: s.total_revenue,
-        real_units_30d: s.total_units,
-        real_orders_30d: s.orders_count,
-        real_avg_ticket: s.orders_count > 0 ? s.total_revenue / s.orders_count : 0,
-        real_revenue_per_day: s.total_revenue / activeDays,
-        has_real_sales: s.total_units > 0,
-      });
-    }
+    // ── 3. Construir índices ───────────────────────────────────────────────
+    const productMap = new Map(products.map((p: any) => [p.asin, p]));
 
-    // ── 2c. Agregar UnifiedAdsMetricsDaily por campaign_id (14d) ─────────────
-    // Métricas de qualidade: impressão share, topo de pesquisa, halo, tráfego inválido
-    const unifiedCutoff14d = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
-    const unifiedByCampaign = new Map();
-    for (const m of unifiedRaw) {
-      if (!m.campaign_id || !m.date || m.date < unifiedCutoff14d) continue;
-      if (!unifiedByCampaign.has(m.campaign_id)) {
-        unifiedByCampaign.set(m.campaign_id, {
-          impression_share_sum: 0, top_of_search_sum: 0, rows: 0,
-          invalid_clicks: 0, invalid_impressions: 0, clicks: 0, impressions: 0,
-          promoted_sales: 0, halo_purchases: 0, budget_at_risk: false,
-        });
-      }
-      const e = unifiedByCampaign.get(m.campaign_id);
-      if (m.impression_share > 0) e.impression_share_sum += m.impression_share;
-      if (m.top_of_search_impression_share > 0) e.top_of_search_sum += m.top_of_search_impression_share;
-      e.invalid_clicks += m.invalid_clicks || 0;
-      e.invalid_impressions += m.invalid_impressions || 0;
-      e.clicks += m.clicks || 0;
-      e.impressions += m.impressions || 0;
-      e.promoted_sales += m.promoted_sales || 0;
-      e.halo_purchases += m.halo_purchases || 0;
-      if (m.budget_at_risk) e.budget_at_risk = true;
-      e.rows++;
-    }
-    // Calcular médias e taxas
-    for (const [, e] of unifiedByCampaign.entries()) {
-      e.avg_impression_share = e.rows > 0 ? e.impression_share_sum / e.rows : 0;
-      e.avg_top_of_search = e.rows > 0 ? e.top_of_search_sum / e.rows : 0;
-      e.avg_invalid_click_rate = e.clicks > 0 ? e.invalid_clicks / e.clicks : 0;
-    }
-
-    // TACoS real por ASIN: gasto ads / receita real
-    // Fonte primária: CampaignMetricsDaily (tem campaign_id); Campaigns têm asin
-    const adsSpendByAsin = new Map();
-    const adsSpendByCampaign = new Map();
-    for (const m of metricsRaw) {
-      if (m.campaign_id) {
-        adsSpendByCampaign.set(m.campaign_id, (adsSpendByCampaign.get(m.campaign_id) || 0) + (m.spend || 0));
-      }
-      if (m.asin) {
-        adsSpendByAsin.set(m.asin, (adsSpendByAsin.get(m.asin) || 0) + (m.spend || 0));
-      }
-    }
-    // Para campanhas com ASIN: acumular spend por ASIN via campaign
-    for (const c of campaigns) {
-      if (!c.asin || !c.campaign_id) continue;
-      const campaignSpend = adsSpendByCampaign.get(c.campaign_id) || adsSpendByCampaign.get(c.amazon_campaign_id) || 0;
-      adsSpendByAsin.set(c.asin, (adsSpendByAsin.get(c.asin) || 0) + campaignSpend);
-    }
-    for (const [asin, metrics] of salesMetricsByAsin.entries()) {
-      const spend = adsSpendByAsin.get(asin) || 0;
-      metrics.real_tacos_pct = metrics.real_revenue_30d > 0 ? (spend / metrics.real_revenue_30d) * 100 : null;
-      metrics.ads_spend_30d = spend;
-    }
-
-    // TACoS por campanha: para keywords sem ASIN, usar o TACoS da campanha
-    // Calculado como: spend da campanha / receita real do ASIN da campanha
-    const tacosByCampaignId = new Map();
-    for (const c of campaigns) {
-      if (!c.asin) continue;
-      const campaignSpend = adsSpendByCampaign.get(c.campaign_id) || adsSpendByCampaign.get(c.amazon_campaign_id) || 0;
-      const asinSales = salesMetricsByAsin.get(c.asin);
-      if (asinSales?.real_revenue_30d > 0 && campaignSpend > 0) {
-        const tacos = (campaignSpend / asinSales.real_revenue_30d) * 100;
-        if (c.campaign_id) tacosByCampaignId.set(c.campaign_id, tacos);
-        if (c.amazon_campaign_id) tacosByCampaignId.set(c.amazon_campaign_id, tacos);
-      }
-    }
-
-    // TACoS de conta: soma de todo spend / soma de toda receita real
-    const totalAdsSpend30d = Array.from(adsSpendByCampaign.values()).reduce((s, v) => s + v, 0);
-    const totalRealRevenue30d = Array.from(salesMetricsByAsin.values()).reduce((s, m) => s + m.real_revenue_30d, 0);
-    const accountTacos = totalRealRevenue30d > 0 ? (totalAdsSpend30d / totalRealRevenue30d) * 100 : null;
-
-    // ── 2d. Gasto real de ontem (para guardrail de redistribute_budget) ─────
-    // Usa o gasto real reportado nos relatórios diários — não a soma de orçamentos configurados.
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const realSpendYesterday = metricsRaw
-      .filter(m => m.date === yesterday)
-      .reduce((s, m) => s + (m.spend || 0), 0);
-
-    // ── 3. Contexto sazonal ───────────────────────────────────────────────
-    const seasonalCtx = getSeasonalCtx(today, customSeasonalEvents);
-
-    // Análise FDS vs dias úteis (últimos 30 dias)
-    const cutStart = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
-    const cutEnd = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const byDate = {};
-    for (const m of metricsRaw) {
-      if (!m.date || m.date < cutStart || m.date > cutEnd) continue;
-      if (!byDate[m.date]) byDate[m.date] = { spend: 0, sales: 0, orders: 0, clicks: 0 };
-      byDate[m.date].spend += m.spend || 0;
-      byDate[m.date].sales += m.sales || 0;
-      byDate[m.date].orders += m.orders || 0;
-      byDate[m.date].clicks += m.clicks || 0;
-    }
-    const wd = { spend: 0, sales: 0, orders: 0, clicks: 0, days: 0 };
-    const we = { spend: 0, sales: 0, orders: 0, clicks: 0, days: 0 };
-    for (const [d, v] of Object.entries(byDate)) {
-      const dow2 = new Date(d + 'T12:00:00').getDay();
-      const b = (dow2 === 0 || dow2 === 6) ? we : wd;
-      b.spend += v.spend; b.sales += v.sales; b.orders += v.orders; b.clicks += v.clicks; b.days++;
-    }
-    const wdCvr = wd.clicks > 0 ? wd.orders / wd.clicks : null;
-    const weCvr = we.clicks > 0 ? we.orders / we.clicks : null;
-    const wdAcos = wd.sales > 0 ? wd.spend / wd.sales * 100 : null;
-    const weAcos = we.sales > 0 ? we.spend / we.sales * 100 : null;
-    const weekendPerformsBetter = (wdCvr != null && weCvr != null && we.days >= 2 && wd.days >= 5)
-      ? (weCvr > wdCvr * 1.05 && (wdAcos == null || weAcos == null || weAcos <= wdAcos * 1.25))
-      : null;
-    const weekendCtx = { weekend_performs_better: weekendPerformsBetter };
-
-    // ── 4. Validar qualidade dos dados (Metodologia MRC) ─────────────────
-    // Dados Amazon SP são considerados "revisáveis" por até 30 dias (ajustes SIVT retroativos).
-    // Após 30 dias são finais e imutáveis. Incidentes raros podem gerar revisão até 90 dias.
-    // Motor exige sincronização recente (< 48h) para garantir que os dados incluem
-    // os últimos ajustes de filtragem GIVT/SIVT aplicados retroativamente pela Amazon.
-    const dataAge = account.last_sync_at
-      ? (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000
-      : 999;
-    if (dataAge > 48) {
-      return Response.json({
-        ok: false, skipped: true,
-        reason: `Dados desatualizados (${Math.round(dataAge)}h sem sync). Motor bloqueado: cliques líquidos pós-GIVT/SIVT podem estar desatualizados.`,
-        correlationId,
-        mrc_note: 'Amazon Ads aplica filtragem SIVT retroativa em até 30 dias. Dados sem sync recente podem refletir cliques brutos ainda não filtrados.',
-      });
-    }
-
-    // Verificar se há dados dentro da janela de atribuição MRC (14d)
-    const latestMetricDate = metricsRaw.length > 0
-      ? metricsRaw.reduce((max, m) => m.date > max ? m.date : max, '2000-01-01')
-      : null;
-    const metricDataAge = latestMetricDate
-      ? (Date.now() - new Date(latestMetricDate).getTime()) / 86400000
-      : 999;
-    const dataWithin14dWindow = metricDataAge <= ATTRIBUTION_WINDOW_DAYS;
-
-    // ── 5. Budget: soma dos orçamentos configurados nas campanhas Amazon ─────
-    // IMPORTANTE: total_active_budget (soma de orçamentos por campanha na Amazon) NÃO precisa
-    // ser <= daily_budget_cap. O daily_budget_cap é o teto de GASTO REAL diário (limite de risco),
-    // não uma restrição sobre a soma de budgets configurados — a Amazon controla o gasto real.
-    // O guardrail real é o gasto real de ontem vs o cap.
-    const totalActiveBudget = campaigns
-      .filter(c => c.state === 'enabled' || c.status === 'enabled')
-      .reduce((s, c) => s + (c.daily_budget || 0), 0);
-    const suggestedTotalBudget = settings.daily_budget_cap;
-
-
-
-    // ── 6. Índices ────────────────────────────────────────────────────────
-    const productMap = new Map(products.map(p => [p.asin, p]));
-
-    // Mapear campaign_id → asin (para keywords sem asin direto)
-    const campaignAsinMap = new Map();
+    // Mapear campaign_id → asin
+    const campaignAsinMap = new Map<string, string>();
     for (const c of campaigns) {
       if (c.campaign_id && c.asin) campaignAsinMap.set(c.campaign_id, c.asin);
       if (c.amazon_campaign_id && c.asin) campaignAsinMap.set(c.amazon_campaign_id, c.asin);
     }
 
-    const recentExecs = await base44.asServiceRole.entities.RuleExecution.filter(
-      { amazon_account_id: aid }, '-created_date', 300
-    );
-    const lastExecByRuleEntity = new Map();
-    for (const ex of recentExecs) {
-      const k = `${ex.rule_key}|${ex.entity_id}`;
-      if (!lastExecByRuleEntity.has(k)) lastExecByRuleEntity.set(k, ex);
-    }
-    const usedIdemKeys = new Set(
-      recentExecs.filter(e => (e.created_date || '').slice(0, 10) === today).map(e => e.idempotency_key).filter(Boolean)
-    );
-
-    const actionsToEnqueue = [];
-    const conflicts = [];
-    const stats = { evaluated: 0, matched: 0, skipped_cooldown: 0, skipped_dup: 0, skipped_stock: 0, skipped_seasonal: 0, enqueued: 0, stock_rules_applied: 0, acos_rules_applied: 0 };
-    const entityChangedThisCycle = new Map();
-    const scopedEntities = { keyword: keywords, campaign: campaigns };
-
-    const seasonalPayload = buildSeasonalContextPayload(seasonalCtx);
-
-    // ── 7a. Regras nativas de estoque (prioridade máxima) ─────────────────
-    // Executam sobre keywords com asin resolvido, independente do banco de regras.
-    for (const kw of keywords) {
-      const entityId = kw.keyword_id || kw.id;
-      if (!entityId) continue;
-
-      const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
-      if (!resolvedAsin) continue;
-
-      const product = productMap.get(resolvedAsin);
-      if (!product) continue;
-
-      const realSales = salesMetricsByAsin.get(resolvedAsin) || {};
-      const stockQty = product.fba_inventory || 0;
-      const realUnits30d = realSales.real_units_30d || 0;
-      const stockVelocity = realUnits30d / 30;
-      const stockCoverageDays = stockVelocity > 0 ? stockQty / stockVelocity : 999;
-
-      const entityData = {
-        ...kw,
-        current_bid: kw.current_bid || kw.bid || 0.25,
-        stock: stockQty,
-        stock_coverage_days: stockCoverageDays,
-        stock_velocity: stockVelocity,
-      };
-
-      for (const sr of STOCK_RULES) {
-        if (!sr.matches(entityData)) continue;
-
-        // Guardrail sazonal: não aumentar bid em baixa demanda ou feriado sem vendas
-        if (sr.is_boost) {
-          if (seasonalCtx.is_low_demand) continue;
-          if (seasonalCtx.is_holiday && !realSales.has_real_sales) continue;
-        }
-
-        // Cooldown — usa created_date (campo real do banco) com fallback para executed_at
-        const lastExecSR = lastExecByRuleEntity.get(`${sr.rule_key}|${entityId}`);
-        if (lastExecSR) {
-          const lastTs = lastExecSR.created_date || lastExecSR.executed_at;
-          if (lastTs) {
-            const hoursAgo = (Date.now() - new Date(lastTs).getTime()) / 3600000;
-            if (hoursAgo < sr.cooldown_hours) continue;
-          }
-        }
-
-        const iKey = `stock|${aid}|${sr.rule_key}|${entityId}|${today}`;
-        if (usedIdemKeys.has(iKey)) continue;
-
-        // Conflito com ação já agendada para esta entity neste ciclo
-        if (entityChangedThisCycle.has(entityId)) continue;
-
-        const newBid = sr.action(entityData);
-        actionsToEnqueue.push({
-          amazon_account_id: aid,
-          correlation_id: correlationId,
-          rule_key: sr.rule_key,
-          rule_version: 1,
-          entity_type: 'keyword',
-          entity_id: entityId,
-          campaign_id: kw.campaign_id,
-          keyword_id: kw.keyword_id,
-          asin: resolvedAsin,
-          action_type: 'set_bid',
-          value_before: entityData.current_bid,
-          value_after: newBid,
-          idempotency_key: iKey,
-          status: 'pending',
-          seasonal_context: seasonalPayload,
-          reason: `${sr.reason} (cobertura: ${Math.round(stockCoverageDays)}d, estoque: ${stockQty}un, velocidade: ${stockVelocity.toFixed(2)}un/dia)`,
-          stock_coverage_days: stockCoverageDays,
-          stock_qty: stockQty,
-        });
-        entityChangedThisCycle.set(entityId, sr.rule_key);
-        stats.stock_rules_applied++;
-        stats.enqueued++;
-        break; // apenas uma regra de estoque por keyword por ciclo
-      }
+    // TermBank: asin → keyword[]
+    const termBankByAsin = new Map<string, any[]>();
+    for (const t of termBankRaw) {
+      if (!t.asin) continue;
+      if (!termBankByAsin.has(t.asin)) termBankByAsin.set(t.asin, []);
+      termBankByAsin.get(t.asin)!.push(t);
     }
 
-    // ── 7b. Regras nativas de ACoS por ASIN (30 dias) com meta dinâmica ─────────
-    // Meta de ACoS calculada automaticamente por produto a partir da margem bruta:
-    //   target_acos_asin = gross_margin_pct × (1 - safety_buffer)
-    //   safety_buffer = 0.20 (reserva 20% da margem para lucro líquido)
-    //   Limites: mínimo 5%, máximo 30%
-    //   Fallback: globalTargetAcos → 10%
-    //
-    // Lógica: se a margem bruta é 30%, o máximo que posso gastar em ads é
-    //         30% × 0.80 = 24% do faturamento, mantendo 6% de lucro líquido.
+    // Suggestions: asin → keyword[]
+    const suggestionsByAsin = new Map<string, any[]>();
+    for (const s of suggestionRaw) {
+      if (!s.asin) continue;
+      if (!suggestionsByAsin.has(s.asin)) suggestionsByAsin.set(s.asin, []);
+      suggestionsByAsin.get(s.asin)!.push(s);
+    }
 
-    const ACOS_SAFETY_BUFFER = 0.20; // 20% de reserva de margem para lucro
-    const ACOS_MIN = 5;              // nunca usar meta abaixo de 5%
-    const ACOS_MAX = 30;             // nunca usar meta acima de 30%
-
-    // Meta global de ACoS vem dos settings configurados (não mais do AutopilotConfig diretamente)
-    const globalTargetAcos = settings.target_acos;
-
-    const profitLearnings = await base44.asServiceRole.entities.ProductProfitabilityLearning.filter(
-      { amazon_account_id: aid }, null, 200
-    ).catch(() => []);
-
-    // Construir mapa asin → meta_acos calculada por produto
-    // Fonte: ProductProfitabilityLearning.gross_margin_pct (margem bruta real dos últimos 30d)
-    const acosByAsin = new Map(); // asin → target_acos calculado
-    const acosBySkuIdx = new Map(); // sku → learning (para join com Product via sku)
+    // Profitability learnings: asin/sku → learning
+    const profitByAsin = new Map<string, any>();
     for (const pl of profitLearnings) {
-      if (pl.sku) acosBySkuIdx.set(pl.sku, pl);
-    }
-    for (const p of products) {
-      const asin = p.asin;
-      if (!asin) continue;
-      // Buscar learning: por ASIN direto ou via SKU
-      const pl = profitLearnings.find(l => l.asin === asin) || (p.sku ? acosBySkuIdx.get(p.sku) : null);
-      if (!pl) continue;
-      const grossMargin = Number(pl.gross_margin_pct || 0);
-      if (grossMargin <= 0) {
-        // Margem negativa → produto bloqueado, não gerar meta (motor não atua)
-        continue;
-      }
-      // Meta dinâmica: margem bruta × (1 - buffer de segurança)
-      const dynTarget = grossMargin * (1 - ACOS_SAFETY_BUFFER);
-      const clamped = Math.min(ACOS_MAX, Math.max(ACOS_MIN, dynTarget));
-      acosByAsin.set(asin, Math.round(clamped * 10) / 10); // arredondar para 1 casa
+      if (pl.asin) profitByAsin.set(pl.asin, pl);
     }
 
-    const acosTargetSource = acosByAsin.size > 0 ? 'dynamic_per_product' : 'global_config';
-
-    // Agregar métricas de ads por ASIN — JANELA 14d (escopo MRC primário de atribuição SP)
-    // Cliques e impressões aqui são LÍQUIDOS pós-GIVT/SIVT (padrão da Amazon Ads API).
-    // A API não expõe cliques brutos — apenas cliques válidos pós-filtragem são reportados.
-    // Dados de D-1 a D-30 podem ainda sofrer ajustes retroativos de SIVT; após 30d são finais.
-    const fourteenDaysAgo = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString().slice(0, 10);
-    const adMetricsByAsin = new Map(); // asin → { spend_14d, sales_14d, clicks_14d, orders_14d, impressions_14d }
+    // ── 4. Agregar métricas por janelas (3d, 7d, 14d, 30d) por keyword ───
+    // Também por ASIN para meta dinâmica
+    const kwMetrics = new Map<string, any>();
     for (const m of metricsRaw) {
       if (!m.campaign_id) continue;
-      if (m.date && m.date < fourteenDaysAgo) continue; // apenas janela 14d MRC
       const asin = campaignAsinMap.get(m.campaign_id) || null;
-      if (!asin) continue;
-      if (!adMetricsByAsin.has(asin)) adMetricsByAsin.set(asin, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 });
-      const a = adMetricsByAsin.get(asin);
-      a.spend += m.spend || 0;
-      a.sales += m.sales || 0;
-      a.clicks += m.clicks || 0;
-      a.orders += m.orders || 0;
-      a.impressions += m.impressions || 0;
+      const kws = keywords.filter((k: any) => k.campaign_id === m.campaign_id || k.campaign_id === m.campaign_id);
+      // Agregar por campanha → usar ASIN para correlacionar
+      // (Métricas por keyword viram de AdsBidChangeLog, métricas por campanha de CampaignMetricsDaily)
     }
 
-    // Persistir metas calculadas em Product.break_even_acos_pct (batch, sem bloquear pipeline)
-    const productUpdates = [];
-    for (const [asin, dynTarget] of acosByAsin.entries()) {
+    // Agregar por campanha por janela
+    const campMetrics = new Map<string, { d3: any; d7: any; d14: any; d30: any }>();
+    for (const m of metricsRaw) {
+      if (!m.campaign_id || !m.date) continue;
+      const key = m.campaign_id;
+      if (!campMetrics.has(key)) campMetrics.set(key, {
+        d3: { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 },
+        d7: { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 },
+        d14: { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 },
+        d30: { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0 },
+      });
+      const cm = campMetrics.get(key)!;
+      const addTo = (obj: any) => {
+        obj.spend += m.spend || 0;
+        obj.sales += m.sales || 0;
+        obj.clicks += m.clicks || 0;
+        obj.orders += m.orders || 0;
+        obj.impressions += m.impressions || 0;
+      };
+      if (m.date >= cutoff3d) addTo(cm.d3);
+      if (m.date >= cutoff7d) addTo(cm.d7);
+      if (m.date >= cutoff14d) addTo(cm.d14);
+      if (m.date >= cutoff30d) addTo(cm.d30);
+    }
+
+    // Calcular métricas derivadas por janela
+    const campWindowMetrics = new Map<string, any>();
+    for (const [cid, wm] of campMetrics.entries()) {
+      const derive = (w: any) => ({
+        ...w,
+        acos: w.sales > 0 ? (w.spend / w.sales) * 100 : null,
+        roas: w.spend > 0 ? w.sales / w.spend : 0,
+        cpc: w.clicks > 0 ? w.spend / w.clicks : 0,
+        cvr: w.clicks > 0 ? w.orders / w.clicks : 0,
+        ctr: w.impressions > 0 ? w.clicks / w.impressions : 0,
+      });
+      const d3 = derive(wm.d3), d14 = derive(wm.d14), d30 = derive(wm.d30);
+      // Tendências: variação relativa
+      const trend_3_vs_14 = d14.sales > 0 ? (d3.sales / (d14.sales / (14 / 3)) - 1) : 0;
+      const trend_7_vs_30 = (() => {
+        const d7 = derive(wm.d7);
+        return d30.sales > 0 ? (d7.sales / (d30.sales / (30 / 7)) - 1) : 0;
+      })();
+      const trend_14_vs_30 = d30.sales > 0 ? (d14.sales / (d30.sales / 2) - 1) : 0;
+      campWindowMetrics.set(cid, { d3, d7: derive(wm.d7), d14, d30, trend_3_vs_14, trend_7_vs_30, trend_14_vs_30 });
+    }
+
+    // ── 5. Métricas por ASIN (para TACoS e metas dinâmicas) ───────────────
+    const salesByAsin = new Map<string, { revenue: number; units: number; days: Set<string> }>();
+    for (const s of salesDailyRaw) {
+      if (!s.asin || !s.date || s.date < cutoff30d) continue;
+      if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { revenue: 0, units: 0, days: new Set() });
+      const e = salesByAsin.get(s.asin)!;
+      e.revenue += s.ordered_product_sales || 0;
+      e.units += s.units_ordered || 0;
+      if (s.date) e.days.add(s.date);
+    }
+
+    // ── 6. Meta econômica dinâmica por produto ─────────────────────────────
+    // break_even_acos = contribution_margin_pct
+    // target_acos_asin = break_even_acos * safety_factor
+    const acosByAsin = new Map<string, { target: number; break_even: number; safe_max_cpc: number; confidence: string }>();
+    for (const p of products) {
+      if (!p.asin) continue;
+      const pl = profitByAsin.get(p.asin);
+      const margin = Number(p.break_even_acos_pct || pl?.gross_margin_pct || p.net_margin_percent || 0);
+      if (margin > 0) {
+        const break_even = margin; // margem bruta % = break-even ACoS %
+        const target = Math.min(FB.MAX_ACOS * 2, Math.max(5, break_even * settings.safety_factor));
+        // Estimar safe_max_cpc
+        const selling_price = Number(p.price || 0);
+        const salesM = salesByAsin.get(p.asin);
+        const cvr = salesM && salesM.units > 0 && salesM.days.size > 3
+          ? salesM.units / (salesM.units + 50) // estimativa conservadora
+          : settings.fallback_cvr;
+        const safe_cpc = calcSafeMaxCpc({ selling_price, gross_margin_pct: margin, cvr_estimate: cvr, safety_factor: settings.safety_factor });
+        acosByAsin.set(p.asin, {
+          target: Math.round(target * 10) / 10,
+          break_even: Math.round(break_even * 10) / 10,
+          safe_max_cpc: safe_cpc,
+          confidence: pl ? 'confirmed' : margin > 0 ? 'estimated' : 'fallback',
+        });
+      }
+    }
+
+    // Persistir metas calculadas (fire-and-forget)
+    const productUpdates: any[] = [];
+    for (const [asin, meta] of acosByAsin.entries()) {
       const p = productMap.get(asin);
-      if (p && p.id && Math.abs((p.break_even_acos_pct || 0) - dynTarget) > 0.5) {
-        productUpdates.push({ id: p.id, break_even_acos_pct: dynTarget });
+      if (p?.id && Math.abs((p.break_even_acos_pct || 0) - meta.target) > 0.5) {
+        productUpdates.push({ id: p.id, break_even_acos_pct: meta.target, break_even_acos: meta.break_even });
       }
     }
     if (productUpdates.length > 0) {
       base44.asServiceRole.entities.Product.bulkUpdate(productUpdates).catch(() => {});
     }
 
+    // ── 7. Gasto real de ontem (guardrail de orçamento) ────────────────────
+    const realSpendYesterday = metricsRaw
+      .filter((m: any) => m.date === yesterday)
+      .reduce((s: number, m: any) => s + (m.spend || 0), 0);
+
+    // ── 8. Contexto sazonal ────────────────────────────────────────────────
+    const seasonal = getSeasonalContext(today);
+
+    // ── 9. Índice de cooldown (RuleExecution + OptimizationDecision) ───────
+    const usedIdemKeys = new Set<string>(
+      recentExecs
+        .filter((e: any) => (e.created_date || '').slice(0, 10) === today)
+        .map((e: any) => e.idempotency_key)
+        .filter(Boolean)
+    );
+    const lastExecByRuleEntity = new Map<string, any>();
+    for (const ex of recentExecs) {
+      const k = `${ex.rule_key || ex.action_type}|${ex.entity_id || ex.keyword_id}`;
+      if (!lastExecByRuleEntity.has(k)) lastExecByRuleEntity.set(k, ex);
+    }
+
+    // ── 10. Gerar decisões ────────────────────────────────────────────────
+    const decisions: any[] = [];
+    const skipped: any[] = [];
+    const entityChangedThisCycle = new Map<string, string>();
+    const stats = {
+      evaluated: 0, protected: 0, held: 0,
+      bid_increase: 0, bid_reduce: 0, paused: 0, skipped_stock: 0,
+      skipped_margin: 0, skipped_cooldown: 0, skipped_confidence: 0,
+      skipped_data: 0, created_campaign: 0,
+    };
+
+    // ── 10a. Keywords: regras estratégicas ────────────────────────────────
     for (const kw of keywords) {
       const entityId = kw.keyword_id || kw.id;
       if (!entityId) continue;
-
-      // Pular keywords que já receberam ação de estoque neste ciclo
       if (entityChangedThisCycle.has(entityId)) continue;
 
+      stats.evaluated++;
+
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
-      if (!resolvedAsin) continue;
+      const product = resolvedAsin ? productMap.get(resolvedAsin) : null;
 
-      const adMetrics = adMetricsByAsin.get(resolvedAsin);
-      if (!adMetrics) continue;
+      // ── Guardrail: estoque ────────────────────────────────────────────
+      const stockQty = product?.fba_inventory || 0;
+      const salesM = resolvedAsin ? salesByAsin.get(resolvedAsin) : null;
+      const realUnits30d = salesM?.units || 0;
+      const stockVelocity = realUnits30d / 30;
+      const stockCovDays = stockVelocity > 0 ? stockQty / stockVelocity : (stockQty > 0 ? 999 : 0);
 
-      // Meta por produto (dinâmica) com fallback para global
-      const effectiveTargetAcos = acosByAsin.get(resolvedAsin) ?? globalTargetAcos;
-      if (effectiveTargetAcos <= 0) continue;
-
-      // ACoS calculado na janela 14d (escopo MRC primário) — cliques líquidos pós-GIVT/SIVT
-      const acos14d = adMetrics.sales > 0 ? (adMetrics.spend / adMetrics.sales) * 100 : null;
-      const ctr14d = adMetrics.impressions > 0 ? adMetrics.clicks / adMetrics.impressions : 0;
-      const cvr14d = adMetrics.clicks > 0 ? (adMetrics.orders || 0) / adMetrics.clicks : 0;
-
-      const entityData = {
-        current_bid: kw.current_bid || kw.bid || 0.25,
-        // Janela MRC 14d (campos renomeados para clareza)
-        acos_14d: acos14d,
-        spend_14d: adMetrics.spend,
-        sales_14d: adMetrics.sales,
-        clicks_14d: adMetrics.clicks,
-        orders_14d: adMetrics.orders || 0,
-        impressions_14d: adMetrics.impressions,
-        ctr_14d: ctr14d,
-        cvr_14d: cvr14d,
-        target_acos: effectiveTargetAcos,
-        // Compatibilidade com regras externas que ainda usam campos 30d
-        acos_30d: acos14d,
-        spend_30d: adMetrics.spend,
-        sales_30d: adMetrics.sales,
-        clicks_30d: adMetrics.clicks,
-      };
-
-      for (const ar of ACOS_RULES) {
-        if (!ar.matches(entityData)) continue;
-
-        // Guardrail sazonal para boost
-        if (ar.is_boost) {
-          if (seasonalCtx.is_low_demand) continue;
-          const product = productMap.get(resolvedAsin);
-          if (seasonalCtx.is_holiday && !salesMetricsByAsin.get(resolvedAsin)?.has_real_sales) continue;
-          if (product?.inventory_status === 'out_of_stock') continue;
+      if (stockQty <= 0) {
+        // Estoque zero: bid mínimo obrigatório
+        const currentBid = kw.bid || kw.current_bid || 0.25;
+        if (currentBid > settings.min_bid) {
+          const iKey = `stock_zero|${aid}|${entityId}|${today}`;
+          if (!usedIdemKeys.has(iKey)) {
+            decisions.push(buildDecision(aid, correlationId, {
+              decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+              campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+              keyword_text: kw.keyword_text, action: 'set_bid',
+              value_before: currentBid, value_after: settings.min_bid,
+              rationale: `Estoque zerado. Bid reduzido ao mínimo R$${settings.min_bid} para preservar ranking sem desperdício.`,
+              rule_key: 'stock_zero',
+              risk: 'low', priority: PRIORITY.stock,
+              search_intent: kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null,
+              settings_source: settings.source, settings_snapshot: settingsSnapshot,
+              idempotency_key: iKey, stock_coverage_days: 0, stock_qty: 0,
+            }));
+            entityChangedThisCycle.set(entityId, 'stock_zero');
+            stats.skipped_stock++;
+          }
         }
-
-        // Cooldown
-        const lastExecAR = lastExecByRuleEntity.get(`${ar.rule_key}|${entityId}`);
-        if (lastExecAR) {
-          const lastTs = lastExecAR.created_date || lastExecAR.executed_at;
-          if (lastTs && (Date.now() - new Date(lastTs).getTime()) / 3600000 < ar.cooldown_hours) continue;
-        }
-
-        const iKey = `acos|${aid}|${ar.rule_key}|${entityId}|${today}`;
-        if (usedIdemKeys.has(iKey)) continue;
-
-        const newBid = ar.action(entityData);
-        const isDynamic = acosByAsin.has(resolvedAsin);
-        actionsToEnqueue.push({
-          amazon_account_id: aid,
-          correlation_id: correlationId,
-          rule_key: ar.rule_key,
-          rule_version: 1,
-          entity_type: 'keyword',
-          entity_id: entityId,
-          campaign_id: kw.campaign_id,
-          keyword_id: kw.keyword_id,
-          asin: resolvedAsin,
-          action_type: 'set_bid',
-          value_before: entityData.current_bid,
-          value_after: newBid,
-          idempotency_key: iKey,
-          status: 'pending',
-          seasonal_context: seasonalPayload,
-          reason: ar.reason_fn(entityData) + (isDynamic ? ` [meta dinâmica por produto: ${effectiveTargetAcos}%]` : ' [meta global]'),
-        });
-        entityChangedThisCycle.set(entityId, ar.rule_key);
-        stats.acos_rules_applied++;
-        stats.enqueued++;
-        break; // uma regra de ACoS por keyword por ciclo
+        continue;
       }
-    }
 
-    // ── 7c. Regras externas do banco de dados (opcional — roda mesmo se vazio) ──
-    for (const rule of activeRules) {
-      const entities = scopedEntities[rule.scope] || [];
+      // Encontrar campanha para métricas por janela
+      const campForKw = campaigns.find((c: any) =>
+        c.campaign_id === kw.campaign_id || c.amazon_campaign_id === kw.campaign_id
+      );
+      const wm = campForKw
+        ? (campWindowMetrics.get(campForKw.campaign_id) || campWindowMetrics.get(campForKw.amazon_campaign_id))
+        : null;
 
-      for (const entity of entities) {
-        stats.evaluated++;
-        const entityId = entity.keyword_id || entity.campaign_id || entity.id;
-        if (!entityId) continue;
+      // Métricas da keyword
+      const currentBid = kw.bid || kw.current_bid || 0.25;
+      const kw_acos = kw.acos || (wm?.d14?.acos ?? null);
+      const kw_clicks = kw.clicks || (wm?.d14?.clicks ?? 0);
+      const kw_impressions = kw.impressions || (wm?.d14?.impressions ?? 0);
+      const kw_spend = kw.spend || (wm?.d14?.spend ?? 0);
+      const kw_orders = kw.orders || (wm?.d14?.orders ?? 0);
+      const kw_sales = kw.sales || (wm?.d14?.sales ?? 0);
+      const kw_cvr = kw_clicks > 0 ? kw_orders / kw_clicks : 0;
+      const kw_cpc = kw_clicks > 0 ? kw_spend / kw_clicks : 0;
 
-        const resolvedAsinEarly = entity.asin || campaignAsinMap.get(entity.campaign_id) || null;
-        const product = resolvedAsinEarly ? productMap.get(resolvedAsinEarly) : null;
-        const isOutOfStock = product?.inventory_status === 'out_of_stock';
+      // Meta por produto ou global
+      const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
+      const effectiveTargetAcos = asinMeta?.target ?? settings.target_acos;
+      const effectiveMaxAcos = asinMeta ? Math.min(asinMeta.break_even, settings.max_acos * 1.5) : settings.max_acos;
+      const effectiveSafeMaxCpc = asinMeta?.safe_max_cpc || (settings.max_cpc > 0 ? settings.max_cpc : 0);
 
-        // Guardrail estoque
-        if (isOutOfStock && ['increase_bid_percent', 'activate_campaign', 'activate_keyword', 'create_exact_keyword'].includes(rule.action.type)) {
+      // Verificar proteção de alta performance
+      const protection = isHighPerformanceProtected(kw, settings, wm ? {
+        acos_14d: wm.d14.acos, acos_30d: wm.d30.acos,
+        roas_14d: wm.d14.roas, orders_14d: wm.d14.orders, orders_30d: wm.d30.orders,
+      } : null);
+
+      // Classificar intenção de busca da keyword
+      const kwIntent = kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null;
+
+      // Verificar cooldown
+      const lastExec = lastExecByRuleEntity.get(`bid_change|${entityId}`);
+      if (lastExec) {
+        const lastTs = lastExec.created_date || lastExec.executed_at;
+        if (lastTs && (Date.now() - new Date(lastTs).getTime()) / 3600000 < settings.cooldown_hours) {
+          stats.skipped_cooldown++;
+          continue;
+        }
+      }
+
+      // ── Regra: Estoque crítico (< 7 dias) ─────────────────────────────
+      if (stockCovDays > 0 && stockCovDays < 7) {
+        const newBid = Math.max(settings.min_bid, currentBid * (1 - settings.max_bid_decrease_pct * 0.75));
+        const iKey = `stock_critical|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid) {
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `Estoque crítico: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido para preservar margem restante.`,
+            rule_key: 'stock_critical',
+            risk: 'low', priority: PRIORITY.stock,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey, stock_coverage_days: stockCovDays, stock_qty: stockQty,
+          }));
+          entityChangedThisCycle.set(entityId, 'stock_critical');
           stats.skipped_stock++;
           continue;
         }
+      }
 
-        // Enriquecer com métricas reais de pedidos do SP-API (SalesDaily)
-        // Resolver ASIN da keyword: campo direto ou via campaign_id
-        const resolvedAsin = entity.asin || campaignAsinMap.get(entity.campaign_id) || null;
-        const realSales = resolvedAsin ? (salesMetricsByAsin.get(resolvedAsin) || {}) : {};
-
-        // TACoS em cascata: ASIN direto → campanha → conta
-        const tacosValue = realSales.real_tacos_pct !== undefined && realSales.real_tacos_pct !== null
-          ? realSales.real_tacos_pct
-          : (tacosByCampaignId.get(entity.campaign_id) ?? accountTacos ?? null);
-
-        const stockQty = product?.fba_inventory || 0;
-        const realUnits30d = realSales.real_units_30d || 0;
-        // Velocidade de venda: unidades vendidas por dia (últimos 30d)
-        const stockVelocity = realUnits30d / 30;
-        // Dias de cobertura: com o estoque atual, quantos dias durariam as vendas
-        const stockCoverageDays = stockVelocity > 0 ? stockQty / stockVelocity : 999;
-
-        // Métricas da keyword agregadas na janela 14d do ASIN (cliques líquidos pós-GIVT/SIVT)
-        const asinAdMetrics14d = adMetricsByAsin.get(resolvedAsin || '') || null;
-        const entityData = {
-          ...entity,
-          current_bid: entity.current_bid || entity.bid || 0.25,
-          current_budget: entity.daily_budget || 0,
-          stock: stockQty,
-          stock_days: stockCoverageDays,
-          // Métricas reais de faturamento (SP-API Orders)
-          real_revenue_30d: realSales.real_revenue_30d || 0,
-          real_units_30d: realUnits30d,
-          real_orders_30d: realSales.real_orders_30d || 0,
-          real_avg_ticket: realSales.real_avg_ticket || 0,
-          real_revenue_per_day: realSales.real_revenue_per_day || 0,
-          has_real_sales: realSales.has_real_sales || false,
-          real_tacos_pct: tacosValue,
-          ads_spend_30d: realSales.ads_spend_30d || 0,
-          stock_velocity: stockVelocity,
-          stock_coverage_days: stockCoverageDays,
-          // acos da keyword (próprio da entidade keyword)
-          acos: entity.acos || (entity.spend > 0 && entity.sales > 0 ? entity.spend / entity.sales * 100 : 0),
-          // Métricas janela 14d (Metodologia MRC — cliques líquidos, atribuição primária SP)
-          clicks_14d: asinAdMetrics14d?.clicks || 0,
-          impressions_14d: asinAdMetrics14d?.impressions || 0,
-          spend_14d: asinAdMetrics14d?.spend || 0,
-          sales_14d: asinAdMetrics14d?.sales || 0,
-          orders_14d: asinAdMetrics14d?.orders || 0,
-          acos_14d: asinAdMetrics14d?.sales > 0 ? (asinAdMetrics14d.spend / asinAdMetrics14d.sales) * 100 : null,
-          ctr_14d: asinAdMetrics14d?.impressions > 0 ? asinAdMetrics14d.clicks / asinAdMetrics14d.impressions : 0,
-          cvr_14d: asinAdMetrics14d?.clicks > 0 ? (asinAdMetrics14d.orders || 0) / asinAdMetrics14d.clicks : 0,
-          // Métricas unificadas (Unified Reports) — disponíveis se conta tem acesso
-          ...(() => {
-            const u = unifiedByCampaign.get(entity.campaign_id) || null;
-            return {
-              unified_impression_share: u?.avg_impression_share || 0,
-              unified_top_of_search: u?.avg_top_of_search || 0,
-              unified_invalid_click_rate: u?.avg_invalid_click_rate || 0,
-              unified_halo_purchases: u?.halo_purchases || 0,
-              unified_promoted_sales: u?.promoted_sales || 0,
-              unified_budget_at_risk: u?.budget_at_risk || false,
-            };
-          })(),
-        };
-
-        if (!entityMatchesRule(rule, entityData)) continue;
-        stats.matched++;
-
-        // Guardrail sazonal — apenas para ações de aumento
-        const isIncreaseAction = ['increase_bid_percent', 'redistribute_budget', 'activate_campaign', 'activate_keyword', 'create_exact_keyword', 'create_phrase_keyword', 'create_broad_keyword', 'create_campaign'].includes(rule.action.type);
-        if (isIncreaseAction) {
-          // Considerar vendas reais (SP-API) além de vendas de ads
-          const hasSales = (entityData.sales || entityData.orders || 0) > 0 || entityData.has_real_sales;
-          const hasStock = !isOutOfStock;
-          const stockDays = product?.stock_days || null;
-          if (seasonalBlocksIncrease(seasonalCtx, weekendCtx, hasSales, hasStock, stockDays)) {
-            stats.skipped_seasonal++;
-            continue;
-          }
+      // ── Guardrail: margem ─────────────────────────────────────────────
+      if (asinMeta && asinMeta.confidence !== 'fallback') {
+        const marginPositive = asinMeta.break_even > 0;
+        if (!marginPositive && kw_spend > 5) {
+          stats.skipped_margin++;
+          skipped.push({ entity_id: entityId, reason: 'negative_margin_blocks_expansion', asin: resolvedAsin });
+          continue;
         }
+      }
 
-        // Guardrail cooldown — usa created_date com fallback para executed_at
-        const lastExec = lastExecByRuleEntity.get(`${rule.rule_key}|${entityId}`);
-        if (lastExec) {
-          const lastTs = lastExec.created_date || lastExec.executed_at;
-          if (lastTs) {
-            const hoursAgo = (Date.now() - new Date(lastTs).getTime()) / 3600000;
-            if (hoursAgo < (rule.cooldown_hours || 72)) {
-              stats.skipped_cooldown++;
-              continue;
+      // ── Evidência mínima para decisão ─────────────────────────────────
+      const hasMinEvidence = kw_clicks >= MRC.MIN_CLICKS && kw_impressions >= MRC.MIN_IMPRESSIONS && kw_spend >= MRC.MIN_SPEND;
+      const hasCtrQuality = kw_impressions > 0 && (kw_clicks / kw_impressions) >= MRC.MIN_CTR;
+
+      // ── Campanha/keyword protegida: não pode receber redução agressiva ──
+      if (protection.protected) {
+        stats.protected++;
+        // Só permite aumento suave quando há estoque saudável
+        if (stockCovDays >= settings.min_stock_days && kw_acos !== null && kw_acos <= effectiveTargetAcos * 0.7) {
+          const maxIncrease = settings.max_bid_increase_pct * 0.50; // metade do máximo para protegida
+          const newBid = clamp(currentBid * (1 + maxIncrease), settings.min_bid, settings.max_bid);
+          if (newBid > currentBid * 1.02 && !seasonal.is_high_demand === false) {
+            const iKey = `protect_scale|${aid}|${entityId}|${today}`;
+            if (!usedIdemKeys.has(iKey)) {
+              decisions.push(buildDecision(aid, correlationId, {
+                decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+                campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+                keyword_text: kw.keyword_text, action: 'set_bid',
+                value_before: currentBid, value_after: newBid,
+                rationale: `Campanha protegida em escala segura: ACoS ${kw_acos?.toFixed(1)}% vs meta ${effectiveTargetAcos}%. Aumento suave ${Math.round(maxIncrease * 100)}%.`,
+                rule_key: 'protected_scale',
+                risk: 'low', priority: PRIORITY.protect_high_performance,
+                search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+                idempotency_key: iKey, stock_coverage_days: stockCovDays,
+              }));
+              entityChangedThisCycle.set(entityId, 'protected_scale');
+              stats.bid_increase++;
             }
           }
         }
+        continue; // protegida: não aplica outras regras
+      }
 
-        // Resolver conflito com ação já agendada para esta entidade
-        const existingRuleKey = entityChangedThisCycle.get(entityId);
-        if (existingRuleKey) {
-          const existingRule = activeRules.find(r => r.rule_key === existingRuleKey);
-          if (existingRule) {
-            const resolution = resolveRuleConflicts(existingRule, rule);
-            conflicts.push({
-              amazon_account_id: aid,
-              correlation_id: correlationId,
-              rule_key_a: existingRule.rule_key,
-              rule_key_b: rule.rule_key,
-              entity_id: entityId,
-              resolution: `execute:${resolution.execute.rule_key}`,
-              rule_executed: resolution.execute.rule_key,
-              rule_skipped: resolution.skip.rule_key,
-              resolved_at: now,
-            });
-            if (resolution.execute.rule_key !== rule.rule_key) continue;
+      // ── Dados insuficientes: hold ─────────────────────────────────────
+      if (!hasMinEvidence || !hasCtrQuality) {
+        stats.held++;
+        // Verificar se estoque baixo e sem impressões (estrutural)
+        if (kw_impressions < 50 && kw_spend < 1 && stockCovDays >= settings.min_stock_days) {
+          // Possível problema de bid muito baixo
+          if (currentBid < settings.min_bid * 1.2) {
+            const iKey = `calibrate_bid|${aid}|${entityId}|${today}`;
+            if (!usedIdemKeys.has(iKey)) {
+              decisions.push(buildDecision(aid, correlationId, {
+                decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+                campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+                keyword_text: kw.keyword_text, action: 'set_bid',
+                value_before: currentBid, value_after: settings.min_bid * 1.1,
+                rationale: `Sem impressões suficientes para análise. Bid calibrado para ${(settings.min_bid * 1.1).toFixed(2)} para gerar dados mínimos.`,
+                rule_key: 'calibrate_no_impressions',
+                risk: 'low', priority: PRIORITY.maintenance,
+                search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+                idempotency_key: iKey,
+              }));
+              entityChangedThisCycle.set(entityId, 'calibrate');
+              stats.bid_increase++;
+            }
           }
         }
+        continue;
+      }
 
-        const newValue = calculateActionValue(rule, entityData, settings);
-        const iKey = `det|${aid}|${rule.rule_key}|${entityId}|${today}`;
-        if (usedIdemKeys.has(iKey)) { stats.skipped_dup++; continue; }
+      // ── Regra: ACoS acima do break-even → reduzir ────────────────────
+      if (kw_acos !== null && kw_acos > effectiveMaxAcos && kw_spend >= MRC.MIN_SPEND) {
+        const reductionPct = kw_acos > effectiveMaxAcos * 1.5
+          ? settings.max_bid_decrease_pct
+          : settings.max_bid_decrease_pct * 0.5;
+        const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
+        const iKey = `acos_above_max|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
+          const intent_label = kwIntent ? `Intenção: ${kwIntent.intent_type} (${kwIntent.purchase_intent})` : '';
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `ACoS ${kw_acos.toFixed(1)}% ACIMA do máximo econômico ${effectiveMaxAcos.toFixed(1)}% (break-even ${asinMeta?.break_even?.toFixed(1) || 'N/A'}%). CVR: ${(kw_cvr * 100).toFixed(2)}%. ${intent_label}. Bid reduzido ${Math.round(reductionPct * 100)}% para proteger margem.`,
+            rule_key: 'acos_above_max',
+            risk: kw_acos > effectiveMaxAcos * 2 ? 'high' : 'medium',
+            priority: PRIORITY.margin,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey, trend_3_vs_14: wm?.trend_3_vs_14,
+          }));
+          entityChangedThisCycle.set(entityId, 'acos_reduce');
+          stats.bid_reduce++;
+        }
+        continue;
+      }
 
-        // Guardrail redistribute_budget: bloquear apenas se GASTO REAL ontem ultrapassou o cap
-        if (rule.action.type === 'redistribute_budget' && realSpendYesterday > settings.daily_budget_cap) continue;
+      // ── Regra: Gasto sem conversão (desperdício) ───────────────────────
+      if (kw_spend >= MRC.MIN_SPEND && kw_orders === 0 && kw_clicks >= MRC.MIN_CLICKS) {
+        const iKey = `no_conversion|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey)) {
+          // Verificar se a intenção é fraca — se sim, sugerir pausa
+          const shouldPause = (kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational')
+            && kw_spend >= MRC.MIN_SPEND * 2;
+          const newBid = shouldPause ? settings.min_bid : clamp(currentBid * (1 - settings.max_bid_decrease_pct * 0.7), settings.min_bid, settings.max_bid);
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: shouldPause ? 'pause' : 'bid_change',
+            entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text,
+            action: shouldPause ? 'pause_keyword' : 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `${kw_clicks} cliques, R$${kw_spend.toFixed(2)} gastos, ZERO conversões. ${kwIntent ? `Intenção: ${kwIntent.intent_type} (${kwIntent.purchase_intent})` : ''}. ${shouldPause ? 'Intenção fraca — pausar keyword para evitar desperdício.' : 'Bid reduzido para reduzir custo de descoberta.'}`,
+            rule_key: shouldPause ? 'no_conversion_pause' : 'no_conversion_reduce',
+            risk: 'medium', priority: PRIORITY.waste_reduction,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey,
+          }));
+          entityChangedThisCycle.set(entityId, 'no_conversion');
+          if (shouldPause) stats.paused++; else stats.bid_reduce++;
+        }
+        continue;
+      }
 
-        actionsToEnqueue.push({
-          amazon_account_id: aid,
-          correlation_id: correlationId,
-          rule_key: rule.rule_key,
-          rule_version: rule.version || 1,
-          entity_type: rule.scope,
-          entity_id: entityId,
-          campaign_id: entity.campaign_id,
-          keyword_id: entity.keyword_id,
-          asin: entity.asin,
-          action_type: rule.action.type,
-          value_before: entityData.current_bid || entityData.current_budget || 0,
-          value_after: newValue,
-          idempotency_key: iKey,
-          status: 'pending',
-          seasonal_context: seasonalPayload,
-          // Métricas reais de faturamento registradas junto à ação
-          real_revenue_30d: entityData.real_revenue_30d || 0,
-          real_tacos_pct: entityData.real_tacos_pct,
-          has_real_sales: entityData.has_real_sales,
-        });
-        entityChangedThisCycle.set(entityId, rule.rule_key);
-        stats.enqueued++;
+      // ── Regra: ACoS abaixo do alvo + vendas → escalar ────────────────
+      if (kw_acos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1 && kw_sales > 0) {
+        // Guardrails de escala
+        const cpcOk = effectiveSafeMaxCpc <= 0 || kw_cpc <= effectiveSafeMaxCpc;
+        const roasOk = settings.target_roas <= 0 || (kw_spend > 0 && kw_sales / kw_spend >= settings.target_roas * 0.85);
+        const stockOk = stockCovDays >= settings.min_stock_days;
+        const trendOk = !wm || (wm.trend_3_vs_14 >= -0.15); // não em queda recente
+
+        if (!cpcOk) { skipped.push({ entity_id: entityId, reason: 'cpc_above_safe_max', cpc: kw_cpc, safe_max: effectiveSafeMaxCpc }); continue; }
+        if (!stockOk) { stats.skipped_stock++; continue; }
+
+        // Intenção influencia o tamanho do aumento
+        const intentBonus = kwIntent?.purchase_intent === 'high' ? 1.0
+          : kwIntent?.purchase_intent === 'medium' ? 0.75 : 0.50;
+        const baseIncrease = settings.max_bid_increase_pct * intentBonus;
+        // Tendência positiva permite aumento maior
+        const trendBonus = wm && wm.trend_3_vs_14 > 0.10 ? 1.15 : 1.0;
+        const finalIncrease = Math.min(settings.max_bid_increase_pct, baseIncrease * trendBonus);
+
+        const newBid = clamp(currentBid * (1 + finalIncrease), settings.min_bid, settings.max_bid);
+        const iKey = `acos_scale|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid > currentBid * 1.02) {
+          const intentLabel = kwIntent ? `Intenção: ${kwIntent.intent_type} (${kwIntent.purchase_intent}) · Cluster: ${kwIntent.cluster}` : '';
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `ACoS ${kw_acos.toFixed(1)}% ≪ meta ${effectiveTargetAcos}%. ${kw_orders}p vendidos. CVR ${(kw_cvr * 100).toFixed(2)}%. ${intentLabel}. Escala segura +${Math.round(finalIncrease * 100)}%.`,
+            rule_key: 'acos_scale',
+            risk: 'low', priority: PRIORITY.scale,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey, trend_3_vs_14: wm?.trend_3_vs_14,
+          }));
+          entityChangedThisCycle.set(entityId, 'acos_scale');
+          stats.bid_increase++;
+        }
+        continue;
+      }
+
+      // ── Regra: CPC acima do safe_max_cpc configurado ───────────────────
+      if (effectiveSafeMaxCpc > 0 && kw_cpc > effectiveSafeMaxCpc && kw_clicks >= MRC.MIN_CLICKS) {
+        const newBid = clamp(currentBid * (1 - Math.min(settings.max_bid_decrease_pct, 0.20)), settings.min_bid, settings.max_bid);
+        const iKey = `cpc_above_safe|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
+          decisions.push(buildDecision(aid, correlationId, {
+            decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
+            campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
+            keyword_text: kw.keyword_text, action: 'set_bid',
+            value_before: currentBid, value_after: newBid,
+            rationale: `CPC R$${kw_cpc.toFixed(2)} ACIMA do máximo seguro R$${effectiveSafeMaxCpc.toFixed(2)} (calculado por break-even + CVR). Margem em risco. Bid reduzido.`,
+            rule_key: 'cpc_above_safe_max',
+            risk: 'medium', priority: PRIORITY.margin,
+            search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
+            idempotency_key: iKey,
+          }));
+          entityChangedThisCycle.set(entityId, 'cpc_safe');
+          stats.bid_reduce++;
+        }
       }
     }
 
-    // ── 8. Gravar ─────────────────────────────────────────────────────────
-    for (const c of conflicts.slice(0, 50)) {
-      await base44.asServiceRole.entities.RuleConflict.create(c).catch(() => {});
-    }
-    for (let i = 0; i < actionsToEnqueue.length; i += 50) {
-      await base44.asServiceRole.entities.RuleExecution.bulkCreate(actionsToEnqueue.slice(i, i + 50));
+    // ── 10b. Guardrail global de orçamento ────────────────────────────────
+    if (realSpendYesterday > settings.daily_budget_cap) {
+      // Budget excedido: não criar novos aumentos
+      decisions.forEach((d: any) => {
+        if (d.action === 'set_bid' && d.value_after > d.value_before) {
+          d.approval_status = 'blocked_budget_cap';
+          d.rationale += ` [BLOQUEADO: gasto real ontem R$${realSpendYesterday.toFixed(2)} excedeu cap R$${settings.daily_budget_cap}]`;
+        }
+      });
     }
 
+    // ── 10c. Priorização das decisões ────────────────────────────────────
+    decisions.sort((a: any, b: any) => {
+      // Prioridade principal: hierarquia
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      // Secundário: score de decisão
+      return (b.decision_priority_score || 0) - (a.decision_priority_score || 0);
+    });
+
+    // ── 11. Gravar OptimizationDecision (fila oficial) ──────────────────
+    let saved = 0, savedDecisionIds: string[] = [];
+    for (let i = 0; i < decisions.length; i += 50) {
+      const batch = decisions.slice(i, i + 50);
+      const created = await base44.asServiceRole.entities.OptimizationDecision.bulkCreate(
+        batch.map((d: any) => ({
+          amazon_account_id: aid,
+          run_id: correlationId,
+          decision_type: d.decision_type || 'bid_change',
+          entity_type: d.entity_type || 'keyword',
+          entity_id: d.entity_id,
+          campaign_id: d.campaign_id,
+          keyword_id: d.keyword_id,
+          keyword_text: d.keyword_text,
+          asin: d.asin,
+          action: d.action,
+          value_before: d.value_before,
+          value_after: d.value_after,
+          rationale: d.rationale,
+          risk: d.risk || 'medium',
+          confidence: d.confidence || Math.round((d.final_confidence || 0.80) * 100),
+          status: 'approved',
+          approval_status: d.approval_status || 'auto_approved',
+          autopilot_authorized: true,
+          requires_approval: false,
+          idempotency_key: d.idempotency_key,
+          source_function: 'runDeterministicDecisionEngine_v4',
+          created_at: now,
+          // Campos estratégicos
+          search_intent_type: d.search_intent?.intent_type,
+          search_intent_cluster: d.search_intent?.cluster,
+          purchase_intent: d.search_intent?.purchase_intent,
+          purchase_intent_score: d.search_intent?.purchase_intent_score,
+          settings_source: d.settings_source,
+          data_quality: dataFreshness,
+          stock_coverage_days: d.stock_coverage_days,
+        }))
+      ).catch(() => []);
+      saved += batch.length;
+      savedDecisionIds.push(...(Array.isArray(created) ? created.map((c: any) => c.id).filter(Boolean) : []));
+    }
+
+    // ── 12. Gravar RuleExecution (auditoria) ─────────────────────────────
+    const auditRecords = decisions.slice(0, 100).map((d: any) => ({
+      amazon_account_id: aid,
+      correlation_id: correlationId,
+      rule_key: d.rule_key || d.decision_type,
+      rule_version: 4,
+      entity_type: d.entity_type || 'keyword',
+      entity_id: d.entity_id,
+      campaign_id: d.campaign_id,
+      keyword_id: d.keyword_id,
+      asin: d.asin,
+      action_type: d.action,
+      value_before: d.value_before,
+      value_after: d.value_after,
+      idempotency_key: d.idempotency_key,
+      status: 'pending',
+      reason: d.rationale?.slice(0, 500),
+      search_intent_type: d.search_intent?.intent_type,
+      settings_source: d.settings_source,
+    }));
+    if (auditRecords.length > 0) {
+      await base44.asServiceRole.entities.RuleExecution.bulkCreate(auditRecords).catch(() => {});
+    }
+
+    // ── 13. Classificar produtos por estado estratégico ──────────────────
+    const productStates: any[] = [];
+    for (const p of products) {
+      if (!p.asin) continue;
+      const salesM = salesByAsin.get(p.asin);
+      const campIds = campaigns
+        .filter((c: any) => c.asin === p.asin)
+        .map((c: any) => c.campaign_id || c.amazon_campaign_id)
+        .filter(Boolean);
+      const wms = campIds.map((cid: string) => campWindowMetrics.get(cid)).filter(Boolean);
+      const agg14d = wms.reduce((acc: any, wm: any) => ({
+        acos: wm.d14.acos !== null ? ((acc.acos_sum || 0) + wm.d14.acos) : acc.acos,
+        acos_sum: (acc.acos_sum || 0) + (wm.d14.acos || 0),
+        roas: acc.roas + wm.d14.roas,
+        orders: acc.orders + wm.d14.orders,
+        spend: acc.spend + wm.d14.spend,
+        cnt: (acc.cnt || 0) + 1,
+      }), { acos: 0, acos_sum: 0, roas: 0, orders: 0, spend: 0, cnt: 0 });
+
+      const asinMeta = acosByAsin.get(p.asin);
+      const state = classifyProductState({
+        stock: p.fba_inventory || 0,
+        stock_days: asinMeta ? ((p.fba_inventory || 0) / Math.max(0.01, (salesM?.units || 0) / 30)) : 999,
+        has_campaign: (p.has_campaign || campIds.length > 0),
+        days_since_launch: p.days_since_launch || 0,
+        acos_14d: agg14d.cnt > 0 ? agg14d.acos_sum / agg14d.cnt : null,
+        target_acos: asinMeta?.target || settings.target_acos,
+        roas_14d: agg14d.cnt > 0 ? agg14d.roas / agg14d.cnt : 0,
+        target_roas: settings.target_roas,
+        margin_positive: asinMeta ? asinMeta.break_even > 0 : true,
+        spend_14d: agg14d.spend,
+        orders_14d: agg14d.orders,
+        trend_3_vs_14: wms[0]?.trend_3_vs_14 || 0,
+      });
+      productStates.push({ asin: p.asin, state, acos_target: asinMeta?.target, break_even: asinMeta?.break_even });
+    }
+
+    // ── Resposta final ────────────────────────────────────────────────────
     return Response.json({
       ok: true,
+      engine: 'unified-strategic-v4',
       correlationId,
-      active_rules: activeRules.length,
+      data_freshness: dataFreshness,
       data_age_hours: Math.round(dataAge),
-      total_active_budget: Math.round(totalActiveBudget * 100) / 100,
-      daily_budget_cap: suggestedTotalBudget,
-      real_spend_yesterday: Math.round(realSpendYesterday * 100) / 100,
-      budget_note: 'total_active_budget é a soma dos orçamentos configurados por campanha na Amazon — não precisa ser <= daily_budget_cap. O guardrail real é o gasto diário.',
+
       performance_settings: {
-        source: settings.settings_source,
+        source: settings.source,
         target_acos: settings.target_acos,
         max_acos: settings.max_acos,
         target_roas: settings.target_roas,
-        target_tacos: settings.target_tacos,
         daily_budget_cap: settings.daily_budget_cap,
         min_bid: settings.min_bid,
         max_bid: settings.max_bid,
-        max_bid_increase_percent: settings.max_bid_increase_percent,
-        max_bid_decrease_percent: settings.max_bid_decrease_percent,
-        enforce_max_cpc: settings.enforce_max_cpc,
-        max_cpc: settings.max_cpc,
+        safety_factor: settings.safety_factor,
       },
-      seasonal_context: { event: seasonalCtx.seasonal_event_name, demand: seasonalCtx.expected_demand_level, is_weekend: seasonalCtx.is_weekend },
-      sales_daily_enrichment: { asins_with_real_sales: salesMetricsByAsin.size, records_loaded: salesDailyRaw.length },
-      stock_rules: { applied: stats.stock_rules_applied },
-      acos_rules: {
-        applied: stats.acos_rules_applied,
-        target_acos_global: globalTargetAcos,
-        target_acos_source: acosTargetSource,
-        dynamic_targets_calculated: acosByAsin.size,
-        product_targets_updated: productUpdates.length,
-        sample_targets: Array.from(acosByAsin.entries()).slice(0, 5).map(([asin, t]) => ({ asin, target_acos: t })),
+
+      economic_context: {
+        products_with_dynamic_target: acosByAsin.size,
+        real_spend_yesterday: Math.round(realSpendYesterday * 100) / 100,
+        budget_cap: settings.daily_budget_cap,
+        budget_guardrail_triggered: realSpendYesterday > settings.daily_budget_cap,
+        products_updated: productUpdates.length,
+        sample_dynamic_targets: Array.from(acosByAsin.entries()).slice(0, 5)
+          .map(([asin, m]) => ({ asin, target_acos: m.target, break_even: m.break_even, confidence: m.confidence, safe_max_cpc: m.safe_max_cpc })),
       },
-      // Diagnóstico de qualidade de dados (Metodologia MRC/Amazon Ads)
-      mrc_data_quality: {
-        click_type: 'net_valid_clicks_post_givt_sivt', // API retorna sempre cliques líquidos
-        attribution_window_days: ATTRIBUTION_WINDOW_DAYS,
-        data_stable_after_days: DATA_STABLE_DAYS,
-        data_within_14d_window: dataWithin14dWindow,
-        latest_metric_date: latestMetricDate,
-        metric_data_age_days: Math.round(metricDataAge * 10) / 10,
-        min_clicks_threshold: MIN_CLICKS_FOR_DECISION,
-        min_impressions_threshold: MIN_IMPRESSIONS_FOR_DECISION,
-        min_ctr_quality: MIN_CTR_QUALITY,
-        note: metricDataAge > DATA_STABLE_DAYS
-          ? 'Dados fora da janela revisável (>30d) — considerados finais pela Amazon'
-          : 'Dados dentro da janela revisável SIVT — podem sofrer pequenos ajustes retroativos',
+
+      search_intent_summary: {
+        keywords_evaluated: stats.evaluated,
+        keywords_protected: stats.protected,
+        keywords_held_insufficient_data: stats.held,
+        intent_distribution: (() => {
+          const dist: any = {};
+          for (const kw of keywords) {
+            if (kw.keyword_text) {
+              const intent = classifySearchIntent(kw.keyword_text);
+              dist[intent.intent_type] = (dist[intent.intent_type] || 0) + 1;
+            }
+          }
+          return dist;
+        })(),
       },
+
+      seasonal_context: seasonal,
+
+      product_strategic_states: productStates,
+
+      decisions_generated: decisions.length,
+      decisions_saved: saved,
       stats,
-      conflicts_resolved: conflicts.length,
-      actions_enqueued: actionsToEnqueue.length,
-      unified_enrichment: {
-        campaigns_with_unified_data: unifiedByCampaign.size,
-        records_loaded: unifiedRaw.length,
+      skipped_count: skipped.length,
+
+      mrc_data_quality: {
+        attribution_window_days: MRC.ATTRIBUTION_WINDOW,
+        min_clicks_threshold: MRC.MIN_CLICKS,
+        min_impressions_threshold: MRC.MIN_IMPRESSIONS,
+        min_spend_threshold: MRC.MIN_SPEND,
+        data_stale_threshold_hours: MRC.DATA_STALE_HOURS,
       },
+
+      note: 'Motor estratégico v4: intenção de busca + metas econômicas dinâmicas + proteção de alta performance + janelas múltiplas.',
     });
 
-  } catch (error) {
-    console.error('[runDeterministicDecisionEngine]', error.message);
+  } catch (error: any) {
+    console.error('[runDeterministicDecisionEngine-v4]', error.message);
     return Response.json({ ok: false, error: error.message, correlationId }, { status: 500 });
   }
 });
+
+// ── Helper para construir decisão padronizada ─────────────────────────────────
+function buildDecision(aid: string, correlationId: string, params: any): any {
+  const intentScore = params.search_intent?.purchase_intent_score || 0.5;
+  const stockFactor = params.stock_coverage_days != null
+    ? Math.min(1, (params.stock_coverage_days || 0) / 30) : 1.0;
+
+  const priorityFactor = 1 - ((params.priority || 9) / 13); // 0–1, maior = mais urgente
+  const riskFactor = { low: 0.9, medium: 0.7, high: 0.5 }[params.risk as string] || 0.7;
+
+  const decision_priority_score = calcDecisionScore({
+    economic_impact: 0.8,
+    confidence: 0.9,
+    urgency: priorityFactor,
+    data_quality: 1.0,
+    inventory: stockFactor,
+    search_intent: intentScore,
+    goal_alignment: riskFactor,
+  });
+
+  return {
+    ...params,
+    amazon_account_id: aid,
+    correlation_id: correlationId,
+    priority: params.priority || 9,
+    decision_priority_score,
+    final_confidence: 0.85,
+  };
+}
