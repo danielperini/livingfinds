@@ -51,7 +51,7 @@ Deno.serve(async(req)=>{try{
     return Response.json({ok:true,scheduled:true,queued:queued.length,results:queued,message:'Reparo de palavras-chave programado para a próxima janela Amazon.'});
   }
 
-  const campaignsResult=await ads(b,accountId,'listManualCampaignsForKeywordRepair','POST','/sp/campaigns/list',{stateFilter:{include:['ENABLED','PAUSED']},targetingTypeFilter:['MANUAL'],maxResults:500},'application/vnd.spCampaign.v3+json');
+  const campaignsResult=await ads(b,accountId,'listManualCampaignsForKeywordRepair','POST','/sp/campaigns/list',{stateFilter:['ENABLED','PAUSED'],targetingTypeFilter:['MANUAL'],maxResults:500},'application/vnd.spCampaign.v3+json');
   if(!campaignsResult?.ok)return Response.json({ok:false,error:campaignsResult?.errors?.[0]?.message||'Falha ao listar campanhas manuais'});
   const remote=listOf(campaignsResult,'campaigns');
   const products=await b.asServiceRole.entities.Product.filter({amazon_account_id:accountId},'-updated_at',5000).catch(()=>[]);
@@ -62,12 +62,12 @@ Deno.serve(async(req)=>{try{
     const matches=remote.filter((c:any)=>String(c.name||'').includes(asin));
     for(const campaign of matches){
       const campaignId=String(campaign.campaignId);
-      const groupsResult=await ads(b,accountId,'listExactAdGroupsForRepair','POST','/sp/adGroups/list',{campaignIdFilter:[campaignId],stateFilter:{include:['ENABLED','PAUSED']},maxResults:100},'application/vnd.spAdGroup.v3+json');
+      const groupsResult=await ads(b,accountId,'listExactAdGroupsForRepair','POST','/sp/adGroups/list',{campaignIdFilter:[campaignId],stateFilter:['ENABLED','PAUSED'],maxResults:100},'application/vnd.spAdGroup.v3+json');
       if(!groupsResult?.ok){results.push({asin,campaign_id:campaignId,ok:false,error:groupsResult?.errors?.[0]?.message||'Falha ao listar grupos'});continue;}
       const groups=listOf(groupsResult,'adGroups').filter((g:any)=>String(g.name||'').includes('EXACT'));
       for(const group of groups){
         const adGroupId=String(group.adGroupId), item:any={asin,campaign_id:campaignId,ad_group_id:adGroupId,ad_group_name:group.name,added:[]};
-        const kwResult=await ads(b,accountId,'listExactKeywordsForRepair','POST','/sp/keywords/list',{campaignIdFilter:[campaignId],adGroupIdFilter:[adGroupId],stateFilter:{include:['ENABLED','PAUSED','ARCHIVED']},matchTypeFilter:['EXACT'],maxResults:100},'application/vnd.spKeyword.v3+json');
+        const kwResult=await ads(b,accountId,'listExactKeywordsForRepair','POST','/sp/keywords/list',{campaignIdFilter:[campaignId],adGroupIdFilter:[adGroupId],stateFilter:['ENABLED','PAUSED','ARCHIVED'],matchTypeFilter:['EXACT'],maxResults:100},'application/vnd.spKeyword.v3+json');
         if(!kwResult?.ok){item.ok=false;item.error=kwResult?.errors?.[0]?.message||'Falha ao listar keywords';results.push(item);continue;}
         const existing=listOf(kwResult,'keywords');
         const active=existing.filter((k:any)=>String(k.state||'').toUpperCase()==='ENABLED');
@@ -79,7 +79,7 @@ Deno.serve(async(req)=>{try{
           if(id||create?.ok){item.added.push({keyword:term.keyword,source:term.source,keyword_id:id||null});await b.asServiceRole.entities.Keyword.create({amazon_account_id:accountId,campaign_id:campaignId,ad_group_id:adGroupId,keyword_id:id?String(id):`kw_${Date.now()}`,asin,keyword_text:term.keyword,keyword:term.keyword,match_type:'exact',state:'enabled',status:'enabled',current_bid:0.5,bid:0.5,source:'repair_exact_group',first_seen_at:new Date().toISOString(),last_seen_at:new Date().toISOString(),synced_at:new Date().toISOString()}).catch(()=>{});} 
           await wait(14000);
         }
-        const verify=await ads(b,accountId,'verifyExactKeywordsAfterRepair','POST','/sp/keywords/list',{campaignIdFilter:[campaignId],adGroupIdFilter:[adGroupId],stateFilter:{include:['ENABLED']},matchTypeFilter:['EXACT'],maxResults:100},'application/vnd.spKeyword.v3+json');
+        const verify=await ads(b,accountId,'verifyExactKeywordsAfterRepair','POST','/sp/keywords/list',{campaignIdFilter:[campaignId],adGroupIdFilter:[adGroupId],stateFilter:['ENABLED'],matchTypeFilter:['EXACT'],maxResults:100},'application/vnd.spKeyword.v3+json');
         const verified=listOf(verify,'keywords').filter((k:any)=>String(k.state||'').toUpperCase()==='ENABLED');
         item.ok=verified.length>0;item.complete=item.ok;item.active_keywords=verified.length;
         const local=await b.asServiceRole.entities.Campaign.filter({amazon_account_id:accountId,campaign_id:campaignId},'-updated_at',1).catch(()=>[]);
