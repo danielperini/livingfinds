@@ -54,9 +54,7 @@ function MetricCard({ icon: IconComp, label, configured, current, unit = '', goa
           </p>
           <p className="text-[10px] text-slate-500 mt-0.5">Meta: {unit}{configured}</p>
         </div>
-        {goal_name &&
-        <span className="text-[9px] text-slate-600 bg-surface-3 px-1.5 py-0.5 rounded">{goal_name}</span>
-        }
+        {goal_name ? <span className="text-[9px] text-slate-600 bg-surface-3 px-1.5 py-0.5 rounded">{goal_name}</span> : null}
       </div>
     </div>);
 
@@ -176,12 +174,12 @@ export default function PerformanceGoalsPanel({ account, metricsData }) {
             {label}{note ? ` ${note}` : ''}
           </div>
         )}
-        {s.placement_optimization_enabled && s.top_of_search_limit === 0 &&
-        <div className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border bg-amber-400/10 border-amber-400/20 text-amber-300 hidden">
+        {(s.placement_optimization_enabled && s.top_of_search_limit === 0) ? (
+          <div className="flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium border bg-amber-400/10 border-amber-400/20 text-amber-300 hidden">
             <AlertTriangle className="w-2.5 h-2.5" />
             Placement ativo mas limites = 0 (somente sugestões)
           </div>
-        }
+        ) : null}
       </div>
     </div>);
 
