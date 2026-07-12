@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import PrelecaoTab from '@/components/sala/PrelecaoTab';
 import EstrategiasTab from '@/components/sala/EstrategiasTab';
+import BudgetSpendControlPanel from '@/components/sala/BudgetSpendControlPanel';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
@@ -76,6 +77,13 @@ const TAB_GROUPS = [
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
       { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
+    ],
+  },
+  {
+    id: 'budget_group',
+    label: 'Orçamento',
+    tabs: [
+      { id: 'orcamento', label: 'Controle de Gasto Diário' },
     ],
   },
   {
@@ -877,6 +885,19 @@ export default function SalaDeComando() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── ORÇAMENTO DIÁRIO ────────────────────────────────────────────── */}
+          {tab === 'orcamento' && (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-white">Controle de Gasto Diário</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Teto definido pelo usuário · Budgets das campanhas · Pacing · Pausa e retomada operacional
+                </p>
+              </div>
+              <BudgetSpendControlPanel account={account} />
             </div>
           )}
 

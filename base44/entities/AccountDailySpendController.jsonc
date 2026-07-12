@@ -1,0 +1,168 @@
+{
+  "name": "AccountDailySpendController",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "spend_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Data operacional no timezone da conta (BRT)"
+    },
+    "timezone": {
+      "type": "string",
+      "default": "America/Sao_Paulo"
+    },
+    "user_daily_spend_cap": {
+      "type": "number",
+      "default": 70,
+      "description": "Teto definido pelo usu\u00e1rio. Nunca alterado automaticamente."
+    },
+    "ai_suggested_daily_spend_cap": {
+      "type": "number",
+      "default": 0,
+      "description": "Sugest\u00e3o da IA baseada em tr\u00e1fego necess\u00e1rio. Apenas recomenda\u00e7\u00e3o."
+    },
+    "ai_suggestion_reason": {
+      "type": "string"
+    },
+    "ai_suggestion_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_suggestion_generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "effective_daily_spend_cap": {
+      "type": "number",
+      "default": 70,
+      "description": "= user_daily_spend_cap. Sempre."
+    },
+    "updated_by": {
+      "type": "string"
+    },
+    "cap_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "confirmed_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado via dados da Amazon Ads API para a data operacional."
+    },
+    "estimated_pending_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Estimativa de gasto pendente (campanhas ativas \u00d7 ritmo atual \u00d7 horas restantes)."
+    },
+    "reserved_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Reserva para campanhas vencedoras protegidas."
+    },
+    "projected_total_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "= confirmed_spend + estimated_pending_spend + reserved_spend"
+    },
+    "remaining_spend": {
+      "type": "number",
+      "default": 70,
+      "description": "= effective_daily_spend_cap - projected_total_spend"
+    },
+    "cap_status": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "attention",
+        "critical",
+        "cap_imminent",
+        "cap_reached"
+      ],
+      "default": "safe",
+      "description": "safe:<70% | attention:70-85% | critical:85-95% | cap_imminent:95-100% | cap_reached:>=100%"
+    },
+    "spend_pacing": {
+      "type": "string",
+      "enum": [
+        "underpacing",
+        "on_track",
+        "overpacing",
+        "unknown"
+      ],
+      "default": "unknown",
+      "description": "confirmed_spend / expected_spend_by_current_time"
+    },
+    "pacing_ratio": {
+      "type": "number",
+      "default": 0,
+      "description": "confirmed / expected. 1.0 = on_track"
+    },
+    "current_hour_brt": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_paused_today": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "IDs de campanhas pausadas pelo teto hoje."
+    },
+    "campaigns_paused_count": {
+      "type": "number",
+      "default": 0
+    },
+    "pause_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resume_scheduled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_pause_reason": {
+      "type": "string",
+      "default": ""
+    },
+    "total_campaign_budget_nominal": {
+      "type": "number",
+      "default": 0,
+      "description": "Soma nominal dos budgets configurados nas campanhas. Pode ultrapassar o teto \u2014 isso \u00e9 normal."
+    },
+    "campaigns_budget_limited_count": {
+      "type": "number",
+      "default": 0,
+      "description": "Campanhas com budget esgotado (>= 90% consumido)."
+    },
+    "last_ads_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_action_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_pacing_check_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "spend_date"
+  ]
+}
