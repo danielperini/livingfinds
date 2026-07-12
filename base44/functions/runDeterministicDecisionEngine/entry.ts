@@ -1001,7 +1001,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 10. Gerar decisões ────────────────────────────────────────────────
+    // ── 10. Gerar decisões (motor principal) ─────────────────────────────
     const decisions: any[] = [];
     const opportunities: any[] = []; // v6: painel de oportunidades para UI
     const skipped: any[] = [];
@@ -1017,7 +1017,27 @@ Deno.serve(async (req) => {
       high_growth: 0, conservative_growth: 0, partial_cost_growth: 0,
     };
 
-    // ── 10a. Keywords ─────────────────────────────────────────────────────
+    // ── 10a. Carregar lifecycles — guardar keywords em fase 0-48h ────────
+    // Keywords em launch_0_48h / emergency_reduction (cooldown) NÃO devem
+    // ser processadas pelo motor determinístico — pertencem ao ciclo inicial.
+    const lifecycleManagedKwIds = new Set<string>();
+    try {
+      const lifecycles = await base44.asServiceRole.entities.ManualCampaignBidLifecycle.filter(
+        { amazon_account_id: aid }, null, 1000
+      ).catch(() => []);
+      for (const lc of lifecycles) {
+        const protectedStatuses = ['launch_0_48h', 'emergency_reduction', 'waiting_48h_review', 'pending_confirmation'];
+        if (protectedStatuses.includes(lc.status) && lc.keyword_id) {
+          lifecycleManagedKwIds.add(lc.keyword_id);
+        }
+        // Cooldown ativo após contenção
+        if (lc.cooldown_until && new Date(lc.cooldown_until).getTime() > Date.now() && lc.keyword_id) {
+          lifecycleManagedKwIds.add(lc.keyword_id);
+        }
+      }
+    } catch {}
+
+    // ── 10b. Keywords ─────────────────────────────────────────────────────
     for (const kw of keywords) {
       const entityId = kw.keyword_id || kw.id;
       if (!entityId) continue;
@@ -1025,6 +1045,11 @@ Deno.serve(async (req) => {
       // Ignorar keywords negativas — não têm bid alterável na Amazon Ads API
       const mt = (kw.match_type || '').toLowerCase();
       if (mt.startsWith('negative') || (kw.keyword_id || '').startsWith('neg_')) continue;
+      // Ignorar keywords no ciclo inicial de launch (protegidas pelo ManualCampaignBidLifecycle)
+      if (lifecycleManagedKwIds.has(entityId)) {
+        skipped.push({ entity_id: entityId, reason: 'protected_by_launch_lifecycle_48h', keyword_text: kw.keyword_text });
+        continue;
+      }
       stats.evaluated++;
 
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;

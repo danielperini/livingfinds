@@ -15,6 +15,7 @@ import BudgetSpendControlPanel from '@/components/sala/BudgetSpendControlPanel';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
+import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
@@ -77,6 +78,7 @@ const TAB_GROUPS = [
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
       { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
+      { id: 'bid_lifecycle', label: 'Ciclo de Bids Manuais' },
     ],
   },
   {
@@ -1403,6 +1405,13 @@ export default function SalaDeComando() {
           {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
           {tab === 'bids_keywords' && (
             <KeywordBidChangesPanel account={account} />
+          )}
+
+          {/* ── CICLO DE BIDS MANUAIS ─────────────────────────────────────────── */}
+          {tab === 'bid_lifecycle' && account && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <ManualBidLifecyclePanel amazonAccountId={account.id} />
+            </div>
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}

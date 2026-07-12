@@ -1,0 +1,233 @@
+{
+  "name": "ManualCampaignBidLifecycle",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "campaign_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "initial_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "ad_group_initial_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "keyword_initial_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "amazon_suggested_bid": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_lower": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_upper": {
+      "type": "number"
+    },
+    "amazon_suggestion_fetched_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_suggestion_valid": {
+      "type": "boolean",
+      "default": false
+    },
+    "post_48h_bid": {
+      "type": "number"
+    },
+    "post_48h_bid_source": {
+      "type": "string",
+      "enum": [
+        "amazon_lower_range",
+        "amazon_suggested",
+        "safe_max_cpc_limited",
+        "maintained_initial",
+        "no_suggestion"
+      ],
+      "description": "Fonte do bid aplicado ap\u00f3s 48h"
+    },
+    "amazon_suggestion_limited_by_guardrail": {
+      "type": "boolean",
+      "default": false
+    },
+    "current_ad_group_default_bid": {
+      "type": "number"
+    },
+    "current_keyword_bid": {
+      "type": "number"
+    },
+    "amazon_confirmed_ad_group_bid": {
+      "type": "number",
+      "description": "Bid do ad group confirmado na Amazon"
+    },
+    "amazon_confirmed_keyword_bid": {
+      "type": "number",
+      "description": "Bid da keyword confirmado na Amazon"
+    },
+    "amazon_confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
+    "ad_group_keywords_count": {
+      "type": "number",
+      "default": 1,
+      "description": "Qtd de keywords no grupo \u2014 determina se pode alinhar default bid"
+    },
+    "keyword_has_individual_bid": {
+      "type": "boolean",
+      "default": true,
+      "description": "true = keyword tem bid pr\u00f3prio, false = depende do default bid do grupo"
+    },
+    "management_source": {
+      "type": "string",
+      "enum": [
+        "launch_lifecycle",
+        "unified_decision_engine"
+      ],
+      "default": "launch_lifecycle"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "launch_0_48h",
+        "emergency_reduction",
+        "waiting_48h_review",
+        "amazon_bid_applied",
+        "amazon_bid_limited",
+        "no_amazon_suggestion",
+        "unified_engine_management",
+        "waiting_72h_review",
+        "stabilized",
+        "failed",
+        "pending_confirmation",
+        "paused_external",
+        "paused_no_stock"
+      ],
+      "default": "launch_0_48h"
+    },
+    "first_48h_ends_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "post_48h_adjusted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_72h_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cooldown_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "target_acos_source": {
+      "type": "string"
+    },
+    "current_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "current_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "current_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "current_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "last_action": {
+      "type": "string"
+    },
+    "last_action_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_action_result": {
+      "type": "string"
+    },
+    "emergency_triggered": {
+      "type": "boolean",
+      "default": false
+    },
+    "emergency_reason": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "ad_group_id",
+    "keyword_id",
+    "status"
+  ]
+}
