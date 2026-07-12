@@ -154,7 +154,7 @@ export default function SyncStatusBanner({ accountId }) {
 
   return (
     <div className="space-y-2">
-      {showTokenBanner && (
+      {showTokenBanner ? (
         <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <ShieldAlert className="w-5 h-5 text-red-400 flex-shrink-0" />
@@ -173,18 +173,18 @@ export default function SyncStatusBanner({ accountId }) {
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {showSyncBanner && (
+      {showSyncBanner ? (
         <div className={`rounded-xl border px-4 py-3 ${cfg.bg}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <Icon className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} />
               <div className="min-w-0">
                 <span className={`text-sm font-semibold ${cfg.color}`}>{cfg.label}</span>
-                {status === 'rate_limit' && (
+                {status === 'rate_limit' ? (
                   <span className="ml-2 text-xs text-slate-500">Detalhes na Sala de Controle</span>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -209,7 +209,7 @@ export default function SyncStatusBanner({ accountId }) {
             </div>
           </div>
 
-          {expanded && errorLogs.length > 0 && (
+          {expanded && errorLogs.length > 0 ? (
             <div className="mt-3 border-t border-white/10 pt-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -254,11 +254,11 @@ export default function SyncStatusBanner({ accountId }) {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-slate-500 font-mono">{timeAgo(log.started_at || log.created_date)}</span>
                         <span className="text-slate-300 font-semibold uppercase tracking-wide">{log.operation}</span>
-                        {result && (
+                        {result ? (
                           <span className={`font-semibold ${result.ok ? 'text-emerald-400' : 'text-red-400'}`}>
                             {result.ok ? '✓ OK' : `✗ ${result.message}`}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                       <p className="text-red-400 truncate">{log.error_message || 'Erro desconhecido'}</p>
                     </div>
@@ -266,9 +266,9 @@ export default function SyncStatusBanner({ accountId }) {
                 );
               })}
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
