@@ -254,6 +254,23 @@ export default function Products({ externalRefreshTrigger }) {
     }
   };
 
+  const cancelKickoff = async (product) => {
+    if (!account || !product?.asin) return;
+    // Cancela itens scheduled na fila para este ASIN
+    try {
+      const queue = await base44.entities.ProductKickoffQueue.filter({
+        amazon_account_id: account.id, asin: product.asin, status: 'scheduled',
+      });
+      for (const item of queue) {
+        await base44.entities.ProductKickoffQueue.update(item.id, { status: 'cancelled' });
+      }
+      setProductMsg(product.id, { type: 'success', text: 'Solicitação cancelada.' });
+      await reloadProducts();
+    } catch (e) {
+      setProductMsg(product.id, { type: 'error', text: e.message || 'Erro ao cancelar.' });
+    }
+  };
+
   const archiveCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
     if (!campaignId || !account) return;
@@ -496,18 +513,19 @@ export default function Products({ externalRefreshTrigger }) {
               <tbody>
                 {paginated.map(product => (
                   <ProductRow
-                    key={product.id}
-                    product={product}
-                    onToggleCampaign={toggleCampaign}
-                    onArchiveCampaign={archiveCampaign}
-                    onKickoff={setKickoffProduct}
-                    onAccelerator={setAcceleratorProduct}
-                    actionLoading={actionLoading}
-                    selected={selectedIds.has(product.id)}
-                    onToggleSelect={toggleSelect}
-                    isFocused={focusedProductId === product.id}
-                    productMessage={productMessages[product.id]}
-                    onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
+                   key={product.id}
+                   product={product}
+                   onToggleCampaign={toggleCampaign}
+                   onArchiveCampaign={archiveCampaign}
+                   onKickoff={setKickoffProduct}
+                   onAccelerator={setAcceleratorProduct}
+                   onCancelKickoff={cancelKickoff}
+                   actionLoading={actionLoading}
+                   selected={selectedIds.has(product.id)}
+                   onToggleSelect={toggleSelect}
+                   isFocused={focusedProductId === product.id}
+                   productMessage={productMessages[product.id]}
+                   onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
                   />
                 ))}
               </tbody>

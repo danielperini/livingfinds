@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
-  AlertCircle, Check, CheckSquare, ExternalLink, Loader2, Package,
-  Pause, Pencil, Play, Rocket, ShoppingBag, Square, Tag, X, XCircle, Zap,
+  AlertCircle, Check, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
+  Loader2, Megaphone, Package, Pause, Pencil, Play, ShoppingBag, Square,
+  Tag, X, XCircle, Zap,
 } from 'lucide-react';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,6 +73,95 @@ function visibleName(product) {
   if (product?.display_name?.trim()) return product.display_name.trim();
   if (product?.product_name?.trim()) return product.product_name.trim();
   return `Produto ${product?.asin || ''}`.trim();
+}
+
+// ── CampaignDropdown ─────────────────────────────────────────────────────────
+
+function CampaignDropdown({ product }) {
+  const [open, setOpen] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  const toggle = async () => {
+    if (!open && !loaded) {
+      setLoading(true);
+      try {
+        const asin = product?.asin;
+        const accountId = product?.amazon_account_id;
+        if (asin && accountId) {
+          const results = await base44.entities.Campaign.filter(
+            { amazon_account_id: accountId, asin },
+            null, 30
+          ).catch(() => []);
+          // Dedupe por campaign_id
+          const seen = new Set();
+          const unique = [];
+          for (const c of results) {
+            const cid = c.campaign_id || c.id;
+            if (!seen.has(cid)) { seen.add(cid); unique.push(c); }
+          }
+          setCampaigns(unique.filter(c => String(c.state || c.status || '').toLowerCase() !== 'archived'));
+        }
+      } finally {
+        setLoading(false);
+        setLoaded(true);
+      }
+    }
+    setOpen(v => !v);
+  };
+
+  const statusColor = (c) => {
+    const st = String(c.state || c.status || '').toLowerCase();
+    if (st === 'enabled' || st === 'active') return 'text-emerald-400';
+    if (st === 'paused') return 'text-amber-400';
+    return 'text-slate-500';
+  };
+
+  const statusLabel = (c) => {
+    const st = String(c.state || c.status || '').toLowerCase();
+    if (st === 'enabled' || st === 'active') return 'Ativa';
+    if (st === 'paused') return 'Pausada';
+    if (st === 'incomplete') return 'Incompleta';
+    return st || '—';
+  };
+
+  return (
+    <div className="mt-1">
+      <button type="button" onClick={toggle}
+        className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-cyan transition-colors">
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <Megaphone className="w-3 h-3" />
+        Campanhas
+        {loaded && campaigns.length > 0 && <span className="ml-0.5 text-cyan font-semibold">({campaigns.length})</span>}
+      </button>
+      {open && (
+        <div className="mt-1.5 ml-1 border-l border-surface-3 pl-2.5 space-y-1.5">
+          {loading && <p className="text-[10px] text-slate-600 animate-pulse">Carregando...</p>}
+          {!loading && campaigns.length === 0 && (
+            <p className="text-[10px] text-slate-600 italic">Nenhuma campanha ativa encontrada para este ASIN.</p>
+          )}
+          {!loading && campaigns.map((c, i) => {
+            const name = c.campaign_name || c.name || `Campanha ${c.campaign_id || c.id || i}`;
+            const id = c.campaign_id || c.id;
+            const spend = Number(c.spend || 0);
+            const acos = Number(c.acos || 0);
+            return (
+              <div key={id || i} className="text-[10px] leading-snug">
+                <p className="text-slate-300 font-medium truncate max-w-[260px]" title={name}>{name}</p>
+                <div className="flex items-center gap-2 text-[9px] mt-0.5 flex-wrap">
+                  <span className={`font-semibold ${statusColor(c)}`}>{statusLabel(c)}</span>
+                  {id && <span className="font-mono text-slate-600">...{String(id).slice(-8)}</span>}
+                  {spend > 0 && <span className="text-slate-500">Spend: R${spend.toFixed(2)}</span>}
+                  {acos > 0 && <span className="text-slate-500">ACoS: {acos.toFixed(1)}%</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -169,19 +259,25 @@ export function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading }) {
-  const [pauseResult, setPauseResult] = useState(null); // 'success' | 'warning' | 'error'
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff }) {
+  const [pauseResult, setPauseResult] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const handleToggle = async (p) => {
     setPauseResult(null);
     try {
       await onToggleCampaign(p);
-      // Após retorno da função pai, verificar campaign_status para inferir resultado
       setPauseResult('success');
     } catch {
       setPauseResult('error');
     }
     setTimeout(() => setPauseResult(null), 4000);
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try { await onCancelKickoff?.(product); }
+    finally { setCancelling(false); }
   };
 
   const isLoading = loading === product.id;
@@ -190,8 +286,30 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
   const incomplete = isCampaignIncomplete(product);
   const outOfStock = isConfirmedOutOfStock(product);
   const pausedByStock = productPausedByStock(product);
+  // Detecta "Solicitação enviada" = kickoff já na fila mas sem campanha ainda
+  const kickoffPending = !hasCampaign && !incomplete &&
+    (String(product?.queue_status || '').toLowerCase() === 'scheduled' ||
+     String(product?.kickoff_status || '').toLowerCase() === 'scheduled' ||
+     product?.kickoff_queued === true);
 
   if (!hasCampaign || incomplete) {
+    // Produto sem estoque com kickoff pendente → "Aguardando Estoque"
+    if (outOfStock && kickoffPending) {
+      return (
+        <div className="space-y-1">
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400/90">
+            <Loader2 className="w-3 h-3 animate-pulse" />
+            Aguardando Estoque
+          </span>
+          <button type="button" onClick={handleCancel} disabled={cancelling}
+            className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors">
+            {cancelling ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <XCircle className="w-2.5 h-2.5" />}
+            Cancelar
+          </button>
+        </div>
+      );
+    }
+    // Produto sem estoque sem kickoff → bloquear
     if (outOfStock) {
       return (
         <span className="text-[10px] text-red-400/80 italic max-w-[160px] leading-tight">
@@ -248,7 +366,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage }) {
+export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -323,6 +441,7 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
                 <ExternalLink className="w-2.5 h-2.5" />Ver na Amazon
               </a>
             )}
+            <CampaignDropdown product={product} />
           </div>
         </div>
       </td>
@@ -334,7 +453,8 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
       <td className="px-4 py-3 text-xs text-slate-400">{Number(product?.units_sold_30d || product?.total_units_30d || 0).toLocaleString('pt-BR')}</td>
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
-          onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign} loading={actionLoading} />
+          onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign}
+          onCancelKickoff={onCancelKickoff} loading={actionLoading} />
         {productMessage && (
           <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
             {productMessage.text}
