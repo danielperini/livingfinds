@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Activity, CheckCircle, Clock, XCircle } from 'lucide-react';
+import { Activity, CheckCircle, Clock, XCircle, AlertTriangle } from 'lucide-react';
 
 function fmtDateBRFull(iso) {
   if (!iso) return '—';
@@ -14,7 +14,7 @@ function StatusDot({ status }) {
   return <span className="w-2 h-2 rounded-full bg-slate-500 flex-shrink-0" />;
 }
 
-export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
+export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSales, spRevenue }) {
   const syncInfo = useMemo(() => {
     // Última data de CampaignMetricsDaily (Ads API)
     const adsDates = allMetrics.map((m) => m.date).filter(Boolean).sort();
@@ -43,10 +43,15 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
 
     const lastSyncAt = account?.last_sync_at;
 
-    return { adsThroughDate, spThroughDate, gapDays, adsStatus, spStatus, overallStatus, lastSyncAt };
-  }, [allMetrics, salesDaily, account]);
+    // Detectar divergência: Ads tem vendas mas SP-API tem zero no mesmo período
+    const hasAdsSales = Number(adsSales) > 0;
+    const hasSpRevenue = Number(spRevenue) > 0;
+    const reconciliationStatus = hasAdsSales && !hasSpRevenue ? 'pending' : hasAdsSales && hasSpRevenue ? 'reconciled' : 'no_sales';
 
-  const { adsThroughDate, spThroughDate, gapDays, adsStatus, spStatus, overallStatus, lastSyncAt } = syncInfo;
+    return { adsThroughDate, spThroughDate, gapDays, adsStatus, spStatus, overallStatus, lastSyncAt, reconciliationStatus };
+  }, [allMetrics, salesDaily, account, adsSales, spRevenue]);
+
+  const { adsThroughDate, spThroughDate, gapDays, adsStatus, spStatus, overallStatus, lastSyncAt, reconciliationStatus } = syncInfo;
 
   const borderColor =
   overallStatus === 'success' ? 'border-emerald-500/20 bg-emerald-500/5' :
@@ -102,6 +107,18 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account }) {
           </p>
         </div>
       </div>
+
+      {/* Alerta de divergência de reconciliação */}
+      {reconciliationStatus === 'pending' && (
+        <div className="mt-2.5 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="text-[10px] space-y-0.5">
+            <p className="font-semibold text-amber-300">Divergência detectada — reconciliação pendente</p>
+            <p className="text-amber-400/80">Ads indica vendas atribuídas, mas SP-API retornou R$&nbsp;0,00 no período. Possíveis causas: atraso de sync SP-API, janela de atribuição diferente, pedido pendente/cancelado, SKU não vinculado ou timezone divergente.</p>
+            <p className="text-slate-400 mt-1">⚠ O motor não deve classificar lucro como confirmado nem pausar campanha com base nestes dados até a reconciliação.</p>
+          </div>
+        </div>
+      )}
 
       <div className="mt-2 flex items-center gap-3 flex-wrap">
         {lastSyncAt && (

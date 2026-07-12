@@ -691,7 +691,7 @@ export default function Dashboard() {
         {account && <SyncStatusBanner accountId={account.id} />}
         {/* Cartão de sincronização das duas APIs */}
         {account && !loading && (
-          <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} />
+          <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} adsSales={kpis.sales} spRevenue={realSalesKpis.revenue} />
         )}
       </div>
 
@@ -912,9 +912,9 @@ export default function Dashboard() {
             )}
             {hasSalesDailyData && realSalesKpis.tacos !== null && (
               <KpiCard label="TACoS Real"
-                value={`${realSalesKpis.tacos.toFixed(1)}%`}
-                sub={targetTacos > 0 ? `Meta: ${targetTacos}%` : 'Gasto Ads / Fat. Real'}
-                tone={realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'bad' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'warn' : 'good'} />
+                value={kpis.sales > 0 && realSalesKpis.revenue === 0 ? '⚠ pendente' : `${realSalesKpis.tacos.toFixed(1)}%`}
+                sub={kpis.sales > 0 && realSalesKpis.revenue === 0 ? 'Divergência Ads × SP-API' : targetTacos > 0 ? `Meta: ${targetTacos}%` : 'Gasto Ads / Fat. Real'}
+                tone={kpis.sales > 0 && realSalesKpis.revenue === 0 ? 'warn' : realSalesKpis.tacos > (autopilotConfig?.maximum_tacos || 15) ? 'bad' : realSalesKpis.tacos > (autopilotConfig?.target_tacos || 10) ? 'warn' : 'good'} />
             )}
             {monthProjection && (
               <KpiCard label="Projeção do Mês"
