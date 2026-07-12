@@ -2,10 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   TrendingUp, TrendingDown, Minus, Search, Filter, Loader2,
-  RefreshCw, ChevronDown, ChevronRight, BarChart2, List
+  RefreshCw, ChevronDown, ChevronRight, BarChart2, List, Eye
 } from 'lucide-react';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ReferenceLine, ResponsiveContainer
 } from 'recharts';
 
@@ -104,50 +104,129 @@ function CampaignGroup({ campaignName, items }) {
   );
 }
 
-// ── Gráfico de evolução ──────────────────────────────────────────────────────
-function BidEvolutionChart({ logs, targetAcos }) {
+// ── Gráfico rico: Bid + Impressões + Cliques + ACoS alvo ────────────────────
+function BidEvolutionChart({ logs, campaignMetrics, targetAcos }) {
+  const [metric, setMetric] = useState('impressions'); // 'impressions' | 'clicks' | 'acos'
+
   const data = useMemo(() => {
+    // Agrega bids por dia
     const byDay = {};
     for (const log of logs) {
       const raw = log.created_at || log.created_date;
       if (!raw) continue;
-      const day = fmtDay(raw);
       const isoDay = new Date(raw).toISOString().slice(0, 10);
-      if (!byDay[isoDay]) byDay[isoDay] = { date: day, newBids: [], oldBids: [] };
+      if (!byDay[isoDay]) byDay[isoDay] = { newBids: [], oldBids: [], increases: 0, decreases: 0 };
       if (log.new_bid > 0) byDay[isoDay].newBids.push(log.new_bid);
       if (log.old_bid > 0) byDay[isoDay].oldBids.push(log.old_bid);
+      if (log.direction === 'increase') byDay[isoDay].increases++;
+      if (log.direction === 'decrease') byDay[isoDay].decreases++;
     }
-    return Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)).slice(-30).map(([, d]) => ({
-      date: d.date,
-      'Bid Aplicado': d.newBids.length ? +(d.newBids.reduce((a, b) => a + b, 0) / d.newBids.length).toFixed(2) : null,
-      'Bid Anterior': d.oldBids.length ? +(d.oldBids.reduce((a, b) => a + b, 0) / d.oldBids.length).toFixed(2) : null,
-    }));
-  }, [logs]);
+
+    // Agrega métricas de campanha por dia
+    const metByDay = {};
+    for (const m of campaignMetrics) {
+      if (!m.date) continue;
+      if (!metByDay[m.date]) metByDay[m.date] = { impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0 };
+      metByDay[m.date].impressions += m.impressions || 0;
+      metByDay[m.date].clicks     += m.clicks     || 0;
+      metByDay[m.date].spend      += m.spend      || 0;
+      metByDay[m.date].sales      += m.sales      || 0;
+      metByDay[m.date].orders     += m.orders     || 0;
+    }
+
+    // Unir por dia (últimos 30)
+    const allDays = new Set([...Object.keys(byDay), ...Object.keys(metByDay)]);
+    return Array.from(allDays).sort().slice(-30).map(day => {
+      const b = byDay[day];
+      const m = metByDay[day];
+      const avgNewBid = b?.newBids.length ? +(b.newBids.reduce((a, v) => a + v, 0) / b.newBids.length).toFixed(2) : null;
+      const avgOldBid = b?.oldBids.length ? +(b.oldBids.reduce((a, v) => a + v, 0) / b.oldBids.length).toFixed(2) : null;
+      const realAcos = m?.sales > 0 ? +((m.spend / m.sales) * 100).toFixed(1) : null;
+      return {
+        date: fmtDay(day + 'T12:00:00'),
+        'Bid Aplicado': avgNewBid,
+        'Bid Anterior': avgOldBid,
+        Impressões: m?.impressions || null,
+        Cliques: m?.clicks || null,
+        'ACoS Real (%)': realAcos,
+        increases: b?.increases || 0,
+        decreases: b?.decreases || 0,
+      };
+    });
+  }, [logs, campaignMetrics]);
 
   if (data.length < 2) return null;
 
+  const metricCfg = {
+    impressions: { key: 'Impressões', color: '#8B5CF6', label: 'Impressões' },
+    clicks:      { key: 'Cliques',    color: '#F59E0B', label: 'Cliques' },
+    acos:        { key: 'ACoS Real (%)', color: '#EF4444', label: 'ACoS Real (%)' },
+  };
+  const sel = metricCfg[metric];
+
   return (
-    <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-      <div className="mb-3">
-        <h2 className="text-sm font-semibold text-slate-300">Evolução dos Lances pelo Motor</h2>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Bid médio diário aplicado vs. bid anterior{targetAcos ? ` · Meta ACoS: ${targetAcos}%` : ''}
-        </p>
+    <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-300">Evolução de Lances + Resultado</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Bid médio diário × resultado da campanha{targetAcos ? ` · Meta ACoS: ${targetAcos}%` : ''}
+          </p>
+        </div>
+        {/* Selector de métrica secundária */}
+        <div className="flex items-center gap-1 bg-surface-2 border border-surface-3 rounded-lg p-0.5">
+          <Eye className="w-3 h-3 text-slate-500 ml-1.5" />
+          {Object.entries(metricCfg).map(([k, cfg]) => (
+            <button key={k} onClick={() => setMetric(k)}
+              className={`px-2.5 py-1 rounded text-[10px] font-semibold transition-all ${metric === k ? 'bg-cyan/20 text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
+              {cfg.label}
+            </button>
+          ))}
+        </div>
       </div>
-      <ResponsiveContainer width="100%" height={200}>
-        <LineChart data={data} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+
+      <ResponsiveContainer width="100%" height={240}>
+        <ComposedChart data={data} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
           <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={42} tickFormatter={v => `R$${v}`} />
+          {/* Eixo esquerdo: Bid (R$) */}
+          <YAxis yAxisId="bid" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={42} tickFormatter={v => `R$${v}`} />
+          {/* Eixo direito: métrica selecionada */}
+          <YAxis yAxisId="metric" orientation="right" tick={{ fontSize: 9, fill: sel.color }} axisLine={false} tickLine={false} width={44}
+            tickFormatter={v => metric === 'acos' ? `${v}%` : v >= 1000 ? `${(v/1000).toFixed(1)}k` : v} />
           <Tooltip
             contentStyle={{ backgroundColor: '#111827', border: '1px solid #263244', borderRadius: 8, fontSize: 11 }}
-            formatter={(v, n) => [`R$ ${v}`, n]}
+            formatter={(v, n) => {
+              if (n === 'Bid Aplicado' || n === 'Bid Anterior') return [`R$ ${v}`, n];
+              if (n === 'ACoS Real (%)') return [`${v}%`, n];
+              return [v?.toLocaleString('pt-BR'), n];
+            }}
           />
           <Legend wrapperStyle={{ fontSize: 10, color: '#94A3B8' }} />
-          <Line type="monotone" dataKey="Bid Anterior" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
-          <Line type="monotone" dataKey="Bid Aplicado" stroke="#3B82F6" strokeWidth={2} dot={{ r: 3, fill: '#3B82F6' }} connectNulls />
-        </LineChart>
+
+          {/* Linha de meta ACoS (só quando ACoS está selecionado) */}
+          {metric === 'acos' && targetAcos && (
+            <ReferenceLine yAxisId="metric" y={targetAcos} stroke="#10B981" strokeDasharray="5 3" strokeWidth={1.5}
+              label={{ value: `Meta ${targetAcos}%`, position: 'insideTopRight', fill: '#10B981', fontSize: 9 }} />
+          )}
+
+          {/* Barras: métrica de resultado (eixo direito) */}
+          <Bar yAxisId="metric" dataKey={sel.key} fill={sel.color} opacity={0.25} radius={[2,2,0,0]} maxBarSize={20} name={sel.label} />
+
+          {/* Linhas de bid */}
+          <Line yAxisId="bid" type="monotone" dataKey="Bid Anterior" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 2" connectNulls />
+          <Line yAxisId="bid" type="monotone" dataKey="Bid Aplicado" stroke="#3B82F6" strokeWidth={2.5} dot={{ r: 3, fill: '#3B82F6' }} connectNulls />
+        </ComposedChart>
       </ResponsiveContainer>
+
+      {/* Mini legenda interpretativa */}
+      <div className="flex flex-wrap gap-3 text-[10px] text-slate-500 border-t border-surface-2 pt-3">
+        <span><span className="text-blue-400 font-semibold">Bid Aplicado</span> — lance definido pelo motor</span>
+        <span><span className="text-slate-500 font-semibold">Bid Anterior</span> — lance antes do ajuste</span>
+        <span style={{ color: sel.color }} className="font-semibold">{sel.label}</span>
+        {metric === 'acos' && targetAcos && <span className="text-emerald-400">linha verde = meta {targetAcos}%</span>}
+        <span className="ml-auto">Período: últimos 30 dias</span>
+      </div>
     </div>
   );
 }
@@ -155,6 +234,7 @@ function BidEvolutionChart({ logs, targetAcos }) {
 // ── Página principal ─────────────────────────────────────────────────────────
 export default function BidLogs() {
   const [logs, setLogs] = useState([]);
+  const [campaignMetrics, setCampaignMetrics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [dirFilter, setDirFilter] = useState('all');
@@ -170,12 +250,15 @@ export default function BidLogs() {
       const aid = accounts[0]?.id;
       if (!aid) return;
 
-      const [bidLogs, ps] = await Promise.all([
+      const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const [bidLogs, ps, metrics] = await Promise.all([
         base44.asServiceRole.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_date', 300),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1),
+        base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300).catch(() => []),
       ]);
 
       setLogs(bidLogs);
+      setCampaignMetrics(metrics.filter(m => m.date >= cutoff30d));
       if (ps[0]?.target_acos > 0) setTargetAcos(ps[0].target_acos);
     } finally {
       setLoading(false);
@@ -255,7 +338,7 @@ export default function BidLogs() {
       </div>
 
       {/* Gráfico */}
-      {!loading && <BidEvolutionChart logs={logs} targetAcos={targetAcos} />}
+      {!loading && <BidEvolutionChart logs={logs} campaignMetrics={campaignMetrics} targetAcos={targetAcos} />}
 
       {/* Controles */}
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
