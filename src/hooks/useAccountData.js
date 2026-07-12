@@ -58,11 +58,11 @@ async function fetchProducts(accountId) {
 }
 
 async function fetchSalesDaily(accountId) {
-  const since60 = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+  const since62 = new Date(Date.now() - 62 * 86400000).toISOString().slice(0, 10);
   return base44.entities.SalesDaily.filter(
-    { amazon_account_id: accountId, date: { $gte: since60 } },
+    { amazon_account_id: accountId, date: { $gte: since62 } },
     '-date',
-    1000
+    2000
   );
 }
 

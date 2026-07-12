@@ -104,9 +104,9 @@ Deno.serve(async (req) => {
       taskQueue.push({ fn: 'syncProductCatalogV2', payload: bp, label: 'sync_catalog' });
     } else plan.push({ step: 'sync_catalog', skipped: true });
 
-    // Vendas: 1x/dia
+    // Vendas do SP-API: 1x/dia via relatórios já baixados (rápido, sem polling)
     if (!salesDone || force) {
-      taskQueue.push({ fn: 'syncProductSalesMetrics', payload: bp, label: 'sync_sales' });
+      taskQueue.push({ fn: 'syncSalesDailyFromReports', payload: bp, label: 'sync_sales' });
     } else plan.push({ step: 'sync_sales', skipped: true });
 
     // Relatórios: somente se não existirem jobs válidos
