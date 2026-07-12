@@ -246,8 +246,8 @@ export default function AppLayout() {
 
                 <div className="min-w-0">
                   <p className="text-[11px] text-slate-400">
-                    Última atualização: {formatLastSync(lastSync)}
-                    {lastSync && isSyncFresh() ? <span className="ml-1 text-emerald-500">· dados frescos</span> : null}
+                    <span>Última atualização: {formatLastSync(lastSync)}</span>
+                    {(lastSync && isSyncFresh()) ? <span className="ml-1 text-emerald-500">· dados frescos</span> : null}
                   </p>
                   {syncMessage ? <p className="text-[11px] text-cyan truncate max-w-[620px]">{syncMessage}</p> : null}
                 </div>

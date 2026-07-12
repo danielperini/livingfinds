@@ -229,10 +229,11 @@ export default function SyncStatusBanner({ accountId }) {
                   disabled={selected.size === 0 || reprocessing}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors bg-red-500/20 border border-red-500/30 text-red-300 hover:bg-red-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {reprocessing
-                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Reprocessando...</>
-                    : <><Play className="w-3 h-3" /> Reprocessar Selecionados ({selected.size})</>
-                  }
+                  {reprocessing ? (
+                    <span className="flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Reprocessando...</span>
+                  ) : (
+                    <span className="flex items-center gap-1.5"><Play className="w-3 h-3" /> Reprocessar Selecionados ({selected.size})</span>
+                  )}
                 </button>
               </div>
 
