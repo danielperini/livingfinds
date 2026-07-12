@@ -1,4 +1,6 @@
 import { Toaster } from "@/components/ui/toaster"
+import { useState, useEffect } from 'react';
+import { base44 } from '@/api/base44Client';
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
@@ -10,6 +12,7 @@ import ScrollToTop from './components/ScrollToTop';
 import ProtectedRoute from '@/components/ProtectedRoute';
 
 import AppLayout from '@/components/layout/AppLayout';
+import AppOpeningSplash from '@/components/AppOpeningSplash';
 
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
@@ -52,6 +55,35 @@ import WeeklyPrelectionPage from '@/pages/WeeklyPrelectionPage';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
+  const [splashDone, setSplashDone] = useState(false);
+  const [showSplash, setShowSplash] = useState(false);
+
+  useEffect(() => {
+    // Controle por sessão — reaparece no reload, não na navegação interna
+    const checkSplash = async () => {
+      try {
+        const isAuth = await base44.auth.isAuthenticated();
+        if (!isAuth) return;
+        const me = await base44.auth.me();
+        const userId = me?.id || 'anon';
+        let accountId = 'none';
+        try {
+          const accs = await base44.entities.AmazonAccount.filter({ user_id: userId }, null, 1).catch(() => []);
+          accountId = accs[0]?.id || 'none';
+        } catch {}
+        const key = `livingfinds_boot_splash_seen:${userId}:${accountId}`;
+        if (!sessionStorage.getItem(key)) {
+          sessionStorage.setItem(key, '1');
+          setShowSplash(true);
+        } else {
+          setSplashDone(true);
+        }
+      } catch {
+        setSplashDone(true);
+      }
+    };
+    checkSplash();
+  }, []);
 
   if (isLoadingPublicSettings || isLoadingAuth) {
     return (
@@ -70,9 +102,23 @@ const AuthenticatedApp = () => {
     return <UserNotRegisteredError />;
   }
 
+  // Enquanto não resolvemos se deve mostrar splash, não renderizar nada sensível
+  if (!splashDone && !showSplash && !isLoadingAuth && !isLoadingPublicSettings && !authError) {
+    // Aguardando checkSplash resolver — mostrar spinner mínimo
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-canvas">
+        <div className="w-6 h-6 border-2 border-cyan/40 border-t-cyan rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
+    <>
+      {showSplash && (
+        <AppOpeningSplash onComplete={() => { setShowSplash(false); setSplashDone(true); }} />
+      )}
+      <Routes>
+        <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
@@ -128,6 +174,7 @@ const AuthenticatedApp = () => {
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
+    </>
   );
 };
 
