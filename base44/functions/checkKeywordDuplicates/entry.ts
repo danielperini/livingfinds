@@ -50,19 +50,34 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error: 'amazon_account_id, asin e keywords[] são obrigatórios' }, { status: 400 });
     }
 
-    // Buscar todas as keywords ENABLED do produto (qualquer campanha)
-    const existing1 = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id, asin, state: 'enabled' }, null, 500
+    // Buscar todas as campanhas manuais deste ASIN para cobrir keywords sem asin preenchido
+    const campaignsOfAsin = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id, asin }, null, 50
     ).catch(() => []);
-    const existing2 = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id, asin, status: 'enabled' }, null, 500
-    ).catch(() => []);
+    const campaignIdsOfAsin = new Set<string>(campaignsOfAsin.map((c: any) => String(c.campaign_id || c.amazon_campaign_id || '')).filter(Boolean));
+    if (campaign_id) campaignIdsOfAsin.add(String(campaign_id));
+
+    // Buscar keywords ENABLED: por asin direto + por campaign_id das campanhas do ASIN
+    const fetches: Promise<any[]>[] = [
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id, asin, state: 'enabled' }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id, asin, status: 'enabled' }, null, 500).catch(() => []),
+    ];
+    // Buscar também por cada campaign_id do ASIN (cobre registros sem asin preenchido)
+    for (const cid of campaignIdsOfAsin) {
+      fetches.push(
+        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id, campaign_id: cid, state: 'enabled' }, null, 500).catch(() => []),
+        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id, campaign_id: cid, status: 'enabled' }, null, 500).catch(() => []),
+      );
+    }
+    const allFetched = await Promise.all(fetches);
 
     // Deduplicar
     const seenIds = new Set<string>();
     const existingEnabled: any[] = [];
-    for (const kw of [...existing1, ...existing2]) {
-      if (!seenIds.has(kw.id)) { seenIds.add(kw.id); existingEnabled.push(kw); }
+    for (const batch of allFetched) {
+      for (const kw of batch) {
+        if (!seenIds.has(kw.id)) { seenIds.add(kw.id); existingEnabled.push(kw); }
+      }
     }
 
     // Índice: normalized_text → campaign_id (para bloquear duplicata cross-campanha por ASIN)

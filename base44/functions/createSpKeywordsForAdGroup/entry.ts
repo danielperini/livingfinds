@@ -170,6 +170,7 @@ Deno.serve(async (req) => {
     // Persistir keywords criados na entidade Keyword
     if (created.length > 0) {
       const now = new Date().toISOString();
+      const asinToPersist = asinForDedup || body.asin || campRows[0]?.asin || null;
       const kwRecords = created.map((k: any, idx: number) => {
         const original = kwPayload[idx] || {};
         return {
@@ -178,9 +179,13 @@ Deno.serve(async (req) => {
           ad_group_id: String(ad_group_id),
           keyword_id: String(k.keywordId || ''),
           keyword_text: original.keywordText || '',
+          keyword: original.keywordText || '',
           match_type: (original.matchType || '').toLowerCase(),
           bid: Number(original.bid?.value || default_bid),
+          current_bid: Number(original.bid?.value || default_bid),
           state: state.toLowerCase(),
+          status: state.toLowerCase(),
+          asin: asinToPersist,
           synced_at: now,
         };
       }).filter((k: any) => k.keyword_id);

@@ -94,11 +94,20 @@ Deno.serve(async (req) => {
     const aid = account.id;
     // gateway centralizado não precisa de credenciais diretas — resolvidas internamente
 
+    // ── Carregar campanhas para resolver ASIN via campaign_id ─────────────
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id: aid }, null, 500
+    ).catch(() => []);
+    // Mapa: campaign_id → asin
+    const campaignAsinMap = new Map<string, string>();
+    for (const c of campaigns) {
+      const cid = String(c.campaign_id || c.amazon_campaign_id || '');
+      if (cid && c.asin) campaignAsinMap.set(cid, c.asin);
+    }
+
     // ── Carregar todas as keywords ativas (paginação correta) ────────────
     const allKeywords: any[] = [];
     const seenIds = new Set<string>();
-    // Buscar enabled e paused/archived separadamente para cobrir todo o dataset
-    // Mas para dedup só nos importam as enabled — buscar em múltiplos passes por sort diferente
     const passes = [
       { sort: '-spend', limit: 500 },
       { sort: 'created_date', limit: 500 },
@@ -123,7 +132,8 @@ Deno.serve(async (req) => {
       const st = String(kw.state || kw.status || '').toLowerCase();
       if (st === 'paused' || st === 'archived' || st === 'deleted') continue;
 
-      const asin = kw.asin;
+      // Resolver ASIN: campo direto ou via campanha
+      const asin = kw.asin || campaignAsinMap.get(String(kw.campaign_id || '')) || null;
       if (!asin) continue;
 
       const text = normalizeText(kw.keyword_text || '');
