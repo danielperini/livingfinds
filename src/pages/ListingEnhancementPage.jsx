@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 import {
   Sparkles, RefreshCw, Search, AlertCircle, CheckCircle2,
-  Clock, Package, ChevronRight, Loader2, ShieldAlert, FileText
+  Clock, ChevronRight, Loader2, ShieldAlert, FileText, Send, RotateCcw
 } from 'lucide-react';
 import ListingEnhancementDrawer from '@/components/listing/ListingEnhancementDrawer';
 
@@ -62,6 +62,48 @@ export default function ListingEnhancementPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const syncAll = useCallback(async () => {
+    if (!account) return;
+    setSyncing('__all__');
+    setMsg(null);
+    try {
+      const res = await base44.functions.invoke('syncListingEnhancementData', {
+        amazon_account_id: account.id, limit: 20,
+      });
+      if (res?.data?.ok) {
+        setMsg({ type: 'success', text: `${res.data.synced}/${res.data.total} produtos sincronizados.` });
+        await load();
+      } else {
+        setMsg({ type: 'error', text: res?.data?.error || 'Erro ao sincronizar.' });
+      }
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncing(null);
+      setTimeout(() => setMsg(null), 8000);
+    }
+  }, [account, load]);
+
+  const pollAllProcessing = useCallback(async () => {
+    if (!account) return;
+    setSyncing('__poll__');
+    setMsg(null);
+    try {
+      const res = await base44.functions.invoke('pollListingSubmissionStatus', { amazon_account_id: account.id });
+      if (res?.data?.ok) {
+        setMsg({ type: 'success', text: `${res.data.confirmed} confirmados, ${res.data.still_processing} ainda processando.` });
+        if (res.data.confirmed > 0) await load();
+      } else {
+        setMsg({ type: 'error', text: res?.data?.error || 'Erro ao verificar status.' });
+      }
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setSyncing(null);
+      setTimeout(() => setMsg(null), 8000);
+    }
+  }, [account, load]);
 
   const syncProduct = useCallback(async (product) => {
     if (!account) return;
@@ -156,6 +198,18 @@ export default function ListingEnhancementPage() {
             <p className="text-xs text-slate-400">Sincronize, analise, sugira e publique melhorias nas suas ofertas Amazon via SP-API</p>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <button onClick={pollAllProcessing} disabled={!!syncing}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-surface-1 border-surface-2 text-slate-400 hover:text-white disabled:opacity-50 transition-colors">
+            {syncing === '__poll__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+            Verificar Status
+          </button>
+          <button onClick={syncAll} disabled={!!syncing}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border bg-violet-500/10 border-violet-500/20 text-violet-300 hover:bg-violet-500/20 disabled:opacity-50 transition-colors">
+            {syncing === '__all__' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Sincronizar Todos
+          </button>
+        </div>
       </div>
 
       {msg && (
@@ -219,7 +273,7 @@ export default function ListingEnhancementPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['Produto', 'ASIN / SKU', 'Product Type', 'Issues', 'Termos', 'Título', 'Bullets', 'Desc.', 'Imgs', 'Propostas', 'Últ. Sync', 'Ações'].map(h => (
+                  {['Produto', 'ASIN / SKU', 'Product Type', 'Issues', 'Termos', 'Título', 'Bullets', 'Desc.', 'Imgs', 'Propostas', 'Publicadas', 'Últ. Sync', 'Ações'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -235,6 +289,8 @@ export default function ListingEnhancementPage() {
                   const pendingProps = productProps.filter(p => p.approval_status === 'pending_review').length;
                   const approvedProps = productProps.filter(p => p.approval_status === 'approved').length;
                   const draftProps = productProps.filter(p => p.approval_status === 'draft').length;
+                  const confirmedProps = productProps.filter(p => p.submission_status === 'confirmed').length;
+                  const processingProps = productProps.filter(p => p.submission_status === 'processing').length;
                   const isSyncing = syncing === product.asin;
                   const isGenerating = syncing === product.asin + '_gen';
 
@@ -289,6 +345,17 @@ export default function ListingEnhancementPage() {
                           {approvedProps > 0 && <ProposalCountBadge count={approvedProps} type="approved" />}
                           {!draftProps && !pendingProps && !approvedProps && <span className="text-slate-600">—</span>}
                         </div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {confirmedProps > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-emerald-500/10 border-emerald-500/20 text-emerald-400">
+                            <CheckCircle2 className="w-2.5 h-2.5" />{confirmedProps}
+                          </span>
+                        ) : processingProps > 0 ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-amber-500/10 border-amber-500/20 text-amber-400">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" />{processingProps}
+                          </span>
+                        ) : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-3 py-2.5">
                         {snap?.synced_at

@@ -1,9 +1,8 @@
 /**
- * submitApprovedListingEnhancement
- * Submete à Amazon somente propostas com approval_status === 'approved'.
- * Usa PATCH mínimo. Valida marca, schema e conflito externo antes de enviar.
+ * submitApprovedListingEnhancement v2
+ * Submete à Amazon SOMENTE propostas com approval_status === 'approved'.
+ * Usa PATCH mínimo. Valida marca, detecção de conflito externo antes de enviar.
  * Nunca usa PUT completo. Nunca remove campos não relacionados.
- * Nunca envia null sem aprovação explícita.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -54,42 +53,41 @@ async function fetchCurrentListing(accessToken: string, sellerId: string, sku: s
 }
 
 function buildMinimalPatch(fieldName: string, proposedValue: string, productType: string): any {
-  // PATCH mínimo: apenas o campo alterado
   const patchValue = (() => {
     if (fieldName === 'generic_keyword' || fieldName === 'search_terms') {
       const terms = proposedValue.split(' ').filter(Boolean);
       return terms.map(v => ({ value: v, marketplace_id: MARKETPLACE_ID }));
     }
-    if (fieldName === 'item_name') return [{ value: proposedValue, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }];
+    if (fieldName === 'item_name')
+      return [{ value: proposedValue, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }];
     if (fieldName === 'bullet_point') {
       const bullets = (() => { try { return JSON.parse(proposedValue); } catch { return [proposedValue]; } })();
-      return Array.isArray(bullets)
-        ? bullets.map((b: string) => ({ value: b, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }))
-        : [{ value: String(bullets), language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }];
+      return (Array.isArray(bullets) ? bullets : [String(bullets)])
+        .map((b: string) => ({ value: b, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }));
     }
-    if (fieldName === 'product_description') return [{ value: proposedValue, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }];
+    if (fieldName === 'product_description')
+      return [{ value: proposedValue, language_tag: 'pt_BR', marketplace_id: MARKETPLACE_ID }];
     return [{ value: proposedValue, marketplace_id: MARKETPLACE_ID }];
   })();
 
   return {
     productType,
-    patches: [{
-      op: 'replace',
-      path: `/attributes/${fieldName}`,
-      value: patchValue,
-    }],
+    patches: [{ op: 'replace', path: `/attributes/${fieldName}`, value: patchValue }],
   };
 }
 
-async function submitPatch(accessToken: string, sellerId: string, sku: string, marketplaceId: string, patch: any): Promise<any> {
-  const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}?marketplaceIds=${marketplaceId}&mode=VALIDATION_PREVIEW`;
+async function submitPatch(
+  accessToken: string, sellerId: string, sku: string,
+  marketplaceId: string, patch: any, dryRun: boolean
+): Promise<any> {
+  const mode = dryRun ? 'VALIDATION_PREVIEW' : 'ACTUAL';
+  const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}?marketplaceIds=${marketplaceId}&mode=${mode}`;
   const res = await fetch(url, {
     method: 'PATCH',
     headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
   });
-  const data = await res.json();
-  return { status: res.status, data };
+  return { status: res.status, data: await res.json() };
 }
 
 Deno.serve(async (req) => {
@@ -98,51 +96,40 @@ Deno.serve(async (req) => {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    // Somente admin pode publicar
-    if (user.role !== 'admin') {
+    if (user.role !== 'admin')
       return Response.json({ error: 'Apenas administradores podem submeter alterações.' }, { status: 403 });
-    }
 
     const body = await req.json().catch(() => ({}));
-    const { proposal_id, amazon_account_id } = body;
+    const { proposal_id, amazon_account_id, dry_run = false } = body;
 
     if (!proposal_id) return Response.json({ error: 'proposal_id obrigatório' }, { status: 400 });
 
-    // Carregar proposta
     const proposals = await base44.asServiceRole.entities.ListingEnhancementProposal.filter({ id: proposal_id });
     const proposal = proposals[0];
     if (!proposal) return Response.json({ error: 'Proposta não encontrada' }, { status: 404 });
 
     const aid = amazon_account_id || proposal.amazon_account_id;
 
-    // Validação: deve estar aprovada
-    if (proposal.approval_status !== 'approved') {
+    if (proposal.approval_status !== 'approved')
       return Response.json({ ok: false, error: `Proposta não aprovada. Status: ${proposal.approval_status}` }, { status: 422 });
-    }
 
-    // Validação: não submeter se já submetido ou confirmado
-    if (['submitted', 'processing', 'confirmed'].includes(proposal.submission_status || '')) {
+    if (!dry_run && ['submitted', 'processing', 'confirmed'].includes(proposal.submission_status || ''))
       return Response.json({ ok: false, error: `Proposta já submetida. Status: ${proposal.submission_status}` }, { status: 409 });
-    }
 
-    // Validação final de marca (imediatamente antes do PATCH)
+    // Validação de marca antes de submeter
     const brandCheck = validateNoThirdPartyBrand(proposal.proposed_value || '');
     if (!brandCheck.safe) {
       await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-        brand_safety_status: 'blocked',
-        submission_status: 'failed',
-        amazon_issues: JSON.stringify([{ message: `Marca de terceiro detectada: ${brandCheck.detected.join(', ')}` }]),
+        brand_safety_status: 'blocked', submission_status: 'failed',
+        amazon_issues: JSON.stringify([{ message: `Marca de terceiro bloqueada: ${brandCheck.detected.join(', ')}` }]),
         updated_at: new Date().toISOString(),
       });
       return Response.json({ ok: false, error: `Marca de terceiro bloqueada: ${brandCheck.detected.join(', ')}` }, { status: 422 });
     }
 
-    // Valor não pode ser null/vazio sem aprovação explícita
-    if (!proposal.proposed_value || proposal.proposed_value.trim() === '') {
-      return Response.json({ ok: false, error: 'proposed_value está vazio. Preencha o valor antes de submeter.' }, { status: 422 });
-    }
+    if (!proposal.proposed_value?.trim())
+      return Response.json({ ok: false, error: 'proposed_value está vazio. Preencha antes de submeter.' }, { status: 422 });
 
-    // Buscar conta
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: aid });
     const account = accounts[0];
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
@@ -151,117 +138,87 @@ Deno.serve(async (req) => {
     const marketplaceId = account.marketplace_id || MARKETPLACE_ID;
 
     let accessToken: string;
-    try {
-      accessToken = await getSpAccessToken();
-    } catch (e: any) {
-      return Response.json({ ok: false, error: `Token SP-API: ${e.message}` }, { status: 503 });
-    }
+    try { accessToken = await getSpAccessToken(); }
+    catch (e: any) { return Response.json({ ok: false, error: `Token SP-API: ${e.message}` }, { status: 503 }); }
 
-    // Verificar conflito externo: comparar valor atual com snapshot
-    const snapshot = proposal.snapshot_id
-      ? (await base44.asServiceRole.entities.ListingSnapshot.filter({ id: proposal.snapshot_id }).catch(() => []))[0]
-      : null;
-
-    if (snapshot && proposal.sku) {
-      const currentListing = await fetchCurrentListing(accessToken, sellerId, proposal.sku, marketplaceId).catch(() => null);
-      if (currentListing) {
-        const currentAttr = currentListing.attributes || {};
-        const fieldName = proposal.field_name || '';
-        const currentFieldVal = currentAttr[fieldName];
-        const snapshotAttr: any = {};
-        try { Object.assign(snapshotAttr, JSON.parse(snapshot.attributes || '{}')); } catch {}
-        const snapshotFieldVal = snapshotAttr[fieldName];
-
-        // Verificar se o valor atual diverge do snapshot (alteração externa)
-        const currentStr = JSON.stringify(currentFieldVal || '');
-        const snapshotStr = JSON.stringify(snapshotFieldVal || '');
-        if (currentStr !== snapshotStr) {
-          await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-            external_change_detected: true,
-            approval_status: 'conflict',
-            amazon_issues: JSON.stringify([{
-              message: 'Alteração externa detectada após snapshot. Revisão necessária antes de submeter.',
-              current: currentStr.slice(0, 200),
-              snapshot: snapshotStr.slice(0, 200),
-            }]),
-            updated_at: new Date().toISOString(),
-          });
-          return Response.json({
-            ok: false,
-            conflict: true,
-            error: 'Valor atual diverge do snapshot. Possível alteração externa. Revise antes de submeter.',
-          }, { status: 409 });
+    // Verificar conflito externo
+    if (!dry_run && proposal.snapshot_id && proposal.sku) {
+      const snapshot = (await base44.asServiceRole.entities.ListingSnapshot.filter({ id: proposal.snapshot_id }).catch(() => []))[0];
+      if (snapshot) {
+        const currentListing = await fetchCurrentListing(accessToken, sellerId, proposal.sku, marketplaceId).catch(() => null);
+        if (currentListing) {
+          const snapshotAttr: any = {};
+          try { Object.assign(snapshotAttr, JSON.parse(snapshot.attributes || '{}')); } catch {}
+          const currentStr = JSON.stringify(currentListing.attributes?.[proposal.field_name || ''] || '');
+          const snapshotStr = JSON.stringify(snapshotAttr[proposal.field_name || ''] || '');
+          if (currentStr !== snapshotStr) {
+            await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
+              external_change_detected: true, approval_status: 'conflict',
+              amazon_issues: JSON.stringify([{ message: 'Alteração externa detectada após snapshot. Revise antes de submeter.' }]),
+              updated_at: new Date().toISOString(),
+            });
+            return Response.json({ ok: false, conflict: true, error: 'Valor atual diverge do snapshot. Possível alteração externa.' }, { status: 409 });
+          }
         }
       }
     }
 
     const now = new Date().toISOString();
-    const productType = proposal.product_type || snapshot?.product_type || '';
-
-    // Montar PATCH mínimo
+    const productType = proposal.product_type || '';
     const patch = buildMinimalPatch(proposal.field_name || '', proposal.proposed_value, productType);
 
-    // Atualizar status para submetendo
-    await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-      submission_status: 'submitted',
-      submitted_at: now,
-      updated_at: now,
-    });
-
-    // Submeter PATCH
-    const submitResult = await submitPatch(accessToken, sellerId, proposal.sku || '', marketplaceId, patch);
-    const submissionId = submitResult.data?.submissionId || submitResult.data?.listingId || '';
-    const submittedIssues = submitResult.data?.issues || [];
-
-    if (submitResult.status === 200 || submitResult.status === 202) {
+    if (!dry_run) {
       await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-        submission_status: submitResult.status === 202 ? 'processing' : 'confirmed',
-        amazon_submission_id: submissionId,
-        amazon_issues: JSON.stringify(submittedIssues),
-        confirmed_at: submitResult.status === 200 ? now : null,
-        updated_at: now,
-      });
-
-      // Registrar no histórico
-      await base44.asServiceRole.entities.ListingEnhancementHistory.create({
-        amazon_account_id: aid,
-        marketplace_id: marketplaceId,
-        product_id: proposal.product_id,
-        asin: proposal.asin,
-        sku: proposal.sku,
-        field_name: proposal.field_name,
-        value_before: proposal.current_value,
-        value_after: proposal.proposed_value,
-        proposal_id: proposal.id,
-        snapshot_id: proposal.snapshot_id,
-        submitted_by: user.id,
-        submitted_at: now,
-        amazon_status: submitResult.status === 202 ? 'processing' : 'confirmed',
-        amazon_issues: JSON.stringify(submittedIssues),
-        rollback_status: 'eligible',
-        created_at: now,
-      });
-
-      return Response.json({
-        ok: true,
-        submission_id: submissionId,
-        status: submitResult.status === 202 ? 'processing' : 'confirmed',
-        issues: submittedIssues,
-        note: submitResult.status === 202
-          ? 'Processando na Amazon. Consulte pollListingSubmissionStatus para confirmar.'
-          : 'Confirmado pela Amazon.',
+        submission_status: 'submitted', submitted_at: now, updated_at: now,
       });
     }
 
-    // Erro na submissão
-    const errorIssues = submitResult.data?.issues || [{ message: `HTTP ${submitResult.status}` }];
-    await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
-      submission_status: 'failed',
-      amazon_issues: JSON.stringify(errorIssues),
-      updated_at: now,
-    });
+    const result = await submitPatch(accessToken, sellerId, proposal.sku || '', marketplaceId, patch, dry_run);
+    const submissionId = result.data?.submissionId || result.data?.listingId || '';
+    const resultIssues = result.data?.issues || [];
 
-    return Response.json({ ok: false, error: `Submissão falhou: ${submitResult.status}`, issues: errorIssues }, { status: 422 });
+    if (dry_run) {
+      return Response.json({
+        ok: result.status < 400, dry_run: true,
+        validation_status: result.status, issues: resultIssues,
+        note: 'Modo de validação — nenhuma alteração foi submetida à Amazon.',
+      });
+    }
+
+    if (result.status === 200 || result.status === 202) {
+      const finalStatus = result.status === 202 ? 'processing' : 'confirmed';
+      await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
+        submission_status: finalStatus,
+        amazon_submission_id: submissionId,
+        amazon_issues: JSON.stringify(resultIssues),
+        confirmed_at: result.status === 200 ? now : undefined,
+        updated_at: now,
+      });
+
+      await base44.asServiceRole.entities.ListingEnhancementHistory.create({
+        amazon_account_id: aid, marketplace_id: marketplaceId,
+        product_id: proposal.product_id, asin: proposal.asin, sku: proposal.sku,
+        field_name: proposal.field_name,
+        value_before: proposal.current_value, value_after: proposal.proposed_value,
+        proposal_id: proposal.id, snapshot_id: proposal.snapshot_id,
+        submitted_by: user.id, submitted_at: now,
+        amazon_status: finalStatus,
+        amazon_issues: JSON.stringify(resultIssues),
+        rollback_status: 'eligible', created_at: now,
+      });
+
+      return Response.json({
+        ok: true, submission_id: submissionId, status: finalStatus, issues: resultIssues,
+        note: result.status === 202 ? 'Processando na Amazon.' : 'Confirmado pela Amazon.',
+      });
+    }
+
+    // Erro
+    const errorIssues = result.data?.issues || [{ message: `HTTP ${result.status}` }];
+    await base44.asServiceRole.entities.ListingEnhancementProposal.update(proposal.id, {
+      submission_status: 'failed', amazon_issues: JSON.stringify(errorIssues), updated_at: now,
+    });
+    return Response.json({ ok: false, error: `Submissão falhou: ${result.status}`, issues: errorIssues }, { status: 422 });
 
   } catch (error: any) {
     console.error('[submitApprovedListingEnhancement]', error.message);
