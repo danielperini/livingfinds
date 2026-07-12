@@ -202,10 +202,10 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     return (
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
-          title={incomplete ? "Reparar campanha incompleta" : "Criar campanha para este produto"}
+          title={incomplete ? "Reparar campanha incompleta" : "Vincular e ativar campanha para este produto"}
           className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' : 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'}`}>
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Rocket className="w-3 h-3" />}
-          {incomplete ? 'Reparar' : 'Kick-off'}
+          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+          {incomplete ? 'Reparar' : 'Vincular e Ativar'}
         </button>
         <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
           className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">

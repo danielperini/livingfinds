@@ -4,6 +4,7 @@ import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSq
 import KickoffModal from '@/components/products/KickoffModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
+import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
 import ProductRow, {
   offerStatus, productHasCampaign, isCampaignActiveFn, campaignIdOf,
   isConfirmedOutOfStock, stockFreshness, formatBRL,
@@ -356,6 +357,11 @@ export default function Products({ externalRefreshTrigger }) {
         <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-400' : 'bg-cyan/10 border-cyan/20 text-cyan'}`}>
           {actionMsg.text}
         </div>
+      )}
+
+      {/* Banner: ASINs com alta adesão sem termo vendedor */}
+      {!loading && account && (
+        <HighAdherenceAlert accountId={account.id} />
       )}
 
       {/* Banner de reabastecimento */}
