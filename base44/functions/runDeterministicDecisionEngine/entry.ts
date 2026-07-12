@@ -426,7 +426,12 @@ Deno.serve(async (req) => {
       account = accs[0];
     }
     if (!account) {
+      // tenta connected primeiro, cai no primeiro registro disponível
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      account = accs[0];
+    }
+    if (!account) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({}, '-created_date', 1);
       account = accs[0];
     }
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada.' });
@@ -644,42 +649,8 @@ Deno.serve(async (req) => {
       campWindowMetrics.set(cid, { d3, d7: derive(wm.d7), d14, d30, trend_3_vs_14, trend_7_vs_30, trend_14_vs_30 });
     }
 
-    // ── 4b. Comparação ACoS Real vs ACoS Alvo por campanha ───────────────
-    // Alimenta decisões com o gap real e orienta escala/redução
-    const acosComparisonByCampaign = new Map<string, {
-      campaign_id: string; campaign_name: string; asin: string | null;
-      real_acos_14d: number | null; real_acos_7d: number | null;
-      target_acos: number | null; gap_pct: number | null;
-      status: 'below_target' | 'on_target' | 'above_target' | 'critical' | 'no_data';
-      sales_14d: number; spend_14d: number; orders_14d: number;
-    }>();
-    for (const c of campaigns) {
-      const cid = c.campaign_id || c.amazon_campaign_id;
-      if (!cid) continue;
-      const st = String(c.state || c.status || '').toLowerCase();
-      if (st === 'archived') continue;
-      const wm = campWindowMetrics.get(cid);
-      const asin = c.asin || campaignAsinMap.get(cid) || null;
-      const asinMeta = asin ? acosByAsin.get(asin) : null;
-      const effectiveTarget = asinMeta?.target ?? settings.target_acos;
-      const real14d = wm?.d14?.acos ?? null;
-      const real7d = wm?.d7?.acos ?? null;
-      let compStatus: 'below_target' | 'on_target' | 'above_target' | 'critical' | 'no_data' = 'no_data';
-      let gap_pct: number | null = null;
-      if (real14d !== null && effectiveTarget !== null) {
-        gap_pct = real14d - effectiveTarget; // positivo = acima da meta (ruim), negativo = abaixo (bom)
-        if (real14d <= effectiveTarget * 0.75) compStatus = 'below_target';
-        else if (real14d <= effectiveTarget * 1.05) compStatus = 'on_target';
-        else if (real14d <= effectiveTarget * 1.5) compStatus = 'above_target';
-        else compStatus = 'critical';
-      }
-      acosComparisonByCampaign.set(cid, {
-        campaign_id: cid, campaign_name: c.campaign_name || c.name || cid,
-        asin, real_acos_14d: real14d, real_acos_7d: real7d,
-        target_acos: effectiveTarget, gap_pct, status: compStatus,
-        sales_14d: wm?.d14?.sales ?? 0, spend_14d: wm?.d14?.spend ?? 0, orders_14d: wm?.d14?.orders ?? 0,
-      });
-    }
+    // acosComparisonByCampaign preenchido na seção 6b (após acosByAsin)
+    const acosComparisonByCampaign = new Map<string, any>();
 
     // ── 5. Métricas por ASIN (para TACoS e metas dinâmicas) ───────────────
     const salesByAsin = new Map<string, { revenue: number; units: number; days: Set<string> }>();
@@ -719,6 +690,34 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── 6b. Preencher acosComparisonByCampaign (usa acosByAsin já declarado acima) ─
+    for (const c of campaigns) {
+      const cid = c.campaign_id || c.amazon_campaign_id;
+      if (!cid) continue;
+      if (String(c.state || c.status || '').toLowerCase() === 'archived') continue;
+      const wm = campWindowMetrics.get(cid);
+      const asin = c.asin || campaignAsinMap.get(cid) || null;
+      const asinMeta = asin ? acosByAsin.get(asin) : null;
+      const effectiveTarget = asinMeta?.target ?? settings.target_acos;
+      const real14d = wm?.d14?.acos ?? null;
+      const real7d = wm?.d7?.acos ?? null;
+      let compStatus = 'no_data';
+      let gap_pct: number | null = null;
+      if (real14d !== null && effectiveTarget !== null) {
+        gap_pct = real14d - effectiveTarget;
+        if (real14d <= effectiveTarget * 0.75) compStatus = 'below_target';
+        else if (real14d <= effectiveTarget * 1.05) compStatus = 'on_target';
+        else if (real14d <= effectiveTarget * 1.5) compStatus = 'above_target';
+        else compStatus = 'critical';
+      }
+      acosComparisonByCampaign.set(cid, {
+        campaign_id: cid, campaign_name: c.campaign_name || c.name || cid,
+        asin, real_acos_14d: real14d, real_acos_7d: real7d,
+        target_acos: effectiveTarget, gap_pct, status: compStatus,
+        sales_14d: wm?.d14?.sales ?? 0, spend_14d: wm?.d14?.spend ?? 0, orders_14d: wm?.d14?.orders ?? 0,
+      });
+    }
+
     // Persistir metas calculadas (fire-and-forget)
     const productUpdates: any[] = [];
     for (const [asin, meta] of acosByAsin.entries()) {
@@ -732,9 +731,10 @@ Deno.serve(async (req) => {
     }
 
     // ── 7. Gasto real de ontem (guardrail de orçamento) ────────────────────
-    // Somar apenas registros com data de ontem (não acumulado histórico)
+    // Excluir registros com spend por campanha > daily_budget_cap * 2 (acumulados históricos errados)
+    const maxSingleCampSpend = settings.daily_budget_cap * 2;
     const realSpendYesterday = metricsRaw
-      .filter((m: any) => m.date === yesterday && (m.spend || 0) > 0)
+      .filter((m: any) => m.date === yesterday && (m.spend || 0) > 0 && (m.spend || 0) <= maxSingleCampSpend)
       .reduce((s: number, m: any) => s + (m.spend || 0), 0);
     // Fallback: se não há dados de ontem, não bloquear por orçamento
     const budgetGuardrailActive = realSpendYesterday > 0 && realSpendYesterday > settings.daily_budget_cap;
