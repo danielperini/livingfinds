@@ -855,11 +855,92 @@ Deno.serve(async (req) => {
     }
     if (productUpdates.length > 0) base44.asServiceRole.entities.Product.bulkUpdate(productUpdates).catch(() => {});
 
-    // ── 7. Gasto real de ontem ────────────────────────────────────────────
+    // ── 7. Gasto real e recálculo dinâmico do daily_budget_cap ───────────
     const maxSingleCampSpend = settings.daily_budget_cap * 2;
-    const realSpendYesterday = metricsRaw
-      .filter((m: any) => m.date === yesterday && (m.spend || 0) > 0 && (m.spend || 0) <= maxSingleCampSpend)
+
+    // Métricas das últimas 24h (D1 = ontem completo)
+    const cutoff24h = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const metrics24h = metricsRaw.filter((m: any) => m.date >= cutoff24h && (m.spend || 0) > 0 && (m.spend || 0) <= maxSingleCampSpend);
+    const realSpendYesterday = metrics24h
+      .filter((m: any) => m.date === yesterday)
       .reduce((s: number, m: any) => s + (m.spend || 0), 0);
+
+    // Agregar spend/sales/orders das últimas 24h
+    const spend24h = metrics24h.reduce((s: number, m: any) => s + (m.spend || 0), 0);
+    const sales24h  = metrics24h.reduce((s: number, m: any) => s + (m.sales || 0), 0);
+    const orders24h = metrics24h.reduce((s: number, m: any) => s + (m.orders || 0), 0);
+    const acos24h   = sales24h > 0 ? (spend24h / sales24h) * 100 : null;
+    const roas24h   = spend24h > 0 ? sales24h / spend24h : null;
+
+    // Buscar o teto definido pelo usuário (AccountDailySpendController)
+    let userBudgetCap = settings.daily_budget_cap; // fallback
+    try {
+      const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
+        { amazon_account_id: aid }, '-spend_date', 1
+      ).catch(() => []);
+      if (controllers.length > 0 && controllers[0].user_daily_spend_cap > 0) {
+        userBudgetCap = controllers[0].user_daily_spend_cap;
+      }
+    } catch {}
+
+    // ── Recalcular daily_budget_cap dinamicamente com base nas 24h ────────
+    // Banda rígida: não sai da faixa [50, userBudgetCap]
+    // Regra:
+    //   - ACoS 24h <= target_acos * 0.8  → pacing eficiente: pode subir até +10% do atual
+    //   - ACoS 24h entre target * 0.8 e target * 1.1 → manter
+    //   - ACoS 24h > target * 1.1 e <= break-even médio → reduzir -5%
+    //   - ACoS 24h > break-even médio ou sem vendas com gasto > 20% cap → reduzir -10%
+    //   - Sem dados suficientes (spend24h < 5) → manter
+    const MIN_BUDGET_CAP = 50;
+    const effectiveUserCap = Math.max(MIN_BUDGET_CAP, userBudgetCap);
+    const targetAcos24h = settings.target_acos ?? FB.TARGET_ACOS;
+    const avgBreakEven = acosByAsin.size > 0
+      ? Array.from(acosByAsin.values()).reduce((s: number, m: any) => s + (m.break_even || targetAcos24h), 0) / acosByAsin.size
+      : targetAcos24h * 1.5;
+
+    let recalculatedBudgetCap = settings.daily_budget_cap;
+    let budgetAdjustReason = 'no_data';
+
+    if (spend24h >= 5) {
+      if (acos24h === null && spend24h > effectiveUserCap * 0.20) {
+        // Gasto real sem nenhuma venda em 24h
+        recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.90);
+        budgetAdjustReason = `sem_vendas_24h: gasto R$${spend24h.toFixed(2)} sem retorno`;
+      } else if (acos24h !== null && acos24h > avgBreakEven) {
+        // ACoS acima do break-even médio → reduzir 10%
+        recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.90);
+        budgetAdjustReason = `acos_acima_breakeven_24h: ACoS ${acos24h.toFixed(1)}% > break-even ${avgBreakEven.toFixed(1)}%`;
+      } else if (acos24h !== null && acos24h > targetAcos24h * 1.1) {
+        // ACoS moderadamente acima da meta → reduzir 5%
+        recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.95);
+        budgetAdjustReason = `acos_acima_meta_24h: ACoS ${acos24h.toFixed(1)}% vs meta ${targetAcos24h}%`;
+      } else if (acos24h !== null && acos24h <= targetAcos24h * 0.80) {
+        // ACoS muito abaixo da meta → crescimento eficiente, aumentar até +10%
+        recalculatedBudgetCap = Math.min(effectiveUserCap, settings.daily_budget_cap * 1.10);
+        budgetAdjustReason = `acos_eficiente_24h: ACoS ${acos24h.toFixed(1)}% ≤ ${(targetAcos24h * 0.80).toFixed(1)}% (meta×0.8)`;
+      } else {
+        recalculatedBudgetCap = settings.daily_budget_cap; // manter
+        budgetAdjustReason = `acos_na_meta_24h: ACoS ${acos24h?.toFixed(1) ?? 'n/a'}% dentro do range aceitável`;
+      }
+    }
+
+    // Arredondar para 2 casas e garantir banda
+    recalculatedBudgetCap = Math.round(Math.min(effectiveUserCap, Math.max(MIN_BUDGET_CAP, recalculatedBudgetCap)) * 100) / 100;
+
+    // Aplicar o novo cap ao settings se mudou significativamente (>1%)
+    const budgetCapChanged = Math.abs(recalculatedBudgetCap - settings.daily_budget_cap) > 0.5;
+    if (budgetCapChanged) {
+      settings.daily_budget_cap = recalculatedBudgetCap;
+      // Persistir em PerformanceSettings (fire-and-forget)
+      if (settings.source_id) {
+        base44.asServiceRole.entities.PerformanceSettings.update(settings.source_id, {
+          calculated_daily_budget: recalculatedBudgetCap,
+          suggested_daily_budget: recalculatedBudgetCap,
+          last_budget_recalculation: now,
+        }).catch(() => {});
+      }
+    }
+
     const budgetGuardrailActive = realSpendYesterday > 0 && realSpendYesterday > settings.daily_budget_cap;
 
     // ── 8. Contexto sazonal ───────────────────────────────────────────────
@@ -1851,6 +1932,20 @@ Deno.serve(async (req) => {
         budget_guardrail_triggered: budgetGuardrailActive,
         products_updated: productUpdates.length,
         econ_records_updated: econUpdates.length,
+        // v7: recálculo dinâmico do orçamento
+        budget_recalculation: {
+          spend_24h: Math.round(spend24h * 100) / 100,
+          sales_24h: Math.round(sales24h * 100) / 100,
+          orders_24h: orders24h,
+          acos_24h: acos24h !== null ? Math.round(acos24h * 10) / 10 : null,
+          roas_24h: roas24h !== null ? Math.round(roas24h * 100) / 100 : null,
+          previous_cap: budgetCapChanged ? Math.round((settings.daily_budget_cap / (recalculatedBudgetCap > settings.daily_budget_cap ? 1.10 : recalculatedBudgetCap < settings.daily_budget_cap ? 0.90 : 0.95)) * 100) / 100 : settings.daily_budget_cap,
+          new_cap: recalculatedBudgetCap,
+          changed: budgetCapChanged,
+          reason: budgetAdjustReason,
+          user_cap: effectiveUserCap,
+          avg_break_even_acos: Math.round(avgBreakEven * 10) / 10,
+        },
       },
 
       opportunity_summary: {
