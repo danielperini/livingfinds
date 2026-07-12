@@ -184,7 +184,14 @@ export default function AcosEvolutionPanel({ metrics, campaigns, products, perio
   }, [viewMode, selectedId, topProducts, topCampaigns]);
 
   const items = viewMode === 'produto' ? topProducts : topCampaigns;
-  const itemLabel = (item) => viewMode === 'produto' ? item.asin : (item.name || item.cid).slice(0, 30);
+  const itemLabel = (item) => {
+    if (viewMode === 'produto') {
+      const p = productMap.get(item.asin);
+      const name = p?.display_name || p?.product_name;
+      return name ? name.slice(0, 40) : item.asin;
+    }
+    return (item.name || item.cid).slice(0, 40);
+  };
   const itemId = (item) => viewMode === 'produto' ? item.asin : item.cid;
 
   // half-period trend
