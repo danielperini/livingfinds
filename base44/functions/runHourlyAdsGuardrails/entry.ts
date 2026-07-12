@@ -23,9 +23,14 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 Deno.serve(async (req) => {
   const startTime = Date.now();
   const base44 = createClientFromRequest(req);
-  const now = new Date().toISOString();
-  const today = now.slice(0, 10);
-  const currentHour = new Date().getUTCHours();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  // Hora em BRT (UTC-3) para cálculos de pacing diário
+  const brtHour = ((nowDate.getUTCHours() - 3 + 24) % 24);
+  // Data em BRT para o campo "today"
+  const brtDate = new Date(nowDate.getTime() - 3 * 3600000);
+  const today = brtDate.toISOString().slice(0, 10);
+  const currentHour = brtHour;
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -174,8 +179,8 @@ Deno.serve(async (req) => {
       }
 
       // Orçamento esgotado antes das 18h (horário local relevante)
-      // Horas fortes típicas: 18-22 BRT = 21-01 UTC
-      const isBrazilPeakAhead = currentHour < 21; // UTC — ainda não chegou no pico
+      // Horas fortes típicas: 18-22 BRT — já usa brtHour
+      const isBrazilPeakAhead = brtHour < 18; // BRT — ainda não chegou no pico
       if (isBrazilPeakAhead && totalSpend > globalBudgetLimit * 0.90) {
         await base44.asServiceRole.entities.Alert.create({
           amazon_account_id: aid,
