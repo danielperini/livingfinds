@@ -142,10 +142,26 @@ Deno.serve(async (req) => {
         ).catch(() => []);
         const kwMap = new Map<string, any>(existingKWs.map((r: any) => [String(r.keyword_id), r]));
 
+        // Carregar keywords pausadas como duplicatas (não devem ser re-ativadas pelo sync)
+        const pausedDupIds = new Set<string>();
+        const pausedDups = await base44.asServiceRole.entities.Keyword.filter(
+          { amazon_account_id: amazonAccountId, state: 'paused' }, null, 5000
+        ).catch(() => []);
+        for (const kw of pausedDups) {
+          if (kw.keyword_id) pausedDupIds.add(String(kw.keyword_id));
+        }
+
         const toCreate: any[] = [], toUpdate: any[] = [];
         const now = new Date().toISOString();
         for (const kw of kwList) {
           const bid = kw.bid?.amount ?? kw.bid ?? 0;
+          const amazonState = (kw.state || 'ENABLED').toLowerCase();
+          const cur = kwMap.get(String(kw.keywordId));
+
+          // Se já está pausada localmente (ex: deduplicação), não re-ativar mesmo que Amazon diga ENABLED
+          const localState = cur ? (cur.state || cur.status || '').toLowerCase() : null;
+          const keepLocalPaused = localState === 'paused' && amazonState === 'enabled' && pausedDupIds.has(String(kw.keywordId));
+
           const rec = {
             amazon_account_id: amazonAccountId,
             campaign_id: String(kw.campaignId),
@@ -154,14 +170,13 @@ Deno.serve(async (req) => {
             keyword_text: kw.keywordText,
             keyword: kw.keywordText,
             match_type: (kw.matchType || 'BROAD').toLowerCase(),
-            state: (kw.state || 'ENABLED').toLowerCase(),
-            status: (kw.state || 'ENABLED').toLowerCase(),
+            state: keepLocalPaused ? 'paused' : amazonState,
+            status: keepLocalPaused ? 'paused' : amazonState,
             bid,
             current_bid: bid,
             synced_at: now,
             last_seen_at: now,
           };
-          const cur = kwMap.get(String(kw.keywordId));
           cur ? toUpdate.push({ id: cur.id, ...rec }) : toCreate.push(rec);
         }
 
