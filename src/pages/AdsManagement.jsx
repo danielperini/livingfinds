@@ -171,6 +171,36 @@ export default function AdsManagement() {
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [showCreateWizard, setShowCreateWizard] = useState(false);
   const [tokenCheck, setTokenCheck] = useState(null);
+  const [pausingNoStock, setPausingNoStock] = useState(false);
+  const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
+
+  const pauseNoStockCampaigns = async (dryRun = false) => {
+    if (!account || pausingNoStock) return;
+    if (!dryRun && !window.confirm('Pausar campanhas automáticas sem estoque ou kickoff? Esta ação será aplicada na Amazon Ads API.')) return;
+    setPausingNoStock(true);
+    setPauseNoStockMsg(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id, dry_run: dryRun,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        if (dryRun) {
+          setPauseNoStockMsg({ type: 'info', text: `Simulação: ${d.would_pause} campanha(s) seriam pausadas.` });
+        } else {
+          setPauseNoStockMsg({ type: 'success', text: d.message });
+          await loadCampaigns();
+        }
+      } else {
+        setPauseNoStockMsg({ type: 'error', text: d?.error || 'Erro ao pausar.' });
+      }
+    } catch (e) {
+      setPauseNoStockMsg({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoStock(false);
+      setTimeout(() => setPauseNoStockMsg(null), 10000);
+    }
+  };
 
   const checkToken = async () => {
     setTokenCheck('checking');
@@ -451,6 +481,12 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
+              <button onClick={() => pauseNoStockCampaigns(false)} disabled={pausingNoStock || !account}
+              title="Pausa campanhas AUTO cujo produto não tem estoque nem kickoff agendado"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50">
+                {pausingNoStock ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
+                Pausar sem estoque
+              </button>
               
 
 
@@ -493,6 +529,9 @@ export default function AdsManagement() {
 
           {syncMsg &&
           <p className={`text-[10px] mt-1.5 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
+          }
+          {pauseNoStockMsg &&
+          <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p>
           }
           {tokenCheck && tokenCheck !== 'checking' &&
           <div className={`mt-1.5 px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-2 ${tokenCheck.ok ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
