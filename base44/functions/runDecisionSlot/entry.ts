@@ -1,25 +1,18 @@
 /**
- * runDecisionSlot — Executa decisões do slot horário atual (sem timeout)
+ * runDecisionSlot — Executa decisões aprovadas sem restrição de janela horária
  *
- * Roda a cada hora (00h–07h + 13h BRT). Processa até MAX_PER_RUN decisões
- * com intervalo de 14s entre chamadas Amazon (rate limit). Retorna em < 90s.
- *
- * Decisões com queue_hour == hora atual BRT são processadas.
- * Pausa de 14s entre cada execução real na Amazon (respeita rate limit).
+ * Processa até MAX_PER_RUN decisões com intervalo de 14s entre chamadas Amazon.
+ * Sem restrição de horário — roda sempre que chamado.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MAX_PER_RUN = 8;         // máx por execução (14s * 8 = ~112s < 2min)
-const INTER_DELAY_MS = 14000;  // 14s entre chamadas Amazon
+const MAX_PER_RUN = 8;          // máx por execução
+const INTER_DELAY_MS = 14000;   // 14s entre chamadas Amazon (rate limit)
 const MAX_DURATION_MS = 100000; // sair se ultrapassar 100s
 
 function currentHourBRT(): number {
   const utcH = new Date().getUTCHours();
   return (utcH - 3 + 24) % 24;
-}
-
-function isOperationalWindow(h: number): boolean {
-  return h >= 0 && h <= 12 || h === 13;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -33,15 +26,6 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
 
     const hourBRT = currentHourBRT();
-
-    // Só roda nas janelas operacionais (00-07h e 13h BRT)
-    if (!isOperationalWindow(hourBRT) && !body.force) {
-      return Response.json({
-        ok: true,
-        skipped: true,
-        reason: `Fora da janela operacional. Hora BRT: ${hourBRT}h. Janela: 00h-07h e 13h.`,
-      });
-    }
 
     // Resolver conta
     let account: any = null;
@@ -57,23 +41,14 @@ Deno.serve(async (request) => {
 
     const aid = account.id;
 
-    // Buscar decisões do slot atual que ainda estão approved/queued
+    // Buscar todas as decisões approved — sem filtro de queue_hour
     const slotDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { amazon_account_id: aid, status: 'approved', queue_hour: hourBRT },
+      { amazon_account_id: aid, status: 'approved' },
       'created_at',
-      MAX_PER_RUN + 10
+      MAX_PER_RUN
     );
 
-    // Fallback: decisões approved sem queue_hour (distribuídas antes do novo sistema)
-    const unslotted = slotDecisions.length < MAX_PER_RUN
-      ? await base44.asServiceRole.entities.OptimizationDecision.filter(
-          { amazon_account_id: aid, status: 'approved', queue_hour: null },
-          'created_at',
-          MAX_PER_RUN - slotDecisions.length
-        ).catch(() => [])
-      : [];
-
-    const toProcess = [...slotDecisions, ...unslotted].slice(0, MAX_PER_RUN);
+    const toProcess = slotDecisions.slice(0, MAX_PER_RUN);
 
     if (toProcess.length === 0) {
       return Response.json({
