@@ -415,11 +415,11 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
-              <button onClick={forceSync} disabled={syncing || !account}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg transition-colors disabled:opacity-50 hidden">
-                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Sincronizando...' : 'Sincronizar'}
-              </button>
+              
+
+
+
+              
               
 
 
