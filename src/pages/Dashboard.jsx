@@ -215,7 +215,7 @@ function GoalRow({ label, real, target, unit = '%', lowerIsBetter = true, realLa
       <div className="flex items-center gap-3 flex-shrink-0">
         <span className={`text-sm font-bold ${tone}`}>{realLabel || (real === 0 ? '—' : `${real.toFixed(1)}${unit}`)}</span>
         <span className="text-[10px] text-slate-600">Meta: {target}{unit}</span>
-        {real > 0 && <span className={`text-[10px] ${tone}`}>{dir}</span>}
+        {real > 0 ? <span className={`text-[10px] ${tone}`}>{dir}</span> : null}
       </div>
     </div>
   );
@@ -1127,7 +1127,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── 7. METAS VS REALIDADE ────────────────────────────────────────────── */}
-      {(targetAcos > 0 || targetRoas > 0 || targetTacos > 0) && (
+      {(targetAcos > 0 || targetRoas > 0 || targetTacos > 0) ? (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-slate-300">Metas vs realidade</h2>
@@ -1142,13 +1142,8 @@ export default function Dashboard() {
             {maxCpc > 0 ? <GoalRow label="CPC máximo" real={kpis.cpc} target={maxCpc} unit="" lowerIsBetter realLabel={kpis.cpc > 0 ? fmtBRL(kpis.cpc) : '—'} /> : null}
             {officialDailyLimit > 0 ? <GoalRow label="Budget D-1" real={spendYesterday} target={officialDailyLimit} unit="" lowerIsBetter realLabel={fmtBRL(spendYesterday)} /> : null}
           </div>
-          {!targetAcos && !targetRoas && !targetTacos && (
-            <p className="text-xs text-slate-500">
-              Nenhuma meta configurada. <Link to="/settings" className="text-cyan hover:underline">Configurar →</Link>
-            </p>
-          )}
         </div>
-      )}
+      ) : null}
 
       {/* ── 8. RESUMO DE DECISÕES ────────────────────────────────────────────── */}
       {decisionSummary != null && (
