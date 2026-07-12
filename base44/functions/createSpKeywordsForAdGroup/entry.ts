@@ -57,16 +57,44 @@ Deno.serve(async (req) => {
       amazon_account_id,
       ad_group_id,
       campaign_id,
-      keywords = [],
       default_bid = 1.00,
       state = 'ENABLED',
     } = body;
+    let keywords: any[] = Array.isArray(body.keywords) ? [...body.keywords] : [];
 
     if (!amazon_account_id || !ad_group_id || !campaign_id) {
       return Response.json({ ok: false, error: 'amazon_account_id, ad_group_id e campaign_id são obrigatórios' }, { status: 400 });
     }
     if (!Array.isArray(keywords) || keywords.length === 0) {
       return Response.json({ ok: false, error: 'keywords[] deve ter pelo menos 1 item' }, { status: 400 });
+    }
+
+    // ── Validação anti-duplicata ────────────────────────────────────────────
+    // Buscar ASIN da campanha para validação cross-campanha
+    const campRows = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id, campaign_id: String(campaign_id) }, null, 1
+    ).catch(() => []);
+    const asinForDedup = campRows[0]?.asin || body.asin || null;
+    if (asinForDedup) {
+      const dedupResult = await base44.asServiceRole.functions.invoke('checkKeywordDuplicates', {
+        amazon_account_id,
+        asin: asinForDedup,
+        keywords: keywords.map((kw: any) => ({ keyword_text: kw.keyword_text, match_type: kw.match_type || 'broad' })),
+        campaign_id: String(campaign_id),
+        _service_role: true,
+      }).catch(() => null);
+      const dedup = dedupResult?.data || dedupResult;
+      if (dedup?.has_duplicates) {
+        const allowedTexts = new Set((dedup.allowed || []).map((k: any) => (k.keyword_text || '').toLowerCase().trim()));
+        keywords = keywords.filter((kw: any) => allowedTexts.has((kw.keyword_text || '').toLowerCase().trim()));
+        if (keywords.length === 0) {
+          return Response.json({
+            ok: false, blocked_all: true,
+            error: `Todas as ${dedup.blocked_count} keywords já existem para este produto.`,
+            blocked: dedup.blocked,
+          });
+        }
+      }
     }
 
     // Carregar conta

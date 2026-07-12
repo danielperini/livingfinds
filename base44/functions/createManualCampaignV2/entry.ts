@@ -66,6 +66,27 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
     }
 
+    // ── Validação anti-duplicata: bloquear antes de criar ──────────────────
+    const dedupCheck = await base44.asServiceRole.functions.invoke('checkKeywordDuplicates', {
+      amazon_account_id: accountId,
+      asin,
+      keywords: [{ keyword_text: keyword, match_type: 'exact' }],
+      _service_role: true,
+    }).catch(() => null);
+    const dedupData = dedupCheck?.data || dedupCheck;
+    if (dedupData?.has_duplicates && dedupData.blocked?.length > 0) {
+      const dup = dedupData.blocked[0];
+      return Response.json({
+        ok: false,
+        blocked_duplicate: true,
+        terminal: true,
+        reason: 'keyword_already_exists',
+        error: `Keyword "${keyword}" já existe para o ASIN ${asin} na campanha ${dup.existing_campaign_id}. Criação bloqueada automaticamente.`,
+        existing_campaign_id: dup.existing_campaign_id,
+        existing_keyword_id: dup.existing_keyword_id,
+      });
+    }
+
     const existing = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, asin, name }, '-created_date', 1).catch(() => []);
     if (existing[0]) {
       const repair = await base44.asServiceRole.functions.invoke('repairExactAdGroupKeywords', { amazon_account_id: accountId, asins: [asin], _window_execution: true, _service_role: true });

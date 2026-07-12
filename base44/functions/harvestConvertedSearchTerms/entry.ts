@@ -78,6 +78,13 @@ Deno.serve(async (req) => {
         .map(k => `${k.campaign_id}|${(k.keyword_text || k.keyword || '').toLowerCase().trim()}`)
     );
 
+    // Índice cross-campanha por ASIN: bloquear se o mesmo texto já existe em QUALQUER campanha do ASIN
+    const manualExactByAsin = new Set(
+      existingKeywords
+        .filter(k => k.match_type === 'exact' && k.state === 'enabled' && k.asin)
+        .map(k => `${k.asin}|${(k.keyword_text || k.keyword || '').toLowerCase().trim()}`)
+    );
+
     // Deduplicar search terms: manter o registro mais rico por (term, asin)
     const stMap = new Map();
     for (const st of searchTerms) {
@@ -117,9 +124,11 @@ Deno.serve(async (req) => {
       if (product.inventory_status === 'out_of_stock') { stats.skipped_no_stock++; continue; }
       if (product.status === 'inactive' || product.status === 'archived') { stats.skipped_no_stock++; continue; }
 
-      // Verificar se keyword exact já existe nesta campanha
+      // Verificar se keyword exact já existe nesta campanha OU em qualquer campanha do mesmo ASIN
       const existsInCampaign = manualExactIndex.has(`${st.campaign_id}|${term}`);
       if (existsInCampaign) { stats.skipped_duplicate++; continue; }
+      const existsCrossAsin = manualExactByAsin.has(`${st.advertised_asin}|${term}`);
+      if (existsCrossAsin) { stats.skipped_duplicate++; continue; }
 
       // Chave de idempotência: garante que não cria 2x no mesmo dia
       const iKey = makeIdempotencyKey(aid, 'harvest_search_term', st.id, 'create_keyword', today);
