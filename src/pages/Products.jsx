@@ -157,16 +157,31 @@ export default function Products({ externalRefreshTrigger }) {
   // ── Filtro permanente: apenas produtos ativos com estoque ────────────────────
   // Mantém na lista produtos que voltaram ao estoque (fba_inventory > 0) mesmo que
   // inventory_status ainda esteja desatualizado — remove apenas quando claramente zerado.
-  const visibleProducts = useMemo(() =>
-    products.filter(p => {
+  // Deduplica por ASIN: mantém o registro com last_sync_at mais recente ou fba_inventory > 0.
+  const visibleProducts = useMemo(() => {
+    const active = products.filter(p => {
       if (p.status === 'inactive' || p.status === 'archived') return false;
-      // Se há unidades reais registradas, sempre mostra (estoque voltou)
       if (Number(p.fba_inventory || 0) > 0) return true;
-      // Remove apenas quando confirmadamente sem estoque
       return offerStatus(p) !== 'out_of_stock';
-    }),
-    [products]
-  );
+    });
+    // Deduplicar por ASIN — em caso de duplicata, prioriza o de maior estoque,
+    // depois o mais recentemente sincronizado.
+    const byAsin = new Map();
+    for (const p of active) {
+      const key = p.asin || p.id;
+      const existing = byAsin.get(key);
+      if (!existing) { byAsin.set(key, p); continue; }
+      const newStock = Number(p.fba_inventory || 0);
+      const existStock = Number(existing.fba_inventory || 0);
+      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
+      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+      // Prefere maior estoque; em empate, prefere sync mais recente
+      if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
+        byAsin.set(key, p);
+      }
+    }
+    return Array.from(byAsin.values());
+  }, [products]);
 
   // ── Contadores ──────────────────────────────────────────────────────────────
   const counters = useMemo(() => {
