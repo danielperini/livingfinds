@@ -39,6 +39,17 @@ function applySort(items, sortBy) {
     });
     case 'total_sales_30d': return arr.sort((a, b) => Number(b.total_sales_30d || 0) - Number(a.total_sales_30d || 0));
     case 'total_spend_30d': return arr.sort((a, b) => Number(b.total_spend_30d || 0) - Number(a.total_spend_30d || 0));
+    case 'champions': return arr.sort((a, b) => {
+      // Score = vendas normalizadas + bônus por ACoS baixo. Produtos sem ACoS não penalizam.
+      const salesA = Number(a.total_sales_30d || 0);
+      const salesB = Number(b.total_sales_30d || 0);
+      const acosA = Number(a.acos || 0);
+      const acosB = Number(b.acos || 0);
+      // Score composto: vendas brutas × fator de eficiência (quanto menor o ACoS, maior o fator)
+      const effA = acosA > 0 ? Math.max(0, 1 - acosA / 100) : 1;
+      const effB = acosB > 0 ? Math.max(0, 1 - acosB / 100) : 1;
+      return (salesB * effB) - (salesA * effA);
+    });
     default: return arr.sort((a, b) => sortDateValue(b) - sortDateValue(a));
   }
 }
@@ -67,7 +78,7 @@ export default function Products({ externalRefreshTrigger }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('newest');
+  const [sortBy, setSortBy] = useState('champions');
   const [page, setPage] = useState(1);
   const [actionLoading, setActionLoading] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
@@ -438,6 +449,7 @@ export default function Products({ externalRefreshTrigger }) {
               <option value="no_campaign">Sem campanha primeiro</option>
               <option value="out_of_stock">Sem estoque primeiro</option>
               <option value="last_update">Última atualização</option>
+              <option value="champions">🏆 Campeões (Vendas + ACoS)</option>
               <option value="total_sales_30d">Vendas 30d</option>
               <option value="total_spend_30d">Spend 30d</option>
             </select>
