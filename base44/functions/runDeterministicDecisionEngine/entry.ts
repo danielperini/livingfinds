@@ -35,27 +35,42 @@ const FB = {
   SAFETY_FACTOR: 0.80,
   MIN_CONFIDENCE: 0.95,
   MIN_RELEVANCE: 0.95,
-  COOLDOWN_HOURS: 72,
+  COOLDOWN_HOURS: 48,               // bid_change_cooldown_hours = 48
   MATURATION_HOURS: 72,
   MIN_STOCK_DAYS: 7,
   // v6
-  GROWTH_TOLERANCE_FACTOR: 1.05,   // permite teste até 5% além do limite econômico
-  MAX_GROWTH_FACTOR: 1.10,          // teto de crescimento por ciclo
-  PARTIAL_COST_MAX_INCREASE: 0.05,  // custo parcial: máximo 5%
-  GROWTH_COOLDOWN_HOURS: 72,        // aguardar avaliação após aumento
+  GROWTH_TOLERANCE_FACTOR: 1.05,
+  MAX_GROWTH_FACTOR: 1.10,
+  PARTIAL_COST_MAX_INCREASE: 0.05,
+  GROWTH_COOLDOWN_HOURS: 48,        // alinhado ao bid_change_cooldown_hours
+  // Sem vendas — revisão e pausa
+  NO_SALES_FIRST_REVIEW_HOURS: 72,
+  NO_SALES_SECOND_REVIEW_DAYS: 5,
+  NO_SALES_CAMPAIGN_PAUSE_DAYS: 7,
+  NEW_PRODUCT_MAX_LEARNING_DAYS: 14,
+  // Zero impressões
+  ZERO_IMP_FIRST_REVIEW_HOURS: 72,
+  ZERO_IMP_KEYWORD_PAUSE_DAYS: 14,
+  ZERO_IMP_CAMPAIGN_PAUSE_DAYS: 21,
+  // Baixas impressões
+  LOW_IMP_REVIEW_DAYS: 7,
+  LOW_IMP_SECOND_REVIEW_DAYS: 14,
+  LOW_IMP_KEYWORD_PAUSE_DAYS: 21,
+  // Evidência mínima antes de pausar
+  MIN_CLICKS_BEFORE_PAUSE: 20,      // mínimo de 20 cliques antes de qualquer pausa
 };
 
 // ── MRC ────────────────────────────────────────────────────────────────────────
 const MRC = {
-  MIN_CLICKS: 10,
+  MIN_CLICKS: 20,                    // minimum_clicks_before_pause = 20
   MIN_IMPRESSIONS: 200,
-  MIN_SPEND: 12.0,
+  MIN_SPEND: 12.0,                   // fallback; runtime usa maximum_profitable_cpa quando disponível
   MIN_CTR: 0.0005,
   ATTRIBUTION_WINDOW: 14,
   DATA_STABLE_DAYS: 30,
   DATA_STALE_HOURS: 48,
-  LOW_VISIBILITY_IMPRESSIONS: 50,    // threshold para baixa visibilidade
-  LOW_IMPRESSION_SHARE: 0.05,        // < 5% = baixa participação
+  LOW_VISIBILITY_IMPRESSIONS: 50,
+  LOW_IMPRESSION_SHARE: 0.05,
 };
 
 // ── Hierarquia de prioridade ──────────────────────────────────────────────────
@@ -1182,7 +1197,9 @@ Deno.serve(async (req) => {
       // ── REGRAS DE PROTEÇÃO (redução) — avaliadas antes do crescimento ─
 
       // CPA acima do máximo lucrável
-      if (funnel.maximum_profitable_cpa > 0 && kw_orders >= 2 && funnel.actual_cpa > funnel.maximum_profitable_cpa && kw_spend >= MRC.MIN_SPEND) {
+      // minimum_spend_before_pause = maximum_profitable_cpa (quando disponível), senão MIN_SPEND
+      const minSpendBeforePause = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
+      if (funnel.maximum_profitable_cpa > 0 && kw_orders >= 2 && funnel.actual_cpa > funnel.maximum_profitable_cpa && kw_spend >= minSpendBeforePause && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE) {
         const reductionPct = funnel.actual_cpa > funnel.maximum_profitable_cpa * 1.5 ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
         const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
         const iKey = `cpa_above_max|${aid}|${entityId}|${today}`;
@@ -1230,8 +1247,9 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Gasto sem conversão
-      if (kw_spend >= MRC.MIN_SPEND && kw_orders === 0 && kw_clicks >= MRC.MIN_CLICKS) {
+      // Gasto sem conversão — exige minimum_clicks_before_pause=20 e minimum_spend=maximum_profitable_cpa
+      const noConvMinSpend = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
+      if (kw_spend >= noConvMinSpend && kw_orders === 0 && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE) {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
           const shouldPause = (kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational') && kw_spend >= MRC.MIN_SPEND * 2;
