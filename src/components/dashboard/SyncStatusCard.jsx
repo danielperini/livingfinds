@@ -109,7 +109,7 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSal
       </div>
 
       {/* Alerta de divergência de reconciliação */}
-      {reconciliationStatus === 'pending' && (
+      {reconciliationStatus === 'pending' ? (
         <div className="mt-2.5 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-[10px] space-y-0.5">
@@ -118,17 +118,17 @@ export default function SyncStatusCard({ allMetrics, salesDaily, account, adsSal
             <p className="text-slate-400 mt-1">⚠ O motor não deve classificar lucro como confirmado nem pausar campanha com base nestes dados até a reconciliação.</p>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="mt-2 flex items-center gap-3 flex-wrap">
-        {lastSyncAt && (
+        {lastSyncAt ? (
           <div className="flex items-center gap-1.5">
             <Clock className="w-3 h-3 text-slate-600" />
             <p className="text-[10px] text-slate-500">
               Último sync: {new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
             </p>
           </div>
-        )}
+        ) : null}
         {lastSyncAt ? (() => {
           const nextSync = new Date(new Date(lastSyncAt).getTime() + 24 * 3600000);
           const diffMs = nextSync.getTime() - Date.now();
