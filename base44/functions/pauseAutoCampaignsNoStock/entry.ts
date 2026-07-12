@@ -1,6 +1,7 @@
 /**
  * pauseAutoCampaignsNoStock
- * Pausa campanhas AUTO cujo ASIN não tem estoque ativo nem kickoff agendado.
+ * 1. Para cada ASIN com múltiplas campanhas AUTO ativas: pausa+arquiva as mais recentes, mantém a mais antiga.
+ * 2. Pausa campanhas AUTO cujo ASIN não tem estoque ativo nem kickoff agendado.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -66,11 +67,11 @@ Deno.serve(async (req) => {
     const account = accounts[0];
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
 
-    // Campanhas AUTO enabled
+    // Todas campanhas AUTO ativas
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, null, 500);
     const autoEnabled = allCampaigns.filter((c: any) =>
       (c.targeting_type || '').toUpperCase() === 'AUTO' &&
-      (c.state === 'enabled' || c.status === 'enabled')
+      (c.state === 'enabled' || c.status === 'enabled' || c.state === 'ENABLED')
     );
 
     // Produtos com estoque
@@ -81,25 +82,52 @@ Deno.serve(async (req) => {
     const queue = await base44.asServiceRole.entities.ProductKickoffQueue.filter({ amazon_account_id, status: 'scheduled' }, null, 200).catch(() => []);
     const kickoffAsins = new Set((queue as any[]).map((q: any) => q.asin));
 
-    // Filtrar campanhas a pausar
-    const toPause = autoEnabled.filter((c: any) => {
-      const asin = c.asin || extractAsin(c.name || c.campaign_name);
+    // ── Regra 1: Múltiplas AUTO por ASIN — pausar+arquivar mais recentes, manter mais antiga ──
+    const byAsin = new Map<string, any[]>();
+    for (const c of autoEnabled as any[]) {
+      const asin = c.asin || extractAsin(c.name || c.campaign_name || '');
+      if (!asin) continue;
+      if (!byAsin.has(asin)) byAsin.set(asin, []);
+      byAsin.get(asin)!.push(c);
+    }
+
+    const duplicatesToArchive: any[] = [];
+    for (const [asin, camps] of byAsin.entries()) {
+      if (camps.length <= 1) continue;
+      // Ordenar: mais antiga primeiro (menor created_date ou campaign_id numérico como fallback)
+      camps.sort((a: any, b: any) => {
+        const da = new Date(a.created_date || a.created_at || 0).getTime();
+        const db = new Date(b.created_date || b.created_at || 0).getTime();
+        return da - db;
+      });
+      // Manter o primeiro (mais antigo), pausar+arquivar os demais
+      for (let i = 1; i < camps.length; i++) {
+        duplicatesToArchive.push({ ...camps[i], _asin: asin, _reason: 'duplicate_auto' });
+      }
+    }
+
+    // ── Regra 2: AUTO sem estoque e sem kickoff ──
+    const noStockToPause = autoEnabled.filter((c: any) => {
+      const asin = c.asin || extractAsin(c.name || c.campaign_name || '');
       if (!asin) return false;
+      // Não incluir se já está na lista de duplicatas
+      if (duplicatesToArchive.find((d: any) => d.id === c.id)) return false;
       return !inStockAsins.has(asin) && !kickoffAsins.has(asin);
     });
 
-    if (toPause.length === 0) {
-      return Response.json({ ok: true, paused: 0, message: 'Nenhuma campanha para pausar.' });
+    const totalActions = duplicatesToArchive.length + noStockToPause.length;
+
+    if (totalActions === 0) {
+      return Response.json({ ok: true, archived_duplicates: 0, paused_no_stock: 0, message: 'Nenhuma ação necessária.' });
     }
 
     if (dry_run) {
       return Response.json({
-        ok: true, dry_run: true, would_pause: toPause.length,
-        campaigns: (toPause as any[]).map((c: any) => ({
-          name: c.name || c.campaign_name,
-          asin: c.asin || extractAsin(c.name || c.campaign_name),
-          campaign_id: c.campaign_id || c.amazon_campaign_id,
-        })),
+        ok: true, dry_run: true,
+        would_archive_duplicates: duplicatesToArchive.length,
+        would_pause_no_stock: noStockToPause.length,
+        duplicates: duplicatesToArchive.map((c: any) => ({ name: c.name || c.campaign_name, asin: c._asin })),
+        no_stock: noStockToPause.map((c: any) => ({ name: c.name || c.campaign_name, asin: c.asin || extractAsin(c.name || c.campaign_name || '') })),
       });
     }
 
@@ -109,38 +137,37 @@ Deno.serve(async (req) => {
     try { accessToken = await getAdsAccessToken(refreshToken); } catch {}
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
 
-    const results: any[] = [];
     const now = new Date().toISOString();
+    let archivedCount = 0;
+    let pausedNoStockCount = 0;
 
-    for (const c of toPause as any[]) {
-      const asin = c.asin || extractAsin(c.name || c.campaign_name);
-      let apiOk = false;
-
-      // Tentar pausar na Amazon Ads API
+    // Arquivar duplicatas (pausa na API + status archived localmente)
+    for (const c of duplicatesToArchive as any[]) {
       if (accessToken && profileId && (c.campaign_id || c.amazon_campaign_id)) {
-        try {
-          apiOk = await pauseCampaignOnAmazon(accessToken, profileId, c.campaign_id || c.amazon_campaign_id);
-        } catch {}
+        try { await pauseCampaignOnAmazon(accessToken, profileId, c.campaign_id || c.amazon_campaign_id); } catch {}
       }
+      await base44.asServiceRole.entities.Campaign.update(c.id, {
+        state: 'archived', status: 'archived', updated_at: now,
+      });
+      archivedCount++;
+    }
 
-      // Sempre atualizar localmente
+    // Pausar sem estoque
+    for (const c of noStockToPause as any[]) {
+      if (accessToken && profileId && (c.campaign_id || c.amazon_campaign_id)) {
+        try { await pauseCampaignOnAmazon(accessToken, profileId, c.campaign_id || c.amazon_campaign_id); } catch {}
+      }
       await base44.asServiceRole.entities.Campaign.update(c.id, {
         state: 'paused', status: 'paused', updated_at: now,
       });
-
-      results.push({ id: c.id, asin, name: c.name || c.campaign_name, api_ok: apiOk });
+      pausedNoStockCount++;
     }
-
-    const apiPaused = results.filter(r => r.api_ok).length;
-    const localOnly = results.filter(r => !r.api_ok).length;
 
     return Response.json({
       ok: true,
-      paused: results.length,
-      api_paused: apiPaused,
-      local_only: localOnly,
-      results,
-      message: `${results.length} campanhas pausadas (${apiPaused} via API, ${localOnly} apenas local).`,
+      archived_duplicates: archivedCount,
+      paused_no_stock: pausedNoStockCount,
+      message: `${archivedCount} duplicatas arquivadas, ${pausedNoStockCount} pausadas por sem estoque.`,
     });
 
   } catch (error: any) {
