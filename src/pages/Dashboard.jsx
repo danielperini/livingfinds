@@ -717,12 +717,12 @@ export default function Dashboard() {
       )}
 
       {/* Decisões pendentes — compacto */}
-      {decisions.length > 0 && (
+      {decisions.length > 0 ? (
         <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border bg-violet-500/5 border-violet-500/20 text-xs">
           <span className="text-violet-300"><span className="font-bold">{decisions.length}</span> decisões de IA pendentes de revisão.</span>
           <Link to="/sala-de-comando" className="text-violet-400 hover:underline whitespace-nowrap">Ver na Sala de Controle →</Link>
         </div>
-      )}
+      ) : null}
 
       {/* ── 3. GRÁFICO CONSOLIDADO: range máximo de dados disponíveis ──────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
@@ -734,7 +734,7 @@ export default function Dashboard() {
           {hasSalesDailyData && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span>}
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400/80 inline-block" />Cliques: {kpis.clicks.toLocaleString('pt-BR')}</span>
-          {totalChanges > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>}
+          {totalChanges > 0 ? <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span> : null}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
@@ -962,9 +962,9 @@ export default function Dashboard() {
       )}
 
       {/* ── 5a2. ALTERAÇÕES DA IA — segmentadas ──────────────────────────────── */}
-      {!loading && bidChanges.length > 0 && (
+      {!loading && bidChanges.length > 0 ? (
         <AiChangesBreakdown bidChanges={bidChanges} />
-      )}
+      ) : null}
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
       {!loading && (
@@ -1151,7 +1151,7 @@ export default function Dashboard() {
       )}
 
       {/* ── 8. RESUMO DE DECISÕES ────────────────────────────────────────────── */}
-      {decisionSummary && (
+      {decisionSummary != null && (
         <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-slate-300">Decisões e automação</h2>
