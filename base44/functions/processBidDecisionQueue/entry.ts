@@ -2,9 +2,9 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid']);
-const WINDOW_HOURS = [16, 17];
-const WINDOW_START = 16;
-const WINDOW_END = 18;
+const WINDOW_HOURS = [23];
+const WINDOW_START = 23;
+const WINDOW_END = 24;
 const MAX_ATTEMPTS = 6;
 const DEFAULT_SPACING_MS = 2500;
 const DEFAULT_RUNTIME_MS = 240000;
@@ -24,7 +24,7 @@ function nextWindowDate() {
   }).formatToParts(now);
   const get = (type:string) => Number(parts.find((part) => part.type === type)?.value || 0);
   const currentHour = get('hour');
-  const target = new Date(Date.UTC(get('year'), get('month') - 1, get('day'), WINDOW_START + 3, 0, 0));
+  const target = new Date(Date.UTC(get('year'), get('month') - 1, get('day'), WINDOW_START + 3, 10, 0));
   if (currentHour >= WINDOW_END) target.setUTCDate(target.getUTCDate() + 1);
   return target.toISOString();
 }
@@ -113,7 +113,7 @@ Deno.serve(async (request) => {
     const recoveryMode = body.recovery_mode === true;
     const hour = Number(body.hour ?? brazilHour());
     if (!recoveryMode && !WINDOW_HOURS.includes(hour)) {
-      return Response.json({ ok: true, skipped: true, reason: 'Fora da janela Amazon 16:00-18:00 BRT', hour, window: '16:00-18:00' });
+      return Response.json({ ok: true, skipped: true, reason: 'Fora da janela Amazon 23:00 BRT', hour, window: '23:00' });
     }
 
     const spacingMs = Math.max(1500, Number(body.spacing_ms || DEFAULT_SPACING_MS));
@@ -144,8 +144,8 @@ Deno.serve(async (request) => {
           }
 
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
-            queue_window: recoveryMode ? 'recuperação imediata' : '16:00-18:00',
+              status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
+              queue_window: recoveryMode ? 'recuperação imediata' : '23:00',
             error_message: null, updated_at: new Date().toISOString(),
           });
 
@@ -163,7 +163,7 @@ Deno.serve(async (request) => {
             const retryAt = nextWindowDate();
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
               status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
-              queue_window: '16:00-18:00', scheduled_for: retryAt, next_retry_at: retryAt,
+              queue_window: '23:00', scheduled_for: retryAt, next_retry_at: retryAt,
               error_message: String(item?.error || data?.error || 'Falha temporária Amazon').slice(0, 500), updated_at: new Date().toISOString(),
             });
             result.retried++;
@@ -178,7 +178,7 @@ Deno.serve(async (request) => {
           if (attempts < MAX_ATTEMPTS) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
               status: 'approved', queue_status: 'scheduled', queue_hour: WINDOW_START,
-              queue_window: '16:00-18:00', scheduled_for: retryAt, next_retry_at: retryAt,
+              queue_window: '23:00', scheduled_for: retryAt, next_retry_at: retryAt,
               error_message: String(error?.message || error).slice(0, 500), updated_at: new Date().toISOString(),
             }).catch(() => {});
             result.retried++;
@@ -196,7 +196,7 @@ Deno.serve(async (request) => {
     const totalRemaining = output.reduce((sum, item) => sum + Number(item.remaining || 0), 0);
     return Response.json({
       ok: output.every((item) => item.failed === 0), hour, recovery_mode: recoveryMode,
-      operational_window: '16:00-18:00 America/Sao_Paulo',
+      operational_window: '23:00 America/Sao_Paulo',
       accounts_processed: accounts.length, spacing_ms: spacingMs, max_attempts: MAX_ATTEMPTS,
       reduction_guard: {
         minimum_keyword_impressions: MIN_KEYWORD_IMPRESSIONS_FOR_REDUCTION,
