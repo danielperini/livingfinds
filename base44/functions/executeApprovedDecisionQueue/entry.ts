@@ -1,23 +1,8 @@
-/**
- * executeApprovedDecisionQueue — Executa decisões aprovadas IMEDIATAMENTE
- *
- * MODO AGRESSIVO: não agenda slots noturnos, não espera janelas.
- * Processa até MAX_BATCH decisões por chamada, com pausa de 400ms entre
- * chamadas Amazon (rate limit seguro). Pausas urgentes têm prioridade absoluta.
- *
- * Prioridade de execução:
- *   1. pause_campaign / pause_keyword (imediato, crítico)
- *   2. set_bid com redução (proteção de margem)
- *   3. set_bid com aumento (escala)
- *   4. budget_change
- *   5. outros
- */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-const MAX_BATCH = 30;        // máx por chamada
-const API_DELAY_MS = 400;    // pausa entre chamadas Amazon
+const MAX_BATCH = 30;
+const API_DELAY_MS = 400;
 
-// Detecta qualquer variante de "entidade não encontrada"
 function isEntityNotFound(payload: any): boolean {
   const s = JSON.stringify(payload || '').toLowerCase();
   return s.includes('entitynotfounderror') || s.includes('entity_not_found') ||
@@ -38,7 +23,6 @@ function prioritize(decisions: any[]): any[] {
     const pa = order[a.action] ?? 9;
     const pb = order[b.action] ?? 9;
     if (pa !== pb) return pa - pb;
-    // Redução de bid antes de aumento (proteção antes de escala)
     if (a.action === b.action && a.action === 'set_bid') {
       const aReduce = (a.value_after || 0) < (a.value_before || 0) ? 0 : 1;
       const bReduce = (b.value_after || 0) < (b.value_before || 0) ? 0 : 1;
@@ -58,7 +42,6 @@ Deno.serve(async (request) => {
       return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    // Resolver conta
     let account: any = null;
     if (body.amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1);
@@ -71,8 +54,6 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
 
     const aid = account.id;
-
-    // Buscar todas as decisões aprovadas pendentes
     const approved = await base44.asServiceRole.entities.OptimizationDecision.filter(
       { amazon_account_id: aid, status: 'approved' },
       'created_at',
@@ -80,10 +61,13 @@ Deno.serve(async (request) => {
     );
 
     if (approved.length === 0) {
-      return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
+      const parity = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
+        amazon_account_id: aid,
+        _service_role: true,
+      }).catch(() => null);
+      return Response.json({ ok: true, executed: 0, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
     }
 
-    // Pré-validar keywords: cancelar decisões cujo keyword_id não existe mais no banco
     const keywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 1000).catch(() => []);
     const validKwIds = new Set(keywords.map((k: any) => k.keyword_id || k.id).filter(Boolean));
 
@@ -98,7 +82,6 @@ Deno.serve(async (request) => {
       }
     }
 
-    // Recarregar após cancelamentos preventivos
     const stillApproved = preAutoCancel > 0
       ? await base44.asServiceRole.entities.OptimizationDecision.filter(
           { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
@@ -106,33 +89,31 @@ Deno.serve(async (request) => {
       : approved;
 
     if (stillApproved.length === 0) {
-      return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, duration_ms: Date.now() - t0 });
+      const parity = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
+        amazon_account_id: aid,
+        _service_role: true,
+      }).catch(() => null);
+      return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
     }
 
-    // Priorizar e limitar
     const toProcess = prioritize(stillApproved).slice(0, MAX_BATCH);
-
-    console.log(`[executeApprovedDecisionQueue] Executando ${toProcess.length} decisões para conta ${aid}`);
-
     const results: any[] = [];
     let executed = 0, failed = 0, skipped = 0;
 
     for (const decision of toProcess) {
-      if (Date.now() - t0 > 90000) {
-        console.warn('[executeApprovedDecisionQueue] Limite de tempo atingido, parando');
-        break;
-      }
+      if (Date.now() - t0 > 90000) break;
 
       try {
-        const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecisionV2', {
+        // Usa o roteador canônico: ajustes de bid são enviados para atualização pareada
+        // de keyword e ad group; as demais ações seguem para o executor V2.
+        const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
           decision_ids: [decision.id],
           _service_role: true,
-          _window_execution: true, // execução imediata — ignora verificação de janela
+          _window_execution: true,
         });
         const data = res?.data || res || {};
         const ok = data?.executed > 0 || data?.ok === true;
 
-        // Detectar ENTITY_NOT_FOUND e cancelar automaticamente (keyword/campanha removida da Amazon)
         if (!ok && isEntityNotFound(data)) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
             status: 'cancelled',
@@ -149,25 +130,28 @@ Deno.serve(async (request) => {
         failed++;
       }
 
-      // Pausa entre chamadas para respeitar rate limit Amazon
-      if (toProcess.indexOf(decision) < toProcess.length - 1) {
-        await sleep(API_DELAY_MS);
-      }
+      if (toProcess.indexOf(decision) < toProcess.length - 1) await sleep(API_DELAY_MS);
     }
 
-    // Log de auditoria
+    // Corrige também divergências históricas existentes em todas as campanhas manuais.
+    const parityResponse = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
+      amazon_account_id: aid,
+      _service_role: true,
+    }).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
+    const parity = parityResponse?.data || parityResponse || {};
+
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
       operation: 'ads_decision_execution',
       trigger_type: body._service_role ? 'automatic' : 'manual',
-      status: failed === 0 ? 'success' : executed > 0 ? 'warning' : 'error',
+      status: failed === 0 && parity?.ok !== false ? 'success' : executed > 0 ? 'warning' : 'error',
       execution_date: new Date().toISOString().slice(0, 10),
       started_at: new Date(t0).toISOString(),
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       records_processed: executed,
-      error_message: failed > 0 ? `${failed} decisões falharam` : null,
-      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas`,
+      error_message: failed > 0 ? `${failed} decisões falharam` : parity?.ok === false ? `Falha na reconciliação de bids: ${parity?.error || 'erro desconhecido'}` : null,
+      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas; ${Number(parity?.corrected || 0)} divergências de bid corrigidas`,
     }).catch(() => {});
 
     return Response.json({
@@ -179,10 +163,10 @@ Deno.serve(async (request) => {
       failed,
       skipped,
       remaining: Math.max(0, approved.length - MAX_BATCH),
+      bid_parity: parity,
       duration_ms: Date.now() - t0,
       results: results.slice(0, 30),
     });
-
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message }, { status: 500 });
   }
