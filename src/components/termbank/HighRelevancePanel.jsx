@@ -26,28 +26,31 @@ export default function HighRelevancePanel({
   const [expandedTerm, setExpandedTerm] = useState(null);
   const [batchLoading, setBatchLoading] = useState(null);
   const [autoRunning, setAutoRunning] = useState(false);
-  const [autoProgress, setAutoProgress] = useState(null); // { done, total }
-  const autoRanRef = useRef(false);
+  const [autoProgress, setAutoProgress] = useState(null);
+  const processedIdsRef = useRef(new Set()); // IDs já processados nesta sessão
+  const runningRef = useRef(false);
 
   const q = search || '';
   const filtered = data.filter(g => !q || g.term.toLowerCase().includes(q));
 
-  // Todos os registros pendentes de termos ≥90%
+  // Todos os registros pendentes de termos ≥90% ainda não processados
   const pendingHigh = data
     .filter(g => g.conf >= 90)
-    .flatMap(g => g.records.filter(r => !scheduledIds[r.id]));
+    .flatMap(g => g.records.filter(r => !scheduledIds[r.id] && !processedIdsRef.current.has(r.id)));
 
-  // Auto-executa ao montar o painel (uma única vez por sessão)
+  // Dispara sempre que data/account mudam e há pendentes novos
   useEffect(() => {
-    if (autoRanRef.current || !account || pendingHigh.length === 0 || autoRunning) return;
-    autoRanRef.current = true;
+    if (!account || pendingHigh.length === 0 || runningRef.current) return;
+    runningRef.current = true;
+    setAutoRunning(true);
+    setAutoProgress({ done: 0, total: pendingHigh.length });
+    setMessage(null);
+
     (async () => {
-      setAutoRunning(true);
-      setAutoProgress({ done: 0, total: pendingHigh.length });
-      setMessage(null);
       let created = 0, failed = 0;
       for (let i = 0; i < pendingHigh.length; i++) {
         const rec = pendingHigh[i];
+        processedIdsRef.current.add(rec.id); // marcar antes de enviar (evita duplo envio)
         try {
           const ok = await scheduleOne(account, rec, setScheduledIds);
           ok ? created++ : failed++;
@@ -57,13 +60,14 @@ export default function HighRelevancePanel({
       }
       setAutoRunning(false);
       setAutoProgress(null);
+      runningRef.current = false;
       setMessage({
         type: failed === 0 ? 'success' : 'info',
-        text: `✓ Auto-implementação concluída — ${created} campanhas criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
+        text: `✓ Auto-implementação concluída — ${created} criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
       });
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account]);
+  }, [account, data]);
 
   const handleBatchCreate = async (group) => {
     if (!account || batchLoading) return;
