@@ -19,6 +19,7 @@ import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
+import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
   BarChart as ReBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area
@@ -534,6 +535,9 @@ export default function SalaDeComando() {
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
+
+      {/* Token Expired Banner */}
+      {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">

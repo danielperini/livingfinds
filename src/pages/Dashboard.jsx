@@ -13,6 +13,7 @@ import {
   AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
 } from 'lucide-react';
 import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
+import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
@@ -690,6 +691,9 @@ export default function Dashboard() {
           loading={canonicalLoading}
         />
       ) : null}
+
+      {/* ── TOKEN EXPIRED BANNER ────────────────────────────────────────────── */}
+      {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
       <div className="space-y-2">

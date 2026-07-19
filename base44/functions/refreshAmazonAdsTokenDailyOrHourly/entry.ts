@@ -134,6 +134,22 @@ Deno.serve(async (req) => {
           error_message: null,
         }).catch(() => {});
 
+        // AUTO-RECOVERY: limpar alertas ativos de token para esta conta
+        try {
+          const tokenAlerts = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: accountId,
+            status: 'active',
+          }, '-created_at', 10);
+          for (const a of tokenAlerts) {
+            if (a.alert_type === 'token_expired' || a.alert_type === 'token_revoked') {
+              await base44.asServiceRole.entities.Alert.update(a.id, {
+                status: 'resolved',
+                resolved_at: now,
+              }).catch(() => {});
+            }
+          }
+        } catch { /* não bloquear o fluxo */ }
+
         const item = {
           account_id: accountId,
           ok: true,

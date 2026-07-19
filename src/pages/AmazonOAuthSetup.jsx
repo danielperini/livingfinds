@@ -4,7 +4,7 @@ import {
   CheckCircle, XCircle, Loader2, ExternalLink, RefreshCw,
   ShieldCheck, ShieldAlert, Zap, Copy, Database, Key,
   Save, Eye, EyeOff, ArrowLeft, Megaphone, CircleDot,
-  AlertTriangle, ChevronRight, Plug
+  AlertTriangle, ChevronRight, Plug, Clock
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -43,13 +43,35 @@ export default function AmazonOAuthSetup() {
   const [showToken, setShowToken]   = useState(false);
   const [saving, setSaving]         = useState(false);
   const [saveResult, setSaveResult] = useState(null);
+  const [lastTokenError, setLastTokenError] = useState(null);
 
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await base44.functions.invoke('getOAuthSetupInfo', {});
-      setInfo(res.data);
+      const [oauthRes, me] = await Promise.all([
+        base44.functions.invoke('getOAuthSetupInfo', {}),
+        base44.auth.me().catch(() => null),
+      ]);
+      setInfo(oauthRes.data);
+
+      // Buscar última falha de token no SyncExecutionLog
+      if (me) {
+        const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id }, null, 1).catch(() => []);
+        const acc = accounts[0];
+        if (acc) {
+          const logs = await base44.entities.SyncExecutionLog.filter(
+            { amazon_account_id: acc.id, status: 'error' }, '-started_at', 50
+          ).catch(() => []);
+          const tokenLog = logs.find(l =>
+            (l.operation || '').toLowerCase().includes('token') ||
+            (l.error_message || '').toLowerCase().includes('token') ||
+            (l.error_message || '').toLowerCase().includes('401') ||
+            (l.error_message || '').toLowerCase().includes('403')
+          );
+          setLastTokenError(tokenLog || null);
+        }
+      }
     } catch (e) {
       setInfo({ error: e.message });
     } finally {
@@ -369,6 +391,29 @@ export default function AmazonOAuthSetup() {
           )}
         </>
       )}
+
+      {/* ── ÚLTIMA FALHA DE TOKEN ─────────────────────────────────────────── */}
+      {lastTokenError ? (
+        <div className="bg-surface-1 border border-red-500/20 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <h2 className="text-sm font-semibold text-red-300">Última falha de token</h2>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
+            <span className="font-mono bg-surface-2 px-2 py-0.5 rounded text-[10px]">{lastTokenError.operation}</span>
+            <span className="text-slate-600">·</span>
+            <span>{lastTokenError.started_at ? new Date(lastTokenError.started_at).toLocaleString('pt-BR') : '—'}</span>
+          </div>
+          {lastTokenError.error_message && (
+            <p className="text-xs text-red-300/80 font-mono bg-red-500/5 border border-red-500/15 rounded-lg px-3 py-2 break-words">
+              {lastTokenError.error_message}
+            </p>
+          )}
+          <p className="text-[10px] text-slate-500">
+            Esta informação mostra quando e por que a conexão com a Amazon caiu.
+          </p>
+        </div>
+      ) : null}
 
       {/* Footer nav */}
       <div className="flex items-center gap-4 pt-2 border-t border-surface-2">

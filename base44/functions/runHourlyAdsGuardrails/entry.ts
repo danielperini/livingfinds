@@ -60,6 +60,88 @@ Deno.serve(async (req) => {
     const actions = [];
     const alerts = [];
 
+    // ── 0. TOKEN HEALTH CHECK ──────────────────────────────────────────────
+    // Verificar status do token ANTES dos guardrails operacionais
+    try {
+      const tokenStatus = account.ads_token_status || 'missing';
+      const expiresAt   = account.ads_access_token_expires_at
+        ? new Date(account.ads_access_token_expires_at).getTime()
+        : 0;
+      const remainingMs = expiresAt - Date.now();
+      const CRITICAL_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutos
+
+      const tokenCritical = (
+        tokenStatus === 'expired' ||
+        tokenStatus === 'revoked' ||
+        tokenStatus === 'missing' ||
+        tokenStatus === 'error' ||
+        !account.ads_access_token ||
+        remainingMs <= CRITICAL_THRESHOLD_MS
+      );
+
+      if (tokenCritical) {
+        // Tentar auto-renovação via watchdog
+        const refreshRes = await base44.asServiceRole.functions.invoke('refreshAmazonAdsTokenDailyOrHourly', {
+          _service_role: true,
+        }).catch((e: any) => ({ data: { ok: false, error: e.message } }));
+
+        const refreshData = refreshRes?.data || {};
+        const accountResult = refreshData?.results?.find((r: any) => r.account_id === aid);
+        const renewalOk = refreshData?.ok === true || accountResult?.ok === true;
+
+        if (!renewalOk) {
+          // Renovação falhou — criar alerta de token expirado (idempotente)
+          const existingTokenAlert = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            alert_type: 'token_expired',
+            status: 'active',
+          }, '-created_at', 1).catch(() => []);
+
+          if (existingTokenAlert.length === 0) {
+            await base44.asServiceRole.entities.Alert.create({
+              amazon_account_id: aid,
+              alert_type: 'token_expired',
+              severity: 'critical',
+              title: 'Token Amazon Ads expirado',
+              message: 'Token Amazon Ads expirado ou revogado. Acesse /amazon-oauth-setup para reconectar.',
+              entity_type: 'account',
+              status: 'active',
+              created_at: now,
+            }).catch(() => {});
+          }
+
+          // Marcar requires_reauth apenas se for revogação real
+          const requiresReauth = accountResult?.requires_reauthorization === true ||
+            tokenStatus === 'revoked' || tokenStatus === 'credentials_error';
+          if (requiresReauth) {
+            await base44.asServiceRole.entities.AmazonAccount.update(aid, {
+              ads_requires_reauth: true,
+              ads_token_status: 'revoked',
+              status: 'error',
+              error_message: 'Reautorização necessária. Acesse /amazon-oauth-setup.',
+            }).catch(() => {});
+          }
+
+          actions.push({ type: 'token_alert_created', token_status: tokenStatus, renewal_attempted: true, renewal_ok: false });
+        } else {
+          // Renovação bem-sucedida — limpar alertas de token
+          const tokenAlerts = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            status: 'active',
+          }, '-created_at', 10).catch(() => []);
+          for (const a of tokenAlerts) {
+            if (a.alert_type === 'token_expired' || a.alert_type === 'token_revoked') {
+              await base44.asServiceRole.entities.Alert.update(a.id, {
+                status: 'resolved',
+                resolved_at: now,
+              }).catch(() => {});
+            }
+          }
+          actions.push({ type: 'token_renewed', token_status: tokenStatus });
+        }
+      }
+    } catch { /* guardrail de token nunca bloqueia o restante */ }
+
     // ── 1. Liberar locks travados ──────────────────────────────────────────
     const stuckRuns = await base44.asServiceRole.entities.AutopilotRun.filter(
       { amazon_account_id: aid, status: 'running' }, '-started_at', 5
