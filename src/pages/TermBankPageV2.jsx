@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock, ChevronUp, ChevronDown } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock, ChevronUp, ChevronDown, Zap, Star } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
+import HighRelevancePanel from '@/components/termbank/HighRelevancePanel';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
 
@@ -224,8 +225,31 @@ export default function TermBankPageV2() {
 
 
 
+  // ── Termos de alta relevância (≥80%) agrupados por texto ──
+  const highRelevanceData = useMemo(() => {
+    const grouped = new Map(); // termo normalizado → { term, asins: Set, records: [] }
+    for (const t of terms) {
+      const conf = toConf100(t.confidence);
+      if (conf < 80) continue;
+      const key = (t.term || '').toLowerCase().trim();
+      if (!key) continue;
+      if (!grouped.has(key)) grouped.set(key, { term: t.term, conf, records: [], asins: new Set() });
+      const g = grouped.get(key);
+      g.records.push(t);
+      if (t.asin) g.asins.add(t.asin);
+      // Manter a conf máxima
+      if (conf > g.conf) g.conf = conf;
+    }
+    // Converter para array ordenado por conf desc
+    return Array.from(grouped.values())
+      .sort((a, b) => b.conf - a.conf);
+  }, [terms]);
+
+  const multiAsinTerms = useMemo(() => highRelevanceData.filter(g => g.conf >= 90 && g.asins.size > 1), [highRelevanceData]);
+
   const tabs = [
   { id: 'amazon', label: `🎯 Amazon Ads Suggestions`, count: amazonSuggestions.filter((s) => !['archived_by_policy', 'superseded'].includes(s.status)).length },
+  { id: 'high_relevance', label: '⚡ Alta Relevância', count: highRelevanceData.length },
   { id: 'terms', label: '📚 TermBank', count: terms.length }];
 
 
@@ -282,6 +306,19 @@ export default function TermBankPageV2() {
       <div className="flex justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
         </div> :
+      tab === 'high_relevance' ?
+      <HighRelevancePanel
+        data={highRelevanceData}
+        multiAsinTerms={multiAsinTerms}
+        search={q}
+        account={account}
+        schedulingId={schedulingId}
+        scheduledIds={scheduledIds}
+        onSchedule={handleScheduleCampaign}
+        setSchedulingId={setSchedulingId}
+        setScheduledIds={setScheduledIds}
+        setMessage={setMessage}
+      /> :
       tab === 'amazon' ?
       <AmazonSuggestionsTab
         suggestions={amazonSuggestions.filter((s) => `${s.keyword || ''} ${s.asin || ''}`.toLowerCase().includes(q))}
