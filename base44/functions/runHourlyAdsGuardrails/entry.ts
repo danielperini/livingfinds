@@ -218,7 +218,28 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // ── 5. Ações Amazon não confirmadas ───────────────────────────────────
+    // ── 5. Budget Kill Switch & Pacing Cycle ─────────────────────────────
+    // Kill Switch: verifica se gasto atingiu Hard Cap
+    try {
+      const killSwitchRes = await base44.asServiceRole.functions.invoke('runBudgetKillSwitch', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (killSwitchRes?.data?.kill_switch_activated) {
+        actions.push({ type: 'kill_switch_activated', campaigns_paused: killSwitchRes.data.campaigns_paused });
+      }
+    } catch {}
+
+    // Pacing Cycle: executa ajustes de underpacing/overpacing/daypart reserve
+    try {
+      const pacingRes = await base44.asServiceRole.functions.invoke('runIntraDayPacingCycle', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (pacingRes?.data?.actions_executed > 0) {
+        actions.push({ type: 'pacing_cycle', actions_executed: pacingRes.data.actions_executed, spend_pacing: pacingRes.data.spend_pacing });
+      }
+    } catch {}
+
+    // ── 6. Ações Amazon não confirmadas ───────────────────────────────────
     // Decisões executadas mas sem amazon_response válido nas últimas 4h
     const unconfirmedCutoff = new Date(Date.now() - 4 * 3600000).toISOString();
     const unconfirmed = await base44.asServiceRole.entities.OptimizationDecision.filter(

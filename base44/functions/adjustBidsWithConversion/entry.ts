@@ -210,6 +210,23 @@ Deno.serve(async (req) => {
     const cutoff48h = new Date(Date.now() - COOLDOWN_BID_H  * 3600 * 1000).toISOString();
     const cutoff24h = new Date(Date.now() - COOLDOWN_BUDGET_H * 3600 * 1000).toISOString();
 
+    // ── 0. KILL SWITCH GUARD ────────────────────────────────────────
+    const brtDateForKs = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const todayBRTForKs = brtDateForKs.toISOString().slice(0, 10);
+    const ksControllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
+      { amazon_account_id: accountId, spend_date: todayBRTForKs }, null, 1
+    ).catch(() => []);
+    const ksController = ksControllers[0];
+    if (ksController?.global_kill_switch === true) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        reason: 'Kill Switch ativo — nenhum bid ou budget alterado',
+        kill_switch_activated_at: ksController.kill_switch_activated_at,
+        duration_ms: Date.now() - t0,
+      });
+    }
+
     // ── 1. GOAL RESOLUTION ──────────────────────────────────────────────
     const [perfList, economicsList] = await Promise.all([
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, null, 1).catch(() => []),

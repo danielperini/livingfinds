@@ -1,0 +1,136 @@
+{
+  "name": "DailyBudgetLedger",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "ledger_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "daily_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "confirmed_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "projected_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "utilization_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "active_hours": {
+      "type": "number",
+      "default": 0
+    },
+    "profitable_hours": {
+      "type": "number",
+      "default": 0
+    },
+    "planned_curve": {
+      "type": "string",
+      "description": "JSON: hour -> expected_spend_pct"
+    },
+    "actual_curve": {
+      "type": "string",
+      "description": "JSON: hour -> actual_spend"
+    },
+    "elite_reserve_used": {
+      "type": "number",
+      "default": 0
+    },
+    "global_stop_events": {
+      "type": "number",
+      "default": 0
+    },
+    "stop_type_counts": {
+      "type": "string",
+      "description": "JSON: stop_type -> count"
+    },
+    "learning_flags": {
+      "type": "string",
+      "description": "JSON: MORNING_OVERSPEND, EVENING_UNDERSPEND, etc."
+    },
+    "pacing_error_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "best_actual_hours": {
+      "type": "string",
+      "description": "JSON: list of best performing hours"
+    },
+    "worst_actual_hours": {
+      "type": "string",
+      "description": "JSON: list of worst performing hours"
+    },
+    "unused_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "unused_reason": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "PROFIT_MAX_NO_OPPORTUNITY",
+        "KILL_SWITCH",
+        "DAYPART_RESERVE",
+        "UNDERPACING_LOW_TRAFFIC",
+        "UNKNOWN"
+      ],
+      "default": "NONE"
+    },
+    "acos_final": {
+      "type": "number"
+    },
+    "profit_final": {
+      "type": "number"
+    },
+    "budget_mode": {
+      "type": "string",
+      "enum": [
+        "PROFIT_MAX",
+        "BALANCED",
+        "FULL_UTILIZATION"
+      ],
+      "default": "BALANCED"
+    },
+    "hour_value_scores": {
+      "type": "string",
+      "description": "JSON: hour -> score (0-100)"
+    },
+    "best_profit_window": {
+      "type": "string",
+      "description": "JSON: [{hour, score, classification}]"
+    },
+    "affordable_active_hours": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_insufficient_for_8h": {
+      "type": "boolean",
+      "default": false
+    },
+    "estimated_budget_for_8h": {
+      "type": "number",
+      "default": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "closed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "ledger_date"
+  ]
+}
