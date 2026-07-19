@@ -1,0 +1,213 @@
+{
+  "name": "CrossAsinTransfer",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace": {
+      "type": "string",
+      "default": "BR"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "default": "exact"
+    },
+    "source_asin": {
+      "type": "string"
+    },
+    "source_keyword_bank_id": {
+      "type": "string"
+    },
+    "source_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "source_acos": {
+      "type": "number"
+    },
+    "source_cvr": {
+      "type": "number"
+    },
+    "source_cpc": {
+      "type": "number"
+    },
+    "source_winner_tier": {
+      "type": "string"
+    },
+    "destination_asin": {
+      "type": "string"
+    },
+    "destination_product_name": {
+      "type": "string"
+    },
+    "destination_sku": {
+      "type": "string"
+    },
+    "destination_fba_inventory": {
+      "type": "number",
+      "default": 0
+    },
+    "destination_aov": {
+      "type": "number"
+    },
+    "destination_target_acos": {
+      "type": "number"
+    },
+    "destination_sustainable_cpc": {
+      "type": "number"
+    },
+    "relevance_score": {
+      "type": "number",
+      "default": 0,
+      "description": "0-100"
+    },
+    "relevance_phase": {
+      "type": "string",
+      "enum": [
+        "HEURISTIC_ONLY",
+        "LLM_VALIDATED",
+        "LLM_SKIPPED"
+      ],
+      "default": "HEURISTIC_ONLY"
+    },
+    "heuristic_score": {
+      "type": "number"
+    },
+    "llm_score": {
+      "type": "number"
+    },
+    "llm_reason": {
+      "type": "string"
+    },
+    "hard_blocker_detected": {
+      "type": "boolean",
+      "default": false
+    },
+    "hard_blocker_reason": {
+      "type": "string"
+    },
+    "relevance_breakdown": {
+      "type": "string",
+      "description": "JSON dos componentes do score"
+    },
+    "transfer_decision": {
+      "type": "string",
+      "enum": [
+        "HIGH_CONFIDENCE_TRANSFER",
+        "MANUAL_REVIEW",
+        "DO_NOT_TRANSFER",
+        "TRANSFER_EXECUTED",
+        "FAILED_CROSS_ASIN"
+      ],
+      "default": "DO_NOT_TRANSFER"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "transfer_confidence": {
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "VERY_HIGH"
+      ],
+      "default": "LOW"
+    },
+    "family_bank_boost": {
+      "type": "boolean",
+      "default": false
+    },
+    "initial_bid": {
+      "type": "number"
+    },
+    "campaign_job": {
+      "type": "string",
+      "default": "VALIDATION"
+    },
+    "created_campaign_id": {
+      "type": "string"
+    },
+    "created_campaign_name": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "APPROVED",
+        "EXECUTING",
+        "EXECUTED",
+        "REJECTED",
+        "FAILED",
+        "VALIDATING",
+        "PROVEN",
+        "FAILED_CROSS_ASIN"
+      ],
+      "default": "PROPOSED"
+    },
+    "destination_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "destination_acos_result": {
+      "type": "number"
+    },
+    "destination_cvr_result": {
+      "type": "number"
+    },
+    "destination_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "validation_result": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "CROSS_ASIN_PROVEN",
+        "STRONG_WINNER",
+        "FAILED_CROSS_ASIN",
+        "COLLECTING"
+      ],
+      "default": "PENDING"
+    },
+    "proposed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "failed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cycle_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword",
+    "source_asin",
+    "destination_asin",
+    "transfer_decision"
+  ]
+}

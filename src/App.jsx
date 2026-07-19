@@ -46,6 +46,7 @@ import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
 import CampaignFactory from '@/pages/CampaignFactory';
+import DaypartCrossAsinPage from '@/pages/DaypartCrossAsinPage';
 import ListingEnhancementPage from '@/pages/ListingEnhancementPage';
 import AdsAuthorizationPage from '@/pages/AdsAuthorizationPage';
 
@@ -153,6 +154,7 @@ const AuthenticatedApp = () => {
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
           <Route path="/campaign-factory" element={<CampaignFactory />} />
+          <Route path="/daypart-crossasin" element={<DaypartCrossAsinPage />} />
           <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
           <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />

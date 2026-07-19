@@ -1,0 +1,255 @@
+{
+  "name": "DaypartingDecision",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "day_of_week": {
+      "type": "number",
+      "description": "0=Dom, 6=Sab"
+    },
+    "hour": {
+      "type": "number",
+      "description": "0-23 BRT"
+    },
+    "slot_label": {
+      "type": "string",
+      "description": "Ex: SEG_14h"
+    },
+    "time_slot_score": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_classification": {
+      "type": "string",
+      "enum": [
+        "ELITE_TIME",
+        "STRONG_TIME",
+        "NORMAL_TIME",
+        "WEAK_TIME",
+        "LOSS_TIME",
+        "COLLECTING_DATA"
+      ],
+      "default": "COLLECTING_DATA"
+    },
+    "decision_type": {
+      "type": "string",
+      "enum": [
+        "BID_UP",
+        "BID_DOWN_ACOS",
+        "BID_DOWN_CVR",
+        "MAINTAIN",
+        "BLOCK_LOW_TIME",
+        "BUDGET_PROTECTION",
+        "NO_SALES_SOFT",
+        "NO_SALES_HARD",
+        "WAIT",
+        "SKIP_COLLECTING_DATA"
+      ],
+      "default": "MAINTAIN"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "rule_version": {
+      "type": "string"
+    },
+    "current_bid": {
+      "type": "number"
+    },
+    "proposed_bid": {
+      "type": "number"
+    },
+    "bid_change_pct": {
+      "type": "number"
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending_approval",
+        "approved",
+        "rejected",
+        "executed",
+        "expired",
+        "cancelled"
+      ],
+      "default": "pending_approval"
+    },
+    "slot_acos": {
+      "type": "number"
+    },
+    "slot_cvr": {
+      "type": "number"
+    },
+    "slot_cpc": {
+      "type": "number"
+    },
+    "slot_ctr": {
+      "type": "number"
+    },
+    "slot_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "slot_roas": {
+      "type": "number"
+    },
+    "slot_aov": {
+      "type": "number"
+    },
+    "slot_cpa": {
+      "type": "number"
+    },
+    "baseline_cvr": {
+      "type": "number"
+    },
+    "baseline_acos": {
+      "type": "number"
+    },
+    "baseline_cpc": {
+      "type": "number"
+    },
+    "baseline_roas": {
+      "type": "number"
+    },
+    "baseline_cpa": {
+      "type": "number"
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "sustainable_cpc": {
+      "type": "number"
+    },
+    "acos_headroom": {
+      "type": "number"
+    },
+    "cvr_advantage": {
+      "type": "number"
+    },
+    "data_confidence": {
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "VERY_HIGH"
+      ],
+      "default": "LOW"
+    },
+    "data_mature": {
+      "type": "boolean",
+      "default": false
+    },
+    "occurrences": {
+      "type": "number",
+      "default": 0
+    },
+    "recent_acos_14d": {
+      "type": "number"
+    },
+    "recent_cvr_14d": {
+      "type": "number"
+    },
+    "trend_status": {
+      "type": "string",
+      "enum": [
+        "IMPROVING",
+        "STABLE",
+        "DECAYING",
+        "UNKNOWN"
+      ],
+      "default": "UNKNOWN"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rejected_by": {
+      "type": "string"
+    },
+    "rejected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rejection_reason": {
+      "type": "string"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_response_status": {
+      "type": "number"
+    },
+    "cycle_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_id",
+    "decision_type",
+    "status"
+  ]
+}
