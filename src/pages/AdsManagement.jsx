@@ -137,6 +137,14 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                   {(c.acos || 0) > 0 ? (
                 <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span>
                 ) : null}
+                  {c.targeting_type === 'MANUAL' && c.bidding_strategy ? (
+                <span className={`text-[9px] font-medium px-1 py-0.5 rounded leading-none ${
+                  c.bidding_strategy === 'autoForSales' ? 'text-emerald-400 bg-emerald-500/10' :
+                  c.bidding_strategy === 'legacyForSales' ? 'text-amber-400 bg-amber-500/10' :
+                  'text-slate-400 bg-slate-500/10'}`}>
+                    {c.bidding_strategy === 'autoForSales' ? '↕ U&D' : c.bidding_strategy === 'legacyForSales' ? '↓ Down' : 'Fixed'}
+                  </span>
+                ) : null}
                 </div>
               </div>);
 
