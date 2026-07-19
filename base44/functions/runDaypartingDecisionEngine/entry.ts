@@ -14,7 +14,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const PIPELINE_VERSION = 'daypart-engine-v1';
+const PIPELINE_VERSION = 'daypart-engine-v2-profit-safe';
 const RULE_VERSION = '1.0';
 const MIN_OCCURRENCES_MATURE = 4;
 const MIN_ORDERS_BID_UP = 3;
@@ -106,6 +106,30 @@ function classifySlot(score: number): string {
   return 'LOSS_TIME';
 }
 
+// ── PROFIT-SAFE inline para Dayparting ───────────────────────────────────
+const ECONOMIC_SAFETY_FACTOR_DP = 0.80;
+function buildDpEconCtx(bid: number, slot: any, breakEvenAcos: number, targetAcos: number, contribMargin: number) {
+  const sustainable_acos = parseFloat((breakEvenAcos * ECONOMIC_SAFETY_FACTOR_DP).toFixed(2));
+  const current_acos     = slot.acos || 0;
+  const acos_headroom    = parseFloat((sustainable_acos - current_acos).toFixed(2));
+  const current_profit   = parseFloat((slot.sales * contribMargin - slot.spend).toFixed(2));
+  const sustainable_cpc  = (slot.aov > 0 && slot.cvr > 0 && targetAcos > 0)
+    ? parseFloat((slot.aov * slot.cvr * (targetAcos / 100)).toFixed(2)) : 0;
+
+  let acos_status: string;
+  if (current_acos <= 0)                       acos_status = 'NO_DATA';
+  else if (current_acos <= targetAcos)         acos_status = 'HEALTHY';
+  else if (current_acos <= sustainable_acos)   acos_status = 'ABOVE_TARGET_BUT_PROFITABLE';
+  else if (current_acos < breakEvenAcos)       acos_status = 'ECONOMIC_WARNING';
+  else                                          acos_status = 'CRITICAL_ECONOMIC';
+
+  const is_winner = current_acos > 0 && current_acos <= sustainable_acos
+    && slot.orders >= 1 && current_profit > 0;
+
+  return { sustainable_acos, acos_headroom, current_profit, sustainable_cpc,
+           acos_status, is_winner, current_acos, targetAcos };
+}
+
 // ─── Decisão por slot ────────────────────────────────────────────────────
 function decideForSlot(
   kw: any,
@@ -113,12 +137,17 @@ function decideForSlot(
   baseline: any,
   goal: any,
   budgetBlockedCamps: Set<string>,
+  breakEvenAcos: number,
+  contribMargin: number,
 ): { decision: string; proposedBid: number; pct: number; requiresApproval: boolean; reason: string; ruleId: string } | null {
 
   const curBid      = Number(kw.current_bid || kw.bid || 0);
   const targetAcos  = Number(goal.target_acos || 15);
   const maxBid      = Number(goal.max_bid || 2.5);
   const minBid      = Number(goal.min_bid || MIN_BID_GLOBAL);
+
+  // PROFIT-SAFE context para este slot
+  const econCtx = buildDpEconCtx(curBid, slot, breakEvenAcos, targetAcos, contribMargin);
 
   const slotAcos    = Number(slot.acos || 0);
   const slotCvr     = Number(slot.cvr  || 0);
@@ -221,18 +250,24 @@ function decideForSlot(
 
   // ── BID_DOWN por ACoS alto ────────────────────────────────────────────
   if (slotAcos > targetAcos && slotOrders > 0 && baseCvr > 0 && slotCvr >= baseCvr * 0.85) {
+    // PROFIT-SAFE: bloquear redução em winner sustentável que pioraria lucro
+    if (econCtx.is_winner && econCtx.acos_status === 'ABOVE_TARGET_BUT_PROFITABLE') {
+      const ratio = curBid > 0 ? (curBid * (1 - MAX_BID_DOWN_ACOS)) / curBid : 1;
+      const expectedProfitDelta = econCtx.current_profit * ratio - econCtx.current_profit;
+      if (expectedProfitDelta < 0) {
+        return null; // BLOCK — WINNER_PROFIT_PROTECTION
+      }
+    }
+
     const targetRatio = targetAcos / slotAcos;
     const rawPct = 1 - targetRatio;
     const cappedPct = Math.min(MAX_BID_DOWN_ACOS, rawPct);
-    // HARD CAP floor: max(perf.min_bid, current_bid × 0.40)
     const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
     const rawBid = curBid * (1 - cappedPct);
     const newBid = r2(Math.max(floorBid, rawBid));
     const bidFloorApplied = rawBid < floorBid;
-    // Recalcular pct APÓS clamping (PRD: bid_change_pct calculado após clamping)
     const actualPct = r2(((newBid - curBid) / curBid) * 100);
     if (newBid >= curBid - 0.01) return null;
-    // > 15% down exige approval
     const requiresApproval = Math.abs(actualPct) > 15;
     return {
       decision: 'BID_DOWN_ACOS',
@@ -241,13 +276,18 @@ function decideForSlot(
       requiresApproval,
       bidFloorApplied,
       bidCapApplied: false,
-      reason: `ACoS slot ${slotAcos.toFixed(1)}% > meta ${targetAcos}%, CPC alto. Ratio ${targetRatio.toFixed(2)}${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
+      reason: `ACoS slot ${slotAcos.toFixed(1)}% > meta ${targetAcos}% (sustentável: ${econCtx.sustainable_acos}%). Ratio ${targetRatio.toFixed(2)}${bidFloorApplied ? ' [floor 40%]' : ''}`,
       ruleId: 'DAYPART_BID_DOWN_ACOS',
     };
   }
 
   // ── BID_DOWN por CVR fraco ────────────────────────────────────────────
   if (baseCvr > 0 && slotCvr < baseCvr * CVR_WEAK_THRESHOLD && slotClicks >= 10) {
+    // PROFIT-SAFE: bloquear em winner sustentável
+    if (econCtx.is_winner && econCtx.current_profit > 0) {
+      return null; // BLOCK — WINNER_PROFIT_PROTECTION (CVR fraco mas ainda lucrativo)
+    }
+
     const cycles = Number(slot.consecutive_down_cycles || 0);
     const redPct = cycles >= 2 ? BID_DOWN_CVR_HARD : BID_DOWN_CVR_SOFT;
     const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
@@ -264,7 +304,7 @@ function decideForSlot(
       requiresApproval,
       bidFloorApplied,
       bidCapApplied: false,
-      reason: `CVR slot ${(slotCvr * 100).toFixed(1)}% vs baseline ${(baseCvr * 100).toFixed(1)}% (abaixo de ${(CVR_WEAK_THRESHOLD * 100).toFixed(0)}% do baseline)${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
+      reason: `CVR slot ${(slotCvr * 100).toFixed(1)}% vs baseline ${(baseCvr * 100).toFixed(1)}% (< ${(CVR_WEAK_THRESHOLD * 100).toFixed(0)}%)${bidFloorApplied ? ' [floor 40%]' : ''}`,
       ruleId: 'DAYPART_BID_DOWN_CVR',
     };
   }
@@ -304,6 +344,9 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
     ]);
     const perf = perfList[0] || {};
+    const avgBreakEven = economicsList.length > 0
+      ? economicsList.reduce((s: number, e: any) => s + Number(e.break_even_acos || 30), 0) / economicsList.length
+      : 30;
     const goal = {
       target_acos:  Number(perf.target_acos  || 15),
       max_bid:      Number(perf.max_bid      || 2.5),
@@ -314,6 +357,17 @@ Deno.serve(async (req) => {
         return total / economicsList.length;
       })(),
     };
+
+    // Mapas econômicos por ASIN (break_even e contribution_margin)
+    const dpBreakEvenMap = new Map<string, number>();
+    const dpMarginMap    = new Map<string, number>();
+    for (const e of economicsList) {
+      if (e.asin) {
+        dpBreakEvenMap.set(e.asin, Number(e.break_even_acos || 30));
+        const m = Number(e.contribution_margin || e.profit_margin_pct || 0);
+        dpMarginMap.set(e.asin, m > 1 ? m / 100 : m);
+      }
+    }
 
     // Carregar keywords ativas
     const kwFilter: any = { amazon_account_id: accountId };
@@ -455,8 +509,13 @@ Deno.serve(async (req) => {
       const score    = calcTimeSlotScore(slot, baseline, goal.target_acos);
       const classif  = slot.occurrences >= MIN_OCCURRENCES_MATURE ? classifySlot(score) : 'COLLECTING_DATA';
 
+      // Contexto econômico por ASIN para PROFIT-SAFE
+      const kwAsin     = slot.asin || kw.asin;
+      const kwBreakEven = kwAsin ? (dpBreakEvenMap.get(kwAsin) || avgBreakEven) : avgBreakEven;
+      const kwMargin    = kwAsin && dpMarginMap.has(kwAsin) ? dpMarginMap.get(kwAsin)! : (kwBreakEven / 100);
+
       const decisionData = slot.occurrences >= MIN_OCCURRENCES_MATURE
-        ? decideForSlot(kw, slot, baseline, goal, budgetBlockedCamps)
+        ? decideForSlot(kw, slot, baseline, goal, budgetBlockedCamps, kwBreakEven, kwMargin)
         : null;
 
       if (!decisionData && classif !== 'COLLECTING_DATA') continue; // MAINTAIN — sem decisão necessária
