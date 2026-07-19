@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Zap, Star, Megaphone, CheckCircle, Loader2, ChevronDown, ChevronUp, PlayCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Zap, Star, Megaphone, CheckCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
@@ -25,16 +25,45 @@ export default function HighRelevancePanel({
 }) {
   const [expandedTerm, setExpandedTerm] = useState(null);
   const [batchLoading, setBatchLoading] = useState(null);
-  const [implementingAll, setImplementingAll] = useState(false);
-  const [implementProgress, setImplementProgress] = useState(null); // { done, total }
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoProgress, setAutoProgress] = useState(null); // { done, total }
+  const autoRanRef = useRef(false);
 
   const q = search || '';
   const filtered = data.filter(g => !q || g.term.toLowerCase().includes(q));
 
-  // Todos os registros pendentes de termos ≥90% (qualquer nº de ASINs)
+  // Todos os registros pendentes de termos ≥90%
   const pendingHigh = data
     .filter(g => g.conf >= 90)
     .flatMap(g => g.records.filter(r => !scheduledIds[r.id]));
+
+  // Auto-executa ao montar o painel (uma única vez por sessão)
+  useEffect(() => {
+    if (autoRanRef.current || !account || pendingHigh.length === 0 || autoRunning) return;
+    autoRanRef.current = true;
+    (async () => {
+      setAutoRunning(true);
+      setAutoProgress({ done: 0, total: pendingHigh.length });
+      setMessage(null);
+      let created = 0, failed = 0;
+      for (let i = 0; i < pendingHigh.length; i++) {
+        const rec = pendingHigh[i];
+        try {
+          const ok = await scheduleOne(account, rec, setScheduledIds);
+          ok ? created++ : failed++;
+        } catch { failed++; }
+        setAutoProgress({ done: i + 1, total: pendingHigh.length });
+        await new Promise(r => setTimeout(r, 400));
+      }
+      setAutoRunning(false);
+      setAutoProgress(null);
+      setMessage({
+        type: failed === 0 ? 'success' : 'info',
+        text: `✓ Auto-implementação concluída — ${created} campanhas criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
+      });
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account]);
 
   const handleBatchCreate = async (group) => {
     if (!account || batchLoading) return;
@@ -56,73 +85,36 @@ export default function HighRelevancePanel({
     });
   };
 
-  const handleImplementAll = async () => {
-    if (!account || implementingAll || pendingHigh.length === 0) return;
-    if (!window.confirm(`Criar campanhas para todos os ${pendingHigh.length} registros com ≥90% de relevância?\n\nCada termo será agendado como campanha EXACT.`)) return;
-    setImplementingAll(true);
-    setImplementProgress({ done: 0, total: pendingHigh.length });
-    setMessage(null);
-    let created = 0, failed = 0;
-    for (let i = 0; i < pendingHigh.length; i++) {
-      const rec = pendingHigh[i];
-      try {
-        const ok = await scheduleOne(account, rec, setScheduledIds);
-        ok ? created++ : failed++;
-      } catch { failed++; }
-      setImplementProgress({ done: i + 1, total: pendingHigh.length });
-      await new Promise(r => setTimeout(r, 400));
-    }
-    setImplementingAll(false);
-    setImplementProgress(null);
-    setMessage({
-      type: failed === 0 ? 'success' : 'info',
-      text: `✓ Implementação concluída — ${created} campanhas criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
-    });
-  };
-
   const confColor = (c) => c >= 90 ? 'text-emerald-400' : c >= 80 ? 'text-amber-400' : 'text-slate-400';
   const confBg = (c) => c >= 90 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-amber-500/10 border-amber-500/20';
 
   return (
     <div className="space-y-4">
-      {/* Cabeçalho com ação global */}
+      {/* Legenda + status de auto-execução */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-4 text-xs text-slate-500">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />≥90% multi-campanha</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />80–89% relevância alta</span>
         </div>
-        {pendingHigh.length > 0 && (
-          <button
-            onClick={handleImplementAll}
-            disabled={implementingAll}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 text-sm font-semibold hover:bg-emerald-500/25 disabled:opacity-60 transition-colors"
-          >
-            {implementingAll ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {implementProgress ? `${implementProgress.done}/${implementProgress.total}` : 'Implementando...'}
-              </>
-            ) : (
-              <>
-                <PlayCircle className="w-4 h-4" />
-                Implementar todos ≥90% ({pendingHigh.length} campanhas)
-              </>
-            )}
-          </button>
+        {autoRunning && autoProgress && (
+          <div className="flex items-center gap-2 text-xs text-emerald-400">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>Criando campanhas… {autoProgress.done}/{autoProgress.total}</span>
+          </div>
         )}
       </div>
 
-      {/* Barra de progresso quando implementando todos */}
-      {implementingAll && implementProgress && (
+      {/* Barra de progresso automática */}
+      {autoRunning && autoProgress && (
         <div className="rounded-lg bg-surface-2 p-3">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Criando campanhas automaticamente...</span>
-            <span>{Math.round((implementProgress.done / implementProgress.total) * 100)}%</span>
+            <span>Criando campanhas ≥90% automaticamente…</span>
+            <span>{Math.round((autoProgress.done / autoProgress.total) * 100)}%</span>
           </div>
           <div className="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
             <div
               className="h-full bg-emerald-500 rounded-full transition-all duration-300"
-              style={{ width: `${(implementProgress.done / implementProgress.total) * 100}%` }}
+              style={{ width: `${(autoProgress.done / autoProgress.total) * 100}%` }}
             />
           </div>
         </div>
