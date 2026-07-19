@@ -1,8 +1,22 @@
 import { useState } from 'react';
-import { Zap, Star, Megaphone, CheckCircle, Clock, Loader2, ChevronDown, ChevronUp, Info } from 'lucide-react';
+import { Zap, Star, Megaphone, CheckCircle, Loader2, ChevronDown, ChevronUp, PlayCircle } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
+
+async function scheduleOne(account, rec, setScheduledIds) {
+  const res = await base44.functions.invoke('scheduleManualCampaignFromTerm', {
+    amazon_account_id: account.id,
+    asin: rec.asin,
+    keyword: rec.term,
+    product_name: rec.product_name || rec.asin,
+    sku: rec.sku || null,
+  });
+  const d = res?.data || {};
+  const ok = d?.ok || d?.already_exists || d?.already_queued;
+  if (ok) setScheduledIds(prev => ({ ...prev, [rec.id]: d.executed ? 'executed' : 'queued' }));
+  return ok;
+}
 
 export default function HighRelevancePanel({
   data, multiAsinTerms, search, account,
@@ -10,48 +24,59 @@ export default function HighRelevancePanel({
   setSchedulingId, setScheduledIds, setMessage
 }) {
   const [expandedTerm, setExpandedTerm] = useState(null);
-  const [batchLoading, setBatchLoading] = useState(null); // term key being batch-created
+  const [batchLoading, setBatchLoading] = useState(null);
+  const [implementingAll, setImplementingAll] = useState(false);
+  const [implementProgress, setImplementProgress] = useState(null); // { done, total }
 
   const q = search || '';
+  const filtered = data.filter(g => !q || g.term.toLowerCase().includes(q));
 
-  const filtered = data.filter(g =>
-    !q || g.term.toLowerCase().includes(q)
-  );
+  // Todos os registros pendentes de termos ≥90% (qualquer nº de ASINs)
+  const pendingHigh = data
+    .filter(g => g.conf >= 90)
+    .flatMap(g => g.records.filter(r => !scheduledIds[r.id]));
 
   const handleBatchCreate = async (group) => {
     if (!account || batchLoading) return;
     const key = group.term.toLowerCase();
     setBatchLoading(key);
     setMessage(null);
-
     let created = 0, failed = 0;
     for (const rec of group.records) {
       try {
-        const res = await base44.functions.invoke('scheduleManualCampaignFromTerm', {
-          amazon_account_id: account.id,
-          asin: rec.asin,
-          keyword: rec.term,
-          product_name: rec.product_name || rec.asin,
-          sku: rec.sku || null,
-        });
-        const d = res?.data || {};
-        if (d?.ok || d?.already_exists || d?.already_queued) {
-          created++;
-          setScheduledIds(prev => ({ ...prev, [rec.id]: d.executed ? 'executed' : 'queued' }));
-        } else {
-          failed++;
-        }
-      } catch {
-        failed++;
-      }
-      // throttle
+        const ok = await scheduleOne(account, rec, setScheduledIds);
+        ok ? created++ : failed++;
+      } catch { failed++; }
       await new Promise(r => setTimeout(r, 300));
     }
-
     setBatchLoading(null);
     setMessage({
       type: failed === 0 ? 'success' : 'info',
       text: `"${group.term}" — ${created} campanhas criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
+    });
+  };
+
+  const handleImplementAll = async () => {
+    if (!account || implementingAll || pendingHigh.length === 0) return;
+    if (!window.confirm(`Criar campanhas para todos os ${pendingHigh.length} registros com ≥90% de relevância?\n\nCada termo será agendado como campanha EXACT.`)) return;
+    setImplementingAll(true);
+    setImplementProgress({ done: 0, total: pendingHigh.length });
+    setMessage(null);
+    let created = 0, failed = 0;
+    for (let i = 0; i < pendingHigh.length; i++) {
+      const rec = pendingHigh[i];
+      try {
+        const ok = await scheduleOne(account, rec, setScheduledIds);
+        ok ? created++ : failed++;
+      } catch { failed++; }
+      setImplementProgress({ done: i + 1, total: pendingHigh.length });
+      await new Promise(r => setTimeout(r, 400));
+    }
+    setImplementingAll(false);
+    setImplementProgress(null);
+    setMessage({
+      type: failed === 0 ? 'success' : 'info',
+      text: `✓ Implementação concluída — ${created} campanhas criadas/agendadas${failed > 0 ? `, ${failed} falhas` : ''}.`,
     });
   };
 
@@ -60,6 +85,49 @@ export default function HighRelevancePanel({
 
   return (
     <div className="space-y-4">
+      {/* Cabeçalho com ação global */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-4 text-xs text-slate-500">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />≥90% multi-campanha</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />80–89% relevância alta</span>
+        </div>
+        {pendingHigh.length > 0 && (
+          <button
+            onClick={handleImplementAll}
+            disabled={implementingAll}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 text-sm font-semibold hover:bg-emerald-500/25 disabled:opacity-60 transition-colors"
+          >
+            {implementingAll ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {implementProgress ? `${implementProgress.done}/${implementProgress.total}` : 'Implementando...'}
+              </>
+            ) : (
+              <>
+                <PlayCircle className="w-4 h-4" />
+                Implementar todos ≥90% ({pendingHigh.length} campanhas)
+              </>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* Barra de progresso quando implementando todos */}
+      {implementingAll && implementProgress && (
+        <div className="rounded-lg bg-surface-2 p-3">
+          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Criando campanhas automaticamente...</span>
+            <span>{Math.round((implementProgress.done / implementProgress.total) * 100)}%</span>
+          </div>
+          <div className="w-full h-1.5 bg-surface-3 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+              style={{ width: `${(implementProgress.done / implementProgress.total) * 100}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Banner multi-ASIN */}
       {multiAsinTerms.length > 0 && (
         <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 p-4">
@@ -67,7 +135,7 @@ export default function HighRelevancePanel({
             <Star className="h-4 w-4 text-violet-400 mt-0.5 shrink-0" />
             <div>
               <p className="text-sm font-semibold text-violet-300">
-                {multiAsinTerms.length} termo{multiAsinTerms.length > 1 ? 's' : ''} com ≥90% de relevância aplicável{multiAsinTerms.length > 1 ? 'is' : ''} a múltiplos ASINs
+                {multiAsinTerms.length} termo{multiAsinTerms.length > 1 ? 's' : ''} com ≥90% aplicável{multiAsinTerms.length > 1 ? 'is' : ''} a múltiplos ASINs
               </p>
               <p className="text-xs text-violet-400/80 mt-0.5">
                 Estes termos podem ser usados em campanhas de mais de um produto simultaneamente.
@@ -86,12 +154,6 @@ export default function HighRelevancePanel({
           </div>
         </div>
       )}
-
-      {/* Legenda */}
-      <div className="flex items-center gap-4 text-xs text-slate-500">
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />≥90% — pode usar em múltiplas campanhas</span>
-        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />80–89% — alta relevância individual</span>
-      </div>
 
       {filtered.length === 0 ? (
         <div className="text-center py-16 text-slate-500 text-sm">Nenhum termo com relevância ≥80% encontrado.</div>
