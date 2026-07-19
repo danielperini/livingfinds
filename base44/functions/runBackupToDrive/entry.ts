@@ -14,14 +14,44 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
-// Entidades a incluir no backup (as mais críticas)
+// Entidades a incluir no backup — cobre todo o conhecimento de Ads para restauração completa
 const ENTITIES_TO_BACKUP = [
-  'AmazonAccount', 'Campaign', 'Product', 'CampaignMetricsDaily',
-  'SalesDaily', 'OptimizationDecision', 'AdsBidChangeLog', 'Keyword',
-  'SearchTerm', 'AutoCampaignLearning', 'SearchTermPromotion',
-  'PerformanceSettings', 'AutopilotConfig', 'ProductKickoffQueue',
-  'BackupAuditLog', 'SyncExecutionLog', 'AmazonAdsReportJob',
+  // ── Conta e configuração ─────────────────────────────────────────────
+  'AmazonAccount', 'PerformanceSettings', 'AutopilotConfig', 'AppOptimizationConfig',
+  'BudgetConfiguration', 'FeatureFlag',
+
+  // ── Campanhas e estrutura ────────────────────────────────────────────
+  'Campaign', 'AdGroup', 'Keyword', 'ProductTarget', 'ProductAd',
+  'NegativeKeywordSuggestion', 'CampaignLearningState', 'CampaignMaturityEvaluation',
+
+  // ── Métricas e performance ───────────────────────────────────────────
+  'CampaignMetricsDaily', 'SalesDaily', 'HourlyMetric', 'UnifiedAdsMetricsDaily',
+  'UnifiedAdsMetricsHourly', 'PerformanceTrendSnapshot', 'DailyBudgetLedger',
+  'AccountDailySpendController', 'DailyProductAdsAssessment', 'WeeklyAdsPerformanceReport',
+  'WeeklyProductPerformance',
+
+  // ── Produtos e inventário ────────────────────────────────────────────
+  'Product', 'ProductEconomics', 'ProductEconomicsHistory', 'ProductProfitabilityLearning',
+
+  // ── Keywords e aprendizado ───────────────────────────────────────────
+  'KeywordBank', 'ProductFamilyKeywordBank', 'TermBank', 'SearchTerm', 'SearchTermPromotion',
+  'KeywordBidOptimizationCycle', 'ManualCampaignBidLifecycle', 'AutoCampaignLearning',
+  'KeywordLifecycle', 'KeywordSuggestion',
+
+  // ── Decisões e otimização ────────────────────────────────────────────
+  'OptimizationDecision', 'DaypartingDecision', 'CrossAsinTransfer', 'CampaignFactoryPlan',
+  'AdsBidChangeLog', 'CampaignBidHistory', 'CampaignChangeHistory',
+
+  // ── Regras e motor ───────────────────────────────────────────────────
+  'DecisionRule', 'DecisionRuleVersion', 'BiddingRule', 'AutopilotConfig',
+  'WeeklyMotorPrelection', 'StrategySession', 'StrategyStateSnapshot',
+
+  // ── Listings ─────────────────────────────────────────────────────────
   'ListingSnapshot', 'ListingEnhancementProposal', 'ListingEnhancementHistory',
+
+  // ── Logs e auditoria ─────────────────────────────────────────────────
+  'SyncExecutionLog', 'AmazonAdsReportJob', 'BackupAuditLog',
+  'ProductKickoffQueue', 'Alert',
 ];
 
 async function compress(data: string): Promise<Uint8Array> {
