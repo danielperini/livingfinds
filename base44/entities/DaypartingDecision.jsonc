@@ -85,6 +85,33 @@
     "bid_change_pct": {
       "type": "number"
     },
+    "bid_floor_applied": {
+      "type": "boolean",
+      "default": false,
+      "description": "true se clamping de 40% do bid atual foi ativado"
+    },
+    "bid_cap_applied": {
+      "type": "boolean",
+      "default": false,
+      "description": "true se cap de +20% foi ativado"
+    },
+    "recency_protection_blocked": {
+      "type": "boolean",
+      "default": false,
+      "description": "true se bloqueado pelo PROTECT_RECENT_STRATEGY"
+    },
+    "metric_window": {
+      "type": "string",
+      "description": "Per\u00edodo real dos dados de performance usados (ex: 14D)"
+    },
+    "recommendation_window": {
+      "type": "string",
+      "description": "Per\u00edodo da recomenda\u00e7\u00e3o externa (ex: Amazon 14D)"
+    },
+    "decision_window": {
+      "type": "string",
+      "description": "Per\u00edodo que o motor considerou como recente"
+    },
     "requires_approval": {
       "type": "boolean",
       "default": true

@@ -32,6 +32,33 @@ Deno.serve(async (req) => {
     const accountId = dec.amazon_account_id;
     const now = new Date().toISOString();
 
+    // ── HARD CAP RE-VALIDATION (PRD) ──────────────────────────────────
+    // Reaplica caps antes de enviar à API, independente do que foi aprovado
+    const curBid = Number(dec.current_bid || 0);
+    if (curBid > 0) {
+      const perfList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+        { amazon_account_id: accountId }, null, 1
+      ).catch(() => []);
+      const perf = perfList[0] || {};
+      const minBidAbs = Number(perf.min_bid || 0.25);
+      const maxBidAbs = Number(perf.max_bid || 2.5);
+
+      const floorBid = Math.max(minBidAbs, curBid * 0.40);
+      const capBid = Math.min(maxBidAbs, curBid * 1.20);
+      const clampedBid = parseFloat(Math.max(floorBid, Math.min(capBid, Number(dec.proposed_bid))).toFixed(2));
+
+      if (clampedBid !== Number(dec.proposed_bid)) {
+        // Atualizar decisão com bid pós-clamping antes de executar
+        await base44.asServiceRole.entities.DaypartingDecision.update(dec.id, {
+          proposed_bid: clampedBid,
+          bid_change_pct: parseFloat((((clampedBid - curBid) / curBid) * 100).toFixed(2)),
+          bid_floor_applied: clampedBid === floorBid,
+          bid_cap_applied: clampedBid === capBid,
+        }).catch(() => {});
+        dec.proposed_bid = clampedBid;
+      }
+    }
+
     // Chamar gateway de ajuste de bid
     const res = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
       _service_role: true,

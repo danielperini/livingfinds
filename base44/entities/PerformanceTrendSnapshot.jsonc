@@ -1,0 +1,94 @@
+{
+  "name": "PerformanceTrendSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "snapshot_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "acos_7d": {
+      "type": "number"
+    },
+    "acos_14d": {
+      "type": "number"
+    },
+    "acos_30d": {
+      "type": "number"
+    },
+    "acos_80d": {
+      "type": "number"
+    },
+    "roas_7d": {
+      "type": "number"
+    },
+    "roas_14d": {
+      "type": "number"
+    },
+    "spend_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr_14d": {
+      "type": "number"
+    },
+    "trend_classification": {
+      "type": "string",
+      "enum": [
+        "STRONGLY_IMPROVING",
+        "IMPROVING",
+        "STABLE",
+        "DEGRADING",
+        "STRONGLY_DEGRADING",
+        "INSUFFICIENT_DATA"
+      ],
+      "default": "INSUFFICIENT_DATA"
+    },
+    "trend_delta_14d_vs_80d": {
+      "type": "number",
+      "description": "Diferen\u00e7a percentual: (acos_14d - acos_80d) / acos_80d \u00d7 100. Negativo = melhora."
+    },
+    "recency_protection_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "goal_alignment_status": {
+      "type": "string",
+      "enum": [
+        "ALIGNED",
+        "GOAL_TENSION",
+        "MISCONFIGURED",
+        "UNCHECKED"
+      ],
+      "default": "UNCHECKED"
+    },
+    "target_acos_at_snapshot": {
+      "type": "number"
+    },
+    "account_acos_14d": {
+      "type": "number"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "snapshot_date"
+  ]
+}

@@ -21,11 +21,12 @@ const MIN_ORDERS_BID_UP = 3;
 const MIN_CLICKS_BID_UP = 20;
 const ACOS_THRESHOLD_BID_UP = 0.80;   // ACoS slot <= TARGET × 0.80
 const CVR_ADVANTAGE_BID_UP = 1.15;    // CVR slot >= baseline × 1.15
-const MAX_BID_UP_AUTO = 0.30;         // +30% max sem aprovação manual
-const MIN_BID_UP = 0.05;
+const MAX_BID_UP_AUTO = 0.20;         // HARD CAP: +20% max por ciclo (PRD)
+const MAX_BID_UP_APPROVAL_THRESHOLD = 0.15; // > 15% exige approval mesmo em modo autônomo
+const MIN_BID_UP = 0.03;
 const MAX_BID_DOWN_ACOS = 0.15;       // -15% max por ciclo
 const BID_DOWN_CVR_SOFT = 0.10;
-const BID_DOWN_CVR_HARD = 0.20;
+const BID_DOWN_CVR_HARD = 0.15;      // hard máximo -15%
 const CVR_WEAK_THRESHOLD = 0.70;      // CVR slot < baseline × 0.70
 const ZERO_SALES_SOFT_MULT = 1.0;     // × TARGET_CPA
 const ZERO_SALES_HARD_MULT = 1.5;
@@ -34,6 +35,7 @@ const TREND_DECAY_THRESHOLD = 0.20;   // deterioração > 20%
 const TREND_IMPROVE_THRESHOLD = 0.20;
 const DECISION_EXPIRY_DAYS = 14;
 const MIN_BID_GLOBAL = 0.25;
+const BID_FLOOR_RELATIVE = 0.40;     // HARD CAP: floor = max(perf.min_bid, current_bid × 0.40)
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function r2(v: number) { return parseFloat(v.toFixed(2)); }
@@ -151,15 +153,21 @@ function decideForSlot(
     const acosHeadroom = targetAcos / slotAcos - 1;
     const cvrAdvantage = slotCvr / baseCvr - 1;
     const rawUplift = Math.min(acosHeadroom, cvrAdvantage);
-    const pct = Math.max(MIN_BID_UP, Math.min(MAX_BID_UP_AUTO + 0.10, rawUplift));
-    const newBid = r2(Math.min(maxBid, curBid * (1 + pct)));
+    // HARD CAP: máximo +20% por ciclo (PRD)
+    const pct = Math.max(MIN_BID_UP, Math.min(MAX_BID_UP_AUTO, rawUplift));
+    const rawBid = curBid * (1 + pct);
+    const newBid = r2(Math.min(maxBid, rawBid));
+    const bidCapApplied = rawBid > maxBid || rawUplift > MAX_BID_UP_AUTO;
     if (newBid <= curBid + 0.01) return null;
-    const requiresApproval = pct > MAX_BID_UP_AUTO;
+    // > 15% sempre exige approval (mesmo em modo autônomo)
+    const requiresApproval = pct > MAX_BID_UP_APPROVAL_THRESHOLD;
     return {
       decision: 'BID_UP',
       proposedBid: newBid,
       pct: r2(pct * 100),
       requiresApproval,
+      bidCapApplied,
+      bidFloorApplied: false,
       reason: `Elite slot ${DAY_LABELS[slot.day_of_week]} ${slot.hour}h: ACoS ${slotAcos.toFixed(1)}% vs meta ${targetAcos}%, CVR +${(cvrAdvantage * 100).toFixed(0)}% acima baseline`,
       ruleId: 'DAYPART_BID_UP_WINNER',
     };
@@ -174,24 +182,37 @@ function decideForSlot(
       return null; // WAIT
     }
     if (targetCpa > 0 && slotSpend >= ZERO_SALES_HARD_MULT * targetCpa && slotClicks >= ZERO_SALES_MIN_CLICKS) {
-      const newBid = r2(Math.max(minBid, curBid * 0.80));
+      // HARD CAP: floor = max(perf.min_bid, current_bid × 0.40)
+      const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
+      const rawBid = curBid * 0.80;
+      const newBid = r2(Math.max(floorBid, rawBid));
+      const bidFloorApplied = rawBid < floorBid;
+      const actualPct = r2(((newBid - curBid) / curBid) * 100);
       return {
         decision: 'NO_SALES_HARD',
         proposedBid: newBid,
-        pct: -20,
+        pct: actualPct,
         requiresApproval: true,
-        reason: `Zero vendas HARD: ${slotClicks} cliques, R$${slotSpend.toFixed(2)} gasto (${(ZERO_SALES_HARD_MULT)}× CPA alvo R$${targetCpa.toFixed(2)})`,
+        bidFloorApplied,
+        bidCapApplied: false,
+        reason: `Zero vendas HARD: ${slotClicks} cliques, R$${slotSpend.toFixed(2)} gasto (${ZERO_SALES_HARD_MULT}× CPA alvo R$${targetCpa.toFixed(2)})${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
         ruleId: 'DAYPART_ZERO_SALES_HARD',
       };
     }
     if (targetCpa > 0 && slotSpend >= ZERO_SALES_SOFT_MULT * targetCpa) {
-      const newBid = r2(Math.max(minBid, curBid * 0.90));
+      const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
+      const rawBid = curBid * 0.90;
+      const newBid = r2(Math.max(floorBid, rawBid));
+      const bidFloorApplied = rawBid < floorBid;
+      const actualPct = r2(((newBid - curBid) / curBid) * 100);
       return {
         decision: 'NO_SALES_SOFT',
         proposedBid: newBid,
-        pct: -10,
+        pct: actualPct,
         requiresApproval: true,
-        reason: `Zero vendas SOFT: R$${slotSpend.toFixed(2)} gasto, CPA alvo R$${targetCpa.toFixed(2)}`,
+        bidFloorApplied,
+        bidCapApplied: false,
+        reason: `Zero vendas SOFT: R$${slotSpend.toFixed(2)} gasto, CPA alvo R$${targetCpa.toFixed(2)}${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
         ruleId: 'DAYPART_ZERO_SALES_SOFT',
       };
     }
@@ -203,14 +224,24 @@ function decideForSlot(
     const targetRatio = targetAcos / slotAcos;
     const rawPct = 1 - targetRatio;
     const cappedPct = Math.min(MAX_BID_DOWN_ACOS, rawPct);
-    const newBid = r2(Math.max(minBid, curBid * (1 - cappedPct)));
+    // HARD CAP floor: max(perf.min_bid, current_bid × 0.40)
+    const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
+    const rawBid = curBid * (1 - cappedPct);
+    const newBid = r2(Math.max(floorBid, rawBid));
+    const bidFloorApplied = rawBid < floorBid;
+    // Recalcular pct APÓS clamping (PRD: bid_change_pct calculado após clamping)
+    const actualPct = r2(((newBid - curBid) / curBid) * 100);
     if (newBid >= curBid - 0.01) return null;
+    // > 15% down exige approval
+    const requiresApproval = Math.abs(actualPct) > 15;
     return {
       decision: 'BID_DOWN_ACOS',
       proposedBid: newBid,
-      pct: r2(-cappedPct * 100),
-      requiresApproval: true,
-      reason: `ACoS slot ${slotAcos.toFixed(1)}% > meta ${targetAcos}%, CPC alto. Ratio ${targetRatio.toFixed(2)}`,
+      pct: actualPct,
+      requiresApproval,
+      bidFloorApplied,
+      bidCapApplied: false,
+      reason: `ACoS slot ${slotAcos.toFixed(1)}% > meta ${targetAcos}%, CPC alto. Ratio ${targetRatio.toFixed(2)}${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
       ruleId: 'DAYPART_BID_DOWN_ACOS',
     };
   }
@@ -219,14 +250,21 @@ function decideForSlot(
   if (baseCvr > 0 && slotCvr < baseCvr * CVR_WEAK_THRESHOLD && slotClicks >= 10) {
     const cycles = Number(slot.consecutive_down_cycles || 0);
     const redPct = cycles >= 2 ? BID_DOWN_CVR_HARD : BID_DOWN_CVR_SOFT;
-    const newBid = r2(Math.max(minBid, curBid * (1 - redPct)));
+    const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
+    const rawBid = curBid * (1 - redPct);
+    const newBid = r2(Math.max(floorBid, rawBid));
+    const bidFloorApplied = rawBid < floorBid;
+    const actualPct = r2(((newBid - curBid) / curBid) * 100);
     if (newBid >= curBid - 0.01) return null;
+    const requiresApproval = Math.abs(actualPct) > 15;
     return {
       decision: 'BID_DOWN_CVR',
       proposedBid: newBid,
-      pct: r2(-redPct * 100),
-      requiresApproval: true,
-      reason: `CVR slot ${(slotCvr * 100).toFixed(1)}% vs baseline ${(baseCvr * 100).toFixed(1)}% (abaixo de ${(CVR_WEAK_THRESHOLD * 100).toFixed(0)}% do baseline)`,
+      pct: actualPct,
+      requiresApproval,
+      bidFloorApplied,
+      bidCapApplied: false,
+      reason: `CVR slot ${(slotCvr * 100).toFixed(1)}% vs baseline ${(baseCvr * 100).toFixed(1)}% (abaixo de ${(CVR_WEAK_THRESHOLD * 100).toFixed(0)}% do baseline)${bidFloorApplied ? ' [floor 40% aplicado]' : ''}`,
       ruleId: 'DAYPART_BID_DOWN_CVR',
     };
   }
@@ -429,6 +467,9 @@ Deno.serve(async (req) => {
       const idempKey = `daypart:${accountId}:${slot.keyword_id}:${slot.day_of_week}:${slot.hour}:${today}`;
       const slotLabel = `${DAY_LABELS[slot.day_of_week]}_${slot.hour}h`;
 
+      // Gate: se abs(bid_change_pct) > 15, força requires_approval=true (PRD)
+      const finalRequiresApproval = decisionData!.requiresApproval || Math.abs(decisionData!.pct) > 15;
+
       decisions.push({
         amazon_account_id: accountId,
         campaign_id: slot.campaign_id || kw.campaign_id,
@@ -447,7 +488,12 @@ Deno.serve(async (req) => {
         current_bid: Number(kw.current_bid || kw.bid || 0),
         proposed_bid: decisionData!.proposedBid,
         bid_change_pct: decisionData!.pct,
-        requires_approval: decisionData!.requiresApproval,
+        bid_floor_applied: (decisionData as any).bidFloorApplied || false,
+        bid_cap_applied: (decisionData as any).bidCapApplied || false,
+        recency_protection_blocked: false,
+        metric_window: '28D',
+        decision_window: '14D',
+        requires_approval: finalRequiresApproval,
         status: 'pending_approval',
         slot_acos: r2(slot.acos),
         slot_cvr: r2(slot.cvr),

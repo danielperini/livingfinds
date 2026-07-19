@@ -227,6 +227,70 @@ Deno.serve(async (req) => {
       });
     }
 
+    // ── 0b. GOAL_ALIGNMENT_GUARD ────────────────────────────────────
+    // Compara target_acos vs ACoS real dos últimos 14 dias
+    let goalAlignmentStatus = 'UNCHECKED';
+    let goalTensionActive = false;
+    let safeModeActive = false;
+    let recencyProtectionActive = false;
+    {
+      try {
+        const perfListGA = await base44.asServiceRole.entities.PerformanceSettings.filter(
+          { amazon_account_id: accountId }, null, 1
+        ).catch(() => []);
+        const perfGA = perfListGA[0] || {};
+        const targetAcosGA = Number(perfGA.target_acos || 15);
+        const aiAutoOptimization = perfGA.ai_auto_optimization === true;
+
+        // Buscar snapshot de trend (fonte única de verdade)
+        const snaps = await base44.asServiceRole.entities.PerformanceTrendSnapshot.filter(
+          { amazon_account_id: accountId }, '-snapshot_date', 1
+        ).catch(() => []);
+        const snap = snaps[0];
+        const account14dAcos = snap?.acos_14d || 0;
+
+        if (account14dAcos > 0 && targetAcosGA > 0) {
+          if (targetAcosGA < 8 && account14dAcos > 20 && !aiAutoOptimization) {
+            goalAlignmentStatus = 'MISCONFIGURED';
+            safeModeActive = true;
+          } else if (targetAcosGA < account14dAcos * 0.70 && account14dAcos <= 16) {
+            goalAlignmentStatus = 'GOAL_TENSION';
+            goalTensionActive = true;
+          } else {
+            goalAlignmentStatus = 'ALIGNED';
+          }
+        }
+
+        if (snap?.recency_protection_active) recencyProtectionActive = true;
+
+        // Persistir no controller
+        const todayBRT2 = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).toISOString().slice(0, 10);
+        const controllers2 = await base44.asServiceRole.entities.AccountDailySpendController.filter(
+          { amazon_account_id: accountId, spend_date: todayBRT2 }, null, 1
+        ).catch(() => []);
+        if (controllers2[0]) {
+          await base44.asServiceRole.entities.AccountDailySpendController.update(controllers2[0].id, {
+            goal_alignment_status: goalAlignmentStatus,
+            goal_alignment_checked_at: new Date().toISOString(),
+            recency_protection_active: recencyProtectionActive,
+            acos_14d_at_last_check: account14dAcos,
+            trend_classification: snap?.trend_classification || 'INSUFFICIENT_DATA',
+          }).catch(() => {});
+        }
+
+        // SAFE_MODE: zero mutações automáticas
+        if (safeModeActive) {
+          return Response.json({
+            ok: true, skipped: true,
+            reason: 'SAFE_MODE ativo — target_acos misconfigured. Ajuste PerformanceSettings.target_acos.',
+            goal_alignment_status: goalAlignmentStatus,
+            target_acos: targetAcosGA, account_acos_14d: account14dAcos,
+            duration_ms: Date.now() - t0,
+          });
+        }
+      } catch { /* não bloquear por erro de guardrail */ }
+    }
+
     // ── 1. GOAL RESOLUTION ──────────────────────────────────────────────
     const [perfList, economicsList] = await Promise.all([
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, null, 1).catch(() => []),

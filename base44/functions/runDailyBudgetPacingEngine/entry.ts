@@ -482,6 +482,112 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ── GERAR PerformanceTrendSnapshot diário ─────────────────────────
+    // Calcula ACoS por janela (7d, 14d, 30d, 80d) usando CampaignMetricsDaily
+    if (!dry_run) {
+      const cutoff7d  = new Date(Date.now() - 7  * 86400000).toISOString().slice(0, 10);
+      const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const cutoff80d = new Date(Date.now() - 80 * 86400000).toISOString().slice(0, 10);
+
+      const allDailyMetrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+        { amazon_account_id: accountId }, '-date', 3000
+      ).catch(() => []);
+
+      function aggMetrics(cutoffDate) {
+        const rows = allDailyMetrics.filter(m => (m.date || '') >= cutoffDate);
+        const s = rows.reduce((a, m) => ({
+          spend: a.spend + Number(m.spend || 0),
+          sales: a.sales + Number(m.sales || m.attributed_sales || 0),
+          orders: a.orders + Number(m.orders || m.attributed_conversions || 0),
+          clicks: a.clicks + Number(m.clicks || 0),
+        }), { spend: 0, sales: 0, orders: 0, clicks: 0 });
+        return {
+          acos: s.sales > 0 ? (s.spend / s.sales) * 100 : 0,
+          roas: s.spend > 0 ? s.sales / s.spend : 0,
+          spend: s.spend,
+          orders: s.orders,
+          cvr: s.clicks > 0 ? s.orders / s.clicks : 0,
+        };
+      }
+
+      const w7  = aggMetrics(cutoff7d);
+      const w14 = aggMetrics(cutoff14d);
+      const w30 = aggMetrics(cutoff30d);
+      const w80 = aggMetrics(cutoff80d);
+
+      // TREND CLASSIFICATION
+      let trendClassification = 'INSUFFICIENT_DATA';
+      let trendDelta = 0;
+      let recencyProtectionActive = false;
+
+      if (w14.acos > 0 && w80.acos > 0) {
+        trendDelta = (w80.acos - w14.acos) / w80.acos; // positivo = melhora recente
+        if (trendDelta >= 0.30) trendClassification = 'STRONGLY_IMPROVING';
+        else if (trendDelta >= 0.10) trendClassification = 'IMPROVING';
+        else if (trendDelta >= -0.10) trendClassification = 'STABLE';
+        else if (trendDelta >= -0.30) trendClassification = 'DEGRADING';
+        else trendClassification = 'STRONGLY_DEGRADING';
+
+        // Proteção de estratégia recente: 14d <= 16% E 80d >= 22%
+        recencyProtectionActive = w14.acos > 0 && w14.acos <= 16 && w80.acos >= 22;
+      }
+
+      // GOAL_ALIGNMENT do snapshot
+      const snapTargetAcos = Number(perf.target_acos || 15);
+      let snapAlignmentStatus = 'UNCHECKED';
+      if (w14.acos > 0) {
+        if (snapTargetAcos < 8 && w14.acos > 20) snapAlignmentStatus = 'MISCONFIGURED';
+        else if (snapTargetAcos < w14.acos * 0.70 && w14.acos <= 16) snapAlignmentStatus = 'GOAL_TENSION';
+        else snapAlignmentStatus = 'ALIGNED';
+      }
+
+      const snapData = {
+        amazon_account_id: accountId,
+        snapshot_date: todayBRT,
+        acos_7d:  r2(w7.acos),
+        acos_14d: r2(w14.acos),
+        acos_30d: r2(w30.acos),
+        acos_80d: r2(w80.acos),
+        roas_7d:  r2(w7.roas),
+        roas_14d: r2(w14.roas),
+        spend_7d:  r2(w7.spend),
+        spend_14d: r2(w14.spend),
+        orders_7d:  w7.orders,
+        orders_14d: w14.orders,
+        cvr_14d: r2(w14.cvr),
+        trend_classification: trendClassification,
+        trend_delta_14d_vs_80d: r2(trendDelta),
+        recency_protection_active: recencyProtectionActive,
+        goal_alignment_status: snapAlignmentStatus,
+        goal_alignment_detail: snapAlignmentStatus === 'GOAL_TENSION'
+          ? `Target ${snapTargetAcos}% mais agressivo que ACoS 14d (${w14.acos.toFixed(1)}%)`
+          : snapAlignmentStatus === 'MISCONFIGURED'
+          ? `Target ${snapTargetAcos}% irrealizável: ACoS 14d=${w14.acos.toFixed(1)}%`
+          : '',
+        target_acos_configured: snapTargetAcos,
+        acos_14d_at_check: r2(w14.acos),
+        created_at: now,
+      };
+
+      // Upsert snapshot do dia
+      const existingSnaps = await base44.asServiceRole.entities.PerformanceTrendSnapshot.filter(
+        { amazon_account_id: accountId, snapshot_date: todayBRT }, null, 1
+      ).catch(() => []);
+      if (existingSnaps.length > 0) {
+        await base44.asServiceRole.entities.PerformanceTrendSnapshot.update(existingSnaps[0].id, snapData).catch(() => {});
+      } else {
+        await base44.asServiceRole.entities.PerformanceTrendSnapshot.create(snapData).catch(() => {});
+      }
+
+      // Registrar no DailyBudgetLedger se houver STRONGLY_IMPROVING
+      if (recencyProtectionActive && existingLedger.length > 0) {
+        await base44.asServiceRole.entities.DailyBudgetLedger.update(existingLedger[0].id, {
+          learning_flags: JSON.stringify({ ...learningFlags, RECENT_PERFORMANCE_BETTER_THAN_HISTORY: true }),
+        }).catch(() => {});
+      }
+    }
+
     return Response.json({
       ok: true,
       dry_run,

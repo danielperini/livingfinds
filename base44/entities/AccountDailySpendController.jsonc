@@ -19,8 +19,7 @@
     },
     "user_daily_spend_cap": {
       "type": "number",
-      "default": 70,
-      "description": "Teto definido pelo usu\u00e1rio. Nunca alterado automaticamente."
+      "default": 70
     },
     "ai_suggested_daily_spend_cap": {
       "type": "number",
@@ -39,8 +38,7 @@
     },
     "effective_daily_spend_cap": {
       "type": "number",
-      "default": 70,
-      "description": "= user_daily_spend_cap. Sempre."
+      "default": 70
     },
     "updated_by": {
       "type": "string"
@@ -167,8 +165,7 @@
     },
     "elite_reserve": {
       "type": "number",
-      "default": 0,
-      "description": "Valor em R$ reservado para slots ELITE futuros"
+      "default": 0
     },
     "affordable_active_hours": {
       "type": "number",
@@ -183,12 +180,10 @@
       "default": false
     },
     "global_stop_event_id": {
-      "type": "string",
-      "description": "ID \u00fanico do evento de pausa global \u2014 garante idempot\u00eancia"
+      "type": "string"
     },
     "global_stop_snapshot": {
-      "type": "string",
-      "description": "JSON: campaign_id -> state antes da pausa pelo Kill Switch"
+      "type": "string"
     },
     "kill_switch_activated_at": {
       "type": "string",
@@ -207,8 +202,7 @@
     },
     "future_value_reserve": {
       "type": "number",
-      "default": 0,
-      "description": "Soma de budget_share das horas futuras com score >= 75"
+      "default": 0
     },
     "underpacing_alert": {
       "type": "boolean",
@@ -227,18 +221,15 @@
         "PROFIT_PROTECTION_STOP",
         "STOCK_STOP",
         "MANUAL_STOP"
-      ],
-      "description": "Tipo de pausa ativa mais recente"
+      ]
     },
     "spend_velocity_per_hour": {
       "type": "number",
-      "default": 0,
-      "description": "R$/hora atual de gasto"
+      "default": 0
     },
     "safety_buffer": {
       "type": "number",
-      "default": 0,
-      "description": "Buffer de seguran\u00e7a calculado dinamicamente"
+      "default": 0
     },
     "budget_insufficient_for_8h": {
       "type": "boolean",
@@ -250,7 +241,7 @@
     },
     "hour_value_scores": {
       "type": "string",
-      "description": "JSON: hour -> score calculado no reset di\u00e1rio"
+      "description": "JSON: hour -> score"
     },
     "last_pacing_engine_run_at": {
       "type": "string",
@@ -259,6 +250,34 @@
     "last_kill_switch_check_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "goal_alignment_status": {
+      "type": "string",
+      "enum": [
+        "ALIGNED",
+        "GOAL_TENSION",
+        "MISCONFIGURED",
+        "UNCHECKED"
+      ],
+      "default": "UNCHECKED",
+      "description": "Resultado do GOAL_ALIGNMENT_GUARD"
+    },
+    "goal_alignment_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "recency_protection_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "acos_14d_at_last_check": {
+      "type": "number",
+      "default": 0
+    },
+    "trend_classification": {
+      "type": "string",
+      "default": "INSUFFICIENT_DATA",
+      "description": "C\u00f3pia do PerformanceTrendSnapshot mais recente"
     }
   },
   "required": [
