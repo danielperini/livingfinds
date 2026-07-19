@@ -157,6 +157,14 @@ Deno.serve(async (req) => {
     const archiveIds = new Set(duplicatesToArchive.map((c: any) => c.id));
     const noStockToPause = autoEnabled.filter((c: any) => {
       if (archiveIds.has(c.id)) return false;
+      // Não pausar campanhas com proteção ativa (ads_protected=true)
+      // exceto se estoque = 0 (fba_inventory do produto)
+      if ((c as any).ads_protected === true) {
+        const asin = getCampaignAsin(c);
+        if (!asin) return false;
+        // Permitir pausa apenas se realmente sem estoque
+        return !inStockAsins.has(asin) && !kickoffAsins.has(asin);
+      }
       const asin = getCampaignAsin(c);
       if (!asin) return false;
       return !inStockAsins.has(asin) && !kickoffAsins.has(asin);

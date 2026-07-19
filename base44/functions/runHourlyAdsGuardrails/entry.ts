@@ -103,6 +103,8 @@ Deno.serve(async (req) => {
 
       for (const c of activeCampaigns) {
         if (!c.asin || !oosByAsin.has(c.asin)) continue;
+        // Respeitar flag ads_protected: só pausar se realmente sem estoque
+        if ((c as any).ads_protected === true) continue;
 
         // Verificar se já existe decisão de pausa pendente/executada hoje
         const existingPause = await base44.asServiceRole.entities.OptimizationDecision.filter({

@@ -165,6 +165,10 @@ Deno.serve(async (req) => {
         const isReallyPaused = realState === 'paused';
 
         // CASO A: sem estoque mas campanha ativa na Amazon → pausar
+        // Respeitar ads_protected: só pausar se realmente sem estoque (fba=0)
+        const linkedProtected = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 1)
+          .then((r: any[]) => r[0]?.ads_protected === true).catch(() => false);
+        if (linkedProtected && fba > 0) continue; // protegida e tem estoque → pular
         if (isOutOfStock && isReallyActive) {
           try {
             const linkedCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 5).catch(() => []);
