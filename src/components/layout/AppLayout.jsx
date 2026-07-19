@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2, Sparkles } from
+  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2, Sparkles, Factory } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -18,6 +18,7 @@ const navItems = [
 { path: '/products/listing-enhancement', icon: Sparkles, label: 'Aprimoramento de Listings', sub: true },
 { path: '/ads', icon: Megaphone, label: 'Campanhas' },
 { path: '/term-bank', icon: BookOpen, label: 'Term Bank' },
+{ path: '/campaign-factory', icon: Factory, label: 'Campaign Factory' },
 { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Controle' },
 { path: '/settings', icon: Settings, label: 'Configurações' },
 { path: '/manual', icon: Book, label: 'Manual' }];

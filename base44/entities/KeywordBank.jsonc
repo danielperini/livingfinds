@@ -1,0 +1,340 @@
+{
+  "name": "KeywordBank",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace": {
+      "type": "string",
+      "default": "BR"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "product_family": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string",
+      "description": "Keyword original preservada"
+    },
+    "normalized_keyword": {
+      "type": "string",
+      "description": "Keyword normalizada para deduplica\u00e7\u00e3o"
+    },
+    "keyword_hash": {
+      "type": "string",
+      "description": "Hash: marketplace+asin+normalized+match_type+job"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "product_target",
+        "auto_group"
+      ],
+      "default": "exact"
+    },
+    "campaign_job": {
+      "type": "string",
+      "enum": [
+        "PROFIT",
+        "SCALE",
+        "DISCOVERY",
+        "VALIDATION",
+        "RANK",
+        "CONQUEST",
+        "BRAND"
+      ],
+      "default": "VALIDATION"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "AUTO_SEARCH_TERM",
+        "BROAD_SEARCH_TERM",
+        "PHRASE_SEARCH_TERM",
+        "EXACT_KEYWORD",
+        "AMAZON_KEYWORD_SUGGESTION",
+        "AMAZON_PRODUCT_SUGGESTION",
+        "PRODUCT_TARGET_WINNER",
+        "KEYWORD_BANK",
+        "ASIN_BANK",
+        "ORGANIC_TERM",
+        "HISTORICAL_WINNER"
+      ]
+    },
+    "source_campaign_id": {
+      "type": "string"
+    },
+    "source_target_id": {
+      "type": "string"
+    },
+    "source_asin": {
+      "type": "string"
+    },
+    "source_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "source_metrics": {
+      "type": "string",
+      "description": "JSON das m\u00e9tricas da fonte no momento da captura"
+    },
+    "source_confidence": {
+      "type": "string",
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "VERY_HIGH",
+        "TRANSFERRED"
+      ],
+      "default": "LOW"
+    },
+    "lifecycle_status": {
+      "type": "string",
+      "enum": [
+        "SUGGESTION",
+        "CANDIDATE",
+        "VALIDATING",
+        "PROVEN",
+        "WINNER",
+        "HARVESTED",
+        "ISOLATED",
+        "SCALED",
+        "DECAYING",
+        "REOPTIMIZED",
+        "RETIRED",
+        "FAILED",
+        "BANK_ONLY"
+      ],
+      "default": "CANDIDATE"
+    },
+    "bank_segment": {
+      "type": "string",
+      "enum": [
+        "PROFIT_BANK",
+        "DISCOVERY_BANK",
+        "RANK_BANK",
+        "BRAND_BANK",
+        "COMPETITOR_BANK",
+        "NEGATIVE_BANK",
+        "FAILED_BANK"
+      ],
+      "default": "DISCOVERY_BANK"
+    },
+    "winner_tier": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "WINNER",
+        "STRONG_WINNER"
+      ],
+      "default": "NONE"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_best_acos": {
+      "type": "number"
+    },
+    "historical_best_cvr": {
+      "type": "number"
+    },
+    "historical_best_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "intent_score": {
+      "type": "number",
+      "default": 0,
+      "description": "0\u2013100: relev\u00e2ncia sem\u00e2ntica do termo para o produto"
+    },
+    "confidence_score": {
+      "type": "number",
+      "default": 0,
+      "description": "0\u2013100: confian\u00e7a nos dados"
+    },
+    "promotion_score": {
+      "type": "number",
+      "default": 0,
+      "description": "0\u2013100: score composto para promo\u00e7\u00e3o"
+    },
+    "economic_score": {
+      "type": "number",
+      "default": 0,
+      "description": "0\u2013100: efici\u00eancia econ\u00f4mica"
+    },
+    "sustainable_cpc": {
+      "type": "number",
+      "description": "AOV \u00d7 CVR \u00d7 Target ACoS"
+    },
+    "estimated_initial_bid": {
+      "type": "number"
+    },
+    "amazon_suggested_bid": {
+      "type": "number"
+    },
+    "amazon_recommended": {
+      "type": "boolean",
+      "default": false
+    },
+    "recommendation_source": {
+      "type": "string"
+    },
+    "recommendation_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "keyword_owner_asin": {
+      "type": "string",
+      "description": "ASIN com melhor performance neste termo"
+    },
+    "campaign_usage": {
+      "type": "string",
+      "description": "JSON: lista de campanhas que usam este termo"
+    },
+    "negative_usage": {
+      "type": "string",
+      "description": "JSON: campanhas onde este termo \u00e9 negativo"
+    },
+    "in_negative_bank": {
+      "type": "boolean",
+      "default": false
+    },
+    "negative_reason": {
+      "type": "string"
+    },
+    "last_decision": {
+      "type": "string"
+    },
+    "last_decision_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_campaign_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "retest_eligible": {
+      "type": "boolean",
+      "default": false
+    },
+    "retest_reason": {
+      "type": "string"
+    },
+    "retest_eligible_after": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "failed_reason": {
+      "type": "string"
+    },
+    "failed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "failed_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "failed_listing_version": {
+      "type": "string"
+    },
+    "harvest_candidate": {
+      "type": "boolean",
+      "default": false
+    },
+    "harvest_action": {
+      "type": "string",
+      "enum": [
+        "CREATE_EXACT",
+        "CREATE_PHRASE",
+        "CREATE_BROAD",
+        "CREATE_PRODUCT",
+        "REACTIVATE",
+        "SCALE",
+        "ISOLATE",
+        "REJECT",
+        "WAIT"
+      ]
+    },
+    "harvest_reason": {
+      "type": "string"
+    },
+    "harvest_proposed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "harvest_executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "normalized_keyword",
+    "source_type"
+  ]
+}

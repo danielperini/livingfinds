@@ -45,6 +45,7 @@ import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
 import TermBankPage from '@/pages/TermBankPage';
+import CampaignFactory from '@/pages/CampaignFactory';
 import ListingEnhancementPage from '@/pages/ListingEnhancementPage';
 import AdsAuthorizationPage from '@/pages/AdsAuthorizationPage';
 
@@ -151,6 +152,7 @@ const AuthenticatedApp = () => {
           <Route path="/keyword-management" element={<KeywordManagement />} />
           <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
           <Route path="/term-bank" element={<TermBankPage />} />
+          <Route path="/campaign-factory" element={<CampaignFactory />} />
           <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
           <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
           <Route path="/keyword-ml" element={<KeywordMLDashboard />} />

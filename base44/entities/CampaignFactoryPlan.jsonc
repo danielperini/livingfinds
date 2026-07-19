@@ -1,0 +1,178 @@
+{
+  "name": "CampaignFactoryPlan",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "keyword_bank_id": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "campaign_job": {
+      "type": "string"
+    },
+    "campaign_type": {
+      "type": "string",
+      "enum": [
+        "AUTO",
+        "MANUAL_EXACT",
+        "MANUAL_PHRASE",
+        "MANUAL_BROAD",
+        "PRODUCT_TARGET"
+      ]
+    },
+    "source_type": {
+      "type": "string"
+    },
+    "source_campaign_id": {
+      "type": "string"
+    },
+    "why_created": {
+      "type": "string"
+    },
+    "source_metrics": {
+      "type": "string",
+      "description": "JSON das m\u00e9tricas que justificaram a proposta"
+    },
+    "target_campaign_name": {
+      "type": "string"
+    },
+    "initial_bid": {
+      "type": "number"
+    },
+    "sustainable_cpc": {
+      "type": "number"
+    },
+    "amazon_suggested_bid": {
+      "type": "number"
+    },
+    "initial_budget": {
+      "type": "number"
+    },
+    "bidding_strategy": {
+      "type": "string",
+      "default": "DOWN_ONLY"
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "intent_score": {
+      "type": "number"
+    },
+    "confidence_score": {
+      "type": "number"
+    },
+    "promotion_score": {
+      "type": "number"
+    },
+    "negative_plan": {
+      "type": "string",
+      "description": "JSON: plano de negativas a aplicar"
+    },
+    "learning_window_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "success_criteria": {
+      "type": "string"
+    },
+    "failure_criteria": {
+      "type": "string"
+    },
+    "next_step": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PROPOSED",
+        "APPROVED",
+        "EXECUTING",
+        "EXECUTED",
+        "FAILED",
+        "REJECTED",
+        "DUPLICATE_FOUND",
+        "WAITING"
+      ],
+      "default": "PROPOSED"
+    },
+    "auto_creation_level": {
+      "type": "number",
+      "default": 1,
+      "description": "0=s\u00f3 recomenda, 1=aprova\u00e7\u00e3o manual, 2=low-risk auto, 3=harvest auto, 4=full auto"
+    },
+    "duplicate_check_hash": {
+      "type": "string"
+    },
+    "duplicate_found": {
+      "type": "boolean",
+      "default": false
+    },
+    "duplicate_campaign_id": {
+      "type": "string"
+    },
+    "duplicate_action": {
+      "type": "string",
+      "enum": [
+        "USE_EXISTING",
+        "REACTIVATE",
+        "ADJUST_BID",
+        "MAINTAIN"
+      ]
+    },
+    "execution_result": {
+      "type": "string",
+      "description": "JSON do resultado da cria\u00e7\u00e3o"
+    },
+    "created_campaign_id": {
+      "type": "string"
+    },
+    "rejected_reason": {
+      "type": "string"
+    },
+    "proposed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cycle_date": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "campaign_type",
+    "source_type",
+    "status"
+  ]
+}
