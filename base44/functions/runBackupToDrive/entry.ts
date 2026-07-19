@@ -196,11 +196,14 @@ Deno.serve(async (req) => {
     }).catch(() => null);
 
     // Garantir estrutura de pastas no Drive
+    // Estrutura: APP_BACKUPS_LivingFinds / {tipo} / {YYYY-MM-DD}
     const rootFolderId = await findOrCreateFolder('APP_BACKUPS_LivingFinds', 'root', driveToken);
-    const subFolder = isFullBackup
+    const typeFolder = isFullBackup
       ? (backup_type === 'monthly_full' ? 'monthly' : backup_type === 'weekly_full' ? 'weekly' : 'manual')
       : 'daily';
-    const targetFolderId = await findOrCreateFolder(subFolder, rootFolderId, driveToken);
+    const typeFolderId = await findOrCreateFolder(typeFolder, rootFolderId, driveToken);
+    // Subpasta por data — cada dia tem seus próprios arquivos isolados e restauráveis
+    const targetFolderId = await findOrCreateFolder(now.slice(0, 10), typeFolderId, driveToken);
 
     // Exportar entidades
     let totalRecords = 0;
@@ -227,8 +230,8 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Comprimir e fazer upload
-        const fileName = `${entityName}_${now.slice(0, 10)}.json.gz`;
+        // Comprimir e fazer upload — nome sem data (já está na pasta por data)
+        const fileName = `${entityName}.json.gz`;
         const compressed = await compress(JSON.stringify({ entity: entityName, since, records, exported_at: now }));
         await uploadFileToDrive(fileName, compressed, targetFolderId, driveToken);
 
