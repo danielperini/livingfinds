@@ -214,7 +214,7 @@ Deno.serve(async (req) => {
         last_activity_at: now,
       }).catch(() => {});
 
-      // Registrar decisão executada
+      // Registrar decisão executada (log auditável — entregável #4)
       await base44.asServiceRole.entities.OptimizationDecision.create({
         amazon_account_id: accountId,
         decision_type: 'pause',
