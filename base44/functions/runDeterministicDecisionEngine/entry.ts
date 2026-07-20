@@ -986,12 +986,42 @@ Deno.serve(async (req) => {
       const dupsToPause: any[] = [];
       for (const [asin, camps] of autoCampaignsByAsin.entries()) {
         if (camps.length <= 1) continue;
-        camps.sort((a: any, b: any) =>
-          new Date(a.created_at || a.created_date || 0).getTime() -
-          new Date(b.created_at || b.created_date || 0).getTime()
-        );
-        for (let i = 1; i < camps.length; i++) {
-          const dup = camps[i];
+
+        // ── WINNER PROTECTION: ordenar por score de performance sustentável ──
+        // NUNCA escolher a campanha a preservar somente por idade.
+        // Score = orders*10 + roas*2 + (sales>0?5:0) + (acos>0&&acos<=target?10:0) - (acos>break_even?5:0)
+        // A campanha com maior score é preservada — independente de ser mais nova ou mais velha.
+        const asinMeta = acosByAsin.get(asin);
+        const targetAcos = asinMeta?.target ?? settings.target_acos ?? 15;
+        const breakEvenAcos = asinMeta?.break_even ?? 30;
+
+        const scoredCamps = camps.map((c: any) => {
+          const cOrders = c.orders || 0;
+          const cRoas = c.roas || 0;
+          const cSales = c.sales || 0;
+          const cAcos = c.acos || 0;
+          const winnerScore =
+            cOrders * 10
+            + cRoas * 2
+            + (cSales > 0 ? 5 : 0)
+            + (cAcos > 0 && cAcos <= targetAcos ? 10 : 0)
+            - (cAcos > breakEvenAcos ? 5 : 0);
+          return { ...c, _winnerScore: winnerScore };
+        }).sort((a: any, b: any) => b._winnerScore - a._winnerScore); // maior score = preservar
+
+        // O primeiro é o winner — os demais são duplicatas
+        for (let i = 1; i < scoredCamps.length; i++) {
+          const dup = scoredCamps[i];
+          // WINNER PROTECTION: nunca pausar campanha com vendas recentes ou ACoS <= target
+          const dupOrders = dup.orders || 0;
+          const dupAcos = dup.acos || 0;
+          const dupSales = dup.sales || 0;
+          const isWinnerProtected =
+            (dupOrders > 0 && dupAcos > 0 && dupAcos <= targetAcos) ||
+            (dupSales > 0 && dupOrders >= 2) ||
+            dup.is_operational === true;
+          if (isWinnerProtected) continue; // nunca deduplica campanha com vendas e ACoS bom
+
           const iKey = `auto_dedup_archive|${aid}|${dup.id}`;
           if (usedIdemKeys.has(iKey)) continue;
           const amazonCampaignId = dup.campaign_id || dup.amazon_campaign_id;
