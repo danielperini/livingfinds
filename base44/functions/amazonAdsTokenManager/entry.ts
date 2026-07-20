@@ -26,6 +26,8 @@ function validAccessToken(account:any, marginMs = SAFETY_MARGIN_MS) {
   return token.length > 20 && Number.isFinite(expires) && expires > Date.now() + marginMs;
 }
 
+import { sendDiscordAlert } from '../../shared/notify.ts';
+
 function classifyLwaError(data:any, status:number) {
   const code = String(data?.error || 'unknown');
   const description = String(data?.error_description || data?.message || data?.error || `HTTP ${status}`);
@@ -197,6 +199,22 @@ Deno.serve(async (req) => {
     }).catch(() => {});
     lockOwned = false;
     await logEvent(base44, accountId, transient ? 'warning' : 'error', refreshError || { message:safeMessage });
+
+    // Alerta de reconexão (entregável #5: nunca cair "sem aviso"). Debounce: só na transição ok→reauth.
+    if ((requiresReauth || credentialsError) && account?.ads_requires_reauth !== true) {
+      await sendDiscordAlert({
+        title: 'Amazon Ads exige reconexão',
+        level: 'error',
+        message: 'O token da API da Amazon Ads não pôde ser renovado automaticamente. ' +
+          'É preciso reconectar a conta (reautorizar o app / atualizar o segredo LWA).',
+        fields: [
+          { name: 'Conta', value: String(account?.name || accountId) },
+          { name: 'Erro', value: safeMessage.slice(0, 200) },
+          { name: 'Código', value: String(refreshError?.amazon_error_code || refreshError?.error_type || 'n/d') },
+        ],
+        source: 'amazonAdsTokenManager',
+      });
+    }
 
     if (transient && stillUsable) {
       return Response.json({ ok:true, access_token:account.ads_access_token, expires_at:account.ads_access_token_expires_at, from_cache:true, degraded:true, source:'database_fallback_after_transient_error', retryable:true, warning:safeMessage });

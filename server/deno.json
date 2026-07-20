@@ -1,0 +1,23 @@
+{
+  "//": "Backend self-hosted do Living Finds. O import-map abaixo intercepta o @base44/sdk que as 311 funções importam e o redireciona para o nosso shim (src/sdk/mod.ts). Assim as funções rodam sem nenhuma alteração no código delas.",
+  "imports": {
+    "npm:@base44/sdk@0.8.31": "./src/sdk/mod.ts",
+    "npm:@base44/sdk@0.8.38": "./src/sdk/mod.ts",
+    "npm:@base44/sdk": "./src/sdk/mod.ts",
+    "@base44/sdk": "./src/sdk/mod.ts",
+    "postgres": "npm:postgres@3.4.5",
+    "strip-json-comments": "npm:strip-json-comments@5.0.1"
+  },
+  "tasks": {
+    "start": "deno run --allow-net --allow-env --allow-read --allow-sys src/main.ts",
+    "dev": "deno run --watch --allow-net --allow-env --allow-read --allow-sys src/main.ts",
+    "schema": "deno run --allow-read --allow-write --allow-env scripts/generate-schema.ts",
+    "migrate": "deno run --allow-net --allow-env --allow-read scripts/migrate.ts"
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "singleQuote": true
+  },
+  "lock": false
+}

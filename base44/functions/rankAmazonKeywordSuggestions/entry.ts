@@ -9,6 +9,7 @@
  * Confiança mínima para criação automática: 0.90
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { evaluateKeywordSpecificity, specificityConfigFrom } from '../../shared/keywordSpecificity.ts';
 
 Deno.serve(async (req) => {
   const now = new Date().toISOString();
@@ -117,8 +118,40 @@ Deno.serve(async (req) => {
     const grossMargin = prod?.break_even_acos_pct || prod?.profit_margin_pct || 0;
     const maxCpc = prod?.maximum_ad_spend_per_order || null;
 
+    // ── Filtro determinístico de especificidade (entregável #2) ─────────
+    // Barra termos curtos/genéricos (ex.: "café elétrico") ANTES da IA e registra o motivo
+    // em cada sugestão (auditável — entregável #4). Limiares calibráveis via AutopilotConfig.
+    const specCfg = specificityConfigFrom(ap);
+    const specificSuggestions: any[] = [];
+    let blockedGenericCount = 0;
+    for (const s of suggestions) {
+      const termText = s.normalized_keyword || s.keyword || '';
+      const spec = evaluateKeywordSpecificity(termText, specCfg);
+      if (spec.specific) {
+        specificSuggestions.push(s);
+      } else {
+        blockedGenericCount++;
+        await base44.asServiceRole.entities.KeywordSuggestion.update(s.id, {
+          status: 'rejected_generic',
+          rejection_reason: `Filtro de especificidade: ${spec.reasons.join('; ')}`,
+          specificity_score: spec.score,
+          decided_at: now,
+        }).catch(() => {});
+      }
+    }
+    if (blockedGenericCount) {
+      console.log(`[rankAmazonKeywordSuggestions] ${blockedGenericCount} sugestões barradas por especificidade (genéricas)`);
+    }
+    if (!specificSuggestions.length) {
+      return Response.json({
+        ok: true, asin, ranked: 0,
+        blocked_generic: blockedGenericCount,
+        message: 'Todas as sugestões foram barradas pelo filtro de especificidade (termos genéricos)',
+      });
+    }
+
     // Preparar dados estruturados para a IA
-    const suggestionsForAI = suggestions.slice(0, 100).map((s: any) => ({
+    const suggestionsForAI = specificSuggestions.slice(0, 100).map((s: any) => ({
       id: s.id,
       keyword: s.keyword,
       normalized: s.normalized_keyword,
@@ -159,18 +192,17 @@ ${JSON.stringify(productContext, null, 2)}
 SUGESTÕES DA AMAZON ADS API (escolha as melhores entre estas):
 ${JSON.stringify(suggestionsForAI, null, 2)}
 
-CRITÉRIOS DE RANQUEAMENTO (por prioridade):
-1. Keyword veio da Amazon Ads API ✓ (todas já vieram)
-2. Alta aderência ao produto (relevância semântica real)
-3. Não contém marca registrada ou nome de concorrente
-4. Não é termo genérico demais (ex: "produto", "item", "coisa")
-5. Não está negativada (already_negated = true → descartar)
-6. Não existe campanha ativa igual (already_active = true → descartar)
-7. CPC sugerido Amazon cabe na margem do produto
-8. Produto tem estoque suficiente
-9. Se tem histórico: pedidos > 0 aumenta score; gasto sem venda diminui score
-10. Evitar keywords muito parecidas entre si (priorizar diversidade)
-11. Preferir EXACT match
+CRITÉRIOS DE RANQUEAMENTO (ordem de prioridade — seja RIGOROSO):
+1. ESPECIFICIDADE / CAUDA LONGA (mais importante): priorize termos específicos, com atributos e intenção de compra (ex.: "cafeteira elétrica 220v inox 15 xícaras"). PENALIZE FORTEMENTE head-terms curtos/genéricos de 1-2 palavras (ex.: "café elétrico", "cafeteira") — têm alta concorrência, ACOS alto e baixa conversão. Termo genérico/amplo → should_create_campaign=false.
+2. INTENÇÃO COMERCIAL: prefira termos com sinais de decisão de compra (modelo, tamanho, voltagem, material, cor, quantidade) sobre termos exploratórios/informacionais.
+3. RELEVÂNCIA REAL ao produto (aderência ao título/atributos), não só correspondência de palavra.
+4. SEM MARCA/CONCORRENTE: descarte termos com marca registrada ou nome de concorrente.
+5. MARGEM/ACOS: o CPC sugerido pela Amazon deve caber na margem (gross_margin_pct) e no ACOS alvo (target_acos). Se o CPC estoura a margem, reduza o score ou descarte.
+6. HISTÓRICO: pedidos > 0 aumenta muito o score; gasto sem venda (clicks altos e orders=0) reduz muito.
+7. Descarte already_negated=true e already_active=true.
+8. Produto precisa de estoque e preço válidos.
+9. DIVERSIDADE: evite selecionar termos quase idênticos entre si.
+10. Prefira EXACT match para termos específicos comprovados.
 
 RETORNE JSON com esta estrutura:
 {
@@ -190,7 +222,7 @@ RETORNE JSON com esta estrutura:
   ]
 }
 
-Selecione no máximo ${max_results} sugestões. Apenas inclua sugestões com ai_confidence >= 0.70. Para should_create_campaign = true, exija ai_confidence >= 0.90 e risk_level = low ou medium.`;
+Selecione no máximo ${max_results} sugestões. Apenas inclua sugestões com ai_confidence >= 0.70. Para should_create_campaign = true, exija ai_confidence >= 0.90, risk_level = low ou medium, E que o termo seja ESPECÍFICO (não genérico/head-term). Em caso de dúvida sobre especificidade ou margem, seja conservador: should_create_campaign = false.`;
 
     const aiRes = await base44.asServiceRole.integrations.Core.InvokeLLM({
       prompt: aiPrompt,

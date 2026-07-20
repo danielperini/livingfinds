@@ -3,6 +3,7 @@
  * A execução efetiva ocorre no runDailyAmazonActionQueue, preservando histórico e idempotência.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { logDecision } from '../../shared/decisionLog.ts';
 
 function daysSince(startDate) {
   if (!startDate) return 0;
@@ -92,6 +93,24 @@ Deno.serve(async (req) => {
         observation: `${reason} Ação aprovada automaticamente e adicionada à fila Amazon.`,
         recorded_at: new Date().toISOString(),
       }).catch(() => {});
+
+      await logDecision(base44, {
+        amazon_account_id: accountId,
+        decision_type: 'pause_campaign',
+        status: 'approved',
+        entity_type: 'campaign',
+        entity_id: campaign.campaign_id,
+        entity_name: campaign.name || campaign.campaign_name,
+        asin: campaign.asin,
+        campaign_id: campaign.campaign_id,
+        rationale: reason,
+        metrics: { days_running: daysRunning, clicks, spend, orders, sales, min_days: minDays, min_clicks: minClicks, min_spend: minSpend },
+        formula: `pausar se dias>=${minDays} E cliques>=${minClicks} E gasto>=R$${minSpend} E pedidos=0 E vendas=0`,
+        risk: 'high',
+        priority: 'high',
+        objective: 'Cortar gasto em campanha sem retorno',
+        source: 'evaluateNoConversionCampaigns',
+      });
 
       queued++;
       results.push({ campaign_id: campaign.campaign_id, status: 'queued', reason });

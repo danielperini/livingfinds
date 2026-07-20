@@ -12,6 +12,8 @@
  * Nomenclatura: EXACT | ASIN | TERMO | DATA
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { evaluateKeywordSpecificity, specificityConfigFrom } from '../../shared/keywordSpecificity.ts';
+import { logDecision } from '../../shared/decisionLog.ts';
 
 function normalizeTerm(t: string): string {
   return t.toLowerCase().trim().replace(/\s+/g, ' ');
@@ -56,6 +58,35 @@ Deno.serve(async (req) => {
     const MIN_BID = cfg.min_bid || 0.10;
     const MAX_BID = cfg.max_bid || 5.00;
     const TARGET_ACOS = cfg.target_acos || 25;
+
+    // ── 0. Filtro de especificidade (entregável #2) ─────────────────────
+    // Termos curtos/genéricos (ex.: "café elétrico") não viram campanha dedicada, mesmo tendo
+    // convertido. Bloqueio registrado com o motivo (auditável — #4). Calibrável via AutopilotConfig.
+    const specResult = evaluateKeywordSpecificity(term, specificityConfigFrom(cfg));
+    if (!specResult.specific) {
+      const why = specResult.reasons.join('; ');
+      await base44.asServiceRole.entities.SearchTermPromotion.update(promo.id, {
+        status: 'rejected',
+        rejection_reason: `Termo genérico/curto barrado pelo filtro de especificidade: ${why}`,
+      });
+      await logDecision(base44, {
+        amazon_account_id,
+        decision_type: 'reject_keyword',
+        status: 'rejected',
+        entity_type: 'search_term',
+        search_term: term,
+        asin,
+        rationale: `Termo genérico/curto barrado pelo filtro de especificidade: ${why}`,
+        metrics: { specificity_score: specResult.score, word_count: specResult.wordCount, conversions: promo.conversions, acos: promo.acos },
+        source: 'promoteSearchTermToExact',
+      });
+      return Response.json({
+        ok: false,
+        rejected: true,
+        reason: `Termo genérico/curto: ${why}`,
+        specificity_score: specResult.score,
+      });
+    }
 
     // ── 1. Verificar duplicatas ─────────────────────────────────────────
     // Verificar campanhas existentes com mesmo ASIN e termo
@@ -215,6 +246,27 @@ Responda APENAS com JSON:
       priority: 'high',
       status: 'pending',
       scheduled_at: now,
+      source: 'promoteSearchTermToExact',
+    });
+
+    await logDecision(base44, {
+      amazon_account_id,
+      decision_type: 'create_campaign_manual',
+      status: 'executed',
+      entity_type: 'campaign',
+      entity_name: campName,
+      asin,
+      search_term: term,
+      rationale: `Termo promovido a campanha EXACT dedicada: ${promo.conversions} conversão(ões), ` +
+        `ACoS ${promo.acos > 0 ? promo.acos.toFixed(1) + '%' : 'n/d'}, cauda "${promo.tail_type}", especificidade aprovada.`,
+      metrics: {
+        conversions: promo.conversions, acos: promo.acos, avg_cpc: promo.avg_cpc,
+        target_bid: targetBid, promotion_score: promo.promotion_score,
+      },
+      proposed_value: targetBid,
+      confidence: 0.9,
+      priority: 'high',
+      objective: 'Isolar termo vencedor em campanha dedicada para controle de lance/ACOS',
       source: 'promoteSearchTermToExact',
     });
 

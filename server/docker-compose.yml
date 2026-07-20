@@ -1,0 +1,37 @@
+# docker-compose do backend self-hosted do Living Finds.
+# Rode a partir da RAIZ do repo:  docker compose -f server/docker-compose.yml up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: livingfinds
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-CHANGE_ME}
+      POSTGRES_DB: livingfinds
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U livingfinds']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - '5432:5432'
+
+  app:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://livingfinds:${DB_PASSWORD:-CHANGE_ME}@db:5432/livingfinds
+    ports:
+      - '8000:8000'
+
+volumes:
+  pgdata:
