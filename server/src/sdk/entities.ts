@@ -140,12 +140,18 @@ export class EntityRepo {
     const id = system.id ?? crypto.randomUUID();
     // Passamos o OBJETO direto (postgres.js serializa como JSON uma única vez).
     // Passar string faria dupla codificação (viraria jsonb scalar string).
+    const cols = ['id', 'created_by', 'data'];
+    const ph = ['$1', '$2', '$3::jsonb'];
+    const vals: unknown[] = [id, system.created_by ?? null, data];
+    // Preserva created_date/updated_date quando fornecidos (importante na migração de dados).
+    if (system.created_date) { vals.push(system.created_date); cols.push('created_date'); ph.push(`$${vals.length}`); }
+    if (system.updated_date) { vals.push(system.updated_date); cols.push('updated_date'); ph.push(`$${vals.length}`); }
     const rows = (await sql.unsafe(
-      `INSERT INTO ${q(this.table)} (id, created_by, data)
-       VALUES ($1, $2, $3::jsonb)
+      `INSERT INTO ${q(this.table)} (${cols.join(', ')})
+       VALUES (${ph.join(', ')})
        ON CONFLICT (id) DO UPDATE SET data = ${q(this.table)}.data || EXCLUDED.data, updated_date = now()
        RETURNING *`,
-      [id, system.created_by ?? null, data] as unknown as string[],
+      vals as unknown as string[],
     )) as unknown as Row[];
     return mapRow(rows[0]);
   }
