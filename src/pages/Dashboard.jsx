@@ -402,8 +402,14 @@ export default function Dashboard() {
     const map = {};
     for (const s of salesDaily) {
       if (!s.date) continue;
-      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0 };
-      map[s.date].revenue += s.ordered_product_sales || 0;
+      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0, source: 'ads_report' };
+      // Priorizar gross_revenue de Finance Events (fonte idêntica ao Seller Central)
+      if (s.finance_sync_status === 'synced' && (s.gross_revenue || 0) > 0) {
+        map[s.date].revenue = (map[s.date].revenue || 0) + (s.gross_revenue || 0);
+        map[s.date].source = 'finance_events';
+      } else {
+        map[s.date].revenue += s.ordered_product_sales || 0;
+      }
       map[s.date].units += s.units_ordered || 0;
     }
     return map;
@@ -910,13 +916,15 @@ export default function Dashboard() {
                 <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Fat. Real (SP-API)</p>
                 <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
                 {realSalesKpis.revenue === 0 ? (
-                  <button onClick={runSync} disabled={syncingDashboard}
-                    className="mt-1 flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50">
-                    {syncingDashboard ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
-                    {syncingDashboard ? 'Atualizando...' : `${realSalesKpis.units} unidades · atualizar`}
-                  </button>
+                  <p className="text-[10px] text-amber-400 mt-1 italic">Aguardando sync Finance Events</p>
                 ) : (
-                  <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    {realSalesKpis.units} unidades
+                    {(() => {
+                      const dateEntry = Object.values(salesDailyByDate).find(v => v.source === 'finance_events');
+                      return dateEntry ? <span className="ml-1 text-emerald-400/70">● Finance Events</span> : <span className="ml-1 text-amber-400/60">estimado</span>;
+                    })()}
+                  </p>
                 )}
               </div>
             ) : null}
