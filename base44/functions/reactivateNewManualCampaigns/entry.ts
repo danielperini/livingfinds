@@ -30,6 +30,7 @@ Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
+    const force = body.force === true;
 
     // Resolver conta
     let account: any;
@@ -54,7 +55,8 @@ Deno.serve(async (req) => {
     const controller = controllers[0];
 
     // Se kill switch ativo E gasto confirmado alto, não reativar agora — aguardar amanhã
-    if (controller?.global_kill_switch) {
+    // Exceção: se force=true, ignora a trava e reativa mesmo assim
+    if (controller?.global_kill_switch && !force) {
       const confirmedSpend = Number(controller.confirmed_spend || 0);
       const dailyCap = Number(controller.user_daily_spend_cap || controller.effective_daily_spend_cap || 70);
       if (confirmedSpend >= dailyCap * 0.90) {
@@ -63,8 +65,9 @@ Deno.serve(async (req) => {
           reason: `Kill switch ativo com gasto R$${confirmedSpend.toFixed(2)} (${((confirmedSpend/dailyCap)*100).toFixed(0)}% do cap). Aguardando reset diário.`,
         });
       }
-      // Kill switch ativo mas gasto baixo = foi ativado por erro, pode reativar
-      // Resetar o kill switch para o novo dia
+    }
+    // Resetar kill switch para permitir reativação (force ou gasto baixo)
+    if (controller?.global_kill_switch) {
       await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
         global_kill_switch: false,
         global_stop_event_id: null,
