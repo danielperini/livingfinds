@@ -21,6 +21,7 @@ import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
+import FinanceAuditPanel from '@/components/dashboard/FinanceAuditPanel';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -813,6 +814,9 @@ export default function Dashboard() {
       {!loading ? (
         <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
       ) : null}
+
+      {/* ── 3b2. AFERIÇÃO ECONÔMICA D-1 (SP-API Finance Events vs Seller Central) */}
+      {account ? <FinanceAuditPanel accountId={account.id} /> : null}
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account ? <UnifiedMetricsPanel amazonAccountId={account.id} /> : null}

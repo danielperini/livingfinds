@@ -35,6 +35,97 @@
     "conversion_rate": {
       "type": "number",
       "default": 0
+    },
+    "gross_revenue": {
+      "type": "number",
+      "default": 0,
+      "description": "Faturamento bruto (Principal) da SP-API Finance Events"
+    },
+    "net_revenue": {
+      "type": "number",
+      "default": 0,
+      "description": "Faturamento l\u00edquido = gross_revenue - total de taxas Amazon"
+    },
+    "amazon_fees": {
+      "type": "number",
+      "default": 0,
+      "description": "Total de taxas Amazon (FBA + Referral + outras)"
+    },
+    "referral_fee": {
+      "type": "number",
+      "default": 0,
+      "description": "Comiss\u00e3o de refer\u00eancia Amazon"
+    },
+    "fba_fee": {
+      "type": "number",
+      "default": 0,
+      "description": "Taxa FBA (fulfillment by Amazon)"
+    },
+    "tax_withheld": {
+      "type": "number",
+      "default": 0,
+      "description": "Impostos retidos (MarketplaceFacilitatorTax)"
+    },
+    "other_fees": {
+      "type": "number",
+      "default": 0,
+      "description": "Demais taxas e ajustes"
+    },
+    "gross_profit": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro bruto = net_revenue - CMV estimado"
+    },
+    "gross_margin_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Margem bruta %"
+    },
+    "mpa_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "MPA % = amazon_fees / gross_revenue * 100"
+    },
+    "profit_after_ads": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS = gross_profit - ads_spend"
+    },
+    "ads_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto em an\u00fancios do dia (copiado de CampaignMetricsDaily)"
+    },
+    "finance_sync_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "synced",
+        "error",
+        "no_events"
+      ],
+      "default": "pending",
+      "description": "Status do sync de Finance Events da SP-API"
+    },
+    "finance_synced_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi feito o sync de Finance Events"
+    },
+    "finance_events_count": {
+      "type": "number",
+      "default": 0,
+      "description": "Quantidade de ShipmentEvents processados"
+    },
+    "seller_central_gross_ref": {
+      "type": "number",
+      "default": 0,
+      "description": "Refer\u00eancia manual do faturamento bruto do Seller Central (para aferi\u00e7\u00e3o)"
+    },
+    "delta_vs_seller_central_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "Diverg\u00eancia % entre gross_revenue e seller_central_gross_ref"
     }
   },
   "required": [
