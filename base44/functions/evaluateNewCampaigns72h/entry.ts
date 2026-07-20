@@ -189,13 +189,12 @@ Deno.serve(async (req) => {
 
         const keywords: any[] = kwRes?.data?.keywords || [];
 
-        // ── DECISÃO: sem cliques e sem spend relevante → pausar campanha e buscar substituta ──
+        // ── DECISÃO: sem cliques e sem spend relevante → NÃO pausar campanha inteira ──
+        // WINNER PROTECTION: volume baixo isolado não justifica pausa de campanha.
+        // Ação correta: pausar somente as keywords sem impressões; manter campanha ativa.
+        // A campanha só será pausada se tiver ≥20 cliques + ≥200 impressões + gasto ≥ CPA máx.
         if (clicks < 3 && spend < 2.0) {
-          // Pausar a CAMPANHA inteira na Amazon (não apenas as keywords)
-          await adsCall(token, account, 'PUT', '/sp/campaigns', {
-            campaigns: [{ campaignId, state: 'PAUSED' }],
-          }).catch(() => {});
-          // Pausar as keywords individualmente também (redundância segura)
+          // Pausar somente as keywords individualmente (nunca a campanha inteira por baixo volume)
           if (keywords.length > 0) {
             await adsCall(token, account, 'PUT', '/sp/keywords', {
               keywords: keywords.map((k: any) => ({ keywordId: k.keywordId, state: 'PAUSED' })),
