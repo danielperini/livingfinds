@@ -14,16 +14,19 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const PIPELINE_VERSION = 'daypart-engine-v2-profit-safe';
-const RULE_VERSION = '1.0';
+const PIPELINE_VERSION = 'daypart-engine-v3-peak-aggressive';
+const RULE_VERSION = '1.1';
 const MIN_OCCURRENCES_MATURE = 4;
-const MIN_ORDERS_BID_UP = 3;
-const MIN_CLICKS_BID_UP = 20;
-const ACOS_THRESHOLD_BID_UP = 0.80;   // ACoS slot <= TARGET × 0.80
-const CVR_ADVANTAGE_BID_UP = 1.15;    // CVR slot >= baseline × 1.15
+const MIN_ORDERS_BID_UP = 2;          // v3: reduzido de 3→2 (mais agressivo em picos)
+const MIN_CLICKS_BID_UP = 15;         // v3: reduzido de 20→15
+const ACOS_THRESHOLD_BID_UP = 0.85;   // v3: ampliado de 0.80→0.85 (janela maior de BID_UP)
+const CVR_ADVANTAGE_BID_UP = 1.10;    // v3: reduzido de 1.15→1.10 (menos exigente em picos)
 const MAX_BID_UP_AUTO = 0.20;         // HARD CAP: +20% max por ciclo (PRD)
 const MAX_BID_UP_APPROVAL_THRESHOLD = 0.15; // > 15% exige approval mesmo em modo autônomo
 const MIN_BID_UP = 0.03;
+// v3: multiplicadores adicionais para slots PEAK (aprendido de HourlySalesPattern)
+const PEAK_ELITE_BID_BONUS = 0.08;   // +8% adicional sobre o uplift calculado em slots PEAK_ELITE
+const PEAK_STRONG_BID_BONUS = 0.04;  // +4% adicional em PEAK_STRONG
 const MAX_BID_DOWN_ACOS = 0.15;       // -15% max por ciclo
 const BID_DOWN_CVR_SOFT = 0.10;
 const BID_DOWN_CVR_HARD = 0.15;      // hard máximo -15%
@@ -181,15 +184,20 @@ function decideForSlot(
   if (canBidUp) {
     const acosHeadroom = targetAcos / slotAcos - 1;
     const cvrAdvantage = slotCvr / baseCvr - 1;
-    const rawUplift = Math.min(acosHeadroom, cvrAdvantage);
+    let rawUplift = Math.min(acosHeadroom, cvrAdvantage);
+
+    // v3: aplicar bonus de pico vindo do HourlySalesPattern (passado em slot.peak_bonus)
+    const peakBonus = Number(slot.peak_bonus || 0);
+    rawUplift = Math.min(MAX_BID_UP_AUTO, rawUplift + peakBonus);
+
     // HARD CAP: máximo +20% por ciclo (PRD)
     const pct = Math.max(MIN_BID_UP, Math.min(MAX_BID_UP_AUTO, rawUplift));
     const rawBid = curBid * (1 + pct);
     const newBid = r2(Math.min(maxBid, rawBid));
     const bidCapApplied = rawBid > maxBid || rawUplift > MAX_BID_UP_AUTO;
     if (newBid <= curBid + 0.01) return null;
-    // > 15% sempre exige approval (mesmo em modo autônomo)
     const requiresApproval = pct > MAX_BID_UP_APPROVAL_THRESHOLD;
+    const peakLabel = peakBonus > 0 ? ` [PEAK+${(peakBonus * 100).toFixed(0)}%]` : '';
     return {
       decision: 'BID_UP',
       proposedBid: newBid,
@@ -197,8 +205,8 @@ function decideForSlot(
       requiresApproval,
       bidCapApplied,
       bidFloorApplied: false,
-      reason: `Elite slot ${DAY_LABELS[slot.day_of_week]} ${slot.hour}h: ACoS ${slotAcos.toFixed(1)}% vs meta ${targetAcos}%, CVR +${(cvrAdvantage * 100).toFixed(0)}% acima baseline`,
-      ruleId: 'DAYPART_BID_UP_WINNER',
+      reason: `Elite slot ${DAY_LABELS[slot.day_of_week]} ${slot.hour}h: ACoS ${slotAcos.toFixed(1)}% vs meta ${targetAcos}%, CVR +${(cvrAdvantage * 100).toFixed(0)}% acima baseline${peakLabel}`,
+      ruleId: peakBonus > 0 ? 'DAYPART_BID_UP_PEAK_AGGRESSIVE' : 'DAYPART_BID_UP_WINNER',
     };
   }
 
@@ -392,6 +400,24 @@ Deno.serve(async (req) => {
         .map((c: any) => c.campaign_id)
     );
 
+    // Carregar padrões aprendidos de pico (HourlySalesPattern)
+    const peakPatterns = await base44.asServiceRole.entities.HourlySalesPattern.filter(
+      { amazon_account_id: accountId }, null, 200
+    ).catch(() => []);
+    // Mapa: `${day_of_week}|${hour}` → { peak_bonus, classification, bid_multiplier }
+    const peakMap = new Map<string, any>();
+    for (const p of peakPatterns) {
+      const bonus = p.classification === 'PEAK_ELITE'  ? PEAK_ELITE_BID_BONUS
+                  : p.classification === 'PEAK_STRONG' ? PEAK_STRONG_BID_BONUS
+                  : 0;
+      peakMap.set(`${p.day_of_week}|${p.hour}`, {
+        peak_bonus: bonus,
+        classification: p.classification,
+        bid_multiplier: p.bid_multiplier || 1.0,
+        peak_score: p.peak_score || 0,
+      });
+    }
+
     // Carregar métricas horárias
     const hourlyMetrics = await base44.asServiceRole.entities.HourlyMetric.filter(
       { amazon_account_id: accountId }, '-date', 2000
@@ -508,6 +534,12 @@ Deno.serve(async (req) => {
       const baseline = kwBaselineMap.get(slot.keyword_id) || { cvr: 0, acos: 0, cpc: 0, roas: 0, cpa: 0 };
       const score    = calcTimeSlotScore(slot, baseline, goal.target_acos);
       const classif  = slot.occurrences >= MIN_OCCURRENCES_MATURE ? classifySlot(score) : 'COLLECTING_DATA';
+
+      // v3: enriquecer slot com bonus de pico aprendido
+      const peakInfo = peakMap.get(`${slot.day_of_week}|${slot.hour}`);
+      slot.peak_bonus          = peakInfo?.peak_bonus || 0;
+      slot.learned_peak_class  = peakInfo?.classification || 'INSUFFICIENT_DATA';
+      slot.learned_peak_score  = peakInfo?.peak_score || 0;
 
       // Contexto econômico por ASIN para PROFIT-SAFE
       const kwAsin     = slot.asin || kw.asin;

@@ -1,0 +1,123 @@
+{
+  "name": "HourlySalesPattern",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "day_of_week": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6,
+      "description": "0=Dom, 6=Sab"
+    },
+    "hour": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23,
+      "description": "Hora BRT (0-23)"
+    },
+    "slot_label": {
+      "type": "string",
+      "description": "Ex: SEG_14h"
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr": {
+      "type": "number",
+      "default": 0,
+      "description": "Taxa de convers\u00e3o m\u00e9dia do slot"
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "aov": {
+      "type": "number",
+      "default": 0,
+      "description": "Ticket m\u00e9dio do slot"
+    },
+    "occurrences": {
+      "type": "number",
+      "default": 0,
+      "description": "Quantas semanas este slot teve dados"
+    },
+    "orders_share_pct": {
+      "type": "number",
+      "default": 0,
+      "description": "% das vendas totais do dia que ocorrem neste hor\u00e1rio"
+    },
+    "peak_score": {
+      "type": "number",
+      "default": 0,
+      "description": "Score de pico 0-100 (combina orders_share + cvr + acos_efficiency)"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "PEAK_ELITE",
+        "PEAK_STRONG",
+        "NORMAL",
+        "WEAK",
+        "LOSS",
+        "INSUFFICIENT_DATA"
+      ],
+      "default": "INSUFFICIENT_DATA"
+    },
+    "bid_multiplier": {
+      "type": "number",
+      "default": 1.0,
+      "description": "Multiplicador de lance sugerido para este slot (1.0 = neutro, 1.2 = +20%)"
+    },
+    "is_peak_hour": {
+      "type": "boolean",
+      "default": false
+    },
+    "data_window_days": {
+      "type": "number",
+      "default": 28
+    },
+    "last_computed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "drive_backup_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "drive_file_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "day_of_week",
+    "hour"
+  ]
+}
