@@ -300,14 +300,30 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // ── 5. Budget Kill Switch & Pacing Cycle ─────────────────────────────
-    // Kill Switch: verifica se gasto atingiu Hard Cap
+    // ── 5. Budget Kill Switch & Pacing Cycle + Trava de limite por campanha ──
+    // Kill Switch: verifica se gasto atingiu Hard Cap (global)
     try {
       const killSwitchRes = await base44.asServiceRole.functions.invoke('runBudgetKillSwitch', {
         amazon_account_id: aid,
       }).catch(() => null);
       if (killSwitchRes?.data?.kill_switch_activated) {
         actions.push({ type: 'kill_switch_activated', campaigns_paused: killSwitchRes.data.campaigns_paused });
+      }
+    } catch {}
+
+    // Trava de limite por campanha + cap global com dados em tempo real
+    try {
+      const spendEnforceRes = await base44.asServiceRole.functions.invoke('enforceCampaignSpendLimits', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      const d = spendEnforceRes?.data;
+      if (d && (d.paused_by_campaign_limit > 0 || d.paused_by_global_limit > 0)) {
+        actions.push({
+          type: 'spend_limit_enforced',
+          paused_by_campaign_limit: d.paused_by_campaign_limit,
+          paused_by_global_limit: d.paused_by_global_limit,
+          global_cap_triggered: d.global_cap_triggered,
+        });
       }
     } catch {}
 
