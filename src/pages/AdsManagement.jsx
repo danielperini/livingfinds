@@ -698,13 +698,41 @@ export default function AdsManagement() {
                       </button>);
 
                 })()}
-                  {/* Pausar */}
+                  {/* Pausar / Reativar */}
                   {campaignState(selectedCampaign) === 'enabled' ? (
                   <button onClick={pauseCampaign} disabled={!!campaignAction}
                 className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
                       {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pause className="w-3.5 h-3.5" />}
                       Pausar
                     </button>
+                ) : campaignState(selectedCampaign) === 'paused' ? (
+                  <button onClick={async () => {
+                    setCampaignAction('pausing');
+                    try {
+                      const res = await base44.functions.invoke('reactivateWinnerCampaign', {
+                        amazon_account_id: account.id,
+                        campaign_id: selectedCampaign.campaign_id || selectedCampaign.amazon_campaign_id || selectedCampaign.id,
+                        asin: selectedCampaign.asin,
+                        force: true,
+                      });
+                      if (res?.data?.ok) {
+                        setSelectedCampaign(prev => ({ ...prev, state: 'enabled', status: 'enabled' }));
+                        setCampaigns(prev => prev.map(c => c.id === selectedCampaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+                        setCampaignActionMsg({ type: 'success', text: 'Campanha reativada!' });
+                      } else {
+                        setCampaignActionMsg({ type: 'error', text: res?.data?.error || 'Falha ao reativar.' });
+                      }
+                    } catch (e) {
+                      setCampaignActionMsg({ type: 'error', text: e.message });
+                    } finally {
+                      setCampaignAction(null);
+                      setTimeout(() => setCampaignActionMsg(null), 7000);
+                    }
+                  }} disabled={!!campaignAction}
+                  className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                    {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    Reativar
+                  </button>
                 ) : null}
                   {/* Remover do painel */}
                   <button onClick={removeCampaign} disabled={!!campaignAction}
