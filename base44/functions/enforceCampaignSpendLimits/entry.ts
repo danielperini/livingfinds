@@ -112,11 +112,18 @@ Deno.serve(async (req) => {
 
     if (totalSpend >= globalThreshold && activeCampaigns.length > 0) {
       // Hard cap atingido — pausar todas as campanhas ainda ativas
-      const stillActive = activeCampaigns.filter(c =>
-        !pausedByCampaignLimit.includes(String(c.amazon_campaign_id || c.campaign_id)) &&
-        c.last_pause_reason !== 'DAILY_BUDGET_CAP_REACHED' &&
-        c.last_pause_reason !== 'CAMPAIGN_BUDGET_EXCEEDED'
-      );
+      // REGRA CRÍTICA: campanhas criadas pelo app com spend=0 e < 72h são imunes ao cap global
+      // — não contribuem para o gasto e pausá-las impede que search term winners rodem
+      const stillActive = activeCampaigns.filter(c => {
+        if (pausedByCampaignLimit.includes(String(c.amazon_campaign_id || c.campaign_id))) return false;
+        if (c.last_pause_reason === 'DAILY_BUDGET_CAP_REACHED') return false;
+        if (c.last_pause_reason === 'CAMPAIGN_BUDGET_EXCEEDED') return false;
+        const spend = Number(c.spend || c.current_spend || 0);
+        const createdAt = c.created_at ? new Date(c.created_at).getTime() : 0;
+        const ageHours = createdAt > 0 ? (Date.now() - createdAt) / 3600000 : 999;
+        if (c.created_by_app === true && spend === 0 && ageHours < 72) return false;
+        return true;
+      });
 
       const batchPayload = stillActive.map(c => ({
         campaignId: String(c.amazon_campaign_id || c.campaign_id),

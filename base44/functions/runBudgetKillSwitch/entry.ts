@@ -152,11 +152,21 @@ Deno.serve(async (req) => {
       snapshot[campId] = c.state || c.status || 'enabled';
     }
 
-    // Filtrar campanhas elegíveis para pausa (excluir as que usuário pausou manualmente)
+    // Filtrar campanhas elegíveis para pausa
+    // REGRA CRÍTICA: campanhas MANUAL EXACT criadas pelo app com spend=0 são imunes ao kill switch
+    // — elas não contribuem para o gasto real e pausá-las impede que campanhãs vencedoras rodem
     const toPause = activeCampaigns.filter(c => {
       const reason = c.archive_reason || c.last_pause_reason || '';
       const isManual = MANUAL_STOP_REASONS.some(r => reason.includes(r));
-      return !isManual;
+      if (isManual) return false;
+
+      // Imunidade: campanha criada pelo app (search term winner) com spend=0 e < 72h de vida
+      const campaignSpend = Number(c.spend || c.current_spend || 0);
+      const createdAt = c.created_at ? new Date(c.created_at).getTime() : 0;
+      const ageHours = createdAt > 0 ? (Date.now() - createdAt) / 3600000 : 999;
+      if (c.created_by_app === true && campaignSpend === 0 && ageHours < 72) return false;
+
+      return true;
     });
 
     // Pausar via Amazon Ads API em batch de 20
