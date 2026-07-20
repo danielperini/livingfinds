@@ -146,6 +146,10 @@ Deno.serve(async (req) => {
     if (!eval72hDone || force) add('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
     else skipped.push('evaluate_new_campaigns_72h');
 
+    // Promoção de search terms vencedores AUTO → MANUAL EXACT + Cross-ASIN
+    // Executado após sync de relatórios e estados de campanha (idempotente)
+    add('promoteWinningSearchTerms', 'promote_winning_terms');
+
     // Bids iniciais: idempotente, só processa pendentes
     add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
