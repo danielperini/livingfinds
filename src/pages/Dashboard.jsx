@@ -21,7 +21,7 @@ import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
-import FinanceAuditPanel from '@/components/dashboard/FinanceAuditPanel';
+import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -403,14 +403,13 @@ export default function Dashboard() {
     for (const s of salesDaily) {
       if (!s.date) continue;
       if (!map[s.date]) map[s.date] = { revenue: 0, units: 0, source: 'ads_report' };
-      // Priorizar gross_revenue de Finance Events (fonte idêntica ao Seller Central)
-      if (s.finance_sync_status === 'synced' && (s.gross_revenue || 0) > 0) {
-        map[s.date].revenue = (map[s.date].revenue || 0) + (s.gross_revenue || 0);
-        map[s.date].source = 'finance_events';
-      } else {
-        map[s.date].revenue += s.ordered_product_sales || 0;
-      }
+      // Priorizar gross_revenue (Finance Events reais) sobre ordered_product_sales (estimado)
+      const rev = s.finance_sync_status === 'synced' && (s.gross_revenue || 0) > 0
+        ? s.gross_revenue
+        : (s.ordered_product_sales || 0);
+      map[s.date].revenue += rev;
       map[s.date].units += s.units_ordered || 0;
+      if (s.finance_sync_status === 'synced') map[s.date].source = 'finance_events';
     }
     return map;
   }, [salesDaily]);
@@ -821,8 +820,8 @@ export default function Dashboard() {
         <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
       ) : null}
 
-      {/* ── 3b2. AFERIÇÃO ECONÔMICA D-1 (SP-API Finance Events vs Seller Central) */}
-      {account ? <FinanceAuditPanel accountId={account.id} /> : null}
+      {/* ── 3b2. DIAGNÓSTICO Finance Events SP-API vs Dashboard ─────────────── */}
+      {account ? <FinanceSyncDiagnostic accountId={account.id} /> : null}
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account ? <UnifiedMetricsPanel amazonAccountId={account.id} /> : null}
@@ -913,18 +912,18 @@ export default function Dashboard() {
               tone={kpis.orders > 0 ? 'good' : 'default'} />
             {hasSalesDailyData ? (
               <div className={`bg-surface-1 border rounded-xl p-4 ${realSalesKpis.revenue > 0 ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-surface-2'}`}>
-                <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Fat. Real (SP-API)</p>
+                <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">
+                  Faturamento {salesDailyByDate[startDate]?.source === 'finance_events' ? '(Finance Events ✓)' : '(estimado)'}
+                </p>
                 <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
                 {realSalesKpis.revenue === 0 ? (
-                  <p className="text-[10px] text-amber-400 mt-1 italic">Aguardando sync Finance Events</p>
+                  <button onClick={runSync} disabled={syncingDashboard}
+                    className="mt-1 flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50">
+                    {syncingDashboard ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
+                    {syncingDashboard ? 'Atualizando...' : `${realSalesKpis.units} unidades · atualizar`}
+                  </button>
                 ) : (
-                  <p className="text-[10px] text-slate-500 mt-1">
-                    {realSalesKpis.units} unidades
-                    {(() => {
-                      const dateEntry = Object.values(salesDailyByDate).find(v => v.source === 'finance_events');
-                      return dateEntry ? <span className="ml-1 text-emerald-400/70">● Finance Events</span> : <span className="ml-1 text-amber-400/60">estimado</span>;
-                    })()}
-                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
                 )}
               </div>
             ) : null}
