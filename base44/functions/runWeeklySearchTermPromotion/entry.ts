@@ -58,9 +58,10 @@ Deno.serve(async (req) => {
   const brtDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
   const todayBRT = brtDate.toISOString().slice(0, 10);
 
-  // Janela de 7 dias excluindo últimas 72h (atribuição Amazon)
+  // Janela de 30 dias excluindo últimas 72h (atribuição Amazon)
+  // Usa 30 dias para garantir que dados esparsos ou com lag de sync sejam capturados
   const ATTRIBUTION_CUTOFF = new Date(Date.now() - 72 * 3600000).toISOString().slice(0, 10);
-  const WEEK_START = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10); // 10d atrás
+  const WEEK_START = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10); // 30d atrás
 
   try {
     const base44 = createClientFromRequest(req);
@@ -119,29 +120,60 @@ Deno.serve(async (req) => {
     const productMap = new Map(products.map((p: any) => [p.asin, p]));
 
     // ── FASE 1: Carregar e agregar Search Terms ───────────────────────
-    const allTerms = await base44.asServiceRole.entities.SearchTerm.filter(
-      { amazon_account_id: aid }, '-date', 10000
-    ).catch(() => []);
+    const [allTerms, allCampaigns] = await Promise.all([
+      base44.asServiceRole.entities.SearchTerm.filter(
+        { amazon_account_id: aid }, '-date', 10000
+      ).catch(() => []),
+      // Mapa de campaign_id → asin para resolver ASINs ausentes no SearchTerm
+      base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: aid }, null, 2000
+      ).catch(() => []),
+    ]);
+
+    // Índice campaign_id → { asin, sku } para resolver campos vazios
+    const campaignAsinMap = new Map<string, { asin: string; sku: string }>();
+    for (const c of allCampaigns) {
+      const cid = String(c.amazon_campaign_id || c.campaign_id || '');
+      if (cid && c.asin) campaignAsinMap.set(cid, { asin: c.asin, sku: c.sku || '' });
+    }
+
+    // Helper: extrair ASIN do nome do ad group (padrão: "AdGroup | B0XXXXXXX" ou "AG | ... | B0XXXXXXX")
+    const ASIN_RE = /\b(B0[A-Z0-9]{8})\b/;
+    function resolveAsin(t: any): string {
+      if (t.advertised_asin) return t.advertised_asin;
+      // Pelo mapa de campanhas locais
+      const fromCamp = campaignAsinMap.get(String(t.campaign_id || ''))?.asin;
+      if (fromCamp) return fromCamp;
+      // Pelo nome do ad group
+      const adGroupMatch = (t.ad_group_name || '').match(ASIN_RE);
+      if (adGroupMatch) return adGroupMatch[1];
+      // Pelo nome da campanha
+      const campMatch = (t.campaign_name || '').match(ASIN_RE);
+      if (campMatch) return campMatch[1];
+      return '';
+    }
 
     // Filtrar janela válida (excluindo atribuição recente)
-    const windowTerms = allTerms.filter((t: any) =>
-      t.search_term &&
-      t.advertised_asin &&
-      t.date &&
-      t.date >= WEEK_START &&
-      t.date < ATTRIBUTION_CUTOFF
-    );
+    const windowTerms = allTerms.filter((t: any) => {
+      if (!t.search_term) return false;
+      if (!t.date || t.date < WEEK_START || t.date >= ATTRIBUTION_CUTOFF) return false;
+      return !!resolveAsin(t);
+    });
 
     // Agregar por ASIN + termo normalizado
     const termMap = new Map<string, any>();
     for (const t of windowTerms) {
+      const asin = resolveAsin(t);
+      const sku  = t.advertised_sku || campaignAsinMap.get(String(t.campaign_id || ''))?.sku || '';
+      if (!asin) continue;
+
       const norm = normalizeTerm(t.search_term);
       if (!norm || norm.length < 2) continue;
-      const key = `${t.advertised_asin}|${norm}`;
+      const key = `${asin}|${norm}`;
       if (!termMap.has(key)) {
         termMap.set(key, {
-          asin: t.advertised_asin,
-          sku: t.advertised_sku || '',
+          asin,
+          sku,
           search_term: t.search_term,
           normalized_term: norm,
           campaign_id: t.campaign_id,
@@ -150,10 +182,11 @@ Deno.serve(async (req) => {
         });
       }
       const agg = termMap.get(key)!;
-      agg.orders += t.orders_14d || t.orders_7d || t.orders_30d || 0;
-      agg.sales += t.sales_14d || t.sales_7d || t.sales_30d || 0;
-      agg.spend += Number(t.spend || 0);
-      agg.clicks += Number(t.clicks || 0);
+      // Usar o maior valor disponível para orders/sales (evitar soma de janelas sobrepostas)
+      agg.orders = Math.max(agg.orders, t.orders_14d || t.orders_7d || t.orders_30d || 0);
+      agg.sales  = Math.max(agg.sales,  t.sales_14d  || t.sales_7d  || t.sales_30d  || 0);
+      agg.spend      += Number(t.spend || 0);
+      agg.clicks     += Number(t.clicks || 0);
       agg.impressions += Number(t.impressions || 0);
     }
 
