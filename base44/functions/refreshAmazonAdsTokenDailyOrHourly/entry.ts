@@ -182,7 +182,14 @@ Deno.serve(async (req) => {
       // 429, 5xx, 504, 524 e timeout não revogam a conexão. O próximo ciclo
       // automático tentará novamente sem depender de intervenção humana.
       if (!transient) {
-        patch.ads_requires_reauth = requiresReauth;
+        // Se requiresReauth mas o token ENV está disponível, o tokenManager já
+        // tentou o fallback. Se ele retornou ok=false, significa que ambos
+        // falharam e aí sim marcar reauth. Se a conta já tem env token presente,
+        // aguardar o resultado real do tokenManager antes de forçar reauth.
+        const envTokenPresent = account?.ads_env_token_present === true || !!String(Deno.env.get('ADS_REFRESH_TOKEN') || '').trim().startsWith('Atzr|');
+        const skipReauthFlag = requiresReauth && envTokenPresent && finalResult?.recovered_from_env_fallback !== true;
+
+        patch.ads_requires_reauth = skipReauthFlag ? false : requiresReauth;
         patch.ads_credentials_error = credentialsError;
         patch.ads_token_status = credentialsError
           ? 'credentials_error'
@@ -190,7 +197,7 @@ Deno.serve(async (req) => {
             ? 'revoked'
             : 'error';
 
-        if (requiresReauth || credentialsError) {
+        if ((requiresReauth && !skipReauthFlag) || credentialsError) {
           patch.status = 'error';
           patch.error_message = message;
         }

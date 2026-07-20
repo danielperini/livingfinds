@@ -7,6 +7,7 @@ import {
   AlertTriangle, ChevronRight, Plug, Clock
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import TokenFallbackDiagnostic from '@/components/amazon/TokenFallbackDiagnostic';
 
 function Step({ n, label, status }) {
   return (
@@ -281,6 +282,41 @@ export default function AmazonOAuthSetup() {
               <p className="text-xs text-amber-300">Erro ao listar profiles: {info.profiles_error}</p>
             </div>
           )}
+
+          {/* ── BANNER REAUTH OBRIGATÓRIO (só quando ambos os tokens falham) ── */}
+          {!tokenOk && info.config?.env_token_present === false && (
+            <div className="rounded-2xl border-2 border-red-500/60 bg-red-500/10 p-5">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0">
+                  <ShieldAlert className="w-5 h-5 text-red-400" />
+                </div>
+                <div>
+                  <p className="text-base font-bold text-red-300">Reconexão obrigatória</p>
+                  <p className="text-xs text-red-400/80 mt-0.5">
+                    {info.token_error || 'unauthorized_client — token revogado pela Amazon'}
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-400 mb-3">
+                O token salvo foi revogado e não há token de ambiente disponível como fallback. Siga os passos:
+              </p>
+              <ol className="text-xs text-slate-300 space-y-1 mb-4 ml-2">
+                <li><span className="text-amber-400 font-bold">1.</span> Clique em "Reconectar Amazon Ads" abaixo</li>
+                <li><span className="text-amber-400 font-bold">2.</span> Autorize no site da Amazon</li>
+                <li><span className="text-amber-400 font-bold">3.</span> Aguarde o redirecionamento automático</li>
+              </ol>
+              {info.auth_url && (
+                <a href={info.auth_url} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 px-5 py-3 bg-amber-500 hover:bg-amber-400 text-white text-sm font-bold rounded-xl transition-colors w-full">
+                  <ExternalLink className="w-4 h-4" />
+                  Reconectar Amazon Ads →
+                </a>
+              )}
+            </div>
+          )}
+
+          {/* ── DIAGNÓSTICO DE FALLBACK AUTOMÁTICO ───────────────────────── */}
+          <TokenFallbackDiagnostic config={info.config} onRefresh={load} />
 
           {/* ── AUTORIZAR VIA OAUTH ───────────────────────────────────── */}
           <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">

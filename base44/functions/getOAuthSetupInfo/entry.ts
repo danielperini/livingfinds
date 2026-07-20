@@ -21,6 +21,8 @@ Deno.serve(async (req) => {
     let entityRefreshToken: string | null = null;
     let accountId: string | null = null;
     let accountStatus: string | null = null;
+    let lastRecoverySource: string | null = null;
+    let lastRecoveryAt: string | null = null;
     try {
       const user = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: user.id });
@@ -29,6 +31,8 @@ Deno.serve(async (req) => {
         entityRefreshToken = (acc.ads_refresh_token || '').trim() || null;
         accountId = acc.id;
         accountStatus = acc.status || null;
+        lastRecoverySource = acc.ads_last_recovery_source || null;
+        lastRecoveryAt = acc.ads_last_recovery_at || null;
       }
     } catch (_) { /* ignora */ }
 
@@ -104,6 +108,10 @@ Deno.serve(async (req) => {
       }
     }
 
+    const envTokenValid = secretRefreshToken.startsWith('Atzr|') && secretRefreshToken.length >= 50;
+    const envTokenPreview = envTokenValid ? `${secretRefreshToken.slice(0, 8)}...${secretRefreshToken.slice(-4)}` : null;
+    const dbTokenValid = !!entityRefreshToken && entityRefreshToken.startsWith('Atzr|') && entityRefreshToken.length >= 50;
+
     return Response.json({
       ok: true,
       config: {
@@ -118,6 +126,13 @@ Deno.serve(async (req) => {
         account_status: accountStatus,
         has_entity_token: !!entityRefreshToken,
         has_secret_token: !!secretRefreshToken,
+        // Campos de fallback
+        env_token_present: envTokenValid,
+        env_token_preview: envTokenPreview,
+        db_token_present: dbTokenValid,
+        last_recovery_source: lastRecoverySource,
+        last_recovery_at: lastRecoveryAt,
+        tokens_are_different: dbTokenValid && envTokenValid && entityRefreshToken !== secretRefreshToken,
       },
       token_status: tokenStatus,
       token_error: tokenError,
