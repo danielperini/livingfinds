@@ -484,28 +484,7 @@ export default function SalaDeComando() {
     finally { setRepairRunning(false); }
   };
 
-  // ── Reativar pausadas com estoque ──
-  const [reactivating, setReactivating] = useState(false);
-  const [reactivateMsg, setReactivateMsg] = useState(null);
-  const runReactivateWithStock = async (dryRun = false) => {
-    if (!account || reactivating) return;
-    setReactivating(true);
-    setReactivateMsg(null);
-    try {
-      const res = await base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: account.id, dry_run: dryRun });
-      const d = res.data;
-      if (d?.ok) {
-        const msg = dryRun
-          ? `Simulação: ${d.candidates} candidatas · ${d.skipped} ignoradas`
-          : `✓ ${d.reactivated} reativadas · ${d.skipped} ignoradas · ${d.candidates} candidatas`;
-        setReactivateMsg({ type: 'success', text: msg });
-        if (!dryRun) loadAll();
-      } else {
-        setReactivateMsg({ type: 'error', text: d?.error || 'Erro ao reativar' });
-      }
-    } catch (e) { setReactivateMsg({ type: 'error', text: e.message }); }
-    finally { setReactivating(false); setTimeout(() => setReactivateMsg(null), 12000); }
-  };
+
 
   // ── KPIs rápidos ──
   const allQueue = [...kickoffQueue, ...repairQueue, ...keywordQueue];
@@ -1460,39 +1439,6 @@ export default function SalaDeComando() {
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
             <div className="space-y-4">
-              {/* Reativar pausadas com estoque */}
-              <div className="bg-surface-1 border border-emerald-500/20 rounded-xl p-5 space-y-4">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                      <PlayCircle className="w-4 h-4 text-emerald-400" />
-                      Reativar Pausadas com Estoque
-                    </h3>
-                    <p className="text-xs text-slate-400 mt-0.5">
-                      Reativa campanhas AUTO e MANUAL pausadas pelo motor cujos produtos têm <span className="text-emerald-400">fba_inventory &gt; 0</span>. Não avalia ACoS nem CVR — foco em restaurar operação.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <button onClick={() => runReactivateWithStock(true)} disabled={reactivating || !account}
-                      className="flex items-center gap-1.5 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-xs rounded-lg disabled:opacity-50">
-                      {reactivating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
-                      Simular
-                    </button>
-                    <button onClick={() => runReactivateWithStock(false)} disabled={reactivating || !account}
-                      className="flex items-center gap-2 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 text-sm font-semibold rounded-lg disabled:opacity-50">
-                      {reactivating ? <Loader2 className="w-4 h-4 animate-spin" /> : <PlayCircle className="w-4 h-4" />}
-                      {reactivating ? 'Reativando...' : 'Reativar Agora'}
-                    </button>
-                  </div>
-                </div>
-                {reactivateMsg && (
-                  <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${reactivateMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
-                    {reactivateMsg.text}
-                  </div>
-                )}
-                <p className="text-[10px] text-slate-600">Motivos bloqueados: OUT_OF_STOCK, USER_MANUAL, POLICY, ABOVE_BREAK_EVEN, LISTING_BLOCKED</p>
-              </div>
-
               <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div>
