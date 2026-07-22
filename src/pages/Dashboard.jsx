@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
+import { useReportPolling } from '@/hooks/useReportPolling';
 import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
 import { useQueryClient } from '@tanstack/react-query';
@@ -230,6 +231,8 @@ export default function Dashboard() {
   const [syncingDashboard, setSyncingDashboard] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
+  const [justUpdated, setJustUpdated] = useState(false);
+  const justUpdatedTimerRef = useRef(null);
 
   // Camada única de dados compartilhada — React Query cuida de cache e dedup
   const {
@@ -247,6 +250,21 @@ export default function Dashboard() {
     if (!account?.id) return;
     invalidateAccountData(queryClient, account.id);
   }, [queryClient, account?.id]);
+
+  // Polling automático: recarrega quando chega novo relatório
+  const handleNewReport = useCallback(() => {
+    if (!account?.id) return;
+    invalidateAccountData(queryClient, account.id);
+    setJustUpdated(true);
+    clearTimeout(justUpdatedTimerRef.current);
+    justUpdatedTimerRef.current = setTimeout(() => setJustUpdated(false), 3000);
+  }, [queryClient, account?.id]);
+
+  useReportPolling({
+    accountId: account?.id,
+    onNewReport: handleNewReport,
+    enabled: !!account?.id,
+  });
 
   // Último sync para subtexto do header
   const lastSyncInfo = useMemo(() => {
@@ -700,7 +718,7 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <AutoWindowStatus />
+          <AutoWindowStatus justUpdated={justUpdated} />
           <button onClick={loadData} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />

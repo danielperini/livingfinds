@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Clock } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
-export default function AutoWindowStatus() {
+export default function AutoWindowStatus({ justUpdated = false }) {
   const [lastSync, setLastSync] = useState(null);
   const [lastReport, setLastReport] = useState(null);
   const [successRate, setSuccessRate] = useState(null);
@@ -29,7 +29,7 @@ export default function AutoWindowStatus() {
       } catch {}
     }
     load();
-  }, []);
+  }, [justUpdated]); // re-fetch quando dados são atualizados
 
   const rateColor = successRate === null ? 'text-slate-500'
     : successRate >= 80 ? 'text-emerald-400'
@@ -41,19 +41,25 @@ export default function AutoWindowStatus() {
     : null;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-2 border border-surface-3 rounded-lg">
+    <div className="flex items-center gap-2 px-3 py-1.5 bg-surface-2 border border-surface-3 rounded-lg transition-all">
       <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
       <div className="text-[11px] flex items-center gap-1.5 flex-wrap">
-        <span className="text-slate-400">
-          {fmt(lastSync) ? `Sync: ${fmt(lastSync)}` : 'Aguardando sync'}
-        </span>
-        <span className={`font-semibold ${rateColor}`}>
-          {successRate !== null ? `· ${successRate}% OK` : ''}
-        </span>
-        {lastReport && (
-          <span className="text-slate-500">
-            · Relatório recebido: <span className="text-emerald-400/80">{fmt(lastReport)}</span>
-          </span>
+        {justUpdated ? (
+          <span className="text-emerald-400 font-semibold animate-fade-in">✓ Atualizado</span>
+        ) : (
+          <>
+            <span className="text-slate-400">
+              {fmt(lastSync) ? `Sync: ${fmt(lastSync)}` : 'Aguardando sync'}
+            </span>
+            <span className={`font-semibold ${rateColor}`}>
+              {successRate !== null ? `· ${successRate}% OK` : ''}
+            </span>
+            {lastReport && (
+              <span className="text-slate-500">
+                · Relatório: <span className="text-emerald-400/80">{fmt(lastReport)}</span>
+              </span>
+            )}
+          </>
         )}
       </div>
     </div>
