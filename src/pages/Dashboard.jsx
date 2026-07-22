@@ -274,10 +274,16 @@ export default function Dashboard() {
 
   const allMetrics = useMemo(() => dedupeMetrics(metricsDaily), [metricsDaily]);
 
-  // Última data com dados de Ads — âncora real de todos os períodos
+  // Última data com dados de Ads reais (spend ou sales > 0) — exclui dias só com impressões
   const lastAvailableAdsDate = useMemo(() => {
-    const dates = allMetrics.map(m => m.date).filter(Boolean).sort();
-    return dates.length > 0 ? dates[dates.length - 1] : null;
+    const datesWithData = allMetrics
+      .filter(m => m.date && ((m.spend || 0) > 0 || (m.sales || 0) > 0))
+      .map(m => m.date)
+      .sort();
+    if (datesWithData.length > 0) return datesWithData[datesWithData.length - 1];
+    // Fallback: qualquer data com dados
+    const allDates = allMetrics.map(m => m.date).filter(Boolean).sort();
+    return allDates.length > 0 ? allDates[allDates.length - 1] : null;
   }, [allMetrics]);
 
   // Determinar períodos disponíveis (baseado na contagem de dias distintos com dados)
