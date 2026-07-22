@@ -274,16 +274,32 @@ export default function Dashboard() {
 
   const allMetrics = useMemo(() => dedupeMetrics(metricsDaily), [metricsDaily]);
 
-  // Última data com dados de Ads reais (spend ou sales > 0) — exclui dias só com impressões
+  // Última data com dados de vendas Ads reais (sales > 0) — âncora para KPIs de período
+  // Dias com spend mas sales=0 são artefatos de latência da Amazon (relatório ainda não fechado)
   const lastAvailableAdsDate = useMemo(() => {
-    const datesWithData = allMetrics
-      .filter(m => m.date && ((m.spend || 0) > 0 || (m.sales || 0) > 0))
-      .map(m => m.date)
+    // Agregar sales por data (vários registros por campanha)
+    const salesByDate = {};
+    for (const m of allMetrics) {
+      if (!m.date) continue;
+      salesByDate[m.date] = (salesByDate[m.date] || 0) + (m.sales || 0);
+    }
+    // Última data com sales > 0
+    const datesWithSales = Object.entries(salesByDate)
+      .filter(([, s]) => s > 0)
+      .map(([d]) => d)
       .sort();
-    if (datesWithData.length > 0) return datesWithData[datesWithData.length - 1];
-    // Fallback: qualquer data com dados
-    const allDates = allMetrics.map(m => m.date).filter(Boolean).sort();
-    return allDates.length > 0 ? allDates[allDates.length - 1] : null;
+    if (datesWithSales.length > 0) return datesWithSales[datesWithSales.length - 1];
+    // Fallback: última data com spend > 0
+    const spendByDate = {};
+    for (const m of allMetrics) {
+      if (!m.date) continue;
+      spendByDate[m.date] = (spendByDate[m.date] || 0) + (m.spend || 0);
+    }
+    const datesWithSpend = Object.entries(spendByDate)
+      .filter(([, s]) => s > 0)
+      .map(([d]) => d)
+      .sort();
+    return datesWithSpend.length > 0 ? datesWithSpend[datesWithSpend.length - 1] : null;
   }, [allMetrics]);
 
   // Determinar períodos disponíveis (baseado na contagem de dias distintos com dados)
