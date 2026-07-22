@@ -35,14 +35,14 @@ function getYesterday() {
   return date.toISOString().slice(0, 10);
 }
 
-function getClosedReportingPeriod(period) {
-  const yesterday = getYesterday();
-  if (period === 'yesterday') return { startDate: yesterday, endDate: yesterday, label: 'Ontem' };
+function getClosedReportingPeriod(period, anchor) {
+  // anchor = último dia com dados reais (lastAvailableAdsDate) — evita zeros por latência Amazon
+  const end = anchor || getYesterday();
+  if (period === 'yesterday') return { startDate: end, endDate: end, label: `Dados até ${fmtDateBRFull(end)}` };
   const days = Number(period);
-  // Usar BRT para calcular startDate: yesterday - (days-1) dias = janela fechada de "days" dias
-  const endDate = new Date(yesterday + 'T12:00:00Z');
+  const endDate = new Date(end + 'T12:00:00Z');
   const startDate = new Date(endDate.getTime() - (days - 1) * 86400000);
-  return { startDate: startDate.toISOString().slice(0, 10), endDate: yesterday, label: `${days} dias` };
+  return { startDate: startDate.toISOString().slice(0, 10), endDate: end, label: `${days} dias · até ${fmtDateBRFull(end)}` };
 }
 
 function safe(v, d = 2) {
@@ -274,33 +274,29 @@ export default function Dashboard() {
 
   const allMetrics = useMemo(() => dedupeMetrics(metricsDaily), [metricsDaily]);
 
-  // Determinar períodos disponíveis
-  const availablePeriods = useMemo(() => {
-    const yesterday = getYesterday();
-    const dates = new Set(allMetrics.filter(m => m.date <= yesterday).map(m => m.date));
-    const periods = ['yesterday'];
-    if (dates.size >= 7) periods.push('7');
-    if (dates.size >= 14) periods.push('14');
-    if (dates.size >= 28) periods.push('30');
-    return periods;
-  }, [allMetrics]);
-
-  // Garantir que period seja válido
-  const activePeriod = availablePeriods.includes(period) ? period : availablePeriods[availablePeriods.length - 1] || 'yesterday';
-
-  // Última data com dados de Ads (pode ser anterior a ontem por latência da Amazon)
+  // Última data com dados de Ads — âncora real de todos os períodos
   const lastAvailableAdsDate = useMemo(() => {
     const dates = allMetrics.map(m => m.date).filter(Boolean).sort();
     return dates.length > 0 ? dates[dates.length - 1] : null;
   }, [allMetrics]);
 
+  // Determinar períodos disponíveis (baseado na contagem de dias distintos com dados)
+  const availablePeriods = useMemo(() => {
+    const anchor = lastAvailableAdsDate || getYesterday();
+    const dates = new Set(allMetrics.filter(m => m.date <= anchor).map(m => m.date));
+    const periods = ['yesterday'];
+    if (dates.size >= 7) periods.push('7');
+    if (dates.size >= 14) periods.push('14');
+    if (dates.size >= 28) periods.push('30');
+    return periods;
+  }, [allMetrics, lastAvailableAdsDate]);
+
+  // Garantir que period seja válido
+  const activePeriod = availablePeriods.includes(period) ? period : availablePeriods[availablePeriods.length - 1] || 'yesterday';
+
+  // Todos os períodos usam lastAvailableAdsDate como âncora — sem zeros por latência Amazon
   const { startDate, endDate, label: periodLabel } = useMemo(() => {
-    const base = getClosedReportingPeriod(activePeriod);
-    // Se "Ontem" não tem dados de Ads mas há dados mais antigos, usar o último dia disponível
-    if (activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < base.endDate) {
-      return { startDate: lastAvailableAdsDate, endDate: lastAvailableAdsDate, label: `${fmtDateBRFull(lastAvailableAdsDate)} (último c/ dados)` };
-    }
-    return base;
+    return getClosedReportingPeriod(activePeriod, lastAvailableAdsDate);
   }, [activePeriod, lastAvailableAdsDate]);
 
   const periodMetrics = useMemo(() =>
@@ -386,12 +382,11 @@ export default function Dashboard() {
     [products]
   );
 
-  // Ontem para subtexto
-  const yesterday = getYesterday();
-  const yesterdayKpis = useMemo(() =>
-    deriveRates(calcKpis(allMetrics.filter(m => m.date === yesterday))),
-    [allMetrics, yesterday]
-  );
+  // KPIs do último dia disponível (usado como "D-1" nos subtextos dos cartões)
+  const yesterdayKpis = useMemo(() => {
+    const refDate = lastAvailableAdsDate || getYesterday();
+    return deriveRates(calcKpis(allMetrics.filter(m => m.date === refDate)));
+  }, [allMetrics, lastAvailableAdsDate]);
 
   // ─── Total de alterações da IA (soma de todos os registros de bidChanges) ──
   const totalChanges = bidChanges.length;
@@ -589,19 +584,20 @@ export default function Dashboard() {
   const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
   // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
   const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
+  // Gasto do último dia com dados disponíveis (lastAvailableAdsDate) — não de "ontem" sem dados
   const spendYesterday = useMemo(() => {
-    // Filtra estritamente pela data de ontem em BRT e deduplica por campaign_id+date
+    const refDate = lastAvailableAdsDate || getYesterday();
     const seen = new Set();
     let s = 0;
     for (const m of allMetrics) {
-      if (!m.date || m.date !== yesterday) continue;
+      if (!m.date || m.date !== refDate) continue;
       const k = `${m.campaign_id}-${m.date}`;
       if (seen.has(k)) continue;
       seen.add(k);
       s += m.spend || 0;
     }
     return s;
-  }, [allMetrics, yesterday]);
+  }, [allMetrics, lastAvailableAdsDate]);
 
   // Média diária do período selecionado — divide pelos dias CALENDÁRIO do período, não pelos dias com dados
   const periodDays = activePeriod === 'yesterday' ? 1 : Number(activePeriod);
@@ -1119,8 +1115,8 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <KpiCard label="Limite diário geral" value={officialDailyLimit > 0 ? fmtBRL(officialDailyLimit) : '—'} tone="cyan" />
-          <KpiCard label={`Gasto D-1 (${yesterday})`} value={fmtBRL(spendYesterday)}
-            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === yesterday).length} registros`}
+          <KpiCard label={`Gasto D-1 (${lastAvailableAdsDate || getYesterday()})`} value={fmtBRL(spendYesterday)}
+            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === (lastAvailableAdsDate || getYesterday())).length} registros`}
             tone={officialDailyLimit > 0 && spendYesterday > officialDailyLimit ? 'bad' : 'default'} />
           <KpiCard label="Média diária" value={fmtBRL(avgDailySpend)} sub={`Período: ${periodLabel}`} />
           <KpiCard label="Campanhas ativas" value={active_count} sub={`${paused_count} pausadas`} />
@@ -1128,7 +1124,7 @@ export default function Dashboard() {
         {(officialDailyLimit > 0 && spendYesterday > 0) ? (
           <div>
             <div className="flex justify-between text-[10px] text-slate-500 mb-1">
-              <span>Pacing D-1: {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
+              <span>Pacing D-1 ({lastAvailableAdsDate || getYesterday()}): {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
               <span className={`font-semibold ${spendYesterday > officialDailyLimit ? 'text-red-400' : 'text-emerald-400'}`}>
                 {Math.round(spendYesterday / officialDailyLimit * 100)}%
               </span>
