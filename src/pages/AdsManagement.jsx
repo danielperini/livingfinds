@@ -217,7 +217,38 @@ export default function AdsManagement() {
   const [repairSummary, setRepairSummary] = useState(null);
   const [reactivatingAuto, setReactivatingAuto] = useState(false);
   const [reactivateAutoResult, setReactivateAutoResult] = useState(null);
+  const [reactivatingManual, setReactivatingManual] = useState(false);
+  const [reactivateManualResult, setReactivateManualResult] = useState(null);
 
+
+  const reactivateManualWithStock = async () => {
+    if (!account || reactivatingManual) return;
+    setReactivatingManual(true);
+    setReactivateManualResult(null);
+    try {
+      const res = await base44.functions.invoke('reactivatePausedWithStock', {
+        amazon_account_id: account.id,
+        targeting_type_filter: 'MANUAL',
+        include_incomplete: true,
+        _service_role: true,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        setReactivateManualResult({
+          type: d.reactivated > 0 ? 'success' : 'info',
+          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já ativas`,
+        });
+        await loadCampaigns();
+      } else {
+        setReactivateManualResult({ type: 'error', text: d?.error || 'Erro ao reativar' });
+      }
+    } catch (e) {
+      setReactivateManualResult({ type: 'error', text: e.message });
+    } finally {
+      setReactivatingManual(false);
+      setTimeout(() => setReactivateManualResult(null), 10000);
+    }
+  };
 
   const reactivateAutoWithStock = async () => {
     if (!account || reactivatingAuto) return;
@@ -604,7 +635,10 @@ export default function AdsManagement() {
       // Priorizar enabled, depois mais recente
       const enabled = group.filter(c => (c.state || c.status) === 'enabled');
       const representative = enabled.length > 0 ? enabled[0] : group[0];
-      return { ...representative, _asin_resolved: getCampaignAsin(representative) || representative.id, _group_count: group.length, _group_all: group };
+      const resolvedAsin = getCampaignAsin(representative);
+      // Só usar _asin_resolved como prefixo de display se for um ASIN Amazon real (começa com B0 e tem 10 chars)
+      const isRealAsin = resolvedAsin && /^B0[A-Z0-9]{8}$/.test(resolvedAsin);
+      return { ...representative, _asin_resolved: isRealAsin ? resolvedAsin : null, _group_count: group.length, _group_all: group };
     });
   })();
 
@@ -773,7 +807,31 @@ export default function AdsManagement() {
               onSelect={selectCampaign}
               loading={loading}
               stateFilter={stateFilterManual}
-              onStateFilter={setStateFilterManual} />
+              onStateFilter={setStateFilterManual}
+              extraAction={
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={reactivateManualWithStock}
+                    disabled={!account || reactivatingManual}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {reactivatingManual ? (
+                      <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
+                    ) : (
+                      <><Play className="w-3 h-3" /> Reativar MANUAL com estoque</>
+                    )}
+                  </button>
+                  {reactivateManualResult && (
+                    <p className={`text-[10px] text-center font-medium ${
+                      reactivateManualResult.type === 'success' ? 'text-emerald-400' :
+                      reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
+                    }`}>
+                      {reactivateManualResult.text}
+                    </p>
+                  )}
+                </div>
+              }
+            />
           </div>
           
         </div>
