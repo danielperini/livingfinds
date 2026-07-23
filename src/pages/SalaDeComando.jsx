@@ -17,6 +17,7 @@ import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
 import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
+import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
@@ -78,6 +79,7 @@ const TAB_GROUPS = [
       { id: 'fila', label: 'Fila e Execuções' },
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
+      { id: 'reativacoes', label: 'Reativações Auto.' },
       { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
       { id: 'bid_lifecycle', label: 'Ciclo de Bids Manuais' },
     ],
@@ -1435,6 +1437,11 @@ export default function SalaDeComando() {
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
           {tab === 'backup' && <BackupPanel />}
+
+          {/* ── REATIVAÇÕES AUTOMÁTICAS ─────────────────────────────────────── */}
+          {tab === 'reativacoes' && account && (
+            <ReactivationLogPanel accountId={account.id} />
+          )}
 
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
