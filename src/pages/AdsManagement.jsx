@@ -202,6 +202,31 @@ export default function AdsManagement() {
   const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
   const [reactivating, setReactivating] = useState(false);
   const [reactivateMsg, setReactivateMsg] = useState(null);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateMsg, setMigrateMsg] = useState(null);
+
+  const migratePendingCampaigns = async () => {
+    if (!account || migrating) return;
+    setMigrating(true);
+    setMigrateMsg(null);
+    try {
+      const res = await base44.functions.invoke('enforceCanonicalManualCampaigns', {
+        amazon_account_id: account.id,
+      });
+      const d = res?.data;
+      if (d?.ok !== false) {
+        setMigrateMsg({ type: 'success', text: `Migração concluída. ${d?.migrated || 0} campanha(s) processada(s).` });
+        await loadCampaigns();
+      } else {
+        setMigrateMsg({ type: 'error', text: d?.error || 'Erro na migração.' });
+      }
+    } catch (e) {
+      setMigrateMsg({ type: 'error', text: e.message });
+    } finally {
+      setMigrating(false);
+      setTimeout(() => setMigrateMsg(null), 12000);
+    }
+  };
 
   const reactivatePausedCampaigns = async () => {
     if (!account || reactivating) return;
@@ -495,6 +520,11 @@ export default function AdsManagement() {
   .filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual)
   .sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
 
+  const pendingMigrationCount = campaigns.filter(
+    (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+      ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+  ).length;
+
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
   const { active_count: activeCount, paused_count: pausedCount, total_current } = classifyCampaigns(campaigns);
@@ -602,17 +632,35 @@ export default function AdsManagement() {
             stateFilter={stateFilterAuto}
             onStateFilter={setStateFilterAuto} />
           
-          <CampaignColumn
-            title="Manuais"
-            icon={Sparkles}
-            color="text-cyan"
-            campaigns={manualCampaigns}
-            products={products}
-            selectedId={selectedCampaign?.id}
-            onSelect={selectCampaign}
-            loading={loading}
-            stateFilter={stateFilterManual}
-            onStateFilter={setStateFilterManual} />
+          <div className="flex-1 flex flex-col min-w-0">
+            <CampaignColumn
+              title="Manuais"
+              icon={Sparkles}
+              color="text-cyan"
+              campaigns={manualCampaigns}
+              products={products}
+              selectedId={selectedCampaign?.id}
+              onSelect={selectCampaign}
+              loading={loading}
+              stateFilter={stateFilterManual}
+              onStateFilter={setStateFilterManual} />
+            {pendingMigrationCount > 0 && (
+              <div className="px-2 py-1.5 border-t border-surface-2 flex-shrink-0">
+                <button
+                  onClick={migratePendingCampaigns}
+                  disabled={migrating}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-60">
+                  {migrating ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  {migrating ? 'Migrando...' : `Migrar Pendentes (${pendingMigrationCount})`}
+                </button>
+                {migrateMsg && (
+                  <p className={`text-[10px] mt-1 text-center ${migrateMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {migrateMsg.text}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
           
         </div>
 
