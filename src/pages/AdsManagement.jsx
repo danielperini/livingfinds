@@ -5,7 +5,7 @@ import {
 Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
 RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
 Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play } from
+Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -204,8 +204,7 @@ export default function AdsManagement() {
   const [tokenCheck, setTokenCheck] = useState(null);
   const [pausingNoStock, setPausingNoStock] = useState(false);
   const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
-  const [reactivating, setReactivating] = useState(false);
-  const [reactivateMsg, setReactivateMsg] = useState(null);
+
   const [migrationInProgress, setMigrationInProgress] = useState(false);
   const [repairPhase, setRepairPhase] = useState(null); // null | 'phase1' | 'phase1_done' | 'phase2' | 'done' | 'error'
   const [repairSummary, setRepairSummary] = useState(null);
@@ -265,30 +264,7 @@ export default function AdsManagement() {
     await loadCampaigns();
   };
 
-  const reactivatePausedCampaigns = async () => {
-    if (!account || reactivating) return;
-    const pausedCamps = campaigns.filter(c => (c.state || c.status || '').toLowerCase() === 'paused');
-    if (pausedCamps.length === 0) { setReactivateMsg({ type: 'info', text: 'Nenhuma campanha pausada encontrada.' }); setTimeout(() => setReactivateMsg(null), 5000); return; }
-    if (!window.confirm(`Reativar ${pausedCamps.length} campanha(s) pausadas na Amazon Ads?`)) return;
-    setReactivating(true);
-    setReactivateMsg(null);
-    let ok = 0, fail = 0;
-    for (const c of pausedCamps) {
-      try {
-        const res = await base44.functions.invoke('reactivateWinnerCampaign', {
-          amazon_account_id: account.id,
-          campaign_id: c.campaign_id || c.amazon_campaign_id || c.id,
-          asin: c.asin,
-          force: true,
-        });
-        if (res?.data?.ok) { ok++; } else { fail++; }
-      } catch { fail++; }
-    }
-    setReactivating(false);
-    setReactivateMsg({ type: ok > 0 ? 'success' : 'error', text: `${ok} reativada(s)${fail > 0 ? ` · ${fail} falha(s)` : ''}.` });
-    setTimeout(() => setReactivateMsg(null), 10000);
-    if (ok > 0) await loadCampaigns();
-  };
+
 
   const pauseNoStockCampaigns = async (dryRun = false) => {
     if (!account || pausingNoStock) return;
@@ -362,6 +338,15 @@ export default function AdsManagement() {
       setCampaigns(operational);
       setProducts(prods);
       setMigrationInProgress(false);
+
+      // Reativar campanhas canônicas pausadas — fire-and-forget, sem bloquear UI
+      const hasCanonicalPaused = operational.some(
+        (c) => campaignState(c) === 'paused' &&
+          /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
+      );
+      if (hasCanonicalPaused) {
+        base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
+      }
 
       // Disparar migração canônica automaticamente em background se houver pendentes
       const hasPendingMigration = operational.some(
@@ -610,12 +595,7 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
-              <button onClick={reactivatePausedCampaigns} disabled={!account || reactivating}
-              title="Reativar todas as campanhas pausadas agora"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg transition-colors disabled:opacity-50">
-                {reactivating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-                {reactivating ? 'Reativando...' : 'Reativar Pausadas'}
-              </button>
+
               <button onClick={repairAndReconcile} disabled={!account || !!repairPhase}
               title="Repara campanhas incompletas e reconcilia estados com a Amazon Ads API"
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50">
@@ -674,9 +654,7 @@ export default function AdsManagement() {
           {pauseNoStockMsg ? (
           <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p>
           ) : null}
-          {reactivateMsg ? (
-          <p className={`text-[10px] mt-1.5 font-semibold ${reactivateMsg.type === 'success' ? 'text-emerald-400' : reactivateMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{reactivateMsg.text}</p>
-          ) : null}
+
           {repairSummary ? (
           <p className={`text-[10px] mt-1.5 font-semibold ${repairSummary.type === 'success' ? 'text-emerald-400' : repairSummary.type === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
             🔧 {repairSummary.text}
