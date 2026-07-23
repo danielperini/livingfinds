@@ -151,36 +151,53 @@ Deno.serve(async (req) => {
       priority_products,
     };
 
-    // ── 5. Chamar IA com schema de resposta estruturado ───────────────
-    const aiRes = await base44.asServiceRole.integrations.Core.InvokeLLM({
-      prompt: `Você é o motor de otimização de Amazon Ads do LivingFinds.
+    // ── 5. Chamar IA via API direta Anthropic (sem créditos Base44) ──────
+    const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
+    if (!anthropicKey) {
+      return Response.json({ ok: false, error: 'ANTHROPIC_API_KEY não configurada.' }, { status: 500 });
+    }
+
+    const aiRaw = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 1024,
+        temperature: 0.1,
+        messages: [{
+          role: 'user',
+          content: `Você é o motor de otimização de Amazon Ads do LivingFinds.
 Analise os dados abaixo e retorne APENAS JSON com decisões para campanhas e keywords com anomalia.
 NÃO repita campanhas sem problema. NÃO inclua explicações longas.
+Formato: {"decisions":[{"entity_type":"campaign|keyword","entity_id":"...","action":"...","confidence":0.0,"reason":"...","risk_level":"low|medium|high","expected_impact":"...","requires_approval":true,"expires_at":"..."}],"summary":"..."}
 Dados: ${JSON.stringify(ai_input)}`,
-      response_json_schema: {
-        type: 'object',
-        properties: {
-          decisions: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                entity_type:       { type: 'string' },
-                entity_id:         { type: 'string' },
-                action:            { type: 'string' },
-                confidence:        { type: 'number' },
-                reason:            { type: 'string' },
-                risk_level:        { type: 'string', enum: ['low', 'medium', 'high'] },
-                expected_impact:   { type: 'string' },
-                requires_approval: { type: 'boolean' },
-                expires_at:        { type: 'string' },
-              },
-            },
-          },
-          summary: { type: 'string' },
-        },
-      },
+        }],
+      }),
     });
+
+    if (!aiRaw.ok) {
+      const err = await aiRaw.json().catch(() => ({}));
+      return Response.json({ ok: false, error: `Anthropic ${aiRaw.status}: ${err.error?.message || 'erro desconhecido'}` }, { status: 500 });
+    }
+
+    const aiData = await aiRaw.json();
+    const rawText = (aiData.content?.[0]?.text || '').trim();
+    let aiRes: any = null;
+    try {
+      aiRes = JSON.parse(rawText);
+    } catch {
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if (match) {
+        try { aiRes = JSON.parse(match[0]); } catch {}
+      }
+    }
+    if (!aiRes) {
+      return Response.json({ ok: false, error: 'IA retornou JSON inválido', raw: rawText.slice(0, 300) }, { status: 500 });
+    }
 
     const tokens_est = JSON.stringify(ai_input).length / 4;
     const cost_est   = Math.round((tokens_est * 0.000003) * 10000) / 10000;
