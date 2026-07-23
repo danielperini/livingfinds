@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
+import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
 import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
@@ -87,9 +88,33 @@ export default function Products({ externalRefreshTrigger }) {
   const [bulkActivating, setBulkActivating] = useState(false);
 
   const [kickoffProduct, setKickoffProduct] = useState(null);
+  const [kickoffStuckItems, setKickoffStuckItems] = useState(null); // itens travados para o produto atual
+  const [stuckQueueByAsin, setStuckQueueByAsin] = useState({}); // {[asin]: count}
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
   const [focusedProductId, setFocusedProductId] = useState(null);
   const [productMessages, setProductMessages] = useState({}); // {[productId]: {type, text}}
+
+  // Abre o modal de kick-off, verificando se há itens travados na fila primeiro
+  const openKickoff = useCallback(async (product) => {
+    if (!account || !product?.asin) { setKickoffProduct(product); return; }
+    try {
+      const stuck = await base44.entities.ProductKickoffQueue.filter({
+        amazon_account_id: account.id,
+        asin: product.asin,
+      }, '-created_date', 50).catch(() => []);
+      const stuckActive = stuck.filter(i => ['scheduled', 'processing'].includes(String(i.status || '').toLowerCase()));
+      if (stuckActive.length > 0) {
+        setKickoffProduct(product);
+        setKickoffStuckItems(stuckActive);
+      } else {
+        setKickoffProduct(product);
+        setKickoffStuckItems(null);
+      }
+    } catch {
+      setKickoffProduct(product);
+      setKickoffStuckItems(null);
+    }
+  }, [account]);
 
   // Restaura foco no produto após qualquer ação e rola até ele
   const restoreProductContext = useCallback((productId) => {
@@ -129,8 +154,26 @@ export default function Products({ externalRefreshTrigger }) {
     if (records) setProducts(records);
   }, [account, load]);
 
+  // Carrega fila travada por ASIN para exibir badges
+  const loadStuckQueue = useCallback(async (accountId) => {
+    if (!accountId) return;
+    const all = await base44.entities.ProductKickoffQueue.filter(
+      { amazon_account_id: accountId }, '-created_date', 200
+    ).catch(() => []);
+    const counts = {};
+    for (const item of all) {
+      if (!item.asin) continue;
+      const s = String(item.status || '').toLowerCase();
+      if (s === 'scheduled' || s === 'processing') {
+        const asin = String(item.asin).toUpperCase();
+        counts[asin] = (counts[asin] || 0) + 1;
+      }
+    }
+    setStuckQueueByAsin(counts);
+  }, []);
+
   useEffect(() => {
-    load();
+    load().then(res => { if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh externo (ex: kickoff concluído no ProductsScheduled) sem desmontar o componente
@@ -527,21 +570,22 @@ export default function Products({ externalRefreshTrigger }) {
               </thead>
               <tbody>
                 {paginated.map(product => (
-                  <ProductRow
-                   key={product.id}
-                   product={product}
-                   onToggleCampaign={toggleCampaign}
-                   onArchiveCampaign={archiveCampaign}
-                   onKickoff={setKickoffProduct}
-                   onAccelerator={setAcceleratorProduct}
-                   onCancelKickoff={cancelKickoff}
-                   actionLoading={actionLoading}
-                   selected={selectedIds.has(product.id)}
-                   onToggleSelect={toggleSelect}
-                   isFocused={focusedProductId === product.id}
-                   productMessage={productMessages[product.id]}
-                   onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
-                  />
+                 <ProductRow
+                  key={product.id}
+                  product={product}
+                  onToggleCampaign={toggleCampaign}
+                  onArchiveCampaign={archiveCampaign}
+                  onKickoff={openKickoff}
+                  onAccelerator={setAcceleratorProduct}
+                  onCancelKickoff={cancelKickoff}
+                  actionLoading={actionLoading}
+                  selected={selectedIds.has(product.id)}
+                  onToggleSelect={toggleSelect}
+                  isFocused={focusedProductId === product.id}
+                  productMessage={productMessages[product.id]}
+                  stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
+                  onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
+                 />
                 ))}
               </tbody>
             </table>
@@ -559,7 +603,26 @@ export default function Products({ externalRefreshTrigger }) {
         </div>
       )}
 
-      {kickoffProduct && (
+      {kickoffProduct && kickoffStuckItems && (
+        <KickoffWithQueueCleanModal
+          product={kickoffProduct}
+          account={account}
+          stuckItems={kickoffStuckItems}
+          onClose={() => { setKickoffProduct(null); setKickoffStuckItems(null); }}
+          onDone={() => {
+            const pid = kickoffProduct?.id;
+            setKickoffProduct(null);
+            setKickoffStuckItems(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Fila limpa. Novo kick-off agendado para a próxima janela.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+              if (account?.id) loadStuckQueue(account.id);
+            }
+          }}
+        />
+      )}
+
+      {kickoffProduct && !kickoffStuckItems && (
         <KickoffModal
           product={kickoffProduct}
           account={account}

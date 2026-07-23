@@ -259,7 +259,7 @@ export function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff }) {
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff, stuckQueueCount }) {
   const [pauseResult, setPauseResult] = useState(null);
   const [cancelling, setCancelling] = useState(false);
 
@@ -318,18 +318,30 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
       );
     }
     return (
-      <div className="flex items-center gap-1.5">
-        <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
-          title={incomplete ? "Reparar campanha incompleta" : "Vincular e ativar campanha para este produto"}
-          className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' : 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'}`}>
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-          {incomplete ? 'Reparar' : 'Vincular e Ativar'}
-        </button>
-        <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-          Acelerar
-        </button>
+      <div className="space-y-1.5">
+        {stuckQueueCount > 0 && (
+          <div className="flex items-center gap-1 text-[10px] font-semibold text-amber-400">
+            <AlertCircle className="w-3 h-3" />
+            {stuckQueueCount} na fila — travado{stuckQueueCount > 1 ? 's' : ''}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
+            title={incomplete ? "Reparar campanha incompleta" : stuckQueueCount > 0 ? "Limpar fila travada e iniciar novo kick-off" : "Vincular e ativar campanha para este produto"}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+              stuckQueueCount > 0 ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25' :
+              incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' :
+              'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'
+            }`}>
+            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            {incomplete ? 'Reparar' : stuckQueueCount > 0 ? 'Reiniciar Kick-off' : 'Vincular e Ativar'}
+          </button>
+          <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
+            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+            Acelerar
+          </button>
+        </div>
       </div>
     );
   }
@@ -366,7 +378,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage }) {
+export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -454,7 +466,7 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
           onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign}
-          onCancelKickoff={onCancelKickoff} loading={actionLoading} />
+          onCancelKickoff={onCancelKickoff} loading={actionLoading} stuckQueueCount={stuckQueueCount || 0} />
         {productMessage && (
           <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
             {productMessage.text}
