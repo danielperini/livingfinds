@@ -21,6 +21,60 @@
       "type": "number",
       "default": 0
     },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "phase1",
+        "phase2",
+        "paused",
+        "recovered"
+      ],
+      "description": "Fase atual do protocolo Protect-Then-Pause"
+    },
+    "phase1_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase2_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase1_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "phase2_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "optimization_attempted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "optimization_cooldown_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bids_reduced": {
+      "type": "boolean",
+      "default": false
+    },
+    "dayparting_evaluated": {
+      "type": "boolean",
+      "default": false
+    },
+    "gpt_phase2_recommendation": {
+      "type": "string",
+      "enum": [
+        "bid_adjustment_sufficient",
+        "dayparting_recommended",
+        "pause_recommended"
+      ],
+      "description": "Recomenda\u00e7\u00e3o do GPT-4o na Fase 2"
+    },
+    "gpt_phase2_rationale": {
+      "type": "string"
+    },
     "acos_cycle_1": {
       "type": "number",
       "default": 0
@@ -53,26 +107,6 @@
       "type": "number",
       "default": 45
     },
-    "optimization_attempted_at": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Quando o motor tentou otimizar bids/dayparting no ciclo 1"
-    },
-    "optimization_cooldown_until": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Car\u00eancia de 2 dias ap\u00f3s otimiza\u00e7\u00e3o \u2014 pausa s\u00f3 ocorre ap\u00f3s este timestamp"
-    },
-    "bids_reduced": {
-      "type": "boolean",
-      "default": false,
-      "description": "True se o motor determin\u00edstico reduziu bids no ciclo 1"
-    },
-    "dayparting_evaluated": {
-      "type": "boolean",
-      "default": false,
-      "description": "True se o dayparting foi disparado no ciclo 1"
-    },
     "last_violation_at": {
       "type": "string",
       "format": "date-time"
@@ -93,6 +127,8 @@
       "enum": [
         "watching",
         "optimizing",
+        "optimizing_phase1",
+        "optimizing_phase2",
         "warning",
         "paused",
         "recovered",
