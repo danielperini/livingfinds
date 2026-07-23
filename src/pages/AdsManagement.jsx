@@ -219,6 +219,8 @@ export default function AdsManagement() {
   const [reactivateAutoResult, setReactivateAutoResult] = useState(null);
   const [reactivatingManual, setReactivatingManual] = useState(false);
   const [reactivateManualResult, setReactivateManualResult] = useState(null);
+  const [pausingNoStockActive, setPausingNoStockActive] = useState(false);
+  const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
 
 
   const reactivateManualWithStock = async () => {
@@ -247,6 +249,34 @@ export default function AdsManagement() {
     } finally {
       setReactivatingManual(false);
       setTimeout(() => setReactivateManualResult(null), 10000);
+    }
+  };
+
+  const pauseAutoNoStockActive = async () => {
+    if (!account || pausingNoStockActive) return;
+    setPausingNoStockActive(true);
+    setPauseNoStockActiveResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id,
+        dry_run: false,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const paused = d.paused ?? d.campaigns_paused ?? 0;
+        setPauseNoStockActiveResult({
+          type: paused > 0 ? 'success' : 'info',
+          text: `${paused} pausadas · motivo: sem estoque`,
+        });
+        if (paused > 0) await loadCampaigns();
+      } else {
+        setPauseNoStockActiveResult({ type: 'error', text: d?.error || 'Erro ao pausar' });
+      }
+    } catch (e) {
+      setPauseNoStockActiveResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoStockActive(false);
+      setTimeout(() => setPauseNoStockActiveResult(null), 10000);
     }
   };
 
@@ -766,27 +796,46 @@ export default function AdsManagement() {
             stateFilter={stateFilterAuto}
             onStateFilter={setStateFilterAuto}
             extraAction={
-              <div className="flex flex-col gap-1">
-                <button
-                  onClick={reactivateAutoWithStock}
-                  disabled={!account || reactivatingAuto}
-                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
-                >
-                  {reactivatingAuto ? (
-                    <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
-                  ) : (
-                    <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>
-                  )}
-                </button>
-                {reactivateAutoResult && (
-                  <p className={`text-[10px] text-center font-medium ${
-                    reactivateAutoResult.type === 'success' ? 'text-emerald-400' :
-                    reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
-                  }`}>
-                    {reactivateAutoResult.text}
-                  </p>
+            <div className="flex flex-col gap-1">
+              <button
+                onClick={reactivateAutoWithStock}
+                disabled={!account || reactivatingAuto}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {reactivatingAuto ? (
+                  <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
+                ) : (
+                  <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>
                 )}
-              </div>
+              </button>
+              {reactivateAutoResult && (
+                <p className={`text-[10px] text-center font-medium ${
+                  reactivateAutoResult.type === 'success' ? 'text-emerald-400' :
+                  reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
+                }`}>
+                  {reactivateAutoResult.text}
+                </p>
+              )}
+              <button
+                onClick={pauseAutoNoStockActive}
+                disabled={!account || pausingNoStockActive}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {pausingNoStockActive ? (
+                  <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</>
+                ) : (
+                  <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>
+                )}
+              </button>
+              {pauseNoStockActiveResult && (
+                <p className={`text-[10px] text-center font-medium ${
+                  pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' :
+                  pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
+                }`}>
+                  {pauseNoStockActiveResult.text}
+                </p>
+              )}
+            </div>
             }
           />
           
