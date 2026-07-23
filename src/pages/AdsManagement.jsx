@@ -207,7 +207,63 @@ export default function AdsManagement() {
   const [reactivating, setReactivating] = useState(false);
   const [reactivateMsg, setReactivateMsg] = useState(null);
   const [migrationInProgress, setMigrationInProgress] = useState(false);
+  const [repairPhase, setRepairPhase] = useState(null); // null | 'phase1' | 'phase1_done' | 'phase2' | 'done' | 'error'
+  const [repairSummary, setRepairSummary] = useState(null);
 
+
+  const repairAndReconcile = async () => {
+    if (!account || repairPhase) return;
+    setRepairPhase('phase1');
+    setRepairSummary(null);
+
+    let repaired = 0;
+    // FASE 1 — Repair incompletas (timeout 90s)
+    try {
+      const p1 = base44.functions.invoke('repairIncompleteManualExactCampaigns', {
+        amazon_account_id: account.id,
+        _service_role: true,
+        target: 'manual_only',
+      });
+      const timeout1 = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 90000));
+      const res1 = await Promise.race([p1, timeout1]).catch(async (e) => {
+        if (e?.message?.includes('429') || e?.message?.includes('502') || e?.message?.includes('rate')) {
+          setRepairSummary({ type: 'warning', text: 'Rate limit Amazon — tentando novamente em 60s...' });
+          await new Promise(r => setTimeout(r, 60000));
+          return base44.functions.invoke('repairIncompleteManualExactCampaigns', {
+            amazon_account_id: account.id, _service_role: true, target: 'manual_only',
+          }).catch(() => null);
+        }
+        return null; // timeout — continua para fase 2
+      });
+      repaired = res1?.data?.repaired ?? res1?.data?.campaigns_repaired ?? 0;
+    } catch { /* continua para fase 2 */ }
+
+    setRepairPhase('phase1_done');
+    await new Promise(r => setTimeout(r, 400));
+    setRepairPhase('phase2');
+
+    // FASE 2 — Reconciliação de estados
+    let synced = 0;
+    let divergencias = 0;
+    try {
+      const res2 = await base44.functions.invoke('syncAdsCampaignStatesV2', {
+        amazon_account_id: account.id,
+        _service_role: true,
+        targeting_type: 'MANUAL',
+        force: true,
+      }).catch(() => null);
+      synced = res2?.data?.synced ?? res2?.data?.campaigns_synced ?? res2?.data?.updated ?? 0;
+      divergencias = res2?.data?.divergencias ?? res2?.data?.divergences ?? res2?.data?.review_required ?? 0;
+    } catch { /* falha parcial — não bloqueia */ }
+
+    setRepairPhase('done');
+    setRepairSummary({
+      type: 'success',
+      text: `${repaired} reparada(s) · ${synced} estado(s) sincronizado(s)${divergencias > 0 ? ` · ${divergencias} divergência(s)` : ''}`,
+    });
+    setTimeout(() => { setRepairPhase(null); setRepairSummary(null); }, 12000);
+    await loadCampaigns();
+  };
 
   const reactivatePausedCampaigns = async () => {
     if (!account || reactivating) return;
@@ -560,6 +616,20 @@ export default function AdsManagement() {
                 {reactivating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
                 {reactivating ? 'Reativando...' : 'Reativar Pausadas'}
               </button>
+              <button onClick={repairAndReconcile} disabled={!account || !!repairPhase}
+              title="Repara campanhas incompletas e reconcilia estados com a Amazon Ads API"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50">
+                {repairPhase === 'phase1' ? <Loader2 className="w-3 h-3 animate-spin" /> :
+                 repairPhase === 'phase1_done' ? <CheckCircle className="w-3 h-3" /> :
+                 repairPhase === 'phase2' ? <Loader2 className="w-3 h-3 animate-spin" /> :
+                 repairPhase === 'done' ? <CheckCircle className="w-3 h-3" /> :
+                 <Shield className="w-3 h-3" />}
+                {repairPhase === 'phase1' ? 'Reparando incompletas...' :
+                 repairPhase === 'phase1_done' ? 'Fase 1 OK...' :
+                 repairPhase === 'phase2' ? 'Sincronizando estados...' :
+                 repairPhase === 'done' ? 'Concluído!' :
+                 'Reparar + Reconciliar'}
+              </button>
 
               
 
@@ -606,6 +676,11 @@ export default function AdsManagement() {
           ) : null}
           {reactivateMsg ? (
           <p className={`text-[10px] mt-1.5 font-semibold ${reactivateMsg.type === 'success' ? 'text-emerald-400' : reactivateMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{reactivateMsg.text}</p>
+          ) : null}
+          {repairSummary ? (
+          <p className={`text-[10px] mt-1.5 font-semibold ${repairSummary.type === 'success' ? 'text-emerald-400' : repairSummary.type === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
+            🔧 {repairSummary.text}
+          </p>
           ) : null}
           {tokenCheck && tokenCheck !== 'checking' ? (
           <div className={`mt-1.5 px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-2 ${tokenCheck.ok ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
