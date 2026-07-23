@@ -21,6 +21,7 @@ import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
 import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
 import MotorExecutionPanel from '@/components/sala/MotorExecutionPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
+import ReportPipelineWatchdogPanel from '@/components/sala/ReportPipelineWatchdogPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
@@ -1439,7 +1440,10 @@ export default function SalaDeComando() {
 
           {/* ── MONITOR DE SYNC ──────────────────────────────────────────────── */}
           {tab === 'sync_monitor' && account && (
-            <SyncFailureMonitor amazonAccountId={account.id} />
+            <div className="space-y-4">
+              <ReportPipelineWatchdogPanel account={account} />
+              <SyncFailureMonitor amazonAccountId={account.id} />
+            </div>
           )}
 
           {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
