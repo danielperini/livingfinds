@@ -206,6 +206,7 @@ export default function AdsManagement() {
   const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
   const [reactivating, setReactivating] = useState(false);
   const [reactivateMsg, setReactivateMsg] = useState(null);
+  const [migrationInProgress, setMigrationInProgress] = useState(false);
 
 
   const reactivatePausedCampaigns = async () => {
@@ -304,6 +305,7 @@ export default function AdsManagement() {
 
       setCampaigns(operational);
       setProducts(prods);
+      setMigrationInProgress(false);
 
       // Disparar migração canônica automaticamente em background se houver pendentes
       const hasPendingMigration = operational.some(
@@ -312,7 +314,27 @@ export default function AdsManagement() {
           ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
       );
       if (hasPendingMigration) {
-        base44.functions.invoke('enforceCanonicalManualCampaigns', { amazon_account_id: acc.id }).catch(() => {});
+        setMigrationInProgress(true);
+        base44.functions.invoke('enforceCanonicalManualCampaigns', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
+        // Re-fetch após 4s para refletir o novo estado (1 tentativa apenas)
+        setTimeout(async () => {
+          try {
+            const refreshed = await loadAllCampaigns(acc.id);
+            const operational2 = refreshed.filter((c) => {
+              const state = (c.state || c.status || '').toLowerCase();
+              return state !== 'incomplete' && !c.is_incomplete;
+            });
+            setCampaigns(operational2);
+            const stillPending = operational2.some(
+              (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+                !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
+                ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+            );
+            if (!stillPending) setMigrationInProgress(false);
+          } catch {
+            setMigrationInProgress(false);
+          }
+        }, 4000);
       }
     } finally {
       setLoading(false);
@@ -617,17 +639,25 @@ export default function AdsManagement() {
             stateFilter={stateFilterAuto}
             onStateFilter={setStateFilterAuto} />
           
-          <CampaignColumn
-            title="Manuais"
-            icon={Sparkles}
-            color="text-cyan"
-            campaigns={manualCampaigns}
-            products={products}
-            selectedId={selectedCampaign?.id}
-            onSelect={selectCampaign}
-            loading={loading}
-            stateFilter={stateFilterManual}
-            onStateFilter={setStateFilterManual} />
+          <div className="flex-1 flex flex-col min-w-0">
+            {migrationInProgress && (
+              <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5">
+                <Settings className="w-3 h-3 text-amber-400 animate-spin" />
+                <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
+              </div>
+            )}
+            <CampaignColumn
+              title="Manuais"
+              icon={Sparkles}
+              color="text-cyan"
+              campaigns={manualCampaigns}
+              products={products}
+              selectedId={selectedCampaign?.id}
+              onSelect={selectCampaign}
+              loading={loading}
+              stateFilter={stateFilterManual}
+              onStateFilter={setStateFilterManual} />
+          </div>
           
         </div>
 
