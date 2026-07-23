@@ -69,7 +69,7 @@ const STATE_FILTERS = [
 { key: 'archived', label: 'Arquivadas' }];
 
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter }) {
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction }) {
   return (
     <div className="flex-1 flex flex-col min-w-0 border-r border-surface-2 last:border-r-0">
       {/* Column header */}
@@ -78,6 +78,13 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
         <span className={`text-xs font-bold uppercase tracking-wider ${color}`}>{title}</span>
         <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
       </div>
+      {/* Extra action row (e.g. bulk reactivate button) */}
+      {extraAction && (
+        <div className="px-2 py-1.5 border-b border-surface-2">
+          {extraAction}
+        </div>
+      )}
+
       {/* State filter per column */}
       <div className="px-2 py-1.5 border-b border-surface-2 flex gap-1">
         {STATE_FILTERS.map((f) =>
@@ -208,7 +215,38 @@ export default function AdsManagement() {
   const [migrationInProgress, setMigrationInProgress] = useState(false);
   const [repairPhase, setRepairPhase] = useState(null); // null | 'phase1' | 'phase1_done' | 'phase2' | 'done' | 'error'
   const [repairSummary, setRepairSummary] = useState(null);
+  const [reactivatingAuto, setReactivatingAuto] = useState(false);
+  const [reactivateAutoResult, setReactivateAutoResult] = useState(null);
 
+
+  const reactivateAutoWithStock = async () => {
+    if (!account || reactivatingAuto) return;
+    setReactivatingAuto(true);
+    setReactivateAutoResult(null);
+    try {
+      const res = await base44.functions.invoke('reactivatePausedWithStock', {
+        amazon_account_id: account.id,
+        targeting_type_filter: 'AUTO',
+        include_incomplete: true,
+        _service_role: true,
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        setReactivateAutoResult({
+          type: d.reactivated > 0 ? 'success' : 'info',
+          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já têm AUTO ativa`,
+        });
+        await loadCampaigns();
+      } else {
+        setReactivateAutoResult({ type: 'error', text: d?.error || 'Erro ao reativar' });
+      }
+    } catch (e) {
+      setReactivateAutoResult({ type: 'error', text: e.message });
+    } finally {
+      setReactivatingAuto(false);
+      setTimeout(() => setReactivateAutoResult(null), 10000);
+    }
+  };
 
   const repairAndReconcile = async () => {
     if (!account || repairPhase) return;
@@ -692,7 +730,31 @@ export default function AdsManagement() {
             onSelect={selectCampaign}
             loading={loading}
             stateFilter={stateFilterAuto}
-            onStateFilter={setStateFilterAuto} />
+            onStateFilter={setStateFilterAuto}
+            extraAction={
+              <div className="flex flex-col gap-1">
+                <button
+                  onClick={reactivateAutoWithStock}
+                  disabled={!account || reactivatingAuto}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {reactivatingAuto ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
+                  ) : (
+                    <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>
+                  )}
+                </button>
+                {reactivateAutoResult && (
+                  <p className={`text-[10px] text-center font-medium ${
+                    reactivateAutoResult.type === 'success' ? 'text-emerald-400' :
+                    reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
+                  }`}>
+                    {reactivateAutoResult.text}
+                  </p>
+                )}
+              </div>
+            }
+          />
           
           <div className="flex-1 flex flex-col min-w-0">
             {migrationInProgress && (
