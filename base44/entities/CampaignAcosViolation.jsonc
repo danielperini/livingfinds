@@ -53,6 +53,26 @@
       "type": "number",
       "default": 45
     },
+    "optimization_attempted_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o motor tentou otimizar bids/dayparting no ciclo 1"
+    },
+    "optimization_cooldown_until": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Car\u00eancia de 2 dias ap\u00f3s otimiza\u00e7\u00e3o \u2014 pausa s\u00f3 ocorre ap\u00f3s este timestamp"
+    },
+    "bids_reduced": {
+      "type": "boolean",
+      "default": false,
+      "description": "True se o motor determin\u00edstico reduziu bids no ciclo 1"
+    },
+    "dayparting_evaluated": {
+      "type": "boolean",
+      "default": false,
+      "description": "True se o dayparting foi disparado no ciclo 1"
+    },
     "last_violation_at": {
       "type": "string",
       "format": "date-time"
@@ -72,6 +92,7 @@
       "type": "string",
       "enum": [
         "watching",
+        "optimizing",
         "warning",
         "paused",
         "recovered",

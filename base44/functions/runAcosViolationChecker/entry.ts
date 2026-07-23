@@ -1,20 +1,22 @@
 /**
- * runAcosViolationChecker
+ * runAcosViolationChecker v2
  *
- * Rastreia campanhas que estouram o ACoS alvo e as pausa
- * após 3 ciclos semanais CONSECUTIVOS acima do maximum_acos.
+ * Ciclo 1 — 1ª violação (ACoS > max_acos):
+ *   → Registra status='optimizing', dispara reduções de bid e dayparting (fire-and-forget)
+ *   → Grava optimization_cooldown_until = now + 2 dias
+ *   → NÃO pausa ainda
  *
- * Ciclo = cada execução semanal desta função.
- * Se em qualquer ciclo a campanha ficar dentro da meta → contagem reinicia.
+ * Ciclo 2 — 2ª violação consecutiva:
+ *   → Se cooldown ainda não passou → adia (status='warning')
+ *   → Se cooldown passou → avalia pausa com thresholds diferenciados:
+ *       MANUAL: pausa se ACoS > max_acos
+ *       AUTO com orders > 0: pausa apenas se ACoS > max_acos × 1.5
+ *       AUTO sem conversões: pausa se spend ≥ min_spend × 3
  *
- * Lógica de pausa diferenciada:
- *  - AUTO: pausa somente se ACoS > maximum_acos × 1.3 (30% acima do máximo)
- *          OU se 3 ciclos com ACoS > maximum_acos E zero conversões
- *  - MANUAL: pausa após 3 ciclos com ACoS > maximum_acos
- *
- * Campanhas com zero spend são ignoradas (sem dados suficientes).
+ * Proteção winner: qualquer campanha com orders_14d > 0 E acos_14d ≤ target_acos → nunca pausa.
+ * Métricas: CampaignMetricsDaily (mais confiável que SearchTerm).
  */
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,10 +46,13 @@ async function getToken(account: any) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user || user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
-
     const body = await req.json().catch(() => ({}));
+
+    if (!body._service_role) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user || user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
+    }
+
     const accountId = body.amazon_account_id;
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
 
@@ -61,33 +66,33 @@ Deno.serve(async (req) => {
     const TARGET_ACOS = config.target_acos || config.acos_target || 25;
     const MAX_ACOS = config.maximum_acos || 45;
     const MIN_SPEND = config.min_spend_for_decision || 5;
-    const CONSECUTIVE_CYCLES_TO_PAUSE = 3;
+    const CONSECUTIVE_CYCLES_TO_PAUSE = 2; // reduzido de 3 para 2
+    const COOLDOWN_DAYS = 2;
 
     const now = new Date().toISOString();
+    const nowMs = Date.now();
 
-    // ── 1. Calcular métricas da semana atual por campanha ─────────────────
-    // Janela: últimos 7 dias, com margem de atribuição de 3 dias → últimos 10 dias reais
-    const attributionCutoff = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
-    const weekStart = new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10);
+    // ── 1. Calcular métricas da semana por campanha via CampaignMetricsDaily ──
+    const weekStart = new Date(nowMs - 10 * 86400000).toISOString().slice(0, 10);
+    const attributionCutoff = new Date(nowMs - 3 * 86400000).toISOString().slice(0, 10);
 
-    const allSearchTerms = await base44.asServiceRole.entities.SearchTerm.filter(
-      { amazon_account_id: accountId }, '-date', 15000
+    const dailyMetrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: accountId }, '-date', 5000
     );
 
-    // Agregar métricas da semana por campaign_id
+    // Agregar por campaign_id dentro da janela
     const weekMetrics = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
-    for (const t of allSearchTerms) {
-      if (!t.campaign_id || !t.date) continue;
-      if (t.date > attributionCutoff || t.date < weekStart) continue;
-
-      if (!weekMetrics.has(t.campaign_id)) {
-        weekMetrics.set(t.campaign_id, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+    for (const row of dailyMetrics) {
+      if (!row.campaign_id || !row.date) continue;
+      if (row.date > attributionCutoff || row.date < weekStart) continue;
+      if (!weekMetrics.has(row.campaign_id)) {
+        weekMetrics.set(row.campaign_id, { spend: 0, sales: 0, orders: 0, clicks: 0 });
       }
-      const m = weekMetrics.get(t.campaign_id)!;
-      m.spend += t.spend || 0;
-      m.sales += t.sales_7d || t.sales_14d || 0;
-      m.orders += t.orders_7d || t.orders_14d || 0;
-      m.clicks += t.clicks || 0;
+      const m = weekMetrics.get(row.campaign_id)!;
+      m.spend  += row.spend  || 0;
+      m.sales  += row.sales  || 0;
+      m.orders += row.orders || 0;
+      m.clicks += row.clicks || 0;
     }
 
     // ── 2. Carregar campanhas ativas e violations existentes ──────────────
@@ -96,9 +101,7 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.CampaignAcosViolation.filter({ amazon_account_id: accountId }, null, 2000),
     ]);
 
-    const violationMap = new Map<string, any>(
-      existingViolations.map((v: any) => [v.campaign_id, v])
-    );
+    const violationMap = new Map<string, any>(existingViolations.map((v: any) => [v.campaign_id, v]));
 
     const activeCampaigns = allCampaigns.filter((c: any) => {
       const st = (c.state || c.status || '').toLowerCase();
@@ -109,46 +112,69 @@ Deno.serve(async (req) => {
       campaigns_evaluated: activeCampaigns.length,
       new_violations: 0,
       violations_reset: 0,
+      optimizations_triggered: 0,
+      cooldown_deferred: 0,
       warnings_issued: 0,
       campaigns_paused: 0,
+      winner_protected: 0,
       amazon_calls: 0,
       errors: 0,
     };
 
     const pausedList: any[] = [];
     const warningList: any[] = [];
+    const optimizingList: any[] = [];
     const campaignsToPauseAmazon: string[] = [];
 
     for (const camp of activeCampaigns) {
       const cid = String(camp.campaign_id || camp.id || '');
       if (!cid) continue;
 
-      const metrics = weekMetrics.get(cid);
-      if (!metrics || metrics.spend < MIN_SPEND) continue; // sem dados suficientes
+      // Tentar ambos os IDs (campaign_id Amazon e id interno)
+      const metrics = weekMetrics.get(cid) || weekMetrics.get(String(camp.id || ''));
+      if (!metrics || metrics.spend < MIN_SPEND) continue;
 
       const weekAcos = metrics.sales > 0
         ? (metrics.spend / metrics.sales) * 100
         : (metrics.spend > 0 ? 999 : 0);
 
-      const isAuto = String(camp.targeting_type || camp.campaign_type || '').toUpperCase().includes('AUTO');
+      const isAuto = String(camp.targeting_type || '').toUpperCase().includes('AUTO');
       const existing = violationMap.get(cid);
       const prevViolations = existing?.consecutive_violations || 0;
-
       const isViolating = weekAcos > MAX_ACOS;
 
-      // ── Resetar contagem se campanha voltou à meta ──────────────────────
+      // ── Proteção winner: orders_14d > 0 AND acos_14d ≤ target_acos ─────
+      const orders14d = camp.orders || 0;
+      const acos14d = camp.acos || 0;
+      if (orders14d > 0 && acos14d > 0 && acos14d <= TARGET_ACOS) {
+        // Campanha vencedora — garantir que violation está limpa
+        if (existing && existing.status !== 'exempt' && prevViolations > 0) {
+          await base44.asServiceRole.entities.CampaignAcosViolation.update(existing.id, {
+            status: 'exempt',
+            notes: `Winner protection: ${orders14d} pedidos, ACoS ${acos14d.toFixed(1)}% ≤ target ${TARGET_ACOS}%`,
+          }).catch(() => {});
+        }
+        stats.winner_protected++;
+        continue;
+      }
+
+      // ── Resetar se voltou à meta ─────────────────────────────────────────
       if (!isViolating && existing && prevViolations > 0) {
         await base44.asServiceRole.entities.CampaignAcosViolation.update(existing.id, {
           consecutive_violations: 0,
           status: 'recovered',
           reset_at: now,
+          bids_reduced: false,
+          dayparting_evaluated: false,
+          optimization_attempted_at: null,
+          optimization_cooldown_until: null,
           notes: `ACoS ${weekAcos.toFixed(1)}% voltou abaixo do máximo ${MAX_ACOS}% em ${now.slice(0, 10)}`,
         });
         stats.violations_reset++;
         continue;
       }
 
-      if (!isViolating) continue; // dentro da meta — nada a fazer
+      if (!isViolating) continue;
 
       // ── Registrar nova violação ─────────────────────────────────────────
       const newCount = prevViolations + 1;
@@ -164,20 +190,105 @@ Deno.serve(async (req) => {
         last_violation_at: now,
       };
 
-      // Guardar ACoS de cada ciclo nas últimas 3 posições
       if (newCount === 1) {
+        // ── CICLO 1: otimizar, não pausar ───────────────────────────────
+        const cooldownUntil = new Date(nowMs + COOLDOWN_DAYS * 86400000).toISOString();
         cycleFields.acos_cycle_1 = weekAcos;
         cycleFields.spend_cycle_1 = metrics.spend;
         cycleFields.first_violation_at = now;
-        cycleFields.status = 'watching';
-      } else if (newCount === 2) {
+        cycleFields.status = 'optimizing';
+        cycleFields.optimization_attempted_at = now;
+        cycleFields.optimization_cooldown_until = cooldownUntil;
+        cycleFields.bids_reduced = true;
+        cycleFields.dayparting_evaluated = true;
+
+        // Fire-and-forget: redução de bids
+        base44.asServiceRole.functions.invoke('runDeterministicDecisionEngine', {
+          amazon_account_id: accountId,
+          campaign_filter: [cid],
+          _service_role: true,
+        }).catch(() => {});
+
+        // Fire-and-forget: análise de dayparting
+        base44.asServiceRole.functions.invoke('runDailyDayparting', {
+          amazon_account_id: accountId,
+          campaign_id: cid,
+          _service_role: true,
+        }).catch(() => {});
+
+        optimizingList.push({
+          campaign_id: cid,
+          name: camp.name || camp.campaign_name,
+          type: isAuto ? 'AUTO' : 'MANUAL',
+          acos: weekAcos,
+          cooldown_until: cooldownUntil,
+        });
+        stats.optimizations_triggered++;
+
+      } else {
+        // ── CICLO 2+: verificar cooldown ────────────────────────────────
         cycleFields.acos_cycle_2 = weekAcos;
         cycleFields.spend_cycle_2 = metrics.spend;
-        cycleFields.status = 'warning';
-      } else {
-        // Ciclo 3+ — sempre atualiza cycle_3 com o mais recente
-        cycleFields.acos_cycle_3 = weekAcos;
-        cycleFields.spend_cycle_3 = metrics.spend;
+
+        const cooldownUntil = existing?.optimization_cooldown_until;
+        const cooldownPassed = !cooldownUntil || new Date(cooldownUntil).getTime() <= nowMs;
+
+        if (!cooldownPassed) {
+          // Cooldown ainda ativo — adiar decisão de pausa
+          cycleFields.status = 'warning';
+          warningList.push({
+            campaign_id: cid,
+            name: camp.name || camp.campaign_name,
+            type: isAuto ? 'AUTO' : 'MANUAL',
+            acos: weekAcos,
+            cycles: newCount,
+            cooldown_until: cooldownUntil,
+            reason: 'cooldown_active',
+          });
+          stats.cooldown_deferred++;
+        } else {
+          // ── Cooldown passou — avaliar pausa ──────────────────────────
+          let shouldPause = false;
+          let pauseReason = '';
+
+          if (isAuto) {
+            if (weekAcos > MAX_ACOS * 1.5) {
+              shouldPause = true;
+              pauseReason = `AUTO: ACoS ${weekAcos.toFixed(0)}% extremamente acima do máximo (${(MAX_ACOS * 1.5).toFixed(0)}%) após ${newCount} ciclos + otimização sem efeito`;
+            } else if (metrics.orders === 0 && metrics.spend >= MIN_SPEND * 3) {
+              shouldPause = true;
+              pauseReason = `AUTO: ${newCount} ciclos consecutivos sem conversão, gasto R$${metrics.spend.toFixed(2)}`;
+            }
+          } else {
+            // MANUAL: pausa direta após cooldown
+            shouldPause = true;
+            pauseReason = `MANUAL: ACoS ${weekAcos.toFixed(0)}% > ${MAX_ACOS}% após ${newCount} ciclos consecutivos. Otimização tentada em ${existing?.optimization_attempted_at?.slice(0, 10) || 'ciclo anterior'} sem recuperação.`;
+          }
+
+          if (shouldPause) {
+            cycleFields.status = 'paused';
+            campaignsToPauseAmazon.push(cid);
+            pausedList.push({
+              campaign_id: cid,
+              name: camp.name || camp.campaign_name,
+              type: isAuto ? 'AUTO' : 'MANUAL',
+              acos: weekAcos,
+              cycles: newCount,
+              reason: pauseReason,
+            });
+          } else {
+            cycleFields.status = 'warning';
+            warningList.push({
+              campaign_id: cid,
+              name: camp.name || camp.campaign_name,
+              type: isAuto ? 'AUTO' : 'MANUAL',
+              acos: weekAcos,
+              cycles: newCount,
+              reason: 'auto_threshold_not_met',
+            });
+            stats.warnings_issued++;
+          }
+        }
       }
 
       if (existing) {
@@ -186,65 +297,27 @@ Deno.serve(async (req) => {
         await base44.asServiceRole.entities.CampaignAcosViolation.create(cycleFields);
       }
       stats.new_violations++;
+    }
 
-      // ── Verificar se deve pausar ────────────────────────────────────────
-      if (newCount < CONSECUTIVE_CYCLES_TO_PAUSE) {
-        // Emitir aviso mas não pausar ainda
-        warningList.push({
-          campaign_id: cid,
-          name: camp.name || camp.campaign_name,
-          type: isAuto ? 'AUTO' : 'MANUAL',
-          acos: weekAcos,
-          cycles: newCount,
-          remaining: CONSECUTIVE_CYCLES_TO_PAUSE - newCount,
-        });
-        stats.warnings_issued++;
-        continue;
-      }
-
-      // ── Lógica de pausa diferenciada AUTO vs MANUAL ─────────────────────
-      let shouldPause = false;
-      let pauseReason = '';
-
-      if (isAuto) {
-        // AUTO: pausa somente se ACoS muito extremo (> MAX × 1.3) OU sem conversões por 3 ciclos
-        const avgAcos = [
-          existing?.acos_cycle_1 || 0,
-          existing?.acos_cycle_2 || 0,
-          weekAcos,
-        ].filter(a => a > 0).reduce((s, a, _, arr) => s + a / arr.length, 0);
-
-        const totalOrders = metrics.orders +
-          (existing?.spend_cycle_1 ? 0 : 0); // sem dados de orders por ciclo, usar métrica atual
-
-        if (weekAcos > MAX_ACOS * 1.3) {
-          shouldPause = true;
-          pauseReason = `AUTO: ACoS ${weekAcos.toFixed(0)}% extremamente acima do máximo (${(MAX_ACOS * 1.3).toFixed(0)}%) por ${newCount} ciclos consecutivos`;
-        } else if (metrics.orders === 0 && metrics.spend >= MIN_SPEND * 3) {
-          shouldPause = true;
-          pauseReason = `AUTO: ${newCount} ciclos consecutivos sem conversão com gasto R$${metrics.spend.toFixed(2)}`;
+    // ── 3. Batch guard: não pausar > 30% das campanhas ativas de uma vez ─
+    const maxPauseAllowed = Math.floor(activeCampaigns.length * 0.30);
+    if (campaignsToPauseAmazon.length > maxPauseAllowed) {
+      const excess = campaignsToPauseAmazon.splice(maxPauseAllowed);
+      // Marcar excedentes como warning ao invés de pausar
+      for (const cid of excess) {
+        const viol = violationMap.get(cid);
+        if (viol) {
+          await base44.asServiceRole.entities.CampaignAcosViolation.update(viol.id, {
+            status: 'warning',
+            notes: `Pausa adiada: batch_guard ativado (máx ${maxPauseAllowed} campanhas por execução)`,
+          }).catch(() => {});
         }
-        // AUTO com ACoS apenas moderadamente alto e ainda convertendo → preservar
-      } else {
-        // MANUAL: pausa após 3 ciclos acima do maximum_acos
-        shouldPause = true;
-        pauseReason = `MANUAL: ACoS acima de ${MAX_ACOS}% por ${newCount} ciclos consecutivos. Último: ${weekAcos.toFixed(0)}%, gasto R$${metrics.spend.toFixed(2)}`;
-      }
-
-      if (shouldPause) {
-        campaignsToPauseAmazon.push(cid);
-        pausedList.push({
-          campaign_id: cid,
-          name: camp.name || camp.campaign_name,
-          type: isAuto ? 'AUTO' : 'MANUAL',
-          acos: weekAcos,
-          cycles: newCount,
-          reason: pauseReason,
-        });
+        const entry = pausedList.find(p => p.campaign_id === cid);
+        if (entry) { entry.deferred_batch_guard = true; warningList.push({ ...entry, reason: 'batch_guard' }); }
       }
     }
 
-    // ── 3. Pausar na Amazon em lotes de 50 ───────────────────────────────
+    // ── 4. Pausar na Amazon em lotes de 50 ───────────────────────────────
     if (campaignsToPauseAmazon.length > 0) {
       const token = await getToken(account);
       const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
@@ -275,12 +348,10 @@ Deno.serve(async (req) => {
         for (const cid of batch) {
           const pausedEntry = pausedList.find(p => p.campaign_id === cid);
           if (ok) {
-            // Atualizar banco
             await base44.asServiceRole.entities.Campaign.updateMany(
               { amazon_account_id: accountId, campaign_id: cid },
               { $set: { state: 'PAUSED', status: 'paused', paused_by_acos_violation: true, pause_reason: pausedEntry?.reason || '', paused_at: now } }
             ).catch(() => {});
-            // Atualizar violation record
             const viol = violationMap.get(cid);
             if (viol) {
               await base44.asServiceRole.entities.CampaignAcosViolation.update(viol.id, {
@@ -298,18 +369,22 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 4. Registrar execução ─────────────────────────────────────────────
+    // ── 5. Registrar execução ─────────────────────────────────────────────
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: accountId,
       operation: 'runAcosViolationChecker',
+      trigger_type: body._service_role ? 'automatic' : 'manual',
       status: 'completed',
       started_at: now,
       completed_at: new Date().toISOString(),
       result_summary: JSON.stringify({
         evaluated: stats.campaigns_evaluated,
         new_violations: stats.new_violations,
+        optimizations_triggered: stats.optimizations_triggered,
+        cooldown_deferred: stats.cooldown_deferred,
         warnings: stats.warnings_issued,
         paused: stats.campaigns_paused,
+        winner_protected: stats.winner_protected,
         reset: stats.violations_reset,
       }),
     }).catch(() => {});
@@ -318,8 +393,9 @@ Deno.serve(async (req) => {
       ok: true,
       stats,
       paused: pausedList,
+      optimizing: optimizingList,
       warnings: warningList,
-      config_used: { TARGET_ACOS, MAX_ACOS, CONSECUTIVE_CYCLES_TO_PAUSE },
+      config_used: { TARGET_ACOS, MAX_ACOS, CONSECUTIVE_CYCLES_TO_PAUSE, COOLDOWN_DAYS },
       ran_at: now,
     });
   } catch (err: any) {

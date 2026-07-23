@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     const [
       catalogDone, salesDone, allJobsExist,
       campStateDone, invDone, manualTermsDone,
-      eval72hDone, backupDone,
+      eval72hDone, backupDone, acosCheckerDone,
     ] = await Promise.all([
       wasRunTodaySuccessfully(base44, aid, 'sync_catalog'),
       wasRunTodaySuccessfully(base44, aid, 'sync_sales'),
@@ -88,7 +88,12 @@ Deno.serve(async (req) => {
       wasRunTodaySuccessfully(base44, aid, 'manual_campaign_terms'),
       wasRunTodaySuccessfully(base44, aid, 'evaluate_new_campaigns_72h'),
       wasRunTodaySuccessfully(base44, aid, 'daily_backup'),
+      wasRunTodaySuccessfully(base44, aid, 'acos_violation_checker'),
     ]);
+
+    // Verificar se hoje é segunda-feira (dia 1 da semana BRT)
+    const todayBRTDate = new Date(Date.now() - 3 * 3600000);
+    const isMonday = todayBRTDate.getDay() === 1;
 
     const pendingJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
       { amazon_account_id: aid }, '-created_date', 10
@@ -164,6 +169,10 @@ Deno.serve(async (req) => {
 
     // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
     add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 });
+
+    // 1x/semana (segunda-feira): ACoS Violation Checker
+    if (isMonday && (!acosCheckerDone || force)) add('runAcosViolationChecker', 'acos_violation_checker', {}, true);
+    else skipped.push('acos_violation_checker');
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
