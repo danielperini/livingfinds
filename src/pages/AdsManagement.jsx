@@ -808,15 +808,17 @@ export default function AdsManagement() {
                       Pausar
                     </button>
                 ) : campaignState(selectedCampaign) === 'paused' ? (
-                  <button onClick={async () => {
-                    setCampaignAction('pausing');
-                    try {
-                      const res = await base44.functions.invoke('reactivateWinnerCampaign', {
-                        amazon_account_id: account.id,
-                        campaign_id: selectedCampaign.campaign_id || selectedCampaign.amazon_campaign_id || selectedCampaign.id,
-                        asin: selectedCampaign.asin,
-                        force: true,
-                      });
+                <button onClick={async () => {
+                  setCampaignAction('pausing');
+                  try {
+                    const res = await base44.functions.invoke('reactivateWinnerCampaign', {
+                      amazon_account_id: account.id,
+                      campaign_id: selectedCampaign.campaign_id || selectedCampaign.amazon_campaign_id,
+                      campaign_db_id: selectedCampaign.id,
+                      asin: selectedCampaign.asin,
+                      force: true,
+                      _service_role: true,
+                    });
                       if (res?.data?.ok) {
                         setSelectedCampaign(prev => ({ ...prev, state: 'enabled', status: 'enabled' }));
                         setCampaigns(prev => prev.map(c => c.id === selectedCampaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));

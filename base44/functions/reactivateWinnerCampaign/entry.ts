@@ -3,20 +3,16 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-async function getAdsToken(refreshToken, clientId, clientSecret) {
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
+async function getAdsToken(base44: any, accountId: string): Promise<string> {
+  const res = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
+    amazon_account_id: accountId,
+    _service_role: true,
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(`Token failed: ${data.error_description || data.error}`);
-  return data.access_token;
+  const data = res?.data || res;
+  if (!data?.ok || !data?.access_token) {
+    throw new Error(data?.message || data?.error || 'Falha ao obter access token Amazon Ads');
+  }
+  return String(data.access_token);
 }
 
 function getAdsBaseUrl() {
@@ -35,26 +31,40 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (!body._service_role) return Response.json({ error: 'Uso interno' }, { status: 403 });
 
-    const { amazon_account_id, campaign_db_id, campaign_id, new_budget } = body;
-    if (!amazon_account_id || !campaign_db_id || !campaign_id) {
-      return Response.json({ error: 'amazon_account_id, campaign_db_id e campaign_id são obrigatórios' }, { status: 400 });
+    const { amazon_account_id, campaign_db_id, campaign_id, asin, force, new_budget } = body;
+    if (!amazon_account_id || !campaign_id) {
+      return Response.json({ error: 'amazon_account_id e campaign_id são obrigatórios' }, { status: 400 });
+    }
+
+    // Resolver o DB id: pode vir como campaign_db_id ou precisar ser buscado
+    let dbId = campaign_db_id || null;
+    if (!dbId) {
+      const rows = await base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id, campaign_id }, null, 1
+      ).catch(() => []);
+      if (!rows[0]) {
+        // Tentar pelo amazon_campaign_id também
+        const rows2 = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id, amazon_campaign_id: campaign_id }, null, 1
+        ).catch(() => []);
+        dbId = rows2[0]?.id || null;
+      } else {
+        dbId = rows[0]?.id || null;
+      }
     }
 
     // Buscar conta
     const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id);
     if (!account) return Response.json({ error: 'Conta não encontrada' }, { status: 404 });
 
-    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-    const clientId = Deno.env.get('ADS_CLIENT_ID');
-    const clientSecret = Deno.env.get('ADS_CLIENT_SECRET');
-
-    if (!refreshToken || !profileId) {
-      return Response.json({ error: 'Credenciais Amazon não configuradas' }, { status: 400 });
+    if (!profileId) {
+      return Response.json({ error: 'ads_profile_id não configurado na conta' }, { status: 400 });
     }
 
-    const token = await getAdsToken(refreshToken, clientId, clientSecret);
+    const token = await getAdsToken(base44, amazon_account_id);
     const baseUrl = getAdsBaseUrl();
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
 
     const headers = {
       'Authorization': `Bearer ${token}`,
@@ -97,7 +107,15 @@ Deno.serve(async (req) => {
       dbUpdate.budget = new_budget;
     }
 
-    await base44.asServiceRole.entities.Campaign.update(campaign_db_id, dbUpdate);
+    if (dbId) {
+      await base44.asServiceRole.entities.Campaign.update(dbId, dbUpdate);
+    } else {
+      // Fallback: atualizar por campaign_id via updateMany
+      await base44.asServiceRole.entities.Campaign.updateMany(
+        { amazon_account_id, campaign_id },
+        { $set: dbUpdate }
+      ).catch(() => {});
+    }
 
     // ── 3. Log de execução ──
     await base44.asServiceRole.entities.SyncExecutionLog.create({
