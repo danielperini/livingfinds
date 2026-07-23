@@ -30,6 +30,30 @@ function bidOf(keyword: any, group: any) {
   return keywordBid > 0 ? keywordBid : groupBid;
 }
 
+function norm(value: any) {
+  return String(value || '').toLowerCase().trim();
+}
+
+function localCampaignId(row: any) {
+  return String(row?.campaign_id || row?.amazon_campaign_id || '');
+}
+
+function quantity(product: any) {
+  return Number(product?.fba_inventory ?? product?.available_quantity ?? product?.fulfillable_quantity ?? product?.stock ?? 0);
+}
+
+function productEligible(product: any) {
+  if (!product) return false;
+  const status = norm(product.status || product.product_status || product.listing_status);
+  if (['inactive', 'archived', 'deleted', 'suppressed'].includes(status)) return false;
+  if (norm(product.inventory_status) === 'out_of_stock' || quantity(product) <= 0) return false;
+  const scope = norm(product.ads_scope_status);
+  if (scope && scope !== 'authorized') return false;
+  const eligibility = norm(product.ads_eligibility_status);
+  if (eligibility && eligibility !== 'eligible') return false;
+  return true;
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -43,8 +67,19 @@ Deno.serve(async (request) => {
     }
     if (!accountId) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' });
 
+    // Estados locais são usados apenas como vínculo ASIN/produto. A lista remota abaixo
+    // é a autoridade para dizer se a campanha/ad group está realmente ENABLED na Amazon.
+    const [localCampaigns, products] = await Promise.all([
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
+    ]);
+    const localCampaignById = new Map(localCampaigns.map((row: any) => [localCampaignId(row), row]).filter(([id]: any) => Boolean(id)));
+    const productByAsin = new Map(products.filter((row: any) => row.asin).map((row: any) => [String(row.asin), row]));
+
+    // REGRA: reconciliação de bid só atua sobre campanhas MANUAL realmente ENABLED.
+    // PAUSED/ARCHIVED ficam fora do ciclo e preservam apenas histórico.
     const campaignsResponse = await ads(base44, accountId, 'listManualCampaignsForBidParity', 'POST', '/sp/campaigns/list', {
-      stateFilter: { include: ['ENABLED', 'PAUSED'] },
+      stateFilter: { include: ['ENABLED'] },
       targetingTypeFilter: ['MANUAL'],
       maxResults: 500,
     }, 'application/vnd.spCampaign.v3+json');
@@ -57,9 +92,24 @@ Deno.serve(async (request) => {
       const campaignId = String(campaign.campaignId || '');
       if (!campaignId) continue;
 
+      const localCampaign = localCampaignById.get(campaignId);
+      const localState = norm(localCampaign?.state || localCampaign?.status);
+      const asin = String(localCampaign?.asin || '');
+      const product = asin ? productByAsin.get(asin) : null;
+
+      // Não tenta "consertar" registros históricos sem ASIN/produto ativo.
+      if (!localCampaign || !['enabled', 'active'].includes(localState)) {
+        results.push({ campaign_id: campaignId, ok: true, skipped: true, reason: 'campanha não está ativa no estado persistido atual' });
+        continue;
+      }
+      if (!asin || !productEligible(product)) {
+        results.push({ campaign_id: campaignId, asin: asin || null, ok: true, skipped: true, reason: !asin ? 'ASIN não resolvido' : 'ASIN/produto inativo, inelegível ou sem estoque' });
+        continue;
+      }
+
       const groupsResponse = await ads(base44, accountId, 'listAdGroupsForBidParity', 'POST', '/sp/adGroups/list', {
         campaignIdFilter: [campaignId],
-        stateFilter: { include: ['ENABLED', 'PAUSED'] },
+        stateFilter: { include: ['ENABLED'] },
         maxResults: 100,
       }, 'application/vnd.spAdGroup.v3+json');
       const groups = listOf(groupsResponse, 'adGroups');
@@ -68,33 +118,47 @@ Deno.serve(async (request) => {
         const adGroupId = String(group.adGroupId || '');
         if (!adGroupId) continue;
 
-        const keywordsResponse = await ads(base44, accountId, 'listKeywordsForBidParity', 'POST', '/sp/keywords/list', {
+        // CRÍTICO: listar TODAS as keywords ENABLED primeiro. O código antigo filtrava EXACT
+        // na consulta e podia enxergar 1 EXACT em um grupo que, na realidade, tinha dezenas
+        // de BROAD/PHRASE, alterando o defaultBid de um grupo multi-keyword antigo.
+        const keywordsResponse = await ads(base44, accountId, 'listAllKeywordsForBidParity', 'POST', '/sp/keywords/list', {
           campaignIdFilter: [campaignId],
           adGroupIdFilter: [adGroupId],
           stateFilter: { include: ['ENABLED'] },
-          matchTypeFilter: ['EXACT'],
           maxResults: 100,
         }, 'application/vnd.spKeyword.v3+json');
-        const keywords = listOf(keywordsResponse, 'keywords');
+        const allEnabledKeywords = listOf(keywordsResponse, 'keywords');
 
-        if (keywords.length !== 1) {
-          results.push({ campaign_id: campaignId, ad_group_id: adGroupId, ok: true, skipped: true, reason: `grupo possui ${keywords.length} keywords ativas` });
+        if (allEnabledKeywords.length !== 1) {
+          results.push({
+            campaign_id: campaignId,
+            asin,
+            ad_group_id: adGroupId,
+            ok: true,
+            skipped: true,
+            reason: `grupo não canônico: ${allEnabledKeywords.length} keywords ativas; fora do ciclo de bid até migração 1 campanha = 1 EXACT`,
+          });
           continue;
         }
 
-        const keyword = keywords[0];
+        const keyword = allEnabledKeywords[0];
+        if (norm(keyword.matchType || keyword.match_type) !== 'exact') {
+          results.push({ campaign_id: campaignId, asin, ad_group_id: adGroupId, ok: true, skipped: true, reason: `keyword ${keyword.matchType || keyword.match_type || 'sem match'} não é EXACT` });
+          continue;
+        }
+
         const keywordId = String(keyword.keywordId || '');
         const keywordBid = Number(keyword?.bid?.value ?? keyword?.bid ?? 0);
         const groupBid = Number(group.defaultBid || 0);
         const targetBid = bidOf(keyword, group);
 
         if (!keywordId || targetBid <= 0) {
-          results.push({ campaign_id: campaignId, ad_group_id: adGroupId, ok: false, error: 'Keyword ou bid inválido' });
+          results.push({ campaign_id: campaignId, ad_group_id: adGroupId, keyword_id: keywordId || null, ok: false, error: 'Keyword ou bid inválido' });
           continue;
         }
 
         if (Math.abs(keywordBid - groupBid) < 0.001) {
-          results.push({ campaign_id: campaignId, ad_group_id: adGroupId, keyword_id: keywordId, ok: true, already_equal: true, bid: targetBid });
+          results.push({ campaign_id: campaignId, asin, ad_group_id: adGroupId, keyword_id: keywordId, ok: true, already_equal: true, bid: targetBid });
           continue;
         }
 
@@ -111,7 +175,7 @@ Deno.serve(async (request) => {
           keywords: [{ keywordId, bid: targetBid }],
         }, 'application/vnd.spKeyword.v3+json');
 
-        if (!updateKeyword?.ok) {
+        if (!keywordUpdateSucceeded(keywordUpdate)) {
           if (groupBid > 0) {
             await ads(base44, accountId, 'rollbackReconcileAdGroupBid', 'PUT', '/sp/adGroups', {
               adGroups: [{ adGroupId, defaultBid: groupBid }],
@@ -140,13 +204,13 @@ Deno.serve(async (request) => {
           campaign_id: campaignId,
           bid_before: keywordBid !== groupBid ? groupBid : keywordBid,
           bid_after: targetBid,
-          reason: 'Reconciliação automática: keyword e ad group estavam com bids divergentes.',
+          reason: 'Reconciliação automática: keyword e ad group ativos estavam com bids divergentes.',
           applied_by: 'bid_parity_reconciler',
           executed_at: now,
           created_at: now,
         }).catch(() => {});
 
-        results.push({ campaign_id: campaignId, ad_group_id: adGroupId, keyword_id: keywordId, ok: true, corrected: true, keyword_bid_before: keywordBid, group_bid_before: groupBid, bid_after: targetBid });
+        results.push({ campaign_id: campaignId, asin, ad_group_id: adGroupId, keyword_id: keywordId, ok: true, corrected: true, keyword_bid_before: keywordBid, group_bid_before: groupBid, bid_after: targetBid });
         await wait(1200);
       }
     }
@@ -156,10 +220,19 @@ Deno.serve(async (request) => {
       checked: results.length,
       corrected: results.filter((item) => item.corrected).length,
       already_equal: results.filter((item) => item.already_equal).length,
+      skipped_inactive_or_noncanonical: results.filter((item) => item.skipped).length,
       failed: results.filter((item) => item.ok === false).length,
+      policy: 'enabled_campaign_enabled_group_one_enabled_exact_keyword_active_asin_only',
       results,
     });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao reconciliar bids manuais' }, { status: 500 });
   }
 });
+
+function keywordUpdateSucceeded(response: any) {
+  if (!response) return false;
+  if (response.ok === true) return true;
+  const payload = response?.payload || response;
+  return Array.isArray(payload?.keywords?.success) && payload.keywords.success.length > 0;
+}
