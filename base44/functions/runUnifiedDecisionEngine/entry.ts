@@ -4,15 +4,10 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
  * runUnifiedDecisionEngine
  *
  * Entrada canônica e única do motor de decisões do LivingFinds.
- * Toda execução delega ao motor determinístico principal, que concentra:
- * - metas e guardrails de PerformanceSettings;
- * - estoque e velocidade real via SP-API;
- * - métricas Amazon Ads persistidas;
- * - idempotência, cooldown e auditoria;
- * - geração de decisões para a fila oficial do Autopilot.
- *
- * Esta função existe para impedir que motores paralelos produzam decisões
- * concorrentes para a mesma conta, campanha ou keyword.
+ * Antes e depois do motor principal, reconcilia o escopo do ciclo manual de bids
+ * para impedir que campanhas antigas, pausadas/arquivadas, ASINs inativos,
+ * produtos sem estoque, keywords não-EXACT ou grupos multi-keyword permaneçam
+ * em lifecycle/fila de decisões.
  */
 Deno.serve(async (request) => {
   try {
@@ -31,18 +26,42 @@ Deno.serve(async (request) => {
       engine_version: 'unified-v1',
     };
 
+    // Pré-flight: sincroniza estados e retira lixo histórico do ciclo antes de decidir.
+    const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileManualBidCycleScope',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+        skip_sync: body.skip_scope_sync === true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const scopeBefore = scopeBeforeResponse?.data || scopeBeforeResponse || {};
+
     const result = await base44.asServiceRole.functions.invoke(
       'runDeterministicDecisionEngine',
       payload,
     );
-
     const data = result?.data || result || {};
 
+    // Pós-flight: o motor legado ainda pode enxergar linhas históricas persistidas.
+    // Cancela qualquer decisão nova que não pertença ao universo manual ativo.
+    const scopeAfterResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileManualBidCycleScope',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+        skip_sync: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const scopeAfter = scopeAfterResponse?.data || scopeAfterResponse || {};
+
     return Response.json({
-      ok: data?.ok !== false,
+      ok: data?.ok !== false && scopeAfter?.ok !== false,
       engine: 'unified',
       delegated_to: 'runDeterministicDecisionEngine',
       amazon_account_id: body.amazon_account_id || null,
+      manual_bid_scope_before: scopeBefore,
+      manual_bid_scope_after: scopeAfter,
       result: data,
     });
   } catch (error: any) {
