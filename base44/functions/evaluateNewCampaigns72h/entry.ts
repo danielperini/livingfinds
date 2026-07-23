@@ -1,17 +1,24 @@
 /**
  * evaluateNewCampaigns72h — Avalia campanhas manuais criadas há 72h.
  *
+ * REGRA CANÔNICA 1 campanha = 1 ASIN = 1 Ad Group = 1 keyword EXACT.
+ * NUNCA adicionar nova keyword a campanha existente.
+ * NUNCA substituir keyword interna.
+ *
  * Para cada campanha com launch_phase='new' criada há >= 72h:
- *  - Lê métricas acumuladas (spend, sales, orders, clicks)
- *  - Se sem vendas E sem cliques suficientes → pausa a keyword, substitui pela próxima sugestão do banco
- *  - Se ACoS > max_acos → reduz bid em 20% (potencializa)
- *  - Se vendas OK e ACoS aceitável → promove para launch_phase='active'
- *  - Sempre negativa na campanha AUTO do mesmo ASIN (se ainda não feito)
+ *  - Se sem impressões após 72h → PAUSA A CAMPANHA INTEIRA (não substitui keyword)
+ *  - Se gasto sem venda → reduz bid em 20%
+ *  - Se ACoS > max_acos → reduz bid 15%
+ *  - Se vendas OK → promove para launch_phase='active'
+ *  - Negativa keyword na campanha AUTO do mesmo ASIN
+ *
+ * CORREÇÃO: acos = sales > 0 ? (spend/sales)*100 : null (nunca acos=0)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const MIN_BID = 0.35;
 const MAX_BID = 3.0;
+const INITIAL_BID = 0.50; // bid inicial padrão para novas campanhas
 
 async function getAdsToken(account: any): Promise<string> {
   const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
@@ -102,6 +109,17 @@ async function negateInAuto(base44: any, account: any, token: string, asin: stri
   return { success, auto_campaign_id: autoCampaign.campaign_id };
 }
 
+/**
+ * Pausa a campanha inteira na Amazon Ads API v3.
+ * REGRA CANÔNICA: keyword sem impressões → pausar campanha, não substituir keyword.
+ */
+async function pauseCampaignOnAmazon(token: string, account: any, campaignId: string): Promise<boolean> {
+  const res = await adsCall(token, account, 'PUT', '/sp/campaigns', {
+    campaigns: [{ campaignId, state: 'PAUSED' }],
+  });
+  return res.ok && (res.data?.campaigns?.success?.length > 0 || res.status === 200);
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -113,7 +131,6 @@ Deno.serve(async (req) => {
 
     const now72hAgo = new Date(Date.now() - 72 * 3600000).toISOString();
 
-    // Buscar contas conectadas
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
     if (!accounts.length) return Response.json({ ok: true, message: 'Nenhuma conta conectada' });
 
@@ -148,31 +165,31 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      let evaluated = 0, paused = 0, optimized = 0, promoted = 0;
+      let evaluated = 0, paused_campaigns = 0, optimized = 0, promoted = 0;
 
       for (const camp of due) {
         const campaignId   = camp.campaign_id || camp.amazon_campaign_id;
         const asin         = camp.asin;
-        const createdDate  = (camp.created_at || camp.created_date || '').slice(0, 10);
-        const nowDate      = new Date().toISOString().slice(0, 10);
 
-        // Buscar métricas acumuladas dos últimos 5 dias (cobre a janela 72h + latência)
+        // Buscar métricas acumuladas dos últimos 5 dias
         const metrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
           amazon_account_id: aid,
           campaign_id: campaignId,
         }, '-date', 10).catch(() => []);
 
-        const spend  = metrics.reduce((s: number, m: any) => s + (m.spend || 0), 0);
-        const sales  = metrics.reduce((s: number, m: any) => s + (m.sales || 0), 0);
-        const orders = metrics.reduce((s: number, m: any) => s + (m.orders || 0), 0);
-        const clicks = metrics.reduce((s: number, m: any) => s + (m.clicks || 0), 0);
-        const acos   = sales > 0 ? (spend / sales) * 100 : 0;
+        const spend     = metrics.reduce((s: number, m: any) => s + (m.spend || 0), 0);
+        const sales     = metrics.reduce((s: number, m: any) => s + (m.sales || 0), 0);
+        const orders    = metrics.reduce((s: number, m: any) => s + (m.orders || 0), 0);
+        const clicks    = metrics.reduce((s: number, m: any) => s + (m.clicks || 0), 0);
+        const impressions = metrics.reduce((s: number, m: any) => s + (m.impressions || 0), 0);
+
+        // CORREÇÃO: acos = null quando sales=0 (nunca 0)
+        const acos: number | null = sales > 0 ? (spend / sales) * 100 : null;
 
         evaluated++;
 
-        // ── Garantir negativação na AUTO ─────────────────────────────────────
+        // ── Garantir negativação na AUTO ─────────────────────────────────
         if (asin && camp.campaign_name) {
-          // Extrair keyword do nome da campanha: "SP | MANUAL | EXACT | ASIN | keyword"
           const parts = camp.campaign_name.split(' | ');
           const kwText = parts.length >= 5 ? parts.slice(4).join(' | ') : null;
           if (kwText) {
@@ -180,88 +197,53 @@ Deno.serve(async (req) => {
           }
         }
 
-        // ── Buscar keywords da campanha via API (v3) ──────────────────────────
+        // ── Buscar keywords da campanha para ajuste de bid ────────────────
         const kwRes = await adsCall(token, account, 'POST', '/sp/keywords/list', {
           stateFilter: { include: ['ENABLED', 'PAUSED'] },
           campaignIdFilter: { include: [campaignId] },
           maxResults: 20,
         }).catch(() => ({ ok: false, data: {} }));
-
         const keywords: any[] = kwRes?.data?.keywords || [];
 
-        // ── DECISÃO: sem cliques e sem spend relevante → NÃO pausar campanha inteira ──
-        // WINNER PROTECTION: volume baixo isolado não justifica pausa de campanha.
-        // Ação correta: pausar somente as keywords sem impressões; manter campanha ativa.
-        // A campanha só será pausada se tiver ≥20 cliques + ≥200 impressões + gasto ≥ CPA máx.
-        if (clicks < 3 && spend < 2.0) {
-          // Pausar somente as keywords individualmente (nunca a campanha inteira por baixo volume)
-          if (keywords.length > 0) {
-            await adsCall(token, account, 'PUT', '/sp/keywords', {
-              keywords: keywords.map((k: any) => ({ keywordId: k.keywordId, state: 'PAUSED' })),
-            }).catch(() => {});
-          }
-
-          // Buscar próxima sugestão não usada para o mesmo ASIN
-          const nextSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter({
-            amazon_account_id: aid,
-            asin,
-            status: 'ranked',
-          }, null, 20).catch(() => []);
-
-          const usedKeywords = new Set(keywords.map((k: any) => (k.keywordText || '').toLowerCase().trim()));
-          const nextSug = nextSuggestions.find((s: any) =>
-            (s.ai_confidence || 0) >= 0.85 &&
-            !usedKeywords.has((s.keyword || '').toLowerCase().trim())
-          );
-
-          if (nextSug) {
-            const newBid = Math.min(MAX_BID, Math.max(MIN_BID, nextSug.recommended_bid || nextSug.amazon_suggested_bid || 0.50));
-            // Buscar adGroupId da campanha (v3 POST list)
-            const agRes = await adsCall(token, account, 'POST', '/sp/adGroups/list', {
-              campaignIdFilter: { include: [campaignId] },
-              stateFilter: { include: ['ENABLED'] },
-              maxResults: 1,
-            }).catch(() => ({ ok: false, data: {} }));
-            const adGroupId = agRes?.data?.adGroups?.[0]?.adGroupId;
-
-            if (adGroupId) {
-              const addKwRes = await adsCall(token, account, 'POST', '/sp/keywords', {
-                keywords: [{
-                  campaignId,
-                  adGroupId,
-                  state: 'ENABLED',
-                  keywordText: nextSug.keyword.trim(),
-                  matchType: 'EXACT',
-                  bid: newBid,
-                }],
-              }).catch(() => ({ ok: false, data: {} }));
-
-              if (addKwRes?.data?.keywords?.success?.length > 0) {
-                await base44.asServiceRole.entities.KeywordSuggestion.update(nextSug.id, {
-                  status: 'created',
-                  amazon_campaign_id: campaignId,
-                  executed_at: new Date().toISOString(),
-                }).catch(() => {});
-                // Negativar na AUTO também
-                if (asin) {
-                  await negateInAuto(base44, account, token, asin, nextSug.keyword, campaignId).catch(() => {});
-                }
-              }
-            }
-          }
+        // ── DECISÃO 1: Zero impressões após 72h → pausar CAMPANHA INTEIRA ──
+        // REGRA CANÔNICA: nunca substituir keyword internamente.
+        // Zero impressões = palavra irrelevante para o algoritmo Amazon.
+        // Ação: pausar toda a campanha. Se quiser testar novo termo: criar NOVA campanha.
+        if (impressions === 0 && clicks === 0 && spend < 0.50) {
+          const pausedOk = await pauseCampaignOnAmazon(token, account, campaignId).catch(() => false);
 
           await base44.asServiceRole.entities.Campaign.update(camp.id, {
-            launch_phase: 'under_review',
+            state: 'paused',
+            status: 'paused',
+            launch_phase: 'paused_no_impressions',
             last_review_at: new Date().toISOString(),
-            last_review_reason: `72h sem cliques suficientes (${clicks} cliques, R$${spend.toFixed(2)} gasto). Keyword substituída.`,
+            last_review_reason: `72h sem nenhuma impressão (${clicks} cliques, R$${spend.toFixed(2)} gasto). Campanha pausada. Para testar novo termo: criar NOVA campanha individual via kickoff.`,
           }).catch(() => {});
-          paused++;
 
-        } else if (spend > 0 && sales === 0 && spend > 5.0) {
-          // Gastando mas sem vender → reduzir bid em 20%
+          // Registrar decisão de pausa para auditoria
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: aid,
+            decision_type: 'pause',
+            entity_type: 'campaign',
+            entity_id: campaignId,
+            campaign_id: campaignId,
+            asin,
+            action: 'pause_campaign',
+            rationale: `72h sem impressões: keyword sem relevância para o algoritmo Amazon. Campanha pausada. Não substituir keyword — criar nova campanha se necessário.`,
+            risk: 'low',
+            status: pausedOk ? 'executed' : 'failed',
+            requires_approval: false,
+            source_function: 'evaluateNewCampaigns72h_canonical',
+            created_at: new Date().toISOString(),
+          }).catch(() => {});
+
+          paused_campaigns++;
+
+        // ── DECISÃO 2: Gasto sem venda → reduzir bid 20% ─────────────────
+        } else if (spend > 0 && orders === 0 && spend > 5.0) {
           const bidUpdates = keywords.map((k: any) => ({
             keywordId: k.keywordId,
-            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || 0.5) * 0.80) * 100) / 100),
+            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || INITIAL_BID) * 0.80) * 100) / 100),
           }));
           if (bidUpdates.length > 0) {
             await adsCall(token, account, 'PUT', '/sp/keywords', { keywords: bidUpdates }).catch(() => {});
@@ -273,11 +255,11 @@ Deno.serve(async (req) => {
           }).catch(() => {});
           optimized++;
 
-        } else if (acos > 0 && acos > maxAcos && spend > 3.0) {
-          // ACoS acima do limite → reduzir bid 15%
+        // ── DECISÃO 3: ACoS acima do limite → reduzir bid 15% ────────────
+        } else if (acos !== null && acos > maxAcos && spend > 3.0) {
           const bidUpdates = keywords.map((k: any) => ({
             keywordId: k.keywordId,
-            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || 0.5) * 0.85) * 100) / 100),
+            bid: Math.max(MIN_BID, Math.round(((k.bid || k.defaultBid || INITIAL_BID) * 0.85) * 100) / 100),
           }));
           if (bidUpdates.length > 0) {
             await adsCall(token, account, 'PUT', '/sp/keywords', { keywords: bidUpdates }).catch(() => {});
@@ -289,17 +271,17 @@ Deno.serve(async (req) => {
           }).catch(() => {});
           optimized++;
 
-        } else if (orders > 0 && (acos <= maxAcos || spend < 1)) {
-          // Vendendo e dentro do alvo → promover
+        // ── DECISÃO 4: Vendendo e dentro do alvo → promover ──────────────
+        } else if (orders > 0 && (acos === null || acos <= maxAcos)) {
           await base44.asServiceRole.entities.Campaign.update(camp.id, {
             launch_phase: 'active',
             last_review_at: new Date().toISOString(),
-            last_review_reason: `72h: ${orders} venda(s), ACoS ${acos.toFixed(1)}%. Campanha promovida.`,
+            last_review_reason: `72h: ${orders} venda(s), ACoS ${acos !== null ? acos.toFixed(1) + '%' : 'n/a'}. Campanha promovida.`,
           }).catch(() => {});
           promoted++;
 
         } else {
-          // Dados insuficientes mas com alguma atividade → aguardar mais 24h
+          // Dados insuficientes — aguardar mais dados
           await base44.asServiceRole.entities.Campaign.update(camp.id, {
             last_review_at: new Date().toISOString(),
             last_review_reason: `72h: ${clicks} cliques, ${orders} vendas, R$${spend.toFixed(2)}. Aguardando mais dados.`,
@@ -309,10 +291,20 @@ Deno.serve(async (req) => {
         await new Promise(r => setTimeout(r, 1500));
       }
 
-      results.push({ account_id: aid, due: due.length, evaluated, paused, optimized, promoted });
+      results.push({ account_id: aid, due: due.length, evaluated, paused_campaigns, optimized, promoted });
     }
 
-    return Response.json({ ok: true, results });
+    return Response.json({
+      ok: true,
+      results,
+      canonical_rules: {
+        '1_campaign_1_keyword': true,
+        'no_keyword_replacement': true,
+        'pause_campaign_not_keyword': 'zero impressions → pause entire campaign',
+        'new_term_test': 'create NEW campaign via kickoff, never add keyword to existing',
+        'acos_null_fix': 'acos=null when sales=0',
+      },
+    });
   } catch (error: any) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }

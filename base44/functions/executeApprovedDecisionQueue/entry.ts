@@ -71,7 +71,50 @@ Deno.serve(async (request) => {
     const keywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 1000).catch(() => []);
     const validKwIds = new Set(keywords.map((k: any) => k.keyword_id || k.id).filter(Boolean));
 
+    // ── Revalidação de decisões obsoletas (STALE_DECISION_REVALIDATION) ──────
+    // Antes de executar: verificar se decisões de pausa ainda são válidas.
+    // Se campanha tem vendas recentes (orders_14d>0) E ACoS<=15% → cancelar decisão.
     let preAutoCancel = 0;
+    const pauseDecisions = approved.filter(d =>
+      d.action === 'pause_campaign' || d.action === 'pause_keyword' || d.action === 'archive_campaign'
+    );
+    if (pauseDecisions.length > 0) {
+      // Buscar métricas recentes para revalidação
+      const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const staleMetrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+        { amazon_account_id: aid }, '-date', 500
+      ).catch(() => []);
+      const metrics14d = staleMetrics.filter((m: any) => m.date >= cutoff14d);
+
+      // Agregar orders e acos por campaign_id
+      const campaignMetrics14d = new Map<string, { orders: number; spend: number; sales: number }>();
+      for (const m of metrics14d) {
+        if (!m.campaign_id) continue;
+        const ex = campaignMetrics14d.get(m.campaign_id) || { orders: 0, spend: 0, sales: 0 };
+        ex.orders += m.orders || 0;
+        ex.spend += m.spend || 0;
+        ex.sales += m.sales || 0;
+        campaignMetrics14d.set(m.campaign_id, ex);
+      }
+
+      for (const d of pauseDecisions) {
+        const cid = d.campaign_id;
+        if (!cid) continue;
+        const cm = campaignMetrics14d.get(cid);
+        if (!cm) continue;
+        const acos14d = cm.sales > 0 ? (cm.spend / cm.sales) * 100 : null;
+        // Cancelar se campanha tem vendas recentes e ACoS sustentável
+        if (cm.orders > 0 && acos14d !== null && acos14d <= 15) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+            status: 'cancelled',
+            error_message: `STALE_DECISION_REVALIDATION: campanha tem ${cm.orders}p em 14d e ACoS ${acos14d.toFixed(1)}% ≤ 15% — decisão de pausa obsoleta cancelada.`,
+          }).catch(() => {});
+          preAutoCancel++;
+        }
+      }
+    }
+
+    // ── Cancelar decisões com keyword_id ausente no banco ────────────────────
     for (const d of approved) {
       if (d.keyword_id && !validKwIds.has(d.keyword_id)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {

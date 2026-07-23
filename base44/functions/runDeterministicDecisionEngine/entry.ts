@@ -25,6 +25,97 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// HIERARQUIA CANÔNICA DE DECISÃO v7
+// P1: Segurança (token, dados, estoque, listing, estrutura)
+// P2: Proteção de Rentabilidade (ACoS, margem, lucro pós-ads, winners)
+// P3: Meta Principal ACoS 10–15%
+//     <10%: preservar eficiência, não forçar escala
+//     10–15%: zona ideal, manter
+//     15–break-even: redução gradual
+//     >break-even: reduzir ou pausar entidade específica
+// P4: Crescimento (somente após P2)
+// P5: Visibilidade (somente se não comprometer ACoS)
+// P6: Experimentação
+//
+// GUARDRAILS DETERMINÍSTICOS (executados antes de qualquer lote de pausas):
+//   account_campaign_floor_guardrail: nunca zerar campanhas se há estoque
+//   pause_batch_guard: >30% exige force_batch=true; >50% bloqueia
+//   winner_protection: orders_14d>0 AND acos_14d<=target → nunca pausar
+//   stale_decision_guard: revalidar decisões obsoletas antes de executar
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Guardrail: zero campanhas ─────────────────────────────────────────────────
+function checkZeroCampaignGuard(
+  planned_pauses: any[],
+  all_campaigns: any[],
+  products: any[],
+  force_batch = false,
+): { allowed: boolean; reason: string } {
+  const active = all_campaigns.filter(c => {
+    const s = String(c.state || c.status || '').toLowerCase();
+    return s === 'enabled';
+  }).length;
+
+  if (active === 0) return { allowed: true, reason: 'no_active_campaigns' }; // nada para proteger
+
+  const activeAfter = active - planned_pauses.length;
+  const hasStock = products.some((p: any) => Number(p.fba_inventory || 0) > 0);
+
+  if (activeAfter <= 0 && hasStock) {
+    return { allowed: false, reason: `ZERO_CAMPAIGN_GUARD: pausar ${planned_pauses.length} reduziria ativas de ${active} para ${activeAfter}. Estoque presente — bloqueado.` };
+  }
+
+  const pct = active > 0 ? planned_pauses.length / active : 0;
+  if (pct > 0.50) {
+    return { allowed: false, reason: `BATCH_PAUSE_GUARD_50PCT: ${planned_pauses.length}/${active} (${Math.round(pct * 100)}%) excede 50% — bloqueado automaticamente.` };
+  }
+  if (pct > 0.30 && !force_batch) {
+    return { allowed: false, reason: `BATCH_PAUSE_GUARD_30PCT: ${planned_pauses.length}/${active} (${Math.round(pct * 100)}%) excede 30% — requer force_batch=true.` };
+  }
+
+  return { allowed: true, reason: 'ok' };
+}
+
+// ── Guardrail: winner protection ──────────────────────────────────────────────
+function checkWinnerProtection(params: {
+  orders_14d: number;
+  acos_14d: number | null;
+  target_acos: number | null;
+  orders_30d?: number;
+  roas_30d?: number;
+  target_roas?: number;
+  last_sale_at?: string | null;
+  protected_high_performance?: boolean;
+  recent_sale_protection_hours: number;
+}): { protected: boolean; reason: string } {
+  const {
+    orders_14d, acos_14d, target_acos,
+    orders_30d = 0, roas_30d = 0, target_roas = 0,
+    last_sale_at, protected_high_performance = false,
+    recent_sale_protection_hours,
+  } = params;
+
+  if (protected_high_performance) return { protected: true, reason: 'protected_high_performance_flag' };
+
+  if (orders_14d > 0 && acos_14d !== null && target_acos !== null && acos_14d <= target_acos) {
+    return { protected: true, reason: `winner_14d: ${orders_14d}p, ACoS ${acos_14d.toFixed(1)}% ≤ meta ${target_acos}%` };
+  }
+
+  if ((orders_30d ?? 0) >= 2 && target_roas > 0 && roas_30d >= target_roas) {
+    return { protected: true, reason: `winner_30d: ${orders_30d}p/30d, ROAS ${roas_30d.toFixed(2)}x ≥ meta` };
+  }
+
+  if (last_sale_at) {
+    const hoursAgo = (Date.now() - new Date(last_sale_at).getTime()) / 3600000;
+    if (hoursAgo <= recent_sale_protection_hours) {
+      return { protected: true, reason: `recent_sale: última venda há ${hoursAgo.toFixed(1)}h (proteção ${recent_sale_protection_hours}h)` };
+    }
+  }
+
+  return { protected: false, reason: 'no_winner_criteria_met' };
+}
+
 // ── Fallbacks do sistema ──────────────────────────────────────────────────────
 const FB = {
   MIN_BID: 0.40, MAX_BID: 1.00,
@@ -563,6 +654,7 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
+    const force_batch = body.force_batch === true;
 
     // ── Resolver conta ────────────────────────────────────────────────────
     let account: any = null;
@@ -755,7 +847,7 @@ Deno.serve(async (req) => {
     for (const [cid, wm] of campMetrics.entries()) {
       const derive = (w: any) => ({
         ...w,
-        acos: w.sales > 0 ? (w.spend / w.sales) * 100 : null,
+        acos: w.sales > 0 ? (w.spend / w.sales) * 100 : null, // CORRETO: acos=null quando sales=0
         roas: w.spend > 0 ? w.sales / w.spend : 0,
         cpc: w.clicks > 0 ? w.spend / w.clicks : 0,
         cvr: w.clicks > 0 ? w.orders / w.clicks : 0,
@@ -967,8 +1059,9 @@ Deno.serve(async (req) => {
     }
 
     // ── 10. Deduplicação de campanhas AUTO por ASIN ───────────────────────
-    // Regra: apenas 1 campanha AUTO ativa por ASIN. Manter a mais antiga; pausar+arquivar as demais.
-    // Pausa real na Amazon Ads API v3 SP + arquivamento local.
+    // Regra: apenas 1 campanha AUTO ativa por ASIN.
+    // NUNCA escolher por idade — sempre por performance (winnerScore).
+    // WINNER PROTECTION antes de pausar qualquer duplicata.
     const autoDuplicatesArchived: any[] = [];
     {
       // Identificar duplicatas
@@ -1016,16 +1109,62 @@ Deno.serve(async (req) => {
           const dupOrders = dup.orders || 0;
           const dupAcos = dup.acos || 0;
           const dupSales = dup.sales || 0;
-          const isWinnerProtected =
-            (dupOrders > 0 && dupAcos > 0 && dupAcos <= targetAcos) ||
-            (dupSales > 0 && dupOrders >= 2) ||
-            dup.is_operational === true;
-          if (isWinnerProtected) continue; // nunca deduplica campanha com vendas e ACoS bom
+          // WINNER PROTECTION canônica (usa função dedicada)
+          const wm_dup = campWindowMetrics.get(dup.campaign_id || dup.amazon_campaign_id);
+          const wpResult = checkWinnerProtection({
+            orders_14d: wm_dup?.d14?.orders ?? dupOrders,
+            acos_14d: wm_dup?.d14?.acos ?? (dupAcos > 0 ? dupAcos : null),
+            target_acos: targetAcos,
+            orders_30d: wm_dup?.d30?.orders ?? dupOrders,
+            roas_30d: wm_dup?.d30?.roas ?? 0,
+            target_roas: settings.target_roas ?? 4,
+            last_sale_at: dup.last_sale_at || null,
+            protected_high_performance: dup.is_operational === true,
+            recent_sale_protection_hours: FB.RECENT_SALE_PROTECTION_HOURS,
+          });
+          if (wpResult.protected) {
+            base44.asServiceRole.entities.OptimizationDecision.create({
+              amazon_account_id: aid,
+              decision_type: 'pause',
+              entity_type: 'campaign',
+              entity_id: dup.campaign_id || dup.amazon_campaign_id,
+              campaign_id: dup.campaign_id || dup.amazon_campaign_id,
+              asin,
+              action: 'pause_campaign',
+              status: 'cancelled',
+              rationale: `winner_protection_blocked (dedup): ${wpResult.reason}`,
+              rule_key: 'winner_protection_dedup',
+              risk: 'low',
+              source_function: 'runDeterministicDecisionEngine_v7',
+              created_at: now,
+            }).catch(() => {});
+            continue;
+          }
 
           const iKey = `auto_dedup_archive|${aid}|${dup.id}`;
           if (usedIdemKeys.has(iKey)) continue;
           const amazonCampaignId = dup.campaign_id || dup.amazon_campaign_id;
           if (amazonCampaignId) dupsToPause.push({ dup, asin, amazonCampaignId });
+        }
+      }
+
+      // ── Zero Campaign Guard antes de pausar duplicatas ───────────────────
+      if (dupsToPause.length > 0) {
+        const guardResult = checkZeroCampaignGuard(dupsToPause.map(d => d.dup), campaigns, products, force_batch);
+        if (!guardResult.allowed) {
+          // Registrar bloqueio no log (fire-and-forget)
+          base44.asServiceRole.entities.SyncExecutionLog.create({
+            amazon_account_id: aid,
+            operation: 'zero_campaign_guard_blocked',
+            status: 'warning',
+            trigger_type: 'automatic',
+            execution_date: today,
+            started_at: now,
+            result_summary: guardResult.reason,
+          }).catch(() => {});
+          // Não pausar nenhuma duplicata — segurança primeiro
+          // dupsToPause permanece mas é ignorado abaixo
+          dupsToPause.splice(0, dupsToPause.length);
         }
       }
 
@@ -1417,14 +1556,19 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── Proteção de venda recente (recent_sale_protection_hours = 72) ──
-      // Se houve venda nas últimas 72h, bloquear qualquer pausa destrutiva
-      const recentSaleProtected = (() => {
-        if (!FB.WINNER_PROTECTION_ENABLED) return false;
-        const lastSaleTs = kw.last_sale_at || kw.last_order_at;
-        if (!lastSaleTs) return false;
-        return (Date.now() - new Date(lastSaleTs).getTime()) / 3600000 < FB.RECENT_SALE_PROTECTION_HOURS;
-      })();
+      // ── Proteção de venda recente — usa guardrail canônico ───────────────
+      const wpKwResult = checkWinnerProtection({
+        orders_14d: wm?.d14?.orders ?? kw_orders,
+        acos_14d: kw_acos,
+        target_acos: effectiveTargetAcos,
+        orders_30d: wm?.d30?.orders ?? kw_orders,
+        roas_30d: wm?.d30?.roas ?? kw.roas ?? 0,
+        target_roas: settings.target_roas ?? 4,
+        last_sale_at: kw.last_sale_at || kw.last_order_at || null,
+        protected_high_performance: false,
+        recent_sale_protection_hours: FB.RECENT_SALE_PROTECTION_HOURS,
+      });
+      const recentSaleProtected = FB.WINNER_PROTECTION_ENABLED && wpKwResult.protected;
 
       // ── Evidência mínima ─────────────────────────────────────────────
       // Exige: min 20 cliques E min 200 impressões E spend >= max_profitable_cpa (ou fallback)
@@ -1873,7 +2017,7 @@ Deno.serve(async (req) => {
           autopilot_authorized: true,
           requires_approval: false,
           idempotency_key: d.idempotency_key,
-          source_function: 'runDeterministicDecisionEngine_v6',
+          source_function: 'runDeterministicDecisionEngine_v7',
           created_at: now,
           search_intent_type: d.search_intent?.intent_type,
           search_intent_cluster: d.search_intent?.cluster,
@@ -1925,7 +2069,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      engine: 'unified-strategic-v6',
+      engine: 'unified-strategic-v7',
       correlationId,
       data_freshness: dataFreshness,
       data_age_hours: Math.round(dataAge),
@@ -2013,7 +2157,13 @@ Deno.serve(async (req) => {
         archived_campaigns: autoDuplicatesArchived,
       },
 
-      note: 'Motor v6: crescimento + visibilidade + oportunidade · custo parcial não bloqueia · growth_tolerance_factor 1.05 · simulação antes de aprovar · cooldown 48h pós-aumento · min 20 cliques + 200 impressões + CPA máximo antes de pausar · proteção de venda recente 72h · dados frescos ≤36h',
+      guardrails: {
+        zero_campaign_guard: 'ATIVO',
+        batch_pause_guard: 'ATIVO (30% exige force_batch; 50% bloqueia)',
+        winner_protection: 'ATIVO (orders_14d>0 + ACoS≤target OU venda recente 72h)',
+        acos_null_fix: 'ATIVO (sales=0 → acos=null)',
+      },
+      note: 'Motor v7: hierarquia canônica P1-P6 · zero_campaign_guard · winner_protection_blocked · acos=null quando sales=0 · dedup por winnerScore nunca por idade · dados frescos ≤36h',
     });
 
   } catch (error: any) {

@@ -18,6 +18,7 @@ import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
 import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
+import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
@@ -1446,6 +1447,9 @@ export default function SalaDeComando() {
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
             <div className="space-y-4">
+              {/* Guardrails e Auditoria de Causa Raiz */}
+              <GuardrailStatusPanel account={account} />
+
               <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div>
