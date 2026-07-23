@@ -183,6 +183,9 @@ Deno.serve(async (req) => {
     add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto');
     add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact');
 
+    // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
+    add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 });
+
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');
