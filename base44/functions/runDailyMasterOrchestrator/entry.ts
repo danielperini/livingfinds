@@ -150,6 +150,10 @@ Deno.serve(async (req) => {
     // Executado após sync de relatórios e estados de campanha (idempotente)
     add('promoteWinningSearchTerms', 'promote_winning_terms');
 
+    // Expansão de cobertura: cria campanhas EXACT canônicas para ASINs elegíveis
+    // Fire-and-forget — não bloqueia o orquestrador
+    add('expandCoverageForAsin', 'expand_coverage', { trigger_type: 'automatic', max_campaigns: 30 });
+
     // Bids iniciais: idempotente, só processa pendentes
     add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
