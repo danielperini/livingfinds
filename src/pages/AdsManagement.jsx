@@ -48,6 +48,8 @@ function getCampaignAsin(c) {
 /** Detecta campanha manual com múltiplas keywords (precisa migração) */
 function needsMigration(campaign, keywords) {
   if ((campaign.targeting_type || '').toUpperCase() !== 'MANUAL') return false;
+  // Campanhas no formato canônico nunca precisam de migração
+  if (/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(campaign.name || campaign.campaign_name || ''))) return false;
   // Padrão +N no nome
   if (/\+\d+\s*$/i.test(String(campaign.name || campaign.campaign_name || ''))) return true;
   // keyword_count > 1 no campo
@@ -132,8 +134,10 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                         <Bot className="w-2.5 h-2.5" />
                       </span>
                   ) : null}
-                    {/* Badge MIGRAÇÃO PENDENTE — campanha manual com múltiplas keywords */}
-                    {(c.targeting_type || '').toUpperCase() === 'MANUAL' && ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ? (
+                    {/* Badge MIGRAÇÃO PENDENTE — só em campanhas NÃO canônicas com múltiplas keywords */}
+                    {(c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+                     !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
+                     ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ? (
                   <span title="Esta campanha tem múltiplas keywords e precisa ser migrada para o formato canônico (1 campanha = 1 keyword)" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 leading-none whitespace-nowrap">
                         MIGRAÇÃO PENDENTE
                       </span>
@@ -304,6 +308,7 @@ export default function AdsManagement() {
       // Disparar migração canônica automaticamente em background se houver pendentes
       const hasPendingMigration = operational.some(
         (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+          !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
           ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
       );
       if (hasPendingMigration) {
