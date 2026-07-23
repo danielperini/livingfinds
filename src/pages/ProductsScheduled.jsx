@@ -15,6 +15,8 @@ import {
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import StockDivergenceReport from '@/components/products/StockDivergenceReport';
 import ProductEconomicsPanel from '@/components/economics/ProductEconomicsPanel';
+import ExpandCoverageModal from '@/components/products/ExpandCoverageModal';
+import { Zap } from 'lucide-react';
 
 function getSaoPauloParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -215,6 +217,8 @@ function latestQueueByAsin(records) {
 export default function ProductsScheduled() {
   const [account, setAccount] =
     useState(null);
+
+  const [expandModal, setExpandModal] = useState(null); // { asin, productName }
 
   const [lastUpdate, setLastUpdate] =
     useState(null);
@@ -1183,8 +1187,30 @@ export default function ProductsScheduled() {
         <>
           <StockDivergenceReport accountId={account?.id} />
           <KickoffControlPanel accountId={account?.id} onRetry={retryKickoff} />
+          {/* Expansão de Cobertura — botão rápido para lixeira bebê */}
+          {account?.id && (
+            <div className="mx-6 flex items-center gap-3 py-2">
+              <button
+                onClick={() => setExpandModal({ asin: 'B0G5ZS4GQK', productName: 'Lixeira Bebê (B0G5ZS4GQK)' })}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 transition-colors"
+              >
+                <Zap className="w-4 h-4" />
+                Expansão de Cobertura — Lixeira Bebê
+              </button>
+              <span className="text-xs text-slate-500">Criar campanhas em massa para B0G5ZS4GQK</span>
+            </div>
+          )}
           <Products externalRefreshTrigger={refreshKey} />
         </>
+      )}
+
+      {expandModal && account?.id && (
+        <ExpandCoverageModal
+          accountId={account.id}
+          asin={expandModal.asin}
+          productName={expandModal.productName}
+          onClose={() => setExpandModal(null)}
+        />
       )}
 
       {activeTab === 'economics' && account?.id && (
