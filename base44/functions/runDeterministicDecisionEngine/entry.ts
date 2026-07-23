@@ -638,6 +638,60 @@ function getSeasonalContext(dateStr: string) {
   return { event: null, demand: (dow === 0 || dow === 6) ? 'uncertain' : 'normal', days_to: null, is_high_demand: false };
 }
 
+// ── CANONICAL_CONFIG v8 ───────────────────────────────────────────────────────
+const CANONICAL_CONFIG = {
+  ACCOUNT_TARGET_ACOS: 15,
+  PREFERRED_ACOS_FLOOR: 10,
+  MAX_BID_CHANGE_PCT: 0.20,   // ±20% máximo por ciclo
+  DATA_FRESHNESS_MAX_HOURS: 36,
+};
+
+// PRD: target_roas SEMPRE derivado do target_acos — nunca valor independente
+function deriveTargetRoas(target_acos: number): number {
+  return target_acos > 0 ? Math.round((100 / target_acos) * 10000) / 10000 : FB.TARGET_ROAS;
+}
+
+// PRD: effective_target_acos = min(account_target, break_even_asin)
+function effectiveTargetAcos_fn(account_target: number, break_even_asin: number | null): number {
+  if (break_even_asin !== null && break_even_asin > 0 && break_even_asin < account_target) {
+    return break_even_asin;
+  }
+  return account_target;
+}
+
+// PRD: ACoS ponderado = SUM(spend)/SUM(sales)*100 — NUNCA média simples
+function calcWeightedAcos(items: { spend: number; sales: number }[]): number | null {
+  const totalSpend = items.reduce((s, m) => s + (m.spend || 0), 0);
+  const totalSales = items.reduce((s, m) => s + (m.sales || 0), 0);
+  return totalSales > 0 ? Math.round((totalSpend / totalSales) * 10000) / 100 : null;
+}
+
+// PRD: Account ACoS Zone classification
+function classifyAccountAcosZone(
+  weighted_acos: number | null,
+  floor: number,
+  target: number,
+  break_even: number,
+): { zone: string; description: string; action: string } {
+  if (weighted_acos === null) return { zone: 'no_data', description: 'Sem vendas — sem dados suficientes', action: 'aguardar dados' };
+  if (weighted_acos < floor) return { zone: 'below_floor', description: `ACoS ${weighted_acos.toFixed(1)}% < ${floor}%`, action: 'identificar oportunidades seguras, não forçar escala' };
+  if (weighted_acos <= target) return { zone: 'ideal', description: `ACoS ${weighted_acos.toFixed(1)}% dentro da zona ideal ${floor}–${target}%`, action: 'manter estratégia atual' };
+  if (weighted_acos <= break_even) return { zone: 'above_target', description: `ACoS ${weighted_acos.toFixed(1)}% acima da meta ${target}% mas abaixo do break-even ${break_even.toFixed(1)}%`, action: 'reduzir entidades com pior marginal_acos primeiro' };
+  return { zone: 'defensive', description: `ACoS ${weighted_acos.toFixed(1)}% acima do break-even ${break_even.toFixed(1)}% — modo defesa`, action: 'modo defesa ativo: reduzir piores campanhas imediatamente' };
+}
+
+// PRD: Portfolio ordering — classificar por marginal_acos descendente (piores primeiro)
+function rankByMarginalAcos(items: { id: string; spend: number; sales: number; orders: number }[]): any[] {
+  return items
+    .filter(i => i.spend > 0)
+    .map(i => ({
+      ...i,
+      marginal_acos: i.sales > 0 ? Math.round((i.spend / i.sales) * 10000) / 100 : 999,
+    }))
+    .sort((a, b) => b.marginal_acos - a.marginal_acos)
+    .map((item, idx) => ({ ...item, rank: idx + 1 }));
+}
+
 // ── Utilitários ───────────────────────────────────────────────────────────────
 function uuid(): string { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; }
 function clamp(v: number, min: number, max: number): number { return Math.min(max, Math.max(min, v)); }
@@ -681,11 +735,12 @@ Deno.serve(async (req) => {
         const ps = psList[0];
         const psNum = (v: any): number | null => { const n = Number(v); return n > 0 ? n : null; };
         const psReq = (v: any, fb: number): number => { const n = Number(v); return n > 0 ? n : fb; };
+        const _psTargetAcos = psNum(ps.target_acos) ?? CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS;
         settings = {
           source: 'PerformanceSettings', source_id: ps.id,
-          target_acos: psNum(ps.target_acos),
+          target_acos: _psTargetAcos,
           max_acos: psNum(ps.max_acos),
-          target_roas: psNum(ps.target_roas),
+          target_roas: deriveTargetRoas(_psTargetAcos),
           target_tacos: psNum(ps.target_tacos),
           min_bid: psReq(ps.min_bid, FB.MIN_BID),
           max_bid: psReq(ps.max_bid, FB.MAX_BID),
@@ -712,11 +767,12 @@ Deno.serve(async (req) => {
         const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1);
         if (apList.length > 0) {
           const cfg = apList[0];
+          const _cfgTargetAcos = Number(cfg.target_acos ?? FB.TARGET_ACOS);
           settings = {
             source: 'AutopilotConfig', source_id: cfg.id,
-            target_acos: Number(cfg.target_acos ?? FB.TARGET_ACOS),
+            target_acos: _cfgTargetAcos,
             max_acos: Number(cfg.maximum_acos ?? FB.MAX_ACOS),
-            target_roas: Number(cfg.target_roas ?? FB.TARGET_ROAS),
+            target_roas: deriveTargetRoas(_cfgTargetAcos),
             target_tacos: Number(cfg.target_tacos ?? FB.TARGET_TACOS),
             min_bid: Number(cfg.min_bid ?? FB.MIN_BID),
             max_bid: Number(cfg.max_bid ?? FB.MAX_BID),
@@ -1031,6 +1087,28 @@ Deno.serve(async (req) => {
 
     const budgetGuardrailActive = realSpendYesterday > 0 && realSpendYesterday > settings.daily_budget_cap;
 
+    // ── 7b. ACCOUNT ACoS CONTROL LOOP (PRD) ──────────────────────────────
+    // weighted_acos = SUM(spend)/SUM(sales)*100 — NUNCA média simples
+    const allMetrics14d = metricsRaw.filter((m: any) => m.date >= cutoff14d && (m.spend || 0) > 0);
+    const accountWeightedAcos = calcWeightedAcos(
+      allMetrics14d.map((m: any) => ({ spend: m.spend || 0, sales: m.sales || 0 }))
+    );
+    const avgBreakEvenAccount = acosByAsin.size > 0
+      ? Array.from(acosByAsin.values()).reduce((s: number, m: any) => s + (m.break_even || 30), 0) / acosByAsin.size
+      : 30;
+    const accountAcosZone = classifyAccountAcosZone(
+      accountWeightedAcos,
+      CANONICAL_CONFIG.PREFERRED_ACOS_FLOOR,
+      CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS,
+      avgBreakEvenAccount
+    );
+    // Portfolio ranking: piores por marginal_acos (somente quando acima da meta)
+    const portfolioRanking = (accountAcosZone.zone === 'above_target' || accountAcosZone.zone === 'defensive')
+      ? rankByMarginalAcos(allMetrics14d.map((m: any) => ({
+          id: m.campaign_id, spend: m.spend || 0, sales: m.sales || 0, orders: m.orders || 0,
+        })))
+      : [];
+
     // ── 8. Contexto sazonal ───────────────────────────────────────────────
     const seasonal = getSeasonalContext(today);
 
@@ -1135,7 +1213,7 @@ Deno.serve(async (req) => {
               rationale: `winner_protection_blocked (dedup): ${wpResult.reason}`,
               rule_key: 'winner_protection_dedup',
               risk: 'low',
-              source_function: 'runDeterministicDecisionEngine_v7',
+              source_function: 'runDeterministicDecisionEngine_v8',
               created_at: now,
             }).catch(() => {});
             continue;
@@ -1368,7 +1446,11 @@ Deno.serve(async (req) => {
       const kw_ctr = kw_impressions > 0 ? kw_clicks / kw_impressions : 0;
 
       const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
-      const effectiveTargetAcos = asinMeta?.target ?? settings.target_acos;
+      // PRD: effective_target_acos = min(account_target, break_even_asin)
+      const effectiveTargetAcos = effectiveTargetAcos_fn(
+        settings.target_acos ?? CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS,
+        asinMeta?.break_even ?? null
+      );
       const effectiveMaxAcos = asinMeta
         ? Math.min(asinMeta.break_even, (settings.max_acos ?? FB.MAX_ACOS) * 1.5)
         : settings.max_acos;
@@ -2069,7 +2151,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      engine: 'unified-strategic-v7',
+      engine: 'unified-strategic-v8',
       correlationId,
       data_freshness: dataFreshness,
       data_age_hours: Math.round(dataAge),
@@ -2157,17 +2239,32 @@ Deno.serve(async (req) => {
         archived_campaigns: autoDuplicatesArchived,
       },
 
+      account_acos_control_loop: {
+        weighted_acos: accountWeightedAcos,
+        zone: accountAcosZone.zone,
+        description: accountAcosZone.description,
+        action: accountAcosZone.action,
+        avg_break_even: Math.round(avgBreakEvenAccount * 10) / 10,
+        portfolio_worst_campaigns: portfolioRanking.slice(0, 5).map((r: any) => ({
+          campaign_id: r.id, marginal_acos: r.marginal_acos, rank: r.rank,
+        })),
+      },
+
       guardrails: {
         zero_campaign_guard: 'ATIVO',
         batch_pause_guard: 'ATIVO (30% exige force_batch; 50% bloqueia)',
-        winner_protection: 'ATIVO (orders_14d>0 + ACoS≤target OU venda recente 72h)',
+        winner_protection: 'ATIVO canônico via evaluateWinnerProtection()',
         acos_null_fix: 'ATIVO (sales=0 → acos=null)',
+        target_roas_derived: `100 / target_acos = ${(settings.target_roas || 0).toFixed(4)}x`,
+        effective_target_acos_per_asin: 'ATIVO (min(account_target, break_even_asin))',
+        max_bid_change_per_cycle: `±${CANONICAL_CONFIG.MAX_BID_CHANGE_PCT * 100}%`,
+        data_freshness_max_hours: CANONICAL_CONFIG.DATA_FRESHNESS_MAX_HOURS,
       },
-      note: 'Motor v7: hierarquia canônica P1-P6 · zero_campaign_guard · winner_protection_blocked · acos=null quando sales=0 · dedup por winnerScore nunca por idade · dados frescos ≤36h',
+      note: 'Motor v8: hierarquia P0-P7 · weighted ACoS · target_roas derivado · effective_target_acos por ASIN · centralDestructiveActionGuard · winner_protection canônico · ±20% max bid',
     });
 
   } catch (error: any) {
-    console.error('[runDeterministicDecisionEngine-v6]', error.message);
+    console.error('[runDeterministicDecisionEngine-v8]', error.message);
     return Response.json({ ok: false, error: error.message, correlationId }, { status: 500 });
   }
 });
