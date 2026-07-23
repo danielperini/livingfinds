@@ -3,7 +3,8 @@
  *
  * Dispara operações de escrita na Amazon durante a janela 16:00-18:00 BRT,
  * incluindo o pipeline de canonização de campanhas manuais.
- * A canonização pode ser disparada fora da janela e respeita a própria fila.
+ * Antes de qualquer canonização/escrita, reconcilia o universo do ciclo manual
+ * para excluir campanhas/ASINs inativos sem apagar histórico.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
@@ -25,6 +26,15 @@ Deno.serve(async (request) => {
     const operation = body.operation || 'all';
     let canonical:any = null;
 
+    // Sempre reconciliar antes: a canonização e a fila nunca devem enxergar campanhas
+    // históricas como candidatas operacionais por simples estado local desatualizado.
+    const scopeResponse = await base44.asServiceRole.functions.invoke('reconcileManualBidCycleScope', {
+      amazon_account_id:body.amazon_account_id || null,
+      _service_role:true,
+      skip_sync:false,
+    }).catch((error:any) => ({ data:{ ok:false, error:error?.message || String(error) } }));
+    const manualBidScope = scopeResponse?.data || scopeResponse || {};
+
     if (operation === 'enforce_canonical' || operation === 'all') {
       const logs = await base44.asServiceRole.entities.SyncExecutionLog.filter(
         { amazon_account_id:body.amazon_account_id || null, operation:'enforce_canonical_manual_campaigns' },
@@ -44,7 +54,8 @@ Deno.serve(async (request) => {
 
       if (operation === 'enforce_canonical') {
         return Response.json({
-          ok:canonical?.ok !== false,
+          ok:manualBidScope?.ok !== false && canonical?.ok !== false,
+          manual_bid_scope:manualBidScope,
           canonical_manual_campaigns:canonical,
           continuation_required:Boolean(canonical?.continuation_required),
         });
@@ -53,10 +64,11 @@ Deno.serve(async (request) => {
 
     if (![16, 17].includes(hour) && !force) {
       return Response.json({
-        ok:canonical?.ok !== false,
+        ok:manualBidScope?.ok !== false && canonical?.ok !== false,
         skipped:true,
         hour,
         reason:'Fora da janela 16:00-18:00 BRT',
+        manual_bid_scope:manualBidScope,
         canonical_manual_campaigns:canonical,
       });
     }
@@ -69,9 +81,10 @@ Deno.serve(async (request) => {
     const data = response?.data || response || {};
 
     return Response.json({
-      ok:canonical?.ok !== false && data?.ok !== false,
+      ok:manualBidScope?.ok !== false && canonical?.ok !== false && data?.ok !== false,
       window:'16:00-18:00 America/Sao_Paulo',
       hour,
+      manual_bid_scope:manualBidScope,
       canonical_manual_campaigns:canonical,
       continuation_required:Boolean(canonical?.continuation_required || data?.continuation_required),
       result:data,
