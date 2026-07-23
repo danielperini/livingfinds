@@ -171,8 +171,6 @@ export default function AdsManagement() {
   const [activeTab, setActiveTab] = useState('keywords');
   const [searchTerms, setSearchTerms] = useState([]);
   const [negSuggestions, setNegSuggestions] = useState([]);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState(null);
   const [products, setProducts] = useState([]);
   const [campaignAction, setCampaignAction] = useState(null); // 'pausing' | 'removing' | null
   const [campaignActionMsg, setCampaignActionMsg] = useState(null);
@@ -286,26 +284,6 @@ export default function AdsManagement() {
   };
 
   useEffect(() => {loadCampaigns();}, []);
-
-  const forceSync = async () => {
-    if (!account || syncing) return;
-    setSyncing(true);
-    setSyncMsg(null);
-    try {
-      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
-      if (res?.data?.ok) {
-        setSyncMsg({ type: 'success', text: `${res.data.campaigns_updated || 0} campanhas sincronizadas.` });
-        await loadCampaigns();
-      } else {
-        setSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
-      }
-    } catch (e) {
-      setSyncMsg({ type: 'error', text: e.message });
-    } finally {
-      setSyncing(false);
-      setTimeout(() => setSyncMsg(null), 8000);
-    }
-  };
 
   const loadKeywordsForCampaign = async (campaign) => {
     setKwLoading(true);
@@ -563,9 +541,6 @@ export default function AdsManagement() {
             ) : null}
           </div>
 
-          {syncMsg ? (
-          <p className={`text-[10px] mt-1.5 ${syncMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{syncMsg.text}</p>
-          ) : null}
           {pauseNoStockMsg ? (
           <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p>
           ) : null}

@@ -1,15 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, Bell, ShoppingBag, BookOpen, RefreshCw, Book, Terminal, Loader2, BarChart2, Sparkles, Factory, Clock } from
+  Zap, ShoppingBag, BookOpen, Book, Terminal, BarChart2, Sparkles, Factory, Clock } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
-
-// TTL de 23 horas — nunca sync automático mais frequente que isso
-const PRODUCT_SYNC_TTL_MS = 23 * 60 * 60 * 1000;
-const PRODUCT_SYNC_STORAGE_KEY = 'livingfinds:lastUnifiedProductSync';
 
 const navItems = [
 { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -25,28 +21,11 @@ const navItems = [
 { path: '/manual', icon: Book, label: 'Manual' }];
 
 
-function formatLastSync(value) {
-  if (!value) return 'Nunca atualizado';
-  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value));
-}
-
-/** Verifica se o último sync ainda está dentro do TTL */
-function isSyncFresh() {
-  const last = Number(localStorage.getItem(PRODUCT_SYNC_STORAGE_KEY) || 0);
-  return last > 0 && Date.now() - last < PRODUCT_SYNC_TTL_MS;
-}
-
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountMode, setAccountMode] = useState('real');
   const [account, setAccount] = useState(null);
-  const [productSyncing, setProductSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState('');
-  const [lastSync, setLastSync] = useState(() => {
-    const stored = Number(localStorage.getItem(PRODUCT_SYNC_STORAGE_KEY) || 0);
-    return stored ? new Date(stored).toISOString() : null;
-  });
   const location = useLocation();
 
   // Inicializar conta (apenas leitura do banco — sem chamar Amazon)
@@ -73,80 +52,6 @@ export default function AppLayout() {
     initialize();
     return () => {mounted = false;};
   }, []);
-
-  /**
-   * Sync de produtos com guard de TTL e verificação de relatório válido.
-   * Fluxo:
-   * 1. Se sync ainda está fresco (< 23h) e trigger é automático → pular
-   * 2. Verificar se há relatório válido no banco (account.last_sync_at)
-   * 3. Se relatório válido → apenas re-linkar produtos sem chamar relatório novo
-   * 4. Se vencido → solicitar novo relatório e sincronizar
-   */
-  const executeProductSync = useCallback(async (trigger = 'manual') => {
-    if (!account?.id || productSyncing) return;
-
-    // Guard TTL: bloqueia sync automático se dados ainda são frescos
-    if (trigger !== 'manual' && isSyncFresh()) {
-      return;
-    }
-
-    // Guard extra: verifica last_sync_at da conta (atualizado pelo backend)
-    if (trigger !== 'manual' && account.last_sync_at) {
-      const ageHours = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
-      if (ageHours < 23) {
-        return; // dados do banco ainda válidos — não chamar Amazon
-      }
-    }
-
-    setProductSyncing(true);
-    setSyncMessage('Verificando relatórios e sincronizando produtos...');
-
-    try {
-      // 1. Tentar apenas linkar produtos (leve, sem Amazon)
-      let links = null;
-      try {
-        const linksRes = await base44.functions.invoke('fixProductCampaignLinks', { amazon_account_id: account.id, trigger });
-        links = linksRes?.data;
-      } catch {}
-
-      // 2. Sincronizar catálogo (usa cache interno se disponível)
-      const catalogRes = await base44.functions.invoke('syncProductCatalog', { amazon_account_id: account.id, trigger });
-      const catalog = catalogRes?.data;
-
-      if (!catalog?.ok) {
-        setSyncMessage(catalog?.error || 'Falha ao sincronizar catálogo.');
-        return;
-      }
-
-      // 3. Solicitar relatório apenas se catálogo indicou necessidade ou se for manual
-      let reportMsg = '';
-      if (trigger === 'manual' || catalog?.report_needed) {
-        try {
-          const reportRes = await base44.functions.invoke('requestProductReports', { amazon_account_id: account.id, trigger });
-          const reportCount = reportRes?.data?.requested?.length || 0;
-          if (reportCount > 0) reportMsg = ` · ${reportCount} relatórios solicitados`;
-        } catch {}
-      }
-
-      const completedAt = catalog?.completed_at || catalog?.synced_at || new Date().toISOString();
-      localStorage.setItem(PRODUCT_SYNC_STORAGE_KEY, String(Date.now()));
-      setLastSync(completedAt);
-
-      const updated = catalog?.updated || catalog?.total_updated || 0;
-      const fixed = links?.updated || 0;
-      setSyncMessage(`${updated} produtos atualizados · ${fixed} vínculos corrigidos${reportMsg}`);
-
-      window.dispatchEvent(new CustomEvent('livingfinds:products-synced', { detail: { catalog, links, completedAt } }));
-
-      if (window.location.pathname === '/products') {
-        setTimeout(() => window.location.reload(), 700);
-      }
-    } catch (error) {
-      setSyncMessage(error?.message || 'Falha na sincronização.');
-    } finally {
-      setProductSyncing(false);
-    }
-  }, [account, productSyncing]);
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
@@ -209,13 +114,7 @@ export default function AppLayout() {
         </nav>
 
         {!collapsed ? (
-          <div className="p-4 border-t border-surface-2 space-y-2">
-            {productSyncing ? (
-              <div className="flex items-center gap-2 text-[11px] text-cyan">
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Sincronizando produtos...
-              </div>
-            ) : null}
+          <div className="p-4 border-t border-surface-2">
             <ModeBadge mode={accountMode} />
           </div>
         ) : null}
@@ -233,40 +132,10 @@ export default function AppLayout() {
             <Menu className="w-5 h-5" />
           </button>
 
-          <div className="flex-1 min-w-0">
-            {location.pathname === '/products' ? (
-            <div className="flex items-center gap-3 flex-wrap">
-                
-
-
-
-
-
-
-
-              
-
-                <div className="min-w-0">
-                  <p className="text-[11px] text-slate-400">
-                    <span>Última atualização: {formatLastSync(lastSync)}</span>
-                    {(lastSync && isSyncFresh()) ? <span className="ml-1 text-emerald-500">· dados frescos</span> : null}
-                  </p>
-                  {syncMessage ? <p className="text-[11px] text-cyan truncate max-w-[620px]">{syncMessage}</p> : null}
-                </div>
-              </div>
-            ) : null}
-          </div>
+          <div className="flex-1 min-w-0" />
 
           <div className="flex items-center gap-3">
             <ModeBadge mode={accountMode} className="hidden sm:flex" />
-            <button
-              type="button"
-              className="relative p-2 text-slate-400 hover:text-slate-200 transition-colors"
-              aria-label="Notificações"
-              title="Notificações">
-              
-              <Bell className="w-4 h-4" />
-            </button>
             <div className="w-8 h-8 rounded-full bg-cyan/20 border border-cyan/30 flex items-center justify-center" title="Living Finds">
               <span className="text-xs font-semibold text-cyan">LF</span>
             </div>

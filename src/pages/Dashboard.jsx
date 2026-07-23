@@ -13,13 +13,11 @@ import {
   RefreshCw, AlertCircle, Clock, Loader2,
   AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
 } from 'lucide-react';
-import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
-import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
@@ -228,8 +226,6 @@ function GoalRow({ label, real, target, unit = '%', lowerIsBetter = true, realLa
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
-  const [syncingDashboard, setSyncingDashboard] = useState(false);
-  const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
   const [justUpdated, setJustUpdated] = useState(false);
   const justUpdatedTimerRef = useRef(null);
@@ -272,21 +268,6 @@ export default function Dashboard() {
     const last = syncRuns.find(r => r.status === 'success' || r.status === 'skipped_limit');
     return last ? { at: last.completed_at || last.started_at } : null;
   }, [account, syncRuns]);
-
-  const runSync = async () => {
-    if (!account || syncingDashboard) return;
-    setSyncingDashboard(true);
-    setSyncError(null);
-    try {
-      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
-      if (res?.data?.ok) invalidateAccountData(queryClient, account.id);
-      else setSyncError(res?.data?.error || 'Falha no sync.');
-    } catch (e) {
-      setSyncError(e.message);
-    } finally {
-      setSyncingDashboard(false);
-    }
-  };
 
   // ─── Cálculos com período fechado ─────────────────────────────────────────
 
@@ -738,32 +719,12 @@ export default function Dashboard() {
       {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
-      <div className="space-y-2">
-        {account ? <SyncStatusBanner accountId={account.id} /> : null}
-        {account && !loading ? (
-          <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} adsSales={kpis.sales} spRevenue={realSalesKpis.revenue} />
-        ) : null}
-      </div>
 
 
       {error ? (
         <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
           <p className="text-xs text-red-400">{error}</p>
-        </div>
-      ) : null}
-
-      {/* Erro de sync automático — só aparece quando falha */}
-      {syncError ? (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border bg-red-500/5 border-red-500/20 text-xs">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-            <span className="text-red-300">Sync falhou: {syncError}</span>
-          </div>
-          <button onClick={() => { setSyncError(null); runSync(); }}
-            className="px-2.5 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap">
-            Tentar novamente
-          </button>
         </div>
       ) : null}
 
@@ -901,13 +862,6 @@ export default function Dashboard() {
             {canonicalSettings ? (
               <span className="text-slate-600 hidden sm:inline">· Metas: {canonicalSettings.source}</span>
             ) : null}
-            <button onClick={runSync} disabled={syncingDashboard}
-              className={`ml-auto underline whitespace-nowrap disabled:opacity-50 flex items-center gap-1 ${
-                dataQuality.quality === 'low' ? 'text-red-400 hover:text-red-300' : 'text-emerald-500/70 hover:text-emerald-400'
-              }`}>
-              {syncingDashboard ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              {syncingDashboard ? 'Atualizando...' : 'Atualizar agora'}
-            </button>
           </div>
         ) : null}
 
@@ -952,15 +906,7 @@ export default function Dashboard() {
                   Faturamento {salesDailyByDate[startDate]?.source === 'finance_events' ? '(Finance Events ✓)' : '(estimado)'}
                 </p>
                 <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
-                {realSalesKpis.revenue === 0 ? (
-                  <button onClick={runSync} disabled={syncingDashboard}
-                    className="mt-1 flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50">
-                    {syncingDashboard ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
-                    {syncingDashboard ? 'Atualizando...' : `${realSalesKpis.units} unidades · atualizar`}
-                  </button>
-                ) : (
-                  <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
-                )}
+                <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
               </div>
             ) : null}
             {hasSalesDailyData && realSalesKpis.tacos !== null ? (
