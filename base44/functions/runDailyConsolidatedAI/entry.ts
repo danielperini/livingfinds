@@ -151,41 +151,43 @@ Deno.serve(async (req) => {
       priority_products,
     };
 
-    // ── 5. Chamar IA via API direta Anthropic (sem créditos Base44) ──────
-    const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!anthropicKey) {
-      return Response.json({ ok: false, error: 'ANTHROPIC_API_KEY não configurada.' }, { status: 500 });
+    // ── 5. Chamar IA via API direta OpenAI (sem créditos Base44) ──────
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!openaiKey) {
+      return Response.json({ ok: false, error: 'OPENAI_API_KEY não configurada.' }, { status: 500 });
     }
 
-    const aiRaw = await fetch('https://api.anthropic.com/v1/messages', {
+    const aiRaw = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': anthropicKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${openaiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
+        model: 'gpt-4o-mini',
         max_tokens: 1024,
         temperature: 0.1,
-        messages: [{
-          role: 'user',
-          content: `Você é o motor de otimização de Amazon Ads do LivingFinds.
-Analise os dados abaixo e retorne APENAS JSON com decisões para campanhas e keywords com anomalia.
-NÃO repita campanhas sem problema. NÃO inclua explicações longas.
-Formato: {"decisions":[{"entity_type":"campaign|keyword","entity_id":"...","action":"...","confidence":0.0,"reason":"...","risk_level":"low|medium|high","expected_impact":"...","requires_approval":true,"expires_at":"..."}],"summary":"..."}
-Dados: ${JSON.stringify(ai_input)}`,
-        }],
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: 'Você é o motor de otimização de Amazon Ads do LivingFinds. Analise os dados fornecidos e retorne APENAS JSON com decisões para campanhas e keywords com anomalia. NÃO repita campanhas sem problema. NÃO inclua explicações longas. Formato: {"decisions":[{"entity_type":"campaign|keyword","entity_id":"...","action":"...","confidence":0.0,"reason":"...","risk_level":"low|medium|high","expected_impact":"...","requires_approval":true,"expires_at":"..."}],"summary":"..."}',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(ai_input),
+          },
+        ],
       }),
     });
 
     if (!aiRaw.ok) {
       const err = await aiRaw.json().catch(() => ({}));
-      return Response.json({ ok: false, error: `Anthropic ${aiRaw.status}: ${err.error?.message || 'erro desconhecido'}` }, { status: 500 });
+      return Response.json({ ok: false, error: `OpenAI ${aiRaw.status}: ${err.error?.message || 'erro desconhecido'}` }, { status: 500 });
     }
 
     const aiData = await aiRaw.json();
-    const rawText = (aiData.content?.[0]?.text || '').trim();
+    const rawText = (aiData.choices?.[0]?.message?.content || '').trim();
     let aiRes: any = null;
     try {
       aiRes = JSON.parse(rawText);

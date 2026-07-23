@@ -331,37 +331,39 @@ function runPolicyEngine(decision, cfg, account) {
   };
 }
 
-async function callClaude(prompt, context = null) {
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY não configurada.');
+async function callGPT(prompt, context = null) {
+  const apiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('OPENAI_API_KEY não configurada.');
 
   const userContent = context
     ? `${prompt}\n\nCONTEXT DATA:\n${JSON.stringify(context, null, 2)}`
     : prompt;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5',
+      model: 'gpt-4o',
       max_tokens: 2048,
       temperature: 0.1,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userContent }],
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userContent },
+      ],
     }),
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`Anthropic ${res.status}: ${err.error?.message || JSON.stringify(err)}`);
+    throw new Error(`OpenAI ${res.status}: ${err.error?.message || JSON.stringify(err)}`);
   }
 
   const data = await res.json();
-  const text = (data.content?.[0]?.text || '').trim();
+  const text = (data.choices?.[0]?.message?.content || '').trim();
 
   // Extrair JSON da resposta
   let parsed = null;
@@ -378,9 +380,9 @@ async function callClaude(prompt, context = null) {
     ok: true,
     response: parsed || text,
     raw_text: parsed ? undefined : text,
-    model: 'claude-sonnet-4-5',
-    input_tokens: data.usage?.input_tokens,
-    output_tokens: data.usage?.output_tokens,
+    model: 'gpt-4o',
+    input_tokens: data.usage?.prompt_tokens,
+    output_tokens: data.usage?.completion_tokens,
   };
 }
 
@@ -395,14 +397,14 @@ Deno.serve(async (req) => {
 
     // ── PING: teste de conectividade ──────────────────────────────────────
     if (mode === 'ping') {
-      const result = await callClaude(
+      const result = await callGPT(
         'Respond with exactly this JSON and nothing else: {"status":"NO_ACTION","action":null,"entity_type":null,"entity_id":null,"value_before":null,"value_after":null,"change_pct":null,"rationale":{"objective":"connectivity test","diagnosis":"ping","evidence":"none","why_this_action":"connection verification","why_not_alternatives":"none","risk":"low","confidence":100,"expected_result":"confirmation","evaluation_at":"immediate","success_criteria":"200 ok","rollback_criteria":"none"},"requires_approval":false,"evaluation_due_days":0,"rollback_payload":null}'
       );
       return Response.json({
         ok: true,
         connected: true,
         model: result.model,
-        agent: 'Living Finds Ads Intelligence Agent',
+        agent: 'Living Finds Ads Intelligence Agent (GPT)',
         input_tokens: result.input_tokens,
         output_tokens: result.output_tokens,
       });
@@ -437,7 +439,7 @@ Deno.serve(async (req) => {
       } : null;
     }
 
-    const result = await callClaude(prompt, context || null);
+    const result = await callGPT(prompt, context || null);
 
     // ── Policy Engine: validar decisão ANTES de retornar ─────────────────
     if (result.ok && result.response && typeof result.response === 'object') {

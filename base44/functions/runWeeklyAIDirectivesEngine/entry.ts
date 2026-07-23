@@ -12,7 +12,6 @@
  *             limites de bid e guardrails financeiros antes de serem salvas.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import Anthropic from 'npm:@anthropic-ai/sdk@0.37.0';
 
 const MIN_BID = 0.10;
 const MAX_BID = 5.0;
@@ -372,17 +371,26 @@ Responda APENAS com JSON no formato:
   ]
 }`;
 
-    const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!anthropicKey) return Response.json({ ok: false, error: 'ANTHROPIC_API_KEY não configurada.' }, { status: 500 });
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!openaiKey) return Response.json({ ok: false, error: 'OPENAI_API_KEY não configurada.' }, { status: 500 });
 
-    const anthropic = new Anthropic({ apiKey: anthropicKey });
-    const aiResponse = await anthropic.messages.create({
-      model: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-3-5-haiku-20241022',
-      max_tokens: 2000,
-      messages: [{ role: 'user', content: prompt }],
+    const aiRaw = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'gpt-4o',
+        max_tokens: 2000,
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'user', content: prompt }],
+      }),
     });
-
-    const rawText = aiResponse.content[0].type === 'text' ? aiResponse.content[0].text : '';
+    if (!aiRaw.ok) {
+      const err = await aiRaw.json().catch(() => ({}));
+      return Response.json({ ok: false, error: `OpenAI ${aiRaw.status}: ${err.error?.message || 'erro'}` }, { status: 500 });
+    }
+    const aiData = await aiRaw.json();
+    const rawText = aiData.choices?.[0]?.message?.content || '';
     let parsed: any = null;
     try {
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
@@ -454,7 +462,7 @@ Responda APENAS com JSON no formato:
     await base44.asServiceRole.entities.WeeklyRuleReview.create({
       amazon_account_id: aid,
       ran_at: now,
-      model_used: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-3-5-haiku-20241022',
+      model_used: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'gpt-4o',
       rules_generated: saved.length,
       rules_expired: expiredKeys.length,
       rules_skipped: skipped.length,

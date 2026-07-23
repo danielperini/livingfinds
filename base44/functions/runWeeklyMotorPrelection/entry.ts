@@ -22,9 +22,8 @@
  *  - Alterar regra com confidence < 0.95
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import Anthropic from 'npm:@anthropic-ai/sdk@0.27.0';
 
-const MODEL = Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-opus-4-8';
+const MODEL = Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'gpt-4o';
 const FALLBACK = { target_acos: 10, max_acos: 15, target_roas: 4, target_tacos: 5, max_tacos: 10, daily_budget_cap: 56, target_cpc: 0.60, max_cpc: 1.00, min_bid: 0.40, max_bid: 1.00, max_bid_increase_pct: 20, max_bid_decrease_pct: 20, min_campaign_budget: 15, budget_increment: 5, weekly_campaign_capacity: 10 };
 
 function weekBounds(offsetWeeks = 0) {
@@ -451,11 +450,12 @@ Deno.serve(async (req) => {
       active_rules: activeRules.map(r => ({ key: r.rule_key, name: r.name, scope: r.scope })).slice(0, 30),
     };
 
-    // ── 9. Chamar Claude (sem timeout forçado — deixar completar) ─────────
+    // ── 9. Chamar GPT (sem timeout forçado — deixar completar) ─────────
     let aiResponse: any = null;
     let rawAiText = '';
     if (!dryRun) {
-      const client = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') });
+      const openaiKey = Deno.env.get('OPENAI_API_KEY');
+      if (!openaiKey) throw new Error('OPENAI_API_KEY não configurada.');
       const systemPrompt = `Você é o auditor estratégico semanal do motor de anúncios Amazon Sponsored Products.
 
 REGRAS ABSOLUTAS (violações são descartadas automaticamente pelo sistema):
@@ -484,14 +484,29 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
   "campaigns_to_reactivate": [{"campaign_id": "string", "reason": "string", "orders_last_7d": 0}]
 }`;
 
-      // Sem AbortSignal ou timeout — deixar Claude completar naturalmente
-      const msg = await client.messages.create({
-        model: MODEL,
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: JSON.stringify(claudePayload) }],
+      const aiRaw = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openaiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: 4096,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: JSON.stringify(claudePayload) },
+          ],
+        }),
       });
-      rawAiText = (msg.content[0] as any).text || '';
+      if (!aiRaw.ok) {
+        const err = await aiRaw.json().catch(() => ({}));
+        throw new Error(`OpenAI ${aiRaw.status}: ${err.error?.message || 'erro desconhecido'}`);
+      }
+      const aiData = await aiRaw.json();
+      rawAiText = (aiData.choices?.[0]?.message?.content || '').trim();
       try {
         aiResponse = JSON.parse(rawAiText);
       } catch {
@@ -512,7 +527,7 @@ Responda APENAS com JSON válido, sem markdown, sem explicações fora do JSON. 
 
     if (!aiResponse) {
       await base44.asServiceRole.entities.WeeklyMotorPrelection.update(prelectionId, { status: 'failed', completed_at: new Date().toISOString() });
-      return Response.json({ ok: false, error: 'Claude não retornou JSON válido.', raw: rawAiText.slice(0, 500) });
+      return Response.json({ ok: false, error: 'GPT não retornou JSON válido.', raw: rawAiText.slice(0, 500) });
     }
 
     // ── 10. Guardrails pós-Claude ─────────────────────────────────────────

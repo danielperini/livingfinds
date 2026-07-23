@@ -24,7 +24,7 @@ const HEURISTIC_LOW_CONF = 70;
 const MAX_TRANSFERS_PER_DAY = 5;
 const DEST_BID_FACTOR = 0.85;
 
-// LLM Relevance via ANTHROPIC_API_KEY
+// LLM Relevance via OPENAI_API_KEY
 async function llmValidateRelevance(
   kwText: string,
   srcTitle: string, srcBullets: string,
@@ -32,8 +32,8 @@ async function llmValidateRelevance(
   heuristicScore: number,
 ): Promise<{ score: number; reason: string; hard_blocker: boolean; hard_blocker_reason: string }> {
 
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) return { score: heuristicScore, reason: 'ANTHROPIC_API_KEY não configurado', hard_blocker: false, hard_blocker_reason: '' };
+  const apiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!apiKey) return { score: heuristicScore, reason: 'OPENAI_API_KEY não configurado', hard_blocker: false, hard_blocker_reason: '' };
 
   const prompt = `Você é um especialista em Amazon Ads. Avalie se a keyword abaixo (vencedora no ASIN ORIGEM) é relevante para o ASIN DESTINO para fins de publicidade.
 
@@ -58,22 +58,23 @@ Responda em JSON:
 Hard Blockers que eliminam a transferência: incompatibilidade funcional, marca específica diferente, modelo incompatível, tamanho essencial incompatível, voltagem incompatível, gênero/idade incompatível quando essencial.`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-3-5-haiku-20241022',
+        model: 'gpt-4o-mini',
         max_tokens: 512,
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
         messages: [{ role: 'user', content: prompt }],
       }),
     });
-    if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
     const data = await res.json();
-    const text = data?.content?.[0]?.text || '{}';
+    const text = data?.choices?.[0]?.message?.content || '{}';
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) throw new Error('JSON não encontrado na resposta');
     const parsed = JSON.parse(match[0]);
