@@ -358,9 +358,11 @@ export default function AdsManagement() {
         base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
         )
       );
-      // Também buscar por ASIN se disponível (fallback para campanhas sem campaign_id linkado)
+      // Buscar por ASIN apenas para campanhas NÃO canônicas (fallback para campanhas sem campaign_id linkado)
+      // Campanhas canônicas (SP | MANUAL | EXACT | ...) têm exatamente 1 keyword — busca por ASIN inflaria o count com keywords de outras campanhas do mesmo produto
+      const isCanonical = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(campaign.name || campaign.campaign_name || '');
       let asinKws = [];
-      if (campaign.asin && account?.id) {
+      if (!isCanonical && campaign.asin && account?.id) {
         asinKws = await base44.entities.Keyword.filter({ amazon_account_id: account.id, asin: campaign.asin }, '-spend', 200).catch(() => []);
       }
 
@@ -815,11 +817,14 @@ export default function AdsManagement() {
               {[
             {
               key: 'keywords',
-              label: (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL'
-                ? keywords.filter(k => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived').length > 1
-                  ? `⚠ Keywords (${keywords.length}) — MIGRAÇÃO PENDENTE`
-                  : `Keyword (${keywords.length})`
-                : `Keywords (${keywords.length})`
+              label: (() => {
+                const isCanonicalTab = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(selectedCampaign?.name || selectedCampaign?.campaign_name || '');
+                if ((selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' && !isCanonicalTab) {
+                  const activeExact = keywords.filter(k => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived');
+                  if (activeExact.length > 1) return `⚠ Keywords (${keywords.length}) — MIGRAÇÃO PENDENTE`;
+                }
+                return `Keyword${keywords.length !== 1 ? 's' : ''} (${keywords.length})`;
+              })()
             },
             { key: 'search-terms', label: `Search Terms${searchTerms.length > 0 ? ` (${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
             { key: 'config', label: 'Configurações', icon: Settings },
