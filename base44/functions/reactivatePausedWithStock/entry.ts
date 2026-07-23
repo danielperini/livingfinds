@@ -291,7 +291,7 @@ Deno.serve(async (req) => {
       reactivated: a.reactivated + (r.reactivated || 0),
       skipped_no_stock: a.skipped_no_stock + (r.skipped_no_stock || 0),
       skipped_already_active: a.skipped_already_active + (r.skipped_already_active || 0),
-      skipped: (a as any).skipped + (r.skipped || 0),
+      skipped: a.skipped + (r.skipped_no_stock || 0) + (r.skipped_already_active || 0) + (r.skipped_other || 0),
     }), { candidates: 0, reactivated: 0, skipped_no_stock: 0, skipped_already_active: 0, skipped: 0 });
 
     return Response.json({ ok: true, dry_run: dryRun, ...total, accounts: globalResults });

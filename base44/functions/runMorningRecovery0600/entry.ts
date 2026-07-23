@@ -40,7 +40,22 @@ Deno.serve(async(request)=>{
 
     const allResults=[];
     for(const account of accounts){
-      const result:any={amazon_account_id:account.id,failed_decisions:0,kickoffs:0,auto_repairs:0,keyword_repairs:0,suggestions:0,recovered:0,failed:0,details:[]};
+      const result:any={amazon_account_id:account.id,stock_reactivated:0,failed_decisions:0,kickoffs:0,auto_repairs:0,keyword_repairs:0,suggestions:0,recovered:0,failed:0,details:[]};
+
+      // PRIORIDADE 1: Reativar campanhas AUTO pausadas por estoque antes de qualquer outra tarefa
+      try{
+        const reactivateRes = await base44.asServiceRole.functions.invoke('reactivatePausedWithStock',{
+          amazon_account_id:account.id,
+          _service_role:true,
+          targeting_type_filter:'AUTO',
+          include_incomplete:true,
+        });
+        const rdata = reactivateRes?.data || reactivateRes || {};
+        result.stock_reactivated = rdata.reactivated || 0;
+        result.details.push({type:'stock_reactivation',reactivated:rdata.reactivated||0,skipped_no_stock:rdata.skipped_no_stock||0,ok:rdata.ok!==false});
+      }catch(e:any){
+        result.details.push({type:'stock_reactivation',ok:false,error:e?.message||String(e)});
+      }
 
       const failedDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({amazon_account_id:account.id,status:'failed'},'-created_at',100).catch(()=>[]);
       for(const decision of failedDecisions){

@@ -174,6 +174,15 @@ Deno.serve(async (req) => {
     if (isMonday && (!acosCheckerDone || force)) add('runAcosViolationChecker', 'acos_violation_checker', {}, true);
     else skipped.push('acos_violation_checker');
 
+    // Reparo de campanhas incompletas: sempre — idempotente, só processa pendentes
+    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto', { _window_execution: true });
+    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' });
+
+    // Sempre: reativar campanhas AUTO pausadas com estoque + reparar incompletas
+    add('reactivatePausedWithStock', 'reactivate_paused_with_stock', { targeting_type_filter: 'AUTO', include_incomplete: true });
+    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto');
+    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact');
+
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');

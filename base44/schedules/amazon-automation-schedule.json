@@ -32,6 +32,12 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
+      "name": "Auto Stock Guard - 07:00 BRT",
+      "function": "autoStockCampaignGuard",
+      "cron": "0 7 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Amazon Reports Audit ML - 06:40 BRT",
       "function": "runMorningAmazonSchedule",
       "cron": "40 6 * * *",
@@ -42,6 +48,12 @@
       "function": "processAmazonNightWindow",
       "cron": "0 13 * * *",
       "payload": { "_service_role": true, "hour": 13 }
+    },
+    {
+      "name": "Auto Stock Guard - 07:00 BRT",
+      "function": "autoStockCampaignGuard",
+      "cron": "0 7 * * *",
+      "payload": { "_service_role": true }
     }
   ]
 }
