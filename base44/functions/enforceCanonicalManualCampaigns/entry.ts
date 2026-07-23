@@ -208,6 +208,7 @@ async function createCanonicalCampaign(
   keyword: string,
   budget: number,
   sku: string | null,
+  initialState: 'enabled' | 'paused' = 'enabled',
 ): Promise<{ ok: boolean; campaign_id?: string; already_exists?: boolean; error?: string }> {
   const result = await invoke(base44, 'createManualCampaignV2', {
     amazon_account_id: accountId,
@@ -216,6 +217,7 @@ async function createCanonicalCampaign(
     bid: INITIAL_BID,
     budget: Math.max(MIN_BUDGET, budget),
     sku: sku || undefined,
+    initial_state: initialState,
     _service_role: true,
   });
 
@@ -342,10 +344,12 @@ Deno.serve(async (request) => {
     }
 
     // ── Detecção ampliada: banco local + padrão nome +N ───────────────────────
+    // Inclui campanhas PAUSADAS com múltiplas keywords ou sufixo +N (PRD v4)
     const manualActive = campaigns.filter((c: any) => {
       if (!isManualCampaign(c)) return false;
       const state = String(c.state || c.status || '').toLowerCase();
-      if (['archived', 'paused'].includes(state)) return false;
+      if (state === 'archived') return false;
+      // Pausadas só entram se tiverem múltiplas keywords (verificado abaixo)
       return true;
     });
 
@@ -357,22 +361,29 @@ Deno.serve(async (request) => {
       const allKws = kwByCampaign.get(cid) || [];
       const exactKws = allKws.filter(isExactKeyword);
       const campaignName = String(c.name || c.campaign_name || '');
+      const state = String(c.state || c.status || '').toLowerCase();
+      const isPaused = state === 'paused';
+
+      // Campanhas PAUSADAS só entram se tiverem evidência de múltiplas keywords
+      // (padrão +N no nome OU keyword_count > 1 OU 2+ keywords no banco)
+      const hasMkEvidence = exactKws.length >= 2 || hasMultiKeywordSuffix(campaignName) || (c.keyword_count || 0) > 1;
+      if (isPaused && !hasMkEvidence) continue;
 
       // Detecção 1: banco local tem 2+ keywords EXACT
       if (exactKws.length >= 2) {
-        multiKeywordCampaigns.push({ campaign: c, cid, exactKws, asin: String(c.asin || '').toUpperCase(), source: 'local_db' });
+        multiKeywordCampaigns.push({ campaign: c, cid, exactKws, asin: String(c.asin || '').toUpperCase(), source: 'local_db', was_paused: isPaused });
         continue;
       }
 
       // Detecção 2: nome contém padrão +N (ex: "SP | MANUAL | EXACT | ASIN | termo +3")
       if (hasMultiKeywordSuffix(campaignName)) {
-        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase() });
+        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase(), was_paused: isPaused });
         continue;
       }
 
       // Detecção 3: campo keywords_count > 1 se disponível
       if ((c.keyword_count || 0) > 1) {
-        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase() });
+        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase(), was_paused: isPaused });
       }
     }
 
@@ -426,7 +437,7 @@ Deno.serve(async (request) => {
     for (const item of multiKeywordCampaigns) {
       if (processed >= MAX_PER_RUN) break;
 
-      const { campaign, cid, exactKws, asin } = item;
+      const { campaign, cid, exactKws, asin, was_paused } = item;
       if (!asin) {
         report.errors.push({ campaign_id: cid, reason: 'missing_asin' });
         continue;
@@ -498,7 +509,7 @@ Deno.serve(async (request) => {
           continue;
         }
 
-        const result = await createCanonicalCampaign(base44, accountId, asin, term, budgetPerCampaign, sku);
+        const result = await createCanonicalCampaign(base44, accountId, asin, term, budgetPerCampaign, sku, was_paused ? 'paused' : 'enabled');
         await sleep(SLEEP_BETWEEN);
 
         if (result.ok) {
