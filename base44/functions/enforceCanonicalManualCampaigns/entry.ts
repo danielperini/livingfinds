@@ -1,27 +1,31 @@
 /**
- * enforceCanonicalManualCampaigns v2 — Migração Canônica Transacional
+ * enforceCanonicalManualCampaigns v3 — Migração Canônica Transacional
  *
  * REGRA ABSOLUTA: 1 campanha manual = 1 ASIN = 1 Ad Group = 1 Product Ad = 1 keyword EXACT
  *
- * FLUXO TRANSACIONAL:
- * 1. Detectar campanhas com 2+ keywords EXACT (ativas ou pausadas)
- * 2. Para cada keyword extra: verificar idempotência, criar nova campanha, confirmar na Amazon
- * 3. SOMENTE quando TODAS as novas campanhas estiverem confirmadas: arquivar a original
- * 4. Se qualquer criação falhar: manter original ativa, enfileirar retry com backoff 15/30/60min
- * 5. Negativar cada termo na campanha AUTO do mesmo ASIN (fire-and-forget)
+ * Detecção ampliada:
+ * - Campanhas com 2+ keywords EXACT no banco local
+ * - Campanhas cujo nome contém padrão '+N' (ex: '+3', '+5') indicando múltiplas keywords
+ * - Auditoria via Amazon Ads API quando keywords_count > 1 ou nome suspeito
  *
- * Chave de idempotência: amazon_account_id + ASIN + normalize(keyword_text) + EXACT
+ * FLUXO TRANSACIONAL:
+ * 1. Detectar campanhas multi-keyword (banco local + API Amazon + padrão nome)
+ * 2. Para cada keyword extra: verificar idempotência, criar nova campanha, confirmar
+ * 3. SOMENTE quando TODAS confirmadas: arquivar a original
+ * 4. Se qualquer falha: manter original ativa, enfileirar retry 15/30/60min
+ * 5. Negativar cada termo na campanha AUTO do mesmo ASIN (fire-and-forget)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 const INITIAL_BID    = 0.50;
 const MIN_BUDGET     = 9.00;
-const MAX_PER_RUN    = 10;   // campanhas multi-keyword processadas por execução
-const SLEEP_BETWEEN  = 5000; // ms entre criações consecutivas (evitar rate limit)
+const MAX_PER_RUN    = 10;
+const SLEEP_BETWEEN  = 5000;
 const MAX_RETRIES    = 3;
 const BACKOFF_MINUTES = [15, 30, 60];
 
 const CT_CAMPAIGN = 'application/vnd.spCampaign.v3+json';
+const CT_KEYWORD  = 'application/vnd.spKeyword.v3+json';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -29,7 +33,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function normTerm(value: any): string {
   return String(value || '')
-    .replace(/\+\d+\s*$/i, '')
+    .replace(/\+\d+\s*$/i, '') // remover sufixo +N
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
@@ -61,9 +65,19 @@ function campaignIdStr(c: any): string {
   return String(c.campaign_id || c.amazon_campaign_id || '');
 }
 
-// Chave canônica de idempotência global
+/** Detectar padrão +N no nome da campanha */
+function hasMultiKeywordSuffix(name: string): boolean {
+  return /\+\d+\s*$/i.test(String(name || '').trim());
+}
+
 function canonicalKey(accountId: string, asin: string, keyword: string): string {
   return `${accountId}|${asin.toUpperCase()}|${normTerm(keyword)}|exact`;
+}
+
+function extractKeywordFromName(name: string): string {
+  const parts = name.split('|').map((p: string) => p.trim());
+  if (parts.length >= 5) return parts.slice(4).join(' | ');
+  return '';
 }
 
 // ── Invoke helper ─────────────────────────────────────────────────────────────
@@ -71,6 +85,31 @@ function canonicalKey(accountId: string, asin: string, keyword: string): string 
 async function invoke(base44: any, fn: string, payload: any): Promise<any> {
   const res = await base44.asServiceRole.functions.invoke(fn, payload);
   return res?.data || res || {};
+}
+
+// ── Buscar keywords da Amazon API para uma campanha ───────────────────────────
+
+async function fetchKeywordsFromAmazon(base44: any, accountId: string, campaignId: string): Promise<any[]> {
+  try {
+    const res = await invoke(base44, 'amazonAdsCommand', {
+      amazon_account_id: accountId,
+      operation: 'listKeywordsForAudit',
+      method: 'POST',
+      path: '/sp/keywords/list',
+      payload: {
+        campaignIdFilter: { include: [campaignId] },
+        stateFilter: { include: ['ENABLED', 'PAUSED'] },
+        maxResults: 100,
+      },
+      content_type: CT_KEYWORD,
+      accept: CT_KEYWORD,
+      _service_role: true,
+    });
+    const payload = res?.payload || res?.data || res || {};
+    return payload?.keywords || [];
+  } catch {
+    return [];
+  }
 }
 
 // ── Arquivar campanha na Amazon ───────────────────────────────────────────────
@@ -97,22 +136,13 @@ async function archiveCampaignOnAmazon(base44: any, accountId: string, amazonCam
 // ── Verificar se já existe campanha canônica ──────────────────────────────────
 
 function findExistingCanonical(campaigns: any[], accountId: string, asin: string, keyword: string): any | null {
-  const key = canonicalKey(accountId, asin, keyword);
   return campaigns.find((c: any) => {
     if (!isManualCampaign(c)) return false;
     if (String(c.asin || '').toUpperCase() !== asin.toUpperCase()) return false;
     if (['archived'].includes(String(c.state || c.status || '').toLowerCase())) return false;
-    // Verificar pelo nome canônico SP | MANUAL | EXACT | ASIN | keyword
     const norm = normTerm(kwText({ keyword_text: extractKeywordFromName(c.name || c.campaign_name || '') }));
     return norm === normTerm(keyword);
   }) || null;
-}
-
-function extractKeywordFromName(name: string): string {
-  // Formato: "SP | MANUAL | EXACT | ASIN | keyword"
-  const parts = name.split('|').map((p: string) => p.trim());
-  if (parts.length >= 5) return parts.slice(4).join(' | ');
-  return '';
 }
 
 // ── Enfileirar retry ──────────────────────────────────────────────────────────
@@ -126,7 +156,6 @@ async function enqueueRetry(
   attemptCount: number,
 ): Promise<void> {
   if (attemptCount >= MAX_RETRIES) {
-    // Esgotou retries — alertar
     await invoke(base44, 'upsertOperationalAlert', {
       amazon_account_id: accountId,
       alert_type: 'sync_error',
@@ -141,20 +170,16 @@ async function enqueueRetry(
 
   const backoffMinutes = BACKOFF_MINUTES[attemptCount] || 60;
   const retryAfter = new Date(Date.now() + backoffMinutes * 60000).toISOString();
-
   const idKey = `canonical_retry|${accountId}|${asin.toUpperCase()}|${normTerm(keyword)}`;
 
-  // Verificar se já há retry agendado para esta keyword
   const existing = await base44.asServiceRole.entities.AmazonActionQueue.filter(
     { amazon_account_id: accountId, idempotency_key: idKey, status: 'pending' }, '-created_date', 1
   ).catch(() => []);
 
   if (existing[0]) {
-    // Atualizar tentativa existente
     await base44.asServiceRole.entities.AmazonActionQueue.update(existing[0].id, {
       attempt_count: attemptCount + 1,
       retry_after: retryAfter,
-      updated_at: new Date().toISOString(),
     }).catch(() => {});
     return;
   }
@@ -164,12 +189,7 @@ async function enqueueRetry(
     action_type: 'migrate_keyword_canonical',
     status: 'pending',
     priority: 'high',
-    payload: JSON.stringify({
-      source_campaign_id: sourceCampaignId,
-      asin,
-      keyword_text: keyword,
-      attempt_count: attemptCount,
-    }),
+    payload: JSON.stringify({ source_campaign_id: sourceCampaignId, asin, keyword_text: keyword, attempt_count: attemptCount }),
     retry_after: retryAfter,
     attempt_count: attemptCount,
     max_attempts: MAX_RETRIES,
@@ -207,7 +227,6 @@ async function createCanonicalCampaign(
     };
   }
 
-  // Bloquear por estoque — não é retry, é skip terminal
   if (result.blocked && result.reason === 'out_of_stock') {
     return { ok: false, error: 'out_of_stock_terminal' };
   }
@@ -227,14 +246,9 @@ function negateInAuto(base44: any, accountId: string, asin: string, keyword: str
   }).catch(() => {});
 }
 
-// ── Processar retries pendentes da fila ───────────────────────────────────────
+// ── Processar retries pendentes ───────────────────────────────────────────────
 
-async function processRetryQueue(
-  base44: any,
-  accountId: string,
-  campaigns: any[],
-  report: any,
-): Promise<void> {
+async function processRetryQueue(base44: any, accountId: string, campaigns: any[], report: any): Promise<void> {
   const now = new Date().toISOString();
   const pending = await base44.asServiceRole.entities.AmazonActionQueue.filter(
     { amazon_account_id: accountId, action_type: 'migrate_keyword_canonical', status: 'pending' },
@@ -251,7 +265,6 @@ async function processRetryQueue(
     const { source_campaign_id, asin, keyword_text, attempt_count = 0 } = payload;
     if (!asin || !keyword_text) continue;
 
-    // Verificar se já existe campanha canônica (retry pode ter sido resolvido externamente)
     const alreadyExists = findExistingCanonical(campaigns, accountId, asin, keyword_text);
     if (alreadyExists) {
       await base44.asServiceRole.entities.AmazonActionQueue.update(item.id, {
@@ -263,7 +276,6 @@ async function processRetryQueue(
       continue;
     }
 
-    // Buscar budget da campanha original
     const srcCampaigns = campaigns.filter((c: any) => campaignIdStr(c) === source_campaign_id);
     const budget = Number(srcCampaigns[0]?.daily_budget || MIN_BUDGET);
     const sku = srcCampaigns[0]?.sku || null;
@@ -285,7 +297,6 @@ async function processRetryQueue(
           result: JSON.stringify({ reason: 'out_of_stock_terminal' }),
         }).catch(() => {});
       } else {
-        await base44.asServiceRole.entities.AmazonActionQueue.update(item.id, { status: 'pending' }).catch(() => {});
         await enqueueRetry(base44, accountId, source_campaign_id, asin, keyword_text, attempt_count + 1);
         report.retry_failed.push({ asin, keyword: keyword_text, attempt: attempt_count + 1, error: result.error });
       }
@@ -304,7 +315,6 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
-    // Resolver conta
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
@@ -313,7 +323,6 @@ Deno.serve(async (request) => {
 
     const accountId = account.id;
 
-    // Carregar dados locais
     const [campaigns, keywords, products] = await Promise.all([
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 5000).catch(() => []),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_at', 15000).catch(() => []),
@@ -322,7 +331,6 @@ Deno.serve(async (request) => {
 
     const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).toUpperCase(), p]));
 
-    // Mapear keywords por campanha (ativas + pausadas — excluindo archived)
     const kwByCampaign = new Map<string, any[]>();
     for (const kw of keywords) {
       const cid = String(kw.campaign_id || '');
@@ -333,7 +341,7 @@ Deno.serve(async (request) => {
       kwByCampaign.get(cid)!.push(kw);
     }
 
-    // Encontrar campanhas manuais ativas com 2+ keywords EXACT
+    // ── Detecção ampliada: banco local + padrão nome +N ───────────────────────
     const manualActive = campaigns.filter((c: any) => {
       if (!isManualCampaign(c)) return false;
       const state = String(c.state || c.status || '').toLowerCase();
@@ -342,13 +350,57 @@ Deno.serve(async (request) => {
     });
 
     const multiKeywordCampaigns: any[] = [];
+    const auditViaApi: any[] = []; // campanhas suspeitas que precisam verificação na Amazon API
+
     for (const c of manualActive) {
       const cid = campaignIdStr(c);
       const allKws = kwByCampaign.get(cid) || [];
       const exactKws = allKws.filter(isExactKeyword);
+      const campaignName = String(c.name || c.campaign_name || '');
+
+      // Detecção 1: banco local tem 2+ keywords EXACT
       if (exactKws.length >= 2) {
-        multiKeywordCampaigns.push({ campaign: c, cid, exactKws, asin: String(c.asin || '').toUpperCase() });
+        multiKeywordCampaigns.push({ campaign: c, cid, exactKws, asin: String(c.asin || '').toUpperCase(), source: 'local_db' });
+        continue;
       }
+
+      // Detecção 2: nome contém padrão +N (ex: "SP | MANUAL | EXACT | ASIN | termo +3")
+      if (hasMultiKeywordSuffix(campaignName)) {
+        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase() });
+        continue;
+      }
+
+      // Detecção 3: campo keywords_count > 1 se disponível
+      if ((c.keyword_count || 0) > 1) {
+        auditViaApi.push({ campaign: c, cid, localKws: exactKws, asin: String(c.asin || '').toUpperCase() });
+      }
+    }
+
+    // ── Auditar via Amazon API campanhas suspeitas ────────────────────────────
+    for (const item of auditViaApi.slice(0, 5)) {
+      const apiKws = await fetchKeywordsFromAmazon(base44, accountId, item.cid);
+      const exactApiKws = apiKws.filter((k: any) =>
+        String(k.matchType || k.match_type || '').toLowerCase() === 'exact' &&
+        String(k.state || '').toUpperCase() !== 'ARCHIVED'
+      );
+      if (exactApiKws.length >= 2) {
+        // Converter keywords da API para formato local
+        const mappedKws = exactApiKws.map((k: any) => ({
+          keyword_text: k.keywordText || k.keyword_text || '',
+          keyword: k.keywordText || k.keyword_text || '',
+          match_type: 'exact',
+          orders: 0,
+          keyword_id: k.keywordId,
+        }));
+        multiKeywordCampaigns.push({
+          campaign: item.campaign,
+          cid: item.cid,
+          exactKws: mappedKws,
+          asin: item.asin,
+          source: 'amazon_api',
+        });
+      }
+      await sleep(1000);
     }
 
     const report: any = {
@@ -368,10 +420,8 @@ Deno.serve(async (request) => {
       canonical_rule: '1_campaign_1_asin_1_adgroup_1_productad_1_exact_keyword',
     };
 
-    // ── Processar retries pendentes primeiro ──────────────────────────────────
     await processRetryQueue(base44, accountId, campaigns, report);
 
-    // ── Processar campanhas multi-keyword ─────────────────────────────────────
     let processed = 0;
     for (const item of multiKeywordCampaigns) {
       if (processed >= MAX_PER_RUN) break;
@@ -388,12 +438,13 @@ Deno.serve(async (request) => {
         continue;
       }
 
+      const keywordsFound = exactKws.length;
       const sourceBudget = Number(campaign.daily_budget || campaign.budget || MIN_BUDGET);
+      // Budget proporcional: distribuir entre as novas campanhas
+      const budgetPerCampaign = Math.max(MIN_BUDGET, Math.round((sourceBudget / keywordsFound) * 100) / 100);
       const sku = campaign.sku || product?.sku || null;
 
-      // Ordenar: manter keyword que melhor corresponde ao nome da campanha (= keyword original/principal)
-      // A "keyword raiz" da campanha é a primeira — ela NÃO precisa ser migrada (já está na campanha certa)
-      // As demais (extras) precisam ganhar campanhas próprias
+      // Identificar keyword raiz (corresponde ao nome da campanha)
       const normalizedCampaignName = normTerm(campaign.name || campaign.campaign_name || '');
       const sorted = [...exactKws].sort((a: any, b: any) => {
         const aNorm = normTerm(kwText(a));
@@ -405,21 +456,37 @@ Deno.serve(async (request) => {
       });
 
       const [rootKw, ...extraKws] = sorted;
-      if (extraKws.length === 0) continue; // já canônica (só 1)
+      if (extraKws.length === 0) continue;
 
       const migrationGroup: any = {
         source_campaign_id: cid,
         source_local_id: campaign.id,
         asin,
         root_keyword: kwText(rootKw),
+        keywords_found: keywordsFound,
         total_to_migrate: extraKws.length,
         created: [] as any[],
         already_existed: [] as any[],
         failed: [] as any[],
+        duplicates_blocked: 0,
       };
 
-      // Migrar cada keyword extra
+      // Deduplicar por normalized_term
+      const seenTerms = new Set<string>();
+      const uniqueExtraKws: any[] = [];
       for (const kw of extraKws) {
+        const t = kwText(kw);
+        const norm = normTerm(t);
+        if (!norm || seenTerms.has(norm)) {
+          migrationGroup.duplicates_blocked++;
+          continue;
+        }
+        seenTerms.add(norm);
+        uniqueExtraKws.push(kw);
+      }
+
+      // Migrar cada keyword extra como campanha individual
+      for (const kw of uniqueExtraKws) {
         const term = kwText(kw);
         if (!term) continue;
 
@@ -431,7 +498,7 @@ Deno.serve(async (request) => {
           continue;
         }
 
-        const result = await createCanonicalCampaign(base44, accountId, asin, term, sourceBudget, sku);
+        const result = await createCanonicalCampaign(base44, accountId, asin, term, budgetPerCampaign, sku);
         await sleep(SLEEP_BETWEEN);
 
         if (result.ok) {
@@ -449,19 +516,16 @@ Deno.serve(async (request) => {
           } else {
             migrationGroup.failed.push({ keyword: term, error: result.error });
             report.keywords_failed.push({ asin, keyword: term, error: result.error });
-            // Enfileirar retry — tentativa 0
             await enqueueRetry(base44, accountId, cid, asin, term, 0);
           }
         }
       }
 
       const allMigrated = migrationGroup.failed.length === 0;
-      const allAccountedFor = migrationGroup.created.length + migrationGroup.already_existed.length === migrationGroup.total_to_migrate;
+      const allAccountedFor = migrationGroup.created.length + migrationGroup.already_existed.length >= migrationGroup.total_to_migrate - migrationGroup.duplicates_blocked;
 
       if (allMigrated && allAccountedFor) {
-        // ── ARQUIVAR campanha original ──────────────────────────────────────
-        const amazonCampaignId = cid; // campaign_id é o amazon_campaign_id
-        const archived = await archiveCampaignOnAmazon(base44, accountId, amazonCampaignId);
+        const archived = await archiveCampaignOnAmazon(base44, accountId, cid);
 
         if (archived) {
           await base44.asServiceRole.entities.Campaign.update(campaign.id, {
@@ -469,21 +533,24 @@ Deno.serve(async (request) => {
             status: 'archived',
             archived: true,
             archived_at: new Date().toISOString(),
-            archive_reason: 'canonical_migration_v2',
-            updated_at: new Date().toISOString(),
+            archive_reason: 'canonical_migration_v3',
           }).catch(() => {});
           report.campaigns_migrated.push({
             source_campaign_id: cid,
             asin,
             root_keyword: kwText(rootKw),
-            keywords_migrated: migrationGroup.created.length,
-            keywords_already_existed: migrationGroup.already_existed.length,
+            keywords_found: keywordsFound,
+            unique_terms: uniqueExtraKws.length,
+            duplicates_blocked: migrationGroup.duplicates_blocked,
+            campaigns_created: migrationGroup.created.length,
+            already_existed: migrationGroup.already_existed.length,
+            failed: migrationGroup.failed.length,
+            old_campaign_archived: true,
           });
         } else {
           report.errors.push({ campaign_id: cid, step: 'archive_source', reason: 'Amazon archive failed — source kept active' });
         }
       } else {
-        // Manter original ativa — retries pendentes
         report.campaigns_pending_retry.push({
           source_campaign_id: cid,
           asin,
@@ -495,8 +562,6 @@ Deno.serve(async (request) => {
       processed++;
     }
 
-    // ── Verificar migrações incompletas de execuções anteriores ───────────────
-    // Campanhas que estavam em migração mas a original ainda está ativa
     const pendingRetries = await base44.asServiceRole.entities.AmazonActionQueue.filter(
       { amazon_account_id: accountId, action_type: 'migrate_keyword_canonical', status: 'pending' },
       null, 100,
@@ -506,16 +571,13 @@ Deno.serve(async (request) => {
     report.continuation_required = pendingRetries.length > 0 || report.keywords_failed.length > 0;
     report.completed_at = new Date().toISOString();
 
-    // Registrar execução
     const logStatus = report.errors.length > 0
       ? 'warning'
-      : report.continuation_required
-        ? 'pending'
-        : 'success';
+      : report.continuation_required ? 'pending' : 'success';
 
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: accountId,
-      operation: 'canonical_migration_v2',
+      operation: 'canonical_migration_v3',
       trigger_type: body.trigger_type || 'automatic',
       status: logStatus,
       started_at: startedAt,
@@ -531,6 +593,7 @@ Deno.serve(async (request) => {
         keywords_failed: report.keywords_failed.length,
         total_pending_retries: report.total_pending_retries,
         retry_resolved: report.retry_resolved.length,
+        migration_details: report.campaigns_migrated.slice(0, 5),
       }).slice(0, 4000),
       error_message: report.errors.length > 0
         ? `${report.errors.length} erro(s). ${report.keywords_failed.length} keyword(s) com retry pendente.`

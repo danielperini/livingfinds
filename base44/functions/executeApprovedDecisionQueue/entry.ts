@@ -3,6 +3,41 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 const MAX_BATCH = 30;
 const API_DELAY_MS = 400;
 
+/**
+ * HARD GUARD — assertSingleKeywordPerCampaign
+ *
+ * Verifica no banco local se a campanha já tem keyword ativa (EXACT).
+ * Se sim, lança erro CANONICAL_MANUAL_CAMPAIGN_VIOLATION antes de qualquer chamada Amazon.
+ * Garante a regra: 1 campanha manual = 1 keyword EXACT.
+ */
+async function assertSingleKeywordPerCampaign(
+  base44: any,
+  accountId: string,
+  campaignId: string,
+  newKeywordText: string,
+): Promise<void> {
+  if (!campaignId) return; // sem campaignId = nova campanha, sem conflito possível
+
+  const existing = await base44.asServiceRole.entities.Keyword.filter(
+    { amazon_account_id: accountId, campaign_id: campaignId },
+    null, 10
+  ).catch(() => []);
+
+  const activeExact = existing.filter((k: any) => {
+    const st = String(k.state || k.status || '').toLowerCase();
+    if (st === 'archived') return false;
+    return String(k.match_type || '').toLowerCase() === 'exact';
+  });
+
+  if (activeExact.length > 0) {
+    const existingText = activeExact[0]?.keyword_text || activeExact[0]?.keyword || 'desconhecida';
+    throw new Error(
+      `CANONICAL_MANUAL_CAMPAIGN_VIOLATION: campanha ${campaignId} já tem keyword ativa "${existingText}". ` +
+      `Tentativa de adicionar "${newKeywordText}" bloqueada. Use createManualCampaignV2 para criar uma nova campanha.`
+    );
+  }
+}
+
 function isEntityNotFound(payload: any): boolean {
   const s = JSON.stringify(payload || '').toLowerCase();
   return s.includes('entitynotfounderror') || s.includes('entity_not_found') ||
@@ -147,6 +182,20 @@ Deno.serve(async (request) => {
       if (Date.now() - t0 > 90000) break;
 
       try {
+        // HARD GUARD: bloquear create_keyword se campanha já tem keyword ativa
+        // Regra canônica: 1 campanha manual = 1 keyword EXACT
+        if (
+          (decision.action === 'create_keyword' || decision.decision_type === 'create_keyword' || decision.decision_type === 'harvest_search_term') &&
+          decision.campaign_id
+        ) {
+          await assertSingleKeywordPerCampaign(
+            base44,
+            aid,
+            decision.campaign_id,
+            decision.keyword_text || decision.action || ''
+          );
+        }
+
         // Usa o roteador canônico: ajustes de bid são enviados para atualização pareada
         // de keyword e ad group; as demais ações seguem para o executor V2.
         const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {

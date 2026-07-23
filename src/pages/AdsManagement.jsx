@@ -45,6 +45,21 @@ function getCampaignAsin(c) {
   return c.asin || extractAsinFromName(c.name || c.campaign_name) || null;
 }
 
+/** Detecta campanha manual com múltiplas keywords (precisa migração) */
+function needsMigration(campaign, keywords) {
+  if ((campaign.targeting_type || '').toUpperCase() !== 'MANUAL') return false;
+  // Padrão +N no nome
+  if (/\+\d+\s*$/i.test(String(campaign.name || campaign.campaign_name || ''))) return true;
+  // keyword_count > 1 no campo
+  if ((campaign.keyword_count || 0) > 1) return true;
+  // Mais de 1 keyword ativa no banco
+  const activeExact = keywords.filter(k => {
+    const st = (k.state || k.status || '').toLowerCase();
+    return st !== 'archived' && (k.match_type || '').toLowerCase() === 'exact';
+  });
+  return activeExact.length > 1;
+}
+
 const STATE_FILTERS = [
 { key: 'all', label: 'Todas' },
 { key: 'enabled', label: 'Ativas' },
@@ -115,6 +130,12 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                     {aiManaged ? (
                   <span title="Gerido pela IA" className="text-[9px] font-bold px-1 py-0.5 rounded bg-cyan/15 text-cyan border border-cyan/25 leading-none flex items-center gap-0.5">
                         <Bot className="w-2.5 h-2.5" />
+                      </span>
+                  ) : null}
+                    {/* Badge MIGRAÇÃO PENDENTE — campanha manual com múltiplas keywords */}
+                    {(c.targeting_type || '').toUpperCase() === 'MANUAL' && ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ? (
+                  <span title="Esta campanha tem múltiplas keywords e precisa ser migrada para o formato canônico (1 campanha = 1 keyword)" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 leading-none whitespace-nowrap">
+                        MIGRAÇÃO PENDENTE
                       </span>
                   ) : null}
                   </div>
@@ -643,6 +664,12 @@ export default function AdsManagement() {
                         <Bot className="w-3 h-3" /> Gerida pela IA
                       </span>
                   ) : null}
+                    {/* Badge MIGRAÇÃO PENDENTE na view de detalhes */}
+                    {needsMigration(selectedCampaign, keywords) ? (
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 flex items-center gap-1">
+                        ⚠ MIGRAÇÃO PENDENTE — múltiplas keywords detectadas
+                      </span>
+                  ) : null}
                   </div>
                   <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <StatusBadge status={campaignState(selectedCampaign) || 'enabled'} />
@@ -741,7 +768,14 @@ export default function AdsManagement() {
             {/* Tabs */}
             <div className="flex border-b border-surface-2 bg-[#0D0F14] flex-shrink-0">
               {[
-            { key: 'keywords', label: `Keywords (${keywords.length})` },
+            {
+              key: 'keywords',
+              label: (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL'
+                ? keywords.filter(k => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived').length > 1
+                  ? `⚠ Keywords (${keywords.length}) — MIGRAÇÃO PENDENTE`
+                  : `Keyword (${keywords.length})`
+                : `Keywords (${keywords.length})`
+            },
             { key: 'search-terms', label: `Search Terms${searchTerms.length > 0 ? ` (${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` · ${negSuggestions.length} neg.` : ''}` },
             { key: 'config', label: 'Configurações', icon: Settings },
             { key: 'history', label: 'Histórico', icon: History }].
@@ -914,16 +948,29 @@ export default function AdsManagement() {
                                   {(st.acos || 0) > 0 ? `${(st.acos || 0).toFixed(1)}%` : '—'}
                                 </td>
                                 <td className="px-4 py-2.5">
-                                  {isGood ?
-                            <button onClick={() => promoteKeyword(st)}
-                            className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
-                                      <Plus className="w-3 h-3" /> Promover
-                                    </button> :
-                            isWasting ?
-                            <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Desperdício</span> :
+                                  {isGood ? (
+                                // Campanhas MANUAIS: criar nova campanha em vez de adicionar keyword
+                                (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' ? (
+                                <button
+                                onClick={() => {
+                                 const prod = products.find(p => p.asin === (st.advertised_asin || selectedCampaign?.asin));
+                                 if (prod) setKickoffProduct(prod);
+                                }}
+                                title="Cria nova campanha canônica para este termo (1 campanha = 1 keyword EXACT)"
+                                className="px-2.5 py-1 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-lg hover:bg-violet-500/30 transition-colors flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> Nova campanha
+                                </button>
+                                ) : (
+                                <button onClick={() => promoteKeyword(st)}
+                                className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> Promover
+                                </button>
+                                )
+                                ) : isWasting ?
+                                <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Desperdício</span> :
 
-                            <span className="text-xs text-slate-500">Observar</span>
-                            }
+                                <span className="text-xs text-slate-500">Observar</span>
+                                }
                                 </td>
                               </tr>);
 
