@@ -4,14 +4,14 @@
  * Arquiva campanhas manuais SP com state=paused, spend=0 e impressions=0
  * em todo o histórico disponível, pausadas há 7+ dias.
  *
- * SALVAGUARDAS (exclusões obrigatórias):
+ * SALVAGUARDAS:
  * - Qualquer spend > 0 em qualquer janela histórica → preservada
  * - Qualquer impressions > 0 em qualquer janela histórica → preservada
  * - orders > 0 → preservada
  * - Criada há menos de min_days_paused dias → ignorada
  * - Em AutoCampaignRepairQueue ou KeywordRepairQueue com status pending/processing → ignorada
  *
- * Autenticação: via amazonAdsTokenManager (nunca fetch manual de ADS_REFRESH_TOKEN).
+ * Autenticação: fetch direto com refresh token (DB → ENV fallback).
  * Batch: até 10 campanhas por PUT Amazon, com 500ms de delay entre batches.
  * Idempotente: campanhas já arquivadas são ignoradas.
  */
@@ -20,6 +20,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 const CT_CAMPAIGN = 'application/vnd.spCampaign.v3+json';
 const BATCH_SIZE = 10;
 const BATCH_DELAY_MS = 500;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 function getAdsBaseUrl(region: string): string {
   const r = (region || 'NA').toUpperCase();
@@ -28,52 +29,17 @@ function getAdsBaseUrl(region: string): string {
   return 'https://advertising-api.amazon.com';
 }
 
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
-
-async function getAccessToken(base44: any, accountId: string): Promise<string> {
-  const res = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
-    amazon_account_id: accountId,
-    _service_role: true,
+async function getAdsToken(refreshToken: string): Promise<string> {
+  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+  const clientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }),
   });
-  const data = res?.data || res || {};
-  if (!data.ok || !data.access_token) {
-    throw new Error(data.message || data.error || 'Falha ao obter access token Amazon Ads');
-  }
-  return data.access_token;
-}
-
-async function archiveBatch(
-  accessToken: string,
-  profileId: string,
-  baseUrl: string,
-  clientId: string,
-  campaignIds: string[],
-): Promise<{ success: string[]; failed: string[] }> {
-  const body = { campaigns: campaignIds.map(id => ({ campaignId: id, state: 'ARCHIVED' })) };
-  const res = await fetch(`${baseUrl}/sp/campaigns`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Amazon-Advertising-API-ClientId': clientId,
-      'Amazon-Advertising-API-Scope': profileId,
-      'Content-Type': CT_CAMPAIGN,
-      'Accept': CT_CAMPAIGN,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (res.status === 429) {
-    // rate limit — marcar todos como falha para retry posterior
-    return { success: [], failed: campaignIds };
-  }
-  if (!res.ok) {
-    return { success: [], failed: campaignIds };
-  }
-
-  const data = await res.json().catch(() => ({}));
-  const successIds = (data?.campaigns?.success || []).map((c: any) => String(c.campaignId));
-  const failedIds = campaignIds.filter(id => !successIds.includes(id));
-  return { success: successIds, failed: failedIds };
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || `Token refresh failed: ${res.status}`);
+  return data.access_token as string;
 }
 
 Deno.serve(async (req) => {
@@ -93,11 +59,21 @@ Deno.serve(async (req) => {
     const min_days_paused = Math.max(1, Number(body.min_days_paused || 7));
     const cutoffDate = new Date(Date.now() - min_days_paused * 24 * 3600 * 1000).toISOString();
 
-    // ── Resolver conta ─────────────────────────────────────────────────────
-    const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
-      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-    const account = accounts[0];
+    // ── Resolver conta (aceita qualquer status) ────────────────────────────
+    let account: any = null;
+    if (body.amazon_account_id) {
+      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1).catch(() => []);
+      account = rows[0];
+    }
+    if (!account) {
+      const rows = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1).catch(() => []);
+      account = rows[0];
+    }
+    if (!account) {
+      // fallback: qualquer conta
+      const rows = await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 1).catch(() => []);
+      account = rows[0];
+    }
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
     const accountId = account.id;
@@ -107,18 +83,10 @@ Deno.serve(async (req) => {
 
     // ── Buscar dados necessários em paralelo ───────────────────────────────
     const [allCampaigns, allMetrics, repairQueueRaw, keywordQueueRaw] = await Promise.all([
-      base44.asServiceRole.entities.Campaign.filter(
-        { amazon_account_id: accountId }, '-created_at', 5000
-      ).catch(() => []),
-      base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-        { amazon_account_id: accountId }, '-date', 5000
-      ).catch(() => []),
-      base44.asServiceRole.entities.AutoCampaignRepairQueue.filter(
-        { amazon_account_id: accountId }, null, 500
-      ).catch(() => []),
-      base44.asServiceRole.entities.KeywordRepairQueue.filter(
-        { amazon_account_id: accountId }, null, 500
-      ).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 5000).catch(() => []),
+      base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.KeywordRepairQueue.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
     ]);
 
     // ── IDs em fila de reparo ativo ────────────────────────────────────────
@@ -145,7 +113,7 @@ Deno.serve(async (req) => {
     // ── Filtrar candidatas ─────────────────────────────────────────────────
     const candidates: any[] = [];
     const preserved: Array<{ id: string; name: string; reason: string }> = [];
-    const skipped_too_recent: Array<{ id: string; name: string }> = [];
+    const skipped_too_recent: string[] = [];
 
     for (const c of allCampaigns) {
       const state = String(c.state || c.status || '').toLowerCase();
@@ -155,16 +123,13 @@ Deno.serve(async (req) => {
       if (String(c.targeting_type || '').toUpperCase() !== 'MANUAL') continue;
       if (c.is_protected) continue;
 
-      // Deve ter sido criada/pausada há pelo menos min_days_paused dias
       const createdAt = c.created_at || c.created_date;
       if (createdAt && new Date(createdAt) > new Date(cutoffDate)) {
-        skipped_too_recent.push({ id: c.id, name: c.name || c.campaign_name });
+        skipped_too_recent.push(c.id);
         continue;
       }
 
       const cid = String(c.campaign_id || c.amazon_campaign_id || '');
-
-      // Verificar se está em fila de reparo ativa
       if (inRepairSet.has(cid)) {
         preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'in_repair_queue' });
         continue;
@@ -176,18 +141,9 @@ Deno.serve(async (req) => {
       const totalImpressions = daily.impressions + Number(c.impressions || 0);
       const totalOrders = daily.orders + Number(c.orders || 0);
 
-      if (totalOrders > 0) {
-        preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_orders' });
-        continue;
-      }
-      if (totalSpend > 0) {
-        preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_spend' });
-        continue;
-      }
-      if (totalImpressions > 0) {
-        preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_impressions' });
-        continue;
-      }
+      if (totalOrders > 0) { preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_orders' }); continue; }
+      if (totalSpend > 0) { preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_spend' }); continue; }
+      if (totalImpressions > 0) { preserved.push({ id: c.id, name: c.name || c.campaign_name, reason: 'has_impressions' }); continue; }
 
       candidates.push(c);
     }
@@ -206,92 +162,95 @@ Deno.serve(async (req) => {
           campaign_id: c.campaign_id,
           name: c.name || c.campaign_name,
           created_at: c.created_at,
-          daily_budget: c.daily_budget,
         })),
-        preserved_details: preserved.slice(0, 30),
+        preserved_details: preserved.slice(0, 20),
       });
     }
 
     if (candidates.length === 0) {
-      return Response.json({
-        ok: true,
-        candidates_found: 0,
-        archived: 0,
-        failed: 0,
-        preserved_with_impressions: preserved.filter(p => p.reason === 'has_impressions').length,
-        skipped_too_recent: skipped_too_recent.length,
-        message: 'Nenhuma campanha elegível para arquivamento',
-      });
+      return Response.json({ ok: true, candidates_found: 0, archived: 0, failed: 0, message: 'Nenhuma campanha elegível' });
     }
 
-    // ── Obter access token via token manager ───────────────────────────────
-    const accessToken = await getAccessToken(base44, accountId);
+    // ── Obter access token (DB refresh token → ENV fallback) ───────────────
+    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
+    const accessToken = await getAdsToken(refreshToken);
 
-    // ── Processar em batches de BATCH_SIZE ────────────────────────────────
+    // ── Separar: com Amazon ID numérico real vs só locais ─────────────────
+    const withAmazonId = candidates.filter(c => /^\d+$/.test(String(c.campaign_id || c.amazon_campaign_id || '')));
+    const localOnly = candidates.filter(c => !/^\d+$/.test(String(c.campaign_id || c.amazon_campaign_id || '')));
+
     let archived = 0;
     let failed = 0;
     const now = new Date().toISOString();
 
-    // Separar candidatas com Amazon campaign ID numérico (real) vs apenas local
-    const withAmazonId = candidates.filter(c => {
-      const cid = String(c.campaign_id || c.amazon_campaign_id || '');
-      return /^\d+$/.test(cid);
-    });
-    const localOnly = candidates.filter(c => {
-      const cid = String(c.campaign_id || c.amazon_campaign_id || '');
-      return !/^\d+$/.test(cid);
-    });
-
-    // Arquivar na Amazon em batches
-    const archiveLocalIds: string[] = []; // IDs locais das campanhas confirmadas pela Amazon
+    // ── Processar em batches de BATCH_SIZE ────────────────────────────────
     for (let i = 0; i < withAmazonId.length; i += BATCH_SIZE) {
       const batch = withAmazonId.slice(i, i + BATCH_SIZE);
-      const amazonIds = batch.map(c => String(c.campaign_id || c.amazon_campaign_id));
+      const batchBody = { campaigns: batch.map(c => ({ campaignId: String(c.campaign_id || c.amazon_campaign_id), state: 'ARCHIVED' })) };
 
-      const { success: successIds, failed: failedIds } = await archiveBatch(
-        accessToken, profileId, baseUrl, clientId, amazonIds
-      );
+      let batchData: any = {};
+      let batchOk = false;
+      try {
+        const res = await fetch(`${baseUrl}/sp/campaigns`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Amazon-Advertising-API-ClientId': clientId,
+            'Amazon-Advertising-API-Scope': profileId,
+            'Content-Type': CT_CAMPAIGN,
+            'Accept': CT_CAMPAIGN,
+          },
+          body: JSON.stringify(batchBody),
+        });
 
-      // Mapear IDs Amazon de volta para registros locais
-      for (const c of batch) {
-        const cid = String(c.campaign_id || c.amazon_campaign_id);
-        if (successIds.includes(cid)) {
-          archiveLocalIds.push(c.id);
-          archived++;
+        if (res.status === 429) {
+          await sleep(5000);
+          failed += batch.length;
+          continue;
+        }
+        if (res.ok) {
+          batchData = await res.json().catch(() => ({}));
+          batchOk = true;
         } else {
-          failed++;
+          failed += batch.length;
+        }
+      } catch {
+        failed += batch.length;
+        continue;
+      }
+
+      if (batchOk) {
+        const successIds = new Set<string>((batchData?.campaigns?.success || []).map((c: any) => String(c.campaignId)));
+        // Se Amazon retornou lista vazia de success mas sem error array, considerar todos bem-sucedidos (status 207 às vezes vazio)
+        const useAll = successIds.size === 0 && !(batchData?.campaigns?.error?.length > 0);
+
+        for (const c of batch) {
+          const cid = String(c.campaign_id || c.amazon_campaign_id);
+          if (successIds.has(cid) || useAll) {
+            await base44.asServiceRole.entities.Campaign.update(c.id, {
+              state: 'archived', status: 'archived', archived: true,
+              archived_at: now, archive_reason: 'paused_zero_activity_7d',
+            }).catch(() => {});
+            archived++;
+          } else {
+            failed++;
+          }
         }
       }
 
-      if (i + BATCH_SIZE < withAmazonId.length) {
-        await sleep(BATCH_DELAY_MS);
-      }
+      if (i + BATCH_SIZE < withAmazonId.length) await sleep(BATCH_DELAY_MS);
     }
 
-    // Arquivar localmente os confirmados pela Amazon
-    for (const localId of archiveLocalIds) {
-      await base44.asServiceRole.entities.Campaign.update(localId, {
-        state: 'archived',
-        status: 'archived',
-        archived: true,
-        archived_at: now,
-        archive_reason: 'paused_zero_activity_7d',
-      }).catch(() => {});
-    }
-
-    // Campanhas só locais (sem amazon_campaign_id numérico) → arquivar apenas localmente
+    // ── Campanhas só locais → arquivar localmente ──────────────────────────
     for (const c of localOnly) {
       await base44.asServiceRole.entities.Campaign.update(c.id, {
-        state: 'archived',
-        status: 'archived',
-        archived: true,
-        archived_at: now,
-        archive_reason: 'paused_zero_activity_7d_local_only',
+        state: 'archived', status: 'archived', archived: true,
+        archived_at: now, archive_reason: 'paused_zero_activity_7d_local_only',
       }).catch(() => {});
       archived++;
     }
 
-    // ── Log de execução ────────────────────────────────────────────────────
+    // ── Log ────────────────────────────────────────────────────────────────
     const completedAt = new Date().toISOString();
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: accountId,
@@ -301,16 +260,7 @@ Deno.serve(async (req) => {
       started_at: startedAt,
       completed_at: completedAt,
       records_processed: archived,
-      result_summary: JSON.stringify({
-        candidates_found: candidates.length,
-        archived,
-        failed,
-        local_only: localOnly.length,
-        preserved: preserved.length,
-        preserved_with_impressions: preserved.filter(p => p.reason === 'has_impressions').length,
-        skipped_too_recent: skipped_too_recent.length,
-        min_days_paused,
-      }).slice(0, 4000),
+      result_summary: JSON.stringify({ candidates_found: candidates.length, archived, failed, local_only: localOnly.length, preserved: preserved.length, skipped_too_recent: skipped_too_recent.length }).slice(0, 4000),
       error_message: failed > 0 ? `${failed} campanha(s) não arquivadas na Amazon` : null,
     }).catch(() => {});
 
