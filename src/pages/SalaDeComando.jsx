@@ -19,6 +19,7 @@ import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
 import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
+import MotorExecutionPanel from '@/components/sala/MotorExecutionPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
@@ -111,6 +112,7 @@ const TAB_GROUPS = [
     id: 'monitoring',
     label: 'Monitoramento',
     tabs: [
+      { id: 'motor_v8', label: 'Motor v8' },
       { id: 'alertas', label: 'Alertas' },
       { id: 'sync_monitor', label: 'Sincronizações' },
     ],
@@ -1416,6 +1418,22 @@ export default function SalaDeComando() {
                   Configurações
                 </Link>
               </div>
+            </div>
+          )}
+
+          {/* ── MOTOR V8 ─────────────────────────────────────────────────────── */}
+          {tab === 'motor_v8' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white">Motor v8 — Execução Imediata</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Pipeline completo: sync → motor determinístico → análise IA → execução Amazon Ads</p>
+                </div>
+              </div>
+              <MotorExecutionPanel account={account} />
             </div>
           )}
 
