@@ -66,28 +66,57 @@ async function fetchPausedAndIncompleteCampaignIds(token, profileId, region, inc
 async function enableBatch(token, profileId, region, campaignIds) {
   const base     = adsBase(region);
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-  const results  = { success: [], failed: [] };
+  const results  = { success: [] as string[], failed: [] as { id: string; reason: string }[] };
 
   // Lotes de 10 com 500ms de intervalo
   for (let i = 0; i < campaignIds.length; i += 10) {
     const batch = campaignIds.slice(i, i + 10);
     const body  = { campaigns: batch.map(id => ({ campaignId: String(id), state: 'ENABLED' })) };
-    const res   = await fetch(`${base}/sp/campaigns`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Amazon-Advertising-API-ClientId': clientId,
-        'Amazon-Advertising-API-Scope': String(profileId),
-        'Content-Type': 'application/vnd.spCampaign.v3+json',
-        'Accept':       'application/vnd.spCampaign.v3+json',
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    for (const c of (data.campaigns || [])) {
-      if (c.code === 'SUCCESS' || res.ok) results.success.push(String(c.campaignId || batch[0]));
-      else results.failed.push({ id: c.campaignId, reason: c.description });
+
+    let res: Response;
+    try {
+      res = await fetch(`${base}/sp/campaigns`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Amazon-Advertising-API-ClientId': clientId,
+          'Amazon-Advertising-API-Scope': String(profileId),
+          'Content-Type': 'application/vnd.spCampaign.v3+json',
+          'Accept':       'application/vnd.spCampaign.v3+json',
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (fetchErr: any) {
+      results.failed.push(...batch.map(id => ({ id: String(id), reason: fetchErr?.message || 'fetch_error' })));
+      if (i + 10 < campaignIds.length) await new Promise(r => setTimeout(r, 500));
+      continue;
     }
+
+    // Tratar respostas não-2xx antes de parsear JSON
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn(`[enableBatch] HTTP ${res.status} for batch ${i}:`, errText.slice(0, 200));
+      results.failed.push(...batch.map(id => ({ id: String(id), reason: `HTTP_${res.status}` })));
+      if (i + 10 < campaignIds.length) await new Promise(r => setTimeout(r, 500));
+      continue;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    // Garantir que campaigns seja sempre um array antes de iterar
+    const campaignResults = Array.isArray(data?.campaigns) ? data.campaigns : [];
+    if (campaignResults.length === 0) {
+      // Amazon aceitou (2xx) mas retornou resposta vazia ou inesperada — considerar sucesso
+      results.success.push(...batch.map(id => String(id)));
+    } else {
+      for (const c of campaignResults) {
+        if (c?.code === 'SUCCESS' || !c?.code) {
+          results.success.push(String(c?.campaignId || batch[0]));
+        } else {
+          results.failed.push({ id: String(c?.campaignId || ''), reason: c?.description || c?.code || 'unknown' });
+        }
+      }
+    }
+
     if (i + 10 < campaignIds.length) await new Promise(r => setTimeout(r, 500));
   }
   return results;
@@ -249,8 +278,10 @@ Deno.serve(async (req) => {
       const amazonIds = candidates.map(c => c.amazonId);
       const batchResult = await enableBatch(token, profileId, region, amazonIds);
 
-      const successSet = new Set(batchResult.success);
-      log.errors.push(...batchResult.failed.map(f => ({ step: 'enable', campaignId: f.id, reason: f.reason })));
+      const successList = Array.isArray(batchResult.success) ? batchResult.success : [];
+      const failedList  = Array.isArray(batchResult.failed)  ? batchResult.failed  : [];
+      const successSet  = new Set(successList);
+      log.errors.push(...failedList.map(f => ({ step: 'enable', campaignId: f.id, reason: f.reason })));
 
       // 7. Atualizar banco local para as que a Amazon aceitou
       const now = new Date().toISOString();
