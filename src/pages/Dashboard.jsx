@@ -273,32 +273,19 @@ export default function Dashboard() {
 
   const allMetrics = useMemo(() => dedupeMetrics(metricsDaily), [metricsDaily]);
 
-  // Última data com dados de vendas Ads reais (sales > 0) — âncora para KPIs de período
-  // Dias com spend mas sales=0 são artefatos de latência da Amazon (relatório ainda não fechado)
+  // Âncora de data: último dia com qualquer sinal de atividade Ads (spend, clicks ou impressions > 0)
+  // Não depende de sales > 0, pois dias sem conversão mas com atividade são válidos
   const lastAvailableAdsDate = useMemo(() => {
-    // Agregar sales por data (vários registros por campanha)
-    const salesByDate = {};
+    const activityByDate = {};
     for (const m of allMetrics) {
       if (!m.date) continue;
-      salesByDate[m.date] = (salesByDate[m.date] || 0) + (m.sales || 0);
+      activityByDate[m.date] = (activityByDate[m.date] || 0)
+        + (m.spend || 0) + (m.clicks || 0) + (m.impressions || 0);
     }
-    // Última data com sales > 0
-    const datesWithSales = Object.entries(salesByDate)
-      .filter(([, s]) => s > 0)
-      .map(([d]) => d)
+    const datesWithActivity = Object.keys(activityByDate)
+      .filter(d => activityByDate[d] > 0)
       .sort();
-    if (datesWithSales.length > 0) return datesWithSales[datesWithSales.length - 1];
-    // Fallback: última data com spend > 0
-    const spendByDate = {};
-    for (const m of allMetrics) {
-      if (!m.date) continue;
-      spendByDate[m.date] = (spendByDate[m.date] || 0) + (m.spend || 0);
-    }
-    const datesWithSpend = Object.entries(spendByDate)
-      .filter(([, s]) => s > 0)
-      .map(([d]) => d)
-      .sort();
-    return datesWithSpend.length > 0 ? datesWithSpend[datesWithSpend.length - 1] : null;
+    return datesWithActivity.length > 0 ? datesWithActivity[datesWithActivity.length - 1] : null;
   }, [allMetrics]);
 
   // Determinar períodos disponíveis (baseado na contagem de dias distintos com dados)
@@ -763,9 +750,13 @@ export default function Dashboard() {
           <span>Todo o histórico disponível · Vendas Ads = atribuição Amazon</span>
           {hasSalesDailyData ? <span> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></span> : null}
           <span>{' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA</span>
-          {(activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday()) ? (
-            <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>
-          ) : null}
+          {(() => {
+            if (!lastAvailableAdsDate) return null;
+            const yesterday = getYesterday();
+            const gapDays = Math.round((new Date(yesterday).getTime() - new Date(lastAvailableAdsDate).getTime()) / 86400000);
+            if (gapDays < 2) return null;
+            return <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>;
+          })()}
         </p>
         {hasSalesDailyData ? (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
