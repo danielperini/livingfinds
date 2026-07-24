@@ -350,11 +350,21 @@ export default function Dashboard() {
     const syncRecente = syncAgeHours !== null && syncAgeHours < 23;
     const reportNormal = reportGapDays !== null && reportGapDays <= 3; // Amazon pode demorar até 3 dias
 
+    // Sync recente mas relatório desatualizado = relatório ainda não foi processado
+    const syncRecenteButStaleReport = syncRecente && !reportNormal;
+
     let source, quality, label;
     if (datesWithData.size === 0) {
       source = 'none'; quality = 'none';
       label = 'Sem dados de performance. Sincronize para começar.';
-    } else if (syncRecente || reportNormal) {
+    } else if (syncRecenteButStaleReport) {
+      // Sync aconteceu mas relatório ainda não chegou — estado mais comum após um sync manual
+      source = 'processing'; quality = 'warn';
+      const syncStr = lastSyncAt
+        ? `sync ${new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+        : '';
+      label = `⚠ Sync recente (${syncStr}) mas relatório ainda mostra dados de ${fmtDateBRFull(lastDate)} — aguardando Amazon processar (pode levar até 2h)`;
+    } else if (reportNormal) {
       source = 'daily_report'; quality = 'high';
       const syncStr = lastSyncAt
         ? `sync ${new Date(lastSyncAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
@@ -366,7 +376,7 @@ export default function Dashboard() {
       const dias = syncAgeHours !== null ? `há ${Math.round(syncAgeHours)}h` : 'há tempo desconhecido';
       label = `Último sync ${dias} — execute Sync para obter relatório atualizado`;
     }
-    return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours };
+    return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours, syncRecenteButStaleReport };
   }, [allMetrics, account]);
 
   // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
@@ -851,11 +861,13 @@ export default function Dashboard() {
         {!loading ? (
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-4 text-[10px] font-medium ${
             dataQuality.quality === 'high'   ? 'bg-emerald-500/8 border border-emerald-500/15 text-emerald-400' :
+            dataQuality.quality === 'warn'   ? 'bg-amber-500/8 border border-amber-500/20 text-amber-400' :
             dataQuality.quality === 'low'    ? 'bg-red-500/8 border border-red-500/15 text-red-400' :
                                                'bg-surface-2 border border-surface-3 text-slate-500'
           }`}>
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
               dataQuality.quality === 'high' ? 'bg-emerald-400' :
+              dataQuality.quality === 'warn' ? 'bg-amber-400' :
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
