@@ -137,12 +137,29 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 4. Aguardar 5min e forçar poll para não deixar jobs orfãos
+    // 4. Aguardar 5min, forçar poll e disparar SP-API + motor de decisão
     if (pipelineOk) {
       console.log('[watchdog] Aguardando 5min para forçar poll dos novos jobs...');
       await sleep(5 * 60 * 1000);
       await db.functions.invoke('pollAmazonAdsReportJobs', {
         max_jobs: 20, _service_role: true,
+      }).catch(() => {});
+
+      // Sincronizar catálogo SP-API em paralelo (fire-and-forget)
+      console.log('[watchdog] Disparando sincronização SP-API (catálogo, estoque, vendas)...');
+      await Promise.allSettled([
+        db.functions.invoke('syncProductCatalogV2', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
+        db.functions.invoke('syncProductsFromInventory', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
+        db.functions.invoke('syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
+      ]);
+
+      // Disparar motor de decisão + execução automática
+      console.log('[watchdog] Disparando motor determinístico de decisão...');
+      await db.functions.invoke('runDeterministicDecisionEngine', {
+        amazon_account_id: aid, auto_approve: true, skip_approval: true, _service_role: true,
+      }).catch(() => {});
+      await db.functions.invoke('executeApprovedDecisionQueue', {
+        amazon_account_id: aid, auto_execute: true, requires_approval: false, _service_role: true,
       }).catch(() => {});
     }
 
@@ -155,7 +172,7 @@ Deno.serve(async (req) => {
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       result_summary: pipelineOk
-        ? `Pipeline disparada OK após ${MAX_RETRIES} tentativa(s)`
+        ? `Pipeline completa: ADS + SP-API + motor decisão disparados`
         : `Falhou após ${MAX_RETRIES} tentativas: ${lastError}`,
     }).catch(() => {});
 
