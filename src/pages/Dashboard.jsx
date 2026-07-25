@@ -758,6 +758,24 @@ export default function Dashboard() {
             return <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>;
           })()}
         </p>
+        {(() => {
+          if (!hasSalesDailyData || !lastSpApiDate || !lastAvailableAdsDate) return null;
+          const spApiMs = new Date(lastSpApiDate).getTime();
+          const adsMs = new Date(lastAvailableAdsDate).getTime();
+          const gapDays = Math.round((adsMs - spApiMs) / 86400000);
+          if (gapDays < 2) return null;
+          // Dias ausentes: do dia seguinte ao lastSpApiDate até lastAvailableAdsDate
+          const nextDay = new Date(spApiMs + 86400000).toISOString().slice(0, 10);
+          return (
+            <div className="flex items-center gap-2 px-3 py-2 mb-2 rounded-lg bg-amber-500/8 border border-amber-500/20 text-[10px] text-amber-300">
+              <span className="flex-shrink-0">⚠</span>
+              <span>
+                Faturamento real disponível até <strong>{fmtDateBRFull(lastSpApiDate)}</strong>.
+                {' '}Dias {fmtDateBR(nextDay)}–{fmtDateBR(lastAvailableAdsDate)} aguardando sincronização SP-API (Finance Events).
+              </span>
+            </div>
+          );
+        })()}
         {hasSalesDailyData ? (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
             <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
