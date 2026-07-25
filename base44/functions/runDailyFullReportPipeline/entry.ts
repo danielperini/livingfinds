@@ -174,97 +174,38 @@ Deno.serve(async (req) => {
     }
 
     // ── FASE 1: Solicitar todos os relatórios v3 (assíncrono, sem polling) ────
-    console.log('[Pipeline] Fase 1: solicitando relatórios v3...');
+    // Delega para requestAmazonAdsReportV3 que já implementa deduplicação por idempotency_key.
+    // Se o job do dia já existe (pending/processing/completed/processed), ele é reutilizado
+    // automaticamente sem nova chamada à Amazon — uma solicitação por tipo por dia.
+    console.log('[Pipeline] Fase 1: solicitando relatórios v3 (com deduplicação)...');
 
     const endDate = new Date(); endDate.setDate(endDate.getDate() - 1);
     const startDate = new Date(endDate); startDate.setDate(startDate.getDate() - 29);
     const endDateStr = fmtDate(endDate);
     const startDateStr = fmtDate(startDate);
 
-    // Obter token para solicitar relatórios
-    const adsToken = await getAdsToken(account);
-    // Headers padrão para relatórios v3
-    const adsHeaders: Record<string, string> = {
-      'Authorization': `Bearer ${adsToken}`,
-      'Amazon-Advertising-API-ClientId': clientId,
-      'Amazon-Advertising-API-Scope': profileId,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-
     const jobIds: Record<string, string> = {};
     const reportResults: any[] = await Promise.all(REPORT_CONFIGS.map(async (rc) => {
       try {
-        const payload: any = {
-          name: `LivingFinds_${rc.key}_${endDateStr}`,
-          startDate: startDateStr,
-          endDate: endDateStr,
-          configuration: {
-            adProduct: 'SPONSORED_PRODUCTS',
-            groupBy: rc.groupBy,
-            columns: rc.columns,
-            reportTypeId: rc.reportTypeId,
-            timeUnit: 'DAILY',
-            format: 'GZIP_JSON',
-          },
-        };
-        // Filtro para spTargeting: apenas keywords (exclui product targets)
-        if (rc.filters) {
-          payload.configuration.filters = rc.filters;
-        }
-
-        const r = await fetch(`${adsBase}/reporting/reports`, {
-          method: 'POST',
-          headers: adsHeaders,
-          body: JSON.stringify(payload),
+        const res = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
+          amazon_account_id: aid,
+          report_type_id: rc.reportTypeId,
+          ad_product: 'SPONSORED_PRODUCTS',
+          time_unit: 'DAILY',
+          group_by: rc.groupBy,
+          columns: rc.columns,
+          filters: rc.filters || null,
+          start_date: startDateStr,
+          end_date: endDateStr,
+          report_name: `LivingFinds_${rc.key}_${endDateStr}`,
+          source_function: 'runDailyFullReportPipeline',
         });
-        const d = await r.json().catch(() => ({}));
-
-        if (!r.ok) {
-          console.warn(`[Pipeline] report ${rc.key} HTTP ${r.status}: ${JSON.stringify(d).slice(0, 200)}`);
+        const d = res?.data ?? res;
+        if (d?.ok && d?.job_id) {
+          jobIds[rc.key] = d.job_id;
+          return { key: rc.key, ok: true, job_id: d.job_id, reused: d.reused ?? false };
         }
-
-        if (r.ok && d.reportId) {
-          // Registrar job no banco para polling assíncrono
-          const job = await base44.asServiceRole.entities.AmazonAdsReportJob.create({
-            amazon_account_id: aid,
-            profile_id: profileId,
-            region: account.region || 'NA',
-            report_id: d.reportId,
-            report_name: payload.name,
-            report_type_id: rc.reportTypeId,
-            ad_product: 'SPONSORED_PRODUCTS',
-            time_unit: 'DAILY',
-            format: 'GZIP_JSON',
-            group_by: rc.groupBy,
-            columns: rc.columns,
-            filters: rc.filters ? JSON.stringify(rc.filters) : null,
-            start_date: startDateStr,
-            end_date: endDateStr,
-            idempotency_key: `${rc.reportTypeId}|${startDateStr}|${endDateStr}`,
-            status: 'pending',
-            amazon_status: d.status || 'PENDING',
-            requested_at: now,
-            next_poll_at: new Date(Date.now() + 10 * 60000).toISOString(), // primeiro poll após 10min
-            poll_attempts: 0,
-            source_function: 'runDailyFullReportPipeline',
-            created_at: now,
-            updated_at: now,
-          }).catch(() => null);
-
-          if (job) jobIds[rc.key] = job.id;
-          return { key: rc.key, ok: true, report_id: d.reportId, job_id: job?.id };
-        } else if (r.status === 425) {
-          // Já existe um relatório equivalente em andamento — buscar job existente
-          const existingJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
-            { amazon_account_id: aid, report_type_id: rc.reportTypeId, status: 'pending' },
-            '-created_at', 1
-          ).catch(() => []);
-          if (existingJobs[0]) jobIds[rc.key] = existingJobs[0].id;
-          return { key: rc.key, ok: true, reused: true, status: 425 };
-        } else {
-          return { key: rc.key, ok: false, error: d?.message || `HTTP ${r.status}` };
-        }
+        return { key: rc.key, ok: false, error: d?.error || 'unknown' };
       } catch (e: any) {
         return { key: rc.key, ok: false, error: e.message };
       }
