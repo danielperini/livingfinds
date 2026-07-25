@@ -70,7 +70,17 @@ const STATE_FILTERS = [
 { key: 'archived', label: 'Arquivadas' }];
 
 
+const PAGE_SIZE = 50;
+
 function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction }) {
+  const [page, setPage] = useState(1);
+
+  // Reset pagination when campaigns list changes (filter/search)
+  useEffect(() => { setPage(1); }, [campaigns.length, stateFilter]);
+
+  const visible = campaigns.slice(0, page * PAGE_SIZE);
+  const hasMore = visible.length < campaigns.length;
+
   return (
     <div className="flex-1 flex flex-col min-w-0 border-r border-surface-2 last:border-r-0">
       {/* Column header */}
@@ -79,7 +89,7 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
         <span className={`text-xs font-bold uppercase tracking-wider ${color}`}>{title}</span>
         <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
       </div>
-      {/* Extra action row (e.g. bulk reactivate button) */}
+      {/* Extra action row */}
       {extraAction && (
         <div className="px-2 py-1.5 border-b border-surface-2">
           {extraAction}
@@ -103,8 +113,8 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
           </div> :
         campaigns.length === 0 ?
         <p className="text-[10px] text-slate-600 text-center py-6 px-2">Nenhuma campanha</p> :
-
-        campaigns.map((c, i) => {
+        <>
+        {visible.map((c, i) => {
           const isSelected = selectedId === c.id;
           const isNew = isNew24h(c);
           const aiManaged = isAiManaged(c);
@@ -120,7 +130,6 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
               'bg-surface-2 border-l-2 border-l-cyan' :
               'hover:bg-surface-1/60 border-l-2 border-l-transparent'}`
               }>
-              
                 {/* Name + badges */}
                 <div className="flex items-start gap-1.5 mb-1">
                   <p className="text-[11px] font-medium text-white truncate flex-1 leading-tight">
@@ -142,7 +151,6 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                         <Bot className="w-2.5 h-2.5" />
                       </span>
                   ) : null}
-                    {/* Badge MIGRAÇÃO PENDENTE — só em campanhas NÃO canônicas com múltiplas keywords */}
                     {(c.targeting_type || '').toUpperCase() === 'MANUAL' &&
                      !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
                      ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ? (
@@ -180,12 +188,19 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                 ) : null}
                 </div>
               </div>);
-
-        })
+        })}
+        {hasMore && (
+          <button
+            onClick={() => setPage(p => p + 1)}
+            className="w-full py-2 text-[10px] text-slate-500 hover:text-cyan transition-colors border-t border-surface-2/40"
+          >
+            Carregar mais ({campaigns.length - visible.length} restantes)
+          </button>
+        )}
+        </>
         }
       </div>
     </div>);
-
 }
 
 export default function AdsManagement() {
