@@ -164,15 +164,6 @@ export default function SpApiSelfAuth() {
         )}
       </div>
 
-      {/* Contexto */}
-      <div className="flex items-start gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-xl">
-        <AlertCircle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-amber-200">
-          A aplicação está em modo <strong>Draft/Privado</strong> — o fluxo OAuth público causa MD1000.
-          O suporte da Amazon confirmou que deves usar <strong>self-authorization</strong> para gerar o token SP-API directamente no Seller Central.
-        </p>
-      </div>
-
       {/* Passos */}
       <div className="bg-surface-1 border border-surface-2 rounded-2xl p-5 space-y-4">
         <p className="text-sm font-semibold text-white">Passos para gerar o token</p>
