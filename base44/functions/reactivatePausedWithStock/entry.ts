@@ -140,10 +140,22 @@ Deno.serve(async (req) => {
     const accounts = await db.entities.AmazonAccount.filter({ status: 'connected' });
     if (!accounts.length) return Response.json({ ok: true, message: 'Nenhuma conta conectada' });
 
+    // Guardrail: verificar kill switch ativo no dia atual
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+
     const globalResults = [];
 
     for (const account of accounts) {
       if (forceAccountId && account.id !== forceAccountId) continue;
+
+      // Guardrail: se kill switch ativo hoje, não reativar campanhas
+      const todayControllers = await db.entities.AccountDailySpendController.filter(
+        { amazon_account_id: account.id, spend_date: todayBRT }, null, 1
+      ).catch(() => []);
+      if (todayControllers[0]?.global_kill_switch === true) {
+        globalResults.push({ account_id: account.id, reactivated: 0, skipped_kill_switch: true, message: 'Kill switch ativo — reativação bloqueada até amanhã às 00h BRT' });
+        continue;
+      }
 
       const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
       const region    = account.region || 'NA';

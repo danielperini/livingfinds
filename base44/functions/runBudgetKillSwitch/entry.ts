@@ -38,25 +38,23 @@ Deno.serve(async (req) => {
     const todayBRT = brtDate.toISOString().slice(0, 10);
     const currentHourBRT = brtDate.getHours();
 
-    // ── 1. Ler dailyBudget de PerformanceSettings (fonte primária) ──
-    let dailyBudget = 70;
-    try {
-      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
-        { amazon_account_id: accountId }, '-updated_at', 1
-      );
-      if (psList[0]?.daily_budget_limit > 0) dailyBudget = Number(psList[0].daily_budget_limit);
-    } catch {}
-
-    // Carregar controller atual
+    // ── 1. Carregar controller atual do dia ──
     const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
       { amazon_account_id: accountId, spend_date: todayBRT }, null, 1
     ).catch(() => [] as any[]);
-
     const controller = controllers[0];
 
-    // Fallback: ler cap do controller se PS não disponível
-    if (dailyBudget <= 0 && controller) {
-      dailyBudget = Number(controller.user_daily_spend_cap || controller.effective_daily_spend_cap || 70);
+    // ── Cap: effective_daily_spend_cap do controller (fonte primária) → PerformanceSettings → default ──
+    let dailyBudget = 70;
+    if (controller?.effective_daily_spend_cap > 0) {
+      dailyBudget = Number(controller.effective_daily_spend_cap);
+    } else {
+      try {
+        const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+          { amazon_account_id: accountId }, '-updated_at', 1
+        );
+        if (psList[0]?.daily_budget_limit > 0) dailyBudget = Number(psList[0].daily_budget_limit);
+      } catch {}
     }
 
     // ── 2. Calcular gasto confirmado via CampaignMetricsDaily (data BRT) ──
@@ -295,6 +293,38 @@ Deno.serve(async (req) => {
       campaigns_affected: pausedCount,
       stop_type: 'DAILY_CAP_STOP',
       created_at: now,
+    }).catch(() => {});
+
+    // Alerta na Sala de Comando
+    const existingCapAlert = await base44.asServiceRole.entities.Alert.filter(
+      { amazon_account_id: accountId, alert_type: 'daily_cap_reached', status: 'active' }, '-created_at', 1
+    ).catch(() => []);
+    if (existingCapAlert.length === 0) {
+      await base44.asServiceRole.entities.Alert.create({
+        amazon_account_id: accountId,
+        alert_type: 'daily_cap_reached',
+        alert_family: 'budget',
+        severity: 'high',
+        status: 'active',
+        title: 'Teto diário atingido — campanhas pausadas',
+        message: `Gasto de R$${r2(confirmedSpend)} atingiu o teto de R$${dailyBudget}. ${pausedCount} campanha(s) foram pausadas. Retomada automática às 00h BRT.`,
+        entity_type: 'account',
+        first_detected_at: now,
+        last_detected_at: now,
+        created_at: now,
+      }).catch(() => {});
+    }
+
+    // Log de execução
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      amazon_account_id: accountId,
+      operation: 'budget_kill_switch',
+      status: 'success',
+      trigger_type: 'automatic',
+      started_at: now,
+      completed_at: now,
+      records_processed: pausedCount,
+      result_summary: `Kill switch ativado. Gasto: R$${r2(confirmedSpend)} / R$${dailyBudget}. Campanhas pausadas: ${pausedCount}.`,
     }).catch(() => {});
 
     await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {

@@ -38,9 +38,94 @@ Deno.serve(async(request)=>{
       ? await base44.asServiceRole.entities.AmazonAccount.filter({id:body.amazon_account_id})
       : await base44.asServiceRole.entities.AmazonAccount.filter({status:'connected'});
 
+    const nowIso = new Date().toISOString();
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    const yesterdayBRT = new Date(Date.now() - 3 * 3600000 - 86400000).toISOString().slice(0, 10);
+
     const allResults=[];
     for(const account of accounts){
-      const result:any={amazon_account_id:account.id,stock_reactivated:0,failed_decisions:0,kickoffs:0,auto_repairs:0,keyword_repairs:0,suggestions:0,recovered:0,failed:0,details:[]};
+      const result:any={amazon_account_id:account.id,stock_reactivated:0,failed_decisions:0,kickoffs:0,auto_repairs:0,keyword_repairs:0,suggestions:0,recovered:0,failed:0,kill_switch_recovered:0,details:[]};
+
+      // PRIORIDADE 0: Recuperação do Kill Switch do dia anterior
+      try{
+        const prevControllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
+          {amazon_account_id:account.id, spend_date:yesterdayBRT}, null, 1
+        ).catch(()=>[]);
+        const prevCtrl = prevControllers[0];
+
+        if(prevCtrl?.global_kill_switch === true){
+          const pausedIds: string[] = Array.isArray(prevCtrl.campaigns_paused_today) ? prevCtrl.campaigns_paused_today : [];
+
+          if(pausedIds.length > 0){
+            // Reativar via Amazon Ads API
+            for(let i=0; i<pausedIds.length; i+=20){
+              const batch = pausedIds.slice(i, i+20).map((id:string)=>({campaignId:String(id), state:'ENABLED'}));
+              await base44.asServiceRole.functions.invoke('amazonAdsCommand',{
+                _service_role:true,
+                amazon_account_id:account.id,
+                path:'/sp/campaigns',
+                method:'PUT',
+                content_type:'application/vnd.spCampaign.v3+json',
+                payload:{campaigns:batch},
+              }).catch(()=>{});
+              // Atualizar estado local
+              for(const campId of pausedIds.slice(i, i+20)){
+                const cList = await base44.asServiceRole.entities.Campaign.filter(
+                  {amazon_account_id:account.id, campaign_id:campId}, null, 1
+                ).catch(()=>[]);
+                const cAlt = cList[0] ? [] : await base44.asServiceRole.entities.Campaign.filter(
+                  {amazon_account_id:account.id, amazon_campaign_id:campId}, null, 1
+                ).catch(()=>[]);
+                const camp = cList[0] || cAlt[0];
+                if(camp) {
+                  await base44.asServiceRole.entities.Campaign.update(camp.id,{
+                    status:'enabled', state:'enabled', archive_reason:null, last_pause_reason:null,
+                  }).catch(()=>{});
+                }
+              }
+              await wait(300);
+            }
+            result.kill_switch_recovered = pausedIds.length;
+          }
+
+          // Criar controller do dia atual com kill_switch=false
+          const perfList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+            {amazon_account_id:account.id}, '-updated_at', 1
+          ).catch(()=>[]);
+          const newCap = Number(perfList[0]?.daily_budget_limit || prevCtrl.effective_daily_spend_cap || 70);
+
+          const todayCtrlList = await base44.asServiceRole.entities.AccountDailySpendController.filter(
+            {amazon_account_id:account.id, spend_date:todayBRT}, null, 1
+          ).catch(()=>[]);
+          if(todayCtrlList[0]){
+            await base44.asServiceRole.entities.AccountDailySpendController.update(todayCtrlList[0].id,{
+              global_kill_switch:false, effective_daily_spend_cap:newCap, user_daily_spend_cap:newCap,
+              confirmed_spend:0, remaining_spend:newCap, cap_status:'safe', updated_at:nowIso,
+            }).catch(()=>{});
+          } else {
+            await base44.asServiceRole.entities.AccountDailySpendController.create({
+              amazon_account_id:account.id, spend_date:todayBRT, global_kill_switch:false,
+              effective_daily_spend_cap:newCap, user_daily_spend_cap:newCap,
+              confirmed_spend:0, remaining_spend:newCap, cap_status:'safe',
+              timezone:'America/Sao_Paulo', created_at:nowIso, updated_at:nowIso,
+            }).catch(()=>{});
+          }
+
+          // Resolver alerta daily_cap_reached do dia anterior
+          const capAlerts = await base44.asServiceRole.entities.Alert.filter(
+            {amazon_account_id:account.id, alert_type:'daily_cap_reached', status:'active'}, '-created_at', 5
+          ).catch(()=>[]);
+          for(const a of capAlerts){
+            await base44.asServiceRole.entities.Alert.update(a.id,{
+              status:'resolved', resolved_at:nowIso, resolution_reason:'Novo dia iniciado — campanhas reativadas automaticamente',
+            }).catch(()=>{});
+          }
+
+          result.details.push({type:'kill_switch_recovery', recovered:pausedIds.length, new_cap:newCap, ok:true});
+        }
+      }catch(e:any){
+        result.details.push({type:'kill_switch_recovery', ok:false, error:e?.message||String(e)});
+      }
 
       // PRIORIDADE 1: Reativar campanhas AUTO pausadas por estoque antes de qualquer outra tarefa
       try{
