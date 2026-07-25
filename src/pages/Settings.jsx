@@ -218,6 +218,30 @@ export default function Settings() {
       setGoalsSaved(true);
       setTimeout(() => setGoalsSaved(false), 3000);
 
+      // ── Pós-save: sincronizar cap no AccountDailySpendController do dia atual ──
+      const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+      base44.entities.AccountDailySpendController.filter(
+        { amazon_account_id: account.id, spend_date: todayBRT }, null, 1
+      ).then(existing => {
+        const capPayload = {
+          user_daily_spend_cap: goals.daily_budget_limit,
+          effective_daily_spend_cap: goals.daily_budget_limit,
+          updated_at: now,
+        };
+        if (existing[0]) {
+          base44.entities.AccountDailySpendController.update(existing[0].id, capPayload).catch(() => {});
+        } else {
+          base44.entities.AccountDailySpendController.create({
+            amazon_account_id: account.id,
+            spend_date: todayBRT,
+            timezone: 'America/Sao_Paulo',
+            ...capPayload,
+            cap_status: 'safe',
+            created_at: now,
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+
       // ── Pós-save: disparar motor imediatamente + enfileirar recalibração ──
       // 1. Motor relê os novos parâmetros e gera decisões atualizadas agora
       base44.functions.invoke('runUnifiedDecisionEngine', {
@@ -511,6 +535,9 @@ export default function Settings() {
           {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar configurações'}
         </button>
       </div>
+
+      {/* ─── STATUS DO ORÇAMENTO DIÁRIO ─── */}
+      {account && <BudgetStatusPanel accountId={account.id} />}
 
       {/* ─── BACKUP ─── */}
       <BackupPanel />
