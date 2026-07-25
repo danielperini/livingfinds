@@ -348,6 +348,37 @@ function BidDeltaInline({ before, after }) {
   );
 }
 
+// ─── Filtro: apenas alterações reais de bid por motor de performance ─────────
+
+const BID_MOTOR_SOURCES = new Set([
+  'runConservativeBidOptimizer',
+  'runDeterministicDecisionEngine',
+  'runBidDecisionEngineV2',
+  'runManualCampaignBidLifecycle',
+  'runAcosBidReductionEngine',
+  'adjustBidsWithConversion',
+  'optimizeKeywordBidsDaily',
+  'runDaypartingDecisionEngine',
+  'runScheduledBidAdjustments',
+  'bulkAdjustKeywordBids',
+  'smartBidFromCpc',
+  'calibrateBidsNoImpressions',
+]);
+
+const EXCLUDED_ACTIONS = new Set(['reload_settings']);
+const EXCLUDED_SOURCE_PREFIXES = ['Settings', 'applyInitialBids', 'boostNew', 'boostBids'];
+
+function isRealBidChange(d) {
+  if (d.entity_type === 'account') return false;
+  if (!d.keyword_id) return false;
+  if (EXCLUDED_ACTIONS.has(d.action)) return false;
+  const src = d.source_function || '';
+  if (EXCLUDED_SOURCE_PREFIXES.some(p => src.includes(p))) return false;
+  // Se tem source_function preenchido, deve ser da whitelist
+  if (src && !BID_MOTOR_SOURCES.has(src)) return false;
+  return true;
+}
+
 // ─── Painel principal ─────────────────────────────────────────────────────────
 
 const FILTER_STATUS_OPTIONS = [
