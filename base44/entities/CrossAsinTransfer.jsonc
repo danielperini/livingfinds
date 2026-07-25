@@ -66,7 +66,7 @@
     "relevance_score": {
       "type": "number",
       "default": 0,
-      "description": "0-100"
+      "description": "0-100: conversion_score composto calculado no motor cross-ASIN"
     },
     "relevance_phase": {
       "type": "string",
@@ -96,6 +96,16 @@
     "relevance_breakdown": {
       "type": "string",
       "description": "JSON dos componentes do score"
+    },
+    "conversion_score": {
+      "type": "number",
+      "default": 0,
+      "description": "Score composto 0-100: (orders*10) + (cvr*30) + (acos_efficiency*40) + (clicks_bonus*20)"
+    },
+    "evaluation_window_hours": {
+      "type": "number",
+      "default": 0,
+      "description": "Janela de avalia\u00e7\u00e3o em horas. 48 para keywords com conversion_score >= 70 (VALIDATION_FAST)."
     },
     "transfer_decision": {
       "type": "string",

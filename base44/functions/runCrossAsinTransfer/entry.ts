@@ -207,6 +207,24 @@ Deno.serve(async (req) => {
       // Uma keyword é "doadora confirmada" se: clicks > 0 e (acos=0 ou acos<=maxAcos)
       const donorMap = new Map(); // normalizedKw → { keyword, asin, acos, clicks, confidence, source }
 
+      // ── Calcular conversion_score composto para cada donor ─────────────────
+      function calcConversionScore(donor) {
+        const orders = Number(donor.orders || 0);
+        const cvr = Number(donor.cvr || 0);      // 0-1 float
+        const acos = Number(donor.acos || 0);
+        const clicks = Number(donor.clicks || 0);
+        const conf = Number(donor.confidence || 0);
+        const acos_efficiency = acos > 0 ? Math.max(0, 1 - acos / maxAcos) : 0.5; // 0.5 neutral when no data
+        const clicks_bonus = Math.min(1, clicks / 20);
+        if (orders === 0 && clicks === 0) {
+          // Sem dados de conversão: score baseado em confidence (0-50 range)
+          return Math.round((conf / 100) * 50);
+        }
+        return Math.min(100, Math.round(
+          (orders * 10) + (cvr * 30) + (acos_efficiency * 40) + (clicks_bonus * 20)
+        ));
+      }
+
       for (const term of termBankRaw) {
         if (!asins.includes(term.asin)) continue;
         if (!term.term) continue;
@@ -217,8 +235,19 @@ Deno.serve(async (req) => {
         if (!isDonor) continue;
         const nkw = normalizeKeyword(term.term);
         if (!nkw || nkw.length < 3) continue;
-        if (!donorMap.has(nkw) || (term.clicks || 0) > (donorMap.get(nkw).clicks || 0)) {
-          donorMap.set(nkw, { keyword: term.term, asin: term.asin, acos, clicks, confidence: conf, source: 'TermBank' });
+        const entry = {
+          keyword: term.term,
+          asin: term.asin,
+          acos,
+          clicks,
+          orders: Number(term.orders || 0),
+          cvr: Number(term.cvr || 0),
+          cpc: Number(term.cpc || 0),
+          confidence: conf,
+          source: 'TermBank',
+        };
+        if (!donorMap.has(nkw) || clicks > (donorMap.get(nkw).clicks || 0)) {
+          donorMap.set(nkw, entry);
         }
       }
 
@@ -232,69 +261,112 @@ Deno.serve(async (req) => {
         if (!isDonor) continue;
         const nkw = normalizeKeyword(kb.keyword);
         if (!nkw || nkw.length < 3) continue;
+        const entry = {
+          keyword: kb.keyword,
+          asin: kb.asin,
+          acos,
+          clicks,
+          orders: Number(kb.orders || 0),
+          cvr: Number(kb.cvr || 0),
+          cpc: Number(kb.cpc || 0),
+          confidence: conf,
+          source: 'KeywordBank',
+        };
         if (!donorMap.has(nkw) || clicks > (donorMap.get(nkw).clicks || 0)) {
-          donorMap.set(nkw, { keyword: kb.keyword, asin: kb.asin, acos, clicks, confidence: conf, source: 'KeywordBank' });
+          donorMap.set(nkw, entry);
         }
       }
 
-      let groupTransfers = 0;
+      // ── Montar candidatas brutas (sem limite ainda) ─────────────────────
       const groupCandidates = [];
+      const rawCandidates = []; // { nkw, donor, destAsin, idempKey, destProduct, conversionScore }
 
       for (const [nkw, donor] of donorMap.entries()) {
-        if (transfersToCreate.length >= MAX_TRANSFERS_PER_RUN) break;
-
         for (const destAsin of asins) {
-          if (destAsin === donor.asin) continue; // mesmo ASIN, ignorar
-          if (transfersToCreate.length >= MAX_TRANSFERS_PER_RUN) break;
+          if (destAsin === donor.asin) continue;
 
-          // Verificar cobertura: já tem campanha EXACT com essa keyword?
           const covKey = `${destAsin}|${nkw}`;
           if (coverageIndex.has(covKey)) {
             groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'already_covered' });
             continue;
           }
 
-          // Verificar idempotência: já foi criado hoje?
           const idempKey = `crossasin:${accountId}:${nkw}:${destAsin}:${todayBRT}`;
           if (existingKeys.has(idempKey)) {
             groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'already_queued' });
             continue;
           }
 
-          // Produto destino com estoque?
           const destProduct = activeProducts.find(p => p.asin === destAsin);
           if (!destProduct) continue;
 
-          transfersToCreate.push({
-            amazon_account_id: accountId,
-            keyword: donor.keyword,
-            normalized_keyword: nkw,
-            match_type: 'exact',
-            source_asin: donor.asin,
-            destination_asin: destAsin,
-            destination_product_name: destProduct.display_name || destProduct.product_name || destAsin,
-            destination_sku: destProduct.sku || '',
-            destination_fba_inventory: destProduct.fba_inventory || 0,
-            source_orders: 0,
-            source_acos: donor.acos,
-            source_cvr: 0,
-            source_cpc: 0,
-            source_winner_tier: 'NONE',
-            relevance_score: Math.min(100, donor.confidence || 50),
-            relevance_phase: 'HEURISTIC_ONLY',
-            heuristic_score: donor.confidence || 50,
-            transfer_decision: 'HIGH_CONFIDENCE_TRANSFER',
-            transfer_confidence: donor.confidence >= 90 ? 'HIGH' : 'MEDIUM',
-            campaign_job: 'VALIDATION',
-            status: 'PROPOSED',
-            idempotency_key: idempKey,
-            proposed_at: now,
-            created_at: now,
-            product_family: name,
+          rawCandidates.push({
+            nkw, donor, destAsin, idempKey, destProduct,
+            conversionScore: calcConversionScore(donor),
           });
-          groupTransfers++;
-          groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'queued' });
         }
+      }
+
+      // ── Ordenar por conversion_score desc antes de aplicar o limite ─────
+      rawCandidates.sort((a, b) => b.conversionScore - a.conversionScore);
+
+      let groupTransfers = 0;
+
+      for (const cand of rawCandidates) {
+        if (transfersToCreate.length >= MAX_TRANSFERS_PER_RUN) break;
+
+        const { nkw, donor, destAsin, idempKey, destProduct, conversionScore } = cand;
+
+        // Keywords com evidência real de conversão → elevar decisão e confiança
+        const hasRealConversion = donor.orders >= 1 && donor.cvr >= 0.05;
+        const highScore = conversionScore >= 70;
+
+        const transferDecision = hasRealConversion ? 'HIGH_CONFIDENCE_TRANSFER' : 'HIGH_CONFIDENCE_TRANSFER';
+        const transferConfidence = hasRealConversion ? 'HIGH' : (donor.confidence >= 90 ? 'HIGH' : 'MEDIUM');
+        const evaluationWindowHours = highScore ? 48 : 0;
+        const campaignJob = highScore ? 'VALIDATION' : 'VALIDATION';
+
+        transfersToCreate.push({
+          amazon_account_id: accountId,
+          keyword: donor.keyword,
+          normalized_keyword: nkw,
+          match_type: 'exact',
+          source_asin: donor.asin,
+          destination_asin: destAsin,
+          destination_product_name: destProduct.display_name || destProduct.product_name || destAsin,
+          destination_sku: destProduct.sku || '',
+          destination_fba_inventory: destProduct.fba_inventory || 0,
+          source_orders: donor.orders,
+          source_acos: donor.acos,
+          source_cvr: donor.cvr,
+          source_cpc: donor.cpc,
+          source_winner_tier: donor.orders >= 1 ? 'WINNER' : 'NONE',
+          relevance_score: conversionScore,
+          relevance_phase: 'HEURISTIC_ONLY',
+          heuristic_score: donor.confidence || 50,
+          conversion_score: conversionScore,
+          evaluation_window_hours: evaluationWindowHours,
+          transfer_decision: transferDecision,
+          transfer_confidence: transferConfidence,
+          campaign_job: campaignJob,
+          status: 'PROPOSED',
+          idempotency_key: idempKey,
+          proposed_at: now,
+          created_at: now,
+          product_family: name,
+          relevance_breakdown: JSON.stringify({
+            orders: donor.orders,
+            cvr: donor.cvr,
+            acos: donor.acos,
+            clicks: donor.clicks,
+            acos_efficiency: donor.acos > 0 ? Math.max(0, 1 - donor.acos / maxAcos) : 0.5,
+            clicks_bonus: Math.min(1, donor.clicks / 20),
+            confidence: donor.confidence,
+            source: donor.source,
+          }),
+        });
+        groupTransfers++;
+        groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'queued', conversion_score: conversionScore });
       }
 
       groupResults.push({
