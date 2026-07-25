@@ -350,7 +350,7 @@ function SettingsHistoryPanel({ accountId }) {
     if (!open || !accountId) return;
     setLoading(true);
     base44.entities.PerformanceSettingsHistory.filter(
-      { amazon_account_id: accountId }, '-changed_at', 5
+      { amazon_account_id: accountId }, '-created_date', 10
     ).then(res => setHistory(res || [])).catch(() => setHistory([])).finally(() => setLoading(false));
   }, [open, accountId]);
 
