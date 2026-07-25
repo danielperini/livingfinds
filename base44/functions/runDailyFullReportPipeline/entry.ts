@@ -174,16 +174,14 @@ Deno.serve(async (req) => {
     }
 
     // ── FASE 1: Solicitar todos os relatórios v3 (assíncrono, sem polling) ────
-    // Delega para requestAmazonAdsReportV3 que já implementa deduplicação por idempotency_key.
-    // Se o job do dia já existe (pending/processing/completed/processed), ele é reutilizado
-    // automaticamente sem nova chamada à Amazon — uma solicitação por tipo por dia.
-    console.log('[Pipeline] Fase 1: solicitando relatórios v3 (com deduplicação)...');
+    console.log('[Pipeline] Fase 1: solicitando relatórios v3...');
 
     const endDate = new Date(); endDate.setDate(endDate.getDate() - 1);
     const startDate = new Date(endDate); startDate.setDate(startDate.getDate() - 29);
     const endDateStr = fmtDate(endDate);
     const startDateStr = fmtDate(startDate);
 
+    // ── Delegar solicitação de relatórios ao requestAmazonAdsReportV3 (deduplication via idempotency_key)
     const jobIds: Record<string, string> = {};
     const reportResults: any[] = await Promise.all(REPORT_CONFIGS.map(async (rc) => {
       try {
@@ -200,12 +198,25 @@ Deno.serve(async (req) => {
           report_name: `LivingFinds_${rc.key}_${endDateStr}`,
           source_function: 'runDailyFullReportPipeline',
         });
+
         const d = res?.data ?? res;
         if (d?.ok && d?.job_id) {
           jobIds[rc.key] = d.job_id;
-          return { key: rc.key, ok: true, job_id: d.job_id, reused: d.reused ?? false };
+          if (d.reused) {
+            // Registrar reutilização no SyncExecutionLog para rastreabilidade
+            await base44.asServiceRole.entities.SyncExecutionLog.create({
+              amazon_account_id: aid,
+              operation: `requestReport_${rc.key}`,
+              trigger_type: 'automatic',
+              status: 'skipped',
+              result_summary: `Job reutilizado: ${d.job_id} (status: ${d.status})`,
+              started_at: now,
+              completed_at: now,
+            }).catch(() => {});
+          }
+          return { key: rc.key, ok: true, job_id: d.job_id, reused: d.reused ?? false, status: d.status };
         }
-        return { key: rc.key, ok: false, error: d?.error || 'unknown' };
+        return { key: rc.key, ok: false, error: d?.error || 'Falha ao solicitar relatório' };
       } catch (e: any) {
         return { key: rc.key, ok: false, error: e.message };
       }
@@ -221,7 +232,9 @@ Deno.serve(async (req) => {
     // ── FASE 2: Budget Usage API — dados em tempo quase real ─────────────────
     // Budget Usage API retorna consumo do dia atual sem esperar relatório
     console.log('[Pipeline] Fase 2: Budget Usage API (tempo real)...');
+    const adsToken = await getAdsToken(account).catch(() => '');
     try {
+      if (!adsToken) throw new Error('Token Ads indisponível para Budget Usage');
       // Budget Usage API v3 (SP) — com fallback para campaigns list
       const budgetApiHeaders = {
         'Authorization': `Bearer ${adsToken}`,
