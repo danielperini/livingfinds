@@ -1,10 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Clock, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2,
   CheckCircle, XCircle, AlertTriangle, ArrowRightLeft, Zap, Play,
   ChevronDown, ChevronRight, Filter, Search
 } from 'lucide-react';
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
+} from 'recharts';
 
 const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
 
@@ -46,9 +49,24 @@ function StatusBadge({ value, map }) {
   );
 }
 
+// ── Bid Chart Tooltip ─────────────────────────────────────────────────────
+function BidChartTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div className="bg-[#111827] border border-surface-3 rounded-lg px-3 py-2 text-xs shadow-xl">
+      <p className="text-slate-300 font-semibold mb-0.5">Hora {d.hour}h</p>
+      <p className="text-cyan">Bid médio: <span className="font-bold">R${d.avg_bid.toFixed(2)}</span></p>
+      <p className="text-slate-500">{d.count} decisão{d.count !== 1 ? 'ões' : ''}</p>
+    </div>
+  );
+}
+
 // ── Dayparting Tab ────────────────────────────────────────────────────────
 function DaypartingTab({ account }) {
   const [decisions, setDecisions] = useState([]);
+  const [executedDecisions, setExecutedDecisions] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState({});
   const [filter, setFilter] = useState('pending_approval');
@@ -60,8 +78,14 @@ function DaypartingTab({ account }) {
     try {
       const filterObj = { amazon_account_id: account.id };
       if (filter !== 'all') filterObj.status = filter;
-      const data = await base44.entities.DaypartingDecision.filter(filterObj, '-created_date', 200);
+      const [data, executed, cams] = await Promise.all([
+        base44.entities.DaypartingDecision.filter(filterObj, '-created_date', 200),
+        base44.entities.DaypartingDecision.filter({ amazon_account_id: account.id, status: 'executed' }, '-created_date', 500),
+        base44.entities.Campaign.filter({ amazon_account_id: account.id }, null, 500).catch(() => []),
+      ]);
       setDecisions(data);
+      setExecutedDecisions(executed);
+      setCampaigns(cams);
     } catch {}
     finally { setLoading(false); }
   }, [account, filter]);
@@ -102,6 +126,37 @@ function DaypartingTab({ account }) {
   const executed = decisions.filter(d => d.status === 'executed').length;
   const bidUp    = decisions.filter(d => d.decision_type === 'BID_UP').length;
 
+  // Gráfico: bid médio por hora das decisões executadas
+  const bidByHour = useMemo(() => {
+    const map = {};
+    for (const d of executedDecisions) {
+      const h = d.hour ?? -1;
+      if (h < 0 || h > 23) continue;
+      const bid = Number(d.proposed_bid || 0);
+      if (bid <= 0) continue;
+      if (!map[h]) map[h] = { sum: 0, count: 0 };
+      map[h].sum += bid;
+      map[h].count += 1;
+    }
+    return Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      avg_bid: map[h] ? parseFloat((map[h].sum / map[h].count).toFixed(2)) : 0,
+      count: map[h]?.count || 0,
+    }));
+  }, [executedDecisions]);
+
+  // Card: campanhas sem orçamento
+  const campaignsNoBudget = useMemo(() => {
+    return campaigns.filter(c => {
+      const state = (c.state || c.status || '').toLowerCase();
+      if (state === 'archived') return false;
+      const budget = Number(c.daily_budget || 0);
+      return budget <= 0;
+    });
+  }, [campaigns]);
+
+  const X_LABELS_SHOW = new Set([0, 6, 12, 18, 23]);
+
   return (
     <div className="p-4 space-y-4">
       {/* KPIs */}
@@ -117,6 +172,60 @@ function DaypartingTab({ account }) {
             <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
           </div>
         ))}
+      </div>
+
+      {/* Gráfico + Alerta de orçamento */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {/* Gráfico de bid médio por hora */}
+        <div className="bg-surface-2 rounded-xl border border-surface-3 p-4">
+          <p className="text-xs font-semibold text-slate-300 mb-3">Bid médio por hora (decisões executadas)</p>
+          {executedDecisions.length === 0 ? (
+            <div className="h-[180px] flex items-center justify-center text-slate-600 text-xs">Sem decisões executadas ainda.</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={bidByHour} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <XAxis dataKey="hour" tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false}
+                  tickFormatter={h => X_LABELS_SHOW.has(h) ? `${h}h` : ''} />
+                <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false}
+                  tickFormatter={v => v > 0 ? `R$${v.toFixed(2)}` : ''} width={48} />
+                <Tooltip content={<BidChartTooltip />} cursor={{ fill: 'rgba(59,130,246,0.08)' }} />
+                <Bar dataKey="avg_bid" radius={[3, 3, 0, 0]}>
+                  {bidByHour.map((entry, i) => (
+                    <Cell key={i} fill={entry.avg_bid > 0 ? '#3B82F6' : '#1E2A40'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Card de campanhas sem orçamento */}
+        {campaignsNoBudget.length > 0 && (
+          <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <p className="text-xs font-semibold text-amber-300">{campaignsNoBudget.length} campanha{campaignsNoBudget.length !== 1 ? 's' : ''} sem orçamento diário</p>
+            </div>
+            <div className="space-y-1.5 max-h-[148px] overflow-y-auto scrollbar-thin">
+              {campaignsNoBudget.map((c, i) => (
+                <div key={c.id || i} className="flex items-center gap-2 py-1 border-b border-amber-500/10 last:border-0">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-slate-300 truncate font-medium">{c.name || c.campaign_name || '—'}</p>
+                    {c.asin && <p className="text-[9px] font-mono text-slate-500">{c.asin}</p>}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400 border border-slate-600/30">
+                      {(c.targeting_type || '').toUpperCase() === 'AUTO' ? 'AUTO' : 'MANUAL'}
+                    </span>
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-500/30">
+                      SEM ORÇAMENTO
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Info automação */}
