@@ -4,7 +4,7 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
-import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2, Zap, CheckCircle, AlertTriangle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import WeeklyReportView from '@/components/analytics/WeeklyReportView';
 import AcosEvolutionPanel from '@/components/analytics/AcosEvolutionPanel';
@@ -68,9 +68,6 @@ export default function Analytics() {
   const [selectedAsin, setSelectedAsin] = useState('all');
   const [period, setPeriod] = useState(30);
   const [activeMainTab, setActiveMainTab] = useState('metricas');
-  const [syncing, setSyncing] = useState(false);
-  const [syncCooldown, setSyncCooldown] = useState(0);
-  const [syncResult, setSyncResult] = useState(null); // { type: 'success'|'error'|'token', text }
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -99,48 +96,6 @@ export default function Analytics() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
-
-  // Cooldown countdown
-  useEffect(() => {
-    if (syncCooldown <= 0) return;
-    const t = setTimeout(() => setSyncCooldown(c => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [syncCooldown]);
-
-  const syncData = async () => {
-    if (syncing || syncCooldown > 0) return;
-    setSyncing(true);
-    setSyncResult(null);
-    try {
-      const res = await base44.functions.invoke('checkAndForceReportPipeline', { force: true });
-      const data = res?.data || res || {};
-      const errMsg = String(data?.error || '').toLowerCase();
-      const isTokenError = errMsg.includes('authorized') || errMsg.includes('token') || errMsg.includes('unauthorized');
-      if (isTokenError) {
-        setSyncResult({ type: 'token', text: 'Token Amazon Ads revogado — reconecte em Integrações' });
-      } else if (data?.ok === false || data?.error) {
-        setSyncResult({ type: 'error', text: data?.error || 'Erro ao sincronizar' });
-      } else {
-        // Determinar data mais recente processada
-        const action = data?.action || '';
-        const summary = action === 'skipped' ? 'Dados já atualizados recentemente' : 'Sincronização disparada com sucesso';
-        setSyncResult({ type: 'success', text: summary });
-      }
-    } catch (e) {
-      const errMsg = String(e?.message || '').toLowerCase();
-      const isTokenError = errMsg.includes('authorized') || errMsg.includes('token');
-      if (isTokenError) {
-        setSyncResult({ type: 'token', text: 'Token Amazon Ads revogado — reconecte em Integrações' });
-      } else {
-        setSyncResult({ type: 'error', text: e?.message || 'Erro ao sincronizar' });
-      }
-    } finally {
-      setSyncing(false);
-      setSyncCooldown(60);
-      await loadData();
-      setTimeout(() => setSyncResult(null), 8000);
-    }
-  };
 
   // ── Dados para gráficos ──
 
@@ -316,6 +271,11 @@ export default function Analytics() {
   const avgTopOfSearch = unifiedDailyData.length > 0 ? unifiedDailyData.reduce((s, d) => s + d.avg_top_of_search, 0) / unifiedDailyData.length : 0;
   const promotedRoas = totSpend > 0 ? totPromotedSales / totSpend : 0;
 
+  // Stale data detection: most recent date in CampaignMetricsDaily
+  const latestMetricDate = metrics.reduce((max, m) => m.date > max ? m.date : max, '');
+  const staleThresholdISO = new Date(Date.now() - 26 * 3600000).toISOString().slice(0, 10);
+  const isStale = !loading && latestMetricDate < staleThresholdISO;
+
   const half = Math.floor(dailyData.length / 2);
   const firstHalf = dailyData.slice(0, half);
   const secondHalf = dailyData.slice(half);
@@ -349,25 +309,6 @@ export default function Analytics() {
               ))}
             </div>
           )}
-          <button
-            onClick={syncData}
-            disabled={syncing || syncCooldown > 0}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-all ${
-              syncing
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 cursor-wait'
-                : syncCooldown > 0
-                ? 'bg-surface-2 border-surface-3 text-slate-500 cursor-not-allowed'
-                : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25'
-            }`}
-          >
-            {syncing ? (
-              <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sincronizando...</>
-            ) : syncCooldown > 0 ? (
-              <><RefreshCw className="w-3.5 h-3.5" /> Aguardar {syncCooldown}s</>
-            ) : (
-              <><Zap className="w-3.5 h-3.5" /> Sincronizar Dados</>
-            )}
-          </button>
           <button onClick={loadData} disabled={loading}
             className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -375,22 +316,7 @@ export default function Analytics() {
         </div>
       </div>
 
-      {/* Sync result message */}
-      {syncResult && (
-        <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm border ${
-          syncResult.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' :
-          syncResult.type === 'token' ? 'bg-red-500/10 border-red-500/25 text-red-300' :
-          'bg-amber-500/10 border-amber-500/25 text-amber-300'
-        }`}>
-          {syncResult.type === 'success' ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0" />}
-          <span>{syncResult.text}</span>
-          {syncResult.type === 'token' && (
-            <Link to="/amazon-oauth-setup" className="ml-2 underline font-semibold whitespace-nowrap">
-              Reconectar →
-            </Link>
-          )}
-        </div>
-      )}
+
 
       {/* Tabs principais */}
       <div className="flex border-b border-surface-2">
@@ -415,6 +341,16 @@ export default function Analytics() {
       {/* Tab Métricas */}
       {activeMainTab === 'metricas' && (
         <>
+          {/* Stale data warning */}
+          {isStale && (
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm bg-amber-500/10 border border-amber-500/20 text-amber-400">
+              <Clock className="w-4 h-4 flex-shrink-0" />
+              <span>Dados desatualizados — a sincronização ocorre automaticamente</span>
+              <Link to="/sala-de-comando" className="ml-auto text-amber-300 hover:text-amber-200 font-medium whitespace-nowrap text-xs">
+                Ver status na Sala de Controle →
+              </Link>
+            </div>
+          )}
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPI label={`Spend ${period}d`} value={`R$${totSpend.toFixed(2)}`} loading={loading} />

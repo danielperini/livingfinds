@@ -26,7 +26,10 @@ export default function TokenExpiredBanner({ accountId }) {
         ).catch(() => []);
 
         if (alerts[0]) {
-          if (!cancelled) setAlertData({ type: 'alert', message: alerts[0].message });
+          if (!cancelled) {
+            setDismissed(false);
+            setAlertData({ type: 'alert', message: alerts[0].message });
+          }
           return;
         }
 
@@ -45,7 +48,11 @@ export default function TokenExpiredBanner({ accountId }) {
         });
 
         if (!tokenManagerError) {
-          if (!cancelled) setAlertData(null);
+          if (!cancelled) {
+            setAlertData(null);
+            // Token is healthy — allow banner to show again if it revokes in the future
+            setDismissed(false);
+          }
           return;
         }
 
@@ -77,6 +84,7 @@ export default function TokenExpiredBanner({ accountId }) {
         }
 
         if (!cancelled) {
+          setDismissed(false); // reset dismiss so banner re-appears on future revocations
           setAlertData({
             type: 'token_revoked',
             since,
