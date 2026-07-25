@@ -223,7 +223,14 @@ export default function Settings() {
         await base44.entities.AutopilotConfig.create({ amazon_account_id: account.id, ...apPayload });
       }
       setGoalsSaved(true);
-      setTimeout(() => setGoalsSaved(false), 3000);
+      setTimeout(() => setGoalsSaved(false), 4000);
+
+      // ── Propagar novo budget para campanhas Amazon (fire-and-forget) ──
+      base44.functions.invoke('adjustCampaignBudgets', {
+        amazon_account_id: account.id,
+        daily_budget_cap: goals.daily_budget_limit,
+        trigger: 'settings_updated',
+      }).catch(() => {});
 
       // ── Pós-save: sincronizar cap no AccountDailySpendController do dia atual ──
       const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
@@ -545,11 +552,16 @@ export default function Settings() {
           </p>
         )}
 
-        <button onClick={saveGoals} disabled={goalsSaving || !account}
-          className="flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
-          {goalsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : goalsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-          {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar configurações'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={saveGoals} disabled={goalsSaving || !account}
+            className="flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+            {goalsSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : goalsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            {goalsSaving ? 'Salvando...' : goalsSaved ? '✓ Salvo' : 'Salvar configurações'}
+          </button>
+          {goalsSaved && (
+            <span className="text-xs text-emerald-400 animate-fade-in">· Propagando orçamento para Amazon...</span>
+          )}
+        </div>
       </div>
 
       {/* ─── BACKUP ─── */}
