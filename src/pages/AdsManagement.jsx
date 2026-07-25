@@ -15,6 +15,7 @@ import KickoffModal from '@/components/products/KickoffModal';
 import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
 import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
+import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 
 
 const NOW_MS = Date.now();
@@ -841,6 +842,7 @@ export default function AdsManagement() {
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-bold text-slate-300">Campanhas</span>
             <div className="flex items-center gap-1.5">
+              <ExportPerformanceButton account={account} />
               <button onClick={() => setShowCreateWizard(true)} disabled={!account}
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
