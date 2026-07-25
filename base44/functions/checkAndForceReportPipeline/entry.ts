@@ -64,12 +64,13 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, action: 'skipped', reason: 'already_processed', duration_ms: Date.now() - t0 });
     }
 
-    // 2. Verificar se há jobs pendentes nunca polled → forçar poll imediatamente
+    // 2. Verificar se há jobs pendentes há mais de 4h sem poll_attempts → reset e forçar poll
+    const cutoff4hIso = new Date(Date.now() - 4 * 3600000).toISOString();
     const stuckJobs = recentJobs.filter((j: any) => {
       const createdAt = j.created_date || j.created_at || j.requested_at || '';
       return ['pending', 'processing', 'requested'].includes(j.status)
-        && createdAt >= cutoffIso
-        && (j.poll_attempts || 0) === 0;
+        && (j.poll_attempts || 0) === 0
+        && createdAt <= cutoff4hIso; // criado há mais de 4h
     });
 
     if (stuckJobs.length > 0) {
