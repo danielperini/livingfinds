@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { usePerformanceData } from '@/hooks/usePerformanceData';
 import {
-  Clock, RefreshCw, Loader2, CheckCircle, XCircle,
+  Clock, Loader2, CheckCircle, XCircle,
   AlertTriangle, ArrowRightLeft, Zap, Play, Search
 } from 'lucide-react';
 import {
@@ -508,7 +508,7 @@ export default function DaypartCrossAsinPage() {
   const fetchFn = useCallback(fetchDaypartData, []);
 
   // Um único fetch para todos os dados da página — ambas as abas consomem do mesmo cache
-  const { data, loading, refresh } = usePerformanceData('dayparting', account?.id, fetchFn);
+  const { data, loading } = usePerformanceData('dayparting', account?.id, fetchFn);
 
   // Permite mutações otimistas locais sem invalidar o cache
   const [localData, setLocalData] = useState(null);
@@ -529,10 +529,9 @@ export default function DaypartCrossAsinPage() {
               <p className="text-xs text-slate-400">Motor determinístico de otimização por horário e transferência de keywords entre ASINs</p>
             </div>
           </div>
-          <button onClick={refresh} disabled={loading}
-            className="p-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white transition-colors disabled:opacity-40" title="Atualizar">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          {loading && (
+            <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />
+          )}
         </div>
       </div>
 
