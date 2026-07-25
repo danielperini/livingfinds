@@ -40,7 +40,14 @@ Deno.serve(async (req) => {
     const refreshToken = entityRefreshToken || secretRefreshToken;
     const tokenSource = entityRefreshToken ? 'entity' : (secretRefreshToken ? 'secret' : null);
 
-    const redirectUri = 'https://living-finds-flow.base44.app/amazon-ads-callback';
+    const appBaseUrl = Deno.env.get('APP_BASE_URL')?.trim();
+    const origin = req.headers.get('origin') || req.headers.get('referer') || '';
+    let redirectUri = 'https://living-finds-flow.base44.app/amazon-ads-callback';
+    if (appBaseUrl) {
+      redirectUri = `${appBaseUrl}/amazon-ads-callback`;
+    } else if (origin) {
+      try { redirectUri = `${new URL(origin).origin}/amazon-ads-callback`; } catch {}
+    }
     const scope = 'advertising::campaign_management';
     const authUrl = clientId
       ? `https://www.amazon.com/ap/oa?client_id=${encodeURIComponent(clientId)}&scope=${encodeURIComponent(scope)}&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`

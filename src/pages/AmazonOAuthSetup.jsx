@@ -47,7 +47,7 @@ export default function AmazonOAuthSetup() {
   const [account, setAccount]       = useState(null);
   const [testingFallback, setTestingFallback] = useState(false);
   const [fallbackResult, setFallbackResult]   = useState(null);
-
+  const [reconnectBanner, setReconnectBanner] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -83,7 +83,16 @@ export default function AmazonOAuthSetup() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Detectar retorno bem-sucedido do OAuth callback
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('reconnected') === '1') {
+      setReconnectBanner(true);
+      setTimeout(() => setReconnectBanner(false), 8000);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
 
   const saveToken = async () => {
@@ -155,6 +164,14 @@ export default function AmazonOAuthSetup() {
 
   return (
     <div className="p-6 max-w-2xl space-y-6 animate-fade-in">
+
+      {/* Banner pós-reconexão */}
+      {reconnectBanner && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-emerald-500/10 border-emerald-500/30 text-sm animate-fade-in">
+          <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span className="text-emerald-300 font-medium">Reconectado · Retomando sincronização automaticamente...</span>
+        </div>
+      )}
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-slate-500">
