@@ -699,6 +699,11 @@ export default function AdsManagement() {
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
               </button>
+              <button onClick={() => setShowProposalModal(true)} disabled={!account}
+              title="Propor campanhas manuais exact para ASINs com vendas confirmadas"
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors disabled:opacity-50">
+                <Sparkles className="w-3 h-3" /> Termos Vencedores
+              </button>
 
               <button onClick={repairAndReconcile} disabled={!account || !!repairPhase}
               title="Repara campanhas incompletas e reconcilia estados com a Amazon Ads API"
@@ -1268,6 +1273,14 @@ export default function AdsManagement() {
         account={account}
         onClose={() => setKickoffProduct(null)}
         onDone={() => {setKickoffProduct(null);loadCampaigns();}} />
+      ) : null}
+
+      {showProposalModal && account ? (
+        <ManualCampaignProposalModal
+          account={account}
+          onClose={() => setShowProposalModal(false)}
+          onDone={loadCampaigns}
+        />
       ) : null}
 
       {showCreateWizard && account ? (
