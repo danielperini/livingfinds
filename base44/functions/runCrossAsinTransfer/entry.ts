@@ -1,349 +1,359 @@
 /**
- * Cross-ASIN Transfer Engine — Identifica keywords vencedoras em um ASIN
- * e calcula relevância para transferência para outros ASINs da mesma loja.
+ * runCrossAsinTransfer — Motor de expansão cross-ASIN
  *
- * Pipeline:
- *  1. Varrer KeywordBank buscando WINNER/STRONG_WINNER
- *  2. Buscar ASINs destino elegíveis (ativos, com estoque)
- *  3. Relevance Score híbrido (heurística + LLM zona cinzenta 70-95%)
- *  4. Hard Blockers detection
- *  5. Regra dos 90%: criar CrossAsinTransfer e (se auto-level) campanha de validação
- *  6. ProductFamilyKeywordBank: registrar winners multi-ASIN
+ * Agrupa ASINs por heurística de título, identifica keywords provadas
+ * em um ASIN que ainda não cobertas em outros do mesmo grupo,
+ * e enfileira criação de campanhas manuais EXACT via ProductKickoffQueue.
  *
- * Helpers compartilhados em base44/shared/crossAsinHelpers.ts
+ * Idempotente via idempotency_key = account_id+normalized_keyword+dest_asin+date
+ * Limite: 20 novas transferências por execução.
  */
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import { normalizeText, tokenize, calcHeuristicScore, detectHardBlockers, destSustainableCpc, parseBullets } from '../../shared/crossAsinHelpers.ts';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
-const RULE_VERSION = '1.0';
-const MIN_SOURCE_ORDERS = 3;
-const TRANSFER_RELEVANCE_MIN = 90;
-const MANUAL_REVIEW_MIN = 80;
-const HEURISTIC_HIGH_CONF = 95;
-const HEURISTIC_LOW_CONF = 70;
-const MAX_TRANSFERS_PER_DAY = 5;
-const DEST_BID_FACTOR = 0.85;
+const MAX_TRANSFERS_PER_RUN = 20;
 
-// LLM Relevance via OPENAI_API_KEY
-async function llmValidateRelevance(
-  kwText: string,
-  srcTitle: string, srcBullets: string,
-  dstTitle: string, dstBullets: string,
-  heuristicScore: number,
-): Promise<{ score: number; reason: string; hard_blocker: boolean; hard_blocker_reason: string }> {
+const STOPWORDS = new Set([
+  'de','do','da','dos','das','em','no','na','nos','nas','ao','aos','à','às',
+  'e','a','o','os','as','um','uma','uns','umas','para','por','com','sem',
+  'que','se','mas','ou','nem','pois','porque','quando','como','seu','sua',
+  'seus','suas','este','esta','estes','estas','esse','essa','esses','essas',
+  'it','the','for','and','or','with','without','from','to','in','on','at',
+  'cm','mm','m','kg','g','l','ml','w','v','hz','led','pro','kit','set',
+  'novo','nova','novos','novas','preto','preta','branco','branca',
+]);
 
-  const apiKey = Deno.env.get('OPENAI_API_KEY');
-  if (!apiKey) return { score: heuristicScore, reason: 'OPENAI_API_KEY não configurado', hard_blocker: false, hard_blocker_reason: '' };
-
-  const prompt = `Você é um especialista em Amazon Ads. Avalie se a keyword abaixo (vencedora no ASIN ORIGEM) é relevante para o ASIN DESTINO para fins de publicidade.
-
-KEYWORD: "${kwText}"
-
-ASIN ORIGEM:
-Título: ${srcTitle}
-Bullets: ${srcBullets.slice(0, 500)}
-
-ASIN DESTINO:
-Título: ${dstTitle}
-Bullets: ${dstBullets.slice(0, 500)}
-
-Responda em JSON:
-{
-  "relevance_score": (0-100, onde 90+ = transferência recomendada),
-  "reasoning": "explicação em 1-2 frases",
-  "hard_blocker": false ou true,
-  "hard_blocker_reason": "razão se hard_blocker=true, senão vazio"
+function normalize(text) {
+  return (text || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-Hard Blockers que eliminam a transferência: incompatibilidade funcional, marca específica diferente, modelo incompatível, tamanho essencial incompatível, voltagem incompatível, gênero/idade incompatível quando essencial.`;
+function tokenize(text) {
+  return normalize(text).split(' ').filter(w => w.length >= 3 && !STOPWORDS.has(w));
+}
 
-  try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        max_tokens: 512,
-        temperature: 0.1,
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
-    const data = await res.json();
-    const text = data?.choices?.[0]?.message?.content || '{}';
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('JSON não encontrado na resposta');
-    const parsed = JSON.parse(match[0]);
-    return {
-      score: Number(parsed.relevance_score || heuristicScore),
-      reason: String(parsed.reasoning || ''),
-      hard_blocker: Boolean(parsed.hard_blocker),
-      hard_blocker_reason: String(parsed.hard_blocker_reason || ''),
+function normalizeKeyword(kw) {
+  return normalize(kw).replace(/\s+/g, ' ').trim();
+}
+
+// Agrupa produtos por termos em comum no título (heurística)
+function groupProductsByTitle(products) {
+  // Para cada produto, extrair tokens significativos do nome
+  const productTokens = products.map(p => ({
+    ...p,
+    tokens: new Set(tokenize(p.display_name || p.product_name || '')),
+  }));
+
+  const groups = []; // { name, asins: [], products: [] }
+  const assigned = new Set();
+
+  for (let i = 0; i < productTokens.length; i++) {
+    if (assigned.has(productTokens[i].asin)) continue;
+    if (productTokens[i].tokens.size === 0) continue;
+
+    const group = {
+      products: [productTokens[i]],
+      asins: [productTokens[i].asin],
+      commonTokens: new Set(productTokens[i].tokens),
     };
-  } catch (e: any) {
-    return { score: heuristicScore, reason: `LLM erro: ${e.message}`, hard_blocker: false, hard_blocker_reason: '' };
+    assigned.add(productTokens[i].asin);
+
+    for (let j = i + 1; j < productTokens.length; j++) {
+      if (assigned.has(productTokens[j].asin)) continue;
+      if (productTokens[j].tokens.size === 0) continue;
+
+      // Verificar intersecção de tokens — ao menos 2 tokens em comum
+      let commonCount = 0;
+      for (const t of productTokens[j].tokens) {
+        if (group.commonTokens.has(t)) commonCount++;
+      }
+      if (commonCount >= 2) {
+        group.products.push(productTokens[j]);
+        group.asins.push(productTokens[j].asin);
+        assigned.add(productTokens[j].asin);
+        // Manter apenas tokens comuns a todos os membros
+        for (const t of [...group.commonTokens]) {
+          if (!productTokens[j].tokens.has(t)) group.commonTokens.delete(t);
+        }
+      }
+    }
+
+    // Grupos com ao menos 2 ASINs fazem sentido para cross-transfer
+    if (group.asins.length >= 2) {
+      const nameParts = [...group.commonTokens].slice(0, 3).join(' ');
+      groups.push({
+        name: nameParts || group.products[0].product_name || 'Grupo',
+        asins: group.asins,
+        products: group.products,
+      });
+    }
   }
+
+  return groups;
 }
 
-// ─── ENTRY POINT ─────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
     const base44 = createClientFromRequest(req);
-    const body   = await req.json().catch(() => ({}));
-    const { amazon_account_id, dry_run = false, source_asin_filter } = body;
+    const user = await base44.auth.me();
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    let account: any;
+    const body = await req.json().catch(() => ({}));
+    const { amazon_account_id, force = false } = body;
+
+    // Resolver conta
+    let account;
     if (amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, null, 1);
       account = accs[0];
     } else {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({}, '-created_date', 1);
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
       account = accs[0];
     }
-    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta configurada' }, { status: 404 });
+    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta conectada' }, { status: 404 });
 
     const accountId = account.id;
-    const now   = new Date().toISOString();
-    const today = now.slice(0, 10);
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    const now = new Date().toISOString();
 
-    const [perfList, economicsList] = await Promise.all([
+    // Carregar configurações (max_acos)
+    const [perfList] = await Promise.all([
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
     ]);
     const perf = perfList[0] || {};
-    const targetAcos = Number(perf.target_acos || 15);
-    const minBid = Number(perf.min_bid || 0.25);
-    const maxBid = Number(perf.max_bid || 2.5);
+    const maxAcos = Number(perf.max_acos || perf.target_acos || 25);
 
-    const econMap = new Map<string, any>();
-    for (const e of economicsList) { if (e.asin) econMap.set(e.asin, e); }
-
-    const kwBankFilter: any = { amazon_account_id: accountId, lifecycle_status: 'WINNER' };
-    if (source_asin_filter) kwBankFilter.asin = source_asin_filter;
-
-    const winnerEntries = await base44.asServiceRole.entities.KeywordBank.filter(
-      kwBankFilter, '-promotion_score', 200
-    ).catch(() => []);
-
-    const qualifiedWinners = winnerEntries.filter((w: any) =>
-      Number(w.orders || 0) >= MIN_SOURCE_ORDERS &&
-      Number(w.acos || 0) > 0 &&
-      Number(w.acos || 0) <= targetAcos &&
-      ['MEDIUM', 'HIGH', 'VERY_HIGH'].includes(w.source_confidence || '') &&
-      ['WINNER', 'STRONG_WINNER'].includes(w.winner_tier || '')
-    );
-
+    // Carregar produtos ativos com estoque
     const allProducts = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: accountId, status: 'active' }, null, 500
+      { amazon_account_id: accountId }, null, 200
     ).catch(() => []);
-    const activeAsins = new Set<string>(allProducts.filter((p: any) => Number(p.fba_inventory || 0) > 0).map((p: any) => p.asin));
-
-    const allSnapshots = await base44.asServiceRole.entities.ListingSnapshot.filter(
-      { amazon_account_id: accountId }, null, 500
-    ).catch(() => []);
-    const snapshotMap = new Map<string, any>();
-    for (const s of allSnapshots) { if (s.asin) snapshotMap.set(s.asin, s); }
-
-    const existingBankEntries = await base44.asServiceRole.entities.KeywordBank.filter(
-      { amazon_account_id: accountId }, null, 2000
-    ).catch(() => []);
-    const existingBankHashes = new Set<string>(existingBankEntries.map((e: any) => e.keyword_hash).filter(Boolean));
-
-    const transfersToday = await base44.asServiceRole.entities.CrossAsinTransfer.filter(
-      { amazon_account_id: accountId, cycle_date: today }, null, 50
-    ).catch(() => []);
-    let transfersCreatedToday = transfersToday.length;
-
-    const familyBankEntries = await base44.asServiceRole.entities.ProductFamilyKeywordBank.filter(
-      { amazon_account_id: accountId }, null, 500
-    ).catch(() => []);
-    const familyBankMap = new Map<string, any>();
-    for (const f of familyBankEntries) {
-      const key = `${f.family_name}|${f.normalized_keyword || (f.keyword || '').toLowerCase()}`;
-      familyBankMap.set(key, f);
+    const activeProducts = allProducts.filter(p =>
+      p.status !== 'archived' &&
+      p.status !== 'inactive' &&
+      p.asin &&
+      (p.fba_inventory > 0 || p.available_quantity > 0)
+    );
+    if (activeProducts.length < 2) {
+      return Response.json({ ok: true, message: 'Menos de 2 produtos ativos com estoque, cross-transfer ignorado', groups: 0, transfers_created: 0 });
     }
 
-    const results: any[] = [];
-    const doNotTransfer: any[] = [];
-    const manualReview: any[] = [];
-    const familyBankUpdates: any[] = [];
+    // Agrupar por heurística de título
+    const groups = groupProductsByTitle(activeProducts);
+    if (groups.length === 0) {
+      return Response.json({ ok: true, message: 'Nenhum grupo de produtos identificado', groups: 0, transfers_created: 0 });
+    }
 
-    for (const winner of qualifiedWinners) {
-      if (transfersCreatedToday >= MAX_TRANSFERS_PER_DAY && !dry_run) break;
+    // Carregar TermBank e KeywordBank para todos os ASINs dos grupos
+    const allGroupAsins = [...new Set(groups.flatMap(g => g.asins))];
 
-      const srcAsin     = winner.asin;
-      const kwText      = winner.keyword;
-      const normKw      = winner.normalized_keyword || kwText.toLowerCase().trim();
-      const srcSnapshot = snapshotMap.get(srcAsin);
+    // Carregar campanhas MANUAL EXACT por ASIN para checar cobertura
+    const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id: accountId }, null, 500
+    ).catch(() => []);
+    const manualExactCampaigns = allCampaigns.filter(c => {
+      const targeting = (c.targeting_type || '').toUpperCase();
+      const status = (c.state || c.status || '').toLowerCase();
+      return targeting === 'MANUAL' && status !== 'archived' && status !== 'incomplete';
+    });
 
-      const srcTitle    = srcSnapshot?.title || '';
-      const srcBullets  = parseBullets(srcSnapshot?.bullets || '');
-      const srcCategory = srcSnapshot?.product_type || '';
-      const srcProduct  = allProducts.find((p: any) => p.asin === srcAsin);
-      const srcCpc      = Number(winner.cpc || 0);
+    // Carregar keywords das campanhas manuais
+    const allKeywords = await base44.asServiceRole.entities.Keyword.filter(
+      { amazon_account_id: accountId }, null, 1000
+    ).catch(() => []);
+    const exactKeywords = allKeywords.filter(k => (k.match_type || '').toLowerCase() === 'exact');
 
-      const destAsins = [...activeAsins].filter(a =>
-        a !== srcAsin &&
-        !existingBankHashes.has(`BR|${a}|${normKw}|exact|VALIDATION`) &&
-        !existingBankHashes.has(`BR|${a}|${normKw}|exact|PROFIT`) &&
-        !existingBankHashes.has(`BR|${a}|${normKw}|exact|SCALE`)
-      );
+    // Construir índice: asin+keyword_normalized → exists
+    const coverageIndex = new Set();
+    for (const kw of exactKeywords) {
+      if (!kw.asin || !kw.keyword_text) continue;
+      const key = `${kw.asin}|${normalizeKeyword(kw.keyword_text)}`;
+      coverageIndex.add(key);
+    }
+    // Também indexar por campaign_id → asin para keywords sem asin direto
+    const campaignAsinMap = new Map();
+    for (const c of manualExactCampaigns) {
+      if (c.campaign_id && c.asin) campaignAsinMap.set(c.campaign_id, c.asin);
+    }
+    for (const kw of exactKeywords) {
+      if (kw.asin) continue; // já indexado acima
+      const asin = campaignAsinMap.get(kw.campaign_id);
+      if (!asin || !kw.keyword_text) continue;
+      coverageIndex.add(`${asin}|${normalizeKeyword(kw.keyword_text)}`);
+    }
 
-      for (const destAsin of destAsins) {
-        const destSnapshot = snapshotMap.get(destAsin);
-        if (!destSnapshot) continue;
+    // Carregar TermBank e KeywordBank
+    const [termBankRaw, keywordBankRaw] = await Promise.all([
+      base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
+    ]);
 
-        const destTitle    = destSnapshot.title || '';
-        const destBullets  = parseBullets(destSnapshot.bullets || '');
-        const destCategory = destSnapshot.product_type || '';
-        const destProduct  = allProducts.find((p: any) => p.asin === destAsin);
-        const destEcon     = econMap.get(destAsin);
-        const destAov      = Number(destEcon?.average_sale_price || destEcon?.current_price || destProduct?.price || 0);
-        const destTargetAcos = Number(destEcon?.target_acos || targetAcos);
+    // Carregar transferências já criadas hoje (dedup)
+    const existingTransfers = await base44.asServiceRole.entities.CrossAsinTransfer.filter(
+      { amazon_account_id: accountId }, '-created_at', 200
+    ).catch(() => []);
+    const existingKeys = new Set(existingTransfers.map(t => t.idempotency_key).filter(Boolean));
 
-        const blocker = detectHardBlockers(kwText, srcTitle, destTitle, srcBullets, destBullets);
-        if (blocker.blocked) {
-          doNotTransfer.push({ source_asin: srcAsin, destination_asin: destAsin, keyword: kwText, rule_id: 'CROSS_ASIN_BLOCK_HARD_BLOCKER', reason: blocker.reason });
-          continue;
+    // Identificar candidatas por grupo
+    const transfersToCreate = [];
+    const groupResults = [];
+
+    for (const group of groups) {
+      const { asins, name } = group;
+
+      // Construir mapa de keywords candidatas por ASIN (fonte: TermBank + KeywordBank)
+      // Uma keyword é "doadora confirmada" se: clicks > 0 e (acos=0 ou acos<=maxAcos)
+      const donorMap = new Map(); // normalizedKw → { keyword, asin, acos, clicks, confidence, source }
+
+      for (const term of termBankRaw) {
+        if (!asins.includes(term.asin)) continue;
+        if (!term.term) continue;
+        const conf = term.confidence != null ? (term.confidence <= 1 ? Math.round(term.confidence * 100) : Math.round(term.confidence)) : 0;
+        const clicks = Number(term.clicks || 0);
+        const acos = Number(term.acos || 0);
+        const isDonor = (conf >= 75 || clicks > 0) && (acos === 0 || acos <= maxAcos);
+        if (!isDonor) continue;
+        const nkw = normalizeKeyword(term.term);
+        if (!nkw || nkw.length < 3) continue;
+        if (!donorMap.has(nkw) || (term.clicks || 0) > (donorMap.get(nkw).clicks || 0)) {
+          donorMap.set(nkw, { keyword: term.term, asin: term.asin, acos, clicks, confidence: conf, source: 'TermBank' });
         }
+      }
 
-        const { score: heuristicScore, breakdown } = calcHeuristicScore(
-          kwText, srcTitle, srcBullets, srcCategory, destTitle, destBullets, destCategory
-        );
-
-        let finalScore = heuristicScore;
-        let relevancePhase = 'HEURISTIC_ONLY';
-        let llmScore: number | null = null;
-        let llmReason = '';
-        let hardBlockerFromLlm = false;
-        let hardBlockerLlmReason = '';
-
-        if (heuristicScore < HEURISTIC_LOW_CONF) {
-          doNotTransfer.push({ source_asin: srcAsin, destination_asin: destAsin, keyword: kwText, heuristic_score: heuristicScore, rule_id: 'CROSS_ASIN_BLOCK_LOW_RELEVANCE', reason: `Relevância heurística ${heuristicScore} < ${HEURISTIC_LOW_CONF}` });
-          continue;
+      for (const kb of keywordBankRaw) {
+        if (!asins.includes(kb.asin)) continue;
+        if (!kb.keyword) continue;
+        const conf = Number(kb.confidence_score || 0);
+        const clicks = Number(kb.clicks || 0);
+        const acos = Number(kb.acos || 0);
+        const isDonor = (conf >= 75 || clicks > 0) && (acos === 0 || acos <= maxAcos);
+        if (!isDonor) continue;
+        const nkw = normalizeKeyword(kb.keyword);
+        if (!nkw || nkw.length < 3) continue;
+        if (!donorMap.has(nkw) || clicks > (donorMap.get(nkw).clicks || 0)) {
+          donorMap.set(nkw, { keyword: kb.keyword, asin: kb.asin, acos, clicks, confidence: conf, source: 'KeywordBank' });
         }
+      }
 
-        if (heuristicScore < HEURISTIC_HIGH_CONF) {
-          const llmResult = await llmValidateRelevance(kwText, srcTitle, srcBullets, destTitle, destBullets, heuristicScore);
-          llmScore = llmResult.score;
-          llmReason = llmResult.reason;
-          hardBlockerFromLlm = llmResult.hard_blocker;
-          hardBlockerLlmReason = llmResult.hard_blocker_reason;
-          finalScore = Math.round((heuristicScore * 0.4) + (llmResult.score * 0.6));
-          relevancePhase = 'LLM_VALIDATED';
+      let groupTransfers = 0;
+      const groupCandidates = [];
 
-          if (hardBlockerFromLlm) {
-            doNotTransfer.push({ source_asin: srcAsin, destination_asin: destAsin, keyword: kwText, heuristic_score: heuristicScore, llm_score: llmScore, rule_id: 'CROSS_ASIN_BLOCK_HARD_BLOCKER', reason: hardBlockerLlmReason });
+      for (const [nkw, donor] of donorMap.entries()) {
+        if (transfersToCreate.length >= MAX_TRANSFERS_PER_RUN) break;
+
+        for (const destAsin of asins) {
+          if (destAsin === donor.asin) continue; // mesmo ASIN, ignorar
+          if (transfersToCreate.length >= MAX_TRANSFERS_PER_RUN) break;
+
+          // Verificar cobertura: já tem campanha EXACT com essa keyword?
+          const covKey = `${destAsin}|${nkw}`;
+          if (coverageIndex.has(covKey)) {
+            groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'already_covered' });
             continue;
           }
-        }
 
-        let transferDecision: string, ruleId: string;
-        if (finalScore >= TRANSFER_RELEVANCE_MIN) {
-          transferDecision = 'HIGH_CONFIDENCE_TRANSFER';
-          ruleId = 'CROSS_ASIN_TRANSFER_90';
-        } else if (finalScore >= MANUAL_REVIEW_MIN) {
-          transferDecision = 'MANUAL_REVIEW';
-          ruleId = 'CROSS_ASIN_MANUAL_REVIEW';
-          manualReview.push({ source_asin: srcAsin, destination_asin: destAsin, keyword: kwText, score: finalScore });
-          continue;
-        } else {
-          doNotTransfer.push({ source_asin: srcAsin, destination_asin: destAsin, keyword: kwText, heuristic_score: heuristicScore, final_score: finalScore, rule_id: 'CROSS_ASIN_BLOCK_LOW_RELEVANCE', reason: `Score final ${finalScore} < ${TRANSFER_RELEVANCE_MIN}` });
-          continue;
-        }
+          // Verificar idempotência: já foi criado hoje?
+          const idempKey = `crossasin:${accountId}:${nkw}:${destAsin}:${todayBRT}`;
+          if (existingKeys.has(idempKey)) {
+            groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'already_queued' });
+            continue;
+          }
 
-        const destSusCpc = destSustainableCpc(destAov, winner.cvr || 0.05, destTargetAcos);
-        let initialBid = destSusCpc > 0 ? Math.min(srcCpc, destSusCpc * DEST_BID_FACTOR) : srcCpc * DEST_BID_FACTOR;
-        initialBid = Math.max(minBid, Math.min(maxBid, parseFloat(initialBid.toFixed(2))));
+          // Produto destino com estoque?
+          const destProduct = activeProducts.find(p => p.asin === destAsin);
+          if (!destProduct) continue;
 
-        const srcFamily = srcProduct?.category || srcSnapshot?.product_type || '';
-        const familyKey = `${srcFamily}|${normKw}`;
-        const familyEntry = familyBankMap.get(familyKey);
-        const familyBoost = familyEntry && familyEntry.winning_asin_count >= 2;
-
-        results.push({
-          amazon_account_id: accountId, marketplace: 'BR',
-          keyword: kwText, normalized_keyword: normKw, match_type: 'exact',
-          source_asin: srcAsin, source_keyword_bank_id: winner.id,
-          source_orders: Number(winner.orders || 0), source_acos: Number(winner.acos || 0),
-          source_cvr: Number(winner.cvr || 0), source_cpc: srcCpc,
-          source_winner_tier: winner.winner_tier,
-          destination_asin: destAsin,
-          destination_product_name: destProduct?.product_name || destProduct?.display_name || '',
-          destination_sku: destProduct?.sku || '',
-          destination_fba_inventory: Number(destProduct?.fba_inventory || 0),
-          destination_aov: destAov, destination_target_acos: destTargetAcos,
-          destination_sustainable_cpc: destSusCpc,
-          relevance_score: finalScore, relevance_phase: relevancePhase,
-          heuristic_score: heuristicScore, llm_score: llmScore || null, llm_reason: llmReason || null,
-          hard_blocker_detected: false,
-          relevance_breakdown: JSON.stringify({ ...breakdown, final_score: finalScore }),
-          transfer_decision: transferDecision, rule_id: ruleId,
-          transfer_confidence: familyBoost ? 'VERY_HIGH' : finalScore >= 95 ? 'HIGH' : 'MEDIUM',
-          family_bank_boost: familyBoost, initial_bid: initialBid, campaign_job: 'VALIDATION',
-          status: 'PROPOSED', validation_result: 'PENDING',
-          proposed_at: now, cycle_date: today, created_at: now,
-        });
-        transfersCreatedToday++;
-
-        if (srcFamily) {
-          familyBankUpdates.push({ family_name: srcFamily, keyword: kwText, normalized_keyword: normKw, asin: srcAsin, orders: winner.orders, acos: winner.acos, cvr: winner.cvr, cpc: srcCpc });
+          transfersToCreate.push({
+            amazon_account_id: accountId,
+            keyword: donor.keyword,
+            normalized_keyword: nkw,
+            match_type: 'exact',
+            source_asin: donor.asin,
+            destination_asin: destAsin,
+            destination_product_name: destProduct.display_name || destProduct.product_name || destAsin,
+            destination_sku: destProduct.sku || '',
+            destination_fba_inventory: destProduct.fba_inventory || 0,
+            source_orders: 0,
+            source_acos: donor.acos,
+            source_cvr: 0,
+            source_cpc: 0,
+            source_winner_tier: 'NONE',
+            relevance_score: Math.min(100, donor.confidence || 50),
+            relevance_phase: 'HEURISTIC_ONLY',
+            heuristic_score: donor.confidence || 50,
+            transfer_decision: 'HIGH_CONFIDENCE_TRANSFER',
+            transfer_confidence: donor.confidence >= 90 ? 'HIGH' : 'MEDIUM',
+            campaign_job: 'VALIDATION',
+            status: 'PROPOSED',
+            idempotency_key: idempKey,
+            proposed_at: now,
+            created_at: now,
+            product_family: name,
+          });
+          groupTransfers++;
+          groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'queued' });
         }
       }
+
+      groupResults.push({
+        group: name,
+        asins,
+        donors: donorMap.size,
+        transfers: groupTransfers,
+      });
     }
 
-    if (!dry_run) {
-      if (results.length > 0) await base44.asServiceRole.entities.CrossAsinTransfer.bulkCreate(results).catch(() => {});
-
-      for (const upd of familyBankUpdates) {
-        const key = `${upd.family_name}|${upd.normalized_keyword}`;
-        const existing = familyBankMap.get(key);
-        if (existing) {
-          const winningAsins: string[] = existing.winning_asins || [];
-          if (!winningAsins.includes(upd.asin)) winningAsins.push(upd.asin);
-          await base44.asServiceRole.entities.ProductFamilyKeywordBank.update(existing.id, {
-            winning_asins: winningAsins, winning_asin_count: winningAsins.length,
-            total_orders: (existing.total_orders || 0) + (upd.orders || 0),
-            avg_acos: upd.acos, avg_cvr: upd.cvr,
-            best_cpc: Math.min(existing.best_cpc || 999, upd.cpc || 999),
-            high_confidence_transfer: winningAsins.length >= 2,
-            transfer_confidence: winningAsins.length >= 2 ? 'VERY_HIGH' : 'HIGH',
-            last_updated_at: now,
-          }).catch(() => {});
-        } else {
-          await base44.asServiceRole.entities.ProductFamilyKeywordBank.create({
-            amazon_account_id: accountId, family_name: upd.family_name,
-            keyword: upd.keyword, normalized_keyword: upd.normalized_keyword,
-            winning_asins: [upd.asin], winning_asin_count: 1,
-            total_orders: upd.orders || 0, avg_acos: upd.acos, avg_cvr: upd.cvr, best_cpc: upd.cpc,
-            transfer_confidence: 'MEDIUM', high_confidence_transfer: false,
-            last_updated_at: now, created_at: now,
-          }).catch(() => {});
-        }
-      }
+    // Persistir CrossAsinTransfer em lotes
+    let created = 0;
+    for (let i = 0; i < transfersToCreate.length; i += 20) {
+      const batch = transfersToCreate.slice(i, i + 20);
+      await base44.asServiceRole.entities.CrossAsinTransfer.bulkCreate(batch).catch(() => {});
+      created += batch.length;
     }
+
+    // Enfileirar na ProductKickoffQueue via scheduleManualCampaignFromTerm
+    let queued = 0;
+    for (const t of transfersToCreate) {
+      const destProd = activeProducts.find(p => p.asin === t.destination_asin);
+      const res = await base44.asServiceRole.functions.invoke('scheduleManualCampaignFromTerm', {
+        amazon_account_id: accountId,
+        asin: t.destination_asin,
+        keyword: t.keyword,
+        product_name: destProd?.display_name || destProd?.product_name || t.destination_asin,
+        sku: destProd?.sku || null,
+      }).catch(() => null);
+      if (res?.ok !== false) queued++;
+    }
+
+    // Log de execução
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      amazon_account_id: accountId,
+      operation: 'runCrossAsinTransfer',
+      status: 'success',
+      trigger_type: force ? 'manual' : 'automatic',
+      started_at: now,
+      completed_at: new Date().toISOString(),
+      records_processed: created,
+      result_summary: JSON.stringify({
+        groups_analyzed: groups.length,
+        transfers_created: created,
+        transfers_queued: queued,
+        group_results: groupResults,
+      }),
+    }).catch(() => {});
 
     return Response.json({
-      ok: true, dry_run, cycle_date: today,
-      qualified_winners: qualifiedWinners.length,
-      transfers_proposed: results.length, manual_review: manualReview.length,
-      blocked: doNotTransfer.length, family_bank_updates: familyBankUpdates.length,
-      transfers: dry_run ? results.slice(0, 10) : results.map((r: any) => ({
-        source_asin: r.source_asin, destination_asin: r.destination_asin,
-        keyword: r.keyword, relevance_score: r.relevance_score,
-        transfer_decision: r.transfer_decision, initial_bid: r.initial_bid,
-        relevance_phase: r.relevance_phase,
-      })),
-      manual_review_list: manualReview.slice(0, 10),
+      ok: true,
+      groups_analyzed: groups.length,
+      transfers_created: created,
+      transfers_queued: queued,
+      group_results: groupResults,
       duration_ms: Date.now() - t0,
     });
 
-  } catch (err: any) {
+  } catch (err) {
     return Response.json({ ok: false, error: err.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });

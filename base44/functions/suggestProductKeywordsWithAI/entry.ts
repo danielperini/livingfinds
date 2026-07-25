@@ -157,11 +157,13 @@ async function writeLog(base44: any, {
   }).catch(() => {});
 }
 
-// ── Claude (opcional — só quando force_ai: true) ──────────────────────────────
+// ── OpenAI (opcional — só quando force_ai: true) ─────────────────────────────
+// NOTA: Migrado de Anthropic Claude → OpenAI GPT para padronização de custos.
+// ANTHROPIC_API_KEY não é mais utilizada nesta função.
 async function callClaude(payload: any): Promise<any> {
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY não configurada.');
-  const model = 'claude-haiku-4-5';
+  const apiKey = Deno.env.get('OPENAI_API_KEY');
+  if (!apiKey) throw new Error('OPENAI_API_KEY não configurada.');
+  const model = Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'gpt-4o-mini';
   const systemPrompt = `Você é especialista em Amazon Ads Sponsored Products no marketplace brasileiro.
 Gere exatamente 10 palavras-chave novas: 5 de cauda média e 5 de cauda longa.
 REGRAS OBRIGATÓRIAS:
@@ -174,26 +176,32 @@ REGRAS OBRIGATÓRIAS:
 Retorne APENAS JSON válido neste formato exato:
 {"medium_tail":[{"keyword":"lixeira com sensor","match_type":"exact","intent":"commercial","relevance_score":0.95,"confidence":88,"reason":"Termo direto com intenção de compra confirmada"}],"long_tail":[{"keyword":"lixeira automatica com sensor infravermelho","match_type":"exact","intent":"high_purchase_intent","relevance_score":0.97,"confidence":82,"reason":"Especificação técnica com alta conversão"}]}`;
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
-    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, max_tokens: 1500, temperature: 0.3, system: systemPrompt,
-      messages: [{ role: 'user', content: JSON.stringify(payload) }],
+      model,
+      max_tokens: 1500,
+      temperature: 0.3,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: JSON.stringify(payload) },
+      ],
     }),
   });
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(`Anthropic erro ${response.status}: ${error.error?.message || JSON.stringify(error)}`);
+    throw new Error(`OpenAI erro ${response.status}: ${error.error?.message || JSON.stringify(error)}`);
   }
 
   const data = await response.json();
-  const content = String(data.content?.[0]?.text || '').trim();
+  const content = String(data.choices?.[0]?.message?.content || '').trim();
   let parsed: any;
   try { parsed = JSON.parse(content); } catch {
     const match = content.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('Claude não retornou JSON válido.');
+    if (!match) throw new Error('OpenAI não retornou JSON válido.');
     parsed = JSON.parse(match[0]);
   }
   if (!Array.isArray(parsed.medium_tail) || !Array.isArray(parsed.long_tail)) {

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
-import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock, ChevronUp, ChevronDown, Zap, Star } from 'lucide-react';
+import { BookOpen, Loader2, RefreshCw, Search, Megaphone, CheckCircle, Clock, ChevronUp, ChevronDown, Zap, Star, Share2 } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 import HighRelevancePanel from '@/components/termbank/HighRelevancePanel';
+import DumBankTab from '@/components/termbank/DumBankTab';
 
 const fmt = (v, d = 2) => Number(v || 0).toFixed(d).replace('.', ',');
 
@@ -250,6 +251,7 @@ export default function TermBankPageV2() {
   const tabs = [
   { id: 'amazon', label: `🎯 Amazon Ads Suggestions`, count: amazonSuggestions.filter((s) => !['archived_by_policy', 'superseded'].includes(s.status)).length },
   { id: 'high_relevance', label: '⚡ Alta Relevância', count: highRelevanceData.length },
+  { id: 'dumbank', label: '🔀 DumBank', count: null },
   { id: 'terms', label: '📚 TermBank', count: terms.length }];
 
 
@@ -319,6 +321,8 @@ export default function TermBankPageV2() {
         setScheduledIds={setScheduledIds}
         setMessage={setMessage}
       /> :
+      tab === 'dumbank' ?
+      <DumBankTab account={account} search={q} /> :
       tab === 'amazon' ?
       <AmazonSuggestionsTab
         suggestions={amazonSuggestions.filter((s) => `${s.keyword || ''} ${s.asin || ''}`.toLowerCase().includes(q))}
