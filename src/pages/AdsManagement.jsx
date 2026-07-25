@@ -283,6 +283,7 @@ export default function AdsManagement() {
   const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
   const [pausingManual, setPausingManual] = useState(false);
   const [pauseManualResult, setPauseManualResult] = useState(null);
+  const [hideNoStock, setHideNoStock] = useState(false);
   const [columnTab, setColumnTab] = useState('auto');
 
 
@@ -780,9 +781,20 @@ export default function AdsManagement() {
   const hasPending = Object.keys(pendingBids).length > 0;
 
   // ── Separar AUTO / MANUAL ──────────────────────────────────────────────────
-  const applySearch = (list) => list.filter((c) =>
-  !search || (c.name || '').toLowerCase().includes(search.toLowerCase()) || (c.campaign_name || '').toLowerCase().includes(search.toLowerCase())
-  );
+  // Mapa de ASIN → produto para filtro de estoque
+  const productsByAsin = Object.fromEntries(products.map(p => [p.asin, p]));
+
+  const applySearch = (list) => list.filter((c) => {
+    if (search && !(c.name || '').toLowerCase().includes(search.toLowerCase()) && !(c.campaign_name || '').toLowerCase().includes(search.toLowerCase())) return false;
+    if (hideNoStock) {
+      const asin = getCampaignAsin(c);
+      if (asin) {
+        const prod = productsByAsin[asin];
+        if (prod && (prod.inventory_status === 'out_of_stock' || prod.fba_inventory === 0)) return false;
+      }
+    }
+    return true;
+  });
 
   // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
   const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO'))
@@ -913,12 +925,23 @@ export default function AdsManagement() {
         </div>
 
         {/* Search filter */}
-        <div className="px-3 py-2 border-b border-surface-2">
-          <div className="relative">
+        <div className="px-3 py-2 border-b border-surface-2 flex items-center gap-2">
+          <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Pesquisar campanhas..."
             className="w-full pl-6 pr-2 py-1 bg-surface-2 border border-surface-3 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
           </div>
+          <button
+            onClick={() => setHideNoStock(v => !v)}
+            title="Esconder campanhas de produtos sem estoque"
+            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
+              hideNoStock
+                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'
+            }`}
+          >
+            📦 {hideNoStock ? 'c/ estoque' : 'todos'}
+          </button>
         </div>
 
         {/* Tab switcher AUTO | MANUAL */}
