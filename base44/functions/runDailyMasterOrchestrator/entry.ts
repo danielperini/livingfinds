@@ -191,6 +191,9 @@ Deno.serve(async (req) => {
     if (isMonday && (!acosCheckerDone || force)) add('runAcosViolationChecker', 'acos_violation_checker', {}, true);
     else skipped.push('acos_violation_checker');
 
+    // Sempre: deduplicar e reescandar jobs travados da fila de kick-off
+    add('rescheduleStaleKickoffJobs', 'kickoff_queue_reschedule');
+
     // Reparo de campanhas incompletas: sempre — idempotente, só processa pendentes
     add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto', { _window_execution: true });
     add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' });

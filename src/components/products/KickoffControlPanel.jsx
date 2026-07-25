@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Rocket, Clock, CheckCircle2, XCircle, Pause, RefreshCw,
-  Loader2, AlertTriangle, ChevronDown, ChevronUp, Package, Ban
+  Loader2, AlertTriangle, ChevronDown, ChevronUp, Package, Ban, Zap
 } from 'lucide-react';
 
 const STATUS_CONFIG = {
@@ -190,6 +190,8 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
   const [collapsed, setCollapsed] = useState(false);
   const [stockMap, setStockMap] = useState({});
   const [cancelling, setCancelling] = useState(null);
+  const [forcing, setForcing] = useState(false);
+  const [forceResult, setForceResult] = useState(null);
 
   const load = useCallback(async () => {
     if (!accountId) return;
@@ -230,6 +232,40 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
       setLoading(false);
     }
   }, [accountId]);
+
+  // Jobs agendados com scheduled_at > 1h no passado
+  const stuckJobs = items.filter(i => {
+    if (i.status !== 'scheduled') return false;
+    if (!i.scheduled_at) return false;
+    return new Date(i.scheduled_at).getTime() < Date.now() - 60 * 60 * 1000;
+  });
+
+  const handleForceProcess = useCallback(async () => {
+    if (!accountId || forcing) return;
+    setForcing(true);
+    setForceResult(null);
+    try {
+      const res = await base44.functions.invoke('processProductKickoffQueueV2', {
+        amazon_account_id: accountId,
+        force: true,
+        ignore_window: true,
+        _service_role: true,
+      });
+      const d = res?.data || res || {};
+      const dedupe = d?.dedupe || {};
+      setForceResult({
+        processed: d?.processed || 0,
+        duplicates: dedupe?.duplicates_cancelled || 0,
+        rescheduled: dedupe?.rescheduled || 0,
+      });
+      setTimeout(() => setForceResult(null), 15000);
+      await load();
+    } catch (e) {
+      setForceResult({ error: e?.message || 'Erro ao forçar processamento' });
+    } finally {
+      setForcing(false);
+    }
+  }, [accountId, forcing, load]);
 
   const handleCancel = useCallback(async (item) => {
     if (!item?.id || cancelling) return;
@@ -282,6 +318,44 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
 
   return (
     <div className="mx-6 rounded-xl border border-violet-500/20 bg-[#0f0d1a] overflow-hidden">
+
+      {/* Banner de alerta — jobs travados há mais de 1h */}
+      {stuckJobs.length > 0 && (
+        <div className="flex items-center justify-between gap-3 px-5 py-3 bg-red-500/10 border-b border-red-500/25">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 animate-pulse" />
+            <p className="text-xs font-semibold text-red-300">
+              {stuckJobs.length} campanha{stuckJobs.length > 1 ? 's' : ''} travada{stuckJobs.length > 1 ? 's' : ''} — agendada{stuckJobs.length > 1 ? 's' : ''} há mais de 1h sem processar
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleForceProcess}
+            disabled={forcing}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30 text-xs font-bold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap flex-shrink-0"
+          >
+            {forcing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            {forcing ? 'Processando...' : 'Forçar Processamento + Limpar Duplicatas'}
+          </button>
+        </div>
+      )}
+
+      {/* Toast de resultado */}
+      {forceResult && !forceResult.error && (
+        <div className="flex items-center gap-2 px-5 py-2.5 bg-emerald-500/10 border-b border-emerald-500/20 text-xs text-emerald-300 font-medium">
+          <CheckCircle2 className="w-3.5 h-3.5" />
+          {forceResult.processed} processado{forceResult.processed !== 1 ? 's' : ''}
+          {forceResult.duplicates > 0 ? ` · ${forceResult.duplicates} duplicata${forceResult.duplicates !== 1 ? 's' : ''} cancelada${forceResult.duplicates !== 1 ? 's' : ''}` : ''}
+          {forceResult.rescheduled > 0 ? ` · ${forceResult.rescheduled} reescalonado${forceResult.rescheduled !== 1 ? 's' : ''}` : ''}
+        </div>
+      )}
+      {forceResult?.error && (
+        <div className="flex items-center gap-2 px-5 py-2.5 bg-red-500/10 border-b border-red-500/20 text-xs text-red-300">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          {forceResult.error}
+        </div>
+      )}
+
       {/* Header */}
       <div
         className="flex items-center justify-between px-5 py-3.5 cursor-pointer select-none"
