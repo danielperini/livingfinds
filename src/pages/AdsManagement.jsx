@@ -14,6 +14,7 @@ import ReconciliationPanel from '@/components/ads/ReconciliationPanel';
 import KickoffModal from '@/components/products/KickoffModal';
 import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
 import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
+import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
 
 
 const NOW_MS = Date.now();
@@ -208,6 +209,7 @@ export default function AdsManagement() {
   const [campaignActionMsg, setCampaignActionMsg] = useState(null);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [showCreateWizard, setShowCreateWizard] = useState(false);
+  const [showProposalModal, setShowProposalModal] = useState(false);
   const [tokenCheck, setTokenCheck] = useState(null);
   const [pausingNoStock, setPausingNoStock] = useState(false);
   const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
