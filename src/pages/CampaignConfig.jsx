@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
+import { Link } from 'react-router-dom';
 import {
   Settings, DollarSign, Target, Zap, Clock, BarChart2,
   Package, Brain, Shield, Save, RefreshCw, Loader2,
-  CheckCircle, AlertTriangle, Info, ChevronDown, ChevronUp
+  CheckCircle, AlertTriangle, Info, ChevronDown, ChevronUp,
+  History, ExternalLink, Play
 } from 'lucide-react';
 
 const TABS = [
@@ -339,7 +341,87 @@ function BudgetTab({ cfg, set }) {
   );
 }
 
-function ObjectivesTab({ cfg, set }) {
+function SettingsHistoryPanel({ accountId }) {
+  const [open, setOpen] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !accountId) return;
+    setLoading(true);
+    base44.entities.PerformanceSettingsHistory.filter(
+      { amazon_account_id: accountId }, '-created_date', 5
+    ).then(res => setHistory(res || [])).catch(() => setHistory([])).finally(() => setLoading(false));
+  }, [open, accountId]);
+
+  const reasonLabel = (r) => {
+    if (r === 'manual_settings_update') return 'Atualização manual';
+    if (r === 'ai_suggestion') return 'Sugestão da IA';
+    return r || 'Alteração';
+  };
+
+  return (
+    <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-surface-2/30 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <History className="w-4 h-4 text-slate-400" />
+          <span className="text-sm font-semibold text-white">Histórico de Alterações</span>
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
+      </button>
+      {open && (
+        <div className="px-5 pb-5 border-t border-surface-2">
+          {loading ? (
+            <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando...
+            </div>
+          ) : history.length === 0 ? (
+            <p className="text-xs text-slate-500 py-4">Nenhum histórico disponível.</p>
+          ) : (
+            <div className="space-y-2 mt-3">
+              {history.map((h, i) => (
+                <div key={h.id || i} className="flex items-center gap-3 px-3 py-2.5 bg-surface-2 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[10px] text-slate-500">
+                        {h.snapshot_date || (h.changed_at ? h.changed_at.slice(0, 10) : '—')}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 bg-violet-500/10 border border-violet-500/20 text-violet-400 rounded">
+                        {reasonLabel(h.snapshot_reason)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 flex-wrap">
+                      {h.target_acos != null && (
+                        <span className="text-[10px] text-slate-300">
+                          ACoS: <span className="font-semibold text-white">{h.target_acos}%</span>
+                        </span>
+                      )}
+                      {h.target_roas != null && (
+                        <span className="text-[10px] text-slate-300">
+                          ROAS: <span className="font-semibold text-white">{h.target_roas}x</span>
+                        </span>
+                      )}
+                      {h.daily_budget_limit != null && (
+                        <span className="text-[10px] text-slate-300">
+                          Budget: <span className="font-semibold text-white">R${h.daily_budget_limit}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ObjectivesTab({ cfg, set, accountId }) {
   const breakEven = cfg.min_margin > 0 ? (100 - cfg.min_margin).toFixed(1) : null;
   const acosAboveBreakeven = breakEven && cfg.target_acos > Number(breakEven);
 
@@ -379,6 +461,7 @@ function ObjectivesTab({ cfg, set }) {
           </div>
         )}
       </Section>
+      <SettingsHistoryPanel accountId={accountId} />
     </div>
   );
 }
@@ -684,6 +767,105 @@ function AITab({ cfg, set }) {
 
 // ── Main Page ──
 
+function MotorDispatchBanner({ accountId, onDismiss }) {
+  const [countdown, setCountdown] = useState(30);
+  const [motorState, setMotorState] = useState('idle'); // idle | running | success | error | timeout
+  const [motorResult, setMotorResult] = useState(null);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    timerRef.current = setInterval(() => {
+      setCountdown(v => {
+        if (v <= 1) { clearInterval(timerRef.current); onDismiss(); return 0; }
+        return v - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [onDismiss]);
+
+  const runMotor = async () => {
+    clearInterval(timerRef.current);
+    setMotorState('running');
+    const timeoutId = setTimeout(() => {
+      setMotorState('timeout');
+    }, 30000);
+    try {
+      const res = await base44.functions.invoke('runDeterministicDecisionEngine', {
+        amazon_account_id: accountId,
+        trigger: 'manual_settings_update',
+      });
+      clearTimeout(timeoutId);
+      const data = res?.data || res;
+      if (data?.error) { setMotorState('error'); setMotorResult(data.error); }
+      else { setMotorState('success'); setMotorResult(data?.decisions_created ?? data?.decisions_count ?? '?'); }
+    } catch (e) {
+      clearTimeout(timeoutId);
+      setMotorState('error');
+      setMotorResult(e.message);
+    }
+  };
+
+  if (motorState === 'success') return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-sm animate-fade-in">
+      <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+      <span className="text-emerald-300 flex-1">Motor executado com sucesso. {motorResult} decisões geradas.</span>
+      <Link to="/sala-de-comando" className="flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-200 underline underline-offset-2">
+        Ver Sala de Comando <ExternalLink className="w-3 h-3" />
+      </Link>
+      <button onClick={onDismiss} className="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+    </div>
+  );
+
+  if (motorState === 'error') return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-sm animate-fade-in">
+      <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+      <span className="text-red-300 flex-1">Erro ao executar o motor: {motorResult}</span>
+      <button onClick={runMotor} className="text-xs px-2.5 py-1 bg-red-500/20 border border-red-500/30 text-red-300 rounded-lg hover:bg-red-500/30">Tentar novamente</button>
+      <button onClick={onDismiss} className="text-slate-500 hover:text-slate-300 text-xs ml-1">✕</button>
+    </div>
+  );
+
+  if (motorState === 'timeout') return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-sm animate-fade-in">
+      <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
+      <span className="text-amber-300 flex-1">Motor iniciado em background. Verifique a Sala de Comando.</span>
+      <Link to="/sala-de-comando" className="flex items-center gap-1 text-xs text-amber-400 hover:text-amber-200 underline underline-offset-2">
+        Sala de Comando <ExternalLink className="w-3 h-3" />
+      </Link>
+      <button onClick={onDismiss} className="text-slate-500 hover:text-slate-300 text-xs ml-1">✕</button>
+    </div>
+  );
+
+  return (
+    <div className="px-4 py-3.5 bg-violet-500/10 border border-violet-500/20 rounded-xl animate-fade-in">
+      <div className="flex items-start gap-3">
+        <Brain className="w-4 h-4 text-violet-400 flex-shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-violet-200 mb-0.5">Configurações salvas com sucesso.</p>
+          <p className="text-xs text-slate-400">Deseja aplicar as novas metas agora? O motor determinístico será disparado imediatamente.</p>
+        </div>
+        <span className="text-xs text-slate-500 font-mono flex-shrink-0 mt-0.5">{countdown}s</span>
+      </div>
+      <div className="flex gap-2 mt-3">
+        <button
+          onClick={runMotor}
+          disabled={motorState === 'running'}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
+        >
+          {motorState === 'running' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          {motorState === 'running' ? 'Motor em execução...' : 'Disparar agora'}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="px-3 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold rounded-lg hover:bg-surface-3 transition-colors"
+        >
+          Aguardar ciclo automático (06h BRT)
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function CampaignConfig() {
   const [activeTab, setActiveTab] = useState('general');
   const [cfg, setCfg] = useState(DEFAULT_CONFIG);
@@ -691,6 +873,7 @@ export default function CampaignConfig() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [account, setAccount] = useState(null);
+  const [showMotorBanner, setShowMotorBanner] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -764,8 +947,57 @@ export default function CampaignConfig() {
       return;
     }
     setSaving(true);
+    setShowMotorBanner(false);
     try {
-      // Atualizar BudgetRule
+      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date().toISOString();
+
+      // 1. Ler estado atual de PerformanceSettings (snapshot ANTES de sobrescrever)
+      const existingPS = await base44.entities.PerformanceSettings.filter(
+        { amazon_account_id: account.id }, '-updated_at', 1
+      ).catch(() => []);
+      const currentPS = existingPS[0] || null;
+
+      // 2. Criar snapshot em PerformanceSettingsHistory com valores anteriores
+      await base44.entities.PerformanceSettingsHistory.create({
+        amazon_account_id: account.id,
+        snapshot_date: today,
+        target_acos: currentPS?.target_acos ?? cfg.target_acos,
+        max_acos: currentPS?.max_acos ?? cfg.max_acos,
+        target_roas: currentPS?.target_roas ?? cfg.target_roas,
+        target_tacos: currentPS?.target_tacos ?? cfg.target_tacos,
+        min_bid: currentPS?.min_bid ?? cfg.min_bid_global,
+        max_bid: currentPS?.max_bid ?? cfg.max_bid_global,
+        max_bid_increase_pct: currentPS?.max_bid_increase_pct ?? cfg.max_increase_pct,
+        max_bid_decrease_pct: currentPS?.max_bid_decrease_pct ?? cfg.max_decrease_pct,
+        daily_budget_limit: currentPS?.daily_budget_limit ?? Number(cfg.daily_budget_total),
+        objective: currentPS?.objective ?? cfg.primary_objective,
+        snapshot_reason: 'manual_settings_update',
+        changed_at: now,
+      }).catch(() => {}); // não bloquear o save se falhar
+
+      // 3. Upsert em PerformanceSettings com novos valores
+      const psData = {
+        amazon_account_id: account.id,
+        target_acos: cfg.target_acos,
+        max_acos: cfg.max_acos,
+        target_roas: cfg.target_roas,
+        target_tacos: cfg.target_tacos,
+        min_bid: cfg.min_bid_global,
+        max_bid: cfg.max_bid_global,
+        max_bid_increase_pct: cfg.max_increase_pct,
+        max_bid_decrease_pct: cfg.max_decrease_pct,
+        daily_budget_limit: Number(cfg.daily_budget_total),
+        objective: cfg.primary_objective,
+        updated_at: now,
+      };
+      if (currentPS) {
+        await base44.entities.PerformanceSettings.update(currentPS.id, psData);
+      } else {
+        await base44.entities.PerformanceSettings.create(psData);
+      }
+
+      // 4. Atualizar BudgetRule
       const existing = await base44.entities.BudgetRule.filter({ amazon_account_id: account.id }, '-created_date', 1);
       const ruleData = {
         amazon_account_id: account.id,
@@ -785,7 +1017,7 @@ export default function CampaignConfig() {
         await base44.entities.BudgetRule.create(ruleData);
       }
 
-      // Atualizar AutopilotConfig
+      // 5. Atualizar AutopilotConfig
       const existingAuto = await base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, '-created_date', 1);
       const autoData = {
         amazon_account_id: account.id,
@@ -806,6 +1038,7 @@ export default function CampaignConfig() {
       }
 
       setMsg({ type: 'success', text: 'Configuração salva com sucesso!' });
+      setShowMotorBanner(true);
     } catch (e) {
       setMsg({ type: 'error', text: `Erro ao salvar: ${e.message}` });
     } finally {
@@ -820,7 +1053,7 @@ export default function CampaignConfig() {
     switch (activeTab) {
       case 'general': return <GeneralTab {...tabProps} />;
       case 'budget': return <BudgetTab {...tabProps} />;
-      case 'objectives': return <ObjectivesTab {...tabProps} />;
+      case 'objectives': return <ObjectivesTab {...tabProps} accountId={account?.id} />;
       case 'bids': return <BidsTab {...tabProps} />;
       case 'auto_campaigns': return <AutoCampaignsTab {...tabProps} />;
       case 'manual_campaigns': return <ManualCampaignsTab {...tabProps} />;
@@ -864,13 +1097,17 @@ export default function CampaignConfig() {
         </button>
       </div>
 
-      {msg && (
+      {msg && !showMotorBanner && (
         <div className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium ${
           msg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'
         }`}>
           {msg.type === 'success' ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0" />}
           {msg.text}
         </div>
+      )}
+
+      {showMotorBanner && account && (
+        <MotorDispatchBanner accountId={account.id} onDismiss={() => setShowMotorBanner(false)} />
       )}
 
       {cfg.operation_mode === 'simulation' && (

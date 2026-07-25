@@ -5,6 +5,44 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "snapshot_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "max_acos": {
+      "type": "number"
+    },
+    "target_roas": {
+      "type": "number"
+    },
+    "target_tacos": {
+      "type": "number"
+    },
+    "min_bid": {
+      "type": "number"
+    },
+    "max_bid": {
+      "type": "number"
+    },
+    "max_bid_increase_pct": {
+      "type": "number"
+    },
+    "max_bid_decrease_pct": {
+      "type": "number"
+    },
+    "daily_budget_limit": {
+      "type": "number"
+    },
+    "objective": {
+      "type": "string"
+    },
+    "snapshot_reason": {
+      "type": "string",
+      "default": "manual_settings_update"
+    },
     "changed_by_id": {
       "type": "string"
     },
@@ -32,6 +70,6 @@
   },
   "required": [
     "amazon_account_id",
-    "changed_at"
+    "snapshot_date"
   ]
 }
