@@ -111,7 +111,7 @@ Deno.serve(async (req) => {
     const result = await adsCall(account, 'POST', '/v2/sp/negativeKeywords', [{
       campaignId: autoCampaignId,
       keywordText: kwText,
-      matchType: 'negativeExact',
+      matchType: 'NEGATIVE_EXACT', // Amazon Ads API exige UPPERCASE para matchType de negative keywords
       state: 'enabled',
     }]);
 

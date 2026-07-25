@@ -342,7 +342,7 @@ Deno.serve(async (req) => {
         const negPayload = terms.map(t => ({
           campaignId: campId,
           keywordText: t.term,
-          matchType: 'negativeExact',
+          matchType: 'NEGATIVE_EXACT', // Amazon Ads API exige UPPERCASE para matchType de negative keywords
           state: 'enabled',
         }));
 
