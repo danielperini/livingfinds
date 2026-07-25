@@ -64,45 +64,46 @@ function BidChartTooltip({ active, payload }) {
 
 // ── Dayparting Tab ────────────────────────────────────────────────────────
 function DaypartingTab({ account }) {
-  const [decisions, setDecisions] = useState([]);
-  const [executedDecisions, setExecutedDecisions] = useState([]);
+  // Todos os dados carregados de uma vez só
+  const [allDecisions, setAllDecisions] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState({});
   const [filter, setFilter] = useState('pending_approval');
   const [search, setSearch] = useState('');
 
-  const loadDecisions = useCallback(async () => {
+  // Uma única request por sessão (ou ao clicar em refresh)
+  const loadAll = useCallback(async () => {
     if (!account) return;
     setLoading(true);
     try {
-      const filterObj = { amazon_account_id: account.id };
-      if (filter !== 'all') filterObj.status = filter;
-      const [data, executed, cams] = await Promise.all([
-        base44.entities.DaypartingDecision.filter(filterObj, '-created_date', 200),
-        base44.entities.DaypartingDecision.filter({ amazon_account_id: account.id, status: 'executed' }, '-created_date', 500),
+      const [all, cams] = await Promise.all([
+        base44.entities.DaypartingDecision.filter({ amazon_account_id: account.id }, '-created_date', 700),
         base44.entities.Campaign.filter({ amazon_account_id: account.id }, null, 500).catch(() => []),
       ]);
-      setDecisions(data);
-      setExecutedDecisions(executed);
+      setAllDecisions(all);
       setCampaigns(cams);
     } catch {}
     finally { setLoading(false); }
-  }, [account, filter]);
+  }, [account]);
 
-  useEffect(() => { loadDecisions(); }, [loadDecisions]);
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Derivados em memória — sem novas requests ao trocar filtro
+  const decisions         = useMemo(() => filter === 'all' ? allDecisions : allDecisions.filter(d => d.status === filter), [allDecisions, filter]);
+  const executedDecisions = useMemo(() => allDecisions.filter(d => d.status === 'executed'), [allDecisions]);
 
   const approveDecision = async (dec) => {
     try {
       await base44.entities.DaypartingDecision.update(dec.id, { status: 'approved', approved_at: new Date().toISOString() });
-      setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'approved' } : d));
+      setAllDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'approved' } : d));
     } catch {}
   };
 
   const rejectDecision = async (dec) => {
     try {
       await base44.entities.DaypartingDecision.update(dec.id, { status: 'rejected', rejected_at: new Date().toISOString() });
-      setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'rejected' } : d));
+      setAllDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'rejected' } : d));
     } catch {}
   };
 
@@ -111,7 +112,7 @@ function DaypartingTab({ account }) {
     setExecuting(prev => ({ ...prev, [dec.id]: true }));
     try {
       const res = await base44.functions.invoke('executeDaypartingDecision', { decision_id: dec.id, amazon_account_id: account.id });
-      if (res?.data?.ok) setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'executed' } : d));
+      if (res?.data?.ok) setAllDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'executed' } : d));
     } catch {}
     finally { setExecuting(prev => ({ ...prev, [dec.id]: false })); }
   };
@@ -121,10 +122,10 @@ function DaypartingTab({ account }) {
     return true;
   });
 
-  const pending  = decisions.filter(d => d.status === 'pending_approval').length;
-  const approved = decisions.filter(d => d.status === 'approved').length;
-  const executed = decisions.filter(d => d.status === 'executed').length;
-  const bidUp    = decisions.filter(d => d.decision_type === 'BID_UP').length;
+  const pending  = allDecisions.filter(d => d.status === 'pending_approval').length;
+  const approved = allDecisions.filter(d => d.status === 'approved').length;
+  const executed = allDecisions.filter(d => d.status === 'executed').length;
+  const bidUp    = allDecisions.filter(d => d.decision_type === 'BID_UP').length;
 
   // Gráfico: bid médio por hora das decisões executadas
   const bidByHour = useMemo(() => {
@@ -253,7 +254,7 @@ function DaypartingTab({ account }) {
             {s === 'all' ? 'Todas' : s.replace('_', ' ')}
           </button>
         ))}
-        <button onClick={loadDecisions} className="p-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white transition-colors">
+        <button onClick={loadAll} className="p-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white transition-colors">
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
       </div>
