@@ -155,6 +155,10 @@ Deno.serve(async (req) => {
     // Executado após sync de relatórios e estados de campanha (idempotente)
     add('promoteWinningSearchTerms', 'promote_winning_terms');
 
+    // Negative Product Target Guard: bloqueia ASINs concorrentes com clicks sem conversão
+    // Executado após promoção de termos — age imediatamente na API da Amazon
+    add('runNegativeProductTargetGuard', 'negative_product_target_guard');
+
     // Bids iniciais: idempotente, só processa pendentes
     add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
@@ -169,6 +173,11 @@ Deno.serve(async (req) => {
 
     // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
     add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 });
+
+    // 1x/dia: Auditoria de divergência de budget — ativa KillSwitch se delta > 5%
+    const budgetAuditDone = await wasRunTodaySuccessfully(base44, aid, 'audit_budget_divergence');
+    if (!budgetAuditDone || force) add('auditBudgetDivergence', 'audit_budget_divergence', {}, true);
+    else skipped.push('audit_budget_divergence');
 
     // 1x/dia: Redução de bids proporcional ao gap de lucro (pré-filtro: 2 dias consecutivos negativos)
     const profitBidReductionDone = await wasRunTodaySuccessfully(base44, aid, 'profit_bid_reduction');

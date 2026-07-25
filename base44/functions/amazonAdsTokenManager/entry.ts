@@ -107,6 +107,7 @@ Deno.serve(async (req) => {
   let base44: any = null;
   let accountId = '';
   let lockOwned = false;
+  let lockId: string | null = null;
 
   try {
     base44 = createClientFromRequest(req);
@@ -145,36 +146,48 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database', active_token_source: activeTokenSource, token_source_conflict: tokenConflict });
     }
 
-    // Gerenciar lock
-    const lockStarted = new Date(account.ads_token_refresh_started_at || 0).getTime();
-    const lockActive = account.ads_token_refresh_in_progress === true && Number.isFinite(lockStarted) && Date.now() - lockStarted < LOCK_TTL_MS;
-    if (lockActive) {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        await wait(1200);
-        account = await readAccount(base44, accountId);
-        if (account && validAccessToken(account, 60_000)) {
-          return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database_after_lock_wait', active_token_source: activeTokenSource });
-        }
-        if (!account?.ads_token_refresh_in_progress) break;
+    // ── Lock atômico via AmazonSchedulerLock (mutex distribuído) ─────────
+    // Aguarda até 30s polling de 2s se outro processo já tem o lock
+    const lockKey = `token_refresh:${accountId}`;
+    const ownerId = crypto.randomUUID();
+    let lockId: string | null = null;
+
+    for (let lockAttempt = 0; lockAttempt < 15; lockAttempt++) {
+      const lockRes = await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+        _service_role: true,
+        amazon_account_id: accountId,
+        lock_key: lockKey,
+        owner_id: ownerId,
+        ttl_ms: 60000,
+      }).catch(() => ({ data: { acquired: false } }));
+      const lockData = lockRes?.data || lockRes || {};
+
+      if (lockData.acquired) {
+        lockId = lockData.lock_id || null;
+        lockOwned = true;
+        break;
       }
-      if (account?.ads_token_refresh_in_progress) return Response.json({ ok: false, error_type: 'refresh_in_progress', retryable: true, status_code: 409, message: 'Renovação de token já está em andamento.' }, { status: 409 });
+      // Lock ativo — verificar se já foi renovado por outro processo
+      account = await readAccount(base44, accountId);
+      if (!forceRefresh && validAccessToken(account, 60_000)) {
+        return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database_after_lock_wait', active_token_source: activeTokenSource });
+      }
+      await wait(2000);
     }
 
-    // Adquirir lock
-    await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
-      ads_token_refresh_in_progress: true,
-      ads_token_refresh_started_at: new Date().toISOString(),
-      ads_token_status: 'refreshing',
-      ads_active_token_source: activeTokenSource,
-      ads_env_token_present: hasEnvToken,
-      ads_token_source_conflict: tokenConflict,
-    });
-    lockOwned = true;
+    if (!lockOwned) {
+      // Timeout de lock — tentar ler token mais recente antes de desistir
+      account = await readAccount(base44, accountId);
+      if (validAccessToken(account, 30_000)) {
+        return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database_lock_timeout_fallback', active_token_source: activeTokenSource });
+      }
+      return Response.json({ ok: false, error_type: 'lock_timeout', retryable: true, status_code: 409, message: 'Timeout aguardando lock de renovação de token.' }, { status: 409 });
+    }
 
-    // Releitura após lock
+    // Releitura após adquirir o lock — outro processo pode ter renovado
     account = await readAccount(base44, accountId);
     if (!forceRefresh && validAccessToken(account)) {
-      await base44.asServiceRole.entities.AmazonAccount.update(accountId, { ads_token_refresh_in_progress: false, ads_token_refresh_started_at: null, ads_token_status: 'active' }).catch(() => {});
+      if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
       lockOwned = false;
       return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database_after_lock', active_token_source: activeTokenSource });
     }
@@ -262,10 +275,13 @@ Deno.serve(async (req) => {
       ads_token_last_error: safeMessage,
       ads_last_lwa_error_code: refreshError?.amazon_error_code || refreshError?.error_type || 'token_refresh_failed',
       ads_last_lwa_status_code: refreshError?.status_code || null,
+      // Somente invalid_grant real seta reauth — erros transitórios (network, 429, 5xx) nunca ativam
       ads_requires_reauth: requiresReauth,
       ads_credentials_error: credentialsError,
       ...(requiresReauth || credentialsError ? { status: 'error', error_message: safeMessage } : {}),
     }).catch(() => {});
+    // Liberar lock distribuído
+    if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
     lockOwned = false;
     await logEvent(base44, accountId, transient ? 'warning' : 'error', refreshError || { message: safeMessage });
 
