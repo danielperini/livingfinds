@@ -28,10 +28,6 @@ const BID_FLOOR_RELATIVE = 0.40;       // floor = max(min_bid, cur_bid × 0.40)
 const MIN_BID_GLOBAL = 0.25;
 const DECISION_EXPIRY_DAYS = 14;
 
-// Prior noturno conservador (apenas para slots 02h–05h imaturos)
-const PRIOR_NIGHT_HOURS = [2, 3, 4];
-const PRIOR_NIGHT_REDUCTION = 0.10;    // -10% (conservador vs -20% antigo)
-
 // Thresholds de score para classificação
 const SCORE_ALTA_OPORTUNIDADE = 85;
 const SCORE_BOA_OPORTUNIDADE = 70;
@@ -184,7 +180,7 @@ function decideForSlot(
   // ── PROTEÇÃO DE VENCEDORAS ────────────────────────────────────────────
   // Campanhas com vendas recentes, ACoS abaixo da meta e ROAS elevado
   // são imunes a qualquer redução, independente do horário.
-  const isWinner = slotOrders >= 1 && slotAcos > 0 && slotAcos <= targetAcos && slot.roas >= 3;
+  const isWinner = slotOrders >= 1 && slotAcos > 0 && slotAcos <= targetAcos && slot.roas >= 2;
   if (isWinner && opportunityScore < SCORE_REDUCAO) {
     return null; // WINNER_PROFIT_PROTECTION — não degradar
   }
@@ -592,7 +588,6 @@ Deno.serve(async (req) => {
 
     // ── Gerar decisões ────────────────────────────────────────────────────
     const decisions: any[] = [];
-    const priorDecisions: any[] = [];
     const kwMap = new Map<string, any>();
     for (const kw of activeKws) kwMap.set(kw.keyword_id, kw);
 
@@ -615,59 +610,8 @@ Deno.serve(async (req) => {
       slot.learned_peak_class = peakInfo?.classification || 'INSUFFICIENT_DATA';
       slot.learned_peak_score = peakInfo?.peak_score || 0;
 
-      // ── PRIOR CONSERVADOR (02h–05h, slots imaturos) ────────────────────
-      if (!dataMature && PRIOR_NIGHT_HOURS.includes(slot.hour) && opportunityScore < SCORE_PRESENCA_CONTROLADA) {
-        // Se evidência positiva forte (score >= 50 mesmo com < 4 ocorrências), não emitir prior
-        const curBid = Number(kw.current_bid || kw.bid || 0);
-        if (curBid > 0) {
-          const minBid   = Number(goal.min_bid || MIN_BID_GLOBAL);
-          const floorBid = Math.max(minBid, curBid * BID_FLOOR_RELATIVE);
-          const rawBid   = curBid * (1 - PRIOR_NIGHT_REDUCTION);
-          const newBid   = r2(Math.max(floorBid, rawBid));
-          if (newBid < curBid - 0.01) {
-            const idempKey = `prior_night:${accountId}:${kw.keyword_id}:${slot.day_of_week}:${slot.hour}:${today}`;
-            priorDecisions.push({
-              amazon_account_id: accountId,
-              campaign_id: slot.campaign_id || kw.campaign_id,
-              keyword_id: slot.keyword_id,
-              asin: slot.asin || kw.asin,
-              keyword_text: kw.keyword_text,
-              match_type: kw.match_type,
-              day_of_week: slot.day_of_week,
-              hour: slot.hour,
-              slot_label: `${DAY_LABELS[slot.day_of_week]}_${slot.hour}h`,
-              time_slot_score: opportunityScore,
-              slot_classification: 'COLLECTING_DATA',
-              decision_type: 'BID_DOWN_ACOS',
-              rule_id: 'PRIOR_NIGHT_CONSERVATIVE',
-              rule_version: RULE_VERSION,
-              current_bid: curBid,
-              proposed_bid: newBid,
-              bid_change_pct: r2(((newBid - curBid) / curBid) * 100),
-              bid_floor_applied: rawBid < floorBid,
-              bid_cap_applied: false,
-              recency_protection_blocked: false,
-              metric_window: `${slot.occurrences || 0} ocorrências`,
-              decision_window: '<4 ocorrências (imaturo)',
-              requires_approval: false,
-              status: 'pending_approval',
-              target_acos: goal.target_acos,
-              data_confidence: 'LOW',
-              data_mature: false,
-              occurrences: slot.occurrences || 0,
-              reason: `Prior conservador madrugada: slot ${DAY_LABELS[slot.day_of_week]} ${slot.hour}h tem apenas ${slot.occurrences || 0} ocorrência(s) (mínimo ${MIN_OCCURRENCES_MATURE} para dados reais). Redução de ${(PRIOR_NIGHT_REDUCTION * 100).toFixed(0)}% aplicada preventivamente. Será descartada automaticamente ao atingir ${MIN_OCCURRENCES_MATURE} ocorrências.`,
-              idempotency_key: idempKey,
-              expires_at: hoursLater(8),
-              cycle_date: today,
-              created_at: now,
-            });
-          }
-        }
-        continue; // próximo slot
-      }
-
-      // ── Slot imaturo fora da madrugada → HOURLY_INSUFFICIENT_DATA ──────
-      if (!dataMature) continue; // sem ação, sem log de decisão
+      // ── Slot imaturo (< MIN_OCCURRENCES_MATURE) em qualquer hora → SKIP, bid preservado ──
+      if (!dataMature) continue; // sem ação, sem ajuste de bid
 
       // Contexto econômico por ASIN
       const kwAsin      = slot.asin || kw.asin;
@@ -752,8 +696,7 @@ Deno.serve(async (req) => {
       ).catch(() => []);
       const existingKeySet = new Set(existingKeys.map((d: any) => d.idempotency_key));
 
-      const allDecisions = [...decisions, ...priorDecisions];
-      const newDecisions = allDecisions.filter((d: any) => !existingKeySet.has(d.idempotency_key));
+      const newDecisions = decisions.filter((d: any) => !existingKeySet.has(d.idempotency_key));
 
       if (newDecisions.length > 0) {
         for (let i = 0; i < newDecisions.length; i += 50) {
@@ -767,13 +710,11 @@ Deno.serve(async (req) => {
         keywords_analyzed: activeKws.length,
         slots_analyzed: slotMap.size,
         decisions_generated: decisions.length,
-        prior_decisions_generated: priorDecisions.length,
-        decisions_skipped_dedup: (decisions.length + priorDecisions.length) - newDecisions.length,
+        decisions_skipped_dedup: decisions.length - newDecisions.length,
         bid_up: decisions.filter((d: any) => d.decision_type === 'BID_UP').length,
         bid_down: decisions.filter((d: any) => d.decision_type.startsWith('BID_DOWN')).length,
         no_sales: decisions.filter((d: any) => d.decision_type.startsWith('NO_SALES')).length,
-        night_block_removed: true,
-        prior_night_conservative: priorDecisions.length,
+        prior_night_removed: true,
         brt_hour: brtHour,
         brt_day_of_week: brtDayOfWeek,
         duration_ms: Date.now() - t0,
@@ -791,11 +732,9 @@ Deno.serve(async (req) => {
       slots_analyzed: slotMap.size,
       hourly_records_loaded: hourlyMetrics.length,
       decisions_generated: decisions.length,
-      prior_decisions_generated: priorDecisions.length,
       by_type: byType,
-      night_block_removed: true,
-      prior_night_conservative: priorDecisions.length,
-      sample: [...decisions, ...priorDecisions].slice(0, 10).map(({ amazon_account_id: _, ...d }) => d),
+      prior_night_removed: true,
+      sample: decisions.slice(0, 10).map(({ amazon_account_id: _, ...d }) => d),
       duration_ms: Date.now() - t0,
     });
 
