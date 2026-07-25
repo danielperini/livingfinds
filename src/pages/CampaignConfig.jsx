@@ -34,7 +34,7 @@ const DEFAULT_CONFIG = {
   ads_profile_id: '',
 
   // Budget
-  daily_budget_total: '',
+  daily_budget_total: 0,
   monthly_budget_total: '',
   max_budget_per_campaign: 20,
   max_budget_per_asin: 50,
@@ -895,7 +895,7 @@ export default function CampaignConfig() {
           const r = rules[0];
           setCfg(prev => ({
             ...prev,
-            daily_budget_total: r.total_daily_budget || '',
+            daily_budget_total: r.total_daily_budget ?? prev.daily_budget_total,
             max_budget_per_campaign: r.max_budget_per_campaign || prev.max_budget_per_campaign,
             max_budget_per_asin: r.max_budget_per_asin || prev.max_budget_per_asin,
             min_bid_global: r.min_bid || prev.min_bid_global,
@@ -918,7 +918,7 @@ export default function CampaignConfig() {
             max_bid_global: c.max_bid || prev.max_bid_global,
             max_increase_pct: c.max_bid_increase_pct || prev.max_increase_pct,
             max_decrease_pct: c.max_bid_decrease_pct || prev.max_decrease_pct,
-            daily_budget_total: c.daily_budget_limit || prev.daily_budget_total,
+            daily_budget_total: c.daily_budget_limit ?? prev.daily_budget_total,
           }));
         }
       } catch (e) {
@@ -933,11 +933,7 @@ export default function CampaignConfig() {
 
   const validate = () => {
     const errors = [];
-    const totalPct = (cfg.proven_campaigns_pct || 0) + (cfg.discovery_campaigns_pct || 0) + (cfg.test_campaigns_pct || 0);
-    if (totalPct !== 100) errors.push(`Percentuais de distribuição somam ${totalPct}% (deve ser 100%)`);
     if (cfg.min_bid_global > cfg.max_bid_global) errors.push('Bid mínimo maior que bid máximo');
-    if (cfg.ai_auto_execute && cfg.operation_mode === 'simulation') errors.push('Execução automática ativa em modo Simulação não tem efeito');
-    if (Number(cfg.daily_budget_total) <= 0) errors.push('Budget geral diário é obrigatório e deve ser maior que zero');
     return errors;
   };
 
