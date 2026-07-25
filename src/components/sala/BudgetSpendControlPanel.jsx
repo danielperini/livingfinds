@@ -16,6 +16,7 @@ import {
   Info, ChevronDown, ChevronUp, Brain, BarChart2, Pause,
   Zap, RotateCcw, ExternalLink
 } from 'lucide-react';
+import ProactiveBudgetOptimizerCard from './ProactiveBudgetOptimizerCard';
 
 const CAP_STATUS_CONFIG = {
   safe:        { label: 'Normal',       color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', bar: 'bg-emerald-500' },
@@ -509,6 +510,9 @@ export default function BudgetSpendControlPanel({ account }) {
           </div>
         </div>
       )}
+
+      {/* ── 6. OTIMIZAÇÃO PROATIVA DE BUDGET ────────────────────────────────── */}
+      <ProactiveBudgetOptimizerCard account={account} />
 
       {/* Sem dados hoje */}
       {!c && !loading && (
