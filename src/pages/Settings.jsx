@@ -407,7 +407,17 @@ export default function Settings() {
           <NumberInput label="ROAS Alvo (x)" hint="Retorno mínimo sobre investimento" value={goals.target_roas} onChange={v => setGoal('target_roas', v)} min={0.1} max={50} step={0.1} />
           <NumberInput label="TACoS Alvo (%)" hint="Gasto / Vendas Totais" value={goals.target_tacos} onChange={v => setGoal('target_tacos', v)} min={1} max={100} step={0.5} />
           <NumberInput label="TACoS Máximo (%)" hint="Limite de risco de TACoS" value={goals.max_tacos} onChange={v => setGoal('max_tacos', v)} min={1} max={200} step={0.5} />
-          <NumberInput label="Orçamento Diário Geral (R$)" hint="Teto de risco diário do motor" value={goals.daily_budget_limit} onChange={v => setGoal('daily_budget_limit', v)} min={10} max={5000} step={5} />
+          <div>
+            <NumberInput label="Orçamento Diário Geral (R$)" hint="Teto de risco diário do motor" value={goals.daily_budget_limit} onChange={v => setGoal('daily_budget_limit', v)} min={10} max={5000} step={5} />
+            {todaySpend?.confirmed_spend != null && (
+              <p className="text-[10px] text-amber-400 mt-1.5 flex items-center gap-1">
+                📊 Gasto Ads hoje: <span className="font-semibold font-mono">R${Number(todaySpend.confirmed_spend).toFixed(2)}</span>
+                {todaySpend.confirmed_spend > goals.daily_budget_limit && (
+                  <span className="text-red-400 ml-1">⚠ acima do teto</span>
+                )}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* CPC */}
