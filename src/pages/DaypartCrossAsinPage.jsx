@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
-  Clock, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2,
-  CheckCircle, XCircle, AlertTriangle, ArrowRightLeft, Zap, Play,
-  ChevronDown, ChevronRight, Filter, Search
+  Clock, RefreshCw, Loader2,
+  CheckCircle, XCircle, ArrowRightLeft, Zap, Play,
+  Search
 } from 'lucide-react';
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -56,26 +56,14 @@ function MetricCell({ label, value, unit = '', color = 'text-slate-200' }) {
   );
 }
 
-function RunButton({ label, onClick, loading, icon: Icon = Play }) {
-  return (
-    <button onClick={onClick} disabled={loading}
-      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-cyan/10 border border-cyan/25 text-cyan hover:bg-cyan/20 rounded-lg transition-colors disabled:opacity-50">
-      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Icon className="w-3.5 h-3.5" />}
-      {label}
-    </button>
-  );
-}
-
 // ── Dayparting Tab ────────────────────────────────────────────────────────
 function DaypartingTab({ account }) {
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
   const [executing, setExecuting] = useState({});
   const [filter, setFilter] = useState('pending_approval');
   const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [msg, setMsg] = useState(null);
 
   const loadDecisions = useCallback(async () => {
     if (!account) return;
@@ -90,29 +78,6 @@ function DaypartingTab({ account }) {
   }, [account, filter]);
 
   useEffect(() => { loadDecisions(); }, [loadDecisions]);
-
-  const runEngine = async (dry = false) => {
-    if (!account || running) return;
-    setRunning(true);
-    setMsg(null);
-    try {
-      const res = await base44.functions.invoke('runDaypartingDecisionEngine', {
-        amazon_account_id: account.id, dry_run: dry
-      });
-      const d = res?.data;
-      if (d?.ok) {
-        setMsg({ type: 'success', text: `${dry ? '[Simulação] ' : ''}${d.decisions_generated} decisões geradas de ${d.slots_analyzed} slots analisados` });
-        if (!dry) await loadDecisions();
-      } else {
-        setMsg({ type: 'error', text: d?.error || 'Erro ao executar motor' });
-      }
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message });
-    } finally {
-      setRunning(false);
-      setTimeout(() => setMsg(null), 10000);
-    }
-  };
 
   const approveDecision = async (dec) => {
     try {
@@ -174,13 +139,10 @@ function DaypartingTab({ account }) {
         ))}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <RunButton label="Simular Motor" onClick={() => runEngine(true)} loading={running} icon={RefreshCw} />
-        <RunButton label="Executar Motor" onClick={() => runEngine(false)} loading={running} />
-        {msg ? (
-          <span className={`text-xs ${msg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{msg.text}</span>
-        ) : null}
+      {/* Info automação */}
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+        Motor executado automaticamente pelo orquestrador diário
       </div>
 
       {/* Filters */}
@@ -306,10 +268,8 @@ function DaypartingTab({ account }) {
 function CrossAsinTab({ account }) {
   const [transfers, setTransfers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [msg, setMsg] = useState(null);
   const [familyBank, setFamilyBank] = useState([]);
 
   const loadData = useCallback(async () => {
@@ -327,29 +287,6 @@ function CrossAsinTab({ account }) {
   }, [account]);
 
   useEffect(() => { loadData(); }, [loadData]);
-
-  const runTransfer = async (dry = false) => {
-    if (!account || running) return;
-    setRunning(true);
-    setMsg(null);
-    try {
-      const res = await base44.functions.invoke('runCrossAsinTransfer', {
-        amazon_account_id: account.id, dry_run: dry
-      });
-      const d = res?.data;
-      if (d?.ok) {
-        setMsg({ type: 'success', text: `${dry ? '[Sim] ' : ''}${d.transfers_proposed} transferências propostas de ${d.qualified_winners} winners. ${d.blocked} bloqueadas.` });
-        if (!dry) await loadData();
-      } else {
-        setMsg({ type: 'error', text: d?.error || 'Erro' });
-      }
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message });
-    } finally {
-      setRunning(false);
-      setTimeout(() => setMsg(null), 12000);
-    }
-  };
 
   const updateStatus = async (transfer, newStatus) => {
     try {
@@ -390,13 +327,10 @@ function CrossAsinTab({ account }) {
         ))}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <RunButton label="Simular Transferência" onClick={() => runTransfer(true)} loading={running} icon={RefreshCw} />
-        <RunButton label="Executar Análise" onClick={() => runTransfer(false)} loading={running} icon={ArrowRightLeft} />
-        {msg ? (
-          <span className={`text-xs ${msg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>{msg.text}</span>
-        ) : null}
+      {/* Info automação */}
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+        Motor executado automaticamente pelo orquestrador diário
       </div>
 
       {/* Filters */}
