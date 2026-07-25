@@ -223,6 +223,7 @@ export default function AdsManagement() {
   const [reactivateManualResult, setReactivateManualResult] = useState(null);
   const [pausingNoStockActive, setPausingNoStockActive] = useState(false);
   const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
+  const [columnTab, setColumnTab] = useState('auto');
 
 
   const reactivateManualWithStock = async () => {
@@ -548,6 +549,9 @@ export default function AdsManagement() {
     setSelectedCampaign(campaign);
     setPendingBids({});
     setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
+    // Mudar aba para corresponder ao tipo da campanha selecionada
+    const isAuto = (campaign.targeting_type || '').toUpperCase() === 'AUTO';
+    setColumnTab(isAuto ? 'auto' : 'manual');
     await loadKeywordsForCampaign(campaign);
   };
 
@@ -789,107 +793,103 @@ export default function AdsManagement() {
           </div>
         </div>
 
-        {/* Two-column campaign list */}
+        {/* Tab switcher AUTO | MANUAL */}
+        <div className="flex border-b border-surface-2 flex-shrink-0">
+          <button
+            onClick={() => setColumnTab('auto')}
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'auto' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+          >
+            Automáticas ({autoCampaigns.length})
+          </button>
+          <button
+            onClick={() => setColumnTab('manual')}
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+          >
+            Manuais ({manualCampaigns.length})
+          </button>
+        </div>
+
+        {/* Single-column campaign list */}
         <div className="flex flex-1 min-h-0">
-          <CampaignColumn
-            title="Automáticas"
-            icon={Zap}
-            color="text-amber-400"
-            campaigns={autoCampaigns}
-            products={products}
-            selectedId={selectedCampaign?.id}
-            onSelect={selectCampaign}
-            loading={loading}
-            stateFilter={stateFilterAuto}
-            onStateFilter={setStateFilterAuto}
-            extraAction={
-            <div className="flex flex-col gap-1">
-              <button
-                onClick={reactivateAutoWithStock}
-                disabled={!account || reactivatingAuto}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {reactivatingAuto ? (
-                  <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
-                ) : (
-                  <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>
-                )}
-              </button>
-              {reactivateAutoResult && (
-                <p className={`text-[10px] text-center font-medium ${
-                  reactivateAutoResult.type === 'success' ? 'text-emerald-400' :
-                  reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
-                }`}>
-                  {reactivateAutoResult.text}
-                </p>
-              )}
-              <button
-                onClick={pauseAutoNoStockActive}
-                disabled={!account || pausingNoStockActive}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {pausingNoStockActive ? (
-                  <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</>
-                ) : (
-                  <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>
-                )}
-              </button>
-              {pauseNoStockActiveResult && (
-                <p className={`text-[10px] text-center font-medium ${
-                  pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' :
-                  pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
-                }`}>
-                  {pauseNoStockActiveResult.text}
-                </p>
-              )}
-            </div>
-            }
-          />
-          
-          <div className="flex-1 flex flex-col min-w-0">
-            {migrationInProgress && (
-              <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5">
-                <Settings className="w-3 h-3 text-amber-400 animate-spin" />
-                <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
-              </div>
-            )}
+          {columnTab === 'auto' ? (
             <CampaignColumn
-              title="Manuais"
-              icon={Sparkles}
-              color="text-cyan"
-              campaigns={manualCampaigns}
+              title="Automáticas"
+              icon={Zap}
+              color="text-amber-400"
+              campaigns={autoCampaigns}
               products={products}
               selectedId={selectedCampaign?.id}
               onSelect={selectCampaign}
               loading={loading}
-              stateFilter={stateFilterManual}
-              onStateFilter={setStateFilterManual}
+              stateFilter={stateFilterAuto}
+              onStateFilter={setStateFilterAuto}
               extraAction={
                 <div className="flex flex-col gap-1">
                   <button
-                    onClick={reactivateManualWithStock}
-                    disabled={!account || reactivatingManual}
+                    onClick={reactivateAutoWithStock}
+                    disabled={!account || reactivatingAuto}
                     className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
                   >
-                    {reactivatingManual ? (
-                      <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</>
-                    ) : (
-                      <><Play className="w-3 h-3" /> Reativar MANUAL com estoque</>
-                    )}
+                    {reactivatingAuto ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>}
                   </button>
-                  {reactivateManualResult && (
-                    <p className={`text-[10px] text-center font-medium ${
-                      reactivateManualResult.type === 'success' ? 'text-emerald-400' :
-                      reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'
-                    }`}>
-                      {reactivateManualResult.text}
+                  {reactivateAutoResult && (
+                    <p className={`text-[10px] text-center font-medium ${reactivateAutoResult.type === 'success' ? 'text-emerald-400' : reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {reactivateAutoResult.text}
+                    </p>
+                  )}
+                  <button
+                    onClick={pauseAutoNoStockActive}
+                    disabled={!account || pausingNoStockActive}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {pausingNoStockActive ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>}
+                  </button>
+                  {pauseNoStockActiveResult && (
+                    <p className={`text-[10px] text-center font-medium ${pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' : pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {pauseNoStockActiveResult.text}
                     </p>
                   )}
                 </div>
               }
             />
-          </div>
-          
+          ) : (
+            <div className="flex flex-col flex-1 min-w-0">
+              {migrationInProgress && (
+                <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5">
+                  <Settings className="w-3 h-3 text-amber-400 animate-spin" />
+                  <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
+                </div>
+              )}
+              <CampaignColumn
+                title="Manuais"
+                icon={Sparkles}
+                color="text-cyan"
+                campaigns={manualCampaigns}
+                products={products}
+                selectedId={selectedCampaign?.id}
+                onSelect={selectCampaign}
+                loading={loading}
+                stateFilter={stateFilterManual}
+                onStateFilter={setStateFilterManual}
+                extraAction={
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={reactivateManualWithStock}
+                      disabled={!account || reactivatingManual}
+                      className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {reactivatingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar MANUAL com estoque</>}
+                    </button>
+                    {reactivateManualResult && (
+                      <p className={`text-[10px] text-center font-medium ${reactivateManualResult.type === 'success' ? 'text-emerald-400' : reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                        {reactivateManualResult.text}
+                      </p>
+                    )}
+                  </div>
+                }
+              />
+            </div>
+          )}
         </div>
 
         {/* KPI bottom */}
