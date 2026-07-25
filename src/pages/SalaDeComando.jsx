@@ -16,6 +16,7 @@ import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
 import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
+import ConservativeBidDiagnosticPanel from '@/components/sala/ConservativeBidDiagnosticPanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
 import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
 import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
@@ -1424,8 +1425,13 @@ export default function SalaDeComando() {
           {/* ── CICLO DE BIDS MANUAIS ─────────────────────────────────────────── */}
           {tab === 'bid_lifecycle' && (
             account
-              ? <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-                  <ManualBidLifecyclePanel amazonAccountId={account.id} />
+              ? <div className="space-y-5">
+                  <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                    <ManualBidLifecyclePanel amazonAccountId={account.id} />
+                  </div>
+                  <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                    <ConservativeBidDiagnosticPanel amazonAccountId={account.id} />
+                  </div>
                 </div>
               : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
           )}
