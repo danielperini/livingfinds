@@ -209,6 +209,7 @@ Deno.serve(async (req) => {
 
     if (tokenResult) {
       const { access_token, expires_at } = await persistSuccessfulToken(base44, accountId, tokenResult, activeTokenSource);
+      if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
       lockOwned = false;
       await logEvent(base44, accountId, 'success', { source: activeTokenSource, expires_at, duration_ms: Date.now() - startedAt });
       return Response.json({ ok: true, access_token, expires_at, from_cache: false, source: 'lwa_refresh', active_token_source: activeTokenSource, token_source_conflict: tokenConflict, duration_ms: Date.now() - startedAt });
@@ -239,6 +240,7 @@ Deno.serve(async (req) => {
       if (envTokenResult) {
         // Fallback funcionou — persistir e retornar sucesso silencioso
         const { access_token, expires_at } = await persistSuccessfulToken(base44, accountId, envTokenResult, 'environment_fallback', envRefreshToken);
+        if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
         lockOwned = false;
         await logEvent(base44, accountId, 'success', {
           source: 'environment_fallback',
@@ -294,6 +296,7 @@ Deno.serve(async (req) => {
   } catch (error: any) {
     if (base44 && accountId && lockOwned) {
       await base44.asServiceRole.entities.AmazonAccount.update(accountId, { ads_token_refresh_in_progress: false, ads_token_refresh_started_at: null, ads_token_status: 'error', ads_token_last_error: String(error?.message || error).slice(0, 500) }).catch(() => {});
+      if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
     }
     return Response.json({ ok: false, error_type: 'internal_error', error: String(error?.message || 'Erro interno no token manager').slice(0, 500) }, { status: 500 });
   }
