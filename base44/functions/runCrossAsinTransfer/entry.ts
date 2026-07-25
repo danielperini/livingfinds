@@ -370,6 +370,11 @@ Deno.serve(async (req) => {
         const evaluationWindowHours = highScore ? 48 : 0;
         const campaignJob = highScore ? 'VALIDATION' : 'VALIDATION';
 
+        // Calcular bid inicial: CPC da origem × 0,75 (desconto 25%), mínimo R$0,30
+        const initialBid = donor.cpc > 0
+          ? Math.max(0.30, Math.round(donor.cpc * 0.75 * 100) / 100)
+          : 0.50;
+
         transfersToCreate.push({
           amazon_account_id: accountId,
           keyword: donor.keyword,
@@ -385,6 +390,7 @@ Deno.serve(async (req) => {
           source_cvr: donor.cvr,
           source_cpc: donor.cpc,
           source_winner_tier: donor.orders >= 1 ? 'WINNER' : 'NONE',
+          initial_bid: initialBid,
           relevance_score: conversionScore,
           relevance_phase: 'HEURISTIC_ONLY',
           heuristic_score: donor.confidence || 50,
@@ -445,6 +451,7 @@ Deno.serve(async (req) => {
         keyword: t.keyword,
         product_name: destProd?.display_name || destProd?.product_name || t.destination_asin,
         sku: destProd?.sku || null,
+        bid_initial: t.initial_bid,
       }).catch(() => null);
       if (res?.ok !== false) queued++;
     }
