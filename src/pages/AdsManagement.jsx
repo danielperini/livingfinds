@@ -723,6 +723,45 @@ export default function AdsManagement() {
     }
   };
 
+  const quickPauseCampaign = async (campaign) => {
+    try {
+      const response = await base44.functions.invoke('pauseCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.campaign_id,
+        asin: campaign.asin,
+      });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar');
+      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
+      if (selectedCampaign?.id === campaign.id) {
+        setSelectedCampaign(prev => ({ ...prev, state: 'paused', status: 'paused' }));
+      }
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
+      setTimeout(() => setCampaignActionMsg(null), 5000);
+    }
+  };
+
+  const quickResumeCampaign = async (campaign) => {
+    try {
+      const res = await base44.functions.invoke('reactivateWinnerCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.campaign_id || campaign.amazon_campaign_id,
+        campaign_db_id: campaign.id,
+        asin: campaign.asin,
+        force: true,
+        _service_role: true,
+      });
+      if (!res?.data?.ok) throw new Error(res?.data?.error || 'Falha ao reativar');
+      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+      if (selectedCampaign?.id === campaign.id) {
+        setSelectedCampaign(prev => ({ ...prev, state: 'enabled', status: 'enabled' }));
+      }
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao reativar: ' + e.message });
+      setTimeout(() => setCampaignActionMsg(null), 5000);
+    }
+  };
+
   const removeCampaign = async () => {
     if (!selectedCampaign || campaignAction) return;
     if (!window.confirm(`Remover a campanha "${selectedCampaign.name || selectedCampaign.campaign_name}" do painel? Ela será marcada como arquivada localmente.`)) return;
@@ -912,6 +951,8 @@ export default function AdsManagement() {
               loading={loading}
               stateFilter={stateFilterAuto}
               onStateFilter={setStateFilterAuto}
+              onQuickPause={quickPauseCampaign}
+              onQuickResume={quickResumeCampaign}
               extraAction={
                 <div className="flex flex-col gap-1">
                   <button
@@ -960,6 +1001,8 @@ export default function AdsManagement() {
                 loading={loading}
                 stateFilter={stateFilterManual}
                 onStateFilter={setStateFilterManual}
+                onQuickPause={quickPauseCampaign}
+                onQuickResume={quickResumeCampaign}
                 extraAction={
                   <div className="flex flex-col gap-1">
                     <button
