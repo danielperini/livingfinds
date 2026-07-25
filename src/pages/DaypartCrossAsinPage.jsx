@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronRight, Filter, Search
 } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
 
 const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
@@ -183,18 +183,25 @@ function DaypartingTab({ account }) {
             <div className="h-[180px] flex items-center justify-center text-slate-600 text-xs">Sem decisões executadas ainda.</div>
           ) : (
             <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={bidByHour} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+              <LineChart data={bidByHour} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} stroke="#1E2A40" />
                 <XAxis dataKey="hour" tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false}
                   tickFormatter={h => X_LABELS_SHOW.has(h) ? `${h}h` : ''} />
                 <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false}
                   tickFormatter={v => v > 0 ? `R$${v.toFixed(2)}` : ''} width={48} />
-                <Tooltip content={<BidChartTooltip />} cursor={{ fill: 'rgba(59,130,246,0.08)' }} />
-                <Bar dataKey="avg_bid" radius={[3, 3, 0, 0]}>
-                  {bidByHour.map((entry, i) => (
-                    <Cell key={i} fill={entry.avg_bid > 0 ? '#3B82F6' : '#1E2A40'} />
-                  ))}
-                </Bar>
-              </BarChart>
+                <Tooltip content={<BidChartTooltip />} />
+                <Line
+                  dataKey="avg_bid"
+                  stroke="#3B82F6"
+                  strokeWidth={2}
+                  dot={(props) => {
+                    const { cx, cy, payload } = props;
+                    if (!payload.avg_bid) return <circle key={`dot-${payload.hour}`} r={0} />;
+                    return <circle key={`dot-${payload.hour}`} cx={cx} cy={cy} r={3} fill="#3B82F6" stroke="none" />;
+                  }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
             </ResponsiveContainer>
           )}
         </div>
