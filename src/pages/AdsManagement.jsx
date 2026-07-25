@@ -238,6 +238,8 @@ export default function AdsManagement() {
   const [reactivateManualResult, setReactivateManualResult] = useState(null);
   const [pausingNoStockActive, setPausingNoStockActive] = useState(false);
   const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
+  const [pausingManual, setPausingManual] = useState(false);
+  const [pauseManualResult, setPauseManualResult] = useState(null);
   const [columnTab, setColumnTab] = useState('auto');
 
 
@@ -295,6 +297,35 @@ export default function AdsManagement() {
     } finally {
       setPausingNoStockActive(false);
       setTimeout(() => setPauseNoStockActiveResult(null), 10000);
+    }
+  };
+
+  const pauseManualNoStock = async () => {
+    if (!account || pausingManual) return;
+    setPausingManual(true);
+    setPauseManualResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        targeting_type_filter: 'MANUAL',
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const paused = d.paused ?? d.campaigns_paused ?? 0;
+        setPauseManualResult({
+          type: paused > 0 ? 'success' : 'info',
+          text: `${paused} pausadas · motivo: sem estoque`,
+        });
+        if (paused > 0) await loadCampaigns();
+      } else {
+        setPauseManualResult({ type: 'error', text: d?.error || 'Erro ao pausar' });
+      }
+    } catch (e) {
+      setPauseManualResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingManual(false);
+      setTimeout(() => setPauseManualResult(null), 10000);
     }
   };
 
@@ -898,6 +929,18 @@ export default function AdsManagement() {
                     {reactivateManualResult && (
                       <p className={`text-[10px] text-center font-medium ${reactivateManualResult.type === 'success' ? 'text-emerald-400' : reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                         {reactivateManualResult.text}
+                      </p>
+                    )}
+                    <button
+                      onClick={pauseManualNoStock}
+                      disabled={!account || pausingManual}
+                      className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {pausingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar MANUAL sem estoque</>}
+                    </button>
+                    {pauseManualResult && (
+                      <p className={`text-[10px] text-center font-medium ${pauseManualResult.type === 'success' ? 'text-orange-400' : pauseManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                        {pauseManualResult.text}
                       </p>
                     )}
                   </div>
