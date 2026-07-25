@@ -1,18 +1,11 @@
 /**
- * enforceCampaignSpendLimits — Trava de segurança por campanha + conta
+ * enforceCampaignSpendLimits — v2
  *
- * Verifica duas camadas de proteção:
- *
- * CAMADA 1 — Por campanha individual:
- *   Se current_spend >= daily_budget de uma campanha → pausar imediatamente
- *   (protege contra campanhas que ignoram o orçamento da Amazon)
- *
- * CAMADA 2 — Por conta (Hard Cap global):
- *   Se soma de gastos de todas as campanhas >= user_daily_spend_cap - buffer → pausar todas
- *   (trava de segurança global para evitar qualquer desperdício fora do planejado)
- *
- * Idempotente: não repete pausas se a campanha já está paused.
- * Registra todas as ações em SyncExecutionLog + Alert.
+ * Correções PRD:
+ * 1. globalCap lido de PerformanceSettings.daily_budget_limit como fonte primária
+ * 2. gasto confirmado de CampaignMetricsDaily (data BRT), fallback Campaign.spend
+ * 3. threshold = 97% do cap (não 97.5%)
+ * 4. Cria controller do dia se não existir antes de aplicar o guardrail
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -42,48 +35,92 @@ Deno.serve(async (req) => {
     const todayBRT = brtDate.toISOString().slice(0, 10);
     const currencySymbol = account.currency_symbol || 'R$';
 
-    // Buscar cap global do dia
+    // ── 1. Ler cap de PerformanceSettings (fonte primária) ──
+    let globalCap = 70;
+    try {
+      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+        { amazon_account_id: aid }, '-updated_at', 1
+      );
+      if (psList[0]?.daily_budget_limit > 0) globalCap = Number(psList[0].daily_budget_limit);
+    } catch {}
+
+    // Buscar controller do dia (fallback de cap se PS não retornou)
     const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
       { amazon_account_id: aid, spend_date: todayBRT }, null, 1
-    ).catch(() => []);
-    const controller = controllers[0];
-    const globalCap = Number(controller?.user_daily_spend_cap || controller?.effective_daily_spend_cap || 70);
-    const GLOBAL_BUFFER_PCT = 0.025; // 2.5% de buffer de segurança
-    const globalThreshold = globalCap * (1 - GLOBAL_BUFFER_PCT);
+    ).catch(() => [] as any[]);
+    let controller = controllers[0];
 
-    // Buscar todas as campanhas ativas
+    if (globalCap <= 0 && controller) {
+      globalCap = Number(controller.user_daily_spend_cap || controller.effective_daily_spend_cap || 70);
+    }
+
+    // Se controller não existe para hoje, criar um mínimo para garantir idempotência
+    if (!controller) {
+      try {
+        controller = await base44.asServiceRole.entities.AccountDailySpendController.create({
+          amazon_account_id: aid,
+          marketplace_id: account.marketplace_id || 'A2Q3Y263D00KWC',
+          spend_date: todayBRT,
+          timezone: 'America/Sao_Paulo',
+          user_daily_spend_cap: globalCap,
+          effective_daily_spend_cap: globalCap,
+          cap_status: 'safe',
+          created_at: now,
+          updated_at: now,
+        });
+      } catch {}
+    } else if (controller.user_daily_spend_cap !== globalCap) {
+      // Sincronizar cap no controller com PerformanceSettings
+      await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
+        user_daily_spend_cap: globalCap,
+        effective_daily_spend_cap: globalCap,
+        updated_at: now,
+      }).catch(() => {});
+    }
+
+    const THRESHOLD_PCT = 0.97; // 97% do cap
+    const globalThreshold = r2(globalCap * THRESHOLD_PCT);
+
+    // Buscar todas as campanhas
     const campaigns = await base44.asServiceRole.entities.Campaign.filter(
       { amazon_account_id: aid }, null, 500
-    ).catch(() => []);
+    ).catch(() => [] as any[]);
 
-    const activeCampaigns = campaigns.filter(c => {
+    const activeCampaigns = campaigns.filter((c: any) => {
       const s = (c.state || c.status || '').toLowerCase();
       return s === 'enabled' || s === 'active';
     });
+
+    // ── 2. Gasto confirmado via CampaignMetricsDaily (data BRT) ──
+    const metricsToday = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: aid, date: todayBRT }, null, 500
+    ).catch(() => [] as any[]);
+
+    let totalSpend = 0;
+    let spendSource = 'metrics_daily';
+    if (metricsToday.length > 0) {
+      totalSpend = metricsToday.reduce((s: number, m: any) => s + Number(m.spend || 0), 0);
+    } else {
+      totalSpend = campaigns.reduce((s: number, c: any) => s + Number(c.current_spend || c.spend || 0), 0);
+      spendSource = 'campaign_spend_fallback';
+    }
 
     const pausedByCampaignLimit: string[] = [];
     const pausedByGlobalLimit: string[] = [];
     const skipped: string[] = [];
 
-    // ── CAMADA 1: Verificar limite por campanha ────────────────────────────
+    // ── CAMADA 1: Verificar limite por campanha ──
     for (const c of activeCampaigns) {
       const campaignBudget = Number(c.daily_budget || 0);
       const campaignSpend = Number(c.current_spend || c.spend || 0);
 
-      if (campaignBudget <= 0) continue; // sem limite definido, pular
-      if (campaignSpend < campaignBudget) continue; // dentro do limite
+      if (campaignBudget <= 0) continue;
+      if (campaignSpend < campaignBudget) continue;
 
-      // Campanha ultrapassou o próprio daily_budget → pausar
       const campaignId = String(c.amazon_campaign_id || c.campaign_id);
       if (!campaignId || campaignId === 'undefined') { skipped.push(c.id); continue; }
+      if (c.last_pause_reason === 'CAMPAIGN_BUDGET_EXCEEDED') { skipped.push(campaignId); continue; }
 
-      // Já pausada por este motivo hoje? (idempotência por archive_reason)
-      if (c.last_pause_reason === 'CAMPAIGN_BUDGET_EXCEEDED') {
-        skipped.push(campaignId);
-        continue;
-      }
-
-      // Enviar pausa para Amazon Ads API
       const pauseRes = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
         _service_role: true,
         amazon_account_id: aid,
@@ -93,7 +130,7 @@ Deno.serve(async (req) => {
         payload: { campaigns: [{ campaignId, state: 'PAUSED' }] },
       }).catch((e: any) => ({ ok: false, error: e.message }));
 
-      if (pauseRes?.ok !== false) {
+      if ((pauseRes as any)?.ok !== false) {
         await base44.asServiceRole.entities.Campaign.update(c.id, {
           status: 'paused',
           state: 'paused',
@@ -101,20 +138,13 @@ Deno.serve(async (req) => {
           archive_reason: 'CAMPAIGN_BUDGET_EXCEEDED',
         }).catch(() => {});
         pausedByCampaignLimit.push(campaignId);
-        console.log(`[SpendLimits] Campanha ${campaignId} pausada: R$${r2(campaignSpend)} >= R$${r2(campaignBudget)} (limite diário)`);
       }
       await sleep(150);
     }
 
-    // ── CAMADA 2: Verificar cap global da conta ────────────────────────────
-    // Recalcular gasto total com os dados mais atuais
-    const totalSpend = campaigns.reduce((s, c) => s + Number(c.current_spend || c.spend || 0), 0);
-
+    // ── CAMADA 2: Verificar cap global da conta ──
     if (totalSpend >= globalThreshold && activeCampaigns.length > 0) {
-      // Hard cap atingido — pausar todas as campanhas ainda ativas
-      // REGRA CRÍTICA: campanhas criadas pelo app com spend=0 e < 72h são imunes ao cap global
-      // — não contribuem para o gasto e pausá-las impede que search term winners rodem
-      const stillActive = activeCampaigns.filter(c => {
+      const stillActive = activeCampaigns.filter((c: any) => {
         if (pausedByCampaignLimit.includes(String(c.amazon_campaign_id || c.campaign_id))) return false;
         if (c.last_pause_reason === 'DAILY_BUDGET_CAP_REACHED') return false;
         if (c.last_pause_reason === 'CAMPAIGN_BUDGET_EXCEEDED') return false;
@@ -125,10 +155,10 @@ Deno.serve(async (req) => {
         return true;
       });
 
-      const batchPayload = stillActive.map(c => ({
+      const batchPayload = stillActive.map((c: any) => ({
         campaignId: String(c.amazon_campaign_id || c.campaign_id),
         state: 'PAUSED',
-      })).filter(p => p.campaignId && p.campaignId !== 'undefined');
+      })).filter((p: any) => p.campaignId && p.campaignId !== 'undefined');
 
       for (let i = 0; i < batchPayload.length; i += 20) {
         const batch = batchPayload.slice(i, i + 20);
@@ -141,7 +171,7 @@ Deno.serve(async (req) => {
           payload: { campaigns: batch },
         }).catch(() => ({ ok: false }));
 
-        if (res?.ok !== false) {
+        if ((res as any)?.ok !== false) {
           for (let j = 0; j < batch.length; j++) {
             const camp = stillActive[i + j];
             if (!camp) continue;
@@ -157,27 +187,28 @@ Deno.serve(async (req) => {
         await sleep(300);
       }
 
-      // Atualizar controller com kill switch ativo
       if (controller) {
         await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
           global_kill_switch: true,
           kill_switch_activated_at: now,
-          kill_switch_reason: `Gasto total R$${r2(totalSpend)} >= threshold R$${r2(globalThreshold)} (cap R$${r2(globalCap)})`,
+          kill_switch_reason: `Gasto total ${currencySymbol}${r2(totalSpend)} >= 97% do cap (${currencySymbol}${r2(globalThreshold)}) | fonte: ${spendSource}`,
           confirmed_spend: r2(totalSpend),
           remaining_spend: 0,
           cap_status: 'cap_reached',
+          user_daily_spend_cap: globalCap,
+          effective_daily_spend_cap: globalCap,
           campaigns_paused_count: (controller.campaigns_paused_count || 0) + pausedByGlobalLimit.length,
           last_action_at: now,
+          last_kill_switch_check_at: now,
           updated_at: now,
         }).catch(() => {});
       }
 
-      // Criar alerta crítico (idempotente por dia)
       const existingAlert = await base44.asServiceRole.entities.Alert.filter({
         amazon_account_id: aid,
         alert_type: 'budget_exhausted',
         status: 'active',
-      }, '-created_at', 1).catch(() => []);
+      }, '-created_at', 1).catch(() => [] as any[]);
 
       if (existingAlert.length === 0) {
         await base44.asServiceRole.entities.Alert.create({
@@ -185,7 +216,7 @@ Deno.serve(async (req) => {
           alert_type: 'budget_exhausted',
           severity: 'critical',
           title: 'Cap diário atingido — campanhas pausadas',
-          message: `Gasto de ${currencySymbol}${r2(totalSpend)} atingiu o limite diário de ${currencySymbol}${r2(globalCap)}. ${pausedByGlobalLimit.length + pausedByCampaignLimit.length} campanha(s) pausada(s) automaticamente para proteger o orçamento.`,
+          message: `Gasto de ${currencySymbol}${r2(totalSpend)} atingiu 97% do limite diário de ${currencySymbol}${r2(globalCap)} (fonte: ${spendSource}). ${pausedByGlobalLimit.length + pausedByCampaignLimit.length} campanha(s) pausada(s).`,
           entity_type: 'account',
           status: 'active',
           current_value: r2(totalSpend),
@@ -194,10 +225,18 @@ Deno.serve(async (req) => {
         }).catch(() => {});
       }
 
-      console.log(`[SpendLimits] CAP GLOBAL atingido: R$${r2(totalSpend)} >= R$${r2(globalThreshold)}. ${pausedByGlobalLimit.length} campanhas pausadas.`);
+      console.log(`[SpendLimits] CAP GLOBAL atingido: ${currencySymbol}${r2(totalSpend)} >= ${currencySymbol}${r2(globalThreshold)} (97% de ${currencySymbol}${r2(globalCap)}) | fonte: ${spendSource}`);
+    } else if (controller) {
+      // Atualizar gasto confirmado no controller mesmo sem acionar cap
+      await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
+        confirmed_spend: r2(totalSpend),
+        user_daily_spend_cap: globalCap,
+        effective_daily_spend_cap: globalCap,
+        last_kill_switch_check_at: now,
+        updated_at: now,
+      }).catch(() => {});
     }
 
-    // Registrar execução
     const totalPaused = pausedByCampaignLimit.length + pausedByGlobalLimit.length;
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
@@ -209,6 +248,7 @@ Deno.serve(async (req) => {
       records_processed: totalPaused,
       result_summary: JSON.stringify({
         total_spend: r2(totalSpend),
+        spend_source: spendSource,
         global_cap: r2(globalCap),
         global_threshold: r2(globalThreshold),
         paused_by_campaign_limit: pausedByCampaignLimit.length,
@@ -220,6 +260,7 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: true,
       total_spend: r2(totalSpend),
+      spend_source: spendSource,
       global_cap: r2(globalCap),
       global_threshold: r2(globalThreshold),
       paused_by_campaign_limit: pausedByCampaignLimit.length,

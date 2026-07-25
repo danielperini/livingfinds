@@ -1,19 +1,17 @@
 /**
- * runBudgetKillSwitch
+ * runBudgetKillSwitch — v2
  *
- * Hard Cap Kill Switch — pausa TODAS as campanhas imediatamente quando
- * confirmed_spend + estimated_unreported >= daily_budget - safety_buffer.
- *
- * Idempotência via global_stop_event_id — não repete pausa para o mesmo evento.
- * Bloqueia qualquer mutação (bid up, budget increase) enquanto ativo.
- * Safety buffer = max(spend_velocity_per_15min × 2, daily_budget × 0.025)
+ * Correções PRD:
+ * 1. dailyBudget lido de PerformanceSettings.daily_budget_limit como fonte primária
+ * 2. confirmedSpend calculado de CampaignMetricsDaily (data BRT atual), fallback Campaign.spend
+ * 3. Threshold = dailyBudget × 0.97 (não 0.975 nem dynamic buffer)
+ * 4. Recovery: se kill_switch ativo MAS confirmed_spend < dailyBudget × 0.80 → reset automático
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function r2(v) { return parseFloat((v || 0).toFixed(2)); }
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+function r2(v: any) { return parseFloat((v || 0).toFixed(2)); }
 
-// Stop types que NUNCA devem ser reativados automaticamente
 const MANUAL_STOP_REASONS = ['USER_MANUAL', 'STOCK_ZERO', 'ABOVE_BREAK_EVEN', 'NO_SALES_HARD', 'LISTING_BLOCKED', 'POLICY', 'LOW_INTENT', 'CONFIGURATION_ERROR'];
 
 Deno.serve(async (req) => {
@@ -24,7 +22,7 @@ Deno.serve(async (req) => {
     const { amazon_account_id, force_check = false } = body;
 
     // Resolver conta
-    let account;
+    let account: any;
     if (amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, null, 1);
       account = accs[0];
@@ -40,65 +38,148 @@ Deno.serve(async (req) => {
     const todayBRT = brtDate.toISOString().slice(0, 10);
     const currentHourBRT = brtDate.getHours();
 
+    // ── 1. Ler dailyBudget de PerformanceSettings (fonte primária) ──
+    let dailyBudget = 70;
+    try {
+      const psList = await base44.asServiceRole.entities.PerformanceSettings.filter(
+        { amazon_account_id: accountId }, '-updated_at', 1
+      );
+      if (psList[0]?.daily_budget_limit > 0) dailyBudget = Number(psList[0].daily_budget_limit);
+    } catch {}
+
     // Carregar controller atual
     const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
       { amazon_account_id: accountId, spend_date: todayBRT }, null, 1
-    ).catch(() => []);
+    ).catch(() => [] as any[]);
 
     const controller = controllers[0];
-    if (!controller) {
-      return Response.json({ ok: true, skipped: true, reason: 'Sem controller para hoje — rode runDailyBudgetPacingEngine primeiro' });
+
+    // Fallback: ler cap do controller se PS não disponível
+    if (dailyBudget <= 0 && controller) {
+      dailyBudget = Number(controller.user_daily_spend_cap || controller.effective_daily_spend_cap || 70);
     }
 
-    const dailyBudget = Number(controller.effective_daily_spend_cap || controller.user_daily_spend_cap || 70);
+    // ── 2. Calcular gasto confirmado via CampaignMetricsDaily (data BRT) ──
+    const metricsToday = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: accountId, date: todayBRT }, null, 500
+    ).catch(() => [] as any[]);
 
-    // Se Kill Switch já está ativo, verificar se deve manter ou resetar
-    if (controller.global_kill_switch && !force_check) {
+    let confirmedSpend = 0;
+    let spendSource = 'metrics_daily';
+
+    if (metricsToday.length > 0) {
+      confirmedSpend = metricsToday.reduce((s: number, m: any) => s + Number(m.spend || 0), 0);
+    } else {
+      // Fallback: Campaign.spend (latência de relatório)
+      const campaigns = await base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: accountId }, null, 500
+      ).catch(() => [] as any[]);
+      confirmedSpend = campaigns.reduce((s: number, c: any) => s + Number(c.spend || c.current_spend || 0), 0);
+      spendSource = 'campaign_spend_fallback';
+    }
+
+    // ── 3. Threshold = 97% do cap ──
+    const threshold = r2(dailyBudget * 0.97);
+    const recoveryThreshold = r2(dailyBudget * 0.80);
+
+    // ── 4. Recovery automático do kill switch ──
+    if (controller?.global_kill_switch && !force_check) {
+      if (confirmedSpend < recoveryThreshold) {
+        // Resetar kill switch — gasto voltou abaixo de 80%
+        await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
+          global_kill_switch: false,
+          global_stop_event_id: null,
+          kill_switch_reason: `Recovery automático: R$${r2(confirmedSpend)} < 80% do cap (R$${r2(recoveryThreshold)})`,
+          confirmed_spend: r2(confirmedSpend),
+          cap_status: 'safe',
+          last_kill_switch_check_at: now,
+          updated_at: now,
+        }).catch(() => {});
+
+        // Reativar campanhas pausadas EXCLUSIVAMENTE por DAILY_BUDGET_CAP_REACHED
+        const pausedCamps = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: accountId, last_pause_reason: 'DAILY_BUDGET_CAP_REACHED' }, null, 200
+        ).catch(() => [] as any[]);
+
+        let reactivated = 0;
+        for (let i = 0; i < pausedCamps.length; i += 20) {
+          const batch = pausedCamps.slice(i, i + 20).map((c: any) => ({
+            campaignId: String(c.amazon_campaign_id || c.campaign_id),
+            state: 'ENABLED',
+          })).filter((p: any) => p.campaignId && p.campaignId !== 'undefined');
+          if (!batch.length) continue;
+          await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+            _service_role: true,
+            amazon_account_id: accountId,
+            path: '/sp/campaigns',
+            method: 'PUT',
+            content_type: 'application/vnd.spCampaign.v3+json',
+            payload: { campaigns: batch },
+          }).catch(() => {});
+          for (const c of pausedCamps.slice(i, i + 20)) {
+            await base44.asServiceRole.entities.Campaign.update(c.id, {
+              status: 'enabled',
+              state: 'enabled',
+              last_pause_reason: null,
+              archive_reason: null,
+            }).catch(() => {});
+            reactivated++;
+          }
+          await sleep(300);
+        }
+
+        return Response.json({
+          ok: true,
+          action: 'kill_switch_reset',
+          confirmed_spend: r2(confirmedSpend),
+          recovery_threshold: r2(recoveryThreshold),
+          daily_budget: dailyBudget,
+          reactivated_campaigns: reactivated,
+          duration_ms: Date.now() - t0,
+        });
+      }
+
+      // Kill switch ainda ativo — gasto ainda alto
       return Response.json({
         ok: true,
         kill_switch_active: true,
-        reason: 'Kill Switch já ativo',
-        activated_at: controller.kill_switch_activated_at,
+        reason: 'Kill Switch ativo e gasto ainda acima de 80% do cap',
+        confirmed_spend: r2(confirmedSpend),
+        recovery_threshold: r2(recoveryThreshold),
         daily_budget: dailyBudget,
-        confirmed_spend: controller.confirmed_spend,
+        activated_at: controller.kill_switch_activated_at,
         duration_ms: Date.now() - t0,
       });
     }
 
-    // ── Calcular gasto atual ───────────────────────────────────────────
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: accountId }, null, 500
-    ).catch(() => []);
+    if (!controller) {
+      return Response.json({ ok: true, skipped: true, reason: 'Sem controller para hoje — rode runDailyBudgetPacingEngine primeiro' });
+    }
 
-    const activeCampaigns = campaigns.filter(c => {
+    // ── Carregar campanhas para pausa ──
+    const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id: accountId }, null, 500
+    ).catch(() => [] as any[]);
+
+    const activeCampaigns = allCampaigns.filter((c: any) => {
       const s = (c.state || c.status || '').toLowerCase();
       return s === 'enabled' || s === 'active';
     });
 
-    const confirmedSpend = campaigns.reduce((s, c) => s + Number(c.spend || c.current_spend || 0), 0);
-    const totalBudgetNominal = campaigns.reduce((s, c) => s + Number(c.daily_budget || 0), 0);
-
-    // Estimativa de gasto não reportado (latência Amazon)
-    // Usa spend_velocity do controller se disponível
+    const totalBudgetNominal = allCampaigns.reduce((s: number, c: any) => s + Number(c.daily_budget || 0), 0);
     const spendVelocity = Number(controller.spend_velocity_per_hour || 0);
-    const estimatedUnreportedHours = 0.25; // 15 minutos de latência estimada
-    const estimatedUnreported = spendVelocity > 0
-      ? spendVelocity * estimatedUnreportedHours
-      : confirmedSpend * 0.05; // fallback: 5% do gasto confirmado
 
-    // ── Calcular safety_buffer dinâmico ───────────────────────────────
-    const velocityBuffer = spendVelocity > 0 ? (spendVelocity / 4) * 2 : 0; // 15min × 2
-    const pctBuffer = dailyBudget * 0.025;
-    const safetyBuffer = r2(Math.max(velocityBuffer, pctBuffer, 2));
+    // Estimativa de gasto não reportado
+    const estimatedUnreported = spendVelocity > 0
+      ? spendVelocity * 0.25
+      : confirmedSpend * 0.05;
 
     const totalProjected = r2(confirmedSpend + estimatedUnreported);
-    const threshold = dailyBudget - safetyBuffer;
 
-    // ── Verificar se deve ativar Kill Switch ──────────────────────────
+    // ── Verificar se deve ativar Kill Switch ──
     const shouldActivate = totalProjected >= threshold;
 
     if (!shouldActivate) {
-      // Atualizar controller sem ativar
       const utilizationPct = dailyBudget > 0 ? confirmedSpend / dailyBudget * 100 : 0;
       let capStatus = 'safe';
       if (utilizationPct >= 100) capStatus = 'cap_reached';
@@ -112,7 +193,8 @@ Deno.serve(async (req) => {
         projected_total_spend: totalProjected,
         remaining_spend: r2(Math.max(0, dailyBudget - totalProjected)),
         cap_status: capStatus,
-        safety_buffer: safetyBuffer,
+        user_daily_spend_cap: dailyBudget,
+        effective_daily_spend_cap: dailyBudget,
         spend_velocity_per_hour: r2(spendVelocity),
         total_campaign_budget_nominal: r2(totalBudgetNominal),
         last_kill_switch_check_at: now,
@@ -123,16 +205,16 @@ Deno.serve(async (req) => {
         ok: true,
         kill_switch_activated: false,
         confirmed_spend: r2(confirmedSpend),
+        spend_source: spendSource,
         threshold: r2(threshold),
-        safety_buffer: safetyBuffer,
         daily_budget: dailyBudget,
         cap_status: capStatus,
         duration_ms: Date.now() - t0,
       });
     }
 
-    // ── ATIVAR KILL SWITCH ─────────────────────────────────────────────
-    // Idempotência: gerar event_id único para hoje + hora
+    // ── ATIVAR KILL SWITCH ──
+    // Idempotência: por dia + hora BRT
     const eventId = `killswitch:${accountId}:${todayBRT}:${currentHourBRT}`;
     if (controller.global_stop_event_id === eventId) {
       return Response.json({
@@ -145,35 +227,28 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Salvar GLOBAL_STOP_SNAPSHOT (estado atual de cada campanha gerenciada)
-    const snapshot = {};
+    // Snapshot do estado atual
+    const snapshot: Record<string, string> = {};
     for (const c of activeCampaigns) {
       const campId = c.campaign_id || c.amazon_campaign_id || c.id;
       snapshot[campId] = c.state || c.status || 'enabled';
     }
 
-    // Filtrar campanhas elegíveis para pausa
-    // REGRA CRÍTICA: campanhas MANUAL EXACT criadas pelo app com spend=0 são imunes ao kill switch
-    // — elas não contribuem para o gasto real e pausá-las impede que campanhãs vencedoras rodem
-    const toPause = activeCampaigns.filter(c => {
+    // Filtrar elegíveis para pausa
+    const toPause = activeCampaigns.filter((c: any) => {
       const reason = c.archive_reason || c.last_pause_reason || '';
-      const isManual = MANUAL_STOP_REASONS.some(r => reason.includes(r));
-      if (isManual) return false;
-
-      // Imunidade: campanha criada pelo app (search term winner) com spend=0 e < 72h de vida
+      if (MANUAL_STOP_REASONS.some(r => reason.includes(r))) return false;
       const campaignSpend = Number(c.spend || c.current_spend || 0);
       const createdAt = c.created_at ? new Date(c.created_at).getTime() : 0;
       const ageHours = createdAt > 0 ? (Date.now() - createdAt) / 3600000 : 999;
       if (c.created_by_app === true && campaignSpend === 0 && ageHours < 72) return false;
-
       return true;
     });
 
-    // Pausar via Amazon Ads API em batch de 20
     let pausedCount = 0;
-    const pausedIds = [];
+    const pausedIds: string[] = [];
 
-    const batchPayload = toPause.map(c => ({
+    const batchPayload = toPause.map((c: any) => ({
       campaignId: String(c.amazon_campaign_id || c.campaign_id),
       state: 'PAUSED',
     }));
@@ -187,9 +262,9 @@ Deno.serve(async (req) => {
         method: 'PUT',
         content_type: 'application/vnd.spCampaign.v3+json',
         payload: { campaigns: batch },
-      }).catch(e => ({ ok: false, error: e.message }));
+      }).catch((e: any) => ({ ok: false, error: e.message }));
 
-      const ok = res?.ok !== false;
+      const ok = (res as any)?.ok !== false;
       for (let j = 0; j < batch.length; j++) {
         const camp = toPause[i + j];
         if (!camp) continue;
@@ -207,18 +282,16 @@ Deno.serve(async (req) => {
       await sleep(300);
     }
 
-    // Registrar em AdsBidChangeLog
     await base44.asServiceRole.entities.AdsBidChangeLog.create({
       amazon_account_id: accountId,
       action: 'kill_switch_activated',
-      reason: `Hard Cap atingido: R$${r2(confirmedSpend)} / R$${dailyBudget} (threshold R$${r2(threshold)})`,
+      reason: `Hard Cap atingido: R$${r2(confirmedSpend)} / R$${dailyBudget} (threshold 97% = R$${r2(threshold)}) | fonte: ${spendSource}`,
       source: 'budget_pacing_engine',
       campaigns_affected: pausedCount,
       stop_type: 'DAILY_CAP_STOP',
       created_at: now,
     }).catch(() => {});
 
-    // Atualizar AccountDailySpendController
     await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
       confirmed_spend: r2(confirmedSpend),
       estimated_pending_spend: r2(estimatedUnreported),
@@ -229,12 +302,13 @@ Deno.serve(async (req) => {
       global_stop_event_id: eventId,
       global_stop_snapshot: JSON.stringify(snapshot),
       kill_switch_activated_at: now,
-      kill_switch_reason: `Gasto projetado R$${r2(totalProjected)} >= threshold R$${r2(threshold)}`,
+      kill_switch_reason: `Gasto projetado R$${r2(totalProjected)} >= 97% do cap R$${r2(threshold)} | fonte: ${spendSource}`,
       last_pause_reason: 'DAILY_BUDGET_CAP_REACHED',
       campaigns_paused_today: pausedIds,
       campaigns_paused_count: pausedCount,
       stop_type: 'DAILY_CAP_STOP',
-      safety_buffer: safetyBuffer,
+      user_daily_spend_cap: dailyBudget,
+      effective_daily_spend_cap: dailyBudget,
       spend_velocity_per_hour: r2(spendVelocity),
       last_kill_switch_check_at: now,
       updated_at: now,
@@ -245,17 +319,17 @@ Deno.serve(async (req) => {
       kill_switch_activated: true,
       event_id: eventId,
       confirmed_spend: r2(confirmedSpend),
+      spend_source: spendSource,
       estimated_unreported: r2(estimatedUnreported),
       total_projected: r2(totalProjected),
       threshold: r2(threshold),
-      safety_buffer: safetyBuffer,
       daily_budget: dailyBudget,
       campaigns_paused: pausedCount,
       paused_ids: pausedIds.slice(0, 20),
       duration_ms: Date.now() - t0,
     });
 
-  } catch (err) {
+  } catch (err: any) {
     return Response.json({ ok: false, error: err.message, duration_ms: Date.now() - t0 }, { status: 500 });
   }
 });

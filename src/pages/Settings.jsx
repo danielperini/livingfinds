@@ -8,6 +8,7 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
 import BackupPanel from '@/components/backup/BackupPanel';
+import BudgetStatusPanel from '@/components/settings/BudgetStatusPanel';
 
 const PERFORMANCE_DEFAULTS = {
   primary_goal: 'acos',
