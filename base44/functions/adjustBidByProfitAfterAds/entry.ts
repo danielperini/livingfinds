@@ -52,10 +52,11 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
 
     // ── Parâmetros configuráveis ──────────────────────────────────────────
-    const PROFIT_TARGET_PCT      = Number(body.profit_target_pct      ?? 0.20); // 20% da margem como meta de lucro pós-ads
-    const RECOVERY_THRESHOLD_PCT = Number(body.recovery_threshold_pct ?? 0.35); // 35% da margem = recuperado
-    const COOLDOWN_HOURS         = Number(body.cooldown_hours         ?? 24);
-    const DRY_RUN                = Boolean(body.dry_run ?? false);
+    const PROFIT_TARGET_PCT        = Number(body.profit_target_pct      ?? 0.20);
+    const RECOVERY_THRESHOLD_PCT   = Number(body.recovery_threshold_pct ?? 0.35);
+    const COOLDOWN_HOURS           = Number(body.cooldown_hours         ?? 24);
+    const DRY_RUN                  = Boolean(body.dry_run ?? false);
+    const REQUIRE_CONSECUTIVE_DAYS = Number(body.require_consecutive_days ?? 0); // 0 = sem restrição, 2 = apenas ASINs com 2+ dias negativos
 
     // ── Resolver conta ──────────────────────────────────────────────────
     let account: any = null;
@@ -94,6 +95,31 @@ Deno.serve(async (req) => {
     // ── Guardrail global de orçamento ────────────────────────────────────
     const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
     const cutoff3d  = new Date(Date.now() - 3  * 86400000).toISOString().slice(0, 10);
+
+    // ── Pré-filtro: ASINs com N dias consecutivos de lucro negativo ───────
+    let allowedAsins: Set<string> | null = null;
+    if (REQUIRE_CONSECUTIVE_DAYS >= 2) {
+      const cutoffSales = new Date(Date.now() - (REQUIRE_CONSECUTIVE_DAYS + 1) * 86400000).toISOString().slice(0, 10);
+      const salesRecs = await base44.asServiceRole.entities.SalesDaily.filter(
+        { amazon_account_id: body.amazon_account_id || account.id },
+        '-date', 2000
+      ).catch(() => []);
+      const recentSales = salesRecs.filter((r: any) => r.date && r.date >= cutoffSales && r.asin);
+      // Agrupar por ASIN e detectar N dias consecutivos negativos
+      const byAsin = new Map<string, { date: string; profit: number }[]>();
+      for (const r of recentSales) {
+        if (!byAsin.has(r.asin)) byAsin.set(r.asin, []);
+        byAsin.get(r.asin)!.push({ date: r.date, profit: r.profit_after_ads ?? 0 });
+      }
+      allowedAsins = new Set<string>();
+      for (const [asin, entries] of byAsin.entries()) {
+        const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
+        if (sorted.length >= REQUIRE_CONSECUTIVE_DAYS) {
+          const allNeg = sorted.slice(0, REQUIRE_CONSECUTIVE_DAYS).every(e => e.profit < 0);
+          if (allNeg) allowedAsins.add(asin);
+        }
+      }
+    }
 
     const [keywords, campaigns, products, metricsRaw, productEconomicsRaw, recentRuleExecs] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
@@ -166,6 +192,9 @@ Deno.serve(async (req) => {
       if (!entityId) continue;
 
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
+
+      // Pular se ASIN não está na lista de negativos consecutivos
+      if (allowedAsins !== null && resolvedAsin && !allowedAsins.has(resolvedAsin)) continue;
       const product = resolvedAsin ? productMap.get(resolvedAsin) : null;
 
       // Buscar dados econômicos do produto

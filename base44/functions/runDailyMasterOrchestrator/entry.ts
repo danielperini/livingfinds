@@ -170,7 +170,12 @@ Deno.serve(async (req) => {
     // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
     add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 });
 
-    // Sempre: motor de proteção de rentabilidade — pausa ASINs com lucro pós-Ads negativo
+    // 1x/dia: Redução de bids proporcional ao gap de lucro (pré-filtro: 2 dias consecutivos negativos)
+    const profitBidReductionDone = await wasRunTodaySuccessfully(base44, aid, 'profit_bid_reduction');
+    if (!profitBidReductionDone || force) add('adjustBidByProfitAfterAds', 'profit_bid_reduction', { require_consecutive_days: 2 }, true);
+    else skipped.push('profit_bid_reduction');
+
+    // Sempre: motor de proteção de rentabilidade — pausa ASINs com lucro pós-Ads negativo (atua 1 dia após redução de bids)
     add('runProfitAfterAdsPauseGuard', 'profit_after_ads_pause_guard');
 
     // 1x/semana (segunda-feira): ACoS Violation Checker
