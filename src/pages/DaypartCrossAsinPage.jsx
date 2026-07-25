@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
-  Clock, RefreshCw, Loader2,
-  CheckCircle, XCircle, ArrowRightLeft, Zap, Play,
-  Search
+  Clock, TrendingUp, TrendingDown, Minus, RefreshCw, Loader2,
+  CheckCircle, XCircle, AlertTriangle, ArrowRightLeft, Zap, Play,
+  ChevronDown, ChevronRight, Filter, Search
 } from 'lucide-react';
 
-// ── Helpers ───────────────────────────────────────────────────────────────
 const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
 
 const DECISION_COLORS = {
@@ -47,22 +46,12 @@ function StatusBadge({ value, map }) {
   );
 }
 
-function MetricCell({ label, value, unit = '', color = 'text-slate-200' }) {
-  return (
-    <div>
-      <p className="text-[9px] text-slate-500 mb-0.5">{label}</p>
-      <p className={`text-xs font-semibold ${color}`}>{value}{unit}</p>
-    </div>
-  );
-}
-
 // ── Dayparting Tab ────────────────────────────────────────────────────────
 function DaypartingTab({ account }) {
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [executing, setExecuting] = useState({});
   const [filter, setFilter] = useState('pending_approval');
-  const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const loadDecisions = useCallback(async () => {
@@ -81,18 +70,14 @@ function DaypartingTab({ account }) {
 
   const approveDecision = async (dec) => {
     try {
-      await base44.entities.DaypartingDecision.update(dec.id, {
-        status: 'approved', approved_at: new Date().toISOString()
-      });
+      await base44.entities.DaypartingDecision.update(dec.id, { status: 'approved', approved_at: new Date().toISOString() });
       setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'approved' } : d));
     } catch {}
   };
 
   const rejectDecision = async (dec) => {
     try {
-      await base44.entities.DaypartingDecision.update(dec.id, {
-        status: 'rejected', rejected_at: new Date().toISOString()
-      });
+      await base44.entities.DaypartingDecision.update(dec.id, { status: 'rejected', rejected_at: new Date().toISOString() });
       setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'rejected' } : d));
     } catch {}
   };
@@ -101,26 +86,21 @@ function DaypartingTab({ account }) {
     if (executing[dec.id]) return;
     setExecuting(prev => ({ ...prev, [dec.id]: true }));
     try {
-      const res = await base44.functions.invoke('executeDaypartingDecision', {
-        decision_id: dec.id, amazon_account_id: account.id
-      });
-      if (res?.data?.ok) {
-        setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'executed' } : d));
-      }
+      const res = await base44.functions.invoke('executeDaypartingDecision', { decision_id: dec.id, amazon_account_id: account.id });
+      if (res?.data?.ok) setDecisions(prev => prev.map(d => d.id === dec.id ? { ...d, status: 'executed' } : d));
     } catch {}
     finally { setExecuting(prev => ({ ...prev, [dec.id]: false })); }
   };
 
   const filtered = decisions.filter(d => {
-    if (typeFilter !== 'all' && d.decision_type !== typeFilter) return false;
     if (search && !(d.keyword_text || '').toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
-  const pending = decisions.filter(d => d.status === 'pending_approval').length;
+  const pending  = decisions.filter(d => d.status === 'pending_approval').length;
   const approved = decisions.filter(d => d.status === 'approved').length;
   const executed = decisions.filter(d => d.status === 'executed').length;
-  const bidUp = decisions.filter(d => d.decision_type === 'BID_UP').length;
+  const bidUp    = decisions.filter(d => d.decision_type === 'BID_UP').length;
 
   return (
     <div className="p-4 space-y-4">
@@ -140,9 +120,8 @@ function DaypartingTab({ account }) {
       </div>
 
       {/* Info automação */}
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <Clock className="w-3.5 h-3.5 flex-shrink-0" />
-        Motor executado automaticamente pelo orquestrador diário
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+        <Clock className="w-3 h-3" /> Motor executado automaticamente pelo orquestrador diário
       </div>
 
       {/* Filters */}
@@ -158,15 +137,17 @@ function DaypartingTab({ account }) {
             {s === 'all' ? 'Todas' : s.replace('_', ' ')}
           </button>
         ))}
+        <button onClick={loadDecisions} className="p-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white transition-colors">
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
       </div>
 
-      {/* Table */}
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <Clock className="w-8 h-8 mx-auto mb-2 opacity-40" />
-          <p className="text-sm">Nenhuma decisão encontrada. Execute o motor para gerar decisões.</p>
+          <p className="text-sm">Nenhuma decisão encontrada.</p>
         </div>
       ) : (
         <div className="bg-surface-2 rounded-xl border border-surface-3 overflow-hidden">
@@ -182,18 +163,14 @@ function DaypartingTab({ account }) {
               {filtered.map((d, i) => (
                 <tr key={d.id || i} className="border-b border-surface-3/40 hover:bg-surface-3/20">
                   <td className="px-3 py-2.5">
-                    <div className="text-[10px] font-semibold text-slate-300">
-                      {DAY_LABELS[d.day_of_week]} {d.hour}h
-                    </div>
+                    <div className="text-[10px] font-semibold text-slate-300">{DAY_LABELS[d.day_of_week]} {d.hour}h</div>
                     <StatusBadge value={d.slot_classification || 'COLLECTING_DATA'} map={SLOT_COLORS} />
                   </td>
                   <td className="px-3 py-2.5 max-w-[140px]">
                     <p className="text-slate-200 truncate font-medium">{d.keyword_text || '—'}</p>
                     <p className="text-[9px] text-slate-500">{d.asin}</p>
                   </td>
-                  <td className="px-3 py-2.5">
-                    <StatusBadge value={d.decision_type} map={DECISION_COLORS} />
-                  </td>
+                  <td className="px-3 py-2.5"><StatusBadge value={d.decision_type} map={DECISION_COLORS} /></td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1">
                       <div className="w-12 h-1.5 bg-surface-3 rounded-full overflow-hidden">
@@ -217,38 +194,28 @@ function DaypartingTab({ account }) {
                   <td className="px-3 py-2.5 text-slate-300 font-mono">{((d.slot_cvr||0)*100).toFixed(1)}%</td>
                   <td className="px-3 py-2.5 text-cyan font-mono">R${(d.sustainable_cpc||0).toFixed(2)}</td>
                   <td className="px-3 py-2.5">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                      d.data_confidence === 'VERY_HIGH' ? 'bg-emerald-500/15 text-emerald-400' :
-                      d.data_confidence === 'HIGH' ? 'bg-cyan/15 text-cyan' :
-                      d.data_confidence === 'MEDIUM' ? 'bg-amber-500/10 text-amber-400' :
-                      'bg-slate-700/30 text-slate-500'
-                    }`}>{d.data_confidence}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${d.data_confidence === 'VERY_HIGH' ? 'bg-emerald-500/15 text-emerald-400' : d.data_confidence === 'HIGH' ? 'bg-cyan/15 text-cyan' : d.data_confidence === 'MEDIUM' ? 'bg-amber-500/10 text-amber-400' : 'bg-slate-700/30 text-slate-500'}`}>
+                      {d.data_confidence}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5">
-                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                      d.status === 'executed' ? 'bg-emerald-500/15 text-emerald-400' :
-                      d.status === 'approved' ? 'bg-cyan/15 text-cyan' :
-                      d.status === 'rejected' ? 'bg-red-500/15 text-red-400' :
-                      d.status === 'expired'  ? 'bg-slate-700/30 text-slate-500' :
-                      'bg-amber-500/10 text-amber-400'
-                    }`}>{d.status}</span>
+                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${d.status === 'executed' ? 'bg-emerald-500/15 text-emerald-400' : d.status === 'approved' ? 'bg-cyan/15 text-cyan' : d.status === 'rejected' ? 'bg-red-500/15 text-red-400' : d.status === 'expired' ? 'bg-slate-700/30 text-slate-500' : 'bg-amber-500/10 text-amber-400'}`}>
+                      {d.status}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1">
                       {d.status === 'pending_approval' ? (
                         <>
-                          <button onClick={() => approveDecision(d)}
-                            className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 transition-colors" title="Aprovar">
+                          <button onClick={() => approveDecision(d)} className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20" title="Aprovar">
                             <CheckCircle className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => rejectDecision(d)}
-                            className="p-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors" title="Rejeitar">
+                          <button onClick={() => rejectDecision(d)} className="p-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20" title="Rejeitar">
                             <XCircle className="w-3.5 h-3.5" />
                           </button>
                         </>
                       ) : d.status === 'approved' ? (
-                        <button onClick={() => executeDecision(d)} disabled={executing[d.id]}
-                          className="p-1 rounded bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 transition-colors disabled:opacity-50" title="Executar na Amazon">
+                        <button onClick={() => executeDecision(d)} disabled={executing[d.id]} className="p-1 rounded bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 disabled:opacity-50" title="Executar na Amazon">
                           {executing[d.id] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                         </button>
                       ) : null}
@@ -306,9 +273,9 @@ function CrossAsinTab({ account }) {
     return true;
   });
 
-  const proposed = transfers.filter(t => t.transfer_decision === 'HIGH_CONFIDENCE_TRANSFER').length;
+  const proposed  = transfers.filter(t => t.transfer_decision === 'HIGH_CONFIDENCE_TRANSFER').length;
   const manualRev = transfers.filter(t => t.transfer_decision === 'MANUAL_REVIEW').length;
-  const executed = transfers.filter(t => t.status === 'EXECUTED' || t.status === 'TRANSFER_EXECUTED').length;
+  const executed  = transfers.filter(t => t.status === 'EXECUTED' || t.status === 'TRANSFER_EXECUTED').length;
 
   return (
     <div className="p-4 space-y-4">
@@ -328,9 +295,8 @@ function CrossAsinTab({ account }) {
       </div>
 
       {/* Info automação */}
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <Clock className="w-3.5 h-3.5 flex-shrink-0" />
-        Motor executado automaticamente pelo orquestrador diário
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+        <Clock className="w-3 h-3" /> Análise Cross-ASIN executada automaticamente pelo orquestrador diário
       </div>
 
       {/* Filters */}
@@ -346,6 +312,9 @@ function CrossAsinTab({ account }) {
             {s === 'all' ? 'Todas' : s.replace(/_/g, ' ')}
           </button>
         ))}
+        <button onClick={loadData} className="p-1.5 rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white transition-colors">
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {loading ? (
@@ -353,7 +322,7 @@ function CrossAsinTab({ account }) {
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-slate-500">
           <ArrowRightLeft className="w-8 h-8 mx-auto mb-2 opacity-40" />
-          <p className="text-sm">Nenhuma transferência encontrada. Execute a análise Cross-ASIN para identificar oportunidades.</p>
+          <p className="text-sm">Nenhuma transferência encontrada. O motor analisa oportunidades diariamente.</p>
         </div>
       ) : (
         <div className="bg-surface-2 rounded-xl border border-surface-3 overflow-hidden">
@@ -377,28 +346,23 @@ function CrossAsinTab({ account }) {
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1">
                       <div className="w-10 h-1.5 bg-surface-3 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${(t.relevance_score||0) >= 90 ? 'bg-emerald-400' : (t.relevance_score||0) >= 80 ? 'bg-amber-400' : 'bg-red-400'}`}
-                          style={{ width: `${t.relevance_score||0}%` }} />
+                        <div className={`h-full rounded-full ${(t.relevance_score||0) >= 90 ? 'bg-emerald-400' : (t.relevance_score||0) >= 80 ? 'bg-amber-400' : 'bg-red-400'}`} style={{ width: `${t.relevance_score||0}%` }} />
                       </div>
                       <span className="font-mono font-semibold text-white">{t.relevance_score||0}</span>
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-[10px] text-slate-400">{t.relevance_phase || '—'}</td>
                   <td className="px-3 py-2.5">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                      t.source_winner_tier === 'STRONG_WINNER' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-cyan/10 text-cyan'
-                    }`}>{t.source_winner_tier || '—'}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${t.source_winner_tier === 'STRONG_WINNER' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-cyan/10 text-cyan'}`}>
+                      {t.source_winner_tier || '—'}
+                    </span>
                   </td>
                   <td className="px-3 py-2.5 font-mono text-white">R${(t.initial_bid||0).toFixed(2)}</td>
+                  <td className="px-3 py-2.5"><StatusBadge value={t.transfer_decision} map={TRANSFER_COLORS} /></td>
                   <td className="px-3 py-2.5">
-                    <StatusBadge value={t.transfer_decision} map={TRANSFER_COLORS} />
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                      t.transfer_confidence === 'VERY_HIGH' ? 'bg-emerald-500/15 text-emerald-400' :
-                      t.transfer_confidence === 'HIGH' ? 'bg-cyan/15 text-cyan' :
-                      'bg-amber-500/10 text-amber-400'
-                    }`}>{t.transfer_confidence || 'MEDIUM'}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${t.transfer_confidence === 'VERY_HIGH' ? 'bg-emerald-500/15 text-emerald-400' : t.transfer_confidence === 'HIGH' ? 'bg-cyan/15 text-cyan' : 'bg-amber-500/10 text-amber-400'}`}>
+                      {t.transfer_confidence || 'MEDIUM'}
+                    </span>
                     {t.family_bank_boost ? <span className="ml-1 text-[9px] text-violet-400">★ Family</span> : null}
                   </td>
                   <td className="px-3 py-2.5 text-[10px]">
@@ -412,22 +376,17 @@ function CrossAsinTab({ account }) {
                   <td className="px-3 py-2.5">
                     {t.status === 'PROPOSED' && t.transfer_decision === 'HIGH_CONFIDENCE_TRANSFER' ? (
                       <div className="flex items-center gap-1">
-                        <button onClick={() => updateStatus(t, 'APPROVED')}
-                          className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20" title="Aprovar">
+                        <button onClick={() => updateStatus(t, 'APPROVED')} className="p-1 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20" title="Aprovar">
                           <CheckCircle className="w-3.5 h-3.5" />
                         </button>
-                        <button onClick={() => updateStatus(t, 'REJECTED')}
-                          className="p-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20" title="Rejeitar">
+                        <button onClick={() => updateStatus(t, 'REJECTED')} className="p-1 rounded bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20" title="Rejeitar">
                           <XCircle className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     ) : (
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        t.status === 'EXECUTED' ? 'bg-emerald-500/15 text-emerald-400' :
-                        t.status === 'REJECTED' ? 'bg-red-500/15 text-red-400' :
-                        t.status === 'APPROVED' ? 'bg-cyan/15 text-cyan' :
-                        'bg-slate-700/30 text-slate-500'
-                      }`}>{t.status}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.status === 'EXECUTED' ? 'bg-emerald-500/15 text-emerald-400' : t.status === 'REJECTED' ? 'bg-red-500/15 text-red-400' : t.status === 'APPROVED' ? 'bg-cyan/15 text-cyan' : 'bg-slate-700/30 text-slate-500'}`}>
+                        {t.status}
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -438,7 +397,7 @@ function CrossAsinTab({ account }) {
       )}
 
       {/* Family Bank */}
-      {familyBank.length > 0 ? (
+      {familyBank.length > 0 && (
         <div className="bg-surface-2 rounded-xl border border-surface-3 p-4">
           <h3 className="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-2">
             <Zap className="w-3.5 h-3.5 text-violet-400" />
@@ -453,15 +412,15 @@ function CrossAsinTab({ account }) {
                 </div>
                 <div className="flex items-center gap-2 ml-2 flex-shrink-0">
                   <span className="text-[10px] text-emerald-400 font-semibold">{f.winning_asin_count} ASINs</span>
-                  {f.high_confidence_transfer ? (
+                  {f.high_confidence_transfer && (
                     <span className="text-[9px] bg-violet-500/15 text-violet-400 border border-violet-500/20 px-1.5 py-0.5 rounded font-medium">AUTO</span>
-                  ) : null}
+                  )}
                 </div>
               </div>
             ))}
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -483,7 +442,6 @@ export default function DaypartCrossAsinPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
       <div className="px-6 py-4 border-b border-surface-2 bg-surface-1 flex-shrink-0">
         <div className="flex items-center gap-3 mb-1">
           <div className="w-8 h-8 rounded-lg bg-violet-500/20 border border-violet-500/30 flex items-center justify-center">
@@ -496,29 +454,21 @@ export default function DaypartCrossAsinPage() {
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="flex border-b border-surface-2 bg-[#0D0F14] flex-shrink-0">
         {[
           { key: 'dayparting', label: 'Dayparting', icon: Clock },
-          { key: 'crossasin', label: 'Cross-ASIN Transfer', icon: ArrowRightLeft },
+          { key: 'crossasin',  label: 'Cross-ASIN Transfer', icon: ArrowRightLeft },
         ].map(tab => (
           <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            className={`flex items-center gap-2 px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${
-              activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'
-            }`}>
+            className={`flex items-center gap-2 px-5 py-3 text-xs font-semibold border-b-2 transition-colors ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             <tab.icon className="w-3.5 h-3.5" />
             {tab.label}
           </button>
         ))}
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {activeTab === 'dayparting' ? (
-          <DaypartingTab account={account} />
-        ) : (
-          <CrossAsinTab account={account} />
-        )}
+        {activeTab === 'dayparting' ? <DaypartingTab account={account} /> : <CrossAsinTab account={account} />}
       </div>
     </div>
   );
