@@ -50,8 +50,7 @@ export default function BudgetStatusPanel({ accountId }) {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 5 * 60 * 1000); // 5min
-    return () => clearInterval(interval);
+    // Sem polling — dados são atualizados pelo motor backend a cada hora
   }, [load]);
 
   if (loading) {

@@ -101,8 +101,22 @@ Deno.serve(async (req) => {
     if (metricsToday.length > 0) {
       totalSpend = metricsToday.reduce((s: number, m: any) => s + Number(m.spend || 0), 0);
     } else {
-      totalSpend = campaigns.reduce((s: number, c: any) => s + Number(c.current_spend || c.spend || 0), 0);
+      totalSpend = campaigns.reduce((s: number, c: any) => s + Number(c.current_spend || 0), 0);
       spendSource = 'campaign_spend_fallback';
+    }
+
+    // Se fallback de gasto e totalSpend=0, não há dados diários confiáveis → abortar sem acionar cap
+    if (spendSource === 'campaign_spend_fallback' && totalSpend === 0) {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: aid,
+        operation: 'enforceCampaignSpendLimits',
+        status: 'skipped',
+        trigger_type: 'automatic',
+        started_at: now,
+        completed_at: new Date().toISOString(),
+        result_summary: 'Skipped: sem dados de gasto diário (CampaignMetricsDaily vazio e current_spend=0)',
+      }).catch(() => {});
+      return Response.json({ ok: true, skipped: true, reason: 'no_daily_spend_data', total_spend: 0, duration_ms: Date.now() - t0 });
     }
 
     const pausedByCampaignLimit: string[] = [];

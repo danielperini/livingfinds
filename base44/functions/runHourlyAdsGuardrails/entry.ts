@@ -337,7 +337,36 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // ── 6. Ações Amazon não confirmadas ───────────────────────────────────
+    // ── 6. Resolver alertas budget_exhausted com dados claramente históricos ─
+    try {
+      const activebudgetAlerts = await base44.asServiceRole.entities.Alert.filter({
+        amazon_account_id: aid,
+        alert_type: 'budget_exhausted',
+        status: 'active',
+      }, '-created_at', 20).catch(() => [] as any[]);
+
+      const staleThreshold48h = new Date(Date.now() - 48 * 3600000).toISOString();
+
+      for (const a of activebudgetAlerts) {
+        const currentVal = Number(a.current_value || 0);
+        const thresholdVal = Number(a.threshold_value || 0);
+        const isHistoricalData = thresholdVal > 0 && currentVal > thresholdVal * 3;
+        const isStale = a.created_at && a.created_at < staleThreshold48h;
+
+        if (isHistoricalData || isStale) {
+          await base44.asServiceRole.entities.Alert.update(a.id, {
+            status: 'resolved',
+            resolved_at: now,
+            resolution_reason: isHistoricalData
+              ? `false_positive_historical_data: current_value (${currentVal}) > threshold × 3 (${thresholdVal * 3})`
+              : 'auto_resolved_stale: alert active > 48h',
+          }).catch(() => {});
+          actions.push({ type: 'resolved_false_positive_budget_alert', alert_id: a.id, reason: isHistoricalData ? 'historical_data' : 'stale_48h' });
+        }
+      }
+    } catch {}
+
+    // ── 8. Ações Amazon não confirmadas ───────────────────────────────────
     // Decisões executadas mas sem amazon_response válido nas últimas 4h
     const unconfirmedCutoff = new Date(Date.now() - 4 * 3600000).toISOString();
     const unconfirmed = await base44.asServiceRole.entities.OptimizationDecision.filter(

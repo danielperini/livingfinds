@@ -8,7 +8,7 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
 import BackupPanel from '@/components/backup/BackupPanel';
-import BudgetStatusPanel from '@/components/settings/BudgetStatusPanel';
+
 
 const PERFORMANCE_DEFAULTS = {
   primary_goal: 'acos',
@@ -78,6 +78,7 @@ export default function Settings() {
   const [goals, setGoals] = useState(PERFORMANCE_DEFAULTS);
   const [goalsSaving, setGoalsSaving] = useState(false);
   const [goalsSaved, setGoalsSaved] = useState(false);
+  const [todaySpend, setTodaySpend] = useState(null);
 
   const setGoal = (key, val) => setGoals(p => ({ ...p, [key]: val }));
 
@@ -96,6 +97,12 @@ export default function Settings() {
         ads_profile_id: acc.ads_profile_id || '',
         region: acc.region || 'NA',
       });
+
+      // Carregar gasto de hoje (leitura única, sem polling)
+      const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+      base44.entities.AccountDailySpendController.filter(
+        { amazon_account_id: acc.id, spend_date: todayBRT }, null, 1
+      ).then(ctrs => { if (ctrs[0]) setTodaySpend(ctrs[0]); }).catch(() => {});
 
       // Carregar PerformanceSettings (fonte única de metas)
       const settings = await base44.entities.PerformanceSettings.filter({ amazon_account_id: acc.id });
@@ -513,7 +520,7 @@ export default function Settings() {
         </div>
 
         {/* Resumo de metas */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5">
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-1">
           {[
             { label: 'ACoS Alvo', value: `${goals.target_acos}%`, color: 'text-cyan' },
             { label: 'ACoS Máx.', value: `${goals.max_acos}%`, color: 'text-red-400' },
@@ -528,6 +535,15 @@ export default function Settings() {
             </div>
           ))}
         </div>
+        {todaySpend && (
+          <p className="text-[10px] text-slate-500 px-1 mb-5">
+            Gasto hoje: <span className="text-slate-300 font-medium">R$ {Number(todaySpend.confirmed_spend || 0).toFixed(2).replace('.', ',')}</span>
+            {' '}de <span className="text-slate-300 font-medium">R$ {Number(todaySpend.user_daily_spend_cap || goals.daily_budget_limit || 0).toFixed(2).replace('.', ',')}</span>
+            {todaySpend.user_daily_spend_cap > 0 && (
+              <span className="text-slate-600"> ({((todaySpend.confirmed_spend / todaySpend.user_daily_spend_cap) * 100).toFixed(0)}%)</span>
+            )}
+          </p>
+        )}
 
         <button onClick={saveGoals} disabled={goalsSaving || !account}
           className="flex items-center gap-2 px-5 py-2.5 bg-cyan hover:bg-cyan/90 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
@@ -535,9 +551,6 @@ export default function Settings() {
           {goalsSaving ? 'Salvando...' : goalsSaved ? 'Salvo!' : 'Salvar configurações'}
         </button>
       </div>
-
-      {/* ─── STATUS DO ORÇAMENTO DIÁRIO ─── */}
-      {account && <BudgetStatusPanel accountId={account.id} />}
 
       {/* ─── BACKUP ─── */}
       <BackupPanel />

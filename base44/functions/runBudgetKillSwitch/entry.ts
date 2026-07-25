@@ -70,12 +70,17 @@ Deno.serve(async (req) => {
     if (metricsToday.length > 0) {
       confirmedSpend = metricsToday.reduce((s: number, m: any) => s + Number(m.spend || 0), 0);
     } else {
-      // Fallback: Campaign.spend (latência de relatório)
+      // Fallback: Campaign.current_spend (gasto diário do sync de API — NUNCA Campaign.spend que é acumulado 30d)
       const campaigns = await base44.asServiceRole.entities.Campaign.filter(
         { amazon_account_id: accountId }, null, 500
       ).catch(() => [] as any[]);
-      confirmedSpend = campaigns.reduce((s: number, c: any) => s + Number(c.spend || c.current_spend || 0), 0);
+      confirmedSpend = campaigns.reduce((s: number, c: any) => s + Number(c.current_spend || 0), 0);
       spendSource = 'campaign_spend_fallback';
+    }
+
+    // Se fallback e confirmedSpend=0, não há dados diários confiáveis → não acionar kill switch
+    if (spendSource === 'campaign_spend_fallback' && confirmedSpend === 0) {
+      return Response.json({ ok: true, skipped: true, reason: 'no_daily_spend_data', confirmed_spend: 0, daily_budget: dailyBudget, duration_ms: Date.now() - t0 });
     }
 
     // ── 3. Threshold = 97% do cap ──
