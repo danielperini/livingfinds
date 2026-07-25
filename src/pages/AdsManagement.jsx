@@ -72,14 +72,37 @@ const STATE_FILTERS = [
 
 const PAGE_SIZE = 50;
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction }) {
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume }) {
   const [page, setPage] = useState(1);
+  const [itemLoading, setItemLoading] = useState({});
 
   // Reset pagination when campaigns list changes (filter/search)
   useEffect(() => { setPage(1); }, [campaigns.length, stateFilter]);
 
   const visible = campaigns.slice(0, page * PAGE_SIZE);
   const hasMore = visible.length < campaigns.length;
+
+  const handleQuickPause = async (e, c) => {
+    e.stopPropagation();
+    if (itemLoading[c.id]) return;
+    setItemLoading(prev => ({ ...prev, [c.id]: true }));
+    try {
+      await onQuickPause(c);
+    } finally {
+      setItemLoading(prev => ({ ...prev, [c.id]: false }));
+    }
+  };
+
+  const handleQuickResume = async (e, c) => {
+    e.stopPropagation();
+    if (itemLoading[c.id]) return;
+    setItemLoading(prev => ({ ...prev, [c.id]: true }));
+    try {
+      await onQuickResume(c);
+    } finally {
+      setItemLoading(prev => ({ ...prev, [c.id]: false }));
+    }
+  };
 
   return (
     <div className="flex-1 flex flex-col min-w-0 border-r border-surface-2 last:border-r-0">
@@ -120,12 +143,14 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
           const aiManaged = isAiManaged(c);
           const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
           const prod = c.asin ? products.find((p) => p.asin === c.asin) : null;
+          const state = campaignState(c);
+          const isItemLoading = !!itemLoading[c.id];
 
           return (
             <div
               key={c.id || i}
               onClick={() => onSelect(c)}
-              className={`w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
+              className={`group w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
               isSelected ?
               'bg-surface-2 border-l-2 border-l-cyan' :
               'hover:bg-surface-1/60 border-l-2 border-l-transparent'}`
@@ -136,6 +161,24 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                     {c._asin_resolved ? `AUTO | ${c._asin_resolved}` : (c.name || c.campaign_name)}
                   </p>
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {/* Quick pause/resume button — visible on hover */}
+                    {(onQuickPause || onQuickResume) && (state === 'enabled' || state === 'paused') ? (
+                      <button
+                        onClick={(e) => state === 'enabled' ? handleQuickPause(e, c) : handleQuickResume(e, c)}
+                        title={state === 'enabled' ? 'Pausar campanha' : 'Reativar campanha'}
+                        className={`opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${
+                          state === 'enabled'
+                            ? 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/25'
+                            : 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/25'
+                        }`}
+                      >
+                        {isItemLoading
+                          ? <Loader2 className="w-3 h-3 animate-spin" />
+                          : state === 'enabled'
+                            ? <Pause className="w-3 h-3" />
+                            : <Play className="w-3 h-3" />}
+                      </button>
+                    ) : null}
                     {c._group_count > 1 ? (
                   <span title={`${c._group_count} campanhas para este ASIN`} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30 leading-none">
                         ×{c._group_count}
@@ -173,7 +216,7 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
 
                 {/* Metrics row */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <StatusBadge status={campaignState(c) || 'enabled'} size="xs" />
+                  <StatusBadge status={state || 'enabled'} size="xs" />
                   <span className="text-[10px] text-slate-500">R${(c.spend || 0).toFixed(0)}</span>
                   {(c.acos || 0) > 0 ? (
                 <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span>
