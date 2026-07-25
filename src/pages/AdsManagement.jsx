@@ -284,6 +284,7 @@ export default function AdsManagement() {
   const [pausingManual, setPausingManual] = useState(false);
   const [pauseManualResult, setPauseManualResult] = useState(null);
   const [hideNoStock, setHideNoStock] = useState(false);
+  const [hidePaused, setHidePaused] = useState(false);
   const [columnTab, setColumnTab] = useState('auto');
 
 
@@ -793,6 +794,7 @@ export default function AdsManagement() {
         if (prod && (prod.inventory_status === 'out_of_stock' || prod.fba_inventory === 0)) return false;
       }
     }
+    if (hidePaused && campaignState(c) === 'paused') return false;
     return true;
   });
 
@@ -941,6 +943,17 @@ export default function AdsManagement() {
             }`}
           >
             📦 {hideNoStock ? 'c/ estoque' : 'todos'}
+          </button>
+          <button
+            onClick={() => setHidePaused(v => !v)}
+            title="Ocultar campanhas pausadas"
+            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
+              hidePaused
+                ? 'bg-cyan/20 text-cyan border-cyan/30'
+                : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'
+            }`}
+          >
+            ▶ {hidePaused ? 'ativas' : 'todas'}
           </button>
         </div>
 
