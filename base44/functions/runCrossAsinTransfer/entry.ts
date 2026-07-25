@@ -38,6 +38,22 @@ function normalizeKeyword(kw) {
   return normalize(kw).replace(/\s+/g, ' ').trim();
 }
 
+// Retorna true se keyword e título do produto destino compartilham ao menos 1 token >= 4 chars
+function keywordRelevantToDestination(keyword: string, destProductTitle: string): boolean {
+  const MIN_TOKEN_LEN = 4;
+  const kwTokens = new Set(
+    tokenize(keyword).filter(t => t.length >= MIN_TOKEN_LEN)
+  );
+  const titleTokens = new Set(
+    tokenize(destProductTitle).filter(t => t.length >= MIN_TOKEN_LEN)
+  );
+  if (kwTokens.size === 0 || titleTokens.size === 0) return false;
+  for (const t of kwTokens) {
+    if (titleTokens.has(t)) return true;
+  }
+  return false;
+}
+
 // Agrupa produtos por termos em comum no título (heurística)
 function groupProductsByTitle(products) {
   // Para cada produto, extrair tokens significativos do nome
@@ -198,6 +214,7 @@ Deno.serve(async (req) => {
 
     // Identificar candidatas por grupo
     const transfersToCreate = [];
+    const transfersBlocked = [];
     const groupResults = [];
 
     for (const group of groups) {
@@ -300,6 +317,33 @@ Deno.serve(async (req) => {
           const destProduct = activeProducts.find(p => p.asin === destAsin);
           if (!destProduct) continue;
 
+          // ── Hard block: filtro de relevância semântica ─────────────────
+          const destTitle = destProduct.display_name || destProduct.product_name || '';
+          if (!keywordRelevantToDestination(donor.keyword, destTitle)) {
+            // Registrar como bloqueado para auditoria (sem enfileirar)
+            transfersBlocked.push({
+              amazon_account_id: accountId,
+              keyword: donor.keyword,
+              normalized_keyword: nkw,
+              match_type: 'exact',
+              source_asin: donor.asin,
+              destination_asin: destAsin,
+              destination_product_name: destTitle || destAsin,
+              destination_sku: destProduct.sku || '',
+              hard_blocker_detected: true,
+              hard_blocker_reason: 'keyword_category_mismatch: nenhum token do keyword encontrado no título do destino',
+              transfer_decision: 'DO_NOT_TRANSFER',
+              status: 'REJECTED',
+              idempotency_key: idempKey,
+              relevance_score: 0,
+              conversion_score: 0,
+              proposed_at: now,
+              created_at: now,
+            });
+            groupCandidates.push({ keyword: donor.keyword, dest_asin: destAsin, status: 'hard_blocked_category_mismatch' });
+            continue;
+          }
+
           rawCandidates.push({
             nkw, donor, destAsin, idempKey, destProduct,
             conversionScore: calcConversionScore(donor),
@@ -377,7 +421,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Persistir CrossAsinTransfer em lotes
+    // Persistir CrossAsinTransfer aprovadas em lotes
     let created = 0;
     for (let i = 0; i < transfersToCreate.length; i += 20) {
       const batch = transfersToCreate.slice(i, i + 20);
@@ -385,7 +429,13 @@ Deno.serve(async (req) => {
       created += batch.length;
     }
 
-    // Enfileirar na ProductKickoffQueue via scheduleManualCampaignFromTerm
+    // Persistir bloqueadas (hard block) — somente as que ainda não existem no índice
+    const blockedToSave = transfersBlocked.filter(b => !existingKeys.has(b.idempotency_key));
+    for (let i = 0; i < blockedToSave.length; i += 20) {
+      await base44.asServiceRole.entities.CrossAsinTransfer.bulkCreate(blockedToSave.slice(i, i + 20)).catch(() => {});
+    }
+
+    // Enfileirar na ProductKickoffQueue via scheduleManualCampaignFromTerm (apenas aprovadas)
     let queued = 0;
     for (const t of transfersToCreate) {
       const destProd = activeProducts.find(p => p.asin === t.destination_asin);
@@ -412,6 +462,12 @@ Deno.serve(async (req) => {
         groups_analyzed: groups.length,
         transfers_created: created,
         transfers_queued: queued,
+        transfers_blocked_hard: blockedToSave.length,
+        hard_block_examples: blockedToSave.slice(0, 5).map(b => ({
+          keyword: b.keyword,
+          dest_asin: b.destination_asin,
+          reason: b.hard_blocker_reason,
+        })),
         group_results: groupResults,
       }),
     }).catch(() => {});
@@ -421,6 +477,12 @@ Deno.serve(async (req) => {
       groups_analyzed: groups.length,
       transfers_created: created,
       transfers_queued: queued,
+      transfers_blocked_hard: blockedToSave.length,
+      hard_block_examples: blockedToSave.slice(0, 5).map(b => ({
+        keyword: b.keyword,
+        dest_asin: b.destination_asin,
+        reason: b.hard_blocker_reason,
+      })),
       group_results: groupResults,
       duration_ms: Date.now() - t0,
     });
