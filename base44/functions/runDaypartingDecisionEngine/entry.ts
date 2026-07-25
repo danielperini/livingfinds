@@ -519,6 +519,102 @@ Deno.serve(async (req) => {
       kwBaselineMap.set(kwId, b);
     }
 
+    // ── NIGHT WINDOW BLOCK (02h–05h, dias úteis) ────────────────────────
+    // Regra determinística: não depende de HourlyMetric nem occurrences.
+    // Reduz -20% os bids de todas as keywords ativas na madrugada de seg-sex.
+    const NIGHT_WINDOW_HOURS = [2, 3, 4];
+    const NIGHT_WINDOW_BID_REDUCTION = 0.20;
+    const NIGHT_WINDOW_MIN_BID = 0.25;
+
+    const brtNow      = new Date(Date.now() - 3 * 3600000);
+    const brtHour     = brtNow.getUTCHours();   // hora BRT
+    const brtDayOfWeek = brtNow.getUTCDay();    // 0=Dom, 6=Sab
+
+    const isNightWindow = NIGHT_WINDOW_HOURS.includes(brtHour) && brtDayOfWeek >= 1 && brtDayOfWeek <= 5;
+
+    const nightDecisions: any[] = [];
+    if (isNightWindow) {
+      // Carregar decisões night window já criadas hoje para dedup
+      const existingNightKeys = !dry_run
+        ? await base44.asServiceRole.entities.DaypartingDecision.filter(
+            { amazon_account_id: accountId, cycle_date: today, rule_id: 'NIGHT_WINDOW_WEEKDAY' }, null, 2000
+          ).catch(() => [])
+        : [];
+      const existingNightKeySet = new Set(existingNightKeys.map((d: any) => d.idempotency_key));
+
+      for (const kw of activeKws) {
+        const curBid = Number(kw.current_bid || kw.bid || 0);
+        if (curBid <= 0) continue;
+
+        const minBid  = Math.max(NIGHT_WINDOW_MIN_BID, Number(goal.min_bid || NIGHT_WINDOW_MIN_BID));
+        const rawBid  = curBid * (1 - NIGHT_WINDOW_BID_REDUCTION);
+        const newBid  = r2(Math.max(minBid, rawBid));
+        if (newBid >= curBid - 0.01) continue; // já no floor
+
+        const idempKey = `night_window:${accountId}:${kw.keyword_id}:${today}`;
+        if (existingNightKeySet.has(idempKey)) continue;
+
+        const actualPct = r2(((newBid - curBid) / curBid) * 100);
+        nightDecisions.push({
+          amazon_account_id: accountId,
+          campaign_id: kw.campaign_id,
+          keyword_id: kw.keyword_id,
+          asin: kw.asin,
+          keyword_text: kw.keyword_text,
+          match_type: kw.match_type,
+          day_of_week: brtDayOfWeek,
+          hour: brtHour,
+          slot_label: `NOITE_${brtHour}h`,
+          time_slot_score: 0,
+          slot_classification: 'LOSS_TIME',
+          decision_type: 'BID_DOWN_ACOS',
+          rule_id: 'NIGHT_WINDOW_WEEKDAY',
+          rule_version: RULE_VERSION,
+          current_bid: curBid,
+          proposed_bid: newBid,
+          bid_change_pct: actualPct,
+          bid_floor_applied: rawBid < minBid,
+          bid_cap_applied: false,
+          recency_protection_blocked: false,
+          metric_window: 'NONE',
+          decision_window: 'NONE',
+          requires_approval: false,
+          status: 'pending_approval',
+          target_acos: goal.target_acos,
+          data_confidence: 'VERY_HIGH',
+          data_mature: true,
+          reason: `Bloco madrugada 02h-05h dia útil: redução preventiva -20%`,
+          idempotency_key: idempKey,
+          expires_at: hoursLater(8),
+          cycle_date: today,
+          created_at: now,
+        });
+      }
+
+      if (!dry_run && nightDecisions.length > 0) {
+        for (let i = 0; i < nightDecisions.length; i += 50) {
+          await base44.asServiceRole.entities.DaypartingDecision.bulkCreate(nightDecisions.slice(i, i + 50)).catch(() => {});
+        }
+      }
+    }
+
+    // ── MORNING RECOVERY (após 05h) ───────────────────────────────────────
+    // Após o bloco noturno, marcar as decisões NIGHT_WINDOW do mesmo dia como
+    // 'approved' para que o executeApprovedDecisionQueue as execute e retome os bids.
+    const isMorningRecovery = brtHour >= 5 && brtDayOfWeek >= 1 && brtDayOfWeek <= 5;
+    if (isMorningRecovery && !dry_run) {
+      const pendingNight = await base44.asServiceRole.entities.DaypartingDecision.filter(
+        { amazon_account_id: accountId, cycle_date: today, rule_id: 'NIGHT_WINDOW_WEEKDAY', status: 'pending_approval' }, null, 500
+      ).catch(() => []);
+      for (const d of pendingNight) {
+        await base44.asServiceRole.entities.DaypartingDecision.update(d.id, {
+          status: 'approved',
+          approved_at: now,
+          approved_by: 'morning_recovery_auto',
+        }).catch(() => {});
+      }
+    }
+
     // Gerar decisões
     const decisions: any[] = [];
     const kwMap = new Map<string, any>();
@@ -642,6 +738,9 @@ Deno.serve(async (req) => {
         bid_up: newDecisions.filter((d: any) => d.decision_type === 'BID_UP').length,
         bid_down: newDecisions.filter((d: any) => d.decision_type.startsWith('BID_DOWN')).length,
         no_sales: newDecisions.filter((d: any) => d.decision_type.startsWith('NO_SALES')).length,
+        night_window_active: isNightWindow,
+        night_window_decisions: nightDecisions.length,
+        morning_recovery_active: isMorningRecovery,
         duration_ms: Date.now() - t0,
       });
     }
