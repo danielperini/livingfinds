@@ -350,7 +350,7 @@ function SettingsHistoryPanel({ accountId }) {
     if (!open || !accountId) return;
     setLoading(true);
     base44.entities.PerformanceSettingsHistory.filter(
-      { amazon_account_id: accountId }, '-created_date', 5
+      { amazon_account_id: accountId }, '-changed_at', 5
     ).then(res => setHistory(res || [])).catch(() => setHistory([])).finally(() => setLoading(false));
   }, [open, accountId]);
 
@@ -379,7 +379,7 @@ function SettingsHistoryPanel({ accountId }) {
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando...
             </div>
           ) : history.length === 0 ? (
-            <p className="text-xs text-slate-500 py-4">Nenhum histórico disponível.</p>
+            <p className="text-xs text-slate-500 py-4">Nenhuma alteração registrada ainda.</p>
           ) : (
             <div className="space-y-2 mt-3">
               {history.map((h, i) => (
@@ -785,11 +785,16 @@ function MotorDispatchBanner({ accountId, onDismiss }) {
 
   const runMotor = async () => {
     clearInterval(timerRef.current);
-    setMotorState('running');
-    const timeoutId = setTimeout(() => {
-      setMotorState('timeout');
-    }, 30000);
+    setMotorState('syncing');
+    const timeoutId = setTimeout(() => { setMotorState('timeout'); }, 45000);
     try {
+      // Passo 1: forçar sync rápido para garantir dados frescos
+      await Promise.race([
+        base44.functions.invoke('syncAdsQuick', { amazon_account_id: accountId }),
+        new Promise(resolve => setTimeout(resolve, 15000)), // timeout de 15s no sync
+      ]);
+      // Passo 2: disparar motor determinístico
+      setMotorState('running');
       const res = await base44.functions.invoke('runDeterministicDecisionEngine', {
         amazon_account_id: accountId,
         trigger: 'manual_settings_update',
@@ -849,11 +854,11 @@ function MotorDispatchBanner({ accountId, onDismiss }) {
       <div className="flex gap-2 mt-3">
         <button
           onClick={runMotor}
-          disabled={motorState === 'running'}
+          disabled={motorState === 'running' || motorState === 'syncing'}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60"
         >
-          {motorState === 'running' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-          {motorState === 'running' ? 'Motor em execução...' : 'Disparar agora'}
+          {(motorState === 'running' || motorState === 'syncing') ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          {motorState === 'syncing' ? 'Sincronizando dados...' : motorState === 'running' ? 'Motor em execução...' : 'Disparar agora'}
         </button>
         <button
           onClick={onDismiss}
@@ -932,7 +937,7 @@ export default function CampaignConfig() {
     if (totalPct !== 100) errors.push(`Percentuais de distribuição somam ${totalPct}% (deve ser 100%)`);
     if (cfg.min_bid_global > cfg.max_bid_global) errors.push('Bid mínimo maior que bid máximo');
     if (cfg.ai_auto_execute && cfg.operation_mode === 'simulation') errors.push('Execução automática ativa em modo Simulação não tem efeito');
-    if (!cfg.daily_budget_total) errors.push('Budget geral diário é obrigatório');
+    if (Number(cfg.daily_budget_total) <= 0) errors.push('Budget geral diário é obrigatório e deve ser maior que zero');
     return errors;
   };
 
@@ -1038,7 +1043,7 @@ export default function CampaignConfig() {
       }
 
       setMsg({ type: 'success', text: 'Configuração salva com sucesso!' });
-      setShowMotorBanner(true);
+      if (account) setShowMotorBanner(true);
     } catch (e) {
       setMsg({ type: 'error', text: `Erro ao salvar: ${e.message}` });
     } finally {

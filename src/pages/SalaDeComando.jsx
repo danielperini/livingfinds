@@ -1448,14 +1448,18 @@ export default function SalaDeComando() {
 
           {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
           {tab === 'bids_keywords' && (
-            <KeywordBidChangesPanel account={account} />
+            account
+              ? <KeywordBidChangesPanel account={account} />
+              : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
           )}
 
           {/* ── CICLO DE BIDS MANUAIS ─────────────────────────────────────────── */}
-          {tab === 'bid_lifecycle' && account && (
-            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-              <ManualBidLifecyclePanel amazonAccountId={account.id} />
-            </div>
+          {tab === 'bid_lifecycle' && (
+            account
+              ? <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                  <ManualBidLifecyclePanel amazonAccountId={account.id} />
+                </div>
+              : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
