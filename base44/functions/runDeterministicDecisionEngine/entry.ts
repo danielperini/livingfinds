@@ -1484,23 +1484,33 @@ Deno.serve(async (req) => {
       const lastGrowthTs = lastGrowthByEntity.get(entityId) || 0;
       const growthCooldownActive = lastGrowthTs > 0 && (Date.now() - lastGrowthTs) / 3600000 < settings.growth_cooldown_hours;
 
-      // ── Guardrail: estoque crítico < 7d ─────────────────────────────
-      if (stockCovDays > 0 && stockCovDays < 7) {
-        const newBid = Math.max(settings.min_bid, currentBid * (1 - settings.max_bid_decrease_pct * 0.75));
-        const iKey = `stock_critical|${aid}|${entityId}|${today}`;
-        if (!usedIdemKeys.has(iKey) && newBid < currentBid) {
+      // ── Guardrail: estoque baixo 7–21d — reduzir lance para concentrar orçamento ──
+      if (stockCovDays > 0 && stockCovDays < 21) {
+        // Estoque crítico (<7d): redução agressiva — apenas produtos com estoque precisam de orçamento
+        // Estoque baixo (7-21d): redução suave — conservar verba para os dias restantes
+        const isCritical = stockCovDays < 7;
+        const reductionPct = isCritical
+          ? settings.max_bid_decrease_pct * 0.90  // −90% do limite: estoque insuficiente
+          : settings.max_bid_decrease_pct * 0.40; // −40% do limite: ainda vendável, mas conservar
+        const newBid = Math.max(settings.min_bid, currentBid * (1 - reductionPct));
+        const ruleKey = isCritical ? 'stock_critical' : 'stock_low';
+        const iKey = `${ruleKey}|${aid}|${entityId}|${today}`;
+        if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
           decisions.push(buildDecision(aid, correlationId, {
             decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `Estoque crítico: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido.`,
-            rule_key: 'stock_critical', risk: 'low', priority: PRIORITY.stock,
+            rationale: isCritical
+              ? `⚠️ ESTOQUE CRÍTICO: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido ${Math.round(reductionPct * 100)}% para conservar orçamento exclusivamente para produtos com estoque suficiente.`
+              : `📦 ESTOQUE BAIXO: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido ${Math.round(reductionPct * 100)}% preventivamente — orçamento direcionado a produtos com estoque pleno.`,
+            rule_key: ruleKey, risk: isCritical ? 'medium' : 'low', priority: PRIORITY.stock,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, stock_coverage_days: stockCovDays,
             opportunity_state: 'no_opportunity',
+            stock_urgency: isCritical ? 'critical' : 'low',
           }));
-          entityChangedThisCycle.set(entityId, 'stock_critical');
+          entityChangedThisCycle.set(entityId, ruleKey);
           stats.skipped_stock++;
           continue;
         }
@@ -2068,8 +2078,18 @@ Deno.serve(async (req) => {
     const allDecisions = [...decisions, ...campaignBudgetDecisions];
 
     // ── 10d. Priorização ──────────────────────────────────────────────────
+    // Stock decisions (stock_zero, stock_critical, stock_low) têm prioridade
+    // absoluta na fila: garantem que o orçamento vai para o que pode ser vendido agora.
+    const STOCK_RULES = new Set(['stock_zero', 'stock_critical', 'stock_low']);
     allDecisions.sort((a: any, b: any) => {
+      const aIsStock = STOCK_RULES.has(a.rule_key || '');
+      const bIsStock = STOCK_RULES.has(b.rule_key || '');
+      if (aIsStock !== bIsStock) return aIsStock ? -1 : 1; // stock decisions first
       if (a.priority !== b.priority) return a.priority - b.priority;
+      // Dentro da mesma prioridade: estoque menor = mais urgente
+      const aDays = a.stock_coverage_days ?? 999;
+      const bDays = b.stock_coverage_days ?? 999;
+      if (Math.abs(aDays - bDays) > 1) return aDays - bDays; // menor cobertura = primeiro
       return (b.decision_priority_score || 0) - (a.decision_priority_score || 0);
     });
 
@@ -2272,14 +2292,20 @@ Deno.serve(async (req) => {
 // ── Helper buildDecision ──────────────────────────────────────────────────────
 function buildDecision(aid: string, correlationId: string, params: any): any {
   const intentScore = params.search_intent?.purchase_intent_score || 0.5;
-  const stockFactor = params.stock_coverage_days != null ? Math.min(1, (params.stock_coverage_days || 0) / 30) : 1.0;
+  // Estoque baixo/crítico: prioridade máxima — o orçamento deve ir para quem pode vender agora.
+  // stockFactor invertido: quanto MENOS estoque, MAIOR a urgência de processar essa decisão.
+  const stockDays = params.stock_coverage_days;
+  const isStockDecision = params.rule_key === 'stock_critical' || params.rule_key === 'stock_low' || params.rule_key === 'stock_zero';
+  const stockFactor = isStockDecision
+    ? 1.0 // força score máximo para decisões de estoque — processadas primeiro
+    : stockDays != null ? Math.min(1, (stockDays || 0) / 30) : 1.0;
   const priorityFactor = 1 - ((params.priority || 9) / 13);
   const riskFactor = { low: 0.9, medium: 0.7, high: 0.5 }[params.risk as string] || 0.7;
-  const opportunityFactor = params.opportunity_score || 0.5;
+  const opportunityFactor = params.opportunity_score || (isStockDecision ? 1.0 : 0.5);
 
   const decision_priority_score = calcDecisionScore({
     opportunity: opportunityFactor,
-    economic_impact: 0.8,
+    economic_impact: isStockDecision ? 1.0 : 0.8, // impacto econômico máximo para estoque
     confidence: 0.9,
     visibility_gap: params.visibility_score != null ? (1 - params.visibility_score) : 0.5,
     inventory: stockFactor,
