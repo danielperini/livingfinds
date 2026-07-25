@@ -2,11 +2,12 @@
  * checkAndForceReportPipeline — Watchdog diário robusto
  *
  * Roda 2x ao dia (07h e 14h BRT via automação).
- * Lógica:
- *  1. Se há job "processed" nas últimas 26h → OK, pular
- *  2. Se há jobs "pending/processing" NUNCA polled (poll_attempts=0) → forçar poll imediatamente
- *  3. Se não há nenhum job recente → disparar runDailyFullReportPipeline com até 3 tentativas
- *  4. Após disparar pipeline, aguardar 5min e forçar poll para não deixar jobs orfãos
+ * Lógica corrigida:
+ *  1. Saudável = job com status processed/completed E processed_at nas últimas 26h (não apenas criado)
+ *  2. Jobs travados = pending/processing com poll_attempts=0 criados há >30min OU start_date=hoje (BRT)
+ *     → zerar next_poll_at e forçar poll imediatamente
+ *  3. Nenhum job do dia atual (BRT) → disparar runDailyFullReportPipeline com force:true
+ *  4. Após pipeline, aguardar 5min, forçar poll, e disparar SP-API + motor
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
@@ -44,10 +45,15 @@ Deno.serve(async (req) => {
       { amazon_account_id: aid }, '-created_date', 50
     ).catch(() => [] as any[]);
 
-    // 1. Verificar se já há relatório processado recente
+    // Data atual em BRT (UTC-3)
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+
+    // ── 1. Verificar se há relatório EFETIVAMENTE processado nas últimas 26h ──
+    // Critério correto: processed_at dentro da janela (não apenas created_date).
+    // Jobs "pending" criados recentemente NÃO contam como saudáveis.
     const hasProcessedRecent = recentJobs.some((j: any) => {
-      const createdAt = j.created_date || j.created_at || j.requested_at || '';
-      return ['processed', 'completed', 'downloaded'].includes(j.status) && createdAt >= cutoffIso;
+      const processedAt = j.processed_at || '';
+      return ['processed', 'completed'].includes(j.status) && processedAt >= cutoffIso;
     });
 
     if (hasProcessedRecent) {
@@ -59,31 +65,46 @@ Deno.serve(async (req) => {
         started_at: startAt,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - t0,
-        result_summary: 'Skipped: relatório já processado nas últimas 26h',
+        result_summary: 'Skipped: relatório já processado (processed_at) nas últimas 26h',
       }).catch(() => {});
       return Response.json({ ok: true, action: 'skipped', reason: 'already_processed', duration_ms: Date.now() - t0 });
     }
 
-    // 2. Verificar se há jobs pendentes há mais de 4h sem poll_attempts → reset e forçar poll
-    const cutoff4hIso = new Date(Date.now() - 4 * 3600000).toISOString();
-    const stuckJobs = recentJobs.filter((j: any) => {
+    // ── 2. Detectar jobs travados (poll_attempts=0) ──
+    // Caso A: criados há mais de 30min sem nenhum poll
+    const cutoffStuckIso = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const stuckByAge = recentJobs.filter((j: any) => {
       const createdAt = j.created_date || j.created_at || j.requested_at || '';
       return ['pending', 'processing', 'requested'].includes(j.status)
         && (j.poll_attempts || 0) === 0
-        && createdAt <= cutoff4hIso; // criado há mais de 4h
+        && createdAt <= cutoffStuckIso;
     });
 
-    if (stuckJobs.length > 0) {
-      console.log(`[watchdog] ${stuckJobs.length} jobs nunca polled — forçando poll`);
-      // Zerar next_poll_at para que sejam elegíveis imediatamente
+    // Caso B: jobs do dia atual (start_date=hoje BRT) com poll_attempts=0
+    const stuckByDate = recentJobs.filter((j: any) => {
+      const startDate = j.start_date || j.end_date || '';
+      return ['pending', 'processing', 'requested'].includes(j.status)
+        && (j.poll_attempts || 0) === 0
+        && startDate === todayBRT;
+    });
+
+    // Combinar sem duplicatas
+    const allStuckJobs: any[] = [...new Map(
+      [...stuckByAge, ...stuckByDate].map((j: any) => [j.id, j])
+    ).values()];
+
+    if (allStuckJobs.length > 0) {
+      console.log(`[watchdog] ${allStuckJobs.length} jobs travados (poll_attempts=0) — forçando poll`);
+      // Zerar next_poll_at e poll_in_progress para torná-los elegíveis imediatamente
       const nowIso = new Date().toISOString();
-      await Promise.all(stuckJobs.map((j: any) =>
+      await Promise.all(allStuckJobs.map((j: any) =>
         db.entities.AmazonAdsReportJob.update(j.id, {
           next_poll_at: nowIso,
           poll_in_progress: false,
           updated_at: nowIso,
         }).catch(() => {})
       ));
+
       const pollRes = await db.functions.invoke('pollAmazonAdsReportJobs', {
         max_jobs: 20, _service_role: true,
       }).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
@@ -96,19 +117,59 @@ Deno.serve(async (req) => {
         started_at: startAt,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - t0,
-        result_summary: `Forçado poll de ${stuckJobs.length} jobs orfãos`,
+        result_summary: `Forçado poll de ${allStuckJobs.length} jobs travados (poll_attempts=0)`,
       }).catch(() => {});
 
       return Response.json({
-        ok: true, action: 'forced_poll',
-        stuck_jobs: stuckJobs.length,
-        poll_result: pollRes?.data,
+        ok: true,
+        action: 'forced_poll',
+        stuck_jobs: allStuckJobs.length,
+        poll_result: (pollRes as any)?.data,
         duration_ms: Date.now() - t0,
       });
     }
 
-    // 3. Sem jobs recentes → disparar pipeline com retry
-    console.log('[watchdog] Nenhum job recente — disparando pipeline com retry');
+    // ── 3. Nenhum job do dia atual → disparar pipeline do zero ──
+    const todayJobsAny = recentJobs.filter((j: any) => {
+      const startDate = j.start_date || j.end_date || '';
+      return startDate === todayBRT;
+    });
+
+    if (todayJobsAny.length === 0) {
+      console.log('[watchdog] Nenhum job do dia atual (BRT) — disparando pipeline com retry');
+    } else {
+      // Há jobs do dia mas nenhum processado e nenhum travado detectado acima — situação inesperada, logar e tentar poll
+      console.log(`[watchdog] ${todayJobsAny.length} jobs do dia existem mas nenhum processado — forçando poll genérico`);
+      const nowIso = new Date().toISOString();
+      await Promise.all(todayJobsAny.map((j: any) =>
+        db.entities.AmazonAdsReportJob.update(j.id, {
+          next_poll_at: nowIso,
+          poll_in_progress: false,
+          updated_at: nowIso,
+        }).catch(() => {})
+      ));
+      await db.functions.invoke('pollAmazonAdsReportJobs', { max_jobs: 20, _service_role: true }).catch(() => {});
+
+      await db.entities.SyncExecutionLog.create({
+        amazon_account_id: aid,
+        operation: 'watchdog_report_pipeline',
+        trigger_type: 'automatic',
+        status: 'warning',
+        started_at: startAt,
+        completed_at: new Date().toISOString(),
+        duration_ms: Date.now() - t0,
+        result_summary: `Jobs do dia existem mas sem processed_at — forçado poll genérico de ${todayJobsAny.length} jobs`,
+      }).catch(() => {});
+
+      return Response.json({
+        ok: true,
+        action: 'forced_poll_fallback',
+        today_jobs: todayJobsAny.length,
+        duration_ms: Date.now() - t0,
+      });
+    }
+
+    // ── 4. Pipeline do zero com retry ──
     let pipelineOk = false;
     let lastError = '';
     let pipelineData: any = null;
@@ -120,7 +181,7 @@ Deno.serve(async (req) => {
           force: true,
           _service_role: true,
         });
-        pipelineData = res?.data || res || {};
+        pipelineData = (res as any)?.data || res || {};
         if (pipelineData?.ok !== false && !pipelineData?.error) {
           pipelineOk = true;
           console.log(`[watchdog] Pipeline disparada com sucesso tentativa ${attempt + 1}`);
@@ -138,7 +199,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    // 4. Aguardar 5min, forçar poll e disparar SP-API + motor de decisão
+    // ── 5. Pós-pipeline: poll + SP-API + motor ──
     if (pipelineOk) {
       console.log('[watchdog] Aguardando 5min para forçar poll dos novos jobs...');
       await sleep(5 * 60 * 1000);
@@ -146,7 +207,6 @@ Deno.serve(async (req) => {
         max_jobs: 20, _service_role: true,
       }).catch(() => {});
 
-      // Sincronizar catálogo SP-API em paralelo (fire-and-forget)
       console.log('[watchdog] Disparando sincronização SP-API (catálogo, estoque, vendas)...');
       await Promise.allSettled([
         db.functions.invoke('syncProductCatalogV2', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
@@ -154,7 +214,6 @@ Deno.serve(async (req) => {
         db.functions.invoke('syncSalesDailyFromReports', { amazon_account_id: aid, _service_role: true }).catch(() => {}),
       ]);
 
-      // Disparar motor de decisão + execução automática
       console.log('[watchdog] Disparando motor determinístico de decisão...');
       await db.functions.invoke('runDeterministicDecisionEngine', {
         amazon_account_id: aid, auto_approve: true, skip_approval: true, _service_role: true,
@@ -173,7 +232,7 @@ Deno.serve(async (req) => {
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       result_summary: pipelineOk
-        ? `Pipeline completa: ADS + SP-API + motor decisão disparados`
+        ? 'Pipeline completa: ADS + SP-API + motor decisão disparados'
         : `Falhou após ${MAX_RETRIES} tentativas: ${lastError}`,
     }).catch(() => {});
 
