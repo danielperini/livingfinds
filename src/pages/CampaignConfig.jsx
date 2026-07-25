@@ -345,13 +345,18 @@ function SettingsHistoryPanel({ accountId }) {
   const [open, setOpen] = useState(false);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
     if (!open || !accountId) return;
     setLoading(true);
+    setFetchError(null);
     base44.entities.PerformanceSettingsHistory.filter(
       { amazon_account_id: accountId }, '-created_date', 10
-    ).then(res => setHistory(res || [])).catch(() => setHistory([])).finally(() => setLoading(false));
+    ).then(res => setHistory(res || [])).catch(e => {
+      setHistory([]);
+      setFetchError(e?.message || 'Erro ao carregar histórico');
+    }).finally(() => setLoading(false));
   }, [open, accountId]);
 
   const reasonLabel = (r) => {
@@ -377,6 +382,11 @@ function SettingsHistoryPanel({ accountId }) {
           {loading ? (
             <div className="flex items-center gap-2 py-4 text-xs text-slate-500">
               <Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando...
+            </div>
+          ) : fetchError ? (
+            <div className="flex items-center gap-2 py-4 text-xs text-amber-400">
+              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+              Não foi possível carregar o histórico. Tente novamente mais tarde.
             </div>
           ) : history.length === 0 ? (
             <p className="text-xs text-slate-500 py-4">Nenhuma alteração registrada ainda.</p>
@@ -461,7 +471,7 @@ function ObjectivesTab({ cfg, set, accountId }) {
           </div>
         )}
       </Section>
-      <SettingsHistoryPanel accountId={accountId} />
+      {accountId ? <SettingsHistoryPanel accountId={accountId} /> : null}
     </div>
   );
 }
