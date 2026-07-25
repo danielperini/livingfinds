@@ -6,6 +6,7 @@ import {
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
+import FloatingChat from '@/components/chat/FloatingChat';
 
 const navItems = [
 { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -146,6 +147,7 @@ export default function AppLayout() {
           <Outlet />
         </main>
       </div>
+      <FloatingChat accountId={account?.id} />
     </div>);
 
 }
