@@ -42,7 +42,9 @@ export default function AmazonAdsCallback() {
 
       try {
         // Usar SDK autenticado — garante token de usuário e URL correta
-        const data = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
+        // base44.functions.invoke retorna { data: { ... } } — extrair .data
+        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
+        const data = res?.data ?? res;
 
         if (!data?.ok) {
           setStatus('error');
