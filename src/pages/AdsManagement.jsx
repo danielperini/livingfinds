@@ -533,6 +533,31 @@ export default function AdsManagement() {
       setProducts(prods);
       setMigrationInProgress(false);
 
+      // Deduplicar campanhas AUTO duplicadas por ASIN — fire-and-forget silencioso
+      const hasAutoDuplicates = (() => {
+        const asinCount = {};
+        for (const c of operational) {
+          if ((c.targeting_type || '').toUpperCase() !== 'AUTO') continue;
+          const asin = c.asin || (() => { const m = (c.name || c.campaign_name || '').match(/B0[A-Z0-9]{8}/i); return m ? m[0].toUpperCase() : null; })();
+          if (!asin) continue;
+          asinCount[asin] = (asinCount[asin] || 0) + 1;
+        }
+        return Object.values(asinCount).some(n => n > 1);
+      })();
+      if (hasAutoDuplicates) {
+        base44.functions.invoke('deduplicateAutoCampaignsByAsin', { amazon_account_id: acc.id }).catch(() => {});
+        setTimeout(async () => {
+          try {
+            const refreshed = await loadAllCampaigns(acc.id);
+            const operational3 = refreshed.filter((c) => {
+              const state = (c.state || c.status || '').toLowerCase();
+              return state !== 'incomplete' && !c.is_incomplete;
+            });
+            setCampaigns(operational3);
+          } catch {}
+        }, 3000);
+      }
+
       // Reativar campanhas canônicas pausadas — fire-and-forget, sem bloquear UI
       const hasCanonicalPaused = operational.some(
         (c) => campaignState(c) === 'paused' &&
@@ -1021,7 +1046,7 @@ export default function AdsManagement() {
               }
             />
           ) : (
-            <div className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden">
+            <div className="flex flex-col flex-1 min-w-0 min-h-0">
               {migrationInProgress && (
                 <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5">
                   <Settings className="w-3 h-3 text-amber-400 animate-spin" />
