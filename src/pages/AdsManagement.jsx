@@ -285,6 +285,8 @@ export default function AdsManagement() {
   const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
   const [pausingNoAsin, setPausingNoAsin] = useState(false);
   const [pauseNoAsinResult, setPauseNoAsinResult] = useState(null);
+  const [archivingDuplicates, setArchivingDuplicates] = useState(false);
+  const [archiveDuplicatesResult, setArchiveDuplicatesResult] = useState(null);
   const [pausingManual, setPausingManual] = useState(false);
   const [pauseManualResult, setPauseManualResult] = useState(null);
   const [hideNoStock, setHideNoStock] = useState(false);
@@ -375,6 +377,39 @@ export default function AdsManagement() {
     } finally {
       setPausingManual(false);
       setTimeout(() => setPauseManualResult(null), 10000);
+    }
+  };
+
+  const archiveAutoDuplicates = async () => {
+    if (!account || archivingDuplicates) return;
+    if (!window.confirm('Arquivar na Amazon e localmente todas as campanhas AUTO duplicadas? Apenas a com maior spend por ASIN será mantida. Esta ação é irreversível.')) return;
+    setArchivingDuplicates(true);
+    setArchiveDuplicatesResult(null);
+    try {
+      const res = await base44.functions.invoke('deduplicateAutoCampaignsByAsin', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        _service_role: true,
+      });
+      const d = res?.data ?? res;
+      if (d?.ok) {
+        const archived = d.archived ?? 0;
+        const asins = d.asins_processed ?? 0;
+        setArchiveDuplicatesResult({
+          type: archived > 0 ? 'success' : 'info',
+          text: archived > 0
+            ? `${archived} arquivadas · ${asins} ASINs limpos`
+            : 'Nenhuma duplicata encontrada',
+        });
+        if (archived > 0) await loadCampaigns();
+      } else {
+        setArchiveDuplicatesResult({ type: 'error', text: d?.error || 'Erro ao arquivar' });
+      }
+    } catch (e) {
+      setArchiveDuplicatesResult({ type: 'error', text: e.message });
+    } finally {
+      setArchivingDuplicates(false);
+      setTimeout(() => setArchiveDuplicatesResult(null), 12000);
     }
   };
 
@@ -1073,6 +1108,18 @@ export default function AdsManagement() {
                   {pauseNoAsinResult && (
                     <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                       {pauseNoAsinResult.text}
+                    </p>
+                  )}
+                  <button
+                    onClick={archiveAutoDuplicates}
+                    disabled={!account || archivingDuplicates}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {archivingDuplicates ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Arquivar AUTO duplicadas</>}
+                  </button>
+                  {archiveDuplicatesResult && (
+                    <p className={`text-[10px] text-center font-medium ${archiveDuplicatesResult.type === 'success' ? 'text-emerald-400' : archiveDuplicatesResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {archiveDuplicatesResult.text}
                     </p>
                   )}
                 </div>
