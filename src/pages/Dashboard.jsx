@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import {
   RefreshCw, AlertCircle, Clock, Loader2,
-  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
+  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
@@ -656,6 +656,44 @@ export default function Dashboard() {
   const targetCpc = cfg.target_cpc || 0;
   const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
 
+  // ─── Ajustes de Bid — Hoje (BRT) ────────────────────────────────────────
+  const bidChangesToday = useMemo(() => {
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    const todayItems = bidChanges.filter(c => {
+      const raw = c.created_date || c.created_at;
+      if (!raw) return false;
+      const dateBRT = new Date(new Date(raw).getTime() - 3 * 3600000).toISOString().slice(0, 10);
+      return dateBRT === todayBRT;
+    });
+    if (todayItems.length === 0) return null;
+
+    const counts = { increase_no_spend_10: 0, increase_no_spend_05: 0, recover_delivery_10: 0, other: 0 };
+    for (const c of todayItems) {
+      const t = String(c.change_type || c.reason || '').toLowerCase();
+      if (t.includes('no_spend') && (t.includes('0.10') || t.includes('10'))) counts.increase_no_spend_10++;
+      else if (t.includes('no_spend') && (t.includes('0.05') || t.includes('05'))) counts.increase_no_spend_05++;
+      else if (t.includes('recover') || t.includes('delivery') || t.includes('reativacao') || t.includes('reativação')) counts.recover_delivery_10++;
+      else counts.other++;
+    }
+
+    const asinMap = new Map();
+    for (const c of todayItems) {
+      const asin = c.asin || c.advertised_asin || '';
+      if (!asin || asinMap.has(asin)) continue;
+      const t = String(c.change_type || c.reason || '').toLowerCase();
+      const isRecover = t.includes('recover') || t.includes('delivery') || t.includes('reativacao') || t.includes('reativação');
+      asinMap.set(asin, {
+        asin,
+        old_bid: c.old_bid,
+        new_bid: c.new_bid,
+        label: isRecover ? 'Recuperação entrega' : 'Sem gasto',
+      });
+    }
+    const asins = [...asinMap.values()];
+
+    return { total: todayItems.length, counts, asins };
+  }, [bidChanges]);
+
   // ─── Decisões — calculado fora do JSX para evitar IIFE ──────────────────
   const decisionSummary = useMemo(() => {
     if (!decisions.length && !allDecisions.length && !bidChanges.length) return null;
@@ -1009,6 +1047,58 @@ export default function Dashboard() {
       {!loading && bidChanges.length > 0 ? (
         <AiChangesBreakdown bidChanges={bidChanges} />
       ) : null}
+
+      {/* ── 5a3. AJUSTES DE BID — HOJE ──────────────────────────────────────── */}
+      {!loading && bidChangesToday ? (() => {
+        const { total, counts, asins } = bidChangesToday;
+        const MAX_ASINS = 8;
+        const visibleAsins = asins.slice(0, MAX_ASINS);
+        const extraCount = asins.length - MAX_ASINS;
+        return (
+          <div className="bg-surface-1 border border-amber-500/20 bg-amber-500/5 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <h2 className="text-sm font-semibold text-slate-300">Ajustes de Bid — Hoje</h2>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25 font-semibold">{total} ajuste{total !== 1 ? 's' : ''}</span>
+              </div>
+              <Link to="/sala-de-comando?tab=historico" className="text-[10px] text-cyan hover:underline flex-shrink-0">Ver histórico completo →</Link>
+            </div>
+
+            {/* Contadores por tipo */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+              {[
+                { label: '+R$0,10 sem gasto', value: counts.increase_no_spend_10, color: 'text-blue-300', bg: 'bg-blue-500/10 border-blue-500/20' },
+                { label: '+R$0,05 sem gasto', value: counts.increase_no_spend_05, color: 'text-amber-300', bg: 'bg-amber-500/10 border-amber-500/20' },
+                { label: 'Recuperação entrega', value: counts.recover_delivery_10, color: 'text-orange-300', bg: 'bg-orange-500/10 border-orange-500/20' },
+              ].map(b => (
+                <div key={b.label} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${b.bg}`}>
+                  <span className={`text-[10px] font-medium ${b.color}`}>{b.label}</span>
+                  <span className={`text-sm font-bold ${b.color}`}>{b.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Lista de ASINs */}
+            <div className="space-y-1">
+              {visibleAsins.map((item) => (
+                <div key={item.asin} className="flex items-center gap-3 py-1 border-b border-amber-500/10 last:border-0">
+                  <span className="font-mono text-[10px] text-cyan flex-shrink-0 w-24">{item.asin}</span>
+                  {item.old_bid != null && item.new_bid != null ? (
+                    <span className="text-[10px] text-emerald-400 font-mono flex-shrink-0">
+                      R${Number(item.old_bid).toFixed(2)} → R${Number(item.new_bid).toFixed(2)}
+                    </span>
+                  ) : null}
+                  <span className="text-[10px] text-slate-500 truncate">{item.label}</span>
+                </div>
+              ))}
+              {extraCount > 0 && (
+                <p className="text-[10px] text-slate-500 pt-1">+ {extraCount} mais ASIN{extraCount !== 1 ? 's' : ''}</p>
+              )}
+            </div>
+          </div>
+        );
+      })() : null}
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
       {!loading ? (
