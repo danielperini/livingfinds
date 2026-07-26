@@ -10,7 +10,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
  * - campanhas manuais só entram quando estratégicas.
  */
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-const ENGINE_VERSION = 'amazon-native-schedule-v5-configurable';
+const ENGINE_VERSION = 'amazon-native-schedule-v6-safe-outage';
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
@@ -68,10 +68,10 @@ function buildWindows(patterns: any[], decisions: any[]) {
   for (const row of orderedDecisions) {
     const dow = Number(row.day_of_week), hour = Number(row.hour);
     if (dow < 0 || dow > 6 || hour < 0 || hour > 23) continue;
-    const classification = slotClass(row.slot_classification);
-    if (classification === 'OTHER') continue;
+    // NORMAL/WEAK/LOSS tornam-se OTHER para regras de incremento, mas ainda
+    // precisam sobrescrever um padrão global anteriormente STRONG/ELITE.
     slots.set(`${dow}|${hour}`, {
-      classification,
+      classification: slotClass(row.slot_classification),
       mature: row.data_mature === true || ['HIGH', 'VERY_HIGH'].includes(String(row.data_confidence || '')),
       score: Number(row.time_slot_score || 0),
     });
@@ -301,6 +301,11 @@ Deno.serve(async (request) => {
 
       let local = storedRules.find((rule: any) => rule.idempotency_key === idem) || null;
       let id = String(local?.optimization_rule_id || '');
+      const existingNativeActive = Boolean(
+        id &&
+        ['enabled', 'creating'].includes(String(local?.status || '')) &&
+        local?.native_api_supported !== false,
+      );
 
       if (!id && nativeRulesEnabled && apiSupported && !dryRun) {
         const search = await rulesCommand(base44, aid, 'search_rules', {
@@ -315,7 +320,9 @@ Deno.serve(async (request) => {
         if (search?.unsupported === true) apiSupported = false;
       }
 
-      const nativeAvailable = nativeRulesEnabled && apiSupported;
+      // Se a API falhar temporariamente, uma regra já confirmada continua sendo
+      // considerada ativa. O app não aplica aumento local por cima dela.
+      const nativeAvailableForRule = nativeRulesEnabled && (apiSupported || existingNativeActive);
       const localData: any = {
         amazon_account_id: aid,
         marketplace_id: account.marketplace_id || account.marketplace || null,
@@ -336,11 +343,11 @@ Deno.serve(async (request) => {
         campaign_ids: campaignIds,
         asins: [...new Set(plan.campaigns.map((campaign: any) => campaign.asin).filter(Boolean))],
         targeting_types: [...new Set(plan.campaigns.map((campaign: any) => campaign.resolved_targeting_type))],
-        native_api_supported: nativeAvailable,
-        fallback_mode: nativeAvailable ? 'amazon_native_positive_app_negative' : 'app_managed_only',
+        native_api_supported: nativeAvailableForRule,
+        fallback_mode: nativeAvailableForRule ? 'amazon_native_positive_app_negative' : 'app_managed_only',
         idempotency_key: idem,
         engine_version: ENGINE_VERSION,
-        reason: `${plan.classification}, score ${plan.average_score}. ${nativeAvailable ? `Amazon incrementa ${plan.adjustment}%` : 'LivingFinds gerencia o ajuste'} para ${campaignIds.length} campanha(s).`,
+        reason: `${plan.classification}, score ${plan.average_score}. ${nativeAvailableForRule ? `Amazon incrementa ${plan.adjustment}%` : 'LivingFinds gerencia o ajuste'} para ${campaignIds.length} campanha(s).`,
         updated_at: now,
         next_review_at: nextReview(),
       };
@@ -348,12 +355,12 @@ Deno.serve(async (request) => {
       if (local?.id) await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, localData).catch(() => {});
       else local = await base44.asServiceRole.entities.AmazonScheduledRule.create({
         ...localData,
-        status: dryRun ? 'planned' : nativeAvailable ? 'creating' : 'unsupported',
+        status: dryRun ? 'planned' : nativeAvailableForRule ? 'creating' : 'unsupported',
         association_status: 'pending',
         created_at: now,
       });
 
-      if (!id && nativeAvailable && !dryRun) {
+      if (!id && nativeRulesEnabled && apiSupported && !dryRun) {
         const created = await rulesCommand(base44, aid, 'create_rules', {
           optimizationRules: [{
             action: {
@@ -393,8 +400,19 @@ Deno.serve(async (request) => {
         results.push({ rule_name: ruleName, adjustment: plan.adjustment, campaigns: campaignIds, asins: localData.asins, native_enabled: nativeRulesEnabled, dry_run: true });
         continue;
       }
-      if (!nativeRulesEnabled || !apiSupported || !id) {
+      if (!nativeRulesEnabled || !id || (!apiSupported && !existingNativeActive)) {
         results.push({ rule_name: ruleName, campaigns: campaignIds, ok: true, fallback: 'app_managed_only' });
+        continue;
+      }
+      if (!apiSupported && existingNativeActive) {
+        await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
+          status: 'enabled',
+          native_api_supported: true,
+          fallback_mode: 'amazon_native_positive_app_negative',
+          last_error: 'API temporariamente indisponível; regra Amazon previamente confirmada permanece tratada como ativa.',
+          updated_at: now,
+        }).catch(() => {});
+        results.push({ rule_name: ruleName, rule_id: id, campaigns: campaignIds, ok: true, native_existing_unverified: true });
         continue;
       }
 
@@ -493,7 +511,12 @@ Deno.serve(async (request) => {
       }
     }
 
-    const nativeAvailable = nativeRulesEnabled && apiSupported;
+    const hasConfirmedNativeRule = storedRules.some((rule: any) =>
+      rule.optimization_rule_id &&
+      ['enabled', 'creating'].includes(String(rule.status || '')) &&
+      rule.native_api_supported !== false,
+    );
+    const nativeAvailable = nativeRulesEnabled && (apiSupported || hasConfirmedNativeRule);
     const logStatus = associationFailures > 0 && associations === 0 ? 'error' : nativeAvailable ? 'success' : 'partial';
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
