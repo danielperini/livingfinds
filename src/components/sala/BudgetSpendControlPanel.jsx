@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import ProactiveBudgetOptimizerCard from './ProactiveBudgetOptimizerCard';
 import KillSwitchPauseDetail from './KillSwitchPauseDetail';
+import BudgetCheckpointsPanel from './BudgetCheckpointsPanel';
 
 const CAP_STATUS_CONFIG = {
   safe:        { label: 'Normal',       color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', bar: 'bg-emerald-500' },
@@ -538,7 +539,10 @@ export default function BudgetSpendControlPanel({ account }) {
       {/* ── 5. CAMPANHAS PAUSADAS HOJE — status detalhado ────────────────────── */}
       <KillSwitchPauseDetail controller={c} />
 
-      {/* ── 6. OTIMIZAÇÃO PROATIVA DE BUDGET ────────────────────────────────── */}
+      {/* ── 6. CHECKPOINTS DO DIA ────────────────────────────────────────────── */}
+      <BudgetCheckpointsPanel account={account} />
+
+      {/* ── 7. OTIMIZAÇÃO PROATIVA DE BUDGET ────────────────────────────────── */}
       <ProactiveBudgetOptimizerCard account={account} />
 
       {/* Sem dados hoje */}

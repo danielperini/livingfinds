@@ -278,6 +278,50 @@
       "type": "string",
       "default": "INSUFFICIENT_DATA",
       "description": "C\u00f3pia do PerformanceTrendSnapshot mais recente"
+    },
+    "checkpoint_morning_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 06h foi executado"
+    },
+    "checkpoint_morning_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 06h"
+    },
+    "checkpoint_afternoon_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 13h foi executado"
+    },
+    "checkpoint_afternoon_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 13h"
+    },
+    "checkpoint_evening_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 19h foi executado"
+    },
+    "checkpoint_evening_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 19h"
+    },
+    "checkpoint_night_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 22h foi executado"
+    },
+    "checkpoint_night_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 22h"
+    },
+    "scheduled_pause_hour": {
+      "type": "number",
+      "description": "Hora BRT calculada no checkpoint 22h para pausa de n\u00e3o-vencedoras (null se n\u00e3o necess\u00e1rio)"
     }
   },
   "required": [
