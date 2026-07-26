@@ -59,7 +59,7 @@ function SpendBar({ confirmed, estimated, cap }) {
 }
 
 export default function BudgetSpendControlPanel({ account }) {
-  const [controller, setController] = useState(null);
+  const [controller, setController] = useState(null); // setController usado também em saveCap para patch otimista
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAiDetails, setShowAiDetails] = useState(false);
@@ -80,7 +80,7 @@ export default function BudgetSpendControlPanel({ account }) {
       const list = await base44.entities.AccountDailySpendController.filter(
         { amazon_account_id: account.id, spend_date: today }, null, 1
       ).catch(() => []);
-      setController(list[0] || null);
+      setController(list[0] ?? null);
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     } finally {
@@ -152,58 +152,33 @@ export default function BudgetSpendControlPanel({ account }) {
     setSaving(true);
     setMsg(null);
     try {
-      const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-
-      // 1. Atualizar PerformanceSettings
-      const psList = await base44.entities.PerformanceSettings.filter(
-        { amazon_account_id: account.id }, '-updated_at', 1
-      ).catch(() => []);
-      if (psList[0]) {
-        await base44.entities.PerformanceSettings.update(psList[0].id, {
-          daily_budget_limit: val, updated_at: new Date().toISOString()
-        });
+      const res = await base44.functions.invoke('updateDailySpendCap', {
+        amazon_account_id: account.id,
+        new_cap: val,
+      });
+      const data = res?.data || res;
+      if (!data?.ok) {
+        setMsg({ type: 'error', text: data?.error || 'Erro ao salvar teto' });
+        return;
       }
 
-      // 2. Atualizar AutopilotConfig
-      const acList = await base44.entities.AutopilotConfig.filter(
-        { amazon_account_id: account.id }, '-updated_at', 1
-      ).catch(() => []);
-      if (acList[0]) {
-        await base44.entities.AutopilotConfig.update(acList[0].id, {
-          daily_budget_limit: val
-        });
-      }
-
-      // 3. Upsert AccountDailySpendController de hoje
-      const ctrlList = await base44.entities.AccountDailySpendController.filter(
-        { amazon_account_id: account.id, spend_date: today }, null, 1
-      ).catch(() => []);
-      if (ctrlList[0]) {
-        await base44.entities.AccountDailySpendController.update(ctrlList[0].id, {
-          user_daily_spend_cap: val,
-          effective_daily_spend_cap: val,
-        });
-      } else {
-        await base44.entities.AccountDailySpendController.create({
-          amazon_account_id: account.id,
-          spend_date: today,
-          user_daily_spend_cap: val,
-          effective_daily_spend_cap: val,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-      }
-
-      // 4. Recalcular controlador via backend
-      await base44.functions.invoke('recalcDailySpendController', {
-        amazon_account_id: account.id
-      }).catch(() => {});
-
-      // 5. Recarregar cards
-      await load();
+      // Aplicar patch no state local — sem reload completo
+      setController(prev => ({
+        ...(prev || {}),
+        user_daily_spend_cap: data.new_cap,
+        effective_daily_spend_cap: data.new_cap,
+        confirmed_spend: data.confirmed_spend,
+        estimated_pending_spend: data.estimated_pending_spend,
+        projected_total_spend: data.projected_total_spend,
+        remaining_spend: data.remaining_spend,
+        cap_status: data.cap_status,
+      }));
 
       setEditingCap(false);
-      setMsg({ type: 'success', text: `Teto atualizado para ${fmtBRL(val)} · sincronizado` });
+      setMsg({
+        type: 'success',
+        text: `Teto atualizado para ${fmtBRL(data.new_cap)} · Saldo: ${fmtBRL(data.remaining_spend)} · Status: ${data.cap_status}`,
+      });
       setTimeout(() => setMsg(null), 6000);
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
