@@ -23,6 +23,7 @@ import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
 import MotorExecutionPanel from '@/components/sala/MotorExecutionPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
 import ReportPipelineWatchdogPanel from '@/components/sala/ReportPipelineWatchdogPanel';
+import ZeroSalesCleanupPanel from '@/components/sala/ZeroSalesCleanupPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
@@ -104,6 +105,11 @@ const TAB_GROUPS = [
       { id: 'historico', label: 'Histórico e Decisões' },
       { id: 'autopilot', label: 'Automação IA' },
     ],
+  },
+  {
+    id: 'cleanup_group',
+    label: 'Limpeza & Expansão',
+    tabs: [{ id: 'limpeza', label: 'Limpeza & Expansão' }],
   },
   {
     id: 'kickoff_group',
@@ -1439,6 +1445,11 @@ export default function SalaDeComando() {
                   </div>
                 </div>
               : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
+          )}
+
+          {/* ── LIMPEZA & EXPANSÃO ───────────────────────────────────────────── */}
+          {tab === 'limpeza' && account && (
+            <ZeroSalesCleanupPanel account={account} />
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
