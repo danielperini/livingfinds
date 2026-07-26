@@ -327,6 +327,31 @@ Deno.serve(async (req) => {
       }
     } catch (e: any) { console.warn('[Pipeline] Inventário FBA (não crítico):', e.message); }
 
+    // ── FASE 3b: Relatório HOURLY por ASIN para HourlySalesPattern ───────────
+    // Não bloqueante — erro aqui não aborta o pipeline
+    console.log('[Pipeline] Fase 3b: relatório HOURLY por ASIN...');
+    try {
+      const hourlyRes = await base44.asServiceRole.functions.invoke('syncUnifiedAdsReportsHourly', {
+        amazon_account_id: aid,
+        days: 7,
+        _service_role: true,
+      }).catch((e: any) => ({ ok: false, error: e?.message }));
+      const hd = hourlyRes?.data ?? hourlyRes;
+      summary.phases.hourly_asin = {
+        ok: hd?.ok ?? false,
+        records_saved: hd?.records_saved ?? 0,
+        slots_computed: hd?.slots_computed ?? 0,
+        peak_elite: hd?.peak_elite ?? 0,
+        peak_strong: hd?.peak_strong ?? 0,
+        used_asin_group_by: hd?.used_asin_group_by ?? false,
+        dayparting_triggered: hd?.dayparting_triggered ?? false,
+        error: hd?.error || null,
+      };
+    } catch (e: any) {
+      console.warn('[Pipeline] Hourly ASIN (não crítico):', e.message);
+      summary.phases.hourly_asin = { error: e.message };
+    }
+
     // ── FASE 4: Atualizar AmazonAccount ──────────────────────────────────────
     await base44.asServiceRole.entities.AmazonAccount.update(aid, { last_sync_at: now, status: 'connected' }).catch(() => {});
     await base44.asServiceRole.entities.SyncRun.create({
