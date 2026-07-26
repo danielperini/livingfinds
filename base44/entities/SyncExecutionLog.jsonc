@@ -13,7 +13,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["started", "pending", "processing", "success", "completed", "warning", "error", "failed", "skipped", "skipped_limit"],
+      "enum": ["started", "pending", "processing", "success", "completed", "partial", "warning", "error", "failed", "skipped", "skipped_limit"],
       "default": "started"
     },
     "execution_date": { "type": "string", "format": "date" },
