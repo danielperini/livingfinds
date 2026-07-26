@@ -1065,11 +1065,6 @@ export default function AdsManagement() {
               onQuickResume={quickResumeCampaign}
               extraAction={
                 <div className="flex flex-col gap-1">
-                  <BudgetOverrunDiagnostic
-                    campaigns={campaigns}
-                    account={account}
-                    onRedistributed={loadCampaigns}
-                  />
                   <StaleInventoryWarningPanel
                     campaigns={campaigns}
                     products={products}

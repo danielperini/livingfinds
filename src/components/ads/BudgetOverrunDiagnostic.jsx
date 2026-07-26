@@ -1,30 +1,30 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { AlertTriangle, RefreshCw, Loader2, CheckCircle, ChevronDown, ChevronUp, Zap, Sparkles } from 'lucide-react';
+import { AlertTriangle, RefreshCw, Loader2, CheckCircle, ChevronDown, ChevronUp, Zap, Sparkles, TrendingUp } from 'lucide-react';
+
+const AMAZON_MIN_BUDGET = 15;
 
 /**
- * Painel de diagnóstico de orçamento excedido.
- * Calcula soma dos budgets das campanhas enabled vs daily_budget_limit do AutopilotConfig.
- * Mostra alerta quando soma > cap, e botão de redistribuição proporcional.
+ * BudgetOverrunDiagnostic v2
+ * 
+ * Lógica CORRETA:
+ * - A soma dos daily_budgets por campanha PODE e DEVE ser maior que o daily_budget_limit.
+ *   O daily_budget_limit é o CAP de GASTO REAL (controlado pelo pacing engine), não a soma.
+ * - Alerta real: campanhas com daily_budget < R$15 (mínimo Amazon), que causam "orçamento excedido" intraday.
+ * - Informação secundária: gasto confirmado hoje vs cap diário (AccountDailySpendController).
  */
 export default function BudgetOverrunDiagnostic({ campaigns, account, onRedistributed }) {
-  const [budgetLimit, setBudgetLimit] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [redistributing, setRedistributing] = useState(false);
-  const [preview, setPreview] = useState(null);
-  const [showPreview, setShowPreview] = useState(false);
+  const [spendController, setSpendController] = useState(null);
+  const [fixing, setFixing] = useState(false);
   const [result, setResult] = useState(null);
   const [expanded, setExpanded] = useState(false);
 
-  // Carregar daily_budget_limit do AutopilotConfig
   useEffect(() => {
     if (!account?.id) return;
-    base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, null, 1)
-      .then(rows => {
-        const cfg = rows[0] || {};
-        setBudgetLimit(Number(cfg.daily_budget_limit || cfg.total_daily_budget || 115));
-      })
-      .catch(() => setBudgetLimit(115));
+    const today = new Date().toISOString().slice(0, 10);
+    base44.entities.AccountDailySpendController.filter(
+      { amazon_account_id: account.id, spend_date: today }, null, 1
+    ).then(rows => setSpendController(rows[0] || null)).catch(() => {});
   }, [account?.id]);
 
   const enabledCampaigns = campaigns.filter(c => {
@@ -32,95 +32,72 @@ export default function BudgetOverrunDiagnostic({ campaigns, account, onRedistri
     return s === 'enabled';
   });
 
-  const currentSum = enabledCampaigns.reduce((s, c) => s + Number(c.daily_budget || 0), 0);
-  const cap = budgetLimit || 115;
-  const excess = currentSum - cap;
-  const isOverrun = excess > 0.5;
+  // Campanhas abaixo do mínimo Amazon
+  const belowMinimum = enabledCampaigns.filter(c => Number(c.daily_budget || 0) < AMAZON_MIN_BUDGET);
 
-  const loadPreview = async () => {
-    if (!account?.id || loading) return;
-    setLoading(true);
-    setPreview(null);
-    try {
-      const res = await base44.functions.invoke('redistributeCampaignBudgets', { dry_run: true });
-      const d = res?.data;
-      if (d?.ok) {
-        setPreview(d);
-        setShowPreview(true);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Informação de gasto real do dia
+  const confirmedSpend = Number(spendController?.confirmed_spend || 0);
+  const dailyCap = Number(spendController?.user_daily_spend_cap || 0);
+  const spendPct = dailyCap > 0 ? (confirmedSpend / dailyCap * 100) : 0;
+  const capStatus = spendController?.cap_status || null;
 
-  const applyRedistribution = async () => {
-    if (!account?.id || redistributing) return;
-    if (!window.confirm(`Redistribuir orçamentos de ${enabledCampaigns.length} campanhas proporcionalmente ao spend dos últimos 7 dias, respeitando o cap de R$${cap.toFixed(2)}?\n\nEsta ação atualiza os budgets na Amazon Ads API.`)) return;
-    setRedistributing(true);
+  const spendColor = capStatus === 'cap_reached' ? 'text-red-400'
+    : capStatus === 'critical' || spendPct >= 85 ? 'text-amber-400'
+    : 'text-emerald-400';
+
+  const fixBelowMinimum = async () => {
+    if (!account?.id || fixing || belowMinimum.length === 0) return;
+    if (!window.confirm(`Elevar daily_budget de ${belowMinimum.length} campanha(s) para R$${AMAZON_MIN_BUDGET} (mínimo Amazon)?\n\nIsso evita o bloqueio intraday por "orçamento excedido".`)) return;
+    setFixing(true);
     setResult(null);
     try {
-      const res = await base44.functions.invoke('redistributeCampaignBudgets', { dry_run: false });
+      const res = await base44.functions.invoke('redistributeCampaignBudgets', {
+        mode: 'fix_below_minimum',
+        dry_run: false,
+      });
       const d = res?.data;
       if (d?.ok) {
-        setResult({ type: 'success', text: `${d.adjusted} campanhas ajustadas · Nova soma: R$${(d.new_sum || 0).toFixed(2)}` });
-        setShowPreview(false);
-        setPreview(null);
+        setResult({ type: 'success', text: `${d.adjusted} campanha(s) elevada(s) para R$${AMAZON_MIN_BUDGET}` });
         if (onRedistributed) onRedistributed();
       } else {
-        setResult({ type: 'error', text: d?.error || 'Erro ao redistribuir' });
+        setResult({ type: 'error', text: d?.error || 'Erro ao corrigir orçamentos' });
       }
     } catch (e) {
       setResult({ type: 'error', text: e.message });
     } finally {
-      setRedistributing(false);
-      setTimeout(() => setResult(null), 15000);
+      setFixing(false);
+      setTimeout(() => setResult(null), 12000);
     }
   };
 
-  // Não renderizar enquanto não tem o cap carregado
-  if (budgetLimit === null) return null;
-  // Não mostrar se não há excesso
-  if (!isOverrun) {
-    return (
-      <div className="flex items-center gap-2 px-3 py-2 bg-emerald-500/8 border border-emerald-500/20 rounded-lg">
-        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-        <span className="text-[10px] text-emerald-300 font-medium">
-          Orçamentos OK · Soma: R${currentSum.toFixed(2)} / Cap: R${cap.toFixed(2)}
-        </span>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-2">
-      {/* Alerta principal */}
-      <div className="bg-red-500/10 border border-red-500/30 rounded-lg overflow-hidden">
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="w-full flex items-center gap-2 px-3 py-2 text-left"
-        >
-          <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 animate-pulse" />
-          <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold text-red-300">ORÇAMENTO EXCEDIDO</p>
-            <p className="text-[9px] text-red-400/80">
-              Soma: R${currentSum.toFixed(2)} · Cap: R${cap.toFixed(2)} · Excesso: R${excess.toFixed(2)}
-            </p>
-          </div>
-          {expanded ? <ChevronUp className="w-3 h-3 text-red-400 flex-shrink-0" /> : <ChevronDown className="w-3 h-3 text-red-400 flex-shrink-0" />}
-        </button>
+    <div className="space-y-1.5">
+      {/* Alerta de campanhas abaixo do mínimo Amazon */}
+      {belowMinimum.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setExpanded(v => !v)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left"
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold text-amber-300">
+                {belowMinimum.length} campanha(s) abaixo de R${AMAZON_MIN_BUDGET}
+              </p>
+              <p className="text-[9px] text-amber-400/70">Mínimo Amazon — causa bloqueio intraday</p>
+            </div>
+            {expanded
+              ? <ChevronUp className="w-3 h-3 text-amber-400 flex-shrink-0" />
+              : <ChevronDown className="w-3 h-3 text-amber-400 flex-shrink-0" />
+            }
+          </button>
 
-        {expanded && (
-          <div className="px-3 pb-3 space-y-2 border-t border-red-500/20">
-            {/* Lista das campanhas com budget */}
-            <div className="max-h-36 overflow-y-auto scrollbar-thin space-y-1 mt-2">
-              {enabledCampaigns
-                .sort((a, b) => Number(b.daily_budget || 0) - Number(a.daily_budget || 0))
-                .map(c => {
+          {expanded && (
+            <div className="px-3 pb-3 space-y-2 border-t border-amber-500/20">
+              <div className="max-h-36 overflow-y-auto scrollbar-thin space-y-1 mt-2">
+                {belowMinimum.map(c => {
                   const isAuto = (c.targeting_type || '').toUpperCase() === 'AUTO';
                   const budget = Number(c.daily_budget || 0);
-                  const share = currentSum > 0 ? (budget / currentSum * 100) : 0;
                   return (
                     <div key={c.id} className="flex items-center gap-1.5">
                       {isAuto
@@ -128,36 +105,28 @@ export default function BudgetOverrunDiagnostic({ campaigns, account, onRedistri
                         : <Sparkles className="w-2.5 h-2.5 text-cyan flex-shrink-0" />
                       }
                       <span className="text-[9px] text-slate-400 truncate flex-1">{c.name || c.campaign_name}</span>
-                      <span className="text-[9px] font-mono text-slate-300 flex-shrink-0">R${budget.toFixed(2)}</span>
-                      <span className="text-[9px] text-slate-600 flex-shrink-0">({share.toFixed(0)}%)</span>
+                      <span className="text-[9px] font-mono text-red-400 flex-shrink-0 font-bold">
+                        R${budget.toFixed(2)}
+                      </span>
+                      <span className="text-[9px] text-slate-600 flex-shrink-0">→ R${AMAZON_MIN_BUDGET}</span>
                     </div>
                   );
-                })
-              }
-            </div>
-
-            {/* Botões de ação */}
-            <div className="flex gap-1.5 mt-2">
+                })}
+              </div>
               <button
-                onClick={loadPreview}
-                disabled={loading}
-                className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50"
+                onClick={fixBelowMinimum}
+                disabled={fixing}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[10px] font-semibold bg-amber-500/20 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 rounded-lg transition-colors disabled:opacity-50"
               >
-                {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                {loading ? 'Calculando...' : 'Preview redistribuição'}
-              </button>
-              <button
-                onClick={applyRedistribution}
-                disabled={redistributing}
-                className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] font-semibold bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30 rounded-lg transition-colors disabled:opacity-50"
-              >
-                {redistributing ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                {redistributing ? 'Redistribuindo...' : 'Redistribuir agora'}
+                {fixing
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Corrigindo...</>
+                  : <><TrendingUp className="w-3 h-3" /> Elevar todas para R${AMAZON_MIN_BUDGET}</>
+                }
               </button>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* Resultado */}
       {result && (
@@ -166,54 +135,29 @@ export default function BudgetOverrunDiagnostic({ campaigns, account, onRedistri
         </p>
       )}
 
-      {/* Preview modal-like */}
-      {showPreview && preview && (
-        <div className="bg-surface-1 border border-amber-500/30 rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-bold text-amber-400">Preview Redistribuição</p>
-            <div className="flex items-center gap-2 text-[9px] text-slate-500">
-              <span>Antes: R${(preview.current_sum || 0).toFixed(2)}</span>
-              <span>→</span>
-              <span className="text-emerald-400">Depois: R${(preview.new_sum || 0).toFixed(2)}</span>
-              <span>/ Cap: R${(preview.daily_budget_limit || cap).toFixed(2)}</span>
-            </div>
-          </div>
-          <div className="max-h-48 overflow-y-auto scrollbar-thin space-y-1">
-            {(preview.preview || []).map((p, i) => {
-              const diff = p.new_budget - p.current_budget;
-              return (
-                <div key={i} className="flex items-center gap-1.5 py-0.5">
-                  <span className="text-[9px] text-slate-400 truncate flex-1">{p.name}</span>
-                  <span className="text-[9px] font-mono text-slate-500 flex-shrink-0 line-through">R${p.current_budget.toFixed(2)}</span>
-                  <span className="text-[9px] text-slate-600 flex-shrink-0">→</span>
-                  <span className={`text-[9px] font-mono font-bold flex-shrink-0 ${diff > 0 ? 'text-emerald-400' : diff < 0 ? 'text-red-400' : 'text-slate-500'}`}>
-                    R${p.new_budget.toFixed(2)}
-                  </span>
-                  {diff !== 0 && (
-                    <span className={`text-[9px] flex-shrink-0 ${diff > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      ({diff > 0 ? '+' : ''}{diff.toFixed(2)})
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex gap-1.5">
-            <button
-              onClick={applyRedistribution}
-              disabled={redistributing}
-              className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[10px] font-semibold bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/30 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {redistributing ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              {redistributing ? 'Aplicando...' : 'Confirmar e aplicar'}
-            </button>
-            <button
-              onClick={() => { setShowPreview(false); setPreview(null); }}
-              className="px-3 py-1.5 text-[10px] text-slate-500 hover:text-slate-300 bg-surface-2 border border-surface-3 rounded-lg transition-colors"
-            >
-              Cancelar
-            </button>
-          </div>
+      {/* Gasto real do dia vs cap (informação secundária) */}
+      {dailyCap > 0 && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${
+          capStatus === 'cap_reached' ? 'bg-red-500/8 border-red-500/20'
+          : capStatus === 'critical' || spendPct >= 85 ? 'bg-amber-500/8 border-amber-500/20'
+          : 'bg-emerald-500/8 border-emerald-500/20'
+        }`}>
+          <span className={`text-[10px] font-medium ${spendColor}`}>
+            Gasto hoje: R${confirmedSpend.toFixed(2)} / R${dailyCap.toFixed(0)}
+          </span>
+          <span className={`text-[9px] font-mono ml-auto ${spendColor}`}>
+            {spendPct.toFixed(0)}%
+          </span>
+        </div>
+      )}
+
+      {/* Tudo OK */}
+      {belowMinimum.length === 0 && dailyCap === 0 && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/8 border border-emerald-500/20 rounded-lg">
+          <CheckCircle className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+          <span className="text-[10px] text-emerald-300 font-medium">
+            Orçamentos OK · {enabledCampaigns.length} campanhas ativas
+          </span>
         </div>
       )}
     </div>
