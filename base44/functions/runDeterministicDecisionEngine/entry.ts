@@ -24,6 +24,7 @@
  *   - Aumento de budget para campanhas limitadas por orçamento
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { runImmediateBudgetRescue } from '../../shared/immediateBudgetRescue.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HIERARQUIA CANÔNICA DE DECISÃO v7
@@ -835,10 +836,8 @@ Deno.serve(async (req) => {
     }
 
     // ── 1b. Carregar guard de escopo autorizado ───────────────────────────
-    // Produtos com ads_scope_status=authorized e ads_eligibility_status=eligible
-    // Qualquer outro estado bloqueia crescimento/criação de campanha.
     const authorizedEligibleAsins = new Set<string>();
-    const authorizedIneligibleAsins = new Set<string>(); // authorized mas temp. inelegível
+    const authorizedIneligibleAsins = new Set<string>();
     {
       const scopedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []);
       for (const sp of scopedProducts) {
@@ -851,13 +850,11 @@ Deno.serve(async (req) => {
     }
 
     // ── 1c. Carregar guardrails de dayparting e placement em paralelo ──────
-    // Hora e dia BRT para consulta de slot
     const brtNow = new Date(Date.now() - 3 * 3600000);
     const currentHourBRT = brtNow.getUTCHours();
-    const currentDowBRT  = brtNow.getUTCDay(); // 0=Dom, 6=Sab
+    const currentDowBRT  = brtNow.getUTCDay();
     const todayBRT = brtNow.toISOString().slice(0, 10);
 
-    // Carregar HourlySalesPattern e DaypartingDecision do dia atual
     const [hourlySalesRaw, daypartDecisionsRaw] = await Promise.all([
       base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
       base44.asServiceRole.entities.DaypartingDecision.filter(
@@ -865,15 +862,11 @@ Deno.serve(async (req) => {
       ).catch(() => []),
     ]);
 
-    // Construir mapa: "dow|hour" → classification
-    // Priorizar DaypartingDecision do dia atual (mais recente); fallback ao HourlySalesPattern histórico
     type SlotClassification = 'ELITE_TIME' | 'STRONG_TIME' | 'NORMAL_TIME' | 'WEAK_TIME' | 'LOSS_TIME' | 'INSUFFICIENT_DATA';
     const hourSlotMap = new Map<string, SlotClassification>();
 
-    // Indexar HourlySalesPattern histórico
     for (const hsp of hourlySalesRaw) {
       const key = `${hsp.day_of_week}|${hsp.hour}`;
-      // Mapear classification do HourlySalesPattern → formato de DaypartingDecision
       const cls: SlotClassification = hsp.classification === 'PEAK_ELITE' ? 'ELITE_TIME'
         : hsp.classification === 'PEAK_STRONG' ? 'STRONG_TIME'
         : hsp.classification === 'NORMAL' ? 'NORMAL_TIME'
@@ -883,19 +876,14 @@ Deno.serve(async (req) => {
       hourSlotMap.set(key, cls);
     }
 
-    // Sobrescrever com DaypartingDecisions do dia atual (mais precisas)
     for (const dd of daypartDecisionsRaw) {
       if (dd.hour == null || dd.day_of_week == null) continue;
       const key = `${dd.day_of_week}|${dd.hour}`;
       if (dd.slot_classification) hourSlotMap.set(key, dd.slot_classification as SlotClassification);
     }
 
-    // Slot atual BRT
     const currentSlotKey = `${currentDowBRT}|${currentHourBRT}`;
     const currentSlotClassification: SlotClassification = hourSlotMap.get(currentSlotKey) || 'INSUFFICIENT_DATA';
-
-    // Ler limites de placement dos settings (lidos mais abaixo em settings)
-    // Serão acessados como: settings.top_of_search_limit, settings.rest_of_search_limit, settings.product_page_limit
 
     // ── 2. Carregar dados em paralelo ─────────────────────────────────────
     const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
@@ -959,7 +947,7 @@ Deno.serve(async (req) => {
     for (const [cid, wm] of campMetrics.entries()) {
       const derive = (w: any) => ({
         ...w,
-        acos: w.sales > 0 ? (w.spend / w.sales) * 100 : null, // CORRETO: acos=null quando sales=0
+        acos: w.sales > 0 ? (w.spend / w.sales) * 100 : null,
         roas: w.spend > 0 ? w.sales / w.spend : 0,
         cpc: w.clicks > 0 ? w.spend / w.clicks : 0,
         cvr: w.clicks > 0 ? w.orders / w.clicks : 0,
@@ -1062,22 +1050,19 @@ Deno.serve(async (req) => {
     // ── 7. Gasto real e recálculo dinâmico do daily_budget_cap ───────────
     const maxSingleCampSpend = settings.daily_budget_cap * 2;
 
-    // Métricas das últimas 24h (D1 = ontem completo)
     const cutoff24h = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     const metrics24h = metricsRaw.filter((m: any) => m.date >= cutoff24h && (m.spend || 0) > 0 && (m.spend || 0) <= maxSingleCampSpend);
     const realSpendYesterday = metrics24h
       .filter((m: any) => m.date === yesterday)
       .reduce((s: number, m: any) => s + (m.spend || 0), 0);
 
-    // Agregar spend/sales/orders das últimas 24h
     const spend24h = metrics24h.reduce((s: number, m: any) => s + (m.spend || 0), 0);
     const sales24h  = metrics24h.reduce((s: number, m: any) => s + (m.sales || 0), 0);
     const orders24h = metrics24h.reduce((s: number, m: any) => s + (m.orders || 0), 0);
     const acos24h   = sales24h > 0 ? (spend24h / sales24h) * 100 : null;
     const roas24h   = spend24h > 0 ? sales24h / spend24h : null;
 
-    // Buscar o teto definido pelo usuário (AccountDailySpendController)
-    let userBudgetCap = settings.daily_budget_cap; // fallback
+    let userBudgetCap = settings.daily_budget_cap;
     try {
       const controllers = await base44.asServiceRole.entities.AccountDailySpendController.filter(
         { amazon_account_id: aid }, '-spend_date', 1
@@ -1087,11 +1072,7 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // ── Recalcular daily_budget_cap dinamicamente com base nas 24h ────────
-    // Sem banda rígida — o motor usa o teto do usuário como limite superior
-    // e R$10 como piso de segurança operacional mínimo.
-    // Ajustes são proporcionais ao desvio real do ACoS.
-    const MIN_BUDGET_CAP = 10; // piso operacional absoluto (evita zerar campanhas)
+    const MIN_BUDGET_CAP = 10;
     const effectiveUserCap = Math.max(MIN_BUDGET_CAP, userBudgetCap);
     const targetAcos24h = settings.target_acos ?? FB.TARGET_ACOS;
     const avgBreakEven = acosByAsin.size > 0
@@ -1103,35 +1084,28 @@ Deno.serve(async (req) => {
 
     if (spend24h >= 5) {
       if (acos24h === null && spend24h > effectiveUserCap * 0.20) {
-        // Gasto real sem nenhuma venda em 24h
         recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.90);
         budgetAdjustReason = `sem_vendas_24h: gasto R$${spend24h.toFixed(2)} sem retorno`;
       } else if (acos24h !== null && acos24h > avgBreakEven) {
-        // ACoS acima do break-even médio → reduzir 10%
         recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.90);
         budgetAdjustReason = `acos_acima_breakeven_24h: ACoS ${acos24h.toFixed(1)}% > break-even ${avgBreakEven.toFixed(1)}%`;
       } else if (acos24h !== null && acos24h > targetAcos24h * 1.1) {
-        // ACoS moderadamente acima da meta → reduzir 5%
         recalculatedBudgetCap = Math.max(MIN_BUDGET_CAP, settings.daily_budget_cap * 0.95);
         budgetAdjustReason = `acos_acima_meta_24h: ACoS ${acos24h.toFixed(1)}% vs meta ${targetAcos24h}%`;
       } else if (acos24h !== null && acos24h <= targetAcos24h * 0.80) {
-        // ACoS muito abaixo da meta → crescimento eficiente, aumentar até +10%
         recalculatedBudgetCap = Math.min(effectiveUserCap, settings.daily_budget_cap * 1.10);
         budgetAdjustReason = `acos_eficiente_24h: ACoS ${acos24h.toFixed(1)}% ≤ ${(targetAcos24h * 0.80).toFixed(1)}% (meta×0.8)`;
       } else {
-        recalculatedBudgetCap = settings.daily_budget_cap; // manter
+        recalculatedBudgetCap = settings.daily_budget_cap;
         budgetAdjustReason = `acos_na_meta_24h: ACoS ${acos24h?.toFixed(1) ?? 'n/a'}% dentro do range aceitável`;
       }
     }
 
-    // Arredondar para 2 casas — limitar apenas pelo teto do usuário e pelo piso operacional mínimo
     recalculatedBudgetCap = Math.round(Math.min(effectiveUserCap, Math.max(MIN_BUDGET_CAP, recalculatedBudgetCap)) * 100) / 100;
 
-    // Aplicar o novo cap ao settings se mudou significativamente (>1%)
     const budgetCapChanged = Math.abs(recalculatedBudgetCap - settings.daily_budget_cap) > 0.5;
     if (budgetCapChanged) {
       settings.daily_budget_cap = recalculatedBudgetCap;
-      // Persistir em PerformanceSettings (fire-and-forget)
       if (settings.source_id) {
         base44.asServiceRole.entities.PerformanceSettings.update(settings.source_id, {
           calculated_daily_budget: recalculatedBudgetCap,
@@ -1144,7 +1118,6 @@ Deno.serve(async (req) => {
     const budgetGuardrailActive = realSpendYesterday > 0 && realSpendYesterday > settings.daily_budget_cap;
 
     // ── 7b. ACCOUNT ACoS CONTROL LOOP (PRD) ──────────────────────────────
-    // weighted_acos = SUM(spend)/SUM(sales)*100 — NUNCA média simples
     const allMetrics14d = metricsRaw.filter((m: any) => m.date >= cutoff14d && (m.spend || 0) > 0);
     const accountWeightedAcos = calcWeightedAcos(
       allMetrics14d.map((m: any) => ({ spend: m.spend || 0, sales: m.sales || 0 }))
@@ -1158,7 +1131,6 @@ Deno.serve(async (req) => {
       CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS,
       avgBreakEvenAccount
     );
-    // Portfolio ranking: piores por marginal_acos (somente quando acima da meta)
     const portfolioRanking = (accountAcosZone.zone === 'above_target' || accountAcosZone.zone === 'defensive')
       ? rankByMarginalAcos(allMetrics14d.map((m: any) => ({
           id: m.campaign_id, spend: m.spend || 0, sales: m.sales || 0, orders: m.orders || 0,
@@ -1179,7 +1151,6 @@ Deno.serve(async (req) => {
       if (!lastExecByRuleEntity.has(k)) lastExecByRuleEntity.set(k, ex);
     }
 
-    // Cooldown de crescimento por entidade (72h após qualquer aumento)
     const lastGrowthByEntity = new Map<string, number>();
     for (const ex of recentExecs) {
       const entityId = ex.entity_id || ex.keyword_id;
@@ -1193,12 +1164,8 @@ Deno.serve(async (req) => {
     }
 
     // ── 10. Deduplicação de campanhas AUTO por ASIN ───────────────────────
-    // Regra: apenas 1 campanha AUTO ativa por ASIN.
-    // NUNCA escolher por idade — sempre por performance (winnerScore).
-    // WINNER PROTECTION antes de pausar qualquer duplicata.
     const autoDuplicatesArchived: any[] = [];
     {
-      // Identificar duplicatas
       const autoCampaignsByAsin = new Map<string, any[]>();
       for (const c of campaigns) {
         const state = String(c.state || c.status || '').toLowerCase();
@@ -1214,10 +1181,6 @@ Deno.serve(async (req) => {
       for (const [asin, camps] of autoCampaignsByAsin.entries()) {
         if (camps.length <= 1) continue;
 
-        // ── WINNER PROTECTION: ordenar por score de performance sustentável ──
-        // NUNCA escolher a campanha a preservar somente por idade.
-        // Score = orders*10 + roas*2 + (sales>0?5:0) + (acos>0&&acos<=target?10:0) - (acos>break_even?5:0)
-        // A campanha com maior score é preservada — independente de ser mais nova ou mais velha.
         const asinMeta = acosByAsin.get(asin);
         const targetAcos = asinMeta?.target ?? settings.target_acos ?? 15;
         const breakEvenAcos = asinMeta?.break_even ?? 30;
@@ -1234,22 +1197,16 @@ Deno.serve(async (req) => {
             + (cAcos > 0 && cAcos <= targetAcos ? 10 : 0)
             - (cAcos > breakEvenAcos ? 5 : 0);
           return { ...c, _winnerScore: winnerScore };
-        }).sort((a: any, b: any) => b._winnerScore - a._winnerScore); // maior score = preservar
+        }).sort((a: any, b: any) => b._winnerScore - a._winnerScore);
 
-        // O primeiro é o winner — os demais são duplicatas
         for (let i = 1; i < scoredCamps.length; i++) {
           const dup = scoredCamps[i];
-          // WINNER PROTECTION: nunca pausar campanha com vendas recentes ou ACoS <= target
-          const dupOrders = dup.orders || 0;
-          const dupAcos = dup.acos || 0;
-          const dupSales = dup.sales || 0;
-          // WINNER PROTECTION canônica (usa função dedicada)
           const wm_dup = campWindowMetrics.get(dup.campaign_id || dup.amazon_campaign_id);
           const wpResult = checkWinnerProtection({
-            orders_14d: wm_dup?.d14?.orders ?? dupOrders,
-            acos_14d: wm_dup?.d14?.acos ?? (dupAcos > 0 ? dupAcos : null),
+            orders_14d: wm_dup?.d14?.orders ?? dup.orders ?? 0,
+            acos_14d: wm_dup?.d14?.acos ?? (dup.acos > 0 ? dup.acos : null),
             target_acos: targetAcos,
-            orders_30d: wm_dup?.d30?.orders ?? dupOrders,
+            orders_30d: wm_dup?.d30?.orders ?? dup.orders ?? 0,
             roas_30d: wm_dup?.d30?.roas ?? 0,
             target_roas: settings.target_roas ?? 4,
             last_sale_at: dup.last_sale_at || null,
@@ -1282,11 +1239,9 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── Zero Campaign Guard antes de pausar duplicatas ───────────────────
       if (dupsToPause.length > 0) {
         const guardResult = checkZeroCampaignGuard(dupsToPause.map(d => d.dup), campaigns, products, force_batch);
         if (!guardResult.allowed) {
-          // Registrar bloqueio no log (fire-and-forget)
           base44.asServiceRole.entities.SyncExecutionLog.create({
             amazon_account_id: aid,
             operation: 'zero_campaign_guard_blocked',
@@ -1296,14 +1251,11 @@ Deno.serve(async (req) => {
             started_at: now,
             result_summary: guardResult.reason,
           }).catch(() => {});
-          // Não pausar nenhuma duplicata — segurança primeiro
-          // dupsToPause permanece mas é ignorado abaixo
           dupsToPause.splice(0, dupsToPause.length);
         }
       }
 
       if (dupsToPause.length > 0) {
-        // Obter token Ads para pausar na Amazon
         const adsClientId = Deno.env.get('ADS_CLIENT_ID') || '';
         const adsClientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
         const adsRegion = Deno.env.get('ADS_REGION') || 'na';
@@ -1333,7 +1285,6 @@ Deno.serve(async (req) => {
           } catch {}
         }
 
-        // Pausar em lotes de 10 na Amazon Ads API v3 SP
         const pausedOnAmazon: string[] = [];
         const failedOnAmazon: string[] = [];
         if (adsAccessToken) {
@@ -1364,7 +1315,6 @@ Deno.serve(async (req) => {
           }
         }
 
-        // Arquivar localmente (independente do resultado da API)
         for (const { dup, asin, amazonCampaignId } of dupsToPause) {
           base44.asServiceRole.entities.Campaign.update(dup.id, {
             state: 'archived', status: 'archived', updated_at: now,
@@ -1383,7 +1333,7 @@ Deno.serve(async (req) => {
 
     // ── 10. Gerar decisões (motor principal) ─────────────────────────────
     const decisions: any[] = [];
-    const opportunities: any[] = []; // v6: painel de oportunidades para UI
+    const opportunities: any[] = [];
     const skipped: any[] = [];
     const entityChangedThisCycle = new Map<string, string>();
     const stats = {
@@ -1392,15 +1342,12 @@ Deno.serve(async (req) => {
       skipped_stock: 0, skipped_margin: 0, skipped_cooldown: 0,
       skipped_confidence: 0, skipped_data: 0, created_campaign: 0,
       auto_duplicates_archived: autoDuplicatesArchived.length,
-      // v6
       low_visibility_growth: 0, emerging_growth: 0, profitable_growth: 0,
       high_growth: 0, conservative_growth: 0, partial_cost_growth: 0,
     };
 
     // ── 10a. Carregar KeywordPrediction como contexto modificador ─────────
-    // O motor determinístico NÃO gera decisões baseadas no ML — apenas usa os
-    // campos como modificadores contextuais (contexto, não duplicação de regras).
-    const kwPredictionMap = new Map<string, any>(); // norm_keyword::asin → prediction
+    const kwPredictionMap = new Map<string, any>();
     try {
       const kwPreds = await base44.asServiceRole.entities.KeywordPrediction.filter(
         { amazon_account_id: aid, status: { $nin: ['rejected', 'blocked', 'expired'] } },
@@ -1416,8 +1363,6 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // Keywords em launch_0_48h / emergency_reduction (cooldown) NÃO devem
-    // ser processadas pelo motor determinístico — pertencem ao ciclo inicial.
     const lifecycleManagedKwIds = new Set<string>();
     try {
       const lifecycles = await base44.asServiceRole.entities.ManualCampaignBidLifecycle.filter(
@@ -1428,7 +1373,6 @@ Deno.serve(async (req) => {
         if (protectedStatuses.includes(lc.status) && lc.keyword_id) {
           lifecycleManagedKwIds.add(lc.keyword_id);
         }
-        // Cooldown ativo após contenção
         if (lc.cooldown_until && new Date(lc.cooldown_until).getTime() > Date.now() && lc.keyword_id) {
           lifecycleManagedKwIds.add(lc.keyword_id);
         }
@@ -1440,10 +1384,8 @@ Deno.serve(async (req) => {
       const entityId = kw.keyword_id || kw.id;
       if (!entityId) continue;
       if (entityChangedThisCycle.has(entityId)) continue;
-      // Ignorar keywords negativas — não têm bid alterável na Amazon Ads API
       const mt = (kw.match_type || '').toLowerCase();
       if (mt.startsWith('negative') || (kw.keyword_id || '').startsWith('neg_')) continue;
-      // Ignorar keywords no ciclo inicial de launch (protegidas pelo ManualCampaignBidLifecycle)
       if (lifecycleManagedKwIds.has(entityId)) {
         skipped.push({ entity_id: entityId, reason: 'protected_by_launch_lifecycle_48h', keyword_text: kw.keyword_text });
         continue;
@@ -1453,7 +1395,6 @@ Deno.serve(async (req) => {
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
       const product = resolvedAsin ? productMap.get(resolvedAsin) : null;
 
-      // ML context — modificador contextual (não gera decisão própria, não duplica regras)
       let mlContext: any = null;
       if (resolvedAsin && kw.keyword_text) {
         const nk = (kw.keyword_text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s\-\.\/]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -1464,30 +1405,25 @@ Deno.serve(async (req) => {
       if (mlFlags.length > 0) { skipped.push({ entity_id: entityId, reason: 'ml_contradiction_flag', flags: mlFlags, asin: resolvedAsin }); continue; }
       if (mlRelevance !== null && mlRelevance < 0.30) { skipped.push({ entity_id: entityId, reason: 'ml_low_relevance', relevance_score: mlRelevance, asin: resolvedAsin }); continue; }
 
-      // ── Guard de escopo: bloquear crescimento/criação para não-autorizados ──
       if (resolvedAsin) {
         const isEligible = authorizedEligibleAsins.has(resolvedAsin);
         const isTempIneligible = authorizedIneligibleAsins.has(resolvedAsin);
         if (!isEligible && !isTempIneligible) {
-          // not_authorized ou mapping_conflict: nenhuma ação de crescimento
           skipped.push({ entity_id: entityId, reason: 'ads_scope_not_authorized', asin: resolvedAsin });
           continue;
         }
         if (isTempIneligible) {
-          // Autorizado mas temp. inelegível: apenas operações de pausa/monitoramento, não crescimento
           skipped.push({ entity_id: entityId, reason: 'ads_scope_temporarily_ineligible', asin: resolvedAsin });
           continue;
         }
       }
 
-      // Estoque
       const stockQty = product?.fba_inventory || 0;
       const salesM = resolvedAsin ? salesByAsin.get(resolvedAsin) : null;
       const realUnits30d = salesM?.units || 0;
       const stockVelocity = realUnits30d / 30;
       const stockCovDays = stockVelocity > 0 ? stockQty / stockVelocity : (stockQty > 0 ? 999 : 0);
 
-      // ── Guardrail: estoque zero ──────────────────────────────────────
       if (stockQty <= 0) {
         const currentBid = kw.bid || kw.current_bid || 0.25;
         if (currentBid > settings.min_bid) {
@@ -1512,7 +1448,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Métricas da campanha
       const campForKw = campaigns.find((c: any) => c.campaign_id === kw.campaign_id || c.amazon_campaign_id === kw.campaign_id);
       const wm = campForKw
         ? (campWindowMetrics.get(campForKw.campaign_id) || campWindowMetrics.get(campForKw.amazon_campaign_id))
@@ -1531,7 +1466,6 @@ Deno.serve(async (req) => {
       const kw_ctr = kw_impressions > 0 ? kw_clicks / kw_impressions : 0;
 
       const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
-      // PRD: effective_target_acos = min(account_target, break_even_asin)
       const effectiveTargetAcos = effectiveTargetAcos_fn(
         settings.target_acos ?? CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS,
         asinMeta?.break_even ?? null
@@ -1541,13 +1475,11 @@ Deno.serve(async (req) => {
         : settings.max_acos;
       const effectiveSafeMaxCpc = asinMeta?.safe_max_cpc || (settings.max_cpc > 0 ? settings.max_cpc : 0);
 
-      // Dados econômicos
       const econForProduct = resolvedAsin
         ? (econByNsku.get(normSku(product?.sku || '')) || econByNsku.get(`ASIN:${resolvedAsin}`) || null)
         : null;
       const econStatus = classifyEconomicStatus(econForProduct);
 
-      // Proteção de alta performance
       const protection = isHighPerformanceProtected(kw, settings, wm ? {
         acos_14d: wm.d14.acos, acos_30d: wm.d30.acos,
         roas_14d: wm.d14.roas, orders_14d: wm.d14.orders, orders_30d: wm.d30.orders,
@@ -1555,7 +1487,6 @@ Deno.serve(async (req) => {
 
       const kwIntent = kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null;
 
-      // Cooldown por regra bid (genérico)
       const lastExec = lastExecByRuleEntity.get(`bid_change|${entityId}`);
       if (lastExec) {
         const lastTs = lastExec.created_date || lastExec.executed_at;
@@ -1565,18 +1496,14 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Cooldown de crescimento v6 (72h após aumento de crescimento)
       const lastGrowthTs = lastGrowthByEntity.get(entityId) || 0;
       const growthCooldownActive = lastGrowthTs > 0 && (Date.now() - lastGrowthTs) / 3600000 < settings.growth_cooldown_hours;
 
-      // ── Guardrail: estoque baixo 7–21d — reduzir lance para concentrar orçamento ──
       if (stockCovDays > 0 && stockCovDays < 21) {
-        // Estoque crítico (<7d): redução agressiva — apenas produtos com estoque precisam de orçamento
-        // Estoque baixo (7-21d): redução suave — conservar verba para os dias restantes
         const isCritical = stockCovDays < 7;
         const reductionPct = isCritical
-          ? settings.max_bid_decrease_pct * 0.90  // −90% do limite: estoque insuficiente
-          : settings.max_bid_decrease_pct * 0.40; // −40% do limite: ainda vendável, mas conservar
+          ? settings.max_bid_decrease_pct * 0.90
+          : settings.max_bid_decrease_pct * 0.40;
         const newBid = Math.max(settings.min_bid, currentBid * (1 - reductionPct));
         const ruleKey = isCritical ? 'stock_critical' : 'stock_low';
         const iKey = `${ruleKey}|${aid}|${entityId}|${today}`;
@@ -1601,14 +1528,12 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ── Guardrail: margem negativa confirmada ────────────────────────
       if (econStatus.block_expansion) {
         stats.skipped_margin++;
         skipped.push({ entity_id: entityId, reason: 'negative_margin_confirmed', asin: resolvedAsin, block_reason: econStatus.block_reason });
         continue;
       }
 
-      // ── Guardrail: lucro pós-ads negativo (paused) ───────────────────
       if (asinMeta?.profit_protection?.mode === 'paused' && kw_spend >= MRC.MIN_SPEND * 0.5) {
         const newBid = clamp(currentBid * (1 - settings.max_bid_decrease_pct), settings.min_bid, settings.max_bid);
         const iKey = `profit_eroded_paused|${aid}|${entityId}|${today}`;
@@ -1629,7 +1554,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── Guardrail: erosão defensiva ──────────────────────────────────
       if (asinMeta?.profit_protection?.mode === 'defensive' && kw_spend >= MRC.MIN_SPEND) {
         const reductionPct = settings.max_bid_decrease_pct * 0.6;
         const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
@@ -1651,7 +1575,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── v6: Calcular visibility score ────────────────────────────────
       const visSc = calcVisibilityScore({
         impressions_14d: kw_impressions,
         impressions_30d: wm?.d30?.impressions ?? kw_impressions,
@@ -1663,7 +1586,6 @@ Deno.serve(async (req) => {
           ? Math.min(1, (wm?.d3?.spend ?? 0) / (campForKw.daily_budget * 3)) : 0.5,
       });
 
-      // ── v6: Calcular opportunity score ───────────────────────────────
       const opp = calcOpportunityScore({
         visibility_score: visSc.visibility_score,
         cvr: kw_cvr,
@@ -1679,7 +1601,6 @@ Deno.serve(async (req) => {
         data_freshness: dataFreshness,
       });
 
-      // Registrar oportunidade no painel (v6 UI)
       opportunities.push({
         entity_id: entityId,
         keyword_text: kw.keyword_text,
@@ -1704,11 +1625,10 @@ Deno.serve(async (req) => {
         partial_cost: econStatus.allow_conservative_growth && econStatus.economic_data_incomplete,
       });
 
-      // ── Proteção de vencedores + crescimento priorizado ──────────────
       if (protection.protected) {
         stats.protected++;
         if (stockCovDays >= settings.min_stock_days && opp.can_grow && !growthCooldownActive) {
-          const increase = getGrowthIncrement('moderate') * 0.5; // metade para protegida
+          const increase = getGrowthIncrement('moderate') * 0.5;
           const proposed = clamp(currentBid * (1 + increase), settings.min_bid, settings.max_bid);
           if (proposed > currentBid * 1.02 && econStatus.economic_confidence !== 'none') {
             const iKey = `protect_winner_growth|${aid}|${entityId}|${today}`;
@@ -1733,7 +1653,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── Proteção de venda recente — usa guardrail canônico ───────────────
       const wpKwResult = checkWinnerProtection({
         orders_14d: wm?.d14?.orders ?? kw_orders,
         acos_14d: kw_acos,
@@ -1747,23 +1666,18 @@ Deno.serve(async (req) => {
       });
       const recentSaleProtected = FB.WINNER_PROTECTION_ENABLED && wpKwResult.protected;
 
-      // ── Evidência mínima ─────────────────────────────────────────────
-      // Exige: min 20 cliques E min 200 impressões E spend >= max_profitable_cpa (ou fallback)
       const hasMinEvidence = kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && kw_spend >= MRC.MIN_SPEND;
       const hasCtrQuality = kw_impressions > 0 && kw_ctr >= MRC.MIN_CTR;
 
-      // ── Dados insuficientes: zero impressões após 72h → pausar keyword ─
       if (!hasMinEvidence) {
         stats.held++;
 
-        // Keyword criada há mais de 72h com zero impressões → palavra irrelevante, pausar
         const kwCreatedAt = kw.created_at || kw.created_date || null;
         const kwAgeHours = kwCreatedAt ? (Date.now() - new Date(kwCreatedAt).getTime()) / 3600000 : 0;
         const hasZeroImpressions = (kw_impressions ?? 0) === 0;
-        const isStale72h = kwAgeHours >= FB.ZERO_IMP_FIRST_REVIEW_HOURS; // 72h
+        const isStale72h = kwAgeHours >= FB.ZERO_IMP_FIRST_REVIEW_HOURS;
 
         if (hasZeroImpressions && isStale72h && stockCovDays > 0) {
-          // Pausar: zero impressões após 72h indica palavra sem relevância para o algoritmo Amazon
           const iKey = `zero_imp_pause_72h|${aid}|${entityId}|${today}`;
           if (!usedIdemKeys.has(iKey)) {
             decisions.push(buildDecision(aid, correlationId, {
@@ -1782,7 +1696,6 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Keyword nova (<72h) com zero impressões e bid baixo → calibrar uma vez
         if (!isStale72h && kw_spend < 1 && stockCovDays >= settings.min_stock_days && !growthCooldownActive) {
           if (currentBid <= settings.min_bid * 1.2) {
             const iKey = `calibrate_bid|${aid}|${entityId}|${today}`;
@@ -1805,17 +1718,12 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── Funil econômico ──────────────────────────────────────────────
       const funnel = calcFunnel({
         impressions: kw_impressions, clicks: kw_clicks, orders: kw_orders,
         spend: kw_spend, sales: kw_sales,
         contribution_margin_amount: asinMeta?.contribution_margin_amount || 0,
       });
 
-      // ── REGRAS DE PROTEÇÃO (redução) — avaliadas antes do crescimento ─
-
-      // CPA acima do máximo lucrável
-      // minimum_spend_before_pause = maximum_profitable_cpa | minimum_clicks = 20 | minimum_impressions = 200
       const minSpendBeforePause = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
       if (!recentSaleProtected && funnel.maximum_profitable_cpa > 0 && kw_orders >= 2
           && funnel.actual_cpa > funnel.maximum_profitable_cpa
@@ -1843,7 +1751,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ACoS acima do break-even
       if (kw_acos !== null && effectiveMaxAcos !== null && kw_acos > effectiveMaxAcos && kw_spend >= MRC.MIN_SPEND) {
         const reductionPct = kw_acos > effectiveMaxAcos * 1.5 ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
         const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
@@ -1868,30 +1775,16 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Gasto sem conversão
-      // REGRA: tempo sozinho NUNCA pausa. Pausa exige conjuntamente:
-      //   1. Tempo mínimo de exposição (no_sales_first_review_hours = 72h desde criação da campanha)
-      //   2. Amostra estatística válida (≥20 cliques + ≥200 impressões)
-      //   3. Gasto mínimo = maximum_profitable_cpa (ou fallback)
-      //   4. Zero vendas
-      //   5. Dados frescos e econômicos válidos (economic_confidence ≠ none + dataFreshness ≠ stale)
-      //   6. Sem venda recente nas últimas 72h (recent_sale_protection)
       const noConvMinSpend = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
       const noConvDataValid = econStatus.economic_confidence !== 'none' && dataFreshness !== 'stale';
-      // Tempo mínimo desde criação da campanha (72h = no_sales_first_review_hours)
       const campCreatedAt = campForKw?.created_at || campForKw?.created_date || null;
       const campAgeHours = campCreatedAt ? (Date.now() - new Date(campCreatedAt).getTime()) / 3600000 : 999;
       const hasMinExposureTime = campAgeHours >= FB.NO_SALES_FIRST_REVIEW_HOURS;
-      // Determinar fase de ação baseada na idade da campanha
-      // 72h: primeira revisão — redução de bid (não pausa)
-      // 5 dias: segunda revisão — redução maior
-      // 7 dias: campanha pode ser pausada
       const campAgeDays = campAgeHours / 24;
       const canPauseCampaign = campAgeDays >= FB.NO_SALES_CAMPAIGN_PAUSE_DAYS;
       const isSecondReview = campAgeDays >= FB.NO_SALES_SECOND_REVIEW_DAYS;
       const isNewProduct = product?.is_new_asin === true || campAgeDays < FB.NEW_PRODUCT_MAX_LEARNING_DAYS;
 
-      // ML guardrail: long-tail com evidence LOW não pausa por volume baixo
       const mlTailIsLong = mlContext?.tail_type === 'long';
       const mlEvidenceLow = mlContext?.evidence_level === 'LOW' || mlContext?.evidence_level === 'NONE';
       if (mlTailIsLong && mlEvidenceLow && kw_impressions > 0 && kw_impressions < FB.MIN_IMP_BEFORE_PAUSE) {
@@ -1904,10 +1797,7 @@ Deno.serve(async (req) => {
           && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && noConvDataValid) {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
-          // Produto novo em learning: nunca pausar, apenas reduzir conservadoramente
-          // pause_most_specific_entity_first=true: pausa keyword antes da campanha
           const isLowIntent = kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational';
-          // Pausa: exige 7+ dias + baixa intenção + gasto dobrado + não é produto novo em learning
           const shouldPause = canPauseCampaign && isLowIntent && kw_spend >= noConvMinSpend * 2 && !isNewProduct;
           const reductionPct = isSecondReview ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
           const newBid = shouldPause
@@ -1932,7 +1822,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── CPC acima do safe max ────────────────────────────────────────
       if (effectiveSafeMaxCpc > 0 && kw_cpc > effectiveSafeMaxCpc && kw_clicks >= MRC.MIN_CLICKS) {
         const newBid = clamp(currentBid * (1 - Math.min(settings.max_bid_decrease_pct, 0.20)), settings.min_bid, settings.max_bid);
         const iKey = `cpc_above_safe|${aid}|${entityId}|${today}`;
@@ -1953,7 +1842,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── v6: REGRAS DE CRESCIMENTO ──────────────────────────────────────
       if (growthCooldownActive) {
         skipped.push({ entity_id: entityId, reason: 'growth_cooldown_active', asin: resolvedAsin });
         continue;
@@ -1964,16 +1852,12 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── GUARDRAIL: Dayparting — verificar slot BRT atual ─────────────
-      // Só atua em decisões de aumento de bid. Fail-open se não há dados (INSUFFICIENT_DATA).
       let daypartSlotNote = `slot ${currentSlotClassification}`;
       if (currentSlotClassification === 'WEAK_TIME' || currentSlotClassification === 'LOSS_TIME') {
         skipped.push({ entity_id: entityId, reason: 'daypart_weak_time', slot: currentSlotClassification, hour: currentHourBRT, asin: resolvedAsin });
         continue;
       }
 
-      // ── GUARDRAIL: Placement — verificar limites configurados ────────
-      // Bloquear aumento de bid e propor OptimizationDecision de redução de placement
       if (campForKw) {
         const tos = Number(campForKw.top_of_search_adjustment || 0);
         const ros = Number(campForKw.rest_of_search_adjustment || 0);
@@ -1988,10 +1872,8 @@ Deno.serve(async (req) => {
         if (ppLimit  > 0 && pp  > ppLimit)  placementViolations.push(`PP ${pp}% > limite ${ppLimit}%`);
 
         if (placementViolations.length > 0) {
-          // Bloquear aumento de bid para esta keyword
           skipped.push({ entity_id: entityId, reason: 'placement_above_limit', violations: placementViolations, asin: resolvedAsin });
 
-          // Propor OptimizationDecision de redução de placement (idempotente por dia)
           const campForPlacement = campForKw.campaign_id || campForKw.amazon_campaign_id;
           if (campForPlacement) {
             const placementIKey = `placement_cap|${campForPlacement}|${today}`;
@@ -2022,22 +1904,17 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Anotar slot no rationale para rastreabilidade
       daypartSlotNote = currentSlotClassification === 'NORMAL_TIME'
         ? `slot NORMAL_TIME — crescimento capped a 5%`
         : `slot ${currentSlotClassification} +${Math.round((currentSlotClassification === 'ELITE_TIME' ? getGrowthIncrement(opp.growth_confidence) : getGrowthIncrement(opp.growth_confidence)) * 100)}% permitido`;
 
-      // Custo parcial: teto conservador de 5%
       const isPartialCost = econStatus.economic_data_incomplete;
       let maxGrowthPct = isPartialCost ? FB.PARTIAL_COST_MAX_INCREASE : getGrowthIncrement(opp.growth_confidence);
-      // GUARDRAIL: NORMAL_TIME → cap de 5% independente da confiança
       if (currentSlotClassification === 'NORMAL_TIME') {
         maxGrowthPct = Math.min(maxGrowthPct, 0.05);
       }
       const growthPct = Math.min(maxGrowthPct, FB.MAX_GROWTH_FACTOR - 1);
-      // daypartSlotNote já calculado acima
 
-      // Simular crescimento antes de aprovar
       const sim = simulateGrowth({
         current_bid: currentBid,
         increase_pct: growthPct,
@@ -2061,7 +1938,6 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Determinar cenário de crescimento e rationale
       let growthScenario = 'A';
       let ruleKey = 'increase_bid_profitable_growth';
       let decisionType = 'increase_bid_profitable_growth';
@@ -2069,7 +1945,6 @@ Deno.serve(async (req) => {
       let growthRisk: 'low' | 'medium' | 'high' = 'low';
 
       if (visSc.is_low_visibility && kw_orders > 0 && kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos) {
-        // Cenário A: Lucrativo com baixa visibilidade
         growthScenario = 'A';
         ruleKey = 'increase_bid_low_visibility';
         decisionType = 'increase_bid_low_visibility';
@@ -2077,7 +1952,6 @@ Deno.serve(async (req) => {
         rationale = `📈 CENÁRIO A — Keyword com ACoS ${kw_acos.toFixed(1)}% ≤ meta ${effectiveTargetAcos}% e baixa visibilidade (${kw_impressions} impr/14d, score ${visSc.visibility_score.toFixed(2)}). Bid aumentado +${Math.round(growthPct * 100)}% para ampliar exposição. CPC projetado R$${proposed_bid.toFixed(2)}, abaixo do limite econômico. [${daypartSlotNote}] ${sim.reason}`;
         stats.low_visibility_growth++;
       } else if (kw_cvr > settings.fallback_cvr * 1.2 && kw_orders >= 1 && visSc.is_low_visibility) {
-        // Cenário B: Alta conversão com baixo volume
         growthScenario = 'B';
         ruleKey = 'increase_bid_high_conversion';
         decisionType = 'increase_bid_profitable_growth';
@@ -2085,7 +1959,6 @@ Deno.serve(async (req) => {
         rationale = `📈 CENÁRIO B — Keyword com CVR ${(kw_cvr * 100).toFixed(2)}% acima da média e baixa exposição (${kw_impressions} impr/14d). ${kw_orders} venda(s). Bid aumentado +${Math.round(growthPct * 100)}% para testar crescimento de volume. [${daypartSlotNote}] ${sim.reason}`;
         stats.emerging_growth++;
       } else if (kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1) {
-        // Cenário A(2): Lucrativo com ACoS muito baixo
         growthScenario = 'A2';
         ruleKey = 'increase_bid_profitable_growth';
         decisionType = 'increase_bid_profitable_growth';
@@ -2093,7 +1966,6 @@ Deno.serve(async (req) => {
         rationale = `📈 CENÁRIO A — ACoS ${kw_acos.toFixed(1)}% muito abaixo da meta ${effectiveTargetAcos}%. ${kw_orders}p vendidos, CPA R$${funnel.actual_cpa.toFixed(2)} vs máx. lucrável R$${funnel.maximum_profitable_cpa.toFixed(2)}. Lucro pós-ADS: R$${(asinMeta?.profit_after_ads_14d || 0).toFixed(2)}/ped. Bid +${Math.round(growthPct * 100)}% para escalar. [${daypartSlotNote}] ${sim.reason}`;
         stats.profitable_growth++;
       } else if (opp.opportunity_state === 'high_growth_opportunity') {
-        // Cenário high_growth
         growthScenario = 'HG';
         ruleKey = 'increase_bid_high_growth';
         decisionType = 'increase_bid_profitable_growth';
@@ -2101,7 +1973,6 @@ Deno.serve(async (req) => {
         rationale = `🚀 ALTA OPORTUNIDADE — Produto lucrativo, ${kw_orders}+ vendas, CVR ${(kw_cvr * 100).toFixed(2)}%, visibilidade limitada. Margem: R$${(asinMeta?.contribution_margin_amount || 0).toFixed(2)}. Bid +${Math.round(growthPct * 100)}% para crescimento sustentado. [${daypartSlotNote}] ${sim.reason}`;
         stats.high_growth++;
       } else if (isPartialCost && kw_orders >= 1) {
-        // Custo parcial com venda: conservador
         growthScenario = 'PC';
         ruleKey = 'conservative_growth_partial_cost';
         decisionType = 'experimental_growth';
@@ -2110,7 +1981,6 @@ Deno.serve(async (req) => {
         stats.partial_cost_growth++;
         stats.conservative_growth++;
       } else {
-        // Oportunidade emergente genérica
         growthScenario = 'E';
         ruleKey = 'emerging_opportunity_growth';
         decisionType = sim.experimental ? 'experimental_growth' : 'increase_bid_profitable_growth';
@@ -2164,66 +2034,23 @@ Deno.serve(async (req) => {
     }
 
     // ── 10e. Motor de redução de ACoS por keyword (fire-and-forget) ──────
-    // Invocado como etapa do motor determinístico — não bloqueia resposta.
-    // runAcosBidReductionEngine é o único responsável pela regra de ACoS gradual.
     base44.asServiceRole.functions.invoke('runAcosBidReductionEngine', {
       amazon_account_id: aid,
       _service_role: true,
       source_function: 'runDeterministicDecisionEngine',
     }).catch(() => {});
 
-    // ── 10b. Budget increase para campanhas limitadas (Cenário C) ─────────
-    const campaignBudgetDecisions: any[] = [];
-    if (!budgetGuardrailActive) {
-      for (const camp of campaigns) {
-        const cid = camp.campaign_id || camp.amazon_campaign_id;
-        if (!cid) continue;
-        if (String(camp.state || camp.status || '').toLowerCase() === 'archived') continue;
-
-        const wm = campWindowMetrics.get(cid);
-        if (!wm) continue;
-
-        const d14 = wm.d14;
-        if (d14.spend < 5 || d14.orders === 0) continue; // sem dados suficientes
-
-        const asin = camp.asin || campaignAsinMap.get(cid) || null;
-        const asinMeta = asin ? acosByAsin.get(asin) : null;
-        const targetAcos = asinMeta?.target ?? settings.target_acos;
-
-        // ACoS sustentável
-        if (d14.acos === null || targetAcos === null || d14.acos > targetAcos * 1.2) continue;
-
-        // Verificar se parece budget-constrained: spend 3d > 90% do budget diário * 3
-        const dailyBudget = Number(camp.daily_budget || camp.budget || 0);
-        if (dailyBudget <= 0) continue;
-        const budget_consumed_ratio = d14.spend / (dailyBudget * 14);
-        if (budget_consumed_ratio < 0.85) continue; // não está limitado
-
-        const increaseP = 0.10; // 10% padrão para budget
-        const newBudget = Math.round(dailyBudget * (1 + increaseP) * 100) / 100;
-
-        // Limite global: soma de todos os budgets não deve ultrapassar o cap diário
-        const totalCurrentBudget = campaigns.reduce((s: number, c: any) => s + Number(c.daily_budget || c.budget || 0), 0);
-        if (totalCurrentBudget + (newBudget - dailyBudget) > settings.daily_budget_cap * 1.2) continue;
-
-        const iKey = `budget_increase|${aid}|${cid}|${today}`;
-        if (usedIdemKeys.has(iKey) || entityChangedThisCycle.has(cid)) continue;
-
-        campaignBudgetDecisions.push(buildDecision(aid, correlationId, {
-          decision_type: 'increase_budget_constrained', entity_type: 'campaign', entity_id: cid,
-          campaign_id: cid, asin,
-          action: 'set_budget',
-          value_before: dailyBudget, value_after: newBudget,
-          rationale: `💰 CENÁRIO C — Campanha convertendo (ACoS ${d14.acos?.toFixed(1)}% ≤ meta ${targetAcos}%), orçamento consumido ${Math.round(budget_consumed_ratio * 100)}% nos últimos 14d. Budget aumentado +10% de R$${dailyBudget.toFixed(2)} para R$${newBudget.toFixed(2)}.`,
-          rule_key: 'budget_increase_constrained', risk: 'low', priority: PRIORITY.budget_increase,
-          search_intent: null, settings_source: settings.source, settings_snapshot: settingsSnapshot,
-          idempotency_key: iKey, opportunity_state: 'budget_constrained',
-          growth_evaluation_due_at: new Date(Date.now() + FB.GROWTH_COOLDOWN_HOURS * 3600000).toISOString(),
-        }));
-        entityChangedThisCycle.set(cid, 'budget_increase');
-        stats.budget_increase++;
-      }
-    }
+    // ── 10b. IMMEDIATE_BUDGET_RESCUE (substitui Cenário C) ────────────────
+    // Executa sincronamente: aumenta orçamento de campanhas SP rentáveis com
+    // ≥95% de utilização via Budget Usage API (Campaign.current_spend),
+    // confirma na Amazon antes de atualizar localmente. Cooldown 24h, +20% max.
+    const campaignBudgetDecisions: any[] = []; // mantido vazio — rescue executa diretamente
+    await runImmediateBudgetRescue({
+      aid, now, today, correlationId, base44,
+      campaigns, campWindowMetrics, acosByAsin, productMap, campaignAsinMap,
+      authorizedEligibleAsins, settings, dataFreshness,
+      usedIdemKeys, entityChangedThisCycle, account, stats,
+    });
 
     // ── 10c. Guardrail global de orçamento ────────────────────────────────
     if (budgetGuardrailActive) {
@@ -2235,22 +2062,19 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Combinar decisões
+    // Combinar decisões (rescue já executou diretamente — não entra no allDecisions)
     const allDecisions = [...decisions, ...campaignBudgetDecisions];
 
     // ── 10d. Priorização ──────────────────────────────────────────────────
-    // Stock decisions (stock_zero, stock_critical, stock_low) têm prioridade
-    // absoluta na fila: garantem que o orçamento vai para o que pode ser vendido agora.
     const STOCK_RULES = new Set(['stock_zero', 'stock_critical', 'stock_low']);
     allDecisions.sort((a: any, b: any) => {
       const aIsStock = STOCK_RULES.has(a.rule_key || '');
       const bIsStock = STOCK_RULES.has(b.rule_key || '');
-      if (aIsStock !== bIsStock) return aIsStock ? -1 : 1; // stock decisions first
+      if (aIsStock !== bIsStock) return aIsStock ? -1 : 1;
       if (a.priority !== b.priority) return a.priority - b.priority;
-      // Dentro da mesma prioridade: estoque menor = mais urgente
       const aDays = a.stock_coverage_days ?? 999;
       const bDays = b.stock_coverage_days ?? 999;
-      if (Math.abs(aDays - bDays) > 1) return aDays - bDays; // menor cobertura = primeiro
+      if (Math.abs(aDays - bDays) > 1) return aDays - bDays;
       return (b.decision_priority_score || 0) - (a.decision_priority_score || 0);
     });
 
@@ -2354,7 +2178,7 @@ Deno.serve(async (req) => {
         description: 'v6: dados econômicos como fator, não bloqueio absoluto',
         partial_cost_max_increase_pct: FB.PARTIAL_COST_MAX_INCREASE * 100,
         growth_tolerance_factor: settings.growth_tolerance_factor,
-        scenarios: ['A: lucrativo+baixa_vis', 'B: alta_cvr+baixo_volume', 'C: budget_constrained', 'D: produto_novo+sinal', 'E: top_search'],
+        scenarios: ['A: lucrativo+baixa_vis', 'B: alta_cvr+baixo_volume', 'C: IMMEDIATE_BUDGET_RESCUE (≥95% utilization)', 'D: produto_novo+sinal', 'E: top_search'],
         increments: { low: '3%', moderate: '5%', high: '8%', very_high: '10%', exceptional: '15%' },
       },
 
@@ -2365,7 +2189,6 @@ Deno.serve(async (req) => {
         budget_guardrail_triggered: budgetGuardrailActive,
         products_updated: productUpdates.length,
         econ_records_updated: econUpdates.length,
-        // v7: recálculo dinâmico do orçamento
         budget_recalculation: {
           spend_24h: Math.round(spend24h * 100) / 100,
           sales_24h: Math.round(sales24h * 100) / 100,
@@ -2442,8 +2265,9 @@ Deno.serve(async (req) => {
         data_freshness_max_hours: CANONICAL_CONFIG.DATA_FRESHNESS_MAX_HOURS,
         dayparting_guardrail: `ATIVO — slot atual: ${currentSlotClassification} (${currentDowBRT}/${currentHourBRT}h BRT)`,
         placement_guardrail: `ATIVO — limites: ToS ${settings.top_of_search_limit}%, RoS ${settings.rest_of_search_limit}%, PP ${settings.product_page_limit}%`,
+        immediate_budget_rescue: 'ATIVO — ≥95% utilization + ACoS≤target + ROAS≥target + cooldown 24h + confirmação Amazon',
       },
-      note: 'Motor v8: hierarquia P0-P7 · weighted ACoS · target_roas derivado · effective_target_acos por ASIN · centralDestructiveActionGuard · winner_protection canônico · ±20% max bid',
+      note: 'Motor v8: hierarquia P0-P7 · weighted ACoS · target_roas derivado · effective_target_acos por ASIN · centralDestructiveActionGuard · winner_protection canônico · ±20% max bid · IMMEDIATE_BUDGET_RESCUE',
     });
 
   } catch (error: any) {
@@ -2455,12 +2279,10 @@ Deno.serve(async (req) => {
 // ── Helper buildDecision ──────────────────────────────────────────────────────
 function buildDecision(aid: string, correlationId: string, params: any): any {
   const intentScore = params.search_intent?.purchase_intent_score || 0.5;
-  // Estoque baixo/crítico: prioridade máxima — o orçamento deve ir para quem pode vender agora.
-  // stockFactor invertido: quanto MENOS estoque, MAIOR a urgência de processar essa decisão.
   const stockDays = params.stock_coverage_days;
   const isStockDecision = params.rule_key === 'stock_critical' || params.rule_key === 'stock_low' || params.rule_key === 'stock_zero';
   const stockFactor = isStockDecision
-    ? 1.0 // força score máximo para decisões de estoque — processadas primeiro
+    ? 1.0
     : stockDays != null ? Math.min(1, (stockDays || 0) / 30) : 1.0;
   const priorityFactor = 1 - ((params.priority || 9) / 13);
   const riskFactor = { low: 0.9, medium: 0.7, high: 0.5 }[params.risk as string] || 0.7;
@@ -2468,7 +2290,7 @@ function buildDecision(aid: string, correlationId: string, params: any): any {
 
   const decision_priority_score = calcDecisionScore({
     opportunity: opportunityFactor,
-    economic_impact: isStockDecision ? 1.0 : 0.8, // impacto econômico máximo para estoque
+    economic_impact: isStockDecision ? 1.0 : 0.8,
     confidence: 0.9,
     visibility_gap: params.visibility_score != null ? (1 - params.visibility_score) : 0.5,
     inventory: stockFactor,
