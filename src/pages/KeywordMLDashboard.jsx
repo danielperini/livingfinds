@@ -68,6 +68,7 @@ export default function KeywordMLDashboard() {
   const [running, setRunning] = useState(false);
   const [recalibrating, setRecalibrating] = useState(false);
   const [message, setMessage] = useState(null);
+  const [lastRunMeta, setLastRunMeta] = useState(null); // { promoted_count, calibration_updated, skipped_promotion }
   const [statusFilter, setStatusFilter] = useState('all');
   const [tailFilter, setTailFilter] = useState('all');
   const [expandedId, setExpandedId] = useState(null);
@@ -109,9 +110,17 @@ export default function KeywordMLDashboard() {
       });
       const d = res?.data || {};
       if (d.ok) {
+        if (!dryRun) {
+          setLastRunMeta({
+            promoted_count: d.promoted_count ?? 0,
+            calibration_updated: d.calibration_updated ?? 0,
+            skipped_promotion: d.skipped_promotion ?? false,
+          });
+        }
+        const promotedInfo = !dryRun && (d.promoted_count ?? 0) > 0 ? ` · ${d.promoted_count} promovidas` : '';
         const txt = dryRun
           ? `Simulação: ${d.candidates_generated} candidatos · Status modelo: ${d.model_status} (${d.readiness_score}%)`
-          : `✓ ${d.saved} predições geradas para ${d.active_products} produtos · ${d.search_terms_processed} termos analisados`;
+          : `✓ ${d.created ?? d.saved ?? 0} criadas, ${d.updated ?? 0} atualizadas · ${d.active_products} produtos · ${d.search_terms_processed} termos${promotedInfo}`;
         setMessage({ type: 'success', text: txt });
         if (!dryRun) await load();
       } else {
@@ -200,11 +209,18 @@ export default function KeywordMLDashboard() {
             {recalibrating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart2 className="w-3.5 h-3.5" />}
             Recalibrar
           </button>
-          <button onClick={() => runPipeline(false)} disabled={running || loading}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 rounded-lg font-semibold transition-colors disabled:opacity-50">
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-            {running ? 'Executando...' : 'Gerar Predições'}
-          </button>
+          <div className="relative">
+            <button onClick={() => runPipeline(false)} disabled={running || loading}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 rounded-lg font-semibold transition-colors disabled:opacity-50">
+              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {running ? 'Executando...' : 'Gerar Predições'}
+            </button>
+            {lastRunMeta && (lastRunMeta.promoted_count > 0 || lastRunMeta.calibration_updated > 0) && (
+              <span className="absolute -top-2 -right-2 flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded-full bg-emerald-500/90 text-white border border-emerald-400/50 whitespace-nowrap">
+                {lastRunMeta.promoted_count > 0 ? `+${lastRunMeta.promoted_count} camp.` : `cal.${lastRunMeta.calibration_updated}`}
+              </span>
+            )}
+          </div>
           <button onClick={load} className="p-2 bg-surface-2 border border-surface-3 rounded-lg text-slate-400 hover:text-white transition-colors">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
