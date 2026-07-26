@@ -11,7 +11,12 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const SAFETY_MARGIN_MS = 5 * 60 * 1000;
+// Margem de validade: tratar token de 60min como se expirasse em 50min (buffer de 10min)
+const ACCESS_TOKEN_BUFFER_MS = 10 * 60 * 1000; // subtrair 10min do expires_in ao persistir
+// Verificar se faltam menos de 15min para a expiração → renovar proativamente
+const PROACTIVE_REFRESH_THRESHOLD_MS = 15 * 60 * 1000;
+// Margem mínima para considerar token válido ao servir da cache
+const SAFETY_MARGIN_MS = 2 * 60 * 1000;
 const LOCK_TTL_MS = 90 * 1000;
 const RETRY_DELAYS_MS = [0, 2000, 6000];
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -74,7 +79,10 @@ async function logEvent(base44: any, accountId: string, status: string, summary:
 
 async function persistSuccessfulToken(base44: any, accountId: string, tokenResult: any, source: string, envRefreshToken?: string) {
   const now = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + tokenResult.expires_in * 1000).toISOString();
+  // Aplicar buffer de 10min: salvar expires_at como (now + expires_in - 10min)
+  // Isso garante que o token_manager renova com 10min de antecedência no próximo ciclo
+  const effectiveExpiresMs = tokenResult.expires_in * 1000 - ACCESS_TOKEN_BUFFER_MS;
+  const expiresAt = new Date(Date.now() + Math.max(effectiveExpiresMs, 5 * 60 * 1000)).toISOString();
   const patch: any = {
     ads_access_token: tokenResult.access_token,
     ads_access_token_expires_at: expiresAt,
@@ -142,8 +150,16 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error_type: 'missing_refresh_token', requires_reauthorization: true, active_token_source: 'missing', message: 'Refresh token Amazon Ads ausente. Reconecte a conta.' });
     }
 
+    // Verificar cache: se token ainda é válido com margem de segurança
     if (!forceRefresh && validAccessToken(account)) {
-      return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database', active_token_source: activeTokenSource, token_source_conflict: tokenConflict });
+      const expiresAt = new Date(account.ads_access_token_expires_at || 0).getTime();
+      const msUntilExpiry = expiresAt - Date.now();
+      // Renovação proativa: token válido mas faltam menos de 15min → continuar para refresh
+      if (msUntilExpiry > PROACTIVE_REFRESH_THRESHOLD_MS) {
+        return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database', active_token_source: activeTokenSource, token_source_conflict: tokenConflict });
+      }
+      // Cair no fluxo de refresh proativo — registrar que foi proativo
+      console.log(`[TokenManager] Renovação proativa: faltam ${Math.round(msUntilExpiry / 60000)}min para expirar`);
     }
 
     // ── Lock atômico via AmazonSchedulerLock (mutex distribuído) ─────────
@@ -211,7 +227,15 @@ Deno.serve(async (req) => {
       const { access_token, expires_at } = await persistSuccessfulToken(base44, accountId, tokenResult, activeTokenSource);
       if (lockId) await base44.asServiceRole.entities.AmazonSchedulerLock.update(lockId, { status: 'released', released_at: new Date().toISOString() }).catch(() => {});
       lockOwned = false;
-      await logEvent(base44, accountId, 'success', { source: activeTokenSource, expires_at, duration_ms: Date.now() - startedAt });
+      // Determinar se foi renovação proativa ou reativa
+      const wasProactive = validAccessToken({ ads_access_token: account.ads_access_token, ads_access_token_expires_at: account.ads_access_token_expires_at }, 0);
+      await logEvent(base44, accountId, 'success', {
+        source: wasProactive ? 'proactive_refresh' : activeTokenSource,
+        expires_at,
+        margin_minutes: 10,
+        triggered_by: body.triggered_by || 'token_manager_v7',
+        duration_ms: Date.now() - startedAt,
+      });
       return Response.json({ ok: true, access_token, expires_at, from_cache: false, source: 'lwa_refresh', active_token_source: activeTokenSource, token_source_conflict: tokenConflict, duration_ms: Date.now() - startedAt });
     }
 

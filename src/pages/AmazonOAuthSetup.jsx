@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import ReconnectRecoveryPanel from '@/components/amazon/ReconnectRecoveryPanel';
+import TokenHealthPanel from '@/components/amazon/TokenHealthPanel';
 
 function Step({ n, label, status }) {
   return (
@@ -181,6 +182,11 @@ export default function AmazonOAuthSetup() {
         <ReconnectRecoveryPanel account={account} />
       )}
 
+      {/* Painel de saúde do token — aparece abaixo do banner de status */}
+      {account && !loading && (
+        <TokenHealthPanel account={account} />
+      )}
+
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-slate-500">
         <Link to="/integracoes/amazon" className="hover:text-white transition-colors flex items-center gap-1">
@@ -333,7 +339,7 @@ export default function AmazonOAuthSetup() {
                 <RotateCcw className="w-4 h-4 text-slate-400" />
                 <h2 className="text-sm font-semibold text-white">Status do Fallback Automático</h2>
               </div>
-              <span className="text-[10px] text-slate-500 bg-surface-2 px-2 py-0.5 rounded">ciclo 40 min</span>
+              <span className="text-[10px] text-slate-500 bg-surface-2 px-2 py-0.5 rounded">ciclo 30 min</span>
             </div>
 
             {/* 3 indicadores em linha */}
