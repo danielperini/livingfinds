@@ -161,6 +161,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 1. Servir da cache se token ainda é válido com margem proativa ───────
+    // (apenas quando NÃO é force_refresh)
     if (!forceRefresh && validAccessToken(account)) {
       const msUntilExpiry = new Date(account.ads_access_token_expires_at || 0).getTime() - Date.now();
       if (msUntilExpiry > PROACTIVE_REFRESH_THRESHOLD_MS) {
@@ -172,7 +173,9 @@ Deno.serve(async (req) => {
     }
 
     // ── 2. Lock de concorrência via flags da entidade ─────────────────────────
-    // Se outro processo já iniciou refresh há menos de LOCK_TTL_MS → wait-and-retry
+    // Atua MESMO com force_refresh=true para evitar que instâncias paralelas do
+    // watchdog chamem o LWA simultaneamente (a Amazon invalida o token anterior
+    // a cada novo access_token, gerando "Not authorized" nas demais).
     const inProgress  = account.ads_token_refresh_in_progress === true;
     const startedAtLock = account.ads_token_refresh_started_at
       ? new Date(account.ads_token_refresh_started_at).getTime()
@@ -180,14 +183,19 @@ Deno.serve(async (req) => {
     const lockAge = Date.now() - startedAtLock;
     const lockIsAlive = inProgress && lockAge < LOCK_TTL_MS;
 
-    if (lockIsAlive && !forceRefresh) {
+    if (lockIsAlive) {
       console.log(`[TokenManager v8] Outro refresh em andamento (${Math.round(lockAge / 1000)}s atrás). Aguardando...`);
       // Wait-and-retry: até 3 tentativas de 3s cada
       for (let attempt = 0; attempt < CONCURRENCY_MAX_RETRIES; attempt++) {
         await wait(CONCURRENCY_WAIT_MS);
         account = await readAccount(base44, accountId);
-        if (validAccessToken(account, 60_000)) {
-          console.log(`[TokenManager v8] Token renovado por outro processo na tentativa ${attempt + 1}. Usando.`);
+        // Com force_refresh: aceitar token renovado nos últimos 30s como suficiente
+        const lastRefreshMs = account.ads_last_token_refresh_at
+          ? Date.now() - new Date(account.ads_last_token_refresh_at).getTime()
+          : Infinity;
+        const freshEnough = lastRefreshMs < 30_000;
+        if (validAccessToken(account, 60_000) && (freshEnough || !forceRefresh)) {
+          console.log(`[TokenManager v8] Token renovado por outro processo na tentativa ${attempt + 1} (${Math.round(lastRefreshMs / 1000)}s atrás). Usando.`);
           return Response.json({ ok: true, access_token: account.ads_access_token, expires_at: account.ads_access_token_expires_at, from_cache: true, source: 'database_after_concurrent_wait', active_token_source: activeTokenSource });
         }
         // Verificar se o lock foi liberado

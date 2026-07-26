@@ -93,8 +93,34 @@ Deno.serve(async (req) => {
         }).catch(() => {});
       }
 
-      // Toda execução de 40 minutos renova de verdade. Não confiar apenas no
-      // horário salvo do access token, pois instâncias diferentes não compartilham cache.
+      // Skip se o token foi renovado há menos de 20min E ainda é válido por >10min.
+      // Evita que instâncias paralelas do watchdog forcem renovações desnecessárias.
+      const lastRefreshAt = account.ads_last_token_refresh_at
+        ? new Date(account.ads_last_token_refresh_at).getTime()
+        : 0;
+      const msSinceLastRefresh = Date.now() - lastRefreshAt;
+      const tokenExpiresAt = account.ads_access_token_expires_at
+        ? new Date(account.ads_access_token_expires_at).getTime()
+        : 0;
+      const msUntilExpiry = tokenExpiresAt - Date.now();
+      const refreshedRecently = msSinceLastRefresh < 20 * 60 * 1000; // <20min
+      const tokenStillValid   = msUntilExpiry > 10 * 60 * 1000;      // >10min restantes
+
+      if (refreshedRecently && tokenStillValid) {
+        console.log(`[Watchdog] Pulando conta ${accountId} — token renovado há ${Math.round(msSinceLastRefresh / 60000)}min, válido por mais ${Math.round(msUntilExpiry / 60000)}min.`);
+        const item = {
+          account_id: accountId,
+          ok: true,
+          refreshed: false,
+          skipped: true,
+          skip_reason: 'skipped_recent_refresh',
+          last_refresh_min_ago: Math.round(msSinceLastRefresh / 60000),
+          valid_for_min: Math.round(msUntilExpiry / 60000),
+        };
+        results.push(item);
+        continue;
+      }
+
       let finalResult: any = null;
       let attempts = 0;
 
@@ -105,7 +131,6 @@ Deno.serve(async (req) => {
         try {
           const response = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
             amazon_account_id: accountId,
-            force_refresh: true,
             _service_role: true,
           });
           finalResult = response?.data || response || {};
