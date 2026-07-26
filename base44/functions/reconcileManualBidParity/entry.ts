@@ -171,7 +171,7 @@ Deno.serve(async (request) => {
         }
 
         await wait(1200);
-        const updateKeyword = await ads(base44, accountId, 'reconcileKeywordBid', 'PUT', '/sp/keywords', {
+        const keywordUpdate = await ads(base44, accountId, 'reconcileKeywordBid', 'PUT', '/sp/keywords', {
           keywords: [{ keywordId, bid: targetBid }],
         }, 'application/vnd.spKeyword.v3+json');
 
