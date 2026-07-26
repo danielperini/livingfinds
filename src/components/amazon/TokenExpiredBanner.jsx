@@ -19,6 +19,23 @@ export default function TokenExpiredBanner({ accountId }) {
 
     const check = async () => {
       try {
+        // Verificação positiva: token já está ativo?
+        const accounts = await base44.entities.AmazonAccount.filter(
+          { id: accountId }, null, 1
+        ).catch(() => []);
+        const account = accounts[0];
+        if (account?.ads_token_status === 'active') {
+          // Confirmar que o alerta também foi resolvido no banco
+          const activeTokenAlerts = await base44.entities.Alert.filter(
+            { amazon_account_id: accountId, alert_type: 'token_expired', status: 'active' },
+            null, 1
+          ).catch(() => []);
+          if (!activeTokenAlerts[0]) {
+            if (!cancelled) setAlertData(null);
+            return;
+          }
+        }
+
         // Verificação 1: Alert ativo de token_expired
         const alerts = await base44.entities.Alert.filter(
           { amazon_account_id: accountId, alert_type: 'token_expired', status: 'active' },
