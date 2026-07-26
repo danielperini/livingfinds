@@ -77,6 +77,7 @@ export default function Products({ externalRefreshTrigger }) {
   const [account, setAccount] = useState(null);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [sortBy, setSortBy] = useState('champions');
@@ -473,13 +474,46 @@ export default function Products({ externalRefreshTrigger }) {
         <KpiCard label="Pausados p/ Estoque" value={loading ? '—' : pausedByStock} detail="pausa automática aplicada" tone={pausedByStock > 0 ? 'violet' : 'default'} />
       </div>
 
-      {/* Busca + Filtros */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-shrink-0 sm:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}
-            placeholder="ASIN, SKU, nome..." className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
+      {/* Busca */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+          <input
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { setSearch(searchInput.trim()); setPage(1); } }}
+            placeholder="Buscar por ASIN, SKU ou nome..."
+            className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+          />
         </div>
+        <button
+          type="button"
+          onClick={() => { setSearch(searchInput.trim()); setPage(1); }}
+          className="px-4 py-2.5 bg-cyan/15 border border-cyan/30 text-cyan text-sm font-semibold rounded-lg hover:bg-cyan/25 transition-colors whitespace-nowrap"
+        >
+          Buscar
+        </button>
+        {search && (
+          <button
+            type="button"
+            onClick={() => { setSearchInput(''); setSearch(''); setPage(1); }}
+            className="flex items-center gap-1 px-3 py-2.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Badge resultados + Filtros */}
+      <div className="flex flex-col gap-2">
+        {search && (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="px-2.5 py-1 rounded-full bg-cyan/10 border border-cyan/20 text-cyan font-semibold">
+              {filtered.length} produto{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
+            </span>
+            <span>para <span className="text-slate-300 font-medium">"{search}"</span></span>
+          </div>
+        )}
         <div className="flex items-center gap-1.5 flex-wrap">
           <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           {[
