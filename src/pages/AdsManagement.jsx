@@ -5,7 +5,7 @@ import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
   Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play } from
+  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, PlayCircle, DollarSign } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -17,6 +17,7 @@ import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
 import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
+import ReactivateWithBudgetModal from '@/components/ads/ReactivateWithBudgetModal';
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
@@ -73,7 +74,7 @@ const STATE_FILTERS = [
 
 const PAGE_SIZE = 50;
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume }) {
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget }) {
   const [page, setPage] = useState(1);
   const [itemLoading, setItemLoading] = useState({});
 
@@ -172,13 +173,22 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                       'text-amber-400 bg-amber-500/10 hover:bg-amber-500/25' :
                       'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/25'}`
                       }>
-                      
                         {isItemLoading ?
                       <Loader2 className="w-3 h-3 animate-spin" /> :
                       state === 'enabled' ?
                       <Pause className="w-3 h-3" /> :
                       <Play className="w-3 h-3" />}
                       </button> :
+                    null}
+                    {/* Reativar + Ajustar Budget — apenas para pausadas */}
+                    {state === 'paused' && onReactivateBudget ?
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onReactivateBudget(c); }}
+                      title="Reativar + Ajustar Budget"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-cyan bg-cyan/10 hover:bg-cyan/25"
+                    >
+                      <DollarSign className="w-3 h-3" />
+                    </button> :
                     null}
                     {c._group_count > 1 ?
                     <span title={`${c._group_count} campanhas para este ASIN`} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30 leading-none">
@@ -272,6 +282,8 @@ export default function AdsManagement() {
   const [tokenCheck, setTokenCheck] = useState(null);
   const [pausingNoStock, setPausingNoStock] = useState(false);
   const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
+  const [reactivateBudgetModal, setReactivateBudgetModal] = useState(null); // campaign object
+  const [reactivateBudgetToast, setReactivateBudgetToast] = useState(null); // { campaignName, prevBudget, newBudget, budgetWarning }
 
   const [migrationInProgress, setMigrationInProgress] = useState(false);
   const [repairPhase, setRepairPhase] = useState(null); // null | 'phase1' | 'phase1_done' | 'phase2' | 'done' | 'error'
@@ -1061,6 +1073,7 @@ export default function AdsManagement() {
             onStateFilter={setStateFilterAuto}
             onQuickPause={quickPauseCampaign}
             onQuickResume={quickResumeCampaign}
+            onReactivateBudget={(c) => setReactivateBudgetModal(c)}
             extraAction={
             <div className="flex flex-col gap-1">
                   <StaleInventoryWarningPanel
@@ -1145,6 +1158,7 @@ export default function AdsManagement() {
               onStateFilter={setStateFilterManual}
               onQuickPause={quickPauseCampaign}
               onQuickResume={quickResumeCampaign}
+              onReactivateBudget={(c) => setReactivateBudgetModal(c)}
               extraAction={
               <div className="flex flex-col gap-1">
                     <button
