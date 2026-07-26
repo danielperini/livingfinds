@@ -867,30 +867,9 @@ export default function AdsManagement() {
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-bold text-slate-300">Campanhas</span>
             <div className="flex items-center gap-1.5">
-              <ExportPerformanceButton account={account} />
               <button onClick={() => setShowCreateWizard(true)} disabled={!account}
               className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
                 <Plus className="w-3 h-3" /> Criar
-              </button>
-              <button onClick={() => setShowProposalModal(true)} disabled={!account}
-              title="Propor campanhas manuais exact para ASINs com vendas confirmadas"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors disabled:opacity-50">
-                <Sparkles className="w-3 h-3" /> Termos Vencedores
-              </button>
-
-              <button onClick={repairAndReconcile} disabled={!account || !!repairPhase}
-              title="Repara campanhas incompletas e reconcilia estados com a Amazon Ads API"
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors disabled:opacity-50">
-                {repairPhase === 'phase1' ? <Loader2 className="w-3 h-3 animate-spin" /> :
-                 repairPhase === 'phase1_done' ? <CheckCircle className="w-3 h-3" /> :
-                 repairPhase === 'phase2' ? <Loader2 className="w-3 h-3 animate-spin" /> :
-                 repairPhase === 'done' ? <CheckCircle className="w-3 h-3" /> :
-                 <Shield className="w-3 h-3" />}
-                {repairPhase === 'phase1' ? 'Reparando incompletas...' :
-                 repairPhase === 'phase1_done' ? 'Fase 1 OK...' :
-                 repairPhase === 'phase2' ? 'Sincronizando estados...' :
-                 repairPhase === 'done' ? 'Concluído!' :
-                 'Reparar + Reconciliar'}
               </button>
 
               
