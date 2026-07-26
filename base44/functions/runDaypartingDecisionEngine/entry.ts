@@ -1,13 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
-function todayBRT() {
-  return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-}
-
 /**
  * Rota canônica de decisão de dayparting.
- * Preserva schedules existentes, sincroniza regras Amazon uma vez ao dia,
- * retira ações legadas pendentes e executa o ajuste horário canônico.
+ *
+ * Preserva schedules existentes. A frequência da sincronização estrutural é
+ * decidida por syncAmazonScheduleBidRules; este wrapper não mantém TTL paralelo.
  */
 Deno.serve(async (request) => {
   try {
@@ -15,24 +12,9 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     const internal = { ...body, _service_role: true };
 
-    const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1).catch(() => [])
-      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1).catch(() => []);
-    const accountId = accounts[0]?.id || body.amazon_account_id || null;
-
-    const dailySync = accountId ? await base44.asServiceRole.entities.SyncExecutionLog.filter({
-      amazon_account_id: accountId,
-      operation: 'sync_amazon_schedule_bid_rules',
-      execution_date: todayBRT(),
-      status: 'success',
-    }, '-started_at', 1).catch(() => []) : [];
-
-    let nativeRules: any = { ok: true, skipped: true, reason: 'already_synced_today' };
-    if (dailySync.length === 0 || body.force_native_sync === true) {
-      const nativeResponse = await base44.asServiceRole.functions.invoke('syncAmazonScheduleBidRules', internal)
-        .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-      nativeRules = nativeResponse?.data || nativeResponse || {};
-    }
+    const nativeResponse = await base44.asServiceRole.functions.invoke('syncAmazonScheduleBidRules', internal)
+      .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const nativeRules = nativeResponse?.data || nativeResponse || {};
 
     const reconcileResponse = await base44.asServiceRole.functions.invoke('reconcileLegacyDaypartingQueue', internal)
       .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
