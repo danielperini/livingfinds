@@ -2,10 +2,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 /**
  * Compatibilidade da rota antiga.
- *
- * Sincroniza as regras nativas, cancela ações legadas ainda pendentes e só
- * então executa o motor canônico. Assim o ciclo já enxerga associações Amazon
- * recém-criadas e não disputa com a fila histórica.
+ * Sincroniza regras Amazon, cancela ações legadas pendentes e delega ao motor
+ * canônico sem repetir o preflight.
  */
 Deno.serve(async (request) => {
   try {
@@ -23,6 +21,8 @@ Deno.serve(async (request) => {
 
     const response = await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
       ...internal,
+      skip_native_preflight: true,
+      skip_queue_preflight: true,
       source_function: body.source_function || 'runIntraDayPacingCycle_legacy_wrapper',
     });
     const data = response?.data || response || {};
