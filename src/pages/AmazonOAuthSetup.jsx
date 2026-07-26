@@ -7,6 +7,7 @@ import {
   AlertTriangle, ChevronRight, Plug, Clock, RotateCcw, Server
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import ReconnectRecoveryPanel from '@/components/amazon/ReconnectRecoveryPanel';
 
 function Step({ n, label, status }) {
   return (
@@ -48,6 +49,7 @@ export default function AmazonOAuthSetup() {
   const [testingFallback, setTestingFallback] = useState(false);
   const [fallbackResult, setFallbackResult]   = useState(null);
   const [reconnectBanner, setReconnectBanner] = useState(false);
+  const [showRecoveryPanel, setShowRecoveryPanel] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -89,6 +91,7 @@ export default function AmazonOAuthSetup() {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('reconnected') === '1') {
       setReconnectBanner(true);
+      setShowRecoveryPanel(true);
       setTimeout(() => setReconnectBanner(false), 8000);
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -171,6 +174,11 @@ export default function AmazonOAuthSetup() {
           <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
           <span className="text-emerald-300 font-medium">Reconectado · Retomando sincronização automaticamente...</span>
         </div>
+      )}
+
+      {/* Painel de recuperação pós-reconexão */}
+      {showRecoveryPanel && account && (
+        <ReconnectRecoveryPanel account={account} />
       )}
 
       {/* Breadcrumb */}
