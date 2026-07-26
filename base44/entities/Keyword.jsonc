@@ -61,6 +61,37 @@
     "suggested_bid": {
       "type": "number"
     },
+    "daypart_base_bid": {
+      "type": "number",
+      "description": "Bid-base imutável durante o bloco horário. Todo ajuste temporário parte dele, nunca do bid já ajustado."
+    },
+    "daypart_bid_floor": {
+      "type": "number",
+      "description": "Piso canônico: max(min_bid configurado, daypart_base_bid × 0,50)."
+    },
+    "daypart_bid_cap": {
+      "type": "number",
+      "description": "Teto canônico: min(max_bid/safe_max_cpc, daypart_base_bid × 1,50)."
+    },
+    "daypart_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "daypart_multiplier": {
+      "type": "number",
+      "default": 1
+    },
+    "daypart_last_slot": {
+      "type": "string"
+    },
+    "daypart_last_adjusted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "daypart_last_restored_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "impressions": {
       "type": "number",
       "default": 0

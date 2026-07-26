@@ -1,4 +1,4 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,9 +42,32 @@ async function markDecision(base44: any, decision: any, ok: boolean, detail: any
   });
 }
 
+async function checkIdempotency(base44: any, decision: any) {
+  if (!decision.idempotency_key || !decision.amazon_account_id) return { blocked: false };
+  const matches = await base44.asServiceRole.entities.OptimizationDecision.filter({
+    amazon_account_id: decision.amazon_account_id,
+    idempotency_key: decision.idempotency_key,
+  }, 'created_at', 50).catch(() => []);
+  const others = matches.filter((row: any) => row.id !== decision.id);
+
+  const executed = others.find((row: any) => row.status === 'executed');
+  if (executed) {
+    return { blocked: true, reason: 'idempotency_already_executed', canonical_decision_id: executed.id };
+  }
+
+  const active = others.find((row: any) => ['approved', 'executing'].includes(String(row.status || '')));
+  if (active) {
+    return { blocked: true, reason: 'idempotency_active_decision_exists', canonical_decision_id: active.id };
+  }
+
+  // Registros failed/cancelled não bloqueiam retry. Nenhuma ação Amazon foi
+  // confirmada nesses estados.
+  return { blocked: false };
+}
+
 async function executeOne(base44: any, decision: any) {
   const accountId = decision.amazon_account_id;
-  const targetBid = Number(decision.value_after);
+  const targetBid = Number(decision.value_after ?? decision.proposed_value);
   if (!Number.isFinite(targetBid) || targetBid <= 0) throw new Error('Bid de destino inválido');
 
   const keywordId = String(decision.keyword_id || (decision.entity_type === 'keyword' ? decision.entity_id : '') || '');
@@ -135,7 +158,7 @@ async function executeOne(base44: any, decision: any) {
     entity_id: `${resolvedKeywordId}|${adGroupId}`,
     entity_name: decision.keyword_text || campaignId,
     campaign_id: campaignId,
-    bid_before: decision.value_before ?? previousGroupBid ?? null,
+    bid_before: decision.value_before ?? decision.current_value ?? previousGroupBid ?? null,
     bid_after: targetBid,
     change_pct: decision.change_pct,
     reason: `${decision.rationale || 'Ajuste IA'} | Bid sincronizado simultaneamente em keyword e ad group.`.slice(0, 500),
@@ -166,6 +189,18 @@ Deno.serve(async (request) => {
       }
       if (!['approved', 'executing'].includes(decision.status)) {
         results.push({ id, ok: false, skipped: true, reason: `status ${decision.status}` });
+        continue;
+      }
+
+      const idempotency = await checkIdempotency(base44, decision);
+      if (idempotency.blocked) {
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'cancelled',
+          queue_status: 'cancelled',
+          error_message: `${idempotency.reason}: ${idempotency.canonical_decision_id}`,
+          updated_at: new Date().toISOString(),
+        }).catch(() => {});
+        results.push({ id, ok: true, skipped: true, status: 'cancelled_duplicate', ...idempotency });
         continue;
       }
 

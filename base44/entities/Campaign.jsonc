@@ -2,262 +2,109 @@
   "name": "Campaign",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
-    "ads_profile_id": {
-      "type": "string"
-    },
-    "marketplace": {
-      "type": "string"
-    },
-    "campaign_id": {
-      "type": "string"
-    },
-    "amazon_campaign_id": {
-      "type": "string"
-    },
-    "asin": {
-      "type": "string"
-    },
-    "name": {
-      "type": "string"
-    },
-    "campaign_name": {
-      "type": "string"
-    },
+    "amazon_account_id": { "type": "string" },
+    "ads_profile_id": { "type": "string" },
+    "marketplace": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "amazon_campaign_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "name": { "type": "string" },
+    "campaign_name": { "type": "string" },
     "campaign_type": {
       "type": "string",
-      "enum": [
-        "SP",
-        "SB",
-        "SD"
-      ],
+      "enum": ["SP", "SB", "SD"],
       "default": "SP"
     },
     "targeting_type": {
       "type": "string",
-      "enum": [
-        "AUTO",
-        "MANUAL"
-      ],
+      "enum": ["AUTO", "MANUAL"],
       "default": "AUTO"
     },
     "state": {
       "type": "string",
-      "enum": [
-        "enabled",
-        "paused",
-        "archived",
-        "incomplete"
-      ],
+      "enum": ["enabled", "paused", "archived", "incomplete"],
       "default": "enabled"
     },
     "status": {
       "type": "string",
-      "enum": [
-        "enabled",
-        "paused",
-        "archived",
-        "incomplete"
-      ],
+      "enum": ["enabled", "paused", "archived", "incomplete"],
       "default": "enabled"
     },
-    "amazon_status": {
-      "type": "string"
-    },
-    "is_operational": {
-      "type": "boolean",
-      "default": true
-    },
-    "requires_attention": {
-      "type": "boolean",
-      "default": false
-    },
-    "api_missing": {
-      "type": "boolean",
-      "default": false
-    },
+    "amazon_status": { "type": "string" },
+    "is_operational": { "type": "boolean", "default": true },
+    "requires_attention": { "type": "boolean", "default": false },
+    "api_missing": { "type": "boolean", "default": false },
     "source": {
       "type": "string",
-      "enum": [
-        "api",
-        "csv",
-        "manual",
-        "app"
-      ],
+      "enum": ["api", "csv", "manual", "app"],
       "default": "api"
     },
     "reconciliation_status": {
       "type": "string",
-      "enum": [
-        "ok",
-        "review_required",
-        "ambiguous",
-        "missing_in_api",
-        "missing_in_csv"
-      ],
+      "enum": ["ok", "review_required", "ambiguous", "missing_in_api", "missing_in_csv"],
       "default": "ok"
     },
-    "reconciliation_notes": {
-      "type": "string"
-    },
+    "reconciliation_notes": { "type": "string" },
     "metrics_status": {
       "type": "string",
-      "enum": [
-        "complete",
-        "partial",
-        "missing"
-      ],
+      "enum": ["complete", "partial", "missing"],
       "default": "missing"
     },
-    "daily_budget": {
-      "type": "number",
-      "default": 10
-    },
-    "currency_code": {
-      "type": "string",
-      "default": "BRL"
-    },
-    "currency_symbol": {
-      "type": "string",
-      "default": "R$"
-    },
-    "current_spend": {
-      "type": "number",
-      "default": 0
-    },
-    "spend": {
-      "type": "number",
-      "default": 0
-    },
-    "sales": {
-      "type": "number",
-      "default": 0
-    },
-    "acos": {
-      "type": "number",
-      "default": 0
-    },
-    "roas": {
-      "type": "number",
-      "default": 0
-    },
-    "impressions": {
-      "type": "number",
-      "default": 0
-    },
-    "clicks": {
-      "type": "number",
-      "default": 0
-    },
-    "orders": {
-      "type": "number",
-      "default": 0
-    },
-    "ctr": {
-      "type": "number",
-      "default": 0
-    },
-    "cpc": {
-      "type": "number",
-      "default": 0
-    },
-    "start_date": {
-      "type": "string"
-    },
-    "end_date": {
-      "type": "string"
-    },
+    "daily_budget": { "type": "number", "default": 10 },
+    "currency_code": { "type": "string", "default": "BRL" },
+    "currency_symbol": { "type": "string", "default": "R$" },
+    "current_spend": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "acos": { "type": "number", "default": 0 },
+    "roas": { "type": "number", "default": 0 },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "orders": { "type": "number", "default": 0 },
+    "ctr": { "type": "number", "default": 0 },
+    "cpc": { "type": "number", "default": 0 },
+    "start_date": { "type": "string" },
+    "end_date": { "type": "string" },
     "bidding_strategy": {
-      "type": "string"
-    },
-    "portfolio_id": {
-      "type": "string"
-    },
-    "top_of_search_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "rest_of_search_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "product_pages_adjustment": {
-      "type": "number",
-      "default": 0
-    },
-    "placement_last_updated_at": {
       "type": "string",
-      "format": "date-time"
+      "description": "Estratégia legível do app: fixed, dynamic_down_only ou dynamic_up_down."
     },
-    "created_by_app": {
-      "type": "boolean",
-      "default": false
+    "amazon_bidding_strategy": {
+      "type": "string",
+      "description": "Estratégia confirmada na Amazon Ads: MANUAL, LEGACY_FOR_SALES, AUTO_FOR_SALES ou RULE_BASED."
     },
+    "bid_control_mode": {
+      "type": "string",
+      "description": "Motor responsável pelo controle do lance, por exemplo livingfinds_dynamic_up_down_capped_50."
+    },
+    "bidding_strategy_reason": { "type": "string" },
+    "bidding_strategy_last_changed_at": { "type": "string", "format": "date-time" },
+    "bidding_strategy_next_review_at": { "type": "string", "format": "date-time" },
+    "bidding_strategy_request_id": { "type": "string" },
+    "portfolio_id": { "type": "string" },
+    "top_of_search_adjustment": { "type": "number", "default": 0 },
+    "rest_of_search_adjustment": { "type": "number", "default": 0 },
+    "product_pages_adjustment": { "type": "number", "default": 0 },
+    "placement_last_updated_at": { "type": "string", "format": "date-time" },
+    "created_by_app": { "type": "boolean", "default": false },
     "launch_phase": {
       "type": "string",
-      "enum": [
-        "new",
-        "learning",
-        "optimizing",
-        "stable"
-      ],
+      "enum": ["new", "learning", "optimizing", "stable"],
       "default": "new"
     },
-    "days_running": {
-      "type": "number",
-      "default": 0
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "last_sync_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "last_api_sync_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "last_csv_import_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "synced_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "archived": {
-      "type": "boolean",
-      "default": false
-    },
-    "archived_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "archive_reason": {
-      "type": "string"
-    },
-    "original_state": {
-      "type": "string"
-    },
-    "last_activity_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "learning_eligible": {
-      "type": "boolean",
-      "default": true
-    },
-    "excluded_from_dashboard": {
-      "type": "boolean",
-      "default": false
-    }
+    "days_running": { "type": "number", "default": 0 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "last_sync_at": { "type": "string", "format": "date-time" },
+    "last_api_sync_at": { "type": "string", "format": "date-time" },
+    "last_csv_import_at": { "type": "string", "format": "date-time" },
+    "synced_at": { "type": "string", "format": "date-time" },
+    "archived": { "type": "boolean", "default": false },
+    "archived_at": { "type": "string", "format": "date-time" },
+    "archive_reason": { "type": "string" },
+    "original_state": { "type": "string" },
+    "last_activity_at": { "type": "string", "format": "date-time" },
+    "learning_eligible": { "type": "boolean", "default": true },
+    "excluded_from_dashboard": { "type": "boolean", "default": false }
   },
-  "required": [
-    "amazon_account_id",
-    "campaign_id"
-  ]
+  "required": ["amazon_account_id", "campaign_id"]
 }

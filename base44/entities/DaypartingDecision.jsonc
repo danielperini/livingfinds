@@ -8,6 +8,19 @@
     "marketplace_id": {
       "type": "string"
     },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "keyword",
+        "ad_group",
+        "product_target",
+        "campaign"
+      ],
+      "default": "keyword"
+    },
+    "entity_id": {
+      "type": "string"
+    },
     "campaign_id": {
       "type": "string"
     },
@@ -16,6 +29,16 @@
     },
     "keyword_id": {
       "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "targeting_type": {
+      "type": "string",
+      "enum": [
+        "AUTO",
+        "MANUAL"
+      ]
     },
     "asin": {
       "type": "string"
@@ -61,6 +84,7 @@
         "BID_DOWN_ACOS",
         "BID_DOWN_CVR",
         "MAINTAIN",
+        "RESTORE_BASE",
         "BLOCK_LOW_TIME",
         "BUDGET_PROTECTION",
         "NO_SALES_SOFT",
@@ -79,21 +103,42 @@
     "current_bid": {
       "type": "number"
     },
+    "base_bid": {
+      "type": "number"
+    },
+    "bid_floor": {
+      "type": "number"
+    },
+    "bid_cap": {
+      "type": "number"
+    },
     "proposed_bid": {
       "type": "number"
     },
     "bid_change_pct": {
       "type": "number"
     },
+    "bid_multiplier": {
+      "type": "number",
+      "default": 1
+    },
+    "envelope_min_multiplier": {
+      "type": "number",
+      "default": 0.5
+    },
+    "envelope_max_multiplier": {
+      "type": "number",
+      "default": 1.5
+    },
     "bid_floor_applied": {
       "type": "boolean",
       "default": false,
-      "description": "true se clamping de 40% do bid atual foi ativado"
+      "description": "true se clamping do piso relativo foi ativado"
     },
     "bid_cap_applied": {
       "type": "boolean",
       "default": false,
-      "description": "true se cap de +20% foi ativado"
+      "description": "true se o teto econômico/relativo foi ativado"
     },
     "recency_protection_blocked": {
       "type": "boolean",
@@ -102,15 +147,19 @@
     },
     "metric_window": {
       "type": "string",
-      "description": "Per\u00edodo real dos dados de performance usados (ex: 14D)"
+      "description": "Período real dos dados de performance usados (ex: 14D)"
     },
     "recommendation_window": {
       "type": "string",
-      "description": "Per\u00edodo da recomenda\u00e7\u00e3o externa (ex: Amazon 14D)"
+      "description": "Período da recomendação externa (ex: Amazon 14D)"
     },
     "decision_window": {
       "type": "string",
-      "description": "Per\u00edodo que o motor considerou como recente"
+      "description": "Período que o motor considerou como recente"
+    },
+    "baseline_window": {
+      "type": "string",
+      "description": "Referência imutável usada no cálculo do ajuste"
     },
     "requires_approval": {
       "type": "boolean",
@@ -122,7 +171,9 @@
         "pending_approval",
         "approved",
         "rejected",
+        "executing",
         "executed",
+        "failed",
         "expired",
         "cancelled"
       ],
@@ -230,6 +281,12 @@
       ],
       "default": "UNKNOWN"
     },
+    "campaign_bidding_strategy_before": {
+      "type": "string"
+    },
+    "campaign_bidding_strategy_after": {
+      "type": "string"
+    },
     "reason": {
       "type": "string"
     },
@@ -261,8 +318,18 @@
       "type": "string",
       "format": "date-time"
     },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
     "amazon_response_status": {
       "type": "number"
+    },
+    "amazon_response": {
+      "type": "string"
     },
     "cycle_date": {
       "type": "string",
@@ -271,11 +338,14 @@
     "created_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [
     "amazon_account_id",
-    "keyword_id",
     "decision_type",
     "status"
   ]

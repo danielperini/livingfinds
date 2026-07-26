@@ -2,89 +2,45 @@
   "name": "ProductTarget",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
-    "campaign_id": {
-      "type": "string"
-    },
-    "ad_group_id": {
-      "type": "string"
-    },
-    "target_id": {
-      "type": "string"
-    },
+    "amazon_account_id": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "target_id": { "type": "string" },
     "target_type": {
       "type": "string",
-      "enum": [
-        "asin",
-        "category",
-        "brand"
-      ]
+      "enum": ["asin", "category", "brand"]
     },
-    "target_value": {
-      "type": "string"
-    },
-    "bid": {
+    "target_value": { "type": "string" },
+    "bid": { "type": "number", "default": 0.3 },
+    "daypart_base_bid": {
       "type": "number",
-      "default": 0.3
+      "description": "Bid-base individual do target; nunca herdado de outro target do mesmo Ad Group."
     },
+    "daypart_bid_floor": { "type": "number" },
+    "daypart_bid_cap": { "type": "number" },
+    "daypart_active": { "type": "boolean", "default": false },
+    "daypart_multiplier": { "type": "number", "default": 1 },
+    "daypart_last_slot": { "type": "string" },
+    "daypart_last_adjusted_at": { "type": "string", "format": "date-time" },
+    "daypart_last_restored_at": { "type": "string", "format": "date-time" },
     "state": {
       "type": "string",
-      "enum": [
-        "enabled",
-        "paused",
-        "archived"
-      ],
+      "enum": ["enabled", "paused", "archived"],
       "default": "enabled"
     },
     "status": {
       "type": "string",
-      "enum": [
-        "enabled",
-        "negative",
-        "archived"
-      ],
+      "enum": ["enabled", "negative", "archived"],
       "default": "enabled"
     },
-    "is_negative": {
-      "type": "boolean",
-      "default": false
-    },
-    "impressions": {
-      "type": "number",
-      "default": 0
-    },
-    "clicks": {
-      "type": "number",
-      "default": 0
-    },
-    "spend": {
-      "type": "number",
-      "default": 0
-    },
-    "sales": {
-      "type": "number",
-      "default": 0
-    },
-    "acos": {
-      "type": "number",
-      "default": 0
-    },
-    "roas": {
-      "type": "number",
-      "default": 0
-    },
-    "synced_at": {
-      "type": "string",
-      "format": "date-time"
-    }
+    "is_negative": { "type": "boolean", "default": false },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "acos": { "type": "number", "default": 0 },
+    "roas": { "type": "number", "default": 0 },
+    "synced_at": { "type": "string", "format": "date-time" }
   },
-  "required": [
-    "amazon_account_id",
-    "campaign_id",
-    "ad_group_id",
-    "target_type",
-    "target_value"
-  ]
+  "required": ["amazon_account_id", "campaign_id", "ad_group_id", "target_type", "target_value"]
 }

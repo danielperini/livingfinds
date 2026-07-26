@@ -1,13 +1,11 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 /**
  * runUnifiedDecisionEngine
  *
  * Entrada canônica e única do motor de decisões do LivingFinds.
- * Antes e depois do motor principal, reconcilia o escopo do ciclo manual de bids
- * para impedir que campanhas antigas, pausadas/arquivadas, ASINs inativos,
- * produtos sem estoque, keywords não-EXACT ou grupos multi-keyword permaneçam
- * em lifecycle/fila de decisões.
+ * Reconciliador manual, motor determinístico, regras nativas Amazon, migração
+ * da fila antiga e monitor de tendência compartilham o mesmo ciclo.
  */
 Deno.serve(async (request) => {
   try {
@@ -23,10 +21,9 @@ Deno.serve(async (request) => {
       ...body,
       _service_role: true,
       source_function: body.source_function || 'runUnifiedDecisionEngine',
-      engine_version: 'unified-v1',
+      engine_version: 'unified-v2-native-bid-rules',
     };
 
-    // Pré-flight: sincroniza estados e retira lixo histórico do ciclo antes de decidir.
     const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
       'reconcileManualBidCycleScope',
       {
@@ -43,8 +40,26 @@ Deno.serve(async (request) => {
     );
     const data = result?.data || result || {};
 
-    // Pós-flight: o motor legado ainda pode enxergar linhas históricas persistidas.
-    // Cancela qualquer decisão nova que não pertença ao universo manual ativo.
+    const nativeRulesResponse = await base44.asServiceRole.functions.invoke(
+      'syncAmazonScheduleBidRules',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        dry_run: body.dry_run === true,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const nativeRules = nativeRulesResponse?.data || nativeRulesResponse || {};
+
+    // Remove apenas ações legadas ainda pendentes. O histórico executado é mantido.
+    const legacyQueueResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileLegacyDaypartingQueue',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const legacyQueue = legacyQueueResponse?.data || legacyQueueResponse || {};
+
     const scopeAfterResponse = await base44.asServiceRole.functions.invoke(
       'reconcileManualBidCycleScope',
       {
@@ -55,7 +70,6 @@ Deno.serve(async (request) => {
     ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const scopeAfter = scopeAfterResponse?.data || scopeAfterResponse || {};
 
-    // Pós-ciclo: monitorar tendência de ACoS (fire-and-forget)
     const trendMonitorResponse = await base44.asServiceRole.functions.invoke(
       'runAcosTrendMonitor',
       {
@@ -67,13 +81,16 @@ Deno.serve(async (request) => {
     const trendMonitor = trendMonitorResponse?.data || trendMonitorResponse || {};
 
     return Response.json({
-      ok: data?.ok !== false && scopeAfter?.ok !== false,
+      ok: data?.ok !== false && scopeAfter?.ok !== false && nativeRules?.ok !== false && legacyQueue?.ok !== false,
       engine: 'unified',
+      engine_version: 'unified-v2-native-bid-rules',
       delegated_to: 'runDeterministicDecisionEngine',
       amazon_account_id: body.amazon_account_id || null,
       manual_bid_scope_before: scopeBefore,
-      manual_bid_scope_after: scopeAfter,
       result: data,
+      amazon_schedule_bid_rules: nativeRules,
+      legacy_dayparting_queue: legacyQueue,
+      manual_bid_scope_after: scopeAfter,
       acos_trend_monitor: trendMonitor,
     });
   } catch (error: any) {
