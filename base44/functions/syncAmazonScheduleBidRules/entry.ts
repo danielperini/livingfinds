@@ -10,7 +10,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
  * - campanhas manuais só entram quando estratégicas.
  */
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-const ENGINE_VERSION = 'amazon-native-schedule-v4-campaign-scoped';
+const ENGINE_VERSION = 'amazon-native-schedule-v5-configurable';
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
@@ -52,7 +52,11 @@ function hashText(value: string) {
 
 function buildWindows(patterns: any[], decisions: any[]) {
   const slots = new Map<string, { classification: string; mature: boolean; score: number }>();
-  for (const row of patterns) {
+  const orderedPatterns = [...patterns].sort((a, b) => new Date(a.updated_at || a.created_at || 0).getTime() - new Date(b.updated_at || b.created_at || 0).getTime());
+  const orderedDecisions = [...decisions].sort((a, b) => new Date(a.updated_at || a.created_at || 0).getTime() - new Date(b.updated_at || b.created_at || 0).getTime());
+
+  // Ordem antiga → nova: o registro mais recente sobrescreve o anterior.
+  for (const row of orderedPatterns) {
     const dow = Number(row.day_of_week), hour = Number(row.hour);
     if (dow < 0 || dow > 6 || hour < 0 || hour > 23) continue;
     slots.set(`${dow}|${hour}`, {
@@ -61,7 +65,7 @@ function buildWindows(patterns: any[], decisions: any[]) {
       score: Number(row.peak_score || 0),
     });
   }
-  for (const row of decisions) {
+  for (const row of orderedDecisions) {
     const dow = Number(row.day_of_week), hour = Number(row.hour);
     if (dow < 0 || dow > 6 || hour < 0 || hour > 23) continue;
     const classification = slotClass(row.slot_classification);
@@ -171,33 +175,37 @@ Deno.serve(async (request) => {
     const dryRun = body.dry_run === true;
     const force = body.force === true || body.force_native_sync === true;
 
-    if (!force && !dryRun) {
-      const todayLogs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
-        amazon_account_id: aid,
-        operation: 'sync_amazon_schedule_bid_rules',
-        execution_date: today,
-      }, '-started_at', 10).catch(() => []);
-      if (todayLogs.some((log: any) => ['success', 'partial'].includes(String(log.status || '')))) {
-        return Response.json({ ok: true, skipped: true, reason: 'already_synced_today', execution_date: today });
-      }
-    }
-
-    const [configs, performance, campaigns, products, patterns, decisions, storedRules] = await Promise.all([
-      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 3000).catch(() => []),
-      base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 1500).catch(() => []),
-    ]);
-
+    const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []);
     const cfg = configs[0] || {};
-    const perf = performance[0] || {};
     if (cfg.enabled === false || cfg.dayparting_enabled === false) {
       return Response.json({ ok: true, skipped: true, reason: 'Autopilot/dayparting desabilitado' });
     }
 
+    const nativeRulesEnabled = cfg.amazon_native_schedule_rules_enabled !== false;
+    const syncFrequencyHours = Math.max(1, Number(cfg.native_rules_sync_frequency_hours || 24));
+    if (!force && !dryRun) {
+      const recentLogs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
+        amazon_account_id: aid,
+        operation: 'sync_amazon_schedule_bid_rules',
+      }, '-completed_at', 10).catch(() => []);
+      const cutoff = Date.now() - syncFrequencyHours * 3600000;
+      const alreadyDone = recentLogs.some((log: any) =>
+        ['success', 'partial'].includes(String(log.status || '')) &&
+        new Date(log.completed_at || log.started_at || 0).getTime() >= cutoff,
+      );
+      if (alreadyDone) return Response.json({ ok: true, skipped: true, reason: 'sync_frequency_not_elapsed', sync_frequency_hours: syncFrequencyHours });
+    }
+
+    const [performance, campaigns, products, patterns, decisions, storedRules] = await Promise.all([
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 1000).catch(() => []),
+      base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, 'created_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+    ]);
+
+    const perf = performance[0] || {};
     const strictEnvelope = cfg.strict_bid_envelope !== false;
     const desiredAmazonStrategy = strictEnvelope ? 'MANUAL' : 'AUTO_FOR_SALES';
     const desiredLocalStrategy = strictEnvelope ? 'fixed' : 'dynamic_up_down';
@@ -262,8 +270,6 @@ Deno.serve(async (request) => {
       eligible.push({ ...campaign, resolved_campaign_id: cid, resolved_targeting_type: type });
     }
 
-    // Cada campanha usa suas próprias decisões quando disponíveis; o padrão
-    // horário da conta é o fallback. Planos iguais são agrupados numa só regra.
     const plans = new Map<string, any>();
     for (const campaign of eligible) {
       const cid = campaign.resolved_campaign_id;
@@ -282,8 +288,8 @@ Deno.serve(async (request) => {
     }
 
     const desiredKeys = new Set<string>();
-    let nativeSupported = true;
-    let rulesCreated = 0, rulesPaused = 0, associations = 0, associationFailures = 0;
+    let apiSupported = true;
+    let rulesCreated = 0, rulesReactivated = 0, rulesPaused = 0, associations = 0, associationFailures = 0;
     const results: any[] = [];
 
     for (const plan of plans.values()) {
@@ -296,7 +302,7 @@ Deno.serve(async (request) => {
       let local = storedRules.find((rule: any) => rule.idempotency_key === idem) || null;
       let id = String(local?.optimization_rule_id || '');
 
-      if (!id && nativeSupported && !dryRun) {
+      if (!id && nativeRulesEnabled && apiSupported && !dryRun) {
         const search = await rulesCommand(base44, aid, 'search_rules', {
           maxResults: 20,
           optimizationRuleFilter: {
@@ -306,9 +312,10 @@ Deno.serve(async (request) => {
           },
         });
         id = String(remoteRules(search).find((rule: any) => String(rule.ruleName || '') === ruleName)?.optimizationRuleId || '');
-        if (search?.unsupported === true) nativeSupported = false;
+        if (search?.unsupported === true) apiSupported = false;
       }
 
+      const nativeAvailable = nativeRulesEnabled && apiSupported;
       const localData: any = {
         amazon_account_id: aid,
         marketplace_id: account.marketplace_id || account.marketplace || null,
@@ -329,11 +336,11 @@ Deno.serve(async (request) => {
         campaign_ids: campaignIds,
         asins: [...new Set(plan.campaigns.map((campaign: any) => campaign.asin).filter(Boolean))],
         targeting_types: [...new Set(plan.campaigns.map((campaign: any) => campaign.resolved_targeting_type))],
-        native_api_supported: nativeSupported,
-        fallback_mode: nativeSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
+        native_api_supported: nativeAvailable,
+        fallback_mode: nativeAvailable ? 'amazon_native_positive_app_negative' : 'app_managed_only',
         idempotency_key: idem,
         engine_version: ENGINE_VERSION,
-        reason: `${plan.classification}, score ${plan.average_score}. Amazon incrementa ${plan.adjustment}% para ${campaignIds.length} campanha(s); reduções ficam no LivingFinds.`,
+        reason: `${plan.classification}, score ${plan.average_score}. ${nativeAvailable ? `Amazon incrementa ${plan.adjustment}%` : 'LivingFinds gerencia o ajuste'} para ${campaignIds.length} campanha(s).`,
         updated_at: now,
         next_review_at: nextReview(),
       };
@@ -341,12 +348,12 @@ Deno.serve(async (request) => {
       if (local?.id) await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, localData).catch(() => {});
       else local = await base44.asServiceRole.entities.AmazonScheduledRule.create({
         ...localData,
-        status: dryRun ? 'planned' : nativeSupported ? 'creating' : 'unsupported',
+        status: dryRun ? 'planned' : nativeAvailable ? 'creating' : 'unsupported',
         association_status: 'pending',
         created_at: now,
       });
 
-      if (!id && nativeSupported && !dryRun) {
+      if (!id && nativeAvailable && !dryRun) {
         const created = await rulesCommand(base44, aid, 'create_rules', {
           optimizationRules: [{
             action: {
@@ -366,12 +373,12 @@ Deno.serve(async (request) => {
           }],
         });
         id = ruleId(created);
-        if (!created?.ok && created?.unsupported) nativeSupported = false;
+        if (!created?.ok && created?.unsupported) apiSupported = false;
         await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
           optimization_rule_id: id || null,
-          status: id ? 'enabled' : nativeSupported ? 'failed' : 'unsupported',
-          native_api_supported: nativeSupported,
-          fallback_mode: nativeSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
+          status: id ? 'enabled' : apiSupported ? 'failed' : 'unsupported',
+          native_api_supported: nativeRulesEnabled && apiSupported,
+          fallback_mode: nativeRulesEnabled && apiSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
           amazon_request_id: created?.request_id || null,
           amazon_response_status: Number(created?.status || 0) || null,
           amazon_response: JSON.stringify(created?.payload || created || {}).slice(0, 4000),
@@ -383,12 +390,31 @@ Deno.serve(async (request) => {
       }
 
       if (dryRun) {
-        results.push({ rule_name: ruleName, adjustment: plan.adjustment, campaigns: campaignIds, asins: localData.asins, dry_run: true });
+        results.push({ rule_name: ruleName, adjustment: plan.adjustment, campaigns: campaignIds, asins: localData.asins, native_enabled: nativeRulesEnabled, dry_run: true });
         continue;
       }
-      if (!nativeSupported || !id) {
-        results.push({ rule_name: ruleName, campaigns: campaignIds, ok: false, fallback: 'app_managed_only' });
+      if (!nativeRulesEnabled || !apiSupported || !id) {
+        results.push({ rule_name: ruleName, campaigns: campaignIds, ok: true, fallback: 'app_managed_only' });
         continue;
+      }
+
+      if (String(local.status || '') === 'paused') {
+        const reactivated = await rulesCommand(base44, aid, 'update_rules', {
+          optimizationRules: [{ optimizationRuleId: id, status: 'ENABLED' }],
+        });
+        if (reactivated?.ok || reactivated?.conflict_existing) {
+          rulesReactivated++;
+          await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
+            status: 'enabled',
+            amazon_request_id: reactivated?.request_id || local.amazon_request_id || null,
+            amazon_response_status: Number(reactivated?.status || 0) || null,
+            amazon_response: JSON.stringify(reactivated?.payload || reactivated || {}).slice(0, 4000),
+            updated_at: now,
+          }).catch(() => {});
+        } else {
+          results.push({ rule_name: ruleName, rule_id: id, ok: false, error: 'Falha ao reativar regra Amazon' });
+          continue;
+        }
       }
 
       const alreadyAssociated = new Set<string>((local.associated_campaign_ids || []).map(String));
@@ -444,7 +470,7 @@ Deno.serve(async (request) => {
 
         let paused = !stale.optimization_rule_id;
         let response: any = null;
-        if (stale.optimization_rule_id && nativeSupported) {
+        if (stale.optimization_rule_id && apiSupported) {
           response = await rulesCommand(base44, aid, 'update_rules', {
             optimizationRules: [{ optimizationRuleId: String(stale.optimization_rule_id), status: 'PAUSED' }],
           });
@@ -455,7 +481,7 @@ Deno.serve(async (request) => {
           await base44.asServiceRole.entities.AmazonScheduledRule.update(stale.id, {
             status: 'paused',
             association_status: 'pending',
-            reason: `Regra pausada: janela, produto ou campanhas alterados no ciclo ${today}. Histórico preservado.`,
+            reason: `Regra pausada: janela, produto, campanhas ou configuração alterados no ciclo ${today}. Histórico preservado.`,
             amazon_request_id: response?.request_id || stale.amazon_request_id || null,
             amazon_response_status: Number(response?.status || 0) || stale.amazon_response_status || null,
             amazon_response: response ? JSON.stringify(response?.payload || response).slice(0, 4000) : stale.amazon_response || null,
@@ -467,7 +493,8 @@ Deno.serve(async (request) => {
       }
     }
 
-    const logStatus = associationFailures > 0 && associations === 0 ? 'error' : nativeSupported ? 'success' : 'partial';
+    const nativeAvailable = nativeRulesEnabled && apiSupported;
+    const logStatus = associationFailures > 0 && associations === 0 ? 'error' : nativeAvailable ? 'success' : 'partial';
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
       operation: 'sync_amazon_schedule_bid_rules',
@@ -477,32 +504,37 @@ Deno.serve(async (request) => {
       started_at: new Date(startedAt).toISOString(),
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt,
-      records_processed: rulesCreated + rulesPaused + associations,
+      records_processed: rulesCreated + rulesReactivated + rulesPaused + associations,
       result_summary: JSON.stringify({
         rule_plans: plans.size,
         campaigns: eligible.length,
         rules_created: rulesCreated,
+        rules_reactivated: rulesReactivated,
         rules_paused: rulesPaused,
         associations,
-        native_supported: nativeSupported,
+        native_enabled: nativeRulesEnabled,
+        api_supported: apiSupported,
         strict_envelope: strictEnvelope,
       }).slice(0, 1500),
-      error_message: nativeSupported ? null : 'Optimization Rules indisponível neste perfil/marketplace; fallback app_managed_only ativado.',
+      error_message: nativeAvailable ? null : nativeRulesEnabled ? 'Optimization Rules indisponível neste perfil/marketplace; fallback app_managed_only ativado.' : 'Regras nativas desabilitadas na configuração; fallback app_managed_only ativado.',
     }).catch(() => {});
 
     return Response.json({
-      ok: associationFailures === 0 || associations > 0 || !nativeSupported,
+      ok: associationFailures === 0 || associations > 0 || !nativeAvailable,
       engine_version: ENGINE_VERSION,
       strict_bid_envelope: strictEnvelope,
       amazon_base_strategy: desiredAmazonStrategy,
       local_bidding_strategy: desiredLocalStrategy,
       bid_control_mode: controlMode,
-      native_api_supported: nativeSupported,
-      fallback_mode: nativeSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
+      native_rules_enabled: nativeRulesEnabled,
+      native_api_supported: apiSupported,
+      fallback_mode: nativeAvailable ? 'amazon_native_positive_app_negative' : 'app_managed_only',
       rule_limit: 'Schedule Bid Rules nativas somente incrementam bids.',
+      sync_frequency_hours: syncFrequencyHours,
       rule_plans: plans.size,
       campaigns_eligible: eligible.length,
       rules_created: rulesCreated,
+      rules_reactivated: rulesReactivated,
       rules_paused: rulesPaused,
       associations,
       association_failures: associationFailures,
