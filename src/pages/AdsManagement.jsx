@@ -1046,9 +1046,9 @@ export default function AdsManagement() {
               }
             />
           ) : (
-            <div className="flex flex-col flex-1 min-w-0 min-h-0">
+            <>
               {migrationInProgress && (
-                <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5">
+                <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5 flex-shrink-0">
                   <Settings className="w-3 h-3 text-amber-400 animate-spin" />
                   <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
                 </div>
@@ -1095,7 +1095,7 @@ export default function AdsManagement() {
                   </div>
                 }
               />
-            </div>
+            </>
           )}
         </div>
 
