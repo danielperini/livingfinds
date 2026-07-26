@@ -1593,15 +1593,18 @@ export default function AdsManagement() {
           campaign={reactivateBudgetModal}
           account={account}
           onClose={() => setReactivateBudgetModal(null)}
-          onSuccess={(updatedCampaign, toastInfo) => {
-            // Atualização otimista
-            setCampaigns((prev) => prev.map((c) => c.id === updatedCampaign.id ? updatedCampaign : c));
-            if (selectedCampaign?.id === updatedCampaign.id) {
-              setSelectedCampaign(updatedCampaign);
+          onDone={(updates) => {
+            const id = reactivateBudgetModal.id;
+            // 1. Atualizar lista — botão CampaignColumn desaparece (state != 'paused')
+            setCampaigns((prev) => prev.map((c) =>
+              c.id === id ? { ...c, ...updates, state: 'enabled', status: 'enabled' } : c
+            ));
+            // 2. Atualizar campanha selecionada — botão header desaparece
+            if (selectedCampaign?.id === id) {
+              setSelectedCampaign((prev) => ({ ...prev, ...updates, state: 'enabled', status: 'enabled' }));
             }
+            // 3. Fechar modal
             setReactivateBudgetModal(null);
-            setReactivateBudgetToast(toastInfo);
-            setTimeout(() => setReactivateBudgetToast(null), 8000);
           }}
         />
       )}
