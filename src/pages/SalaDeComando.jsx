@@ -368,7 +368,7 @@ export default function SalaDeComando() {
           id: `sync-${r.id}`,
           type: 'sync',
           label: r.operation || 'Sincronização',
-          status: r.status === 'success' ? 'success' : r.status === 'running' ? 'running' : 'failed',
+          status: r.status === 'success' ? 'success' : r.status === 'running' ? 'running' : (r.status === 'warning' || r.status === 'skipped' || r.status === 'skipped_limit') ? 'warning' : 'failed',
           detail: r.records_upserted != null ? `${r.records_upserted} registros` : r.error_message || '',
           at: r.started_at || r.created_date,
           raw: r,
