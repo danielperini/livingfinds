@@ -1192,8 +1192,13 @@ export default function AdsManagement() {
           </div>
         </div>
 
-        {/* Reconciliation Panel */}
-        <div className="p-3 border-t border-surface-2">
+        {/* Budget Diagnostic + Reconciliation */}
+        <div className="p-3 border-t border-surface-2 space-y-2">
+          <BudgetOverrunDiagnostic
+            campaigns={campaigns}
+            account={account}
+            onRedistributed={loadCampaigns}
+          />
           <ReconciliationPanel account={account} onDone={loadCampaigns} />
         </div>
       </div>
