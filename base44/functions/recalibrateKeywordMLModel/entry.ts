@@ -85,16 +85,44 @@ Deno.serve(async (req) => {
     const avgPredError = withOutcome.length > 0
       ? withOutcome.reduce((s: number, p: any) => s + (p.prediction_error || 0), 0) / withOutcome.length : 0;
 
+    // ── Calibração por tail_type ──────────────────────────────────────────────
+    const calibrationByTail: Record<string, any> = {};
+    for (const tail of ['short', 'medium', 'long']) {
+      const tailGroup = withOutcome.filter((p: any) => (p.tail_type || 'medium') === tail);
+      if (tailGroup.length === 0) continue;
+      const successful = tailGroup.filter((p: any) => p.status === 'successful');
+      const underperforming = tailGroup.filter((p: any) => p.status === 'underperforming');
+      const withSales = tailGroup.filter((p: any) => (p.actual_orders || 0) > 0);
+      const withAcos = tailGroup.filter((p: any) => (p.actual_acos || 0) > 0 && (p.actual_orders || 0) > 0);
+      calibrationByTail[tail] = {
+        count: tailGroup.length,
+        precision: tailGroup.length > 0 ? Math.round((successful.length / tailGroup.length) * 100) / 100 : 0,
+        false_positive_rate: tailGroup.length > 0 ? Math.round((underperforming.length / tailGroup.length) * 100) / 100 : 0,
+        false_negative_rate: 0, // não calculável sem dados negativos
+        conversion_rate: withSales.length > 0 ? Math.round((withSales.reduce((s: number, p: any) => s + (p.actual_conversion_rate || 0), 0) / withSales.length) * 1000) / 1000 : 0,
+        avg_acos: withAcos.length > 0 ? Math.round((withAcos.reduce((s: number, p: any) => s + (p.actual_acos || 0), 0) / withAcos.length) * 10) / 10 : null,
+        avg_roas: withSales.length > 0 ? Math.round((withSales.reduce((s: number, p: any) => s + (p.actual_roas || 0), 0) / withSales.length) * 100) / 100 : 0,
+        avg_orders: withSales.length > 0 ? Math.round((withSales.reduce((s: number, p: any) => s + (p.actual_orders || 0), 0) / withSales.length) * 100) / 100 : 0,
+      };
+    }
+
     // Buscar versão atual e atualizar métricas
     const versions = await base44.asServiceRole.entities.MLModelVersion.filter({ amazon_account_id }, '-training_date', 1);
     if ((versions as any[]).length > 0) {
       const v = (versions as any[])[0];
+      let existingWeights: any = {};
+      try { existingWeights = JSON.parse(v.weights_json || '{}'); } catch {}
       await base44.asServiceRole.entities.MLModelVersion.update(v.id, {
-        total_with_sales: (allPreds as any[]).filter(p => p.actual_orders > 0).length,
+        total_with_sales: (allPreds as any[]).filter((p: any) => p.actual_orders > 0).length,
         precision: Math.round(precision * 100) / 100,
         conversion_prediction_accuracy: Math.max(0, Math.round((1 - avgPredError) * 100) / 100),
         acos_prediction_error: Math.round(avgPredError * 100) / 100,
-        profit_generated: (allPreds as any[]).filter(p => p.status === 'successful').reduce((s: number, p: any) => s + (p.actual_profit || 0), 0),
+        profit_generated: (allPreds as any[]).filter((p: any) => p.status === 'successful').reduce((s: number, p: any) => s + (p.actual_profit || 0), 0),
+        weights_json: JSON.stringify({
+          ...existingWeights,
+          calibration_by_tail: calibrationByTail,
+          calibration_updated_at: new Date().toISOString(),
+        }),
       }).catch(() => {});
     }
 
@@ -104,6 +132,7 @@ Deno.serve(async (req) => {
       updated, successful, underperforming,
       model_precision: Math.round(precision * 100) / 100,
       avg_prediction_error: Math.round(avgPredError * 100) / 100,
+      calibration_by_tail: calibrationByTail,
     });
 
   } catch (err: any) {

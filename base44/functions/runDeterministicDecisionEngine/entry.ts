@@ -1397,7 +1397,25 @@ Deno.serve(async (req) => {
       high_growth: 0, conservative_growth: 0, partial_cost_growth: 0,
     };
 
-    // ── 10a. Carregar lifecycles — guardar keywords em fase 0-48h ────────
+    // ── 10a. Carregar KeywordPrediction como contexto modificador ─────────
+    // O motor determinístico NÃO gera decisões baseadas no ML — apenas usa os
+    // campos como modificadores contextuais (contexto, não duplicação de regras).
+    const kwPredictionMap = new Map<string, any>(); // norm_keyword::asin → prediction
+    try {
+      const kwPreds = await base44.asServiceRole.entities.KeywordPrediction.filter(
+        { amazon_account_id: aid, status: { $nin: ['rejected', 'blocked', 'expired'] } },
+        '-last_evaluated_at', 1000
+      ).catch(() => []);
+      for (const p of kwPreds) {
+        if (!p.keyword || !p.asin) continue;
+        const norm = (p.normalized_keyword || p.keyword || '').toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^\w\s\-\.\/]/g, ' ').replace(/\s+/g, ' ').trim();
+        const mapKey = `${norm}::${p.asin}`;
+        if (!kwPredictionMap.has(mapKey)) kwPredictionMap.set(mapKey, p);
+      }
+    } catch {}
+
     // Keywords em launch_0_48h / emergency_reduction (cooldown) NÃO devem
     // ser processadas pelo motor determinístico — pertencem ao ciclo inicial.
     const lifecycleManagedKwIds = new Set<string>();
@@ -1434,6 +1452,17 @@ Deno.serve(async (req) => {
 
       const resolvedAsin = kw.asin || campaignAsinMap.get(kw.campaign_id) || null;
       const product = resolvedAsin ? productMap.get(resolvedAsin) : null;
+
+      // ML context — modificador contextual (não gera decisão própria, não duplica regras)
+      let mlContext: any = null;
+      if (resolvedAsin && kw.keyword_text) {
+        const nk = (kw.keyword_text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s\-\.\/]/g, ' ').replace(/\s+/g, ' ').trim();
+        mlContext = kwPredictionMap.get(`${nk}::${resolvedAsin}`) || null;
+      }
+      const mlFlags: string[] = mlContext?.contradiction_flags ? (() => { try { return JSON.parse(mlContext.contradiction_flags); } catch { return []; } })() : [];
+      const mlRelevance: number | null = mlContext?.relevance_score ?? null;
+      if (mlFlags.length > 0) { skipped.push({ entity_id: entityId, reason: 'ml_contradiction_flag', flags: mlFlags, asin: resolvedAsin }); continue; }
+      if (mlRelevance !== null && mlRelevance < 0.30) { skipped.push({ entity_id: entityId, reason: 'ml_low_relevance', relevance_score: mlRelevance, asin: resolvedAsin }); continue; }
 
       // ── Guard de escopo: bloquear crescimento/criação para não-autorizados ──
       if (resolvedAsin) {
@@ -1861,6 +1890,14 @@ Deno.serve(async (req) => {
       const canPauseCampaign = campAgeDays >= FB.NO_SALES_CAMPAIGN_PAUSE_DAYS;
       const isSecondReview = campAgeDays >= FB.NO_SALES_SECOND_REVIEW_DAYS;
       const isNewProduct = product?.is_new_asin === true || campAgeDays < FB.NEW_PRODUCT_MAX_LEARNING_DAYS;
+
+      // ML guardrail: long-tail com evidence LOW não pausa por volume baixo
+      const mlTailIsLong = mlContext?.tail_type === 'long';
+      const mlEvidenceLow = mlContext?.evidence_level === 'LOW' || mlContext?.evidence_level === 'NONE';
+      if (mlTailIsLong && mlEvidenceLow && kw_impressions > 0 && kw_impressions < FB.MIN_IMP_BEFORE_PAUSE) {
+        skipped.push({ entity_id: entityId, reason: 'ml_long_tail_low_volume_protected', asin: resolvedAsin, impressions: kw_impressions });
+        continue;
+      }
 
       if (!recentSaleProtected && hasMinExposureTime && kw_spend >= noConvMinSpend
           && kw_orders === 0 && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE
