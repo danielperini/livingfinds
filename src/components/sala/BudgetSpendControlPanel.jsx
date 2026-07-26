@@ -149,21 +149,65 @@ export default function BudgetSpendControlPanel({ account }) {
     const val = parseFloat(newCapValue);
     if (isNaN(val) || val <= 0) return;
     setSaving(true);
+    setMsg(null);
     try {
-      const psList = await base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []);
+      const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+
+      // 1. Atualizar PerformanceSettings
+      const psList = await base44.entities.PerformanceSettings.filter(
+        { amazon_account_id: account.id }, '-updated_at', 1
+      ).catch(() => []);
       if (psList[0]) {
         await base44.entities.PerformanceSettings.update(psList[0].id, {
           daily_budget_limit: val, updated_at: new Date().toISOString()
         });
       }
+
+      // 2. Atualizar AutopilotConfig
+      const acList = await base44.entities.AutopilotConfig.filter(
+        { amazon_account_id: account.id }, '-updated_at', 1
+      ).catch(() => []);
+      if (acList[0]) {
+        await base44.entities.AutopilotConfig.update(acList[0].id, {
+          daily_budget_limit: val
+        });
+      }
+
+      // 3. Upsert AccountDailySpendController de hoje
+      const ctrlList = await base44.entities.AccountDailySpendController.filter(
+        { amazon_account_id: account.id, spend_date: today }, null, 1
+      ).catch(() => []);
+      if (ctrlList[0]) {
+        await base44.entities.AccountDailySpendController.update(ctrlList[0].id, {
+          user_daily_spend_cap: val,
+          effective_daily_spend_cap: val,
+        });
+      } else {
+        await base44.entities.AccountDailySpendController.create({
+          amazon_account_id: account.id,
+          spend_date: today,
+          user_daily_spend_cap: val,
+          effective_daily_spend_cap: val,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      // 4. Recalcular controlador via backend
+      await base44.functions.invoke('recalcDailySpendController', {
+        amazon_account_id: account.id
+      }).catch(() => {});
+
+      // 5. Recarregar cards
+      await load();
+
       setEditingCap(false);
-      setMsg({ type: 'success', text: `Teto atualizado para R$${val.toFixed(2)}.` });
-      await refresh();
+      setMsg({ type: 'success', text: `Teto atualizado para ${fmtBRL(val)} · sincronizado` });
+      setTimeout(() => setMsg(null), 6000);
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     } finally {
       setSaving(false);
-      setTimeout(() => setMsg(null), 6000);
     }
   };
 
