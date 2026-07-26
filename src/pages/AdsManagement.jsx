@@ -1567,6 +1567,45 @@ export default function AdsManagement() {
         }
       </div>
 
+      {/* Toast de sucesso para Reativar + Budget */}
+      {reactivateBudgetToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-start gap-3 px-4 py-3 bg-[#111827] border border-emerald-500/30 rounded-xl shadow-2xl max-w-sm animate-fade-in">
+          <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white">Campanha reativada com sucesso!</p>
+            <p className="text-xs text-slate-400 mt-0.5 truncate">{reactivateBudgetToast.campaignName}</p>
+            <p className="text-xs text-emerald-400 mt-0.5">
+              Budget: R${reactivateBudgetToast.prevBudget.toFixed(2)} → R${reactivateBudgetToast.newBudget.toFixed(2)} · Status: pausado → ENABLED
+            </p>
+            {reactivateBudgetToast.budgetWarning && (
+              <p className="text-xs text-amber-400 mt-0.5">⚠ {reactivateBudgetToast.budgetWarning}</p>
+            )}
+          </div>
+          <button onClick={() => setReactivateBudgetToast(null)} className="text-slate-500 hover:text-white flex-shrink-0">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Reativar + Ajustar Budget modal */}
+      {reactivateBudgetModal && account && (
+        <ReactivateWithBudgetModal
+          campaign={reactivateBudgetModal}
+          account={account}
+          onClose={() => setReactivateBudgetModal(null)}
+          onSuccess={(updatedCampaign, toastInfo) => {
+            // Atualização otimista
+            setCampaigns((prev) => prev.map((c) => c.id === updatedCampaign.id ? updatedCampaign : c));
+            if (selectedCampaign?.id === updatedCampaign.id) {
+              setSelectedCampaign(updatedCampaign);
+            }
+            setReactivateBudgetModal(null);
+            setReactivateBudgetToast(toastInfo);
+            setTimeout(() => setReactivateBudgetToast(null), 8000);
+          }}
+        />
+      )}
+
       {kickoffProduct && account ?
       <KickoffModal
         product={kickoffProduct}
