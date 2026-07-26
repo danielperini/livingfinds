@@ -317,6 +317,121 @@ Deno.serve(async (req) => {
       duration_ms: Date.now() - t0,
     }).catch(() => {});
 
+    // ── Atualizar HourlySalesPattern quando o relatório tiver dados por ASIN (spAdvertisedProduct) ──
+    if (job.report_type_id === 'spAdvertisedProduct' && rows.some((r: any) => r.advertisedAsin)) {
+      console.log('[downloadProcess] Atualizando HourlySalesPattern a partir de spAdvertisedProduct...');
+      try {
+        // Carregar target_acos
+        const perfList = await base44.asServiceRole.entities.PerformanceSettings
+          .filter({ amazon_account_id: accountId }, null, 1).catch(() => []);
+        const targetAcos = Number((perfList as any[])[0]?.target_acos || 15);
+
+        // Agregar por day_of_week + hour (via data, sem hora — mapear por dia da semana)
+        const slotMap = new Map<string, any>();
+        const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
+        for (const r of rows) {
+          const date = r.date || '';
+          if (!date) continue;
+          const d = new Date(date);
+          if (isNaN(d.getTime())) continue;
+          const dow = d.getDay();
+          // Sem granularidade horária real neste relatório — usar hora 0 como agregado do dia
+          // O snapshotHourlySalesPattern existente já usa HourlyMetric com hora real
+          // Aqui populamos apenas o padrão de dia-da-semana (hour=0) com dados ASIN
+          const key = `${dow}|0`;
+          if (!slotMap.has(key)) {
+            slotMap.set(key, { day_of_week: dow, hour: 0, orders: 0, sales: 0, spend: 0, clicks: 0, impressions: 0, occurrences: 0 });
+          }
+          const s = slotMap.get(key)!;
+          s.orders      += Number(r.purchases14d || r.purchases7d || 0);
+          s.sales       += Number(r.sales14d || r.sales7d || 0);
+          s.spend       += Number(r.cost || 0);
+          s.clicks      += Number(r.clicks || 0);
+          s.impressions += Number(r.impressions || 0);
+          s.occurrences++;
+        }
+
+        const totalOrders = Array.from(slotMap.values()).reduce((s, v) => s + v.orders, 0);
+        const patterns: any[] = [];
+        const nowPat = new Date().toISOString();
+
+        for (const [, s] of slotMap) {
+          const cvr  = s.clicks > 0 ? s.orders / s.clicks : 0;
+          const acos = s.sales  > 0 ? (s.spend / s.sales) * 100 : 0;
+          const roas = s.spend  > 0 ? s.sales / s.spend : 0;
+          const cpc  = s.clicks > 0 ? s.spend / s.clicks : 0;
+          const aov  = s.orders > 0 ? s.sales / s.orders : 0;
+          const ordersSharePct = totalOrders > 0 ? (s.orders / totalOrders) * 100 : 0;
+          const shareScore = Math.min(40, ordersSharePct * 8);
+          const cvrScore   = Math.min(35, cvr * 3500);
+          const acosScore  = acos > 0 && targetAcos > 0 ? Math.min(25, Math.max(0, (1 - acos / targetAcos) * 30)) : 0;
+          const rawScore   = shareScore + cvrScore + acosScore;
+          const peakScore  = Math.round(Math.max(0, Math.min(100, s.occurrences >= 4 ? rawScore : rawScore * 0.5)));
+          const classifyFn = (sc: number) => sc >= 80 ? 'PEAK_ELITE' : sc >= 60 ? 'PEAK_STRONG' : sc >= 40 ? 'NORMAL' : sc >= 20 ? 'WEAK' : 'LOSS';
+          const classification = s.occurrences >= 2 ? classifyFn(peakScore) : 'INSUFFICIENT_DATA';
+          const bm = classification === 'PEAK_ELITE' ? parseFloat((1.0 + Math.min(0.20, peakScore / 500)).toFixed(4))
+                   : classification === 'PEAK_STRONG' ? parseFloat((1.0 + Math.min(0.12, peakScore / 600)).toFixed(4))
+                   : classification === 'WEAK' ? 0.92 : classification === 'LOSS' ? 0.85 : 1.0;
+          patterns.push({
+            amazon_account_id: accountId,
+            day_of_week: s.day_of_week, hour: s.hour,
+            slot_label: `${DAY_LABELS[s.day_of_week]}_dia`,
+            orders: s.orders, sales: parseFloat(s.sales.toFixed(4)), spend: parseFloat(s.spend.toFixed(4)),
+            clicks: s.clicks, impressions: s.impressions, cvr: parseFloat(cvr.toFixed(4)),
+            acos: parseFloat(acos.toFixed(4)), roas: parseFloat(roas.toFixed(4)),
+            cpc: parseFloat(cpc.toFixed(4)), aov: parseFloat(aov.toFixed(4)),
+            occurrences: s.occurrences, orders_share_pct: parseFloat(ordersSharePct.toFixed(4)),
+            peak_score: peakScore, classification, bid_multiplier: bm,
+            is_peak_hour: classification === 'PEAK_ELITE' || classification === 'PEAK_STRONG',
+            data_window_days: 14, last_computed_at: nowPat,
+          });
+        }
+
+        // Upsert
+        const existing: any[] = await base44.asServiceRole.entities.HourlySalesPattern
+          .filter({ amazon_account_id: accountId }, null, 200).catch(() => []);
+        const existingMap = new Map(existing.map((e: any) => [`${e.day_of_week}|${e.hour}`, e]));
+        for (const p of patterns) {
+          const k = `${p.day_of_week}|${p.hour}`;
+          if (existingMap.has(k)) {
+            await base44.asServiceRole.entities.HourlySalesPattern.update((existingMap.get(k) as any).id, p).catch(() => {});
+          } else {
+            await base44.asServiceRole.entities.HourlySalesPattern.create(p).catch(() => {});
+          }
+        }
+        console.log(`[downloadProcess] HourlySalesPattern: ${patterns.length} slots atualizados`);
+
+        // Disparo de dayparting se slot atual for ELITE/STRONG e dayparting habilitado
+        const autopilotList = await base44.asServiceRole.entities.AutopilotConfig
+          .filter({ amazon_account_id: accountId }, null, 1).catch(() => []);
+        const daypartingEnabled = (autopilotList as any[])[0]?.dayparting_enabled !== false;
+        if (daypartingEnabled) {
+          const brtNow = new Date(Date.now() - 3 * 3600000);
+          const brtHour = brtNow.getUTCHours();
+          const brtDow  = brtNow.getUTCDay();
+          const currentSlot = patterns.find(p => p.day_of_week === brtDow && p.hour === brtHour);
+          const isElite = currentSlot && (currentSlot.classification === 'PEAK_ELITE' || currentSlot.classification === 'PEAK_STRONG');
+          if (isElite) {
+            const acos14d = (() => {
+              const cutoff = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+              const recent = allEntries.filter(m => m._type !== 'keyword' && (m.date || '') >= cutoff);
+              const ts = recent.reduce((s: number, m: any) => s + m.spend, 0);
+              const tv = recent.reduce((s: number, m: any) => s + m.sales, 0);
+              return tv > 0 ? (ts / tv) * 100 : 0;
+            })();
+            if (acos14d === 0 || acos14d <= targetAcos * 1.20) {
+              base44.asServiceRole.functions.invoke('runDaypartingDecisionEngine', {
+                amazon_account_id: accountId, dry_run: false, _service_role: true,
+              }).catch((e: any) => console.warn('[downloadProcess] Dayparting (não crítico):', e.message));
+              console.log(`[downloadProcess] ✓ Dayparting disparado — slot ${brtDow}|${brtHour} = ${currentSlot.classification}`);
+            }
+          }
+        }
+      } catch (patErr: any) {
+        console.warn('[downloadProcess] HourlySalesPattern update (não crítico):', patErr.message);
+      }
+    }
+
     // Disparar motor de decisão com os dados recém-processados
     // Só para relatórios de campanha (spCampaigns) — são os que têm métricas diárias completas
     if ((metricsRecords.length > 0 || campUpdates.length > 0) && (job.report_type_id === 'spCampaigns' || !job.report_type_id)) {
