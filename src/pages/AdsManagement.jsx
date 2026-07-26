@@ -228,6 +228,9 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                 {/* Metrics row */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <StatusBadge status={state || 'enabled'} size="xs" />
+                  {(c.daily_budget || 0) > 0 && (
+                    <span className="text-[10px] text-slate-500" title="Orçamento diário">R${Number(c.daily_budget).toFixed(2)}/d</span>
+                  )}
                   <span className="text-[10px] text-slate-500">R${(c.spend || 0).toFixed(0)}</span>
                   {(c.acos || 0) > 0 ?
                   <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span> :
@@ -1249,7 +1252,11 @@ export default function AdsManagement() {
                   </div>
                   <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <StatusBadge status={campaignState(selectedCampaign) || 'enabled'} />
-                    <span className="text-xs text-slate-400">Orçamento: <span className="text-white">R${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span></span>
+                    <span className="text-xs text-slate-400">Orçamento: <span className="text-white">R${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span>
+                      {selectedCampaign.recommended_daily_budget > 0 && Math.abs((selectedCampaign.recommended_daily_budget || 0) - (selectedCampaign.daily_budget || 0)) > 0.5 && (
+                        <span className="ml-1.5 text-[10px] text-amber-400/80">· Recomendado: R${Number(selectedCampaign.recommended_daily_budget).toFixed(2)}</span>
+                      )}
+                    </span>
                     <span className="text-xs text-slate-400">Spend: <span className="text-white">R${(selectedCampaign.spend || 0).toFixed(2)}</span></span>
                     <span className="text-xs text-slate-400">Vendas: <span className="text-emerald-400">R${(selectedCampaign.sales || 0).toFixed(2)}</span></span>
                     <span className="text-xs text-slate-400">ACoS: <span className={`font-semibold ${(selectedCampaign.acos || 0) > 40 ? 'text-red-400' : 'text-emerald-400'}`}>{(selectedCampaign.acos || 0).toFixed(1)}%</span></span>

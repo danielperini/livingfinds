@@ -22,6 +22,7 @@ import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
+import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -1314,6 +1315,11 @@ export default function Dashboard() {
       {/* ── 8b. MOTOR & IA — STATUS POR PRODUTO ─────────────────────────────── */}
       {account && !loading ? (
         <MotorStatusBySku accountId={account.id} targetAcos={targetAcos} />
+      ) : null}
+
+      {/* ── 8c. HISTÓRICO DE ALTERAÇÕES DE ORÇAMENTO ─────────────────────────── */}
+      {account && !loading ? (
+        <BudgetHistoryPanel accountId={account.id} />
       ) : null}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}
