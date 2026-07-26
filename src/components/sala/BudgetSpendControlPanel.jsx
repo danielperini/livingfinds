@@ -17,6 +17,7 @@ import {
   Zap, RotateCcw, ExternalLink
 } from 'lucide-react';
 import ProactiveBudgetOptimizerCard from './ProactiveBudgetOptimizerCard';
+import KillSwitchPauseDetail from './KillSwitchPauseDetail';
 
 const CAP_STATUS_CONFIG = {
   safe:        { label: 'Normal',       color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', bar: 'bg-emerald-500' },
@@ -490,26 +491,8 @@ export default function BudgetSpendControlPanel({ account }) {
         </div>
       </div>
 
-      {/* ── 5. CAMPANHAS PAUSADAS HOJE ───────────────────────────────────────── */}
-      {c?.campaigns_paused_today?.length > 0 && (
-        <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Pause className="w-4 h-4 text-red-400" />
-            <p className="text-xs font-semibold text-red-300">Campanhas Pausadas pelo Teto Hoje</p>
-          </div>
-          <p className="text-[10px] text-slate-400 mb-2">
-            Pausa operacional temporária. Motivo: <code className="text-red-300">global_daily_cap_reached</code>.
-            Retomadas automaticamente no próximo dia operacional (meia-noite BRT).
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {c.campaigns_paused_today.map((cid) => (
-              <span key={cid} className="text-[10px] font-mono px-2 py-0.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded">
-                {cid}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── 5. CAMPANHAS PAUSADAS HOJE — status detalhado ────────────────────── */}
+      <KillSwitchPauseDetail controller={c} />
 
       {/* ── 6. OTIMIZAÇÃO PROATIVA DE BUDGET ────────────────────────────────── */}
       <ProactiveBudgetOptimizerCard account={account} />
