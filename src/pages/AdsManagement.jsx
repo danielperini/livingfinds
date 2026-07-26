@@ -17,6 +17,7 @@ import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
 import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
+import BudgetOverrunDiagnostic from '@/components/ads/BudgetOverrunDiagnostic';
 
 
 const NOW_MS = Date.now();
@@ -1064,6 +1065,11 @@ export default function AdsManagement() {
               onQuickResume={quickResumeCampaign}
               extraAction={
                 <div className="flex flex-col gap-1">
+                  <BudgetOverrunDiagnostic
+                    campaigns={campaigns}
+                    account={account}
+                    onRedistributed={loadCampaigns}
+                  />
                   <StaleInventoryWarningPanel
                     campaigns={campaigns}
                     products={products}
