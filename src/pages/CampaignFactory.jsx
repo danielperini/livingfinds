@@ -3,13 +3,13 @@ import { base44 } from '@/api/base44Client';
 import {
   Factory, TrendingUp, Search, RefreshCw, Loader2,
   CheckCircle, XCircle, Clock, Zap, Sparkles, Target, BarChart2,
-  ChevronRight, BookOpen, Megaphone, Star, Share2, ChevronUp, ChevronDown
+  BookOpen, Megaphone, ChevronUp, ChevronDown
 } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
-import HighRelevancePanel from '@/components/termbank/HighRelevancePanel';
-import DumBankTab from '@/components/termbank/DumBankTab';
 import IASuggestionsTab from '@/components/factory/IASuggestionsTab';
 import KeywordInvestigatorTab from '@/components/factory/KeywordInvestigatorTab';
+import KeywordBankSection from '@/components/factory/KeywordBankSection';
+import KeywordBankTab from '@/components/factory/KeywordBankTab';
 
 // ── Configs ──────────────────────────────────────────────────────────────
 const LIFECYCLE_CONFIG = {
@@ -94,15 +94,12 @@ function IntentBar({ score }) {
 
 // ── Abas ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { key: 'overview',     label: 'Visão Geral',     icon: BarChart2 },
-  { key: 'winners',      label: 'Winners',         icon: TrendingUp },
-  { key: 'harvest',      label: 'Harvest Ready',   icon: Zap },
-  { key: 'plans',        label: 'Planos',          icon: Factory },
-  { key: 'bank',         label: 'Keyword Bank',    icon: BookOpen },
-  { key: 'termbank',     label: 'Term Bank',       icon: Star },
-  { key: 'amazon_sug',   label: 'Amazon Sugestões',icon: Share2 },
-  { key: 'ia_sug',       label: 'Sugestões IA',    icon: Sparkles },
-  { key: 'investigator', label: 'Investigador',    icon: Search },
+  { key: 'overview',     label: 'Visão Geral',  icon: BarChart2 },
+  { key: 'winners',      label: 'Winners',      icon: TrendingUp },
+  { key: 'harvest',      label: 'Harvest Ready',icon: Zap },
+  { key: 'plans',        label: 'Planos',       icon: Factory },
+  { key: 'ia_sug',       label: 'Sugestões IA', icon: Sparkles },
+  { key: 'keyword_bank', label: 'Keyword Bank', icon: BookOpen },
 ];
 
 // ── TermBank sub-tab ──────────────────────────────────────────────────────
@@ -471,14 +468,13 @@ export default function CampaignFactory() {
             {t.label}
             {t.key === 'harvest' && stats.harvest > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[9px] font-bold">{stats.harvest}</span>}
             {t.key === 'plans' && stats.proposed > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 text-[9px] font-bold">{stats.proposed}</span>}
-            {t.key === 'termbank' && terms.length > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-slate-600/40 text-slate-400 text-[9px] font-bold">{terms.length}</span>}
-            {t.key === 'amazon_sug' && amazonSuggestions.filter(s => !['archived_by_policy','superseded'].includes(s.status)).length > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-cyan/20 text-cyan text-[9px] font-bold">{amazonSuggestions.filter(s => !['archived_by_policy','superseded'].includes(s.status)).length}</span>}
+            {t.key === 'keyword_bank' && (terms.length + bankEntries.length) > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-cyan/20 text-cyan text-[9px] font-bold">{terms.length + bankEntries.length}</span>}
           </button>
         ))}
       </div>
 
-      {/* Global search (shared by bank + termbank) */}
-      {(tab === 'bank' || tab === 'termbank') && (
+      {/* Search bar for keyword bank sub-tabs */}
+      {tab === 'keyword_bank' && (
         <div className="px-6 pt-4 pb-0 flex-shrink-0">
           <div className="relative max-w-sm">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
@@ -505,7 +501,7 @@ export default function CampaignFactory() {
               <StatCard icon={Factory}     label="Planos propostos" value={stats.proposed}  color="text-violet-400" />
               <StatCard icon={Sparkles}    label="Amazon Sugestões" value={stats.amazon_sug}color="text-cyan" />
               <StatCard icon={XCircle}     label="Falharam"         value={stats.failed}    color="text-red-400" />
-              <StatCard icon={Star}        label="Term Bank"         value={terms.length}    color="text-slate-300" />
+              <StatCard icon={BookOpen}    label="Term Bank"         value={terms.length}    color="text-slate-300" />
             </div>
             {/* Funnel */}
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
@@ -690,101 +686,69 @@ export default function CampaignFactory() {
           </div>
         )}
 
-        {/* ── KEYWORD BANK ── */}
-        {tab === 'bank' && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 flex-wrap">
-              <select value={lifecycleFilter} onChange={e => setLifecycleFilter(e.target.value)}
-                className="px-2 py-1.5 bg-surface-2 border border-surface-3 rounded-lg text-xs text-slate-300 focus:outline-none">
-                <option value="all">Todos status</option>
-                {Object.entries(LIFECYCLE_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
-              <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
-                className="px-2 py-1.5 bg-surface-2 border border-surface-3 rounded-lg text-xs text-slate-300 focus:outline-none">
-                <option value="all">Todas fontes</option>
-                {Object.entries(SOURCE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
-              <span className="text-xs text-slate-500">{filteredBank.length} termos</span>
-            </div>
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-[#0D0F14] z-10">
-                <tr className="border-b border-surface-2">
-                  {['Keyword','ASIN','Fonte','Status','Intent','Promo','Pedidos','ACoS','CPC','Colheita'].map(h => (
-                    <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredBank.slice(0, 200).map((e, i) => (
-                  <tr key={e.id || i} className="border-b border-surface-2/40 hover:bg-surface-2/30">
-                    <td className="px-3 py-2 max-w-[180px]">
-                      <p className="text-[11px] font-medium text-white truncate">{e.keyword}</p>
-                      <p className="text-[9px] text-slate-600">{e.match_type}</p>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-[10px] text-cyan">{e.asin}</td>
-                    <td className="px-3 py-2"><SourceBadge source={e.source_type} /></td>
-                    <td className="px-3 py-2"><LifecycleBadge status={e.lifecycle_status} winnerTier={e.winner_tier} /></td>
-                    <td className="px-3 py-2"><IntentBar score={e.intent_score || 0} /></td>
-                    <td className="px-3 py-2 text-[10px] text-violet-400">{e.promotion_score || 0}</td>
-                    <td className="px-3 py-2 text-emerald-400 font-semibold text-[11px]">{e.orders || 0}</td>
-                    <td className="px-3 py-2">
-                      <span className={`text-[10px] font-semibold ${(e.acos || 0) > (e.target_acos || 15) ? 'text-red-400' : (e.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
-                        {(e.acos || 0) > 0 ? `${(e.acos || 0).toFixed(1)}%` : '—'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-[10px] text-slate-400">R${(e.cpc || 0).toFixed(2)}</td>
-                    <td className="px-3 py-2">
-                      {e.harvest_candidate && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/25">
-                          {e.harvest_action || 'HARVEST'}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {filteredBank.length > 200 && (
-              <p className="text-[10px] text-slate-500 text-center py-2">Mostrando 200 de {filteredBank.length} — use filtros para refinar</p>
-            )}
-          </div>
-        )}
 
-        {/* ── TERM BANK ── */}
-        {tab === 'termbank' && (
-          <>
-            {termMsg && (
-              <div className={`mb-3 rounded-lg p-3 text-xs ${termMsg.type === 'success' ? 'bg-emerald-400/10 text-emerald-300' : termMsg.type === 'info' ? 'bg-amber-400/10 text-amber-300' : 'bg-red-400/10 text-red-300'}`}>
-                {termMsg.text}
-              </div>
-            )}
-            <TermBankTab
-              account={account}
-              terms={terms}
-              schedulingId={schedulingId}
-              scheduledIds={scheduledIds}
-              onSchedule={handleScheduleTerm}
-              search={q}
-            />
-          </>
-        )}
-
-        {/* ── AMAZON SUGESTÕES ── */}
-        {tab === 'amazon_sug' && (
-          <AmazonSuggestionsTab
-            suggestions={amazonSuggestions.filter(s => `${s.keyword || ''} ${s.asin || ''}`.toLowerCase().includes(q))}
-            products={products}
-            account={account}
-            onRefresh={loadData}
-          />
-        )}
 
         {/* ── SUGESTÕES IA ── */}
         {tab === 'ia_sug' && <IASuggestionsTab account={account} />}
 
-        {/* ── KEYWORD INVESTIGATOR ── */}
-        {tab === 'investigator' && (
-          <KeywordInvestigatorTab account={account} products={products} />
+        {/* ── KEYWORD BANK (seção hierárquica com 4 sub-tabs) ── */}
+        {tab === 'keyword_bank' && (
+          <KeywordBankSection
+            counts={{
+              terms: terms.length,
+              suggested: amazonSuggestions.filter(s => !['archived_by_policy','superseded'].includes(s.status)).length,
+              bank: bankEntries.length,
+            }}
+          >
+            {(subTab) => (
+              <>
+                {/* Terms */}
+                {subTab === 'terms' && (
+                  <>
+                    {termMsg && (
+                      <div className={`mb-3 rounded-lg p-3 text-xs ${termMsg.type === 'success' ? 'bg-emerald-400/10 text-emerald-300' : termMsg.type === 'info' ? 'bg-amber-400/10 text-amber-300' : 'bg-red-400/10 text-red-300'}`}>
+                        {termMsg.text}
+                      </div>
+                    )}
+                    <TermBankTab
+                      account={account}
+                      terms={terms}
+                      schedulingId={schedulingId}
+                      scheduledIds={scheduledIds}
+                      onSchedule={handleScheduleTerm}
+                      search={q}
+                    />
+                  </>
+                )}
+                {/* Suggested */}
+                {subTab === 'suggested' && (
+                  <AmazonSuggestionsTab
+                    suggestions={amazonSuggestions.filter(s => `${s.keyword || ''} ${s.asin || ''}`.toLowerCase().includes(q))}
+                    products={products}
+                    account={account}
+                    onRefresh={loadData}
+                  />
+                )}
+                {/* Keyword Bank */}
+                {subTab === 'bank' && (
+                  <KeywordBankTab
+                    bankEntries={bankEntries}
+                    filteredBank={filteredBank}
+                    search={search}
+                    setSearch={setSearch}
+                    lifecycleFilter={lifecycleFilter}
+                    setLifecycleFilter={setLifecycleFilter}
+                    sourceFilter={sourceFilter}
+                    setSourceFilter={setSourceFilter}
+                  />
+                )}
+                {/* Keyword Investigator */}
+                {subTab === 'investigator' && (
+                  <KeywordInvestigatorTab account={account} products={products} />
+                )}
+              </>
+            )}
+          </KeywordBankSection>
         )}
 
       </div>
