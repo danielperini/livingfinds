@@ -16,6 +16,7 @@ import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
 import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
 import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
+import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
 
 
 const NOW_MS = Date.now();
@@ -1028,6 +1029,16 @@ export default function AdsManagement() {
               onQuickResume={quickResumeCampaign}
               extraAction={
                 <div className="flex flex-col gap-1">
+                  <StaleInventoryWarningPanel
+                    campaigns={campaigns}
+                    products={products}
+                    account={account}
+                    onReactivated={(campaignId) => {
+                      setCampaigns(prev => prev.map(c =>
+                        c.id === campaignId ? { ...c, state: 'enabled', status: 'enabled' } : c
+                      ));
+                    }}
+                  />
                   <button
                     onClick={reactivateAutoWithStock}
                     disabled={!account || reactivatingAuto}
