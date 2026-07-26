@@ -1,19 +1,16 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 /**
- * Sincroniza Schedule Bid Rules diretamente na Amazon Ads.
+ * Sincroniza Schedule Bid Rules da Amazon Ads por campanha/produto.
  *
  * Modo estrito padrão:
- * - estratégia Amazon fixa (`MANUAL`);
- * - aumentos nativos de +25%/+50% nas janelas fortes;
- * - reduções e restauração pelo LivingFinds;
- * - envelope absoluto 0,50x–1,50x do bid-base.
- *
- * AUTO_FOR_SALES só é permitido quando strict_bid_envelope=false, porque a
- * própria Amazon pode variar o bid em até 100%.
+ * - Amazon mantém o bid-base fixo (`MANUAL`);
+ * - regras nativas incrementam +25%/+50% nas janelas STRONG/ELITE;
+ * - LivingFinds reduz/restaura dentro do envelope 0,50x–1,50x;
+ * - campanhas manuais só entram quando estratégicas.
  */
 const DAYS = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-const ENGINE_VERSION = 'amazon-native-schedule-v3-idempotent';
+const ENGINE_VERSION = 'amazon-native-schedule-v4-campaign-scoped';
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
@@ -42,6 +39,15 @@ function slotClass(value: any): 'ELITE_TIME' | 'STRONG_TIME' | 'OTHER' {
   if (text === 'PEAK_ELITE' || text === 'ELITE_TIME') return 'ELITE_TIME';
   if (text === 'PEAK_STRONG' || text === 'STRONG_TIME') return 'STRONG_TIME';
   return 'OTHER';
+}
+
+function hashText(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase();
 }
 
 function buildWindows(patterns: any[], decisions: any[]) {
@@ -171,8 +177,9 @@ Deno.serve(async (request) => {
         operation: 'sync_amazon_schedule_bid_rules',
         execution_date: today,
       }, '-started_at', 10).catch(() => []);
-      const alreadyDone = todayLogs.some((log: any) => ['success', 'partial'].includes(String(log.status || '')));
-      if (alreadyDone) return Response.json({ ok: true, skipped: true, reason: 'already_synced_today', execution_date: today });
+      if (todayLogs.some((log: any) => ['success', 'partial'].includes(String(log.status || '')))) {
+        return Response.json({ ok: true, skipped: true, reason: 'already_synced_today', execution_date: today });
+      }
     }
 
     const [configs, performance, campaigns, products, patterns, decisions, storedRules] = await Promise.all([
@@ -181,8 +188,8 @@ Deno.serve(async (request) => {
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
       base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
-      base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 2000).catch(() => []),
-      base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
+      base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 3000).catch(() => []),
+      base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 1500).catch(() => []),
     ]);
 
     const cfg = configs[0] || {};
@@ -198,7 +205,6 @@ Deno.serve(async (request) => {
     const targetAcos = Number(perf.target_acos || cfg.target_acos || 15);
     const minManualOrders = Number(cfg.min_orders_for_scale || 2);
     const productByAsin = new Map(products.map((product: any) => [String(product.asin || ''), product]));
-    const windows = buildWindows(patterns, decisions);
 
     const eligible: any[] = [];
     const strategyChanges: any[] = [];
@@ -256,16 +262,35 @@ Deno.serve(async (request) => {
       eligible.push({ ...campaign, resolved_campaign_id: cid, resolved_targeting_type: type });
     }
 
-    const eligibleIds = eligible.map((campaign) => campaign.resolved_campaign_id);
+    // Cada campanha usa suas próprias decisões quando disponíveis; o padrão
+    // horário da conta é o fallback. Planos iguais são agrupados numa só regra.
+    const plans = new Map<string, any>();
+    for (const campaign of eligible) {
+      const cid = campaign.resolved_campaign_id;
+      const asin = String(campaign.asin || '');
+      const specificDecisions = decisions.filter((decision: any) =>
+        String(decision.campaign_id || '') === cid ||
+        (asin && String(decision.asin || '') === asin),
+      );
+      const campaignWindows = buildWindows(patterns, specificDecisions);
+      for (const window of campaignWindows) {
+        const dayToken = [...window.days].sort().join('-');
+        const windowKey = `${window.classification}|${window.start_time}|${window.end_time}|${window.adjustment}|${dayToken}`;
+        if (!plans.has(windowKey)) plans.set(windowKey, { ...window, dayToken, campaigns: [] });
+        plans.get(windowKey).campaigns.push(campaign);
+      }
+    }
+
     const desiredKeys = new Set<string>();
     let nativeSupported = true;
     let rulesCreated = 0, rulesPaused = 0, associations = 0, associationFailures = 0;
     const results: any[] = [];
 
-    for (const window of windows) {
-      const dayToken = [...window.days].sort().join('-');
-      const ruleName = `LF_${window.classification === 'ELITE_TIME' ? 'ELITE' : 'STRONG'}_${window.start_time.replace(':', '')}_${window.end_time.replace(':', '')}_${dayToken}`.slice(0, 120);
-      const idem = `${aid}|BID|SCHEDULE|${window.adjustment}|${window.start_time}|${window.end_time}|${dayToken}`;
+    for (const plan of plans.values()) {
+      const campaignIds = [...new Set(plan.campaigns.map((campaign: any) => String(campaign.resolved_campaign_id)))].sort();
+      const membershipHash = hashText(campaignIds.join('|'));
+      const ruleName = `LF_${plan.classification === 'ELITE_TIME' ? 'ELITE' : 'STRONG'}_${plan.start_time.replace(':', '')}_${plan.end_time.replace(':', '')}_${plan.dayToken}_${membershipHash}`.slice(0, 120);
+      const idem = `${aid}|BID|SCHEDULE|${plan.adjustment}|${plan.start_time}|${plan.end_time}|${plan.dayToken}|${membershipHash}`;
       desiredKeys.add(idem);
 
       let local = storedRules.find((rule: any) => rule.idempotency_key === idem) || null;
@@ -293,22 +318,22 @@ Deno.serve(async (request) => {
         rule_category: 'BID',
         rule_subcategory: 'SCHEDULE',
         recurrence_type: 'WEEKLY',
-        days_of_week: window.days,
-        start_time: window.start_time,
-        end_time: window.end_time,
+        days_of_week: plan.days,
+        start_time: plan.start_time,
+        end_time: plan.end_time,
         duration_start: `${today}T00:00:00Z`,
         adjustment_operator: 'INCREMENT',
         adjustment_unit: 'PERCENT',
-        adjustment_value: window.adjustment,
-        slot_classification: window.classification,
-        campaign_ids: eligibleIds,
-        asins: [...new Set(eligible.map((campaign) => campaign.asin).filter(Boolean))],
-        targeting_types: [...new Set(eligible.map((campaign) => campaign.resolved_targeting_type))],
+        adjustment_value: plan.adjustment,
+        slot_classification: plan.classification,
+        campaign_ids: campaignIds,
+        asins: [...new Set(plan.campaigns.map((campaign: any) => campaign.asin).filter(Boolean))],
+        targeting_types: [...new Set(plan.campaigns.map((campaign: any) => campaign.resolved_targeting_type))],
         native_api_supported: nativeSupported,
         fallback_mode: nativeSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
         idempotency_key: idem,
         engine_version: ENGINE_VERSION,
-        reason: `${window.classification}, score ${window.average_score}. Amazon incrementa ${window.adjustment}%; reduções ficam no LivingFinds.`,
+        reason: `${plan.classification}, score ${plan.average_score}. Amazon incrementa ${plan.adjustment}% para ${campaignIds.length} campanha(s); reduções ficam no LivingFinds.`,
         updated_at: now,
         next_review_at: nextReview(),
       };
@@ -325,13 +350,13 @@ Deno.serve(async (request) => {
         const created = await rulesCommand(base44, aid, 'create_rules', {
           optimizationRules: [{
             action: {
-              actionDetails: { actionOperator: 'INCREMENT', actionUnit: 'PERCENT', value: String(window.adjustment) },
+              actionDetails: { actionOperator: 'INCREMENT', actionUnit: 'PERCENT', value: String(plan.adjustment) },
               actionType: 'ADOPT',
             },
             recurrence: {
-              daysOfWeek: window.days,
+              daysOfWeek: plan.days,
               duration: { startTime: `${today}T00:00:00Z` },
-              timesOfDay: [{ startTime: window.start_time, endTime: window.end_time }],
+              timesOfDay: [{ startTime: plan.start_time, endTime: plan.end_time }],
               type: 'WEEKLY',
             },
             ruleCategory: 'BID',
@@ -358,16 +383,16 @@ Deno.serve(async (request) => {
       }
 
       if (dryRun) {
-        results.push({ rule_name: ruleName, adjustment: window.adjustment, campaigns: eligible.length, dry_run: true });
+        results.push({ rule_name: ruleName, adjustment: plan.adjustment, campaigns: campaignIds, asins: localData.asins, dry_run: true });
         continue;
       }
       if (!nativeSupported || !id) {
-        results.push({ rule_name: ruleName, ok: false, fallback: 'app_managed_only' });
+        results.push({ rule_name: ruleName, campaigns: campaignIds, ok: false, fallback: 'app_managed_only' });
         continue;
       }
 
       const alreadyAssociated = new Set<string>((local.associated_campaign_ids || []).map(String));
-      const toAssociate = eligibleIds.filter((cid) => !alreadyAssociated.has(String(cid)));
+      const toAssociate = campaignIds.filter((cid) => !alreadyAssociated.has(cid));
       const newlyAssociated: string[] = [];
       const failed: string[] = [];
       for (const cid of toAssociate) {
@@ -382,14 +407,14 @@ Deno.serve(async (request) => {
         await wait(350);
       }
 
-      const associated = [...new Set([...alreadyAssociated, ...newlyAssociated])].filter((cid) => eligibleIds.includes(cid));
+      const associated = [...new Set([...alreadyAssociated, ...newlyAssociated])].filter((cid) => campaignIds.includes(cid));
       await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
         optimization_rule_id: id,
         status: 'enabled',
         association_status: failed.length === 0 ? 'associated' : associated.length > 0 ? 'partial' : 'failed',
         associated_campaign_ids: associated,
         failed_campaign_ids: failed,
-        campaign_ids: eligibleIds,
+        campaign_ids: campaignIds,
         native_api_supported: true,
         fallback_mode: 'amazon_native_positive_app_negative',
         last_associated_at: toAssociate.length > 0 ? now : local.last_associated_at || null,
@@ -401,14 +426,17 @@ Deno.serve(async (request) => {
       results.push({
         rule_name: ruleName,
         rule_id: id,
-        adjustment: window.adjustment,
+        adjustment: plan.adjustment,
+        campaigns: campaignIds,
+        asins: localData.asins,
         already_associated: alreadyAssociated.size,
         newly_associated: newlyAssociated.length,
         failed: failed.length,
       });
     }
 
-    // Regras que deixaram de corresponder às janelas atuais são pausadas, nunca apagadas.
+    // Mudança de janela, ASIN ou conjunto de campanhas gera nova chave. A regra
+    // anterior é pausada na Amazon e mantida localmente para auditoria.
     if (!dryRun) {
       for (const stale of storedRules) {
         if (!stale.idempotency_key || desiredKeys.has(stale.idempotency_key)) continue;
@@ -427,7 +455,7 @@ Deno.serve(async (request) => {
           await base44.asServiceRole.entities.AmazonScheduledRule.update(stale.id, {
             status: 'paused',
             association_status: 'pending',
-            reason: `Regra pausada: janela não existe mais no ciclo ${today}. Histórico preservado.`,
+            reason: `Regra pausada: janela, produto ou campanhas alterados no ciclo ${today}. Histórico preservado.`,
             amazon_request_id: response?.request_id || stale.amazon_request_id || null,
             amazon_response_status: Number(response?.status || 0) || stale.amazon_response_status || null,
             amazon_response: response ? JSON.stringify(response?.payload || response).slice(0, 4000) : stale.amazon_response || null,
@@ -451,7 +479,7 @@ Deno.serve(async (request) => {
       duration_ms: Date.now() - startedAt,
       records_processed: rulesCreated + rulesPaused + associations,
       result_summary: JSON.stringify({
-        windows: windows.length,
+        rule_plans: plans.size,
         campaigns: eligible.length,
         rules_created: rulesCreated,
         rules_paused: rulesPaused,
@@ -472,7 +500,7 @@ Deno.serve(async (request) => {
       native_api_supported: nativeSupported,
       fallback_mode: nativeSupported ? 'amazon_native_positive_app_negative' : 'app_managed_only',
       rule_limit: 'Schedule Bid Rules nativas somente incrementam bids.',
-      windows_found: windows.length,
+      rule_plans: plans.size,
       campaigns_eligible: eligible.length,
       rules_created: rulesCreated,
       rules_paused: rulesPaused,
