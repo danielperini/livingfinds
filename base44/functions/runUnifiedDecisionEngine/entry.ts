@@ -55,6 +55,17 @@ Deno.serve(async (request) => {
     ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const scopeAfter = scopeAfterResponse?.data || scopeAfterResponse || {};
 
+    // Pós-ciclo: monitorar tendência de ACoS (fire-and-forget)
+    const trendMonitorResponse = await base44.asServiceRole.functions.invoke(
+      'runAcosTrendMonitor',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        trigger: 'runUnifiedDecisionEngine',
+        _service_role: true,
+      },
+    ).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
+    const trendMonitor = trendMonitorResponse?.data || trendMonitorResponse || {};
+
     return Response.json({
       ok: data?.ok !== false && scopeAfter?.ok !== false,
       engine: 'unified',
@@ -63,6 +74,7 @@ Deno.serve(async (request) => {
       manual_bid_scope_before: scopeBefore,
       manual_bid_scope_after: scopeAfter,
       result: data,
+      acos_trend_monitor: trendMonitor,
     });
   } catch (error: any) {
     return Response.json(
