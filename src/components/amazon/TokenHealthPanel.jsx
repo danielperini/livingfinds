@@ -17,7 +17,7 @@ export default function TokenHealthPanel({ account }) {
     setLoading(true);
     try {
       const logs = await base44.entities.SyncExecutionLog.filter(
-        { amazon_account_id: account.id, operation: 'amazon_ads:token_manager_v7' },
+        { amazon_account_id: account.id, operation: 'amazon_ads:token_manager_v8' },
         '-started_at',
         10
       ).catch(() => []);
