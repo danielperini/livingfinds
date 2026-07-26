@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
 import {
-Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
-RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
-Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, } from
+  Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
+  RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
+  Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
+  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -57,7 +57,7 @@ function needsMigration(campaign, keywords) {
   // keyword_count > 1 no campo
   if ((campaign.keyword_count || 0) > 1) return true;
   // Mais de 1 keyword ativa no banco
-  const activeExact = keywords.filter(k => {
+  const activeExact = keywords.filter((k) => {
     const st = (k.state || k.status || '').toLowerCase();
     return st !== 'archived' && (k.match_type || '').toLowerCase() === 'exact';
   });
@@ -78,7 +78,7 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
   const [itemLoading, setItemLoading] = useState({});
 
   // Reset pagination when campaigns list changes (filter/search)
-  useEffect(() => { setPage(1); }, [campaigns.length, stateFilter]);
+  useEffect(() => {setPage(1);}, [campaigns.length, stateFilter]);
 
   const visible = campaigns.slice(0, page * PAGE_SIZE);
   const hasMore = visible.length < campaigns.length;
@@ -86,22 +86,22 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
   const handleQuickPause = async (e, c) => {
     e.stopPropagation();
     if (itemLoading[c.id]) return;
-    setItemLoading(prev => ({ ...prev, [c.id]: true }));
+    setItemLoading((prev) => ({ ...prev, [c.id]: true }));
     try {
       await onQuickPause(c);
     } finally {
-      setItemLoading(prev => ({ ...prev, [c.id]: false }));
+      setItemLoading((prev) => ({ ...prev, [c.id]: false }));
     }
   };
 
   const handleQuickResume = async (e, c) => {
     e.stopPropagation();
     if (itemLoading[c.id]) return;
-    setItemLoading(prev => ({ ...prev, [c.id]: true }));
+    setItemLoading((prev) => ({ ...prev, [c.id]: true }));
     try {
       await onQuickResume(c);
     } finally {
-      setItemLoading(prev => ({ ...prev, [c.id]: false }));
+      setItemLoading((prev) => ({ ...prev, [c.id]: false }));
     }
   };
 
@@ -114,11 +114,11 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
         <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
       </div>
       {/* Extra action row */}
-      {extraAction && (
-        <div className="px-2 py-1.5 border-b border-surface-2">
+      {extraAction &&
+      <div className="px-2 py-1.5 border-b border-surface-2">
           {extraAction}
         </div>
-      )}
+      }
 
       {/* State filter per column */}
       <div className="px-2 py-1.5 border-b border-surface-2 flex gap-1">
@@ -139,108 +139,108 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
         <p className="text-[10px] text-slate-600 text-center py-6 px-2">Nenhuma campanha</p> :
         <>
         {visible.map((c, i) => {
-          const isSelected = selectedId === c.id;
-          const isNew = isNew24h(c);
-          const aiManaged = isAiManaged(c);
-          const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
-          const prod = c.asin ? products.find((p) => p.asin === c.asin) : null;
-          const state = campaignState(c);
-          const isItemLoading = !!itemLoading[c.id];
+            const isSelected = selectedId === c.id;
+            const isNew = isNew24h(c);
+            const aiManaged = isAiManaged(c);
+            const acosColor = (c.acos || 0) > 40 ? 'text-red-400' : (c.acos || 0) > 25 ? 'text-amber-400' : 'text-emerald-400';
+            const prod = c.asin ? products.find((p) => p.asin === c.asin) : null;
+            const state = campaignState(c);
+            const isItemLoading = !!itemLoading[c.id];
 
-          return (
-            <div
-              key={c.id || i}
-              onClick={() => onSelect(c)}
-              className={`group w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
-              isSelected ?
-              'bg-surface-2 border-l-2 border-l-cyan' :
-              'hover:bg-surface-1/60 border-l-2 border-l-transparent'}`
-              }>
+            return (
+              <div
+                key={c.id || i}
+                onClick={() => onSelect(c)}
+                className={`group w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
+                isSelected ?
+                'bg-surface-2 border-l-2 border-l-cyan' :
+                'hover:bg-surface-1/60 border-l-2 border-l-transparent'}`
+                }>
                 {/* Name + badges */}
                 <div className="flex items-start gap-1.5 mb-1">
                   <p className="text-[11px] font-medium text-white truncate flex-1 leading-tight">
-                    {c._asin_resolved ? `AUTO | ${c._asin_resolved}` : (c.name || c.campaign_name)}
+                    {c._asin_resolved ? `AUTO | ${c._asin_resolved}` : c.name || c.campaign_name}
                   </p>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {/* Quick pause/resume button — visible on hover */}
-                    {(onQuickPause || onQuickResume) && (state === 'enabled' || state === 'paused') ? (
-                      <button
-                        onClick={(e) => state === 'enabled' ? handleQuickPause(e, c) : handleQuickResume(e, c)}
-                        title={state === 'enabled' ? 'Pausar campanha' : 'Reativar campanha'}
-                        className={`opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${
-                          state === 'enabled'
-                            ? 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/25'
-                            : 'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/25'
-                        }`}
-                      >
-                        {isItemLoading
-                          ? <Loader2 className="w-3 h-3 animate-spin" />
-                          : state === 'enabled'
-                            ? <Pause className="w-3 h-3" />
-                            : <Play className="w-3 h-3" />}
-                      </button>
-                    ) : null}
-                    {c._group_count > 1 ? (
-                  <span title={`${c._group_count} campanhas para este ASIN`} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30 leading-none">
+                    {(onQuickPause || onQuickResume) && (state === 'enabled' || state === 'paused') ?
+                    <button
+                      onClick={(e) => state === 'enabled' ? handleQuickPause(e, c) : handleQuickResume(e, c)}
+                      title={state === 'enabled' ? 'Pausar campanha' : 'Reativar campanha'}
+                      className={`opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${
+                      state === 'enabled' ?
+                      'text-amber-400 bg-amber-500/10 hover:bg-amber-500/25' :
+                      'text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/25'}`
+                      }>
+                      
+                        {isItemLoading ?
+                      <Loader2 className="w-3 h-3 animate-spin" /> :
+                      state === 'enabled' ?
+                      <Pause className="w-3 h-3" /> :
+                      <Play className="w-3 h-3" />}
+                      </button> :
+                    null}
+                    {c._group_count > 1 ?
+                    <span title={`${c._group_count} campanhas para este ASIN`} className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30 leading-none">
                         ×{c._group_count}
-                      </span>
-                  ) : null}
-                    {isNew ? (
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+                      </span> :
+                    null}
+                    {isNew ?
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
                         NEW
-                      </span>
-                  ) : null}
-                    {aiManaged ? (
-                  <span title="Gerido pela IA" className="text-[9px] font-bold px-1 py-0.5 rounded bg-cyan/15 text-cyan border border-cyan/25 leading-none flex items-center gap-0.5">
+                      </span> :
+                    null}
+                    {aiManaged ?
+                    <span title="Gerido pela IA" className="text-[9px] font-bold px-1 py-0.5 rounded bg-cyan/15 text-cyan border border-cyan/25 leading-none flex items-center gap-0.5">
                         <Bot className="w-2.5 h-2.5" />
-                      </span>
-                  ) : null}
+                      </span> :
+                    null}
                     {(c.targeting_type || '').toUpperCase() === 'MANUAL' &&
-                     !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
-                     ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ? (
-                  <span title="Esta campanha tem múltiplas keywords e precisa ser migrada para o formato canônico (1 campanha = 1 keyword)" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 leading-none whitespace-nowrap">
+                    !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
+                    (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || ''))) ?
+                    <span title="Esta campanha tem múltiplas keywords e precisa ser migrada para o formato canônico (1 campanha = 1 keyword)" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 leading-none whitespace-nowrap">
                         MIGRAÇÃO PENDENTE
-                      </span>
-                  ) : null}
+                      </span> :
+                    null}
                   </div>
                 </div>
 
                 {/* ASIN/SKU */}
                 {prod ?
-              <p className="text-[9px] text-slate-500 truncate mb-1">
+                <p className="text-[9px] text-slate-500 truncate mb-1">
                     <span className="text-cyan font-mono">{prod.asin}</span>
                     {prod.sku ? <span className="ml-1">· {prod.sku}</span> : null}
                   </p> :
-              (c.asin || c._asin_resolved) ?
-              <p className="text-[9px] font-mono text-slate-500 mb-1">{c.asin || c._asin_resolved}</p> :
-              null}
+                c.asin || c._asin_resolved ?
+                <p className="text-[9px] font-mono text-slate-500 mb-1">{c.asin || c._asin_resolved}</p> :
+                null}
 
                 {/* Metrics row */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <StatusBadge status={state || 'enabled'} size="xs" />
                   <span className="text-[10px] text-slate-500">R${(c.spend || 0).toFixed(0)}</span>
-                  {(c.acos || 0) > 0 ? (
-                <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span>
-                ) : null}
-                  {c.targeting_type === 'MANUAL' && c.bidding_strategy ? (
-                <span className={`text-[9px] font-medium px-1 py-0.5 rounded leading-none ${
+                  {(c.acos || 0) > 0 ?
+                  <span className={`text-[10px] font-semibold ${acosColor}`}>{(c.acos || 0).toFixed(0)}%</span> :
+                  null}
+                  {c.targeting_type === 'MANUAL' && c.bidding_strategy ?
+                  <span className={`text-[9px] font-medium px-1 py-0.5 rounded leading-none ${
                   c.bidding_strategy === 'autoForSales' ? 'text-emerald-400 bg-emerald-500/10' :
                   c.bidding_strategy === 'legacyForSales' ? 'text-amber-400 bg-amber-500/10' :
                   'text-slate-400 bg-slate-500/10'}`}>
                     {c.bidding_strategy === 'autoForSales' ? '↕ U&D' : c.bidding_strategy === 'legacyForSales' ? '↓ Down' : 'Fixed'}
-                  </span>
-                ) : null}
+                  </span> :
+                  null}
                 </div>
               </div>);
-        })}
-        {hasMore && (
+          })}
+        {hasMore &&
           <button
-            onClick={() => setPage(p => p + 1)}
-            className="w-full py-2 text-[10px] text-slate-500 hover:text-cyan transition-colors border-t border-surface-2/40"
-          >
+            onClick={() => setPage((p) => p + 1)}
+            className="w-full py-2 text-[10px] text-slate-500 hover:text-cyan transition-colors border-t border-surface-2/40">
+            
             Carregar mais ({campaigns.length - visible.length} restantes)
           </button>
-        )}
+          }
         </>
         }
       </div>
@@ -302,13 +302,13 @@ export default function AdsManagement() {
         amazon_account_id: account.id,
         targeting_type_filter: 'MANUAL',
         include_incomplete: true,
-        _service_role: true,
+        _service_role: true
       });
       const d = res?.data;
       if (d?.ok) {
         setReactivateManualResult({
           type: d.reactivated > 0 ? 'success' : 'info',
-          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já ativas`,
+          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já ativas`
         });
         await loadCampaigns();
       } else {
@@ -329,14 +329,14 @@ export default function AdsManagement() {
     try {
       const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
         amazon_account_id: account.id,
-        dry_run: false,
+        dry_run: false
       });
       const d = res?.data;
       if (d?.ok) {
         const paused = d.paused ?? d.campaigns_paused ?? 0;
         setPauseNoStockActiveResult({
           type: paused > 0 ? 'success' : 'info',
-          text: `${paused} pausadas · motivo: sem estoque`,
+          text: `${paused} pausadas · motivo: sem estoque`
         });
         if (paused > 0) await loadCampaigns();
       } else {
@@ -358,14 +358,14 @@ export default function AdsManagement() {
       const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
         amazon_account_id: account.id,
         dry_run: false,
-        targeting_type_filter: 'MANUAL',
+        targeting_type_filter: 'MANUAL'
       });
       const d = res?.data;
       if (d?.ok) {
         const paused = d.paused ?? d.campaigns_paused ?? 0;
         setPauseManualResult({
           type: paused > 0 ? 'success' : 'info',
-          text: `${paused} pausadas · motivo: sem estoque`,
+          text: `${paused} pausadas · motivo: sem estoque`
         });
         if (paused > 0) await loadCampaigns();
       } else {
@@ -388,7 +388,7 @@ export default function AdsManagement() {
       const res = await base44.functions.invoke('deduplicateAutoCampaignsByAsin', {
         amazon_account_id: account.id,
         dry_run: false,
-        _service_role: true,
+        _service_role: true
       });
       const d = res?.data ?? res;
       if (d?.ok) {
@@ -396,9 +396,9 @@ export default function AdsManagement() {
         const asins = d.asins_processed ?? 0;
         setArchiveDuplicatesResult({
           type: archived > 0 ? 'success' : 'info',
-          text: archived > 0
-            ? `${archived} arquivadas · ${asins} ASINs limpos`
-            : 'Nenhuma duplicata encontrada',
+          text: archived > 0 ?
+          `${archived} arquivadas · ${asins} ASINs limpos` :
+          'Nenhuma duplicata encontrada'
         });
         if (archived > 0) await loadCampaigns();
       } else {
@@ -421,13 +421,13 @@ export default function AdsManagement() {
       const res = await base44.functions.invoke('pauseAndArchiveAutoNoAsin', {
         amazon_account_id: account.id,
         dry_run: false,
-        _service_role: true,
+        _service_role: true
       });
       const d = res?.data ?? res;
       if (d?.ok) {
         setPauseNoAsinResult({
           type: d.paused > 0 ? 'success' : 'info',
-          text: `${d.paused} pausadas/arquivadas · ${d.preserved} preservadas (com pedidos) · ${d.failed} falhas`,
+          text: `${d.paused} pausadas/arquivadas · ${d.preserved} preservadas (com pedidos) · ${d.failed} falhas`
         });
         if (d.paused > 0) await loadCampaigns();
       } else {
@@ -450,13 +450,13 @@ export default function AdsManagement() {
         amazon_account_id: account.id,
         targeting_type_filter: 'AUTO',
         include_incomplete: true,
-        _service_role: true,
+        _service_role: true
       });
       const d = res?.data;
       if (d?.ok) {
         setReactivateAutoResult({
           type: d.reactivated > 0 ? 'success' : 'info',
-          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já têm AUTO ativa`,
+          text: `${d.reactivated ?? 0} reativadas · ${d.skipped_no_stock ?? 0} sem estoque · ${d.skipped_already_active ?? 0} já têm AUTO ativa`
         });
         await loadCampaigns();
       } else {
@@ -481,24 +481,24 @@ export default function AdsManagement() {
       const p1 = base44.functions.invoke('repairIncompleteManualExactCampaigns', {
         amazon_account_id: account.id,
         _service_role: true,
-        target: 'manual_only',
+        target: 'manual_only'
       });
       const timeout1 = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 90000));
       const res1 = await Promise.race([p1, timeout1]).catch(async (e) => {
         if (e?.message?.includes('429') || e?.message?.includes('502') || e?.message?.includes('rate')) {
           setRepairSummary({ type: 'warning', text: 'Rate limit Amazon — tentando novamente em 60s...' });
-          await new Promise(r => setTimeout(r, 60000));
+          await new Promise((r) => setTimeout(r, 60000));
           return base44.functions.invoke('repairIncompleteManualExactCampaigns', {
-            amazon_account_id: account.id, _service_role: true, target: 'manual_only',
+            amazon_account_id: account.id, _service_role: true, target: 'manual_only'
           }).catch(() => null);
         }
         return null; // timeout — continua para fase 2
       });
       repaired = res1?.data?.repaired ?? res1?.data?.campaigns_repaired ?? 0;
-    } catch { /* continua para fase 2 */ }
+    } catch {/* continua para fase 2 */}
 
     setRepairPhase('phase1_done');
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 400));
     setRepairPhase('phase2');
 
     // FASE 2 — Reconciliação de estados
@@ -509,18 +509,18 @@ export default function AdsManagement() {
         amazon_account_id: account.id,
         _service_role: true,
         targeting_type: 'MANUAL',
-        force: true,
+        force: true
       }).catch(() => null);
       synced = res2?.data?.synced ?? res2?.data?.campaigns_synced ?? res2?.data?.updated ?? 0;
       divergencias = res2?.data?.divergencias ?? res2?.data?.divergences ?? res2?.data?.review_required ?? 0;
-    } catch { /* falha parcial — não bloqueia */ }
+    } catch {/* falha parcial — não bloqueia */}
 
     setRepairPhase('done');
     setRepairSummary({
       type: 'success',
-      text: `${repaired} reparada(s) · ${synced} estado(s) sincronizado(s)${divergencias > 0 ? ` · ${divergencias} divergência(s)` : ''}`,
+      text: `${repaired} reparada(s) · ${synced} estado(s) sincronizado(s)${divergencias > 0 ? ` · ${divergencias} divergência(s)` : ''}`
     });
-    setTimeout(() => { setRepairPhase(null); setRepairSummary(null); }, 12000);
+    setTimeout(() => {setRepairPhase(null);setRepairSummary(null);}, 12000);
     await loadCampaigns();
   };
 
@@ -533,7 +533,7 @@ export default function AdsManagement() {
     setPauseNoStockMsg(null);
     try {
       const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
-        amazon_account_id: account.id, dry_run: dryRun,
+        amazon_account_id: account.id, dry_run: dryRun
       });
       const d = res?.data;
       if (d?.ok) {
@@ -604,11 +604,11 @@ export default function AdsManagement() {
         const asinCount = {};
         for (const c of operational) {
           if ((c.targeting_type || '').toUpperCase() !== 'AUTO') continue;
-          const asin = c.asin || (() => { const m = (c.name || c.campaign_name || '').match(/B0[A-Z0-9]{8}/i); return m ? m[0].toUpperCase() : null; })();
+          const asin = c.asin || (() => {const m = (c.name || c.campaign_name || '').match(/B0[A-Z0-9]{8}/i);return m ? m[0].toUpperCase() : null;})();
           if (!asin) continue;
           asinCount[asin] = (asinCount[asin] || 0) + 1;
         }
-        return Object.values(asinCount).some(n => n > 1);
+        return Object.values(asinCount).some((n) => n > 1);
       })();
       if (hasAutoDuplicates) {
         base44.functions.invoke('deduplicateAutoCampaignsByAsin', { amazon_account_id: acc.id }).catch(() => {});
@@ -627,7 +627,7 @@ export default function AdsManagement() {
       // Reativar campanhas canônicas pausadas — fire-and-forget, sem bloquear UI
       const hasCanonicalPaused = operational.some(
         (c) => campaignState(c) === 'paused' &&
-          /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
+        /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
       );
       if (hasCanonicalPaused) {
         base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
@@ -636,8 +636,8 @@ export default function AdsManagement() {
       // Disparar migração canônica automaticamente em background se houver pendentes
       const hasPendingMigration = operational.some(
         (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
-          !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
-          ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+        !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
+        (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
       );
       if (hasPendingMigration) {
         setMigrationInProgress(true);
@@ -653,8 +653,8 @@ export default function AdsManagement() {
             setCampaigns(operational2);
             const stillPending = operational2.some(
               (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
-                !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) &&
-                ((c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+              !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
+              (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
             );
             if (!stillPending) setMigrationInProgress(false);
           } catch {
@@ -822,12 +822,12 @@ export default function AdsManagement() {
       const response = await base44.functions.invoke('pauseCampaign', {
         amazon_account_id: account.id,
         campaign_id: campaign.campaign_id,
-        asin: campaign.asin,
+        asin: campaign.asin
       });
       if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar');
-      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
+      setCampaigns((prev) => prev.map((c) => c.id === campaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
       if (selectedCampaign?.id === campaign.id) {
-        setSelectedCampaign(prev => ({ ...prev, state: 'paused', status: 'paused' }));
+        setSelectedCampaign((prev) => ({ ...prev, state: 'paused', status: 'paused' }));
       }
     } catch (e) {
       setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
@@ -843,12 +843,12 @@ export default function AdsManagement() {
         campaign_db_id: campaign.id,
         asin: campaign.asin,
         force: true,
-        _service_role: true,
+        _service_role: true
       });
       if (!res?.data?.ok) throw new Error(res?.data?.error || 'Falha ao reativar');
-      setCampaigns(prev => prev.map(c => c.id === campaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+      setCampaigns((prev) => prev.map((c) => c.id === campaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
       if (selectedCampaign?.id === campaign.id) {
-        setSelectedCampaign(prev => ({ ...prev, state: 'enabled', status: 'enabled' }));
+        setSelectedCampaign((prev) => ({ ...prev, state: 'enabled', status: 'enabled' }));
       }
     } catch (e) {
       setCampaignActionMsg({ type: 'error', text: 'Erro ao reativar: ' + e.message });
@@ -875,7 +875,7 @@ export default function AdsManagement() {
 
   // ── Separar AUTO / MANUAL ──────────────────────────────────────────────────
   // Mapa de ASIN → produto para filtro de estoque
-  const productsByAsin = Object.fromEntries(products.map(p => [p.asin, p]));
+  const productsByAsin = Object.fromEntries(products.map((p) => [p.asin, p]));
 
   const applySearch = (list) => list.filter((c) => {
     if (search && !(c.name || '').toLowerCase().includes(search.toLowerCase()) && !(c.campaign_name || '').toLowerCase().includes(search.toLowerCase())) return false;
@@ -891,19 +891,19 @@ export default function AdsManagement() {
   });
 
   // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
-  const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO'))
-    .filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
+  const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO')).
+  filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
 
   const autoByAsin = (() => {
     const map = new Map();
     for (const c of rawAuto) {
       const asin = getCampaignAsin(c) || c.id;
-      if (!map.has(asin)) { map.set(asin, []); }
+      if (!map.has(asin)) {map.set(asin, []);}
       map.get(asin).push(c);
     }
-    return Array.from(map.values()).map(group => {
+    return Array.from(map.values()).map((group) => {
       // Priorizar enabled, depois mais recente
-      const enabled = group.filter(c => (c.state || c.status) === 'enabled');
+      const enabled = group.filter((c) => (c.state || c.status) === 'enabled');
       const representative = enabled.length > 0 ? enabled[0] : group[0];
       const resolvedAsin = getCampaignAsin(representative);
       // Só usar _asin_resolved como prefixo de display se for um ASIN Amazon real (começa com B0 e tem 10 chars)
@@ -913,9 +913,9 @@ export default function AdsManagement() {
   })();
 
   const autoCampaigns = autoByAsin;
-  const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO'))
-  .filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual)
-  .sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
+  const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO')).
+  filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual).
+  sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
@@ -971,30 +971,30 @@ export default function AdsManagement() {
           {/* Stats row */}
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-[10px] text-slate-500">{total_current} operacionais · {activeCount} ativas · {pausedCount} pausadas</span>
-            {newCount > 0 ? (
+            {newCount > 0 ?
             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
                 {newCount} NEW (24h)
-              </span>
-            ) : null}
+              </span> :
+            null}
           </div>
 
-          {pauseNoStockMsg ? (
-          <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p>
-          ) : null}
+          {pauseNoStockMsg ?
+          <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p> :
+          null}
 
-          {repairSummary ? (
+          {repairSummary ?
           <p className={`text-[10px] mt-1.5 font-semibold ${repairSummary.type === 'success' ? 'text-emerald-400' : repairSummary.type === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
             🔧 {repairSummary.text}
-          </p>
-          ) : null}
-          {tokenCheck && tokenCheck !== 'checking' ? (
+          </p> :
+          null}
+          {tokenCheck && tokenCheck !== 'checking' ?
           <div className={`mt-1.5 px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-2 ${tokenCheck.ok ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
               {tokenCheck.ok ?
             <><Wifi className="w-3 h-3 text-emerald-400 flex-shrink-0" /><span className="text-emerald-300">API OK · {tokenCheck.profiles?.length} profile(s) · {tokenCheck.latency}ms · {tokenCheck.checkedAt}</span></> :
             <><WifiOff className="w-3 h-3 text-red-400 flex-shrink-0" /><span className="text-red-300">Falha: {tokenCheck.error?.slice(0, 80)} · {tokenCheck.checkedAt}</span></>
             }
-            </div>
-          ) : null}
+            </div> :
+          null}
 
         </div>
 
@@ -1006,25 +1006,25 @@ export default function AdsManagement() {
             className="w-full pl-6 pr-2 py-1 bg-surface-2 border border-surface-3 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
           </div>
           <button
-            onClick={() => setHideNoStock(v => !v)}
+            onClick={() => setHideNoStock((v) => !v)}
             title="Esconder campanhas de produtos sem estoque"
             className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
-              hideNoStock
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'
-            }`}
-          >
+            hideNoStock ?
+            'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+            'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`
+            }>
+            
             📦 {hideNoStock ? 'c/ estoque' : 'todos'}
           </button>
           <button
-            onClick={() => setHidePaused(v => !v)}
+            onClick={() => setHidePaused((v) => !v)}
             title="Ocultar campanhas pausadas"
             className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
-              hidePaused
-                ? 'bg-cyan/20 text-cyan border-cyan/30'
-                : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'
-            }`}
-          >
+            hidePaused ?
+            'bg-cyan/20 text-cyan border-cyan/30' :
+            'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`
+            }>
+            
             ▶ {hidePaused ? 'ativas' : 'todas'}
           </button>
         </div>
@@ -1033,149 +1033,149 @@ export default function AdsManagement() {
         <div className="flex border-b border-surface-2 flex-shrink-0">
           <button
             onClick={() => setColumnTab('auto')}
-            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'auto' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-          >
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'auto' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            
             Automáticas ({autoCampaigns.length})
           </button>
           <button
             onClick={() => setColumnTab('manual')}
-            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
-          >
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            
             Manuais ({manualCampaigns.length})
           </button>
         </div>
 
         {/* Single-column campaign list */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
-          {columnTab === 'auto' ? (
-            <CampaignColumn
-              title="Automáticas"
-              icon={Zap}
-              color="text-amber-400"
-              campaigns={autoCampaigns}
+          {columnTab === 'auto' ?
+          <CampaignColumn
+            title="Automáticas"
+            icon={Zap}
+            color="text-amber-400"
+            campaigns={autoCampaigns}
+            products={products}
+            selectedId={selectedCampaign?.id}
+            onSelect={selectCampaign}
+            loading={loading}
+            stateFilter={stateFilterAuto}
+            onStateFilter={setStateFilterAuto}
+            onQuickPause={quickPauseCampaign}
+            onQuickResume={quickResumeCampaign}
+            extraAction={
+            <div className="flex flex-col gap-1">
+                  <StaleInventoryWarningPanel
+                campaigns={campaigns}
+                products={products}
+                account={account}
+                onReactivated={(campaignId) => {
+                  setCampaigns((prev) => prev.map((c) =>
+                  c.id === campaignId ? { ...c, state: 'enabled', status: 'enabled' } : c
+                  ));
+                }} />
+              
+                  <button
+                onClick={reactivateAutoWithStock}
+                disabled={!account || reactivatingAuto}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
+                
+                    {reactivatingAuto ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>}
+                  </button>
+                  {reactivateAutoResult &&
+              <p className={`text-[10px] text-center font-medium ${reactivateAutoResult.type === 'success' ? 'text-emerald-400' : reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {reactivateAutoResult.text}
+                    </p>
+              }
+                  <button
+                onClick={pauseAutoNoStockActive}
+                disabled={!account || pausingNoStockActive}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50">
+                
+                    {pausingNoStockActive ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>}
+                  </button>
+                  {pauseNoStockActiveResult &&
+              <p className={`text-[10px] text-center font-medium ${pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' : pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {pauseNoStockActiveResult.text}
+                    </p>
+              }
+                  <button
+                onClick={pauseAndArchiveAutoNoAsin}
+                disabled={!account || pausingNoAsin}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50 hidden">
+                
+                    {pausingNoAsin ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Pausar AUTO sem ASIN</>}
+                  </button>
+                  {pauseNoAsinResult &&
+              <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {pauseNoAsinResult.text}
+                    </p>
+              }
+                  <button
+                onClick={archiveAutoDuplicates}
+                disabled={!account || archivingDuplicates}
+                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50 hidden">
+                
+                    {archivingDuplicates ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Arquivar AUTO duplicadas</>}
+                  </button>
+                  {archiveDuplicatesResult &&
+              <p className={`text-[10px] text-center font-medium ${archiveDuplicatesResult.type === 'success' ? 'text-emerald-400' : archiveDuplicatesResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {archiveDuplicatesResult.text}
+                    </p>
+              }
+                </div>
+            } /> :
+
+
+          <>
+              {migrationInProgress &&
+            <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5 flex-shrink-0">
+                  <Settings className="w-3 h-3 text-amber-400 animate-spin" />
+                  <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
+                </div>
+            }
+              <CampaignColumn
+              title="Manuais"
+              icon={Sparkles}
+              color="text-cyan"
+              campaigns={manualCampaigns}
               products={products}
               selectedId={selectedCampaign?.id}
               onSelect={selectCampaign}
               loading={loading}
-              stateFilter={stateFilterAuto}
-              onStateFilter={setStateFilterAuto}
+              stateFilter={stateFilterManual}
+              onStateFilter={setStateFilterManual}
               onQuickPause={quickPauseCampaign}
               onQuickResume={quickResumeCampaign}
               extraAction={
-                <div className="flex flex-col gap-1">
-                  <StaleInventoryWarningPanel
-                    campaigns={campaigns}
-                    products={products}
-                    account={account}
-                    onReactivated={(campaignId) => {
-                      setCampaigns(prev => prev.map(c =>
-                        c.id === campaignId ? { ...c, state: 'enabled', status: 'enabled' } : c
-                      ));
-                    }}
-                  />
-                  <button
-                    onClick={reactivateAutoWithStock}
-                    disabled={!account || reactivatingAuto}
-                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {reactivatingAuto ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>}
-                  </button>
-                  {reactivateAutoResult && (
-                    <p className={`text-[10px] text-center font-medium ${reactivateAutoResult.type === 'success' ? 'text-emerald-400' : reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {reactivateAutoResult.text}
-                    </p>
-                  )}
-                  <button
-                    onClick={pauseAutoNoStockActive}
-                    disabled={!account || pausingNoStockActive}
-                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {pausingNoStockActive ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>}
-                  </button>
-                  {pauseNoStockActiveResult && (
-                    <p className={`text-[10px] text-center font-medium ${pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' : pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {pauseNoStockActiveResult.text}
-                    </p>
-                  )}
-                  <button
-                    onClick={pauseAndArchiveAutoNoAsin}
-                    disabled={!account || pausingNoAsin}
-                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {pausingNoAsin ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Pausar AUTO sem ASIN</>}
-                  </button>
-                  {pauseNoAsinResult && (
-                    <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {pauseNoAsinResult.text}
-                    </p>
-                  )}
-                  <button
-                    onClick={archiveAutoDuplicates}
-                    disabled={!account || archivingDuplicates}
-                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {archivingDuplicates ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Arquivar AUTO duplicadas</>}
-                  </button>
-                  {archiveDuplicatesResult && (
-                    <p className={`text-[10px] text-center font-medium ${archiveDuplicatesResult.type === 'success' ? 'text-emerald-400' : archiveDuplicatesResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {archiveDuplicatesResult.text}
-                    </p>
-                  )}
-                </div>
-              }
-            />
-          ) : (
-            <>
-              {migrationInProgress && (
-                <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5 flex-shrink-0">
-                  <Settings className="w-3 h-3 text-amber-400 animate-spin" />
-                  <span className="text-[10px] text-amber-400 font-medium">Migração canônica em progresso...</span>
-                </div>
-              )}
-              <CampaignColumn
-                title="Manuais"
-                icon={Sparkles}
-                color="text-cyan"
-                campaigns={manualCampaigns}
-                products={products}
-                selectedId={selectedCampaign?.id}
-                onSelect={selectCampaign}
-                loading={loading}
-                stateFilter={stateFilterManual}
-                onStateFilter={setStateFilterManual}
-                onQuickPause={quickPauseCampaign}
-                onQuickResume={quickResumeCampaign}
-                extraAction={
-                  <div className="flex flex-col gap-1">
+              <div className="flex flex-col gap-1">
                     <button
-                      onClick={reactivateManualWithStock}
-                      disabled={!account || reactivatingManual}
-                      className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50"
-                    >
+                  onClick={reactivateManualWithStock}
+                  disabled={!account || reactivatingManual}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
+                  
                       {reactivatingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar MANUAL com estoque</>}
                     </button>
-                    {reactivateManualResult && (
-                      <p className={`text-[10px] text-center font-medium ${reactivateManualResult.type === 'success' ? 'text-emerald-400' : reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                    {reactivateManualResult &&
+                <p className={`text-[10px] text-center font-medium ${reactivateManualResult.type === 'success' ? 'text-emerald-400' : reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                         {reactivateManualResult.text}
                       </p>
-                    )}
+                }
                     <button
-                      onClick={pauseManualNoStock}
-                      disabled={!account || pausingManual}
-                      className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50"
-                    >
+                  onClick={pauseManualNoStock}
+                  disabled={!account || pausingManual}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50">
+                  
                       {pausingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar MANUAL sem estoque</>}
                     </button>
-                    {pauseManualResult && (
-                      <p className={`text-[10px] text-center font-medium ${pauseManualResult.type === 'success' ? 'text-orange-400' : pauseManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                    {pauseManualResult &&
+                <p className={`text-[10px] text-center font-medium ${pauseManualResult.type === 'success' ? 'text-orange-400' : pauseManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                         {pauseManualResult.text}
                       </p>
-                    )}
-                  </div>
                 }
-              />
+                  </div>
+              } />
+            
             </>
-          )}
+          }
         </div>
 
         {/* KPI bottom */}
@@ -1209,9 +1209,9 @@ export default function AdsManagement() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <h2 className="text-base font-bold text-white truncate">{selectedCampaign.name || selectedCampaign.campaign_name}</h2>
-                    {isNew24h(selectedCampaign) ? (
-                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">NEW</span>
-                  ) : null}
+                    {isNew24h(selectedCampaign) ?
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">NEW</span> :
+                  null}
                     {(selectedCampaign.targeting_type || '').toUpperCase() === 'AUTO' ?
                   <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/20 flex items-center gap-1">
                         <Zap className="w-3 h-3" /> AUTO
@@ -1221,17 +1221,17 @@ export default function AdsManagement() {
                         <Sparkles className="w-3 h-3" /> MANUAL
                       </span>
                   }
-                    {isAiManaged(selectedCampaign) ? (
+                    {isAiManaged(selectedCampaign) ?
                   <span className="text-xs font-semibold px-2 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 flex items-center gap-1">
                         <Bot className="w-3 h-3" /> Gerida pela IA
-                      </span>
-                  ) : null}
+                      </span> :
+                  null}
                     {/* Badge MIGRAÇÃO PENDENTE na view de detalhes */}
-                    {needsMigration(selectedCampaign, keywords) ? (
+                    {needsMigration(selectedCampaign, keywords) ?
                   <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 flex items-center gap-1">
                         ⚠ MIGRAÇÃO PENDENTE — múltiplas keywords detectadas
-                      </span>
-                  ) : null}
+                      </span> :
+                  null}
                   </div>
                   <div className="flex items-center gap-3 mt-1 flex-wrap">
                     <StatusBadge status={campaignState(selectedCampaign) || 'enabled'} />
@@ -1246,11 +1246,11 @@ export default function AdsManagement() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
-                  {campaignActionMsg ? (
-                  <span className={`text-xs px-2 py-1 rounded ${campaignActionMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {campaignActionMsg ?
+                <span className={`text-xs px-2 py-1 rounded ${campaignActionMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
                       {campaignActionMsg.text}
-                    </span>
-                  ) : null}
+                    </span> :
+                null}
                   {/* Kick-off manual para a campanha selecionada */}
                   {(() => {
                   const prod = selectedCampaign.asin ? products.find((p) => p.asin === selectedCampaign.asin) : null;
@@ -1263,13 +1263,13 @@ export default function AdsManagement() {
 
                 })()}
                   {/* Pausar / Reativar */}
-                  {campaignState(selectedCampaign) === 'enabled' ? (
-                  <button onClick={pauseCampaign} disabled={!!campaignAction}
+                  {campaignState(selectedCampaign) === 'enabled' ?
+                <button onClick={pauseCampaign} disabled={!!campaignAction}
                 className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
                       {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pause className="w-3.5 h-3.5" />}
                       Pausar
-                    </button>
-                ) : campaignState(selectedCampaign) === 'paused' ? (
+                    </button> :
+                campaignState(selectedCampaign) === 'paused' ?
                 <button onClick={async () => {
                   setCampaignAction('pausing');
                   try {
@@ -1279,27 +1279,27 @@ export default function AdsManagement() {
                       campaign_db_id: selectedCampaign.id,
                       asin: selectedCampaign.asin,
                       force: true,
-                      _service_role: true,
+                      _service_role: true
                     });
-                      if (res?.data?.ok) {
-                        setSelectedCampaign(prev => ({ ...prev, state: 'enabled', status: 'enabled' }));
-                        setCampaigns(prev => prev.map(c => c.id === selectedCampaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
-                        setCampaignActionMsg({ type: 'success', text: 'Campanha reativada!' });
-                      } else {
-                        setCampaignActionMsg({ type: 'error', text: res?.data?.error || 'Falha ao reativar.' });
-                      }
-                    } catch (e) {
-                      setCampaignActionMsg({ type: 'error', text: e.message });
-                    } finally {
-                      setCampaignAction(null);
-                      setTimeout(() => setCampaignActionMsg(null), 7000);
+                    if (res?.data?.ok) {
+                      setSelectedCampaign((prev) => ({ ...prev, state: 'enabled', status: 'enabled' }));
+                      setCampaigns((prev) => prev.map((c) => c.id === selectedCampaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+                      setCampaignActionMsg({ type: 'success', text: 'Campanha reativada!' });
+                    } else {
+                      setCampaignActionMsg({ type: 'error', text: res?.data?.error || 'Falha ao reativar.' });
                     }
-                  }} disabled={!!campaignAction}
-                  className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                  } catch (e) {
+                    setCampaignActionMsg({ type: 'error', text: e.message });
+                  } finally {
+                    setCampaignAction(null);
+                    setTimeout(() => setCampaignActionMsg(null), 7000);
+                  }
+                }} disabled={!!campaignAction}
+                className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
                     {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                     Reativar
-                  </button>
-                ) : null}
+                  </button> :
+                null}
                   {/* Remover do painel */}
                   <button onClick={removeCampaign} disabled={!!campaignAction}
                 className="px-3 py-2 text-xs font-semibold bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
@@ -1312,19 +1312,19 @@ export default function AdsManagement() {
                 }} className="px-3 py-2 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5">
                     <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
                   </button>
-                  {keywords.length > 0 ? (
+                  {keywords.length > 0 ?
                 <button onClick={() => {const b = {};keywords.forEach((kw) => {b[kw.id] = 0.50;});setPendingBids(b);}}
                 className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5">
                       <TrendingUp className="w-3.5 h-3.5" /> Bids → R$0,50
-                    </button>
-                ) : null}
-                  {hasPending ? (
+                    </button> :
+                null}
+                  {hasPending ?
                 <button onClick={applyBids} disabled={saveState === 'loading'}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
                       {saveState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : saveState === 'success' ? <CheckCircle className="w-4 h-4" /> : saveState === 'error' ? <AlertCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
                       {saveState === 'loading' ? 'Guardando...' : saveState === 'success' ? 'Bids guardados!' : saveState === 'error' ? saveError || 'Erro' : `Guardar ${Object.keys(pendingBids).length} bid(s)`}
-                    </button>
-                ) : null}
+                    </button> :
+                null}
                 </div>
               </div>
             </div>
@@ -1337,7 +1337,7 @@ export default function AdsManagement() {
               label: (() => {
                 const isCanonicalTab = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(selectedCampaign?.name || selectedCampaign?.campaign_name || '');
                 if ((selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' && !isCanonicalTab) {
-                  const activeExact = keywords.filter(k => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived');
+                  const activeExact = keywords.filter((k) => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived');
                   if (activeExact.length > 1) return `⚠ Keywords (${keywords.length}) — MIGRAÇÃO PENDENTE`;
                 }
                 return `Keyword${keywords.length !== 1 ? 's' : ''} (${keywords.length})`;
@@ -1462,7 +1462,7 @@ export default function AdsManagement() {
 
             /* Search Terms Tab */
             <div className="p-4 space-y-4">
-                  {negSuggestions.length > 0 ? (
+                  {negSuggestions.length > 0 ?
               <div>
                       <h3 className="text-xs font-semibold text-red-400 mb-2 flex items-center gap-1.5">
                         <TrendingDown className="w-3.5 h-3.5" /> {negSuggestions.length} termos para negativar
@@ -1484,8 +1484,8 @@ export default function AdsManagement() {
                           </div>
                   )}
                       </div>
-                    </div>
-              ) : null}
+                    </div> :
+              null}
                   <div>
                     <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
                       <ListFilter className="w-3.5 h-3.5" /> {searchTerms.length} search terms capturados
@@ -1515,29 +1515,29 @@ export default function AdsManagement() {
                                   {(st.acos || 0) > 0 ? `${(st.acos || 0).toFixed(1)}%` : '—'}
                                 </td>
                                 <td className="px-4 py-2.5">
-                                  {isGood ? (
-                                // Campanhas MANUAIS: criar nova campanha em vez de adicionar keyword
-                                (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' ? (
-                                <button
-                                onClick={() => {
-                                 const prod = products.find(p => p.asin === (st.advertised_asin || selectedCampaign?.asin));
-                                 if (prod) setKickoffProduct(prod);
-                                }}
-                                title="Cria nova campanha canônica para este termo (1 campanha = 1 keyword EXACT)"
-                                className="px-2.5 py-1 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-lg hover:bg-violet-500/30 transition-colors flex items-center gap-1">
+                                  {isGood ?
+                            // Campanhas MANUAIS: criar nova campanha em vez de adicionar keyword
+                            (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' ?
+                            <button
+                              onClick={() => {
+                                const prod = products.find((p) => p.asin === (st.advertised_asin || selectedCampaign?.asin));
+                                if (prod) setKickoffProduct(prod);
+                              }}
+                              title="Cria nova campanha canônica para este termo (1 campanha = 1 keyword EXACT)"
+                              className="px-2.5 py-1 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-lg hover:bg-violet-500/30 transition-colors flex items-center gap-1">
                                 <Plus className="w-3 h-3" /> Nova campanha
-                                </button>
-                                ) : (
-                                <button onClick={() => promoteKeyword(st)}
-                                className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
-                                <Plus className="w-3 h-3" /> Promover
-                                </button>
-                                )
-                                ) : isWasting ?
-                                <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Desperdício</span> :
+                                </button> :
 
-                                <span className="text-xs text-slate-500">Observar</span>
-                                }
+                            <button onClick={() => promoteKeyword(st)}
+                            className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> Promover
+                                </button> :
+
+                            isWasting ?
+                            <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Desperdício</span> :
+
+                            <span className="text-xs text-slate-500">Observar</span>
+                            }
                                 </td>
                               </tr>);
 
@@ -1553,29 +1553,29 @@ export default function AdsManagement() {
         }
       </div>
 
-      {kickoffProduct && account ? (
+      {kickoffProduct && account ?
       <KickoffModal
         product={kickoffProduct}
         account={account}
         onClose={() => setKickoffProduct(null)}
-        onDone={() => {setKickoffProduct(null);loadCampaigns();}} />
-      ) : null}
+        onDone={() => {setKickoffProduct(null);loadCampaigns();}} /> :
+      null}
 
-      {showProposalModal && account ? (
-        <ManualCampaignProposalModal
-          account={account}
-          onClose={() => setShowProposalModal(false)}
-          onDone={loadCampaigns}
-        />
-      ) : null}
+      {showProposalModal && account ?
+      <ManualCampaignProposalModal
+        account={account}
+        onClose={() => setShowProposalModal(false)}
+        onDone={loadCampaigns} /> :
 
-      {showCreateWizard && account ? (
+      null}
+
+      {showCreateWizard && account ?
       <CreateCampaignWizard
         account={account}
         products={products}
         onClose={() => setShowCreateWizard(false)}
-        onDone={loadCampaigns} />
-      ) : null}
+        onDone={loadCampaigns} /> :
+      null}
     </div>);
 
 }
