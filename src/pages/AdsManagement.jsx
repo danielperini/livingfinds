@@ -1097,25 +1097,25 @@ export default function AdsManagement() {
                       {pauseNoStockActiveResult.text}
                     </p>
               }
-                  <button
-                onClick={pauseAndArchiveAutoNoAsin}
-                disabled={!account || pausingNoAsin}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50 hidden">
-                
-                    {pausingNoAsin ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Pausar AUTO sem ASIN</>}
-                  </button>
+                  
+
+
+
+
+
+              
                   {pauseNoAsinResult &&
               <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                       {pauseNoAsinResult.text}
                     </p>
               }
-                  <button
-                onClick={archiveAutoDuplicates}
-                disabled={!account || archivingDuplicates}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50 hidden">
-                
-                    {archivingDuplicates ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Arquivar AUTO duplicadas</>}
-                  </button>
+                  
+
+
+
+
+
+              
                   {archiveDuplicatesResult &&
               <p className={`text-[10px] text-center font-medium ${archiveDuplicatesResult.type === 'success' ? 'text-emerald-400' : archiveDuplicatesResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                       {archiveDuplicatesResult.text}

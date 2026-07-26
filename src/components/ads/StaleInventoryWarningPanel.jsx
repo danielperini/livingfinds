@@ -165,22 +165,22 @@ export default function StaleInventoryWarningPanel({ campaigns, products, accoun
     onReactivated?.(campaignId, asin);
   };
 
-  return (
-    <div className="space-y-2 hidden">
-      <div className="flex items-center gap-1.5 px-1">
-        <Package className="w-3 h-3 text-orange-400" />
-        <span className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">
-          Estoque Desatualizado · {visible.length} campanha{visible.length > 1 ? 's' : ''}
-        </span>
-      </div>
-      {visible.map((item) =>
-      <CandidateRow
-        key={item.campaign.id}
-        item={item}
-        account={account}
-        onReactivated={handleReactivated} />
+  return null;
 
-      )}
-    </div>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }
