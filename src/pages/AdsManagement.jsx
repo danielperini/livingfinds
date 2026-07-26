@@ -282,6 +282,8 @@ export default function AdsManagement() {
   const [reactivateManualResult, setReactivateManualResult] = useState(null);
   const [pausingNoStockActive, setPausingNoStockActive] = useState(false);
   const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
+  const [pausingNoAsin, setPausingNoAsin] = useState(false);
+  const [pauseNoAsinResult, setPauseNoAsinResult] = useState(null);
   const [pausingManual, setPausingManual] = useState(false);
   const [pauseManualResult, setPauseManualResult] = useState(null);
   const [hideNoStock, setHideNoStock] = useState(false);
@@ -372,6 +374,35 @@ export default function AdsManagement() {
     } finally {
       setPausingManual(false);
       setTimeout(() => setPauseManualResult(null), 10000);
+    }
+  };
+
+  const pauseAndArchiveAutoNoAsin = async () => {
+    if (!account || pausingNoAsin) return;
+    if (!window.confirm('Pausar na Amazon e arquivar localmente todas as campanhas AUTO sem ASIN vinculado?\n\nCampanhas com pedidos nos últimos 30 dias serão preservadas automaticamente.')) return;
+    setPausingNoAsin(true);
+    setPauseNoAsinResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAndArchiveAutoNoAsin', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        _service_role: true,
+      });
+      const d = res?.data ?? res;
+      if (d?.ok) {
+        setPauseNoAsinResult({
+          type: d.paused > 0 ? 'success' : 'info',
+          text: `${d.paused} pausadas/arquivadas · ${d.preserved} preservadas (com pedidos) · ${d.failed} falhas`,
+        });
+        if (d.paused > 0) await loadCampaigns();
+      } else {
+        setPauseNoAsinResult({ type: 'error', text: d?.error || 'Erro ao executar' });
+      }
+    } catch (e) {
+      setPauseNoAsinResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoAsin(false);
+      setTimeout(() => setPauseNoAsinResult(null), 12000);
     }
   };
 
@@ -1019,6 +1050,18 @@ export default function AdsManagement() {
                   {pauseNoStockActiveResult && (
                     <p className={`text-[10px] text-center font-medium ${pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' : pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
                       {pauseNoStockActiveResult.text}
+                    </p>
+                  )}
+                  <button
+                    onClick={pauseAndArchiveAutoNoAsin}
+                    disabled={!account || pausingNoAsin}
+                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-red-500/15 border border-red-500/30 text-red-400 hover:bg-red-500/25 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {pausingNoAsin ? <><Loader2 className="w-3 h-3 animate-spin" /> Arquivando...</> : <><Trash2 className="w-3 h-3" /> Pausar AUTO sem ASIN</>}
+                  </button>
+                  {pauseNoAsinResult && (
+                    <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {pauseNoAsinResult.text}
                     </p>
                   )}
                 </div>
