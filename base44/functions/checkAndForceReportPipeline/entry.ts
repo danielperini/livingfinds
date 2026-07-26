@@ -70,7 +70,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, action: 'skipped', reason: 'already_processed', duration_ms: Date.now() - t0 });
     }
 
-    // ── 2. Detectar jobs travados (poll_attempts=0) ──
+    // ── 2. Detectar jobs orphaned/travados (poll_attempts=0) ──
     // Caso A: criados há mais de 30min sem nenhum poll
     const cutoffStuckIso = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const stuckByAge = recentJobs.filter((j: any) => {
