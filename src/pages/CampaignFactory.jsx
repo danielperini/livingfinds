@@ -9,6 +9,7 @@ import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 import HighRelevancePanel from '@/components/termbank/HighRelevancePanel';
 import DumBankTab from '@/components/termbank/DumBankTab';
 import IASuggestionsTab from '@/components/factory/IASuggestionsTab';
+import KeywordInvestigatorTab from '@/components/factory/KeywordInvestigatorTab';
 
 // ── Configs ──────────────────────────────────────────────────────────────
 const LIFECYCLE_CONFIG = {
@@ -101,6 +102,7 @@ const TABS = [
   { key: 'termbank',     label: 'Term Bank',       icon: Star },
   { key: 'amazon_sug',   label: 'Amazon Sugestões',icon: Share2 },
   { key: 'ia_sug',       label: 'Sugestões IA',    icon: Sparkles },
+  { key: 'investigator', label: 'Investigador',    icon: Search },
 ];
 
 // ── TermBank sub-tab ──────────────────────────────────────────────────────
@@ -779,6 +781,11 @@ export default function CampaignFactory() {
 
         {/* ── SUGESTÕES IA ── */}
         {tab === 'ia_sug' && <IASuggestionsTab account={account} />}
+
+        {/* ── KEYWORD INVESTIGATOR ── */}
+        {tab === 'investigator' && (
+          <KeywordInvestigatorTab account={account} products={products} />
+        )}
 
       </div>
     </div>
