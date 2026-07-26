@@ -21,6 +21,7 @@ import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
+import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -1198,6 +1199,11 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* ── 8b. MOTOR & IA — STATUS POR PRODUTO ─────────────────────────────── */}
+      {account && !loading ? (
+        <MotorStatusBySku accountId={account.id} targetAcos={targetAcos} />
       ) : null}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}
