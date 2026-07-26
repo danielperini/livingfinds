@@ -817,6 +817,7 @@ export default function SalaDeComando() {
                         {windowActions.map(action => {
                           const isOk = action.status === 'success';
                           const isFailed = action.status === 'failed';
+                          const isWarning = action.status === 'warning';
                           const isPending = action.status === 'pending';
                           const isRunning = action.status === 'running';
                           const isPaused = action.raw?.status === 'cancelled';
@@ -850,6 +851,10 @@ export default function SalaDeComando() {
                                 ) : isFailed ? (
                                   <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-red-500/10 border-red-500/20 text-red-400 font-bold">
                                     <XCircle className="w-2.5 h-2.5" /> Falhou
+                                  </span>
+                                ) : isWarning ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/20 text-amber-400 font-bold">
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Aviso
                                   </span>
                                 ) : isPaused ? (
                                   <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-slate-500/10 border-slate-500/20 text-slate-400 font-bold">
