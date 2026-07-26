@@ -758,6 +758,9 @@ Deno.serve(async (req) => {
           fallback_cvr: psReq(ps.fallback_conversion_rate, 0.05),
           growth_tolerance_factor: FB.GROWTH_TOLERANCE_FACTOR,
           growth_cooldown_hours: FB.GROWTH_COOLDOWN_HOURS,
+          top_of_search_limit: Number(ps.top_of_search_limit ?? 0),
+          rest_of_search_limit: Number(ps.rest_of_search_limit ?? 0),
+          product_page_limit: Number(ps.product_page_limit ?? 0),
         };
       }
     } catch {}
@@ -786,6 +789,9 @@ Deno.serve(async (req) => {
             min_stock_days: FB.MIN_STOCK_DAYS, fallback_cvr: 0.05,
             growth_tolerance_factor: FB.GROWTH_TOLERANCE_FACTOR,
             growth_cooldown_hours: FB.GROWTH_COOLDOWN_HOURS,
+            top_of_search_limit: Number(cfg.top_of_search_limit ?? 0),
+            rest_of_search_limit: Number(cfg.rest_of_search_limit ?? 0),
+            product_page_limit: Number(cfg.product_page_limit ?? 0),
           };
         }
       } catch {}
@@ -806,6 +812,9 @@ Deno.serve(async (req) => {
         min_stock_days: FB.MIN_STOCK_DAYS, fallback_cvr: 0.05,
         growth_tolerance_factor: FB.GROWTH_TOLERANCE_FACTOR,
         growth_cooldown_hours: FB.GROWTH_COOLDOWN_HOURS,
+        top_of_search_limit: 0,
+        rest_of_search_limit: 0,
+        product_page_limit: 0,
       };
     }
 
@@ -840,6 +849,53 @@ Deno.serve(async (req) => {
         else if (scope === 'authorized') authorizedIneligibleAsins.add(sp.asin);
       }
     }
+
+    // ── 1c. Carregar guardrails de dayparting e placement em paralelo ──────
+    // Hora e dia BRT para consulta de slot
+    const brtNow = new Date(Date.now() - 3 * 3600000);
+    const currentHourBRT = brtNow.getUTCHours();
+    const currentDowBRT  = brtNow.getUTCDay(); // 0=Dom, 6=Sab
+    const todayBRT = brtNow.toISOString().slice(0, 10);
+
+    // Carregar HourlySalesPattern e DaypartingDecision do dia atual
+    const [hourlySalesRaw, daypartDecisionsRaw] = await Promise.all([
+      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.DaypartingDecision.filter(
+        { amazon_account_id: aid, cycle_date: todayBRT }, null, 500
+      ).catch(() => []),
+    ]);
+
+    // Construir mapa: "dow|hour" → classification
+    // Priorizar DaypartingDecision do dia atual (mais recente); fallback ao HourlySalesPattern histórico
+    type SlotClassification = 'ELITE_TIME' | 'STRONG_TIME' | 'NORMAL_TIME' | 'WEAK_TIME' | 'LOSS_TIME' | 'INSUFFICIENT_DATA';
+    const hourSlotMap = new Map<string, SlotClassification>();
+
+    // Indexar HourlySalesPattern histórico
+    for (const hsp of hourlySalesRaw) {
+      const key = `${hsp.day_of_week}|${hsp.hour}`;
+      // Mapear classification do HourlySalesPattern → formato de DaypartingDecision
+      const cls: SlotClassification = hsp.classification === 'PEAK_ELITE' ? 'ELITE_TIME'
+        : hsp.classification === 'PEAK_STRONG' ? 'STRONG_TIME'
+        : hsp.classification === 'NORMAL' ? 'NORMAL_TIME'
+        : hsp.classification === 'WEAK' ? 'WEAK_TIME'
+        : hsp.classification === 'LOSS' ? 'LOSS_TIME'
+        : 'INSUFFICIENT_DATA';
+      hourSlotMap.set(key, cls);
+    }
+
+    // Sobrescrever com DaypartingDecisions do dia atual (mais precisas)
+    for (const dd of daypartDecisionsRaw) {
+      if (dd.hour == null || dd.day_of_week == null) continue;
+      const key = `${dd.day_of_week}|${dd.hour}`;
+      if (dd.slot_classification) hourSlotMap.set(key, dd.slot_classification as SlotClassification);
+    }
+
+    // Slot atual BRT
+    const currentSlotKey = `${currentDowBRT}|${currentHourBRT}`;
+    const currentSlotClassification: SlotClassification = hourSlotMap.get(currentSlotKey) || 'INSUFFICIENT_DATA';
+
+    // Ler limites de placement dos settings (lidos mais abaixo em settings)
+    // Serão acessados como: settings.top_of_search_limit, settings.rest_of_search_limit, settings.product_page_limit
 
     // ── 2. Carregar dados em paralelo ─────────────────────────────────────
     const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
@@ -1871,10 +1927,78 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      // ── GUARDRAIL: Dayparting — verificar slot BRT atual ─────────────
+      // Só atua em decisões de aumento de bid. Fail-open se não há dados (INSUFFICIENT_DATA).
+      let daypartSlotNote = `slot ${currentSlotClassification}`;
+      if (currentSlotClassification === 'WEAK_TIME' || currentSlotClassification === 'LOSS_TIME') {
+        skipped.push({ entity_id: entityId, reason: 'daypart_weak_time', slot: currentSlotClassification, hour: currentHourBRT, asin: resolvedAsin });
+        continue;
+      }
+
+      // ── GUARDRAIL: Placement — verificar limites configurados ────────
+      // Bloquear aumento de bid e propor OptimizationDecision de redução de placement
+      if (campForKw) {
+        const tos = Number(campForKw.top_of_search_adjustment || 0);
+        const ros = Number(campForKw.rest_of_search_adjustment || 0);
+        const pp  = Number(campForKw.product_pages_adjustment || 0);
+        const tosLimit = settings.top_of_search_limit;
+        const rosLimit = settings.rest_of_search_limit;
+        const ppLimit  = settings.product_page_limit;
+
+        const placementViolations: string[] = [];
+        if (tosLimit > 0 && tos > tosLimit) placementViolations.push(`ToS ${tos}% > limite ${tosLimit}%`);
+        if (rosLimit > 0 && ros > rosLimit) placementViolations.push(`RoS ${ros}% > limite ${rosLimit}%`);
+        if (ppLimit  > 0 && pp  > ppLimit)  placementViolations.push(`PP ${pp}% > limite ${ppLimit}%`);
+
+        if (placementViolations.length > 0) {
+          // Bloquear aumento de bid para esta keyword
+          skipped.push({ entity_id: entityId, reason: 'placement_above_limit', violations: placementViolations, asin: resolvedAsin });
+
+          // Propor OptimizationDecision de redução de placement (idempotente por dia)
+          const campForPlacement = campForKw.campaign_id || campForKw.amazon_campaign_id;
+          if (campForPlacement) {
+            const placementIKey = `placement_cap|${campForPlacement}|${today}`;
+            if (!usedIdemKeys.has(placementIKey) && !entityChangedThisCycle.has(`placement|${campForPlacement}`)) {
+              usedIdemKeys.add(placementIKey);
+              entityChangedThisCycle.set(`placement|${campForPlacement}`, 'placement_cap');
+              base44.asServiceRole.entities.OptimizationDecision.create({
+                amazon_account_id: aid,
+                decision_type: 'placement_change',
+                entity_type: 'campaign',
+                entity_id: campForPlacement,
+                campaign_id: campForPlacement,
+                asin: resolvedAsin,
+                action: 'reduce_placement_adjustment',
+                rationale: `placement_above_limit: ${placementViolations.join(' | ')}. Ajustes de placement acima do limite configurado — reduzir para respeitar teto.`,
+                rule_key: 'placement_cap_guardrail',
+                status: 'approved',
+                approval_status: 'auto_approved',
+                requires_approval: false,
+                risk: 'low',
+                idempotency_key: placementIKey,
+                source_function: 'runDeterministicDecisionEngine_v8',
+                created_at: now,
+              }).catch(() => {});
+            }
+          }
+          continue;
+        }
+      }
+
+      // Anotar slot no rationale para rastreabilidade
+      daypartSlotNote = currentSlotClassification === 'NORMAL_TIME'
+        ? `slot NORMAL_TIME — crescimento capped a 5%`
+        : `slot ${currentSlotClassification} +${Math.round((currentSlotClassification === 'ELITE_TIME' ? getGrowthIncrement(opp.growth_confidence) : getGrowthIncrement(opp.growth_confidence)) * 100)}% permitido`;
+
       // Custo parcial: teto conservador de 5%
       const isPartialCost = econStatus.economic_data_incomplete;
-      const maxGrowthPct = isPartialCost ? FB.PARTIAL_COST_MAX_INCREASE : getGrowthIncrement(opp.growth_confidence);
+      let maxGrowthPct = isPartialCost ? FB.PARTIAL_COST_MAX_INCREASE : getGrowthIncrement(opp.growth_confidence);
+      // GUARDRAIL: NORMAL_TIME → cap de 5% independente da confiança
+      if (currentSlotClassification === 'NORMAL_TIME') {
+        maxGrowthPct = Math.min(maxGrowthPct, 0.05);
+      }
       const growthPct = Math.min(maxGrowthPct, FB.MAX_GROWTH_FACTOR - 1);
+      // daypartSlotNote já calculado acima
 
       // Simular crescimento antes de aprovar
       const sim = simulateGrowth({
@@ -1913,7 +2037,7 @@ Deno.serve(async (req) => {
         ruleKey = 'increase_bid_low_visibility';
         decisionType = 'increase_bid_low_visibility';
         growthRisk = 'low';
-        rationale = `📈 CENÁRIO A — Keyword com ACoS ${kw_acos.toFixed(1)}% ≤ meta ${effectiveTargetAcos}% e baixa visibilidade (${kw_impressions} impr/14d, score ${visSc.visibility_score.toFixed(2)}). Bid aumentado +${Math.round(growthPct * 100)}% para ampliar exposição. CPC projetado R$${proposed_bid.toFixed(2)}, abaixo do limite econômico. ${sim.reason}`;
+        rationale = `📈 CENÁRIO A — Keyword com ACoS ${kw_acos.toFixed(1)}% ≤ meta ${effectiveTargetAcos}% e baixa visibilidade (${kw_impressions} impr/14d, score ${visSc.visibility_score.toFixed(2)}). Bid aumentado +${Math.round(growthPct * 100)}% para ampliar exposição. CPC projetado R$${proposed_bid.toFixed(2)}, abaixo do limite econômico. [${daypartSlotNote}] ${sim.reason}`;
         stats.low_visibility_growth++;
       } else if (kw_cvr > settings.fallback_cvr * 1.2 && kw_orders >= 1 && visSc.is_low_visibility) {
         // Cenário B: Alta conversão com baixo volume
@@ -1921,7 +2045,7 @@ Deno.serve(async (req) => {
         ruleKey = 'increase_bid_high_conversion';
         decisionType = 'increase_bid_profitable_growth';
         growthRisk = 'low';
-        rationale = `📈 CENÁRIO B — Keyword com CVR ${(kw_cvr * 100).toFixed(2)}% acima da média e baixa exposição (${kw_impressions} impr/14d). ${kw_orders} venda(s). Bid aumentado +${Math.round(growthPct * 100)}% para testar crescimento de volume. ${sim.reason}`;
+        rationale = `📈 CENÁRIO B — Keyword com CVR ${(kw_cvr * 100).toFixed(2)}% acima da média e baixa exposição (${kw_impressions} impr/14d). ${kw_orders} venda(s). Bid aumentado +${Math.round(growthPct * 100)}% para testar crescimento de volume. [${daypartSlotNote}] ${sim.reason}`;
         stats.emerging_growth++;
       } else if (kw_acos !== null && effectiveTargetAcos !== null && kw_acos <= effectiveTargetAcos * 0.75 && kw_orders >= 1) {
         // Cenário A(2): Lucrativo com ACoS muito baixo
@@ -1929,7 +2053,7 @@ Deno.serve(async (req) => {
         ruleKey = 'increase_bid_profitable_growth';
         decisionType = 'increase_bid_profitable_growth';
         growthRisk = 'low';
-        rationale = `📈 CENÁRIO A — ACoS ${kw_acos.toFixed(1)}% muito abaixo da meta ${effectiveTargetAcos}%. ${kw_orders}p vendidos, CPA R$${funnel.actual_cpa.toFixed(2)} vs máx. lucrável R$${funnel.maximum_profitable_cpa.toFixed(2)}. Lucro pós-ADS: R$${(asinMeta?.profit_after_ads_14d || 0).toFixed(2)}/ped. Bid +${Math.round(growthPct * 100)}% para escalar. ${sim.reason}`;
+        rationale = `📈 CENÁRIO A — ACoS ${kw_acos.toFixed(1)}% muito abaixo da meta ${effectiveTargetAcos}%. ${kw_orders}p vendidos, CPA R$${funnel.actual_cpa.toFixed(2)} vs máx. lucrável R$${funnel.maximum_profitable_cpa.toFixed(2)}. Lucro pós-ADS: R$${(asinMeta?.profit_after_ads_14d || 0).toFixed(2)}/ped. Bid +${Math.round(growthPct * 100)}% para escalar. [${daypartSlotNote}] ${sim.reason}`;
         stats.profitable_growth++;
       } else if (opp.opportunity_state === 'high_growth_opportunity') {
         // Cenário high_growth
@@ -1937,7 +2061,7 @@ Deno.serve(async (req) => {
         ruleKey = 'increase_bid_high_growth';
         decisionType = 'increase_bid_profitable_growth';
         growthRisk = 'medium';
-        rationale = `🚀 ALTA OPORTUNIDADE — Produto lucrativo, ${kw_orders}+ vendas, CVR ${(kw_cvr * 100).toFixed(2)}%, visibilidade limitada. Margem: R$${(asinMeta?.contribution_margin_amount || 0).toFixed(2)}. Bid +${Math.round(growthPct * 100)}% para crescimento sustentado. ${sim.reason}`;
+        rationale = `🚀 ALTA OPORTUNIDADE — Produto lucrativo, ${kw_orders}+ vendas, CVR ${(kw_cvr * 100).toFixed(2)}%, visibilidade limitada. Margem: R$${(asinMeta?.contribution_margin_amount || 0).toFixed(2)}. Bid +${Math.round(growthPct * 100)}% para crescimento sustentado. [${daypartSlotNote}] ${sim.reason}`;
         stats.high_growth++;
       } else if (isPartialCost && kw_orders >= 1) {
         // Custo parcial com venda: conservador
@@ -1945,7 +2069,7 @@ Deno.serve(async (req) => {
         ruleKey = 'conservative_growth_partial_cost';
         decisionType = 'experimental_growth';
         growthRisk = 'medium';
-        rationale = `🔬 TESTE CONSERVADOR — Produto com custo parcial (economic_data_partial), ${kw_orders} venda(s), CPC R$${kw_cpc.toFixed(2)} controlado. Sem prejuízo confirmado. Aumento conservador +${Math.round(growthPct * 100)}% para manter visibilidade. Reavaliação em 72h. ${sim.reason}`;
+        rationale = `🔬 TESTE CONSERVADOR — Produto com custo parcial (economic_data_partial), ${kw_orders} venda(s), CPC R$${kw_cpc.toFixed(2)} controlado. Sem prejuízo confirmado. Aumento conservador +${Math.round(growthPct * 100)}% para manter visibilidade. Reavaliação em 72h. [${daypartSlotNote}] ${sim.reason}`;
         stats.partial_cost_growth++;
         stats.conservative_growth++;
       } else {
@@ -1954,7 +2078,7 @@ Deno.serve(async (req) => {
         ruleKey = 'emerging_opportunity_growth';
         decisionType = sim.experimental ? 'experimental_growth' : 'increase_bid_profitable_growth';
         growthRisk = 'medium';
-        rationale = `📊 OPORTUNIDADE EMERGENTE — opportunity_score ${opp.opportunity_score.toFixed(2)}, confiança ${opp.growth_confidence}. Bid +${Math.round(growthPct * 100)}% para teste de crescimento. ${sim.reason}`;
+        rationale = `📊 OPORTUNIDADE EMERGENTE — opportunity_score ${opp.opportunity_score.toFixed(2)}, confiança ${opp.growth_confidence}. Bid +${Math.round(growthPct * 100)}% para teste de crescimento. [${daypartSlotNote}] ${sim.reason}`;
         stats.emerging_growth++;
       }
 
@@ -2279,6 +2403,8 @@ Deno.serve(async (req) => {
         effective_target_acos_per_asin: 'ATIVO (min(account_target, break_even_asin))',
         max_bid_change_per_cycle: `±${CANONICAL_CONFIG.MAX_BID_CHANGE_PCT * 100}%`,
         data_freshness_max_hours: CANONICAL_CONFIG.DATA_FRESHNESS_MAX_HOURS,
+        dayparting_guardrail: `ATIVO — slot atual: ${currentSlotClassification} (${currentDowBRT}/${currentHourBRT}h BRT)`,
+        placement_guardrail: `ATIVO — limites: ToS ${settings.top_of_search_limit}%, RoS ${settings.rest_of_search_limit}%, PP ${settings.product_page_limit}%`,
       },
       note: 'Motor v8: hierarquia P0-P7 · weighted ACoS · target_roas derivado · effective_target_acos por ASIN · centralDestructiveActionGuard · winner_protection canônico · ±20% max bid',
     });
