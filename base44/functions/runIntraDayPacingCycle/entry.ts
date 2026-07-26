@@ -3,23 +3,34 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 /**
  * Compatibilidade da rota antiga.
  *
- * O motor anterior alterava bids diretamente sobre valores já modificados e
- * atuava principalmente em keywords. A implementação canônica agora está em
- * runCanonicalDaypartingEngine e cobre campanhas AUTO, MANUAL EXACT e product
- * targeting, preservando esta rota para schedules e chamadas antigas.
+ * Sincroniza as regras nativas, cancela ações legadas ainda pendentes e só
+ * então executa o motor canônico. Assim o ciclo já enxerga associações Amazon
+ * recém-criadas e não disputa com a fila histórica.
  */
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
+    const internal = { ...body, _service_role: true };
+
+    const nativeResponse = await base44.asServiceRole.functions.invoke('syncAmazonScheduleBidRules', internal)
+      .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const nativeRules = nativeResponse?.data || nativeResponse || {};
+
+    const reconcileResponse = await base44.asServiceRole.functions.invoke('reconcileLegacyDaypartingQueue', internal)
+      .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const queueReconciliation = reconcileResponse?.data || reconcileResponse || {};
+
     const response = await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
-      ...body,
-      _service_role: true,
+      ...internal,
       source_function: body.source_function || 'runIntraDayPacingCycle_legacy_wrapper',
     });
     const data = response?.data || response || {};
+
     return Response.json({
       ...data,
+      native_rule_preflight: nativeRules,
+      legacy_queue_reconciliation: queueReconciliation,
       delegated_from: 'runIntraDayPacingCycle',
       delegated_to: 'runCanonicalDaypartingEngine',
       legacy_route_preserved: true,
