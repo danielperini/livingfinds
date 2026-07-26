@@ -16,7 +16,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const tokenCache = {};
+const tokenCache = new Map();
 const MAX_429_RETRIES = 3;
 const AUTO_DEDUP_LOOKBACK_DAYS = 30;
 
@@ -61,7 +61,8 @@ function normalizeSearchTerm(value) {
 async function getAdsToken(refreshToken) {
   if (!refreshToken) throw new Error('ADS_REFRESH_TOKEN ausente para a conta');
 
-  const cached = tokenCache['ads'];
+  const cacheKey = String(refreshToken);
+  const cached = tokenCache.get(cacheKey);
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
 
   const clientId = Deno.env.get('ADS_CLIENT_ID');
@@ -83,15 +84,16 @@ async function getAdsToken(refreshToken) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const error = new Error(data.error_description || data.error || `Token failed (${res.status})`);
-    error.status = res.status;
-    throw error;
+    throw Object.assign(
+      new Error(data.error_description || data.error || `Token failed (${res.status})`),
+      { status: res.status },
+    );
   }
 
-  tokenCache['ads'] = {
+  tokenCache.set(cacheKey, {
     access_token: data.access_token,
     expires_at: Date.now() + Math.max(60, numberValue(data.expires_in, 3600) - 60) * 1000,
-  };
+  });
   return data.access_token;
 }
 
@@ -149,11 +151,14 @@ async function adsRequestV3(method, path, body, refreshToken, profileId, region,
     }
 
     if (!res.ok) {
-      const error = new Error(amazonErrorMessage(res.status, data));
-      error.status = res.status;
-      error.amazon_response = data;
-      error.request_id = requestId;
-      throw error;
+      throw Object.assign(
+        new Error(amazonErrorMessage(res.status, data)),
+        {
+          status: res.status,
+          amazon_response: data,
+          request_id: requestId,
+        },
+      );
     }
 
     return { status: res.status, data, requestId };
