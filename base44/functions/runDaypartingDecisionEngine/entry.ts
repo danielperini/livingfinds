@@ -2,9 +2,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 /**
  * Rota canônica de decisão de dayparting.
- *
- * Preserva schedules e chamadas existentes. Antes de decidir, sincroniza as
- * regras Amazon e cancela somente ações legadas pendentes, sem apagar histórico.
+ * Preserva schedules existentes, sincroniza regras Amazon, cancela somente
+ * ações legadas pendentes e delega ao núcleo sem repetir o preflight.
  */
 Deno.serve(async (request) => {
   try {
@@ -22,6 +21,8 @@ Deno.serve(async (request) => {
 
     const response = await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
       ...internal,
+      skip_native_preflight: true,
+      skip_queue_preflight: true,
       source_function: body.source_function || 'runDaypartingDecisionEngine_canonical_route',
     });
     const data = response?.data || response || {};
