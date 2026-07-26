@@ -4,8 +4,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
  * runUnifiedDecisionEngine
  *
  * Entrada canônica e única do motor de decisões do LivingFinds.
- * Reconciliador manual, motor determinístico, regras nativas Amazon e monitor
- * de tendência compartilham o mesmo ciclo, sem criar motores paralelos.
+ * Reconciliador manual, motor determinístico, regras nativas Amazon, migração
+ * da fila antiga e monitor de tendência compartilham o mesmo ciclo.
  */
 Deno.serve(async (request) => {
   try {
@@ -40,8 +40,6 @@ Deno.serve(async (request) => {
     );
     const data = result?.data || result || {};
 
-    // Regras de aumento persistidas na própria Amazon. A função é idempotente,
-    // procura ruleName antes de criar e associa somente campanhas elegíveis.
     const nativeRulesResponse = await base44.asServiceRole.functions.invoke(
       'syncAmazonScheduleBidRules',
       {
@@ -51,6 +49,16 @@ Deno.serve(async (request) => {
       },
     ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const nativeRules = nativeRulesResponse?.data || nativeRulesResponse || {};
+
+    // Remove apenas ações legadas ainda pendentes. O histórico executado é mantido.
+    const legacyQueueResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileLegacyDaypartingQueue',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const legacyQueue = legacyQueueResponse?.data || legacyQueueResponse || {};
 
     const scopeAfterResponse = await base44.asServiceRole.functions.invoke(
       'reconcileManualBidCycleScope',
@@ -73,7 +81,7 @@ Deno.serve(async (request) => {
     const trendMonitor = trendMonitorResponse?.data || trendMonitorResponse || {};
 
     return Response.json({
-      ok: data?.ok !== false && scopeAfter?.ok !== false && nativeRules?.ok !== false,
+      ok: data?.ok !== false && scopeAfter?.ok !== false && nativeRules?.ok !== false && legacyQueue?.ok !== false,
       engine: 'unified',
       engine_version: 'unified-v2-native-bid-rules',
       delegated_to: 'runDeterministicDecisionEngine',
@@ -81,6 +89,7 @@ Deno.serve(async (request) => {
       manual_bid_scope_before: scopeBefore,
       result: data,
       amazon_schedule_bid_rules: nativeRules,
+      legacy_dayparting_queue: legacyQueue,
       manual_bid_scope_after: scopeAfter,
       acos_trend_monitor: trendMonitor,
     });
