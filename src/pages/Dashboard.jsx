@@ -726,13 +726,7 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      {/* Decisões pendentes — compacto */}
-      {decisions.length > 0 ? (
-        <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border bg-violet-500/5 border-violet-500/20 text-xs">
-          <span className="text-violet-300"><span className="font-bold">{decisions.length}</span> decisões de IA pendentes de revisão.</span>
-          <Link to="/sala-de-comando" className="text-violet-400 hover:underline whitespace-nowrap">Ver na Sala de Controle →</Link>
-        </div>
-      ) : null}
+
 
       {/* ── 3. GRÁFICO CONSOLIDADO: range máximo de dados disponíveis ──────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
