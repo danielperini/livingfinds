@@ -17,8 +17,6 @@ import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
 import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
-import BudgetOverrunDiagnostic from '@/components/ads/BudgetOverrunDiagnostic';
-
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
@@ -1192,13 +1190,8 @@ export default function AdsManagement() {
           </div>
         </div>
 
-        {/* Budget Diagnostic + Reconciliation */}
-        <div className="p-3 border-t border-surface-2 space-y-2">
-          <BudgetOverrunDiagnostic
-            campaigns={campaigns}
-            account={account}
-            onRedistributed={loadCampaigns}
-          />
+        {/* Reconciliation Panel */}
+        <div className="p-3 border-t border-surface-2">
           <ReconciliationPanel account={account} onDone={loadCampaigns} />
         </div>
       </div>
