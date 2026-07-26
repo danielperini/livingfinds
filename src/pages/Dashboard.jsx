@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useReportPolling } from '@/hooks/useReportPolling';
 import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
@@ -247,6 +247,30 @@ export default function Dashboard() {
     if (!account?.id) return;
     invalidateAccountData(queryClient, account.id);
   }, [queryClient, account?.id]);
+
+  // Auto-refresh no mount: se os dados tiverem > 6h de idade (stale), invalida o cache silenciosamente
+  const autoRefreshDoneRef = useRef(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
+  useEffect(() => {
+    if (!account?.id || loading || autoRefreshDoneRef.current) return;
+    autoRefreshDoneRef.current = true;
+
+    const today = new Date().toISOString().slice(0, 10);
+    // Verificar se o dado mais recente é de hoje ou anterior
+    const latestDate = metricsDaily.length > 0
+      ? metricsDaily.reduce((max, m) => (m.date && m.date > max ? m.date : max), '')
+      : '';
+
+    // Stale se: sem dados, ou dado mais recente é anterior a hoje
+    const isDataStale = !latestDate || latestDate < today;
+
+    if (isDataStale) {
+      setAutoRefreshing(true);
+      invalidateAccountData(queryClient, account.id).finally(() => {
+        setTimeout(() => setAutoRefreshing(false), 1500);
+      });
+    }
+  }, [account?.id, loading, metricsDaily, queryClient]);
 
   // Polling automático: recarrega quando chega novo relatório
   const handleNewReport = useCallback(() => {
@@ -698,10 +722,12 @@ export default function Dashboard() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <AutoWindowStatus justUpdated={justUpdated} />
-          <button onClick={loadData} disabled={loading}
-            className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          {(autoRefreshing || loading) ? (
+            <span className="flex items-center gap-1.5 text-[10px] text-slate-500 px-2 py-1 bg-surface-2 border border-surface-3 rounded-lg">
+              <Loader2 className="w-3 h-3 animate-spin text-cyan" />
+              Atualizando dados...
+            </span>
+          ) : null}
         </div>
       </div>
 
