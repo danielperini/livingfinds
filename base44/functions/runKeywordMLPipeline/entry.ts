@@ -25,7 +25,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const RULE_VERSION = 'ml-v2-2026-07';
+const RULE_VERSION = 'ml-v3-2026-07';
 
 // ── Normalização ───────────────────────────────────────────────────────────────
 function normTerm(v: string): string {
@@ -71,27 +71,43 @@ function semanticSimilarity(kw: string, title: string): number {
   return Math.round((inter / Math.max(ka.size, ta.size)) * 100) / 100;
 }
 
+// ── Atributos semânticos de especificidade ────────────────────────────────────
+const SEMANTIC_COLORS    = ['preto','branco','azul','vermelho','verde','amarelo','rosa','cinza','marrom','bege','dourado','prata','transparente','laranja','roxo','lilas'];
+const SEMANTIC_MATERIALS = ['inox','aco','aluminio','plastico','borracha','couro','silicone','madeira','vidro','metal','ceramica','tecido','nylon','poliester'];
+const SEMANTIC_SIZES     = ['mini','maxi','pequeno','grande','pp','gg','xl','xxl','xg','xxg'];
+
+function detectSemanticAttrs(norm: string): string[] {
+  const found: string[] = [];
+  for (const c of SEMANTIC_COLORS)    if (norm.includes(c)) found.push(`cor:${c}`);
+  for (const m of SEMANTIC_MATERIALS) if (norm.includes(m)) found.push(`material:${m}`);
+  for (const s of SEMANTIC_SIZES)     if (norm.includes(s)) found.push(`tamanho:${s}`);
+  if (/\d+\s*(un|pç|peca|ml|litro|litros|kg|g\b|cm|mm|l\b)/.test(norm)) found.push('quantidade_numerica');
+  return found;
+}
+
 // ── Classificação de cauda HÍBRIDA ────────────────────────────────────────────
 // Ordem de prioridade:
 // 1. Dados reais de demanda (impressões acumuladas) quando >= 30 termos comparáveis
-// 2. Fallback por word_count
+// 2. Fallback por atributos semânticos (SEMANTIC_ATTR_FALLBACK) — MEDIUM confidence
+// 3. Fallback por word_count puro — LOW confidence
 function classifyTailHybrid(kw: string, allTermsWithImpressions: Array<{term: string; impressions: number}>): {
   tail_type: 'short' | 'medium' | 'long';
-  tail_class_method: 'DEMAND_DATA' | 'WORD_COUNT_FALLBACK';
+  tail_class_method: 'DEMAND_DATA' | 'SEMANTIC_ATTR_FALLBACK' | 'WORD_COUNT_FALLBACK';
   tail_class_confidence: 'HIGH' | 'MEDIUM' | 'LOW';
   demand_percentile: number;
   normalized_search_volume: number;
   word_count: number;
+  semantic_attrs: string[];
 } {
   const norm = normTerm(kw);
   const wc = norm.split(' ').filter(Boolean).length;
+  const semantic_attrs = detectSemanticAttrs(norm);
 
   // Tentar classificar por demanda real se há >= 30 termos comparáveis
   if (allTermsWithImpressions.length >= 30) {
     const selfEntry = allTermsWithImpressions.find(t => normTerm(t.term) === norm);
     const selfImpressions = selfEntry?.impressions ?? 0;
 
-    // Calcular percentil: % de termos com impressões <= self
     const sorted = [...allTermsWithImpressions].sort((a, b) => a.impressions - b.impressions);
     const below = sorted.filter(t => t.impressions <= selfImpressions).length;
     const demand_percentile = Math.round((below / sorted.length) * 100);
@@ -99,37 +115,23 @@ function classifyTailHybrid(kw: string, allTermsWithImpressions: Array<{term: st
     let tail_type: 'short' | 'medium' | 'long';
     let tail_class_confidence: 'HIGH' | 'MEDIUM' | 'LOW' = 'HIGH';
 
-    if (demand_percentile >= 80) {
-      tail_type = 'short';
-    } else if (demand_percentile >= 30) {
-      tail_type = 'medium';
-    } else {
-      tail_type = 'long';
-    }
+    if (demand_percentile >= 80) tail_type = 'short';
+    else if (demand_percentile >= 30) tail_type = 'medium';
+    else tail_type = 'long';
 
-    // Reduzir confiança se impressões são zero (termo sem dados de demanda)
     if (selfImpressions === 0) tail_class_confidence = 'MEDIUM';
 
-    return {
-      tail_type,
-      tail_class_method: 'DEMAND_DATA',
-      tail_class_confidence,
-      demand_percentile,
-      normalized_search_volume: selfImpressions,
-      word_count: wc,
-    };
+    return { tail_type, tail_class_method: 'DEMAND_DATA', tail_class_confidence, demand_percentile, normalized_search_volume: selfImpressions, word_count: wc, semantic_attrs };
   }
 
-  // Fallback por contagem de palavras
+  // Fallback semântico: 3+ palavras com pelo menos 1 atributo semântico → long (MEDIUM confidence)
+  if (wc >= 3 && semantic_attrs.length >= 1) {
+    return { tail_type: 'long', tail_class_method: 'SEMANTIC_ATTR_FALLBACK', tail_class_confidence: 'MEDIUM', demand_percentile: 0, normalized_search_volume: 0, word_count: wc, semantic_attrs };
+  }
+
+  // Fallback por contagem de palavras (LOW confidence)
   const tail_type: 'short' | 'medium' | 'long' = wc >= 5 ? 'long' : wc >= 3 ? 'medium' : 'short';
-  return {
-    tail_type,
-    tail_class_method: 'WORD_COUNT_FALLBACK',
-    tail_class_confidence: 'LOW',
-    demand_percentile: 0,
-    normalized_search_volume: 0,
-    word_count: wc,
-  };
+  return { tail_type, tail_class_method: 'WORD_COUNT_FALLBACK', tail_class_confidence: 'LOW', demand_percentile: 0, normalized_search_volume: 0, word_count: wc, semantic_attrs };
 }
 
 // ── Intenção comercial determinística ──────────────────────────────────────────
@@ -329,12 +331,16 @@ function generateFeatures(kw: string, product: any, metrics: any, negativeTexts:
   };
 }
 
-// ── Modelo de pontuação v2 (sem bônus artificial de cauda) ────────────────────
-function scoreCandidate(features: any, targetAcos: number): {
+// ── Modelo de pontuação v3 ────────────────────────────────────────────────────
+// Bônus long_tail_cvr_evidence: +0.05 para long-tail com evidence MEDIUM ou HIGH
+// (aplicado uma única vez, documentado, não viola princípio de cauda como contexto analítico
+//  pois é condicionado a evidência real de CVR)
+function scoreCandidate(features: any, targetAcos: number, tail_type?: string, evidence_level?: string): {
   conversion_probability: number;
   quality_score: number;
   confidence: number;
   data_confidence: number;
+  long_tail_score_bonus: number;
 } {
   // semScore já calculado em features (canônico)
   const semScore = features.semScore;
@@ -378,18 +384,23 @@ function scoreCandidate(features: any, targetAcos: number): {
 
   convScore = Math.max(0, Math.min(1, convScore));
 
-  // Quality Score (sem bônus de cauda)
+  // Quality Score base
   let qs = 0;
   qs += convScore * 0.30;
   qs += semScore * 0.20;
   qs += Math.min(features.historical_conversion_rate * 1.5, 0.15) * (1/0.15) * 0.15;
   if (features.historical_roas > 0) qs += Math.min(features.historical_roas / 10, 1) * 0.10;
-  // CORREÇÃO: bônus de ACoS apenas quando há vendas reais (acos !== null)
   if (features.historical_acos !== null && features.historical_sales > 0 && features.historical_acos <= targetAcos) {
     qs += (1 - features.historical_acos / 100) * 0.10;
   }
   if (features.amazon_suggestion_rank <= 10) qs += (1 - features.amazon_suggestion_rank / 10) * 0.05;
   qs += features.product_attribute_match_score * 0.05;
+
+  // bonus_long_tail_cvr_evidence: +0.05 apenas para long-tail com evidence MEDIUM ou HIGH
+  // Princípio: evidência real de CVR dirige o bônus, não a cauda em si
+  const isLongTailEvidence = tail_type === 'long' && (evidence_level === 'MEDIUM' || evidence_level === 'HIGH');
+  const long_tail_score_bonus = isLongTailEvidence ? 0.05 : 0;
+  qs += long_tail_score_bonus;
 
   // Confiança dos dados
   let dc = 0;
@@ -408,16 +419,29 @@ function scoreCandidate(features: any, targetAcos: number): {
     quality_score: Math.round(Math.max(0, Math.min(1, qs)) * 100) / 100,
     confidence: Math.round(confidence * 100) / 100,
     data_confidence: Math.round(dc * 100) / 100,
+    long_tail_score_bonus,
   };
 }
 
-// ── Bid recomendado ───────────────────────────────────────────────────────────
-function calcBid(metrics: any, product: any, config: any, isExperimental: boolean): number {
+// ── Bid recomendado v3 ────────────────────────────────────────────────────────
+// Para long-tail com CVR histórica >= 3%: usa AOV × CVR_real × (target_acos/100)
+// sem o corte de 70% para experimentais — bid_method='cvr_real'
+// Outros casos: comportamento anterior — bid_method='experimental_capped'
+function calcBid(metrics: any, product: any, config: any, isExperimental: boolean, tail_type?: string): { bid: number; bid_method: string } {
   const minBid = Number(config.min_bid || 0.50);
   const maxBid = Number(config.max_bid || 5.0);
   const targetAcos = Number(config.target_acos || 25);
   const price = Number(product?.price || product?.buy_box_price || 0);
   const convRate = Number(metrics.conv_rate || 0.08);
+  const historicalCvr = Number(metrics.conv_rate || 0);
+
+  // Long-tail com CVR histórica >= 3%: bid por CVR real sem corte experimental
+  if (tail_type === 'long' && historicalCvr >= 0.03 && price > 0 && targetAcos > 0) {
+    const bidCvr = price * historicalCvr * (targetAcos / 100);
+    if (bidCvr >= minBid) {
+      return { bid: Math.round(Math.max(minBid, Math.min(bidCvr, maxBid)) * 100) / 100, bid_method: 'cvr_real' };
+    }
+  }
 
   const candidates: number[] = [];
   if (metrics.cpc > 0) candidates.push(metrics.cpc * 1.10);
@@ -429,18 +453,24 @@ function calcBid(metrics: any, product: any, config: any, isExperimental: boolea
 
   let bid = candidates.length > 0 ? Math.min(...candidates) : minBid;
   if (isExperimental) bid = Math.max(minBid, bid * 0.70);
-  return Math.round(Math.max(minBid, Math.min(bid, maxBid)) * 100) / 100;
+  return { bid: Math.round(Math.max(minBid, Math.min(bid, maxBid)) * 100) / 100, bid_method: 'experimental_capped' };
 }
 
-// ── Reason builder v2 ─────────────────────────────────────────────────────────
-function buildReason(kw: string, features: any, scores: any, tailInfo: any, evidenceLevel: string): string {
+// ── Reason builder v3 ─────────────────────────────────────────────────────────
+function buildReason(kw: string, features: any, scores: any, tailInfo: any, evidenceLevel: string, longTailEarlyPromo?: boolean): string {
   const parts: string[] = [];
 
   // Cauda como contexto analítico (não como afirmação de qualidade)
   if (tailInfo.tail_class_method === 'DEMAND_DATA') {
     parts.push(`cauda ${tailInfo.tail_type} por demanda (percentil ${tailInfo.demand_percentile}%, método: dados reais)`);
+  } else if (tailInfo.tail_class_method === 'SEMANTIC_ATTR_FALLBACK') {
+    parts.push(`cauda ${tailInfo.tail_type} por atributos semânticos (${tailInfo.semantic_attrs?.join(', ')})`);
   } else {
     parts.push(`cauda ${tailInfo.tail_type} por contagem de palavras (fallback)`);
+  }
+
+  if (longTailEarlyPromo) {
+    parts.push('long-tail com evidência MEDIUM promovida antecipadamente');
   }
 
   if (features.semantic_similarity_to_title >= 0.5) parts.push(`alta similaridade ao título (${Math.round(features.semantic_similarity_to_title * 100)}%)`);
@@ -688,14 +718,14 @@ Deno.serve(async (req) => {
           // Ainda processar para registrar como blocked
         }
 
-        const scores = scoreCandidate(features, targetAcos);
-        if (scores.quality_score < 0.20 && !isExisting) continue; // filtro de qualidade mínima para novos
-
-        // Classificação de cauda HÍBRIDA (sem relação com match_type)
+        // Classificação de cauda HÍBRIDA (com atributos semânticos)
         const tailInfo = classifyTailHybrid(kw, allTermsForContext);
 
         // Evidence level (tail NÃO influencia)
         const evidenceLevel = calcEvidenceLevel(features.historical_clicks, features.historical_orders, features.historical_impressions);
+
+        const scores = scoreCandidate(features, targetAcos, tailInfo.tail_type, evidenceLevel);
+        if (scores.quality_score < 0.20 && !isExisting) continue; // filtro de qualidade mínima para novos
 
         // ACoS status
         const acos_status = classifyAcosStatus(features.historical_acos, features.historical_sales, targetAcos);
@@ -704,16 +734,20 @@ Deno.serve(async (req) => {
         const matchType = 'EXACT';
 
         const isExperimental = scores.data_confidence < 0.40 || scores.conversion_probability < 0.30;
-        const bid = calcBid(cand.metrics || {}, product, config, isExperimental);
-        const reason = buildReason(kw, features, scores, tailInfo, evidenceLevel);
+        const { bid, bid_method } = calcBid(cand.metrics || {}, product, config, isExperimental, tailInfo.tail_type);
 
+        // Status: long-tail com evidence MEDIUM e quality >= 0.45 → 'scored' antecipado
         const isBlocked = (features.contradiction_flags && features.contradiction_flags.length > 0) || features.is_generic;
         const hasContradict = features.contradiction_flags && features.contradiction_flags.length > 0;
+        const isLongTailEarlyPromo = !isBlocked && tailInfo.tail_type === 'long' && evidenceLevel === 'MEDIUM' && scores.quality_score >= 0.45;
 
         const status = isBlocked ? 'blocked'
-          : isExperimental ? 'experimental'
+          : isExperimental && !isLongTailEarlyPromo ? 'experimental'
+          : isLongTailEarlyPromo ? 'scored'
           : scores.quality_score >= 0.60 && (acos_status === 'PROFITABLE' || acos_status === 'NO_SALES') ? 'scored'
           : 'candidate';
+
+        const reason = buildReason(kw, features, scores, tailInfo, evidenceLevel, isLongTailEarlyPromo);
 
         const expSales = features.product_price * Math.max(features.historical_conversion_rate, 0.05);
         const expAcos = bid > 0 && expSales > 0 ? (bid / expSales) * 100 : targetAcos;
@@ -796,6 +830,11 @@ Deno.serve(async (req) => {
           features_json: JSON.stringify({
             ...features,
             contradiction_flags: features.contradiction_flags,
+            // Campos de auditabilidade v3
+            tail_semantic_attrs: tailInfo.semantic_attrs ?? [],
+            bid_method,
+            long_tail_score_bonus: scores.long_tail_score_bonus,
+            long_tail_early_promo: isLongTailEarlyPromo,
           }).slice(0, 3000),
           last_evaluated_at: now,
           next_evaluation_at: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
@@ -838,15 +877,21 @@ Deno.serve(async (req) => {
         candidates_generated: totalCandidates,
         to_create: toCreate.length,
         to_update: toUpdate.length,
-        sample: toCreate.slice(0, 5).map(p => ({
-          keyword: p.keyword, asin: p.asin, tail_type: p.tail_type,
-          tail_class_method: p.tail_class_method, tail_class_confidence: p.tail_class_confidence,
-          demand_percentile: p.demand_percentile,
-          match_type: p.match_type, quality_score: p.keyword_quality_score,
-          conversion_probability: p.conversion_probability, evidence_level: p.evidence_level,
-          acos_status: p.acos_status, historical_acos: p.historical_acos,
-          status: p.status, reason: p.reason,
-        })),
+        sample: toCreate.slice(0, 5).map(p => {
+          const fj = p.features_json ? JSON.parse(p.features_json) : {};
+          return {
+            keyword: p.keyword, asin: p.asin, tail_type: p.tail_type,
+            tail_class_method: p.tail_class_method, tail_class_confidence: p.tail_class_confidence,
+            demand_percentile: p.demand_percentile,
+            match_type: p.match_type, quality_score: p.keyword_quality_score,
+            conversion_probability: p.conversion_probability, evidence_level: p.evidence_level,
+            acos_status: p.acos_status, historical_acos: p.historical_acos,
+            status: p.status, reason: p.reason,
+            // Novos campos dry_run v3
+            bid_method: fj.bid_method,
+            tail_semantic_attrs: fj.tail_semantic_attrs,
+          };
+        }),
         duration_ms: Date.now() - runStart,
       });
     }
@@ -892,6 +937,10 @@ Deno.serve(async (req) => {
         tail_bonus_removed: true,
         relevance_score_canonical: 'title*0.6+bullets*0.3+attrs*0.1',
         evidence_level_independent_of_tail: true,
+        long_tail_cvr_bid_enabled: true,
+        long_tail_semantic_attr_fallback: true,
+        long_tail_early_promo_threshold: 0.45,
+        long_tail_score_bonus_on_medium_high_evidence: 0.05,
       }),
       thresholds_json: JSON.stringify({
         min_quality: 0.20,
