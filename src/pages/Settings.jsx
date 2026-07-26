@@ -410,9 +410,11 @@ export default function Settings() {
           <div>
             <NumberInput label="Orçamento Diário Geral (R$)" hint="Teto de risco diário do motor" value={goals.daily_budget_limit} onChange={v => setGoal('daily_budget_limit', v)} min={10} max={5000} step={5} />
             {todaySpend?.confirmed_spend != null && (
-              <p className="text-[10px] text-amber-400 mt-1.5 flex items-center gap-1">
-                📊 Gasto Ads hoje: <span className="font-semibold font-mono">R${Number(todaySpend.confirmed_spend).toFixed(2)}</span>
-                {todaySpend.confirmed_spend > goals.daily_budget_limit && (
+              <p className="text-[10px] mt-1.5 flex items-center gap-1">
+                <span className="text-slate-400">📊 Gasto Ads hoje:</span>
+                <span className="font-semibold font-mono text-slate-200">R${Number(todaySpend.confirmed_spend).toFixed(2)}</span>
+                <span className="text-slate-500">de R${Number(goals.daily_budget_limit).toFixed(2)}</span>
+                {Number(todaySpend.confirmed_spend) > Number(goals.daily_budget_limit) && (
                   <span className="text-red-400 ml-1">⚠ acima do teto</span>
                 )}
               </p>
@@ -555,9 +557,9 @@ export default function Settings() {
         {todaySpend && (
           <p className="text-[10px] text-slate-500 px-1 mb-5">
             Gasto hoje: <span className="text-slate-300 font-medium">R$ {Number(todaySpend.confirmed_spend || 0).toFixed(2).replace('.', ',')}</span>
-            {' '}de <span className="text-slate-300 font-medium">R$ {Number(todaySpend.user_daily_spend_cap || goals.daily_budget_limit || 0).toFixed(2).replace('.', ',')}</span>
-            {todaySpend.user_daily_spend_cap > 0 && (
-              <span className="text-slate-600"> ({((todaySpend.confirmed_spend / todaySpend.user_daily_spend_cap) * 100).toFixed(0)}%)</span>
+            {' '}de <span className="text-slate-300 font-medium">R$ {Number(goals.daily_budget_limit || 0).toFixed(2).replace('.', ',')}</span>
+            {goals.daily_budget_limit > 0 && (
+              <span className="text-slate-600"> ({((todaySpend.confirmed_spend / goals.daily_budget_limit) * 100).toFixed(0)}%)</span>
             )}
           </p>
         )}
