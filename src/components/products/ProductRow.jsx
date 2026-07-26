@@ -5,6 +5,7 @@ import {
   Loader2, Megaphone, Package, Pause, Pencil, Play, ShoppingBag, Square,
   Tag, X, XCircle, Zap,
 } from 'lucide-react';
+import MarketPriceCell from '@/components/products/MarketPriceCell';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -378,7 +379,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount }) {
+export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -463,6 +464,13 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
       <td className="px-4 py-3 text-xs text-slate-400">{formatBRL(product?.total_spend_30d || 0)}</td>
       <td className="px-4 py-3 text-xs"><span className={acosColor}>{formatPercent(acos)}</span></td>
       <td className="px-4 py-3 text-xs text-slate-400">{Number(product?.units_sold_30d || product?.total_units_30d || 0).toLocaleString('pt-BR')}</td>
+      <td className="px-4 py-3 min-w-[160px]">
+        <MarketPriceCell
+          product={product}
+          accountId={account?.id || product?.amazon_account_id}
+          onPriceUpdated={onPriceUpdated}
+        />
+      </td>
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
           onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign}

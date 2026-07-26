@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square } from 'lucide-react';
+import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square, TrendingUp } from 'lucide-react';
 import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
@@ -40,6 +40,17 @@ function applySort(items, sortBy) {
     });
     case 'total_sales_30d': return arr.sort((a, b) => Number(b.total_sales_30d || 0) - Number(a.total_sales_30d || 0));
     case 'total_spend_30d': return arr.sort((a, b) => Number(b.total_spend_30d || 0) - Number(a.total_spend_30d || 0));
+    case 'price_avg_high': return arr.sort((a, b) => Number(b.market_price_average || 0) - Number(a.market_price_average || 0));
+    case 'price_avg_low': return arr.sort((a, b) => {
+      const pa = a.market_price_average; const pb = b.market_price_average;
+      if (pa == null && pb == null) return 0;
+      if (pa == null) return 1; if (pb == null) return -1;
+      return pa - pb;
+    });
+    case 'price_not_checked': return arr.sort((a, b) => {
+      const nc = (p) => !p.market_price_status || p.market_price_status === 'not_checked' ? 0 : 1;
+      return nc(a) - nc(b);
+    });
     case 'champions': return arr.sort((a, b) => {
       // Score = vendas normalizadas + bônus por ACoS baixo. Produtos sem ACoS não penalizam.
       const salesA = Number(a.total_sales_30d || 0);
@@ -88,6 +99,7 @@ export default function Products({ externalRefreshTrigger }) {
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
 
+  const [priceQueryLoading, setPriceQueryLoading] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [kickoffStuckItems, setKickoffStuckItems] = useState(null); // itens travados para o produto atual
   const [stuckQueueByAsin, setStuckQueueByAsin] = useState({}); // {[asin]: count}
@@ -442,7 +454,42 @@ export default function Products({ externalRefreshTrigger }) {
             </p>
           </div>
         </div>
-
+        {account && (
+          <button
+            type="button"
+            disabled={priceQueryLoading}
+            onClick={async () => {
+              if (!account || priceQueryLoading) return;
+              setPriceQueryLoading(true);
+              setActionMsg({ type: 'info', text: 'Consultando preço do próximo produto ativo…' });
+              try {
+                const res = await base44.functions.invoke('refreshProductMarketPrice', {
+                  amazon_account_id: account.id,
+                  next_active: true,
+                  force: false,
+                });
+                const data = res?.data || res;
+                if (data?.cache_hit) {
+                  setActionMsg({ type: 'info', text: `Cache válido para ${data.asin}. ${data.message}` });
+                } else if (data?.ok && data?.status === 'success') {
+                  setActionMsg({ type: 'success', text: `✓ ${data.asin} · ${data.provider} · R$ ${data.average} · ${data.offer_count} ofertas` });
+                  await reloadProducts();
+                } else {
+                  setActionMsg({ type: 'error', text: data?.message || data?.error || 'Sem resultado' });
+                }
+              } catch (e) {
+                setActionMsg({ type: 'error', text: e?.message || 'Erro ao consultar preço' });
+              } finally {
+                setPriceQueryLoading(false);
+                setTimeout(() => setActionMsg(null), 12000);
+              }
+            }}
+            className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            {priceQueryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
+            Consultar próximo ativo
+          </button>
+        )}
       </div>
 
       {actionMsg && (
@@ -566,6 +613,9 @@ export default function Products({ externalRefreshTrigger }) {
               <option value="champions">🏆 Campeões (Vendas + ACoS)</option>
               <option value="total_sales_30d">Vendas 30d</option>
               <option value="total_spend_30d">Spend 30d</option>
+              <option value="price_avg_high">💰 Maior preço médio</option>
+              <option value="price_avg_low">💰 Menor preço médio</option>
+              <option value="price_not_checked">Sem preço consultado</option>
             </select>
           </div>
 
@@ -597,9 +647,15 @@ export default function Products({ externalRefreshTrigger }) {
                       {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
-                  {['Produto', 'Estoque', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d', 'Ações'].map(heading => (
+                  {['Produto', 'Estoque', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d'].map(heading => (
                     <th key={heading} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{heading}</th>
                   ))}
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                    <span title="Média, mínimo e máximo das ofertas públicas encontradas para este mesmo ASIN no marketplace atual.">
+                      Preço Amazon ℹ
+                    </span>
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -607,6 +663,7 @@ export default function Products({ externalRefreshTrigger }) {
                  <ProductRow
                   key={product.id}
                   product={product}
+                  account={account}
                   onToggleCampaign={toggleCampaign}
                   onArchiveCampaign={archiveCampaign}
                   onKickoff={openKickoff}
@@ -619,6 +676,7 @@ export default function Products({ externalRefreshTrigger }) {
                   productMessage={productMessages[product.id]}
                   stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
                   onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
+                  onPriceUpdated={(id, patch) => setProducts(cur => cur.map(item => item.id === id ? { ...item, ...patch } : item))}
                  />
                 ))}
               </tbody>
