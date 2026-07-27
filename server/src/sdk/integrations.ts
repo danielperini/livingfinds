@@ -11,12 +11,13 @@ type Json = Record<string, any>;
 
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 
-function pickModel(): string {
-  return (
-    Deno.env.get('ANTHROPIC_MODEL_FAST') ??
-    Deno.env.get('ANTHROPIC_MODEL') ??
-    'claude-3-5-sonnet-20241022'
-  );
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
+
+function anthropicModel(): string {
+  return Deno.env.get('ANTHROPIC_MODEL_FAST') ?? Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-3-5-sonnet-20241022';
+}
+function openaiModel(): string {
+  return Deno.env.get('OPENAI_MODEL') ?? 'gpt-4o';
 }
 
 function extractJson(text: string): Json | null {
@@ -40,55 +41,73 @@ function extractJson(text: string): Json | null {
   }
 }
 
-async function invokeLLM(payload: Json): Promise<Json> {
-  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-  const prompt: string = payload?.prompt ?? '';
-  const schema = payload?.response_json_schema;
-
-  if (!apiKey) {
-    return { ok: false, error: 'ANTHROPIC_API_KEY não configurada', data: null };
-  }
-
+function buildSystem(schema: unknown, addContext: boolean): string {
   let system = 'Você é um assistente de automação de Amazon Ads da plataforma Living Finds.';
   if (schema) {
-    system +=
-      ' Responda EXCLUSIVAMENTE com um JSON válido que satisfaça este JSON Schema, sem texto fora do JSON:\n' +
-      JSON.stringify(schema);
+    system += ' Responda EXCLUSIVAMENTE com um JSON válido que satisfaça este JSON Schema, ' +
+      'sem texto fora do JSON:\n' + JSON.stringify(schema);
   }
-  if (payload?.add_context_from_internet) {
-    system += ' Use seu conhecimento para inferir contexto de mercado quando útil.';
-  }
+  if (addContext) system += ' Use seu conhecimento para inferir contexto de mercado quando útil.';
+  return system;
+}
 
-  const body = {
-    model: pickModel(),
-    max_tokens: Number(payload?.max_tokens ?? 4096),
-    temperature: Number(payload?.temperature ?? 0.2),
-    system,
-    messages: [{ role: 'user', content: prompt }],
-  };
-
-  const res = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  });
-
-  const raw = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { ok: false, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
-  }
-  const text: string = (raw?.content ?? []).map((b: Json) => b?.text ?? '').join('').trim();
-
+function finish(text: string, schema: unknown): Json {
   if (schema) {
     const parsed = extractJson(text);
-    // devolve o objeto parseado direto (as funções fazem `res.campo`) e também sob .data
-    return parsed ? { ...parsed, data: parsed, ok: true, text } : { ok: false, error: 'JSON inválido do modelo', text, data: null };
+    return parsed
+      ? { ...parsed, data: parsed, ok: true, text }
+      : { ok: false, error: 'JSON inválido do modelo', text, data: null };
   }
   return { ok: true, text, data: text };
+}
+
+async function invokeOpenAI(key: string, payload: Json): Promise<Json> {
+  const schema = payload?.response_json_schema;
+  const body: Json = {
+    model: openaiModel(),
+    temperature: Number(payload?.temperature ?? 0.2),
+    max_tokens: Number(payload?.max_tokens ?? 4096),
+    messages: [
+      { role: 'system', content: buildSystem(schema, !!payload?.add_context_from_internet) },
+      { role: 'user', content: payload?.prompt ?? '' },
+    ],
+  };
+  if (schema) body.response_format = { type: 'json_object' }; // JSON mode
+  const res = await fetch(OPENAI_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    body: JSON.stringify(body),
+  });
+  const raw = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
+  return finish((raw?.choices?.[0]?.message?.content ?? '').trim(), schema);
+}
+
+async function invokeAnthropic(key: string, payload: Json): Promise<Json> {
+  const schema = payload?.response_json_schema;
+  const res = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: anthropicModel(),
+      max_tokens: Number(payload?.max_tokens ?? 4096),
+      temperature: Number(payload?.temperature ?? 0.2),
+      system: buildSystem(schema, !!payload?.add_context_from_internet),
+      messages: [{ role: 'user', content: payload?.prompt ?? '' }],
+    }),
+  });
+  const raw = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: raw?.error?.message ?? `HTTP ${res.status}`, data: null };
+  return finish((raw?.content ?? []).map((b: Json) => b?.text ?? '').join('').trim(), schema);
+}
+
+/** Prefere OpenAI (chave disponível no projeto); cai para Anthropic se configurado. */
+async function invokeLLM(payload: Json): Promise<Json> {
+  const openaiKey = Deno.env.get('OPENAI_API_KEY');
+  const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (openaiKey) return await invokeOpenAI(openaiKey, payload);
+  if (anthropicKey) return await invokeAnthropic(anthropicKey, payload);
+  return { ok: false, error: 'Nenhuma chave de IA configurada (OPENAI_API_KEY/ANTHROPIC_API_KEY)', data: null };
 }
 
 async function sendEmail(payload: Json): Promise<Json> {
