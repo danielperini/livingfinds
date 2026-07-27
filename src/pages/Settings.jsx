@@ -50,7 +50,8 @@ function Toggle({ value, onChange }) {
   );
 }
 
-function NumberInput({ label, hint, value, onChange, min, max, step = 0.01, unit = '' }) {
+function NumberInput({ label, hint, value, onChange, min, max, step = 0.01, unit = '', zeroMeansIgnored = false }) {
+  const showIgnoredHint = zeroMeansIgnored && (value === 0 || value === '0' || value === null || value === undefined || value === '');
   return (
     <div>
       <label className="block text-xs text-slate-400 mb-1.5">{label}</label>
@@ -60,7 +61,10 @@ function NumberInput({ label, hint, value, onChange, min, max, step = 0.01, unit
           className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50" />
         {unit && <span className="text-xs text-slate-500 flex-shrink-0">{unit}</span>}
       </div>
-      {hint && <p className="text-[10px] text-slate-600 mt-1">{hint}</p>}
+      {showIgnoredHint
+        ? <p className="text-[10px] text-amber-400/70 mt-1 flex items-center gap-1"><AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" />Ignorado — defina &gt; 0 para ativar</p>
+        : hint && <p className="text-[10px] text-slate-600 mt-1">{hint}</p>
+      }
     </div>
   );
 }
@@ -159,12 +163,27 @@ export default function Settings() {
     }
   };
 
+  // Campos elegíveis: zero → null ao salvar
+  const ZERO_IGNORED_FIELDS = [
+    'target_acos', 'max_acos', 'target_roas', 'target_tacos', 'max_tacos',
+    'target_cpc', 'max_cpc', 'top_of_search_limit', 'rest_of_search_limit',
+    'product_page_limit', 'minimum_campaign_budget', 'campaign_budget_increment',
+    'weekly_campaign_capacity',
+  ];
+
   const saveGoals = async () => {
     if (!account) return;
     setGoalsSaving(true);
     try {
       const now = new Date().toISOString();
-      const payload = { ...goals, amazon_account_id: account.id, updated_at: now };
+      // Serializar: campos elegíveis com valor 0 → null (motor os ignora)
+      const serializedGoals = { ...goals };
+      for (const field of ZERO_IGNORED_FIELDS) {
+        if (serializedGoals[field] === 0 || serializedGoals[field] === '0') {
+          serializedGoals[field] = null;
+        }
+      }
+      const payload = { ...serializedGoals, amazon_account_id: account.id, updated_at: now };
 
       // Detectar campos alterados para o histórico
       const changedFields = [];
@@ -200,24 +219,24 @@ export default function Settings() {
       // Sincronizar com AutopilotConfig para compatibilidade com o motor existente
       const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id });
       const apPayload = {
-        target_acos: goals.target_acos,
-        maximum_acos: goals.max_acos,
-        target_roas: goals.target_roas,
-        target_tacos: goals.target_tacos,
-        maximum_tacos: goals.max_tacos,
-        total_daily_budget: goals.daily_budget_limit,
-        daily_budget_limit: goals.daily_budget_limit,
-        min_bid: goals.min_bid,
-        max_bid: goals.max_bid,
-        max_bid_increase_pct: goals.max_bid_increase_pct,
-        max_bid_decrease_pct: goals.max_bid_decrease_pct,
-        target_cpc: goals.target_cpc,
-        maximum_cpc: goals.max_cpc,
-        cpc_enforcement: goals.max_cpc > 0,
-        objective: goals.objective,
-        ai_auto_optimization: goals.ai_auto_optimization,
-        dayparting_enabled: goals.dayparting_enabled,
-        placement_optimization_enabled: goals.placement_optimization_enabled,
+        target_acos: serializedGoals.target_acos,
+        maximum_acos: serializedGoals.max_acos,
+        target_roas: serializedGoals.target_roas,
+        target_tacos: serializedGoals.target_tacos,
+        maximum_tacos: serializedGoals.max_tacos,
+        total_daily_budget: serializedGoals.daily_budget_limit,
+        daily_budget_limit: serializedGoals.daily_budget_limit,
+        min_bid: serializedGoals.min_bid,
+        max_bid: serializedGoals.max_bid,
+        max_bid_increase_pct: serializedGoals.max_bid_increase_pct,
+        max_bid_decrease_pct: serializedGoals.max_bid_decrease_pct,
+        target_cpc: serializedGoals.target_cpc,
+        maximum_cpc: serializedGoals.max_cpc,
+        cpc_enforcement: (serializedGoals.max_cpc ?? 0) > 0,
+        objective: serializedGoals.objective,
+        ai_auto_optimization: serializedGoals.ai_auto_optimization,
+        dayparting_enabled: serializedGoals.dayparting_enabled,
+        placement_optimization_enabled: serializedGoals.placement_optimization_enabled,
       };
       if (apCfgs.length) {
         await base44.entities.AutopilotConfig.update(apCfgs[0].id, apPayload);
@@ -431,11 +450,11 @@ export default function Settings() {
         {/* Metas de eficiência */}
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Metas de Eficiência</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
-          <NumberInput label="ACoS Alvo (%)" hint="Meta primária de gasto/venda" value={goals.target_acos} onChange={v => setGoal('target_acos', v)} min={1} max={200} step={0.5} />
-          <NumberInput label="ACoS Máximo (%)" hint="Acima disso: corte de bid" value={goals.max_acos} onChange={v => setGoal('max_acos', v)} min={1} max={500} step={0.5} />
-          <NumberInput label="ROAS Alvo (x)" hint="Retorno mínimo sobre investimento" value={goals.target_roas} onChange={v => setGoal('target_roas', v)} min={0.1} max={50} step={0.1} />
-          <NumberInput label="TACoS Alvo (%)" hint="Gasto / Vendas Totais" value={goals.target_tacos} onChange={v => setGoal('target_tacos', v)} min={1} max={100} step={0.5} />
-          <NumberInput label="TACoS Máximo (%)" hint="Limite de risco de TACoS" value={goals.max_tacos} onChange={v => setGoal('max_tacos', v)} min={1} max={200} step={0.5} />
+          <NumberInput label="ACoS Alvo (%)" hint="Meta primária de gasto/venda" value={goals.target_acos} onChange={v => setGoal('target_acos', v)} min={0} max={200} step={0.5} zeroMeansIgnored />
+          <NumberInput label="ACoS Máximo (%)" hint="Acima disso: corte de bid" value={goals.max_acos} onChange={v => setGoal('max_acos', v)} min={0} max={500} step={0.5} zeroMeansIgnored />
+          <NumberInput label="ROAS Alvo (x)" hint="Retorno mínimo sobre investimento" value={goals.target_roas} onChange={v => setGoal('target_roas', v)} min={0} max={50} step={0.1} zeroMeansIgnored />
+          <NumberInput label="TACoS Alvo (%)" hint="Gasto / Vendas Totais" value={goals.target_tacos} onChange={v => setGoal('target_tacos', v)} min={0} max={100} step={0.5} zeroMeansIgnored />
+          <NumberInput label="TACoS Máximo (%)" hint="Limite de risco de TACoS" value={goals.max_tacos} onChange={v => setGoal('max_tacos', v)} min={0} max={200} step={0.5} zeroMeansIgnored />
           <div>
             <NumberInput label="Orçamento Diário Geral (R$)" hint="Teto de risco diário do motor" value={goals.daily_budget_limit} onChange={v => setGoal('daily_budget_limit', v)} min={10} max={5000} step={5} />
             {todaySpend?.confirmed_spend != null && (
@@ -454,8 +473,8 @@ export default function Settings() {
         {/* CPC */}
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Meta de CPC</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
-          <NumberInput label="CPC Alvo (R$)" hint="A IA ajusta bids para este CPC" value={goals.target_cpc} onChange={v => setGoal('target_cpc', v)} min={0} step={0.01} />
-          <NumberInput label="CPC Máximo (R$)" hint="Acima disso: bid reduzido" value={goals.max_cpc} onChange={v => setGoal('max_cpc', v)} min={0} step={0.01} />
+          <NumberInput label="CPC Alvo (R$)" hint="A IA ajusta bids para este CPC" value={goals.target_cpc} onChange={v => setGoal('target_cpc', v)} min={0} step={0.01} zeroMeansIgnored />
+          <NumberInput label="CPC Máximo (R$)" hint="Acima disso: bid reduzido" value={goals.max_cpc} onChange={v => setGoal('max_cpc', v)} min={0} step={0.01} zeroMeansIgnored />
           <div className="flex flex-col justify-between">
             <label className="block text-xs text-slate-400 mb-1.5">Enforçar CPC Máximo</label>
             <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg border border-surface-3 h-[42px]">
@@ -493,9 +512,9 @@ export default function Settings() {
         {/* Budget por campanha */}
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Budget por Campanha</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
-          <NumberInput label="Budget Mínimo por Campanha (R$)" hint="Piso de budget individual" value={goals.minimum_campaign_budget} onChange={v => setGoal('minimum_campaign_budget', v)} min={5} step={5} />
-          <NumberInput label="Incremento Permitido (R$)" hint="Variação máxima por ciclo" value={goals.campaign_budget_increment} onChange={v => setGoal('campaign_budget_increment', v)} min={1} step={1} />
-          <NumberInput label="Capacidade Semanal de Campanhas" hint="Usado no cálculo de budget sugerido" value={goals.weekly_campaign_capacity} onChange={v => setGoal('weekly_campaign_capacity', v)} min={1} step={1} />
+          <NumberInput label="Budget Mínimo por Campanha (R$)" hint="Piso de budget individual" value={goals.minimum_campaign_budget} onChange={v => setGoal('minimum_campaign_budget', v)} min={0} step={5} zeroMeansIgnored />
+          <NumberInput label="Incremento Permitido (R$)" hint="Variação máxima por ciclo" value={goals.campaign_budget_increment} onChange={v => setGoal('campaign_budget_increment', v)} min={0} step={1} zeroMeansIgnored />
+          <NumberInput label="Capacidade Semanal de Campanhas" hint="Usado no cálculo de budget sugerido" value={goals.weekly_campaign_capacity} onChange={v => setGoal('weekly_campaign_capacity', v)} min={0} step={1} zeroMeansIgnored />
         </div>
 
         {/* Dayparting e Posicionamento */}
@@ -548,9 +567,9 @@ export default function Settings() {
           <>
             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Limites de Placement (%)</p>
             <div className="grid grid-cols-3 gap-4 mb-4">
-              <NumberInput label="Top of Search Máx." hint="0 = sem ajuste" value={goals.top_of_search_limit} onChange={v => setGoal('top_of_search_limit', v)} min={0} max={900} step={5} />
-              <NumberInput label="Rest of Search Máx." hint="0 = sem ajuste" value={goals.rest_of_search_limit} onChange={v => setGoal('rest_of_search_limit', v)} min={0} max={900} step={5} />
-              <NumberInput label="Product Pages Máx." hint="0 = sem ajuste" value={goals.product_page_limit} onChange={v => setGoal('product_page_limit', v)} min={0} max={900} step={5} />
+              <NumberInput label="Top of Search Máx." value={goals.top_of_search_limit} onChange={v => setGoal('top_of_search_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
+              <NumberInput label="Rest of Search Máx." value={goals.rest_of_search_limit} onChange={v => setGoal('rest_of_search_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
+              <NumberInput label="Product Pages Máx." value={goals.product_page_limit} onChange={v => setGoal('product_page_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
             </div>
           </>
         )}
@@ -570,18 +589,21 @@ export default function Settings() {
         {/* Resumo de metas */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-1">
           {[
-            { label: 'ACoS Alvo', value: `${goals.target_acos}%`, color: 'text-cyan' },
-            { label: 'ACoS Máx.', value: `${goals.max_acos}%`, color: 'text-red-400' },
-            { label: 'ROAS Alvo', value: `${goals.target_roas}x`, color: 'text-emerald-400' },
-            { label: 'TACoS Alvo', value: `${goals.target_tacos}%`, color: 'text-amber-400' },
-            { label: 'CPC Alvo', value: goals.target_cpc > 0 ? `R$${goals.target_cpc.toFixed(2)}` : '—', color: 'text-violet-400' },
-            { label: 'Budget/dia', value: `R$${goals.daily_budget_limit}`, color: 'text-slate-300' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="text-center">
-              <p className="text-[10px] text-slate-500 mb-0.5">{label}</p>
-              <p className={`text-sm font-bold ${color}`}>{value}</p>
-            </div>
-          ))}
+            { label: 'ACoS Alvo', raw: goals.target_acos, fmt: v => `${v}%`, color: 'text-cyan' },
+            { label: 'ACoS Máx.', raw: goals.max_acos, fmt: v => `${v}%`, color: 'text-red-400' },
+            { label: 'ROAS Alvo', raw: goals.target_roas, fmt: v => `${v}x`, color: 'text-emerald-400' },
+            { label: 'TACoS Alvo', raw: goals.target_tacos, fmt: v => `${v}%`, color: 'text-amber-400' },
+            { label: 'CPC Alvo', raw: goals.target_cpc, fmt: v => `R$${Number(v).toFixed(2)}`, color: 'text-violet-400' },
+            { label: 'Budget/dia', raw: goals.daily_budget_limit, fmt: v => `R$${v}`, color: 'text-slate-300', noZeroCheck: true },
+          ].map(({ label, raw, fmt, color, noZeroCheck }) => {
+            const inactive = !noZeroCheck && (!raw || raw === 0);
+            return (
+              <div key={label} className="text-center">
+                <p className="text-[10px] text-slate-500 mb-0.5">{label}</p>
+                <p className={`text-sm font-bold ${inactive ? 'text-slate-500' : color}`}>{inactive ? '—' : fmt(raw)}</p>
+              </div>
+            );
+          })}
         </div>
         {todaySpend && (
           <p className="text-[10px] text-slate-500 px-1 mb-5">
