@@ -25,6 +25,7 @@ import BackupPanel from '@/components/backup/BackupPanel';
 import ReportPipelineWatchdogPanel from '@/components/sala/ReportPipelineWatchdogPanel';
 import ZeroSalesCleanupPanel from '@/components/sala/ZeroSalesCleanupPanel';
 import ZeroBidFixPanel from '@/components/sala/ZeroBidFixPanel';
+import EngineMotorsPanel from '@/components/sala/EngineMotorsPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
@@ -1464,6 +1465,9 @@ export default function SalaDeComando() {
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
             <div className="space-y-4">
+              {/* Motores Automáticos */}
+              {account && <EngineMotorsPanel account={account} />}
+
               {/* Guardrails e Auditoria de Causa Raiz */}
               <GuardrailStatusPanel account={account} />
 
