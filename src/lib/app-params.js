@@ -41,10 +41,9 @@ const getAppParams = () => {
 	}
 	return {
 		appId: getAppParamValue("app_id", { defaultValue: import.meta.env.VITE_BASE44_APP_ID }),
-		// Self-hosted (single-tenant): sempre há um token para o app autenticar via nosso backend
-		// (o login com Google era do Base44 e não existe self-hosted). O backend aceita qualquer token
-		// e o auth.me() devolve o usuário admin. Pode-se sobrescrever via ?access_token=... na URL.
-		token: getAppParamValue("access_token", { removeFromUrl: true }) || 'selfhosted',
+		// Self-hosted: token armazenado no localStorage após login com senha.
+		// Se null → AuthContext detecta não-autenticado e redireciona para /login.
+		token: getAppParamValue("access_token", { removeFromUrl: true }),
 		fromUrl: getAppParamValue("from_url", { defaultValue: window.location.href }),
 		functionsVersion: getAppParamValue("functions_version", { defaultValue: import.meta.env.VITE_BASE44_FUNCTIONS_VERSION }),
 		appBaseUrl: getAppParamValue("app_base_url", { defaultValue: import.meta.env.VITE_BASE44_APP_BASE_URL }),
