@@ -978,13 +978,23 @@ export default function AdsManagement() {
       // Só usar _asin_resolved como prefixo de display se for um ASIN Amazon real (começa com B0 e tem 10 chars)
       const isRealAsin = resolvedAsin && /^B0[A-Z0-9]{8}$/.test(resolvedAsin);
       return { ...representative, _asin_resolved: isRealAsin ? resolvedAsin : null, _group_count: group.length, _group_all: group };
+    }).sort((a, b) => {
+      const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
+      const sDiff = stateOrder(a) - stateOrder(b);
+      if (sDiff !== 0) return sDiff;
+      return new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime();
     });
   })();
 
   const autoCampaigns = autoByAsin;
   const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO')).
   filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual).
-  sort((a, b) => new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime());
+  sort((a, b) => {
+    const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
+    const sDiff = stateOrder(a) - stateOrder(b);
+    if (sDiff !== 0) return sDiff;
+    return new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime();
+  });
 
   const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
   const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
