@@ -70,25 +70,65 @@ function splitSystem(payload: Row): { system: Row; data: Row } {
   return { system, data };
 }
 
-/** Constrói a cláusula WHERE a partir de um objeto de filtro { campo: valor }. */
+/**
+ * Constrói a cláusula WHERE a partir de um objeto de filtro. Suporta igualdade simples e
+ * operadores estilo Mongo: $in, $nin, $gt, $gte, $lt, $lte, $ne, $exists e $or.
+ */
 function buildWhere(where: Row, startIdx: number): { clause: string; params: unknown[] } {
-  const parts: string[] = [];
   const params: unknown[] = [];
-  let i = startIdx;
+  const esc = (k: string) => k.replace(/'/g, "''");
+  const colText = (k: string) => SYSTEM_FIELDS.has(k) ? q(k) : `(data->>'${esc(k)}')`;
+  const colJson = (k: string) => SYSTEM_FIELDS.has(k) ? `to_jsonb(${q(k)})` : `(data->'${esc(k)}')`;
+  const p = (v: unknown) => { params.push(v); return `$${startIdx + params.length - 1}`; };
+
+  function condFor(key: string, value: unknown): string {
+    if (value === null || value === undefined) return `${colText(key)} IS NULL`;
+    // objeto de operadores { $in: [...], $gte: x, ... }
+    if (typeof value === 'object' && !Array.isArray(value)) {
+      const ops = value as Record<string, unknown>;
+      const opKeys = Object.keys(ops);
+      if (opKeys.some((k) => k.startsWith('$'))) {
+        const clauses: string[] = [];
+        for (const op of opKeys) {
+          const v = ops[op];
+          if (op === '$in' || op === '$nin') {
+            const arr = (Array.isArray(v) ? v : [v]).map((x) => p(String(x)));
+            if (!arr.length) { clauses.push(op === '$in' ? 'false' : 'true'); continue; }
+            clauses.push(op === '$in'
+              ? `${colText(key)} IN (${arr.join(',')})`
+              : `(${colText(key)} NOT IN (${arr.join(',')}) OR ${colText(key)} IS NULL)`);
+          } else if (op === '$gt' || op === '$gte' || op === '$lt' || op === '$lte') {
+            const sqlOp = op === '$gt' ? '>' : op === '$gte' ? '>=' : op === '$lt' ? '<' : '<=';
+            if (typeof v === 'number') {
+              // número: compara como jsonb numérico (não estoura em linhas não-numéricas)
+              clauses.push(`${colJson(key)} ${sqlOp} to_jsonb(${p(v)}::numeric)`);
+            } else {
+              // string (ex.: data ISO): comparação textual/lexical
+              clauses.push(`${colText(key)} ${sqlOp} ${p(String(v))}`);
+            }
+          } else if (op === '$ne') {
+            clauses.push(v === null ? `${colText(key)} IS NOT NULL` : `${colText(key)} IS DISTINCT FROM ${p(String(v))}`);
+          } else if (op === '$exists') {
+            const has = SYSTEM_FIELDS.has(key) ? `${q(key)} IS NOT NULL` : `(data ? '${esc(key)}')`;
+            clauses.push(v ? has : `NOT (${has})`);
+          }
+        }
+        return clauses.length ? `(${clauses.join(' AND ')})` : 'true';
+      }
+      // objeto comum -> compara como JSON textual
+      return `${colText(key)} = ${p(JSON.stringify(value))}`;
+    }
+    return `${colText(key)} = ${p(SYSTEM_FIELDS.has(key) ? value : String(value))}`;
+  }
+
+  const parts: string[] = [];
   for (const [key, value] of Object.entries(where ?? {})) {
-    if (value === null || value === undefined) {
-      if (SYSTEM_FIELDS.has(key)) parts.push(`${q(key)} IS NULL`);
-      else parts.push(`(data->>'${key.replace(/'/g, "''")}') IS NULL`);
+    if (key === '$or' && Array.isArray(value)) {
+      const ors = value.map((sub) => Object.entries(sub as Row).map(([k, v]) => condFor(k, v)).join(' AND '));
+      parts.push(`(${ors.filter(Boolean).map((c) => `(${c})`).join(' OR ')})`);
       continue;
     }
-    if (SYSTEM_FIELDS.has(key)) {
-      parts.push(`${q(key)} = $${i++}`);
-      params.push(value);
-    } else {
-      // comparação textual — cobre string/number/boolean de forma consistente
-      parts.push(`(data->>'${key.replace(/'/g, "''")}') = $${i++}`);
-      params.push(typeof value === 'object' ? JSON.stringify(value) : String(value));
-    }
+    parts.push(condFor(key, value));
   }
   return { clause: parts.length ? 'WHERE ' + parts.join(' AND ') : '', params };
 }
@@ -175,6 +215,30 @@ export class EntityRepo {
       [id, data, system.created_by ?? null] as unknown as string[],
     )) as unknown as Row[];
     return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  /** Atualiza vários registros; cada item é { id, ...campos }. */
+  async bulkUpdate(items: Row[] = []): Promise<Row[]> {
+    const out: Row[] = [];
+    for (const item of items) {
+      if (!item || item.id == null) continue;
+      const { id, ...patch } = item;
+      const r = await this.update(String(id), patch);
+      if (r) out.push(r);
+    }
+    return out;
+  }
+
+  /** updateMany(filtro, patch) — suporta patch estilo Mongo `{ $set: {...} }` ou objeto direto. */
+  async updateMany(where: Row = {}, update: Row = {}): Promise<{ updated: number }> {
+    const patch = update && typeof update === 'object' && update.$set ? update.$set : update;
+    const matches = await this.filter(where, null, 100000);
+    let updated = 0;
+    for (const m of matches) {
+      const r = await this.update(String(m.id), patch);
+      if (r) updated++;
+    }
+    return { updated };
   }
 
   async delete(id: string): Promise<{ id: string }> {
