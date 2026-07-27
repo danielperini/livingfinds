@@ -24,6 +24,7 @@ import MotorExecutionPanel from '@/components/sala/MotorExecutionPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
 import ReportPipelineWatchdogPanel from '@/components/sala/ReportPipelineWatchdogPanel';
 import ZeroSalesCleanupPanel from '@/components/sala/ZeroSalesCleanupPanel';
+import ZeroBidFixPanel from '@/components/sala/ZeroBidFixPanel';
 import { Link } from 'react-router-dom';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
@@ -1504,6 +1505,9 @@ export default function SalaDeComando() {
                   Diagnóstico
                 </Link>
               </div>
+
+              {/* Correção de Bids Zerados */}
+              {account && <ZeroBidFixPanel account={account} />}
             </div>
           )}
         </>
