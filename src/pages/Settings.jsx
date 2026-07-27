@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import {
   Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save,
   ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package,
-  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette
+  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette, FlaskConical
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
@@ -73,6 +73,8 @@ export default function Settings() {
   const [authStatus, setAuthStatus] = useState(null);
   const [authChecking, setAuthChecking] = useState(false);
   const [credOpen, setCredOpen] = useState(false);
+  const [spApiTestLoading, setSpApiTestLoading] = useState(false);
+  const [spApiTestResult, setSpApiTestResult] = useState(null);
   const [perfSettings, setPerfSettings] = useState(null); // registro PerformanceSettings
   const [form, setForm] = useState({ seller_name: '', marketplace_id: '', ads_profile_id: '', region: 'NA' });
   const [goals, setGoals] = useState(PERFORMANCE_DEFAULTS);
@@ -283,6 +285,33 @@ export default function Settings() {
       alert(`Erro ao salvar metas: ${err.message}`);
     } finally {
       setGoalsSaving(false);
+    }
+  };
+
+  const testSpApiPrice = async () => {
+    if (!account || spApiTestLoading) return;
+    setSpApiTestLoading(true);
+    setSpApiTestResult(null);
+    try {
+      // Buscar o primeiro produto da conta para testar
+      const products = await base44.entities.Product.filter({ amazon_account_id: account.id }, null, 1);
+      const product = products[0];
+      if (!product) { setSpApiTestResult({ ok: false, error: 'Nenhum produto encontrado para testar.' }); return; }
+      const res = await base44.functions.invoke('refreshProductMarketPrice', {
+        amazon_account_id: account.id,
+        product_id: product.id,
+        force: true,
+        next_active: true,
+      });
+      const data = res?.data || res;
+      // Sanitizar: remover campos sensíveis antes de exibir
+      const safe = { ...data };
+      delete safe.access_token; delete safe.refresh_token; delete safe.token;
+      setSpApiTestResult({ ok: !!data?.ok, asin: product.asin, data: safe });
+    } catch (e) {
+      setSpApiTestResult({ ok: false, error: e.message });
+    } finally {
+      setSpApiTestLoading(false);
     }
   };
 
@@ -624,16 +653,49 @@ export default function Settings() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button onClick={checkAuth} disabled={authChecking}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors disabled:opacity-60">
                 {authChecking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                 {authChecking ? 'Verificando...' : 'Testar conexão'}
               </button>
+              <button onClick={testSpApiPrice} disabled={spApiTestLoading || !account}
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors disabled:opacity-60">
+                {spApiTestLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
+                {spApiTestLoading ? 'Testando...' : 'Testar SP-API (Preço Competitivo)'}
+              </button>
               {!authStatus && !authChecking && (
                 <p className="text-xs text-slate-600">Clique para testar a conexão com a Amazon.</p>
               )}
             </div>
+
+            {/* Resultado do teste SP-API */}
+            {spApiTestResult && (
+              <div className={`p-3 rounded-lg border text-xs space-y-2 ${spApiTestResult.ok ? 'border-emerald-400/20 bg-emerald-400/5' : 'border-amber-400/20 bg-amber-400/5'}`}>
+                <div className="flex items-center gap-2">
+                  {spApiTestResult.ok
+                    ? <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    : <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />}
+                  <span className={`font-semibold ${spApiTestResult.ok ? 'text-emerald-300' : 'text-amber-300'}`}>
+                    SP-API Preço Competitivo — {spApiTestResult.ok ? 'Sucesso' : 'Falha'}
+                  </span>
+                  {spApiTestResult.asin && <span className="text-slate-500 font-mono">{spApiTestResult.asin}</span>}
+                </div>
+                {spApiTestResult.error && (
+                  <p className="text-amber-400/80">{spApiTestResult.error}</p>
+                )}
+                {spApiTestResult.data && (
+                  <pre className="text-[10px] text-slate-400 bg-surface-3 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all max-h-40">
+                    {JSON.stringify(spApiTestResult.data, null, 2)}
+                  </pre>
+                )}
+                {!spApiTestResult.ok && (
+                  <p className="text-[10px] text-amber-400/70">
+                    Se o erro for 401 ou "unauthorized", verifique os secrets: <code>SP_REFRESH_TOKEN</code>, <code>SP_CLIENT_ID</code>, <code>SP_CLIENT_SECRET</code> em Base44 → Settings → Environment Variables.
+                  </p>
+                )}
+              </div>
+            )}
 
             {authStatus && (
               <div className="space-y-2">

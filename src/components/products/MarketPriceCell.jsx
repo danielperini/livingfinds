@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Loader2, RefreshCw, TrendingUp, AlertCircle, Info } from 'lucide-react';
+import { Loader2, RefreshCw, TrendingUp, AlertCircle, Info, ShieldAlert } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 function fmtBRL(v) {
   if (v == null || isNaN(Number(v))) return null;
@@ -39,6 +40,12 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   const lastChecked = product?.market_price_last_checked_at;
   const priceError = product?.market_price_error;
 
+  const isAuthError = (data, e) => {
+    const msg = (data?.error || data?.message || e?.message || '').toLowerCase();
+    const code = String(data?.http_status || data?.status_code || '');
+    return code === '401' || msg.includes('401') || msg.includes('unauthorized') || msg.includes('auth_error') || msg.includes('invalid_client') || msg.includes('access denied');
+  };
+
   const handleConsult = async () => {
     if (loading || !accountId || !product?.id) return;
     setLoading(true);
@@ -61,11 +68,17 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
           market_price_last_checked_at: data.checked_at || new Date().toISOString(),
           market_price_error: null,
         });
+      } else if (isAuthError(data, null)) {
+        setError('auth_error');
       } else {
         setError(data?.error || data?.message || 'Erro ao consultar preço');
       }
     } catch (e) {
-      setError(e?.message || 'Falha na consulta');
+      if (isAuthError(null, e)) {
+        setError('auth_error');
+      } else {
+        setError(e?.message || 'Falha na consulta');
+      }
     } finally {
       setLoading(false);
     }
@@ -170,6 +183,28 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
           </button>
         )}
         {error && <p className="text-[9px] text-red-400">{error}</p>}
+      </div>
+    );
+  }
+
+  // ── Banner de erro de autenticação SP-API ────────────────────────────────
+  if (error === 'auth_error') {
+    return (
+      <div className="space-y-1.5 min-w-[180px]">
+        <div className="flex items-start gap-1.5 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
+          <ShieldAlert className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold text-amber-300 leading-tight">Falha de autenticação SP-API (401)</p>
+            <p className="text-[9px] text-amber-400/80 mt-0.5 leading-tight">Verifique: <span className="font-mono">SP_REFRESH_TOKEN</span>, <span className="font-mono">SP_CLIENT_ID</span>, <span className="font-mono">SP_CLIENT_SECRET</span></p>
+            <Link to="/settings" className="inline-flex items-center gap-0.5 text-[9px] text-cyan hover:text-cyan/80 mt-1 underline underline-offset-2">
+              Ir para Configurações →
+            </Link>
+          </div>
+        </div>
+        <button type="button" onClick={() => setError(null)}
+          className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-cyan transition-colors">
+          <RefreshCw className="w-2.5 h-2.5" />Tentar novamente
+        </button>
       </div>
     );
   }
