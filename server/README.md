@@ -51,6 +51,23 @@ deno task migrate    # aplica no Postgres (opcional: as tabelas também nascem s
 deno task start      # sobe o backend na porta 8000
 ```
 
+## Frontend (mesma origem)
+
+O backend também serve o **frontend React** e expõe a API compatível com o `@base44/sdk`
+(`/api/apps/:appId/entities/...` e `/api/apps/:appId/functions/:name`) — como o
+`src/api/base44Client.js` usa `serverUrl: ''`, o SDK chama a mesma origem. Basta buildar o
+front e apontar `FRONTEND_DIR` para o `dist/`:
+
+```bash
+# na raiz do repo
+VITE_BASE44_APP_ID=<appId> npm install && VITE_BASE44_APP_ID=<appId> npm run build
+# o Dockerfile copia ./dist para /app/dist (FRONTEND_DIR). Rebuild:
+docker compose -f server/docker-compose.yml up -d --build
+```
+
+Abra `http://<host>:8000/` para a tela do app. As rotas `/api/*` (usadas pelo front) ficam
+abertas na mesma origem; proteja com Nginx + Basic Auth/HTTPS em produção.
+
 ## Deploy na VPS (Hostinger)
 
 1. Instale Docker + Docker Compose na VPS.
