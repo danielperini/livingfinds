@@ -232,7 +232,7 @@ export default async function handler(req: Request): Promise<Response> {
         return false;
       }
 
-      // ✅ Amazon confirmou — agora atualiza o banco
+      // ✅ Amazon confirmou — atualiza o banco imediatamente
       const patch: any = {
         cleanup_last_action_at: new Date().toISOString(),
       };
@@ -245,6 +245,76 @@ export default async function handler(req: Request): Promise<Response> {
         patch.status = 'paused';
       }
       await base44.asServiceRole.entities.Campaign.update(campaign.id, patch).catch(() => {});
+
+      // ── Verificação pós-arquivamento (só para ações 'archive') ─────────
+      if (action === 'archive') {
+        // Aguardar 60s para propagação na Amazon
+        await new Promise((r) => setTimeout(r, 60000));
+
+        const base   = adsBase(region);
+        const getUrl = `${base}/v2/sp/campaigns/${aid}`;
+        const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+
+        try {
+          const verifyRes = await fetch(getUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Amazon-Advertising-API-ClientId': clientId,
+              'Amazon-Advertising-API-Scope': profileId,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+          const verifyText = await verifyRes.text().catch(() => '');
+          let verifyData: any = {};
+          try { verifyData = verifyText ? JSON.parse(verifyText) : {}; } catch {}
+
+          const confirmedState = String(verifyData?.state || '').toLowerCase();
+          if (confirmedState !== 'archived') {
+            // Não revertemos o estado local — apenas alertamos
+            const dedupKey = `archive_verify_${aid}`;
+            await base44.asServiceRole.entities.Alert.create({
+              amazon_account_id,
+              alert_type: 'sync_error',
+              alert_family: 'campaign',
+              severity: 'high',
+              status: 'active',
+              entity_type: 'campaign',
+              entity_id: campaign.id,
+              campaign_id: aid,
+              title: 'Arquivamento não confirmado pela Amazon',
+              message: `A campanha "${campaign.campaign_name || campaign.name}" (ID: ${aid}) não retornou estado 'archived' após 60s. Estado lido: "${confirmedState || 'desconhecido'}". Verifique manualmente no Amazon Ads.`,
+              deduplication_key: dedupKey,
+              source_function: 'runAutoCampaignCleanup',
+              created_at: new Date().toISOString(),
+            }).catch(() => {});
+
+            await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+              reconciliation_status: 'review_required',
+            }).catch(() => {});
+          }
+        } catch {
+          // Falha na verificação — criar alerta preventivo
+          const dedupKey = `archive_verify_${aid}`;
+          await base44.asServiceRole.entities.Alert.create({
+            amazon_account_id,
+            alert_type: 'sync_error',
+            alert_family: 'campaign',
+            severity: 'high',
+            status: 'active',
+            entity_type: 'campaign',
+            entity_id: campaign.id,
+            campaign_id: aid,
+            title: 'Arquivamento não confirmado pela Amazon',
+            message: `Não foi possível verificar o estado da campanha "${campaign.campaign_name || campaign.name}" (ID: ${aid}) após arquivamento. Verifique manualmente no Amazon Ads.`,
+            deduplication_key: `archive_verify_${aid}`,
+            source_function: 'runAutoCampaignCleanup',
+            created_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      }
+
       return true;
     };
 

@@ -5,7 +5,8 @@ import {
   Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
   Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, PlayCircle, DollarSign } from
+  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, PlayCircle, DollarSign,
+  Archive } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import CampaignConfigPanel from '@/components/ads/CampaignConfigPanel';
@@ -74,7 +75,7 @@ const STATE_FILTERS = [
 
 const PAGE_SIZE = 50;
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget }) {
+function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget, onQuickArchive }) {
   const [page, setPage] = useState(1);
   const [itemLoading, setItemLoading] = useState({});
 
@@ -101,6 +102,19 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
     setItemLoading((prev) => ({ ...prev, [c.id]: true }));
     try {
       await onQuickResume(c);
+    } finally {
+      setItemLoading((prev) => ({ ...prev, [c.id]: false }));
+    }
+  };
+
+  const handleQuickArchive = async (e, c) => {
+    e.stopPropagation();
+    if (itemLoading[c.id]) return;
+    const name = c.name || c.campaign_name || 'esta campanha';
+    if (!window.confirm(`Arquivar "${name}" na Amazon Ads? Ela será removida do painel e arquivada permanentemente. Esta ação é irreversível.`)) return;
+    setItemLoading((prev) => ({ ...prev, [c.id]: true }));
+    try {
+      await onQuickArchive(c);
     } finally {
       setItemLoading((prev) => ({ ...prev, [c.id]: false }));
     }
@@ -178,6 +192,15 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
                       state === 'enabled' ?
                       <Pause className="w-3 h-3" /> :
                       <Play className="w-3 h-3" />}
+                      </button> :
+                    null}
+                    {/* Quick archive button — visible on hover, destructive */}
+                    {onQuickArchive && state !== 'archived' ?
+                    <button
+                      onClick={(e) => handleQuickArchive(e, c)}
+                      title="Arquivar na Amazon (irreversível)"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-rose-500 bg-rose-500/10 hover:bg-rose-500/25">
+                        {isItemLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Archive className="w-3 h-3" />}
                       </button> :
                     null}
                     {/* Reativar + Ajustar Budget — apenas para pausadas */}
@@ -886,6 +909,37 @@ export default function AdsManagement() {
     }
   };
 
+  const archiveCampaignAction = async (campaign) => {
+    if (!account) return;
+    setCampaignAction('archiving');
+    setCampaignActionMsg(null);
+    try {
+      const response = await base44.functions.invoke('archiveCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.amazon_campaign_id || campaign.campaign_id,
+        asin: campaign.asin,
+      });
+      const data = response?.data || response;
+      if (!data?.ok) throw new Error(data?.error || 'Falha ao arquivar campanha na Amazon');
+      // Remover da lista localmente (otimista pós-confirmação)
+      setCampaigns((prev) => prev.filter((c) => c.id !== campaign.id));
+      if (selectedCampaign?.id === campaign.id) setSelectedCampaign(null);
+      setCampaignActionMsg({ type: 'success', text: 'Campanha arquivada na Amazon com sucesso.' });
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao arquivar: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+      setTimeout(() => setCampaignActionMsg(null), 7000);
+    }
+  };
+
+  const archiveSelectedCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    const name = selectedCampaign.name || selectedCampaign.campaign_name || 'esta campanha';
+    if (!window.confirm(`Arquivar "${name}" na Amazon Ads? Ela será removida do painel e arquivada permanentemente. Esta ação é irreversível.`)) return;
+    await archiveCampaignAction(selectedCampaign);
+  };
+
   const hasPending = Object.keys(pendingBids).length > 0;
 
   // ── Separar AUTO / MANUAL ──────────────────────────────────────────────────
@@ -1077,6 +1131,7 @@ export default function AdsManagement() {
             onQuickPause={quickPauseCampaign}
             onQuickResume={quickResumeCampaign}
             onReactivateBudget={(c) => setReactivateBudgetModal(c)}
+            onQuickArchive={archiveCampaignAction}
             extraAction={
             <div className="flex flex-col gap-1">
                   <StaleInventoryWarningPanel
@@ -1162,6 +1217,7 @@ export default function AdsManagement() {
               onQuickPause={quickPauseCampaign}
               onQuickResume={quickResumeCampaign}
               onReactivateBudget={(c) => setReactivateBudgetModal(c)}
+              onQuickArchive={archiveCampaignAction}
               extraAction={
               <div className="flex flex-col gap-1">
                     <button
@@ -1321,7 +1377,15 @@ export default function AdsManagement() {
                     Reativar
                   </button> :
                 null}
-                  {/* Remover do painel */}
+                  {/* Arquivar na Amazon */}
+                  {campaignState(selectedCampaign) !== 'archived' && (
+                    <button onClick={archiveSelectedCampaign} disabled={!!campaignAction}
+                  className="px-3 py-2 text-xs font-semibold bg-rose-500/15 border border-rose-500/40 text-rose-300 hover:bg-rose-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                      {campaignAction === 'archiving' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                      Arquivar
+                    </button>
+                  )}
+                  {/* Remover do painel (apenas local) */}
                   <button onClick={removeCampaign} disabled={!!campaignAction}
                 className="px-3 py-2 text-xs font-semibold bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
                     {campaignAction === 'removing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
