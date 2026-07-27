@@ -8,6 +8,8 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
 import BackupPanel from '@/components/backup/BackupPanel';
+import ObjectiveSelector from '@/components/settings/ObjectiveSelector';
+import { OBJECTIVE_PRESETS, divergesFromPreset, getCoherenceWarnings } from '@/components/settings/objectivePresets';
 
 
 const PERFORMANCE_DEFAULTS = {
@@ -85,8 +87,17 @@ export default function Settings() {
   const [goalsSaving, setGoalsSaving] = useState(false);
   const [goalsSaved, setGoalsSaved] = useState(false);
   const [todaySpend, setTodaySpend] = useState(null);
+  const [justApplied, setJustApplied] = useState(false);
 
   const setGoal = (key, val) => setGoals(p => ({ ...p, [key]: val }));
+
+  const applyObjectivePreset = (key) => {
+    const preset = OBJECTIVE_PRESETS[key];
+    if (!preset?.values) return;
+    setGoals(p => ({ ...p, ...preset.values, objective: key }));
+    setJustApplied(true);
+    setTimeout(() => setJustApplied(false), 1000);
+  };
 
   useEffect(() => {
     async function load() {
@@ -183,6 +194,12 @@ export default function Settings() {
           serializedGoals[field] = null;
         }
       }
+      // Objetivo efetivo: se campos divergem do preset base → 'custom'
+      const baseObjective = goals.objective;
+      const effectiveObjective = divergesFromPreset(goals) ? 'custom' : baseObjective;
+      serializedGoals.objective = effectiveObjective;
+      serializedGoals.objective_base = effectiveObjective === 'custom' && baseObjective !== 'custom' ? baseObjective : null;
+
       const payload = { ...serializedGoals, amazon_account_id: account.id, updated_at: now };
 
       // Detectar campos alterados para o histórico
@@ -234,6 +251,12 @@ export default function Settings() {
         maximum_cpc: serializedGoals.max_cpc,
         cpc_enforcement: (serializedGoals.max_cpc ?? 0) > 0,
         objective: serializedGoals.objective,
+        impressions_goal_enabled: serializedGoals.impressions_goal_enabled,
+        target_daily_impressions: serializedGoals.target_daily_impressions,
+        top_of_search_limit: serializedGoals.top_of_search_limit,
+        rest_of_search_limit: serializedGoals.rest_of_search_limit,
+        product_page_limit: serializedGoals.product_page_limit,
+        ...(baseObjective === 'flex_stock' ? { auto_reduce_low_stock: true, auto_pause_zero_stock: true } : {}),
         ai_auto_optimization: serializedGoals.ai_auto_optimization,
         dayparting_enabled: serializedGoals.dayparting_enabled,
         placement_optimization_enabled: serializedGoals.placement_optimization_enabled,
@@ -252,6 +275,16 @@ export default function Settings() {
         daily_budget_cap: goals.daily_budget_limit,
         trigger: 'settings_updated',
       }).catch(() => {});
+
+      // ── Aplicar budget mínimo por campanha nas campanhas existentes na Amazon ──
+      if ((goals.minimum_campaign_budget ?? 0) > 0) {
+        base44.functions.invoke('validateCampaignBudgets', {
+          amazon_account_id: account.id,
+          minimum_campaign_budget: goals.minimum_campaign_budget,
+          apply_fixes: true,
+          trigger: 'settings_updated',
+        }).catch(() => {});
+      }
 
       // ── Pós-save: sincronizar cap no AccountDailySpendController do dia atual ──
       const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
@@ -360,14 +393,7 @@ export default function Settings() {
     { value: 'growth', label: 'Crescimento com controle de eficiência' },
   ];
 
-  const OBJECTIVE_OPTIONS = [
-    { value: 'profitability', label: 'Lucratividade — reduzir ACoS e maximizar margem' },
-    { value: 'growth', label: 'Crescimento — aumentar vendas mantendo ACoS controlado' },
-    { value: 'launch', label: 'Lançamento — ganhar visibilidade e reviews iniciais' },
-    { value: 'defense', label: 'Defesa — proteger posição e marca' },
-    { value: 'liquidation', label: 'Liquidação — girar estoque rapidamente' },
-    { value: 'maintenance', label: 'Manutenção — estabilizar sem mudanças agressivas' },
-  ];
+  const coherenceWarnings = getCoherenceWarnings(goals);
 
   return (
     <div className="p-6 space-y-6 max-w-3xl animate-fade-in">
@@ -420,7 +446,7 @@ export default function Settings() {
       </div>
 
       {/* ─── METAS DE PERFORMANCE (Fonte Única) ─── */}
-      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
+      <div className={`bg-surface-1 border border-surface-2 rounded-xl p-6 ${justApplied ? 'animate-pulse' : ''}`}>
         <div className="flex items-center gap-2 mb-1">
           <Target className="w-4 h-4 text-cyan" />
           <h2 className="text-sm font-semibold text-white">Metas de Performance</h2>
@@ -428,7 +454,7 @@ export default function Settings() {
         </div>
         <p className="text-xs text-slate-500 mb-5">Todos os cálculos e decisões de bid usam estes valores. Dashboard e Campanhas apenas leem.</p>
 
-        {/* Meta principal e objetivo */}
+        {/* Meta principal */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
           <div>
             <label className="block text-xs text-slate-400 mb-1.5">Meta Principal</label>
@@ -438,13 +464,15 @@ export default function Settings() {
             </select>
             <p className="text-[10px] text-slate-600 mt-1">A IA prioriza esta métrica. Demais servem como limites de segurança.</p>
           </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Objetivo Estratégico</label>
-            <select value={goals.objective} onChange={e => setGoal('objective', e.target.value)}
-              className="w-full px-3 py-2.5 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white focus:outline-none focus:border-cyan/50">
-              {OBJECTIVE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
+        </div>
+
+        {/* Objetivo estratégico — cards com presets */}
+        <div className="mb-5">
+          <ObjectiveSelector
+            objective={goals.objective}
+            isCustomized={divergesFromPreset(goals)}
+            onApply={applyObjectivePreset}
+          />
         </div>
 
         {/* Metas de eficiência */}
@@ -613,6 +641,17 @@ export default function Settings() {
               <span className="text-slate-600"> ({((todaySpend.confirmed_spend / goals.daily_budget_limit) * 100).toFixed(0)}%)</span>
             )}
           </p>
+        )}
+
+        {/* Avisos de coerência objetivo × metas (não bloqueiam) */}
+        {coherenceWarnings.length > 0 && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 space-y-1">
+            {coherenceWarnings.map((w, i) => (
+              <p key={i} className="text-[11px] text-amber-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-3 h-3 flex-shrink-0" />{w} Você pode continuar mesmo assim.
+              </p>
+            ))}
+          </div>
         )}
 
         <div className="flex items-center gap-3">

@@ -159,9 +159,16 @@
         "launch",
         "defense",
         "liquidation",
-        "maintenance"
+        "maintenance",
+        "aggressive_peak",
+        "flex_stock",
+        "custom"
       ],
       "default": "profitability"
+    },
+    "objective_base": {
+      "type": "string",
+      "description": "Objetivo base do preset quando objective=custom (ex: launch)."
     },
     "ai_auto_optimization": {
       "type": "boolean",
