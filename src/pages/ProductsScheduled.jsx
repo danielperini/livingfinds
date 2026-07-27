@@ -478,6 +478,17 @@ export default function ProductsScheduled() {
     }
   }, [account?.id, syncing, readStatus]);
 
+  const cancelKickoff = useCallback(async (queueItem) => {
+    if (!queueItem?.id) return;
+    const asin = String(queueItem.asin || '').trim().toUpperCase();
+    setQueueByAsin(current => ({
+      ...current,
+      [asin]: { ...queueItem, status: 'cancelled' },
+    }));
+    await base44.entities.ProductKickoffQueue.update(queueItem.id, { status: 'cancelled' });
+    await readQueue(account?.id);
+  }, [account?.id, readQueue]);
+
   const retryKickoff =
     useCallback(
       async (queueItem) => {
@@ -870,13 +881,24 @@ export default function ProductsScheduled() {
         }
       );
 
-      helper.appendChild(
-        errorText
-      );
+      const cancelButton = document.createElement('button');
+      cancelButton.type = 'button';
+      cancelButton.className = 'text-[10px] font-semibold text-red-400 hover:underline';
+      cancelButton.textContent = 'Cancelar';
+      cancelButton.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelButton.disabled = true;
+        cancelButton.textContent = 'Cancelando...';
+        try { await cancelKickoff(queueItem); } catch {
+          cancelButton.disabled = false;
+          cancelButton.textContent = 'Cancelar';
+        }
+      });
 
-      helper.appendChild(
-        retryButton
-      );
+      helper.appendChild(errorText);
+      helper.appendChild(retryButton);
+      helper.appendChild(cancelButton);
     };
 
     const applyQueueStatuses =
@@ -955,18 +977,33 @@ export default function ProductsScheduled() {
               'cursor-not-allowed'
             );
 
-            renderSimpleHelper(
-              helper,
-              queueItem
-                ?.queue_window
+            const schedRenderKey = `scheduled-${queueItem.id}-${queueItem.queue_window || ''}`;
+            if (helper.dataset.renderKey !== schedRenderKey) {
+              helper.dataset.renderKey = schedRenderKey;
+              helper.innerHTML = '';
+              helper.className = 'basis-full mt-1 flex items-center gap-2 flex-wrap';
+              const schedText = document.createElement('span');
+              schedText.className = 'text-[10px] text-cyan';
+              schedText.textContent = queueItem?.queue_window
                 ? `Janela: ${queueItem.queue_window}`
-                : 'Pedido salvo na fila para execução',
-              'basis-full mt-1 ' +
-                'text-[10px] ' +
-                'text-cyan ' +
-                'max-w-[230px]',
-              `scheduled-${queueItem.id}-${queueItem.queue_window || ''}`
-            );
+                : 'Pedido salvo na fila para execução';
+              const cancelBtn = document.createElement('button');
+              cancelBtn.type = 'button';
+              cancelBtn.className = 'text-[10px] font-semibold text-red-400 hover:underline';
+              cancelBtn.textContent = 'Cancelar';
+              cancelBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = 'Cancelando...';
+                try { await cancelKickoff(queueItem); } catch {
+                  cancelBtn.disabled = false;
+                  cancelBtn.textContent = 'Cancelar';
+                }
+              });
+              helper.appendChild(schedText);
+              helper.appendChild(cancelBtn);
+            }
 
             return;
           }
@@ -1096,6 +1133,7 @@ export default function ProductsScheduled() {
   }, [
     queueByAsin,
     retryKickoff,
+    cancelKickoff,
   ]);
 
   const pendingCount =

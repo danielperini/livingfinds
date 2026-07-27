@@ -51,9 +51,10 @@ function calcStats(prices: number[]) {
 }
 
 async function getSpApiToken(): Promise<string> {
-  const refreshToken = secrets.get('SP_REFRESH_TOKEN') || secrets.get('AMAZON_SP_REFRESH_TOKEN');
-  const clientId = secrets.get('SP_CLIENT_ID') || secrets.get('AMAZON_LWA_CLIENT_ID');
-  const clientSecret = secrets.get('SP_CLIENT_SECRET') || secrets.get('AMAZON_LWA_CLIENT_SECRET');
+  // AMAZON_* secrets são os válidos — têm prioridade sobre os legados SP_*
+  const refreshToken = secrets.get('AMAZON_SP_REFRESH_TOKEN') || secrets.get('SP_REFRESH_TOKEN');
+  const clientId = secrets.get('AMAZON_LWA_CLIENT_ID') || secrets.get('SP_CLIENT_ID');
+  const clientSecret = secrets.get('AMAZON_LWA_CLIENT_SECRET') || secrets.get('SP_CLIENT_SECRET');
 
   if (!refreshToken || !clientId || !clientSecret) {
     throw new Error('SP-API credentials not configured (SP_REFRESH_TOKEN, SP_CLIENT_ID, SP_CLIENT_SECRET)');
