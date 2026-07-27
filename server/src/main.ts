@@ -14,6 +14,7 @@ import { loadFunctions, registry } from './registry.ts';
 import { startScheduler } from './scheduler.ts';
 import { healthcheck } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
+import { makeIntegrations } from './sdk/integrations.ts';
 
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
@@ -27,7 +28,7 @@ function json(data: unknown, status = 200): Response {
 function defaultUser() {
   return {
     id: Deno.env.get('DEFAULT_USER_ID') ?? 'system',
-    email: Deno.env.get('DEFAULT_USER_EMAIL') ?? 'daniel@livingfinds.local',
+    email: Deno.env.get('DEFAULT_USER_EMAIL') ?? 'daniel@livingfinds.com.br',
     full_name: Deno.env.get('DEFAULT_USER_NAME') ?? 'Living Finds',
     role: 'admin',
   };
@@ -93,13 +94,32 @@ async function handleEntities(req: Request, url: URL, entity: string, rest: stri
 }
 
 async function handleApi(req: Request, url: URL): Promise<Response> {
+  const path = url.pathname;
+  let m: RegExpMatchArray | null;
+
   // /api/apps/:appId/functions/:name
-  const fn = url.pathname.match(/^\/api\/apps\/[^/]+\/functions\/([A-Za-z0-9_]+)\/?$/);
-  if (fn) return await invokeFn(fn[1], req);
+  if ((m = path.match(/^\/api\/apps\/[^/]+\/functions\/([A-Za-z0-9_]+)\/?$/))) {
+    return await invokeFn(m[1], req);
+  }
   // /api/apps/:appId/entities/:Entity[/rest...]
-  const ent = url.pathname.match(/^\/api\/apps\/[^/]+\/entities\/([A-Za-z0-9_]+)(\/.*)?$/);
-  if (ent) return await handleEntities(req, url, ent[1], ent[2] ?? '');
-  return json({ error: 'rota de API desconhecida' }, 404);
+  if ((m = path.match(/^\/api\/apps\/[^/]+\/entities\/([A-Za-z0-9_]+)(\/.*)?$/))) {
+    return await handleEntities(req, url, m[1], m[2] ?? '');
+  }
+  // /api/apps/:appId/integration-endpoints/Core/:name  (InvokeLLM, SendEmail, UploadFile...)
+  if ((m = path.match(/\/integration-endpoints\/Core\/([A-Za-z0-9_]+)\/?$/))) {
+    const payload = await req.json().catch(() => ({}));
+    // deno-lint-ignore no-explicit-any
+    const core = makeIntegrations().Core as any;
+    if (typeof core[m[1]] === 'function') return json(await core[m[1]](payload));
+    return json({ ok: false, error: `Core.${m[1]} não implementado` });
+  }
+  // Telemetria/logs/agents/auth externos -> no-op benigno (o app não depende do retorno)
+  if (/\/(analytics|app-logs|log-user-in-app|agents|external-auth|app-user-auth|users\/invite)/.test(path)) {
+    return json({ ok: true });
+  }
+  // Rota não tratada: não derruba o app — responde vazio e loga para eu implementar se precisar.
+  console.warn(`[api] rota não tratada -> {} : ${req.method} ${path}`);
+  return json({});
 }
 
 // ── Frontend estático (SPA) ─────────────────────────────────────────────────
