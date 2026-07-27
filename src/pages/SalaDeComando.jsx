@@ -95,7 +95,8 @@ const TAB_GROUPS = [
       { id: 'estrategias', label: 'Motor de Estratégias' },
       { id: 'prelecao', label: 'Revisão Semanal' },
       { id: 'historico', label: 'Histórico e Decisões' },
-      { id: 'autopilot', label: 'Automação IA' },
+      // Aba "Automação IA" removida por redundância (call ~15:37): decisões e motor já
+      // aparecem em "Histórico e Decisões" e "Motor de Estratégias". Rota /autopilot mantida.
     ],
   },
   {
@@ -646,7 +647,7 @@ export default function SalaDeComando() {
                   { label: 'Alertas Ativos', value: activeAlerts, color: activeAlerts > 0 ? 'text-amber-400' : 'text-emerald-400', action: () => setTab('alertas') },
                   { label: 'Alertas Críticos', value: criticalAlerts, color: criticalAlerts > 0 ? 'text-red-400' : 'text-slate-400', action: () => setTab('alertas') },
                   { label: 'Erros na Fila', value: queueFailed, color: queueFailed > 0 ? 'text-red-400' : 'text-emerald-400', action: () => setTab('fila') },
-                  { label: 'Decisões IA Pendentes', value: pendingDecisions, color: pendingDecisions > 0 ? 'text-amber-400' : 'text-emerald-400', action: () => setTab('autopilot') },
+                  { label: 'Decisões IA Pendentes', value: pendingDecisions, color: pendingDecisions > 0 ? 'text-amber-400' : 'text-emerald-400', action: () => setTab('historico') },
                 ].map(k => (
                   <button key={k.label} onClick={k.action} className="bg-surface-1 border border-surface-2 rounded-xl p-4 text-left hover:border-surface-3 transition-colors">
                     <p className="text-xs text-slate-500 mb-1">{k.label}</p>
