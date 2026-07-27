@@ -85,7 +85,46 @@ function KpiCard({ label, value, detail, tone = 'default' }) {
   );
 }
 
+// ── Column sort state ────────────────────────────────────────────────────────
+const CAMPAIGN_STATUS_ORDER = { active: 0, enabled: 0, paused: 1, incomplete: 2, none: 3, '': 4 };
+
+function applySortWithColumn(items, sortBy, colSort) {
+  if (colSort?.column) {
+    const { column, direction } = colSort;
+    const arr = [...items];
+    arr.sort((a, b) => {
+      let va, vb;
+      if (column === 'fba') { va = Number(a.fba_inventory || 0); vb = Number(b.fba_inventory || 0); }
+      else if (column === 'campaign_status') {
+        va = CAMPAIGN_STATUS_ORDER[String(a.campaign_status || '').toLowerCase()] ?? 4;
+        vb = CAMPAIGN_STATUS_ORDER[String(b.campaign_status || '').toLowerCase()] ?? 4;
+      }
+      else if (column === 'sales') { va = Number(a.total_sales_30d || 0); vb = Number(b.total_sales_30d || 0); }
+      else if (column === 'spend') { va = Number(a.total_spend_30d || 0); vb = Number(b.total_spend_30d || 0); }
+      else if (column === 'acos') { va = Number(a.acos || 0); vb = Number(b.acos || 0); }
+      else return 0;
+      return direction === 'asc' ? va - vb : vb - va;
+    });
+    return arr;
+  }
+  return applySort(items, sortBy);
+}
+
+// SortArrow component
+function SortArrow({ column, colSort, onSort }) {
+  const { ChevronUp, ChevronDown } = { ChevronUp: () => <svg className="w-3 h-3 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 15l-6-6-6 6"/></svg>, ChevronDown: () => <svg className="w-3 h-3 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg> };
+  const active = colSort?.column === column;
+  const dir = colSort?.direction;
+  return (
+    <button type="button" onClick={() => onSort(column)}
+      className={`ml-1 inline-flex items-center transition-colors ${active ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
+      {active && dir === 'asc' ? <ChevronUp /> : active && dir === 'desc' ? <ChevronDown /> : <ChevronDown />}
+    </button>
+  );
+}
+
 export default function Products({ externalRefreshTrigger }) {
+  const [accounts, setAccounts] = useState([]);
   const [account, setAccount] = useState(null);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -93,7 +132,16 @@ export default function Products({ externalRefreshTrigger }) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [sortBy, setSortBy] = useState('champions');
+  const [colSort, setColSort] = useState(null); // { column, direction }
   const [page, setPage] = useState(1);
+
+  const handleColSort = (column) => {
+    setColSort(prev => {
+      if (!prev || prev.column !== column) return { column, direction: 'desc' };
+      if (prev.direction === 'desc') return { column, direction: 'asc' };
+      return null; // reset
+    });
+  };
   const [actionLoading, setActionLoading] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -149,14 +197,37 @@ export default function Products({ externalRefreshTrigger }) {
     setLoading(true);
     try {
       const me = await base44.auth.me();
-      let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-      if (!accounts.length) accounts = await base44.entities.AmazonAccount.list();
-      const currentAccount = accounts[0] || null;
-      setAccount(currentAccount);
-      if (!currentAccount) { setProducts([]); return; }
-      const records = await base44.entities.Product.filter({ amazon_account_id: currentAccount.id }, '-created_date', 500);
-      setProducts(records || []);
-      return { records, currentAccount };
+      let allAccounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!allAccounts.length) allAccounts = await base44.entities.AmazonAccount.list();
+      setAccounts(allAccounts);
+      const primaryAccount = allAccounts[0] || null;
+      setAccount(primaryAccount);
+      if (!primaryAccount) { setProducts([]); return; }
+
+      // Buscar produtos de TODAS as contas em paralelo
+      const allRecordArrays = await Promise.all(
+        allAccounts.map(acc =>
+          base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => [])
+        )
+      );
+      const allRecords = allRecordArrays.flat();
+
+      // Deduplicar por ASIN: prioridade = maior fba_inventory, desempate = last_sync_at mais recente
+      const byAsin = new Map();
+      for (const p of allRecords) {
+        const key = String(p.asin || p.id || '').trim().toUpperCase();
+        if (!key) continue;
+        const existing = byAsin.get(key);
+        if (!existing) { byAsin.set(key, p); continue; }
+        const newFba = Number(p.fba_inventory || 0);
+        const exFba = Number(existing.fba_inventory || 0);
+        const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
+        const exSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+        if (newFba > exFba || (newFba === exFba && newSync > exSync)) byAsin.set(key, p);
+      }
+      const records = Array.from(byAsin.values());
+      setProducts(records);
+      return { records, currentAccount: primaryAccount };
     } catch (error) {
       setActionMsg({ type: 'error', text: error?.message || 'Erro ao carregar produtos.' });
     } finally {
@@ -165,10 +236,28 @@ export default function Products({ externalRefreshTrigger }) {
   }, []);
 
   const reloadProducts = useCallback(async () => {
-    if (!account) { await load(); return; }
-    const records = await base44.entities.Product.filter({ amazon_account_id: account.id }, '-created_date', 500).catch(() => null);
-    if (records) setProducts(records);
-  }, [account, load]);
+    if (!accounts.length) { await load(); return; }
+    // Re-fetch de todas as contas + deduplicar
+    const allRecordArrays = await Promise.all(
+      accounts.map(acc =>
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => [])
+      )
+    );
+    const allRecords = allRecordArrays.flat();
+    const byAsin = new Map();
+    for (const p of allRecords) {
+      const key = String(p.asin || p.id || '').trim().toUpperCase();
+      if (!key) continue;
+      const existing = byAsin.get(key);
+      if (!existing) { byAsin.set(key, p); continue; }
+      const newFba = Number(p.fba_inventory || 0);
+      const exFba = Number(existing.fba_inventory || 0);
+      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
+      const exSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+      if (newFba > exFba || (newFba === exFba && newSync > exSync)) byAsin.set(key, p);
+    }
+    setProducts(Array.from(byAsin.values()));
+  }, [accounts, load]);
 
   // Carrega fila travada por ASIN para exibir badges
   const loadStuckQueue = useCallback(async (accountId) => {
@@ -189,7 +278,14 @@ export default function Products({ externalRefreshTrigger }) {
   }, []);
 
   useEffect(() => {
-    load().then(res => { if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id); });
+    load().then(res => {
+      if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id);
+      // Enriquecimento de nomes em background para produtos sem título
+      const unnamed = (res?.records || []).filter(p => !p.product_name?.trim() && !p.display_name?.trim());
+      if (unnamed.length > 0 && res?.currentAccount?.id) {
+        base44.functions.invoke('enrichProductNames', { amazon_account_id: res.currentAccount.id }).catch(() => {});
+      }
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Refresh externo (ex: kickoff concluído no ProductsScheduled) sem desmontar o componente
@@ -213,33 +309,17 @@ export default function Products({ externalRefreshTrigger }) {
     [products]
   );
 
-  // ── Filtro permanente: apenas produtos ativos com estoque ────────────────────
-  // Mantém na lista produtos que voltaram ao estoque (fba_inventory > 0) mesmo que
-  // inventory_status ainda esteja desatualizado — remove apenas quando claramente zerado.
-  // Deduplica por ASIN: mantém o registro com last_sync_at mais recente ou fba_inventory > 0.
+  // ── Filtro permanente: produtos visíveis ─────────────────────────────────────
+  // Inclui qualquer produto com fba_inventory > 0 (de qualquer conta).
+  // A deduplicação já ocorreu em `load`, então products já é único por ASIN.
   const visibleProducts = useMemo(() => {
-    const active = products.filter(p => {
+    return products.filter(p => {
       if (p.status === 'inactive' || p.status === 'archived') return false;
+      // Sempre exibir se tem estoque positivo — ignorar inventory_status desatualizado
       if (Number(p.fba_inventory || 0) > 0) return true;
+      // Sem estoque: só ocultar se status confirma out_of_stock explicitamente
       return offerStatus(p) !== 'out_of_stock';
     });
-    // Deduplicar por ASIN — em caso de duplicata, prioriza o de maior estoque,
-    // depois o mais recentemente sincronizado.
-    const byAsin = new Map();
-    for (const p of active) {
-      const key = p.asin || p.id;
-      const existing = byAsin.get(key);
-      if (!existing) { byAsin.set(key, p); continue; }
-      const newStock = Number(p.fba_inventory || 0);
-      const existStock = Number(existing.fba_inventory || 0);
-      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
-      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
-      // Prefere maior estoque; em empate, prefere sync mais recente
-      if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
-        byAsin.set(key, p);
-      }
-    }
-    return Array.from(byAsin.values());
   }, [products]);
 
   // ── Contadores ──────────────────────────────────────────────────────────────
@@ -280,8 +360,8 @@ export default function Products({ externalRefreshTrigger }) {
         (filter === 'restocked' && Number(product.fba_inventory || 0) > 0 && (product.previous_inventory_status === 'out_of_stock' || (product.campaign_status === 'paused' && product.pause_reason?.includes('stock'))));
       return matchesSearch && matchesFilter;
     });
-    return applySort(base, sortBy);
-  }, [products, search, filter, sortBy]);
+    return applySortWithColumn(base, sortBy, colSort);
+  }, [products, search, filter, sortBy, colSort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -674,8 +754,21 @@ export default function Products({ externalRefreshTrigger }) {
                       {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
-                  {['Produto', 'Estoque', 'Status Ads', 'Vendas 30d', 'Spend 30d', 'ACoS', 'Units 30d'].map(heading => (
-                    <th key={heading} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{heading}</th>
+                  {[
+                    { label: 'Produto', col: null },
+                    { label: 'Estoque', col: 'fba' },
+                    { label: 'Status Ads', col: 'campaign_status' },
+                    { label: 'Vendas 30d', col: 'sales' },
+                    { label: 'Spend 30d', col: 'spend' },
+                    { label: 'ACoS', col: 'acos' },
+                    { label: 'Units 30d', col: null },
+                  ].map(({ label, col }) => (
+                    <th key={label} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                      <span className="inline-flex items-center gap-0.5">
+                        {label}
+                        {col && <SortArrow column={col} colSort={colSort} onSort={handleColSort} />}
+                      </span>
+                    </th>
                   ))}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                     <span title="Média, mínimo e máximo das ofertas públicas encontradas para este mesmo ASIN no marketplace atual.">

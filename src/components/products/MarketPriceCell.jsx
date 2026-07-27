@@ -46,13 +46,16 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
     return code === '401' || msg.includes('401') || msg.includes('unauthorized') || msg.includes('auth_error') || msg.includes('invalid_client') || msg.includes('access denied');
   };
 
+  // product.amazon_account_id tem prioridade sobre a prop accountId (pode ser de conta diferente)
+  const effectiveAccountId = product?.amazon_account_id || accountId;
+
   const handleConsult = async () => {
-    if (loading || !accountId || !product?.id) return;
+    if (loading || !effectiveAccountId || !product?.id) return;
     setLoading(true);
     setError(null);
     try {
       const res = await base44.functions.invoke('refreshProductMarketPrice', {
-        amazon_account_id: accountId,
+        amazon_account_id: effectiveAccountId,
         product_id: product.id,
         force: true,
       });
@@ -212,7 +215,6 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   // ── Estado padrão: NOT_CHECKED ───────────────────────────────────────────
   return (
     <div className="space-y-1.5">
-      <p className="text-[11px] text-slate-500">Não consultado</p>
       <button
         type="button"
         onClick={handleConsult}
