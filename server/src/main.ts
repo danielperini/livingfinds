@@ -18,6 +18,9 @@ import { makeIntegrations } from './sdk/integrations.ts';
 
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
+const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') ?? '';
+// Token de sessão retornado após login. Reutiliza API_TOKEN se definido.
+const SESSION_TOKEN = API_TOKEN || ADMIN_PASSWORD;
 const FRONTEND_DIR = Deno.env.get('FRONTEND_DIR') ?? join(import.meta.dirname!, '..', '..', 'dist');
 const entities = makeEntities();
 
@@ -35,10 +38,16 @@ function defaultUser() {
 }
 
 function authorized(req: Request): boolean {
-  if (!API_TOKEN) return true;
+  if (!SESSION_TOKEN) return true;
   const auth = req.headers.get('authorization') ?? '';
-  return (auth.startsWith('Bearer ') && auth.slice(7) === API_TOKEN) ||
-    req.headers.get('x-api-token') === API_TOKEN;
+  return (auth.startsWith('Bearer ') && auth.slice(7) === SESSION_TOKEN) ||
+    req.headers.get('x-api-token') === SESSION_TOKEN;
+}
+
+// Valida token para rotas de API (entities/functions). Só aplica se ADMIN_PASSWORD estiver definida.
+function apiAuthorized(req: Request): boolean {
+  if (!ADMIN_PASSWORD) return true;
+  return authorized(req);
 }
 
 async function invokeFn(name: string, req: Request): Promise<Response> {
@@ -168,7 +177,24 @@ async function handler(req: Request): Promise<Response> {
   if (path === '/functions' && req.method === 'GET') {
     return json({ functions: [...registry.keys()].sort() });
   }
+  // ── Auth endpoints ──────────────────────────────────────────────────────────
+  if (path === '/api/auth/login' && req.method === 'POST') {
+    if (!ADMIN_PASSWORD) return json({ ok: true, token: 'selfhosted' });
+    const body = await req.json().catch(() => ({}));
+    if (body.password !== ADMIN_PASSWORD) {
+      return json({ ok: false, error: 'Senha incorreta' }, 401);
+    }
+    return json({ ok: true, token: SESSION_TOKEN });
+  }
+  if (path === '/api/auth/logout') {
+    return json({ ok: true });
+  }
   if (path.startsWith('/api/')) {
+    // Rotas públicas (public-settings, chamadas sem auth do AuthContext)
+    const isPublic = path.startsWith('/api/apps/public/');
+    if (!isPublic && !apiAuthorized(req)) {
+      return json({ ok: false, error: 'Não autorizado' }, 401);
+    }
     return await handleApi(req, url);
   }
   // rota direta protegida por token (uso programático)
