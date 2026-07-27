@@ -485,6 +485,8 @@ Deno.serve(async (request) => {
     // Planos removidos são pausados, nunca excluídos.
     for (const stale of storedRules) {
       if (!stale.idempotency_key || desiredKeys.has(stale.idempotency_key)) continue;
+      // Regras do motor canônico v8 são gerenciadas por runCanonicalDaypartingEngine
+      if (String(stale.engine_version || '').startsWith('canonical-native')) continue;
       if (!['enabled', 'creating', 'planned'].includes(String(stale.status || ''))) continue;
 
       let paused = !stale.optimization_rule_id;

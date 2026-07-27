@@ -269,45 +269,11 @@ export default function Settings() {
       setGoalsSaved(true);
       setTimeout(() => setGoalsSaved(false), 4000);
 
-      // ── Propagar novo budget para campanhas Amazon (fire-and-forget) ──
-      base44.functions.invoke('adjustCampaignBudgets', {
+      // ── Propagação canônica: budgets, budget mínimo, placements e cap diário
+      //    em uma única chamada backend com log em SyncExecutionLog ──
+      base44.functions.invoke('propagateCanonicalSettings', {
         amazon_account_id: account.id,
-        daily_budget_cap: goals.daily_budget_limit,
         trigger: 'settings_updated',
-      }).catch(() => {});
-
-      // ── Aplicar budget mínimo por campanha nas campanhas existentes na Amazon ──
-      if ((goals.minimum_campaign_budget ?? 0) > 0) {
-        base44.functions.invoke('validateCampaignBudgets', {
-          amazon_account_id: account.id,
-          minimum_campaign_budget: goals.minimum_campaign_budget,
-          apply_fixes: true,
-          trigger: 'settings_updated',
-        }).catch(() => {});
-      }
-
-      // ── Pós-save: sincronizar cap no AccountDailySpendController do dia atual ──
-      const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-      base44.entities.AccountDailySpendController.filter(
-        { amazon_account_id: account.id, spend_date: todayBRT }, null, 1
-      ).then(existing => {
-        const capPayload = {
-          user_daily_spend_cap: goals.daily_budget_limit,
-          effective_daily_spend_cap: goals.daily_budget_limit,
-          updated_at: now,
-        };
-        if (existing[0]) {
-          base44.entities.AccountDailySpendController.update(existing[0].id, capPayload).catch(() => {});
-        } else {
-          base44.entities.AccountDailySpendController.create({
-            amazon_account_id: account.id,
-            spend_date: todayBRT,
-            timezone: 'America/Sao_Paulo',
-            ...capPayload,
-            cap_status: 'safe',
-            created_at: now,
-          }).catch(() => {});
-        }
       }).catch(() => {});
 
       // ── Pós-save: disparar motor imediatamente + enfileirar recalibração ──

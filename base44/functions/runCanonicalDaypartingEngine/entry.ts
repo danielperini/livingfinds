@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { runCanonicalNativeDaypartSync } from '../../shared/canonicalNativeDaypartSync.ts';
 
 /**
  * Motor canônico de dayparting híbrido.
@@ -162,7 +163,9 @@ function ruleApplies(rule: any, campaignId: string, slotClassification: string, 
   if (!statuses.includes(String(rule.status || ''))) return false;
   if (rule.native_api_supported !== true || !rule.optimization_rule_id) return false;
   if (!ruleCampaigns(rule).has(campaignId)) return false;
-  if (rule.slot_classification && String(rule.slot_classification) !== slotClassification) return false;
+  const ruleSlot = String(rule.slot_classification || '');
+  // Regras canônicas v8 (PISO/EFICIENTE/PICO) valem por horário, não por slot aprendido
+  if (ruleSlot && !['PICO', 'PISO', 'EFICIENTE'].includes(ruleSlot) && ruleSlot !== slotClassification) return false;
   return ruleTimeMatches(rule, clock);
 }
 
@@ -310,10 +313,12 @@ Deno.serve(async (request) => {
     let nativePreflight: any = null;
     let queuePreflight: any = null;
     if (!dryRun && body.skip_native_preflight !== true) {
-      const nativePayload = { ...body, amazon_account_id: aid, eligible_asins: undefined, bid_multiplier_override: undefined, _service_role: true };
-      const response = await base44.asServiceRole.functions.invoke('syncAmazonScheduleBidRules', nativePayload)
-        .catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-      nativePreflight = response?.data || response || {};
+      // v8: sync nativo canônico (PISO/EFICIENTE/PICO) direto no motor,
+      // máx. 10 campanhas por execução para evitar rate limit.
+      nativePreflight = await runCanonicalNativeDaypartSync(base44, account, {
+        trigger_type: body._service_role ? 'automatic' : 'manual',
+        max_campaigns: Number(body.native_max_campaigns || 10),
+      }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
     }
     if (!dryRun && body.skip_queue_preflight !== true) {
       const response = await base44.asServiceRole.functions.invoke('reconcileLegacyDaypartingQueue', { amazon_account_id: aid, _service_role: true })
