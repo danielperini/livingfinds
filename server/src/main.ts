@@ -1,62 +1,148 @@
 /**
- * main.ts — servidor HTTP do backend self-hosted do Living Finds.
+ * main.ts — servidor HTTP do Living Finds self-hosted.
  *
- * - Carrega as 311 funções Deno no registry (sem alterá-las).
- * - Expõe POST /functions/:name  -> executa o handler da função.
- * - Protege a borda com API_TOKEN (header Authorization: Bearer ... ou x-api-token).
- *   Chamadas internas (service role) não passam por aqui — vão direto pelo registry.
- * - Sobe o scheduler (crons da janela noturna etc.).
+ * Serve três coisas na mesma origem:
+ *  1. O FRONTEND (React build em FRONTEND_DIR) — SPA com fallback para index.html.
+ *  2. A API compatível com Base44 que o @base44/sdk do front chama:
+ *       /api/apps/:appId/entities/:Entity[...]   (GET/POST/PUT/PATCH/DELETE, /bulk, /update-many, User/me)
+ *       /api/apps/:appId/functions/:name         (POST -> invoca a função)
+ *  3. Rotas diretas /functions/:name (uso programático, protegidas por API_TOKEN) + /health.
  */
+import { join, extname } from 'jsr:@std/path@1';
+import { contentType } from 'jsr:@std/media-types@1';
 import { loadFunctions, registry } from './registry.ts';
 import { startScheduler } from './scheduler.ts';
 import { healthcheck } from './db.ts';
+import { makeEntities } from './sdk/entities.ts';
 
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
+const FRONTEND_DIR = Deno.env.get('FRONTEND_DIR') ?? join(import.meta.dirname!, '..', '..', 'dist');
+const entities = makeEntities();
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
+  return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
+}
+
+function defaultUser() {
+  return {
+    id: Deno.env.get('DEFAULT_USER_ID') ?? 'system',
+    email: Deno.env.get('DEFAULT_USER_EMAIL') ?? 'daniel@livingfinds.local',
+    full_name: Deno.env.get('DEFAULT_USER_NAME') ?? 'Living Finds',
+    role: 'admin',
+  };
 }
 
 function authorized(req: Request): boolean {
-  if (!API_TOKEN) return true; // sem token configurado = aberto (dev)
+  if (!API_TOKEN) return true;
   const auth = req.headers.get('authorization') ?? '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  const alt = req.headers.get('x-api-token') ?? '';
-  return bearer === API_TOKEN || alt === API_TOKEN;
+  return (auth.startsWith('Bearer ') && auth.slice(7) === API_TOKEN) ||
+    req.headers.get('x-api-token') === API_TOKEN;
+}
+
+async function invokeFn(name: string, req: Request): Promise<Response> {
+  const fn = registry.get(name);
+  if (!fn) return json({ ok: false, error: `Função '${name}' não encontrada` }, 404);
+  try {
+    return await fn(req);
+  } catch (e) {
+    console.error(`[main] erro em ${name}:`, (e as Error).message);
+    return json({ ok: false, error: (e as Error).message }, 500);
+  }
+}
+
+// ── API compatível com o @base44/sdk ────────────────────────────────────────
+async function handleEntities(req: Request, url: URL, entity: string, rest: string): Promise<Response> {
+  // deno-lint-ignore no-explicit-any
+  const repo = (entities as any)[entity];
+  const m = req.method;
+
+  if (entity === 'User' && rest === '/me') {
+    return json(defaultUser()); // GET/PUT — single-tenant
+  }
+  if (rest === '/bulk') {
+    if (m === 'POST') return json(await repo.bulkCreate(await req.json().catch(() => [])));
+    if (m === 'PUT') return json(await repo.bulkUpdate(await req.json().catch(() => [])));
+  }
+  if (rest === '/update-many' && (m === 'PATCH' || m === 'POST')) {
+    const b = await req.json().catch(() => ({}));
+    return json(await repo.updateMany(b?.query ?? {}, b?.data ?? {}));
+  }
+  const idm = rest.match(/^\/([^/]+)$/);
+  if (idm) {
+    const id = decodeURIComponent(idm[1]);
+    if (m === 'GET') return json(await repo.get(id));
+    if (m === 'PUT' || m === 'PATCH') return json(await repo.update(id, await req.json().catch(() => ({}))));
+    if (m === 'DELETE') return json(await repo.delete(id));
+  }
+  if (rest === '' || rest === '/') {
+    if (m === 'GET') {
+      const q = url.searchParams;
+      const special = new Set(['sort', 'limit', 'skip', 'fields']);
+      const where: Record<string, string> = {};
+      for (const [k, v] of q) if (!special.has(k)) where[k] = v;
+      const sort = q.get('sort') ?? undefined;
+      const limit = q.get('limit') ? Number(q.get('limit')) : undefined;
+      const skip = q.get('skip') ? Number(q.get('skip')) : undefined;
+      return json(await repo.filter(where, sort, limit, skip));
+    }
+    if (m === 'POST') return json(await repo.create(await req.json().catch(() => ({}))));
+    if (m === 'DELETE') return json(await repo.deleteMany(await req.json().catch(() => ({}))));
+  }
+  return json({ error: 'método/rota de entidade não suportado' }, 404);
+}
+
+async function handleApi(req: Request, url: URL): Promise<Response> {
+  // /api/apps/:appId/functions/:name
+  const fn = url.pathname.match(/^\/api\/apps\/[^/]+\/functions\/([A-Za-z0-9_]+)\/?$/);
+  if (fn) return await invokeFn(fn[1], req);
+  // /api/apps/:appId/entities/:Entity[/rest...]
+  const ent = url.pathname.match(/^\/api\/apps\/[^/]+\/entities\/([A-Za-z0-9_]+)(\/.*)?$/);
+  if (ent) return await handleEntities(req, url, ent[1], ent[2] ?? '');
+  return json({ error: 'rota de API desconhecida' }, 404);
+}
+
+// ── Frontend estático (SPA) ─────────────────────────────────────────────────
+async function serveStatic(url: URL): Promise<Response> {
+  let path = decodeURIComponent(url.pathname);
+  if (path === '/' || path === '') path = '/index.html';
+  const filePath = join(FRONTEND_DIR, path);
+  try {
+    const data = await Deno.readFile(filePath);
+    const ct = contentType(extname(filePath)) ?? 'application/octet-stream';
+    return new Response(data, { headers: { 'content-type': ct } });
+  } catch {
+    // fallback SPA -> index.html
+    try {
+      const idx = await Deno.readFile(join(FRONTEND_DIR, 'index.html'));
+      return new Response(idx, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    } catch {
+      return json({ ok: true, service: 'livingfinds-backend', note: 'frontend não buildado em FRONTEND_DIR' }, 200);
+    }
+  }
 }
 
 async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
 
-  if (path === '/health' || path === '/') {
-    const db = await healthcheck();
-    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db });
+  if (path === '/health') {
+    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck() });
   }
-
   if (path === '/functions' && req.method === 'GET') {
     return json({ functions: [...registry.keys()].sort() });
   }
-
-  const m = path.match(/^\/functions\/([A-Za-z0-9_]+)\/?$/);
-  if (m) {
-    if (!authorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
-    const name = m[1];
-    const fn = registry.get(name);
-    if (!fn) return json({ ok: false, error: `Função '${name}' não encontrada` }, 404);
-    try {
-      return await fn(req);
-    } catch (e) {
-      console.error(`[main] erro em ${name}:`, (e as Error).message);
-      return json({ ok: false, error: (e as Error).message }, 500);
-    }
+  if (path.startsWith('/api/')) {
+    return await handleApi(req, url);
   }
-
-  return json({ ok: false, error: 'Rota desconhecida' }, 404);
+  // rota direta protegida por token (uso programático)
+  const direct = path.match(/^\/functions\/([A-Za-z0-9_]+)\/?$/);
+  if (direct) {
+    if (!authorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    return await invokeFn(direct[1], req);
+  }
+  // qualquer outra coisa -> frontend
+  return await serveStatic(url);
 }
 
 console.log('[main] carregando funções...');
@@ -65,5 +151,5 @@ if (failed.length) console.warn('[main] funções que não carregaram:', failed.
 
 startScheduler();
 
-console.log(`[main] Living Finds backend ouvindo na porta ${PORT} (${loaded} funções)`);
+console.log(`[main] Living Finds ouvindo na porta ${PORT} (${loaded} funções, frontend em ${FRONTEND_DIR})`);
 Deno.serve({ port: PORT }, handler);
