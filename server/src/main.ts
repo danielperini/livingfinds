@@ -78,13 +78,20 @@ async function handleEntities(req: Request, url: URL, entity: string, rest: stri
   }
   if (rest === '' || rest === '/') {
     if (m === 'GET') {
-      const q = url.searchParams;
-      const special = new Set(['sort', 'limit', 'skip', 'fields']);
-      const where: Record<string, string> = {};
-      for (const [k, v] of q) if (!special.has(k)) where[k] = v;
-      const sort = q.get('sort') ?? undefined;
-      const limit = q.get('limit') ? Number(q.get('limit')) : undefined;
-      const skip = q.get('skip') ? Number(q.get('skip')) : undefined;
+      const sp = url.searchParams;
+      const special = new Set(['sort', 'limit', 'skip', 'fields', 'q']);
+      // O @base44/sdk manda o filtro como parâmetro `q` = JSON (ex.: q={"user_id":"..."}).
+      // deno-lint-ignore no-explicit-any
+      let where: Record<string, any> = {};
+      const qParam = sp.get('q');
+      if (qParam) {
+        try { where = JSON.parse(qParam); } catch { /* q inválido -> filtro vazio */ }
+      }
+      // Também aceita filtros como params soltos (robustez p/ outros clientes).
+      for (const [k, v] of sp) if (!special.has(k)) where[k] = v;
+      const sort = sp.get('sort') ?? undefined;
+      const limit = sp.get('limit') ? Number(sp.get('limit')) : undefined;
+      const skip = sp.get('skip') ? Number(sp.get('skip')) : undefined;
       return json(await repo.filter(where, sort, limit, skip));
     }
     if (m === 'POST') return json(await repo.create(await req.json().catch(() => ({}))));
