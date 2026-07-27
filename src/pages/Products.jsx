@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square, TrendingUp } from 'lucide-react';
+import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
 import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
 import AcceleratorModal from '@/components/products/AcceleratorModal';
@@ -98,6 +99,8 @@ export default function Products({ externalRefreshTrigger }) {
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
   const [bulkActivating, setBulkActivating] = useState(false);
+
+  const { propagating: amazonPropagating, propagationResult: amazonResult, propagate: amazonPropagate } = useAmazonPropagation();
 
   const [priceQueryLoading, setPriceQueryLoading] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
@@ -292,49 +295,73 @@ export default function Products({ externalRefreshTrigger }) {
     setActionLoading(product.id);
 
     // Atualização otimista imediata — reflete pausa antes da API responder
-    if (active) {
+    const optimisticStatus = active ? 'paused' : 'active';
+    setProducts(cur => cur.map(p =>
+      p.id === product.id ? { ...p, campaign_status: optimisticStatus, has_campaign: true } : p
+    ));
+
+    const { ok, classified } = await amazonPropagate(
+      product.id,
+      active ? 'pause_campaign_user_action' : 'enable_campaign_user_action',
+      async () => {
+        if (active) {
+          const payload = { amazon_account_id: account.id };
+          if (campaignId) payload.campaign_id = campaignId;
+          if (product.asin) payload.asin = product.asin;
+          if (product.sku) payload.sku = product.sku;
+          const response = await base44.functions.invoke('pauseCampaign', payload);
+          if (!response?.data?.ok) throw Object.assign(new Error(response?.data?.error || 'Falha ao pausar campanha'), { status: response?.data?.status });
+        } else {
+          const agentAction = await base44.entities.AgentAction.create({
+            amazon_account_id: account.id, action: 'enable_campaign', asin: product.asin,
+            campaign_id: campaignId, reason: 'Ativação manual', evidence: `Produto: ${product.asin}`,
+            risk_level: 'medium', requires_approval: false,
+          });
+          await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
+        }
+      },
+      {
+        amazonAccountId: account.id,
+        actionType: active ? 'pause_campaign' : 'enable_campaign',
+        enqueuePayload: { amazon_account_id: account.id, campaign_id: campaignId, asin: product.asin },
+      }
+    );
+
+    if (!ok) {
+      // Reverter atualização otimista em caso de falha
       setProducts(cur => cur.map(p =>
-        p.id === product.id ? { ...p, campaign_status: 'paused', has_campaign: true } : p
+        p.id === product.id ? { ...p, campaign_status: active ? 'active' : 'paused' } : p
       ));
+      // Exibir mensagem de erro específica para o token expirado
+      if (classified?.code === 'auth') {
+        setActionMsg({ type: 'error', text: 'Token expirado — reconecte em Configurações' });
+        setTimeout(() => setActionMsg(null), 8000);
+      }
+    } else {
+      await reloadProducts();
     }
 
-    try {
-      if (active) {
-        const payload = { amazon_account_id: account.id };
-        if (campaignId) payload.campaign_id = campaignId;
-        if (product.asin) payload.asin = product.asin;
-        if (product.sku) payload.sku = product.sku;
-        const response = await base44.functions.invoke('pauseCampaign', payload);
-        if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
-      } else {
-        const agentAction = await base44.entities.AgentAction.create({
-          amazon_account_id: account.id, action: 'enable_campaign', asin: product.asin,
-          campaign_id: campaignId, reason: 'Ativação manual', evidence: `Produto: ${product.asin}`,
-          risk_level: 'medium', requires_approval: false,
-        });
-        await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
-      }
-      setProductMsg(product.id, { type: 'success', text: active ? 'Campanha pausada.' : 'Campanha ativada.' });
-      await reloadProducts();
-      restoreProductContext(product.id);
-    } catch (error) {
-      setProductMsg(product.id, { type: 'error', text: error?.message || 'Erro ao alterar campanha.' });
-      restoreProductContext(product.id);
-    } finally {
-      setActionLoading(null);
-    }
+    restoreProductContext(product.id);
+    setActionLoading(null);
   };
 
   const cancelKickoff = async (product) => {
     if (!account || !product?.asin) return;
-    // Cancela itens scheduled na fila para este ASIN
     try {
+      // Cancelar itens na fila
       const queue = await base44.entities.ProductKickoffQueue.filter({
         amazon_account_id: account.id, asin: product.asin, status: 'scheduled',
       });
       for (const item of queue) {
         await base44.entities.ProductKickoffQueue.update(item.id, { status: 'cancelled' });
       }
+      // Verificar se há campanhas órfãs na Amazon para este ASIN
+      base44.functions.invoke('autoStockCampaignGuard', {
+        amazon_account_id: account.id,
+        asin: product.asin,
+        trigger: 'kickoff_cancelled_user',
+      }).catch(() => {});
+
       setProductMsg(product.id, { type: 'success', text: 'Solicitação cancelada.' });
       await reloadProducts();
     } catch (e) {
@@ -670,6 +697,8 @@ export default function Products({ externalRefreshTrigger }) {
                   onAccelerator={setAcceleratorProduct}
                   onCancelKickoff={cancelKickoff}
                   actionLoading={actionLoading}
+                  amazonPropagating={amazonPropagating[product.id]}
+                  amazonResult={amazonResult[product.id]}
                   selected={selectedIds.has(product.id)}
                   onToggleSelect={toggleSelect}
                   isFocused={focusedProductId === product.id}

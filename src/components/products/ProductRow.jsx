@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import {
   AlertCircle, Check, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
   Loader2, Megaphone, Package, Pause, Pencil, Play, ShoppingBag, Square,
-  Tag, X, XCircle, Zap,
+  Tag, X, XCircle, Zap, Wifi, WifiOff,
 } from 'lucide-react';
 import MarketPriceCell from '@/components/products/MarketPriceCell';
 
@@ -260,19 +260,37 @@ export function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff, stuckQueueCount }) {
-  const [pauseResult, setPauseResult] = useState(null);
+function PropagationBadge({ result, propagating }) {
+  if (propagating) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-cyan animate-pulse">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        Sincronizando...
+      </span>
+    );
+  }
+  if (!result) return null;
+  if (result.type === 'success') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 animate-fade-in">
+        <Wifi className="w-3 h-3" />
+        Sincronizado na Amazon
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-400 animate-fade-in" title={result.text}>
+      <WifiOff className="w-3 h-3" />
+      {result.text}
+    </span>
+  );
+}
+
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff, stuckQueueCount, amazonPropagating, amazonResult }) {
   const [cancelling, setCancelling] = useState(false);
 
   const handleToggle = async (p) => {
-    setPauseResult(null);
-    try {
-      await onToggleCampaign(p);
-      setPauseResult('success');
-    } catch {
-      setPauseResult('error');
-    }
-    setTimeout(() => setPauseResult(null), 4000);
+    await onToggleCampaign(p);
   };
 
   const handleCancel = async () => {
@@ -281,7 +299,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     finally { setCancelling(false); }
   };
 
-  const isLoading = loading === product.id;
+  const isLoading = loading === product.id || amazonPropagating;
   const hasCampaign = productHasCampaign(product);
   const active = isCampaignActiveFn(product);
   const incomplete = isCampaignIncomplete(product);
@@ -354,32 +372,29 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
         <button type="button" onClick={() => handleToggle(product)} disabled={isLoading}
           title={active ? 'Pausar campanha' : 'Ativar campanha'}
           className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
-            pauseResult === 'success' ? 'bg-emerald-500/25 border-emerald-500/40 text-emerald-300' :
-            pauseResult === 'error'   ? 'bg-red-500/20 border-red-500/30 text-red-400' :
             active ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30' :
                      'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'
           }`}>
-          {isLoading
+          {(isLoading && amazonPropagating)
             ? <Loader2 className="w-3 h-3 animate-spin" />
-            : pauseResult === 'success' ? <Check className="w-3 h-3" />
-            : pauseResult === 'error'   ? <AlertCircle className="w-3 h-3" />
             : active ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />
           }
-          {pauseResult === 'success' ? 'Pausada!' : pauseResult === 'error' ? 'Erro' : active ? 'Pausar' : 'Ativar'}
+          {active ? 'Pausar' : 'Ativar'}
         </button>
         <button type="button" onClick={() => onArchiveCampaign(product)} disabled={isLoading}
           className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20">
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+          {isLoading && !amazonPropagating ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
           Arquivar
         </button>
       </div>
+      <PropagationBadge result={amazonResult} propagating={amazonPropagating} />
     </div>
   );
 }
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated }) {
+export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, amazonPropagating, amazonResult, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -474,7 +489,8 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
           onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign}
-          onCancelKickoff={onCancelKickoff} loading={actionLoading} stuckQueueCount={stuckQueueCount || 0} />
+          onCancelKickoff={onCancelKickoff} loading={actionLoading} stuckQueueCount={stuckQueueCount || 0}
+          amazonPropagating={amazonPropagating} amazonResult={amazonResult} />
         {productMessage && (
           <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
             {productMessage.text}

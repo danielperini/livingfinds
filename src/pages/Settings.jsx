@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import {
   Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save,
   ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package,
-  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette, FlaskConical
+  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette, FlaskConical, Wifi,
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
@@ -274,6 +274,13 @@ export default function Settings() {
       base44.functions.invoke('propagateCanonicalSettings', {
         amazon_account_id: account.id,
         trigger: 'settings_updated',
+      }).then(res => {
+        const d = res?.data;
+        if (d?.ok) {
+          // Budget confirmado pela Amazon — atualizar feedback visual
+          setGoalsSaved(true);
+          setTimeout(() => setGoalsSaved(false), 6000);
+        }
       }).catch(() => {});
 
       // ── Pós-save: disparar motor imediatamente + enfileirar recalibração ──
@@ -627,7 +634,10 @@ export default function Settings() {
             {goalsSaving ? 'Salvando...' : goalsSaved ? '✓ Salvo' : 'Salvar configurações'}
           </button>
           {goalsSaved && (
-            <span className="text-xs text-emerald-400 animate-fade-in">· Propagando orçamento para Amazon...</span>
+            <span className="inline-flex items-center gap-1 text-xs text-emerald-400 animate-fade-in">
+              <Wifi className="w-3.5 h-3.5" />
+              Orçamento sincronizado na Amazon
+            </span>
           )}
         </div>
       </div>
