@@ -83,7 +83,7 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
 
   // ── Estado: SUCCESS ──────────────────────────────────────────────────────
   if (status === 'success' && avg != null) {
-    const sourceLabel = source === 'zinc' ? 'Zinc' : source === 'scrapingbee' ? 'ScrapingBee' : source || '—';
+    const sourceLabel = source === 'sp_api' ? 'Amazon SP-API' : source === 'zinc' ? 'Zinc' : source === 'scrapingbee' ? 'ScrapingBee' : source || '—';
     return (
       <div className="space-y-1 min-w-[140px]">
         {/* Preço médio em destaque */}
@@ -141,10 +141,10 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
     return (
       <div className="space-y-1">
         <p className="text-[10px] text-amber-400">Marketplace não suportado</p>
-        <p className="text-[9px] text-slate-500">Use ScrapingBee como fonte pública</p>
+        <p className="text-[9px] text-slate-500">Marketplace não suportado pela SP-API</p>
         <button type="button" onClick={handleConsult}
           className="flex items-center gap-1 text-[10px] text-cyan hover:text-cyan/80 transition-colors">
-          <RefreshCw className="w-2.5 h-2.5" />Consultar via ScrapingBee
+          <RefreshCw className="w-2.5 h-2.5" />Tentar novamente
         </button>
         {error && <p className="text-[9px] text-red-400">{error}</p>}
       </div>
