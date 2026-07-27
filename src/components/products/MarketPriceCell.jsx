@@ -31,6 +31,9 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // product.amazon_account_id always takes priority (multi-account support)
+  const effectiveAccountId = product?.amazon_account_id || accountId;
+
   const status = product?.market_price_status || 'not_checked';
   const avg = product?.market_price_average;
   const min = product?.market_price_minimum;
@@ -45,9 +48,6 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
     const code = String(data?.http_status || data?.status_code || '');
     return code === '401' || msg.includes('401') || msg.includes('unauthorized') || msg.includes('auth_error') || msg.includes('invalid_client') || msg.includes('access denied');
   };
-
-  // product.amazon_account_id tem prioridade sobre a prop accountId (pode ser de conta diferente)
-  const effectiveAccountId = product?.amazon_account_id || accountId;
 
   const handleConsult = async () => {
     if (loading || !effectiveAccountId || !product?.id) return;
@@ -156,13 +156,8 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   if (status === 'unsupported_marketplace') {
     return (
       <div className="space-y-1">
-        <p className="text-[10px] text-amber-400">Marketplace não suportado</p>
-        <p className="text-[9px] text-slate-500">Marketplace não suportado pela SP-API</p>
-        <button type="button" onClick={handleConsult}
-          className="flex items-center gap-1 text-[10px] text-cyan hover:text-cyan/80 transition-colors">
-          <RefreshCw className="w-2.5 h-2.5" />Tentar novamente
-        </button>
-        {error && <p className="text-[9px] text-red-400">{error}</p>}
+        <p className="text-[10px] text-amber-400">Indisponível</p>
+        <p className="text-[9px] text-slate-500">Marketplace não suportado</p>
       </div>
     );
   }
@@ -215,6 +210,7 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
   // ── Estado padrão: NOT_CHECKED ───────────────────────────────────────────
   return (
     <div className="space-y-1.5">
+      <p className="text-[11px] text-slate-500">Não consultado</p>
       <button
         type="button"
         onClick={handleConsult}

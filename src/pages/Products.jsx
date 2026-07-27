@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Filter, Loader2, Package, Pause, Rocket, Search, X, Zap, Check, CheckSquare, Square, TrendingUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
 import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
 import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
@@ -14,7 +14,6 @@ import ProductRow, {
 
 const PAGE_SIZE = 20;
 
-// Ordenação padrão: mais recente primeiro
 const DATE_FIELDS = ['created_date', 'created_at', 'first_seen_at', 'imported_at', 'updated_date', 'last_sync_at'];
 
 function sortDateValue(product) {
@@ -25,8 +24,39 @@ function sortDateValue(product) {
   return 0;
 }
 
-function applySort(items, sortBy) {
+// campaign status order: active > paused > incomplete > no campaign
+function campaignSortScore(product) {
+  const s = String(product?.campaign_status || '').toLowerCase();
+  if (s === 'active' || s === 'enabled') return 0;
+  if (s === 'paused') return 1;
+  if (s === 'incomplete') return 2;
+  return 3;
+}
+
+function applySort(items, sortBy, colSort) {
   const arr = [...items];
+
+  // Column click sort takes precedence
+  if (colSort?.column) {
+    const dir = colSort.direction === 'asc' ? 1 : -1;
+    return arr.sort((a, b) => {
+      switch (colSort.column) {
+        case 'stock':
+          return dir * (Number(a.fba_inventory || 0) - Number(b.fba_inventory || 0));
+        case 'ads_status':
+          return dir * (campaignSortScore(a) - campaignSortScore(b));
+        case 'sales':
+          return dir * (Number(a.total_sales_30d || 0) - Number(b.total_sales_30d || 0));
+        case 'spend':
+          return dir * (Number(a.total_spend_30d || 0) - Number(b.total_spend_30d || 0));
+        case 'acos':
+          return dir * (Number(a.acos || 0) - Number(b.acos || 0));
+        default:
+          return 0;
+      }
+    });
+  }
+
   switch (sortBy) {
     case 'newest': return arr.sort((a, b) => sortDateValue(b) - sortDateValue(a));
     case 'oldest': return arr.sort((a, b) => sortDateValue(a) - sortDateValue(b));
@@ -53,12 +83,10 @@ function applySort(items, sortBy) {
       return nc(a) - nc(b);
     });
     case 'champions': return arr.sort((a, b) => {
-      // Score = vendas normalizadas + bônus por ACoS baixo. Produtos sem ACoS não penalizam.
       const salesA = Number(a.total_sales_30d || 0);
       const salesB = Number(b.total_sales_30d || 0);
       const acosA = Number(a.acos || 0);
       const acosB = Number(b.acos || 0);
-      // Score composto: vendas brutas × fator de eficiência (quanto menor o ACoS, maior o fator)
       const effA = acosA > 0 ? Math.max(0, 1 - acosA / 100) : 1;
       const effB = acosB > 0 ? Math.max(0, 1 - acosB / 100) : 1;
       return (salesB * effB) - (salesA * effA);
@@ -85,47 +113,29 @@ function KpiCard({ label, value, detail, tone = 'default' }) {
   );
 }
 
-// ── Column sort state ────────────────────────────────────────────────────────
-const CAMPAIGN_STATUS_ORDER = { active: 0, enabled: 0, paused: 1, incomplete: 2, none: 3, '': 4 };
-
-function applySortWithColumn(items, sortBy, colSort) {
-  if (colSort?.column) {
-    const { column, direction } = colSort;
-    const arr = [...items];
-    arr.sort((a, b) => {
-      let va, vb;
-      if (column === 'fba') { va = Number(a.fba_inventory || 0); vb = Number(b.fba_inventory || 0); }
-      else if (column === 'campaign_status') {
-        va = CAMPAIGN_STATUS_ORDER[String(a.campaign_status || '').toLowerCase()] ?? 4;
-        vb = CAMPAIGN_STATUS_ORDER[String(b.campaign_status || '').toLowerCase()] ?? 4;
-      }
-      else if (column === 'sales') { va = Number(a.total_sales_30d || 0); vb = Number(b.total_sales_30d || 0); }
-      else if (column === 'spend') { va = Number(a.total_spend_30d || 0); vb = Number(b.total_spend_30d || 0); }
-      else if (column === 'acos') { va = Number(a.acos || 0); vb = Number(b.acos || 0); }
-      else return 0;
-      return direction === 'asc' ? va - vb : vb - va;
-    });
-    return arr;
-  }
-  return applySort(items, sortBy);
-}
-
-// SortArrow component
-function SortArrow({ column, colSort, onSort }) {
-  const { ChevronUp, ChevronDown } = { ChevronUp: () => <svg className="w-3 h-3 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 15l-6-6-6 6"/></svg>, ChevronDown: () => <svg className="w-3 h-3 inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9l6 6 6-6"/></svg> };
-  const active = colSort?.column === column;
-  const dir = colSort?.direction;
+// Sortable column header
+function SortTh({ label, colKey, colSort, onSort, className = '' }) {
+  const active = colSort?.column === colKey;
+  const asc = active && colSort?.direction === 'asc';
+  const desc = active && colSort?.direction === 'desc';
   return (
-    <button type="button" onClick={() => onSort(column)}
-      className={`ml-1 inline-flex items-center transition-colors ${active ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
-      {active && dir === 'asc' ? <ChevronUp /> : active && dir === 'desc' ? <ChevronDown /> : <ChevronDown />}
-    </button>
+    <th
+      className={`px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none hover:text-slate-300 transition-colors ${className}`}
+      onClick={() => onSort(colKey)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        <span className={active ? 'text-cyan' : 'text-slate-600'}>
+          {desc ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+        </span>
+      </span>
+    </th>
   );
 }
 
 export default function Products({ externalRefreshTrigger }) {
-  const [accounts, setAccounts] = useState([]);
-  const [account, setAccount] = useState(null);
+  const [accounts, setAccounts] = useState([]); // all accounts
+  const [account, setAccount] = useState(null);  // primary (for actions)
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchInput, setSearchInput] = useState('');
@@ -134,31 +144,31 @@ export default function Products({ externalRefreshTrigger }) {
   const [sortBy, setSortBy] = useState('champions');
   const [colSort, setColSort] = useState(null); // { column, direction }
   const [page, setPage] = useState(1);
-
-  const handleColSort = (column) => {
-    setColSort(prev => {
-      if (!prev || prev.column !== column) return { column, direction: 'desc' };
-      if (prev.direction === 'desc') return { column, direction: 'asc' };
-      return null; // reset
-    });
-  };
   const [actionLoading, setActionLoading] = useState(null);
   const [actionMsg, setActionMsg] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkActionLoading, setBulkActionLoading] = useState(null);
-  const [bulkActivating, setBulkActivating] = useState(false);
 
   const { propagating: amazonPropagating, propagationResult: amazonResult, propagate: amazonPropagate } = useAmazonPropagation();
 
   const [priceQueryLoading, setPriceQueryLoading] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
-  const [kickoffStuckItems, setKickoffStuckItems] = useState(null); // itens travados para o produto atual
-  const [stuckQueueByAsin, setStuckQueueByAsin] = useState({}); // {[asin]: count}
+  const [kickoffStuckItems, setKickoffStuckItems] = useState(null);
+  const [stuckQueueByAsin, setStuckQueueByAsin] = useState({});
   const [acceleratorProduct, setAcceleratorProduct] = useState(null);
   const [focusedProductId, setFocusedProductId] = useState(null);
-  const [productMessages, setProductMessages] = useState({}); // {[productId]: {type, text}}
+  const [productMessages, setProductMessages] = useState({});
 
-  // Abre o modal de kick-off, verificando se há itens travados na fila primeiro
+  // Column sort: cycle asc → desc → null (reset to dropdown)
+  const handleColSort = useCallback((col) => {
+    setColSort(prev => {
+      if (!prev || prev.column !== col) return { column: col, direction: 'asc' };
+      if (prev.direction === 'asc') return { column: col, direction: 'desc' };
+      return null; // reset
+    });
+    setPage(1);
+  }, []);
+
   const openKickoff = useCallback(async (product) => {
     if (!account || !product?.asin) { setKickoffProduct(product); return; }
     try {
@@ -167,20 +177,14 @@ export default function Products({ externalRefreshTrigger }) {
         asin: product.asin,
       }, '-created_date', 50).catch(() => []);
       const stuckActive = stuck.filter(i => ['scheduled', 'processing'].includes(String(i.status || '').toLowerCase()));
-      if (stuckActive.length > 0) {
-        setKickoffProduct(product);
-        setKickoffStuckItems(stuckActive);
-      } else {
-        setKickoffProduct(product);
-        setKickoffStuckItems(null);
-      }
+      setKickoffProduct(product);
+      setKickoffStuckItems(stuckActive.length > 0 ? stuckActive : null);
     } catch {
       setKickoffProduct(product);
       setKickoffStuckItems(null);
     }
   }, [account]);
 
-  // Restaura foco no produto após qualquer ação e rola até ele
   const restoreProductContext = useCallback((productId) => {
     setFocusedProductId(productId);
     setTimeout(() => {
@@ -193,41 +197,36 @@ export default function Products({ externalRefreshTrigger }) {
     setTimeout(() => setProductMessages(prev => { const next = { ...prev }; delete next[productId]; return next; }), 8000);
   }, []);
 
+  // ── MULTI-ACCOUNT LOAD ────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const me = await base44.auth.me();
-      let allAccounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-      if (!allAccounts.length) allAccounts = await base44.entities.AmazonAccount.list();
-      setAccounts(allAccounts);
-      const primaryAccount = allAccounts[0] || null;
+      let accs = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!accs.length) accs = await base44.entities.AmazonAccount.list();
+      if (!accs.length) { setProducts([]); return; }
+
+      setAccounts(accs);
+      const primaryAccount = accs[0];
       setAccount(primaryAccount);
-      if (!primaryAccount) { setProducts([]); return; }
 
-      // Buscar produtos de TODAS as contas em paralelo
-      const allRecordArrays = await Promise.all(
-        allAccounts.map(acc =>
-          base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => [])
-        )
+      // Fetch products from ALL accounts in parallel
+      const allResults = await Promise.all(
+        accs.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))
       );
-      const allRecords = allRecordArrays.flat();
+      const allProducts = allResults.flat();
+      setProducts(allProducts);
 
-      // Deduplicar por ASIN: prioridade = maior fba_inventory, desempate = last_sync_at mais recente
-      const byAsin = new Map();
-      for (const p of allRecords) {
-        const key = String(p.asin || p.id || '').trim().toUpperCase();
-        if (!key) continue;
-        const existing = byAsin.get(key);
-        if (!existing) { byAsin.set(key, p); continue; }
-        const newFba = Number(p.fba_inventory || 0);
-        const exFba = Number(existing.fba_inventory || 0);
-        const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
-        const exSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
-        if (newFba > exFba || (newFba === exFba && newSync > exSync)) byAsin.set(key, p);
+      // Enrich names in background for products without names
+      const needsEnrich = allProducts.filter(p => !p.product_name?.trim() && !p.display_name?.trim());
+      if (needsEnrich.length > 0) {
+        base44.functions.invoke('enrichProductNames', {
+          amazon_account_id: primaryAccount.id,
+          limit: 20,
+        }).catch(() => {});
       }
-      const records = Array.from(byAsin.values());
-      setProducts(records);
-      return { records, currentAccount: primaryAccount };
+
+      return { currentAccount: primaryAccount };
     } catch (error) {
       setActionMsg({ type: 'error', text: error?.message || 'Erro ao carregar produtos.' });
     } finally {
@@ -237,29 +236,12 @@ export default function Products({ externalRefreshTrigger }) {
 
   const reloadProducts = useCallback(async () => {
     if (!accounts.length) { await load(); return; }
-    // Re-fetch de todas as contas + deduplicar
-    const allRecordArrays = await Promise.all(
-      accounts.map(acc =>
-        base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => [])
-      )
+    const allResults = await Promise.all(
+      accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))
     );
-    const allRecords = allRecordArrays.flat();
-    const byAsin = new Map();
-    for (const p of allRecords) {
-      const key = String(p.asin || p.id || '').trim().toUpperCase();
-      if (!key) continue;
-      const existing = byAsin.get(key);
-      if (!existing) { byAsin.set(key, p); continue; }
-      const newFba = Number(p.fba_inventory || 0);
-      const exFba = Number(existing.fba_inventory || 0);
-      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
-      const exSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
-      if (newFba > exFba || (newFba === exFba && newSync > exSync)) byAsin.set(key, p);
-    }
-    setProducts(Array.from(byAsin.values()));
+    setProducts(allResults.flat());
   }, [accounts, load]);
 
-  // Carrega fila travada por ASIN para exibir badges
   const loadStuckQueue = useCallback(async (accountId) => {
     if (!accountId) return;
     const all = await base44.entities.ProductKickoffQueue.filter(
@@ -278,17 +260,9 @@ export default function Products({ externalRefreshTrigger }) {
   }, []);
 
   useEffect(() => {
-    load().then(res => {
-      if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id);
-      // Enriquecimento de nomes em background para produtos sem título
-      const unnamed = (res?.records || []).filter(p => !p.product_name?.trim() && !p.display_name?.trim());
-      if (unnamed.length > 0 && res?.currentAccount?.id) {
-        base44.functions.invoke('enrichProductNames', { amazon_account_id: res.currentAccount.id }).catch(() => {});
-      }
-    });
+    load().then(res => { if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id); });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refresh externo (ex: kickoff concluído no ProductsScheduled) sem desmontar o componente
   const prevExternalTrigger = useRef(externalRefreshTrigger);
   useEffect(() => {
     if (externalRefreshTrigger !== prevExternalTrigger.current) {
@@ -297,8 +271,6 @@ export default function Products({ externalRefreshTrigger }) {
     }
   }, [externalRefreshTrigger, reloadProducts]);
 
-  // ── Produtos que voltaram ao estoque (reabastecidos) ────────────────────────
-  // Detecta via previous_inventory_status = 'out_of_stock' e fba_inventory > 0
   const restockedProducts = useMemo(() =>
     products.filter(p =>
       p.status === 'active' &&
@@ -309,35 +281,57 @@ export default function Products({ externalRefreshTrigger }) {
     [products]
   );
 
-  // ── Filtro permanente: produtos visíveis ─────────────────────────────────────
-  // Inclui qualquer produto com fba_inventory > 0 (de qualquer conta).
-  // A deduplicação já ocorreu em `load`, então products já é único por ASIN.
-  const visibleProducts = useMemo(() => {
-    return products.filter(p => {
-      if (p.status === 'inactive' || p.status === 'archived') return false;
-      // Sempre exibir se tem estoque positivo — ignorar inventory_status desatualizado
-      if (Number(p.fba_inventory || 0) > 0) return true;
-      // Sem estoque: só ocultar se status confirma out_of_stock explicitamente
-      return offerStatus(p) !== 'out_of_stock';
-    });
+  // ── VISIBILITY + DEDUP (multi-account aware) ─────────────────────────────
+  // First pass: collect max fba_inventory per ASIN across all accounts
+  const maxFbaByAsin = useMemo(() => {
+    const map = {};
+    for (const p of products) {
+      const key = p.asin;
+      if (!key) continue;
+      const fba = Number(p.fba_inventory || 0);
+      if (fba > (map[key] || 0)) map[key] = fba;
+    }
+    return map;
   }, [products]);
 
-  // ── Contadores ──────────────────────────────────────────────────────────────
+  const visibleProducts = useMemo(() => {
+    // Include product if ANY record for that ASIN has fba > 0, OR status is not explicitly out_of_stock with fresh data
+    const active = products.filter(p => {
+      if (p.status === 'inactive' || p.status === 'archived') return false;
+      const asinMaxFba = maxFbaByAsin[p.asin] || 0;
+      if (asinMaxFba > 0) return true; // at least one account has stock
+      return offerStatus(p) !== 'out_of_stock';
+    });
+
+    // Dedup by ASIN: priority 1 = highest fba_inventory, priority 2 = most recent last_sync_at
+    const byAsin = new Map();
+    for (const p of active) {
+      const key = p.asin || p.id;
+      const existing = byAsin.get(key);
+      if (!existing) { byAsin.set(key, p); continue; }
+      const newStock = Number(p.fba_inventory || 0);
+      const existStock = Number(existing.fba_inventory || 0);
+      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
+      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+      if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
+        byAsin.set(key, p);
+      }
+    }
+    return Array.from(byAsin.values());
+  }, [products, maxFbaByAsin]);
+
   const counters = useMemo(() => {
-    // "Em Estoque" = com dado fresco E status ativo (excluir desatualizados do contador principal)
     const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active' && stockFreshness(p) === 'fresh').length;
     const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock' && stockFreshness(p) === 'fresh').length;
     const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
-    const unknownStock = visibleProducts.filter(p => stockFreshness(p) === 'unknown').length;
     const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
     const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
     const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
     const pausedByStock = visibleProducts.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
     const restocked = products.filter(p => p.status === 'active' && Number(p.fba_inventory || 0) > 0 && (p.previous_inventory_status === 'out_of_stock' || (p.campaign_status === 'paused' && p.pause_reason?.includes('stock')))).length;
-    return { activeOffers, lowStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
-  }, [products]);
+    return { activeOffers, lowStock, staleStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
+  }, [products, visibleProducts]);
 
-  // ── Filtro + Ordenação ──────────────────────────────────────────────────────
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     const base = visibleProducts.filter(product => {
@@ -360,32 +354,29 @@ export default function Products({ externalRefreshTrigger }) {
         (filter === 'restocked' && Number(product.fba_inventory || 0) > 0 && (product.previous_inventory_status === 'out_of_stock' || (product.campaign_status === 'paused' && product.pause_reason?.includes('stock'))));
       return matchesSearch && matchesFilter;
     });
-    return applySortWithColumn(base, sortBy, colSort);
+    return applySort(base, sortBy, colSort);
   }, [products, search, filter, sortBy, colSort]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  // ── Ações ───────────────────────────────────────────────────────────────────
+  // ── Ações ─────────────────────────────────────────────────────────────────
   const toggleCampaign = async (product) => {
     const campaignId = campaignIdOf(product);
     if (!account) return;
     const active = isCampaignActiveFn(product);
     setActionLoading(product.id);
-
-    // Atualização otimista imediata — reflete pausa antes da API responder
     const optimisticStatus = active ? 'paused' : 'active';
     setProducts(cur => cur.map(p =>
       p.id === product.id ? { ...p, campaign_status: optimisticStatus, has_campaign: true } : p
     ));
-
     const { ok, classified } = await amazonPropagate(
       product.id,
       active ? 'pause_campaign_user_action' : 'enable_campaign_user_action',
       async () => {
         if (active) {
-          const payload = { amazon_account_id: account.id };
+          const payload = { amazon_account_id: product.amazon_account_id || account.id };
           if (campaignId) payload.campaign_id = campaignId;
           if (product.asin) payload.asin = product.asin;
           if (product.sku) payload.sku = product.sku;
@@ -393,7 +384,7 @@ export default function Products({ externalRefreshTrigger }) {
           if (!response?.data?.ok) throw Object.assign(new Error(response?.data?.error || 'Falha ao pausar campanha'), { status: response?.data?.status });
         } else {
           const agentAction = await base44.entities.AgentAction.create({
-            amazon_account_id: account.id, action: 'enable_campaign', asin: product.asin,
+            amazon_account_id: product.amazon_account_id || account.id, action: 'enable_campaign', asin: product.asin,
             campaign_id: campaignId, reason: 'Ativação manual', evidence: `Produto: ${product.asin}`,
             risk_level: 'medium', requires_approval: false,
           });
@@ -401,18 +392,15 @@ export default function Products({ externalRefreshTrigger }) {
         }
       },
       {
-        amazonAccountId: account.id,
+        amazonAccountId: product.amazon_account_id || account.id,
         actionType: active ? 'pause_campaign' : 'enable_campaign',
-        enqueuePayload: { amazon_account_id: account.id, campaign_id: campaignId, asin: product.asin },
+        enqueuePayload: { amazon_account_id: product.amazon_account_id || account.id, campaign_id: campaignId, asin: product.asin },
       }
     );
-
     if (!ok) {
-      // Reverter atualização otimista em caso de falha
       setProducts(cur => cur.map(p =>
         p.id === product.id ? { ...p, campaign_status: active ? 'active' : 'paused' } : p
       ));
-      // Exibir mensagem de erro específica para o token expirado
       if (classified?.code === 'auth') {
         setActionMsg({ type: 'error', text: 'Token expirado — reconecte em Configurações' });
         setTimeout(() => setActionMsg(null), 8000);
@@ -420,7 +408,6 @@ export default function Products({ externalRefreshTrigger }) {
     } else {
       await reloadProducts();
     }
-
     restoreProductContext(product.id);
     setActionLoading(null);
   };
@@ -428,20 +415,17 @@ export default function Products({ externalRefreshTrigger }) {
   const cancelKickoff = async (product) => {
     if (!account || !product?.asin) return;
     try {
-      // Cancelar itens na fila
       const queue = await base44.entities.ProductKickoffQueue.filter({
-        amazon_account_id: account.id, asin: product.asin, status: 'scheduled',
+        amazon_account_id: product.amazon_account_id || account.id, asin: product.asin, status: 'scheduled',
       });
       for (const item of queue) {
         await base44.entities.ProductKickoffQueue.update(item.id, { status: 'cancelled' });
       }
-      // Verificar se há campanhas órfãs na Amazon para este ASIN
       base44.functions.invoke('autoStockCampaignGuard', {
-        amazon_account_id: account.id,
+        amazon_account_id: product.amazon_account_id || account.id,
         asin: product.asin,
         trigger: 'kickoff_cancelled_user',
       }).catch(() => {});
-
       setProductMsg(product.id, { type: 'success', text: 'Solicitação cancelada.' });
       await reloadProducts();
     } catch (e) {
@@ -456,7 +440,7 @@ export default function Products({ externalRefreshTrigger }) {
     setActionLoading(product.id);
     try {
       const response = await base44.functions.invoke('archiveCampaign', {
-        amazon_account_id: account.id, campaign_id: campaignId,
+        amazon_account_id: product.amazon_account_id || account.id, campaign_id: campaignId,
         archive_reason: `Arquivamento manual via interface - ${new Date().toLocaleDateString('pt-BR')}`,
       });
       if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao arquivar campanha.');
@@ -471,33 +455,10 @@ export default function Products({ externalRefreshTrigger }) {
     }
   };
 
-
-
-  // ── Seleção em massa ────────────────────────────────────────────────────────
   const toggleSelect = (id) => setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const toggleSelectAll = () => selectedIds.size === paginated.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(paginated.map(p => p.id)));
   const clearSelection = () => setSelectedIds(new Set());
   const selectedProducts = paginated.filter(p => selectedIds.has(p.id));
-
-  const bulkKickoffSelected = async () => {
-    if (!account || !selectedProducts.length) return;
-    const targets = selectedProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p));
-    if (!targets.length) { setActionMsg({ type: 'error', text: 'Nenhum produto elegível (sem estoque bloqueado).' }); setTimeout(() => setActionMsg(null), 5000); return; }
-    setBulkActionLoading('kickoff');
-    setActionMsg({ type: 'info', text: `Agendando Kick-off para ${targets.length} produtos...` });
-    let success = 0, failed = 0;
-    for (const product of targets) {
-      try {
-        const r = await base44.functions.invoke('scheduleProductKickoff', { amazon_account_id: account.id, asin: product.asin, sku: product.sku, product_name: product.product_name, mode: 'auto_plus_four' });
-        r?.data?.ok ? success++ : failed++;
-      } catch { failed++; }
-    }
-    setBulkActionLoading(null);
-    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} kick-offs agendados${failed > 0 ? ` · ${failed} falharam` : ''}` });
-    clearSelection();
-    await load();
-    setTimeout(() => setActionMsg(null), 10000);
-  };
 
   const bulkPause = async () => {
     if (!account || !selectedProducts.length) return;
@@ -508,7 +469,7 @@ export default function Products({ externalRefreshTrigger }) {
     let success = 0, failed = 0;
     for (const product of targets) {
       try {
-        const pausePayload = { amazon_account_id: account.id };
+        const pausePayload = { amazon_account_id: product.amazon_account_id || account.id };
         const cid = campaignIdOf(product);
         if (cid) pausePayload.campaign_id = cid;
         if (product.asin) pausePayload.asin = product.asin;
@@ -520,30 +481,11 @@ export default function Products({ externalRefreshTrigger }) {
     setBulkActionLoading(null);
     setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} campanhas pausadas${failed > 0 ? ` · ${failed} falharam` : ''}` });
     clearSelection();
-    await load();
+    await reloadProducts();
     setTimeout(() => setActionMsg(null), 10000);
   };
 
-  const bulkKickoff = async () => {
-    if (!account) return;
-    const targets = filtered.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p));
-    if (!targets.length) return;
-    setBulkActivating(true);
-    setActionMsg({ type: 'info', text: `Criando campanhas para ${targets.length} produtos...` });
-    let success = 0, failed = 0;
-    for (const product of targets) {
-      try {
-        const r = await base44.functions.invoke('createAutoCampaignForAsin', { amazon_account_id: account.id, asin: product.asin, sku: product.sku, product_name: product.product_name });
-        r?.data?.ok ? success++ : failed++;
-      } catch { failed++; }
-    }
-    setBulkActivating(false);
-    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} campanhas criadas${failed > 0 ? ` · ${failed} falharam` : ''}` });
-    await load();
-    setTimeout(() => setActionMsg(null), 10000);
-  };
-
-  const { activeOffers, lowStock, outOfStock, staleStock, unknownStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked } = counters;
+  const { activeOffers, lowStock, staleStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked } = counters;
   const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
 
   return (
@@ -557,7 +499,8 @@ export default function Products({ externalRefreshTrigger }) {
           <div>
             <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
             <p className="text-xs text-slate-400">
-              {visibleProducts.length} ASINs ativos · {activeAds} ads ativos · {withoutCampaign} sem campanha · {products.length - visibleProducts.length} ocultos (sem estoque/inativos)
+              {visibleProducts.length} ASINs ativos · {activeAds} ads ativos · {withoutCampaign} sem campanha
+              {accounts.length > 1 && <span className="text-cyan ml-1">· {accounts.length} contas</span>}
             </p>
           </div>
         </div>
@@ -605,18 +548,10 @@ export default function Products({ externalRefreshTrigger }) {
         </div>
       )}
 
-      {/* Banner: ASINs com alta adesão sem termo vendedor */}
-      {!loading && account && (
-        <HighAdherenceAlert accountId={account.id} />
-      )}
+      {!loading && account && <HighAdherenceAlert accountId={account.id} />}
 
-      {/* Banner de reabastecimento */}
       {!loading && restockedProducts.length > 0 && (
-        <RestockedAlert
-          products={restockedProducts}
-          account={account}
-          onDone={load}
-        />
+        <RestockedAlert products={restockedProducts} account={account} onDone={load} />
       )}
 
       {/* KPIs */}
@@ -658,7 +593,7 @@ export default function Products({ externalRefreshTrigger }) {
         )}
       </div>
 
-      {/* Badge resultados + Filtros */}
+      {/* Filtros */}
       <div className="flex flex-col gap-2">
         {search && (
           <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -705,9 +640,10 @@ export default function Products({ externalRefreshTrigger }) {
           <div className="px-4 py-3 border-b border-surface-2 flex items-center justify-between">
             <p className="text-xs text-slate-500">
               {filtered.length} produtos · página {safePage} de {totalPages}
+              {colSort && <span className="ml-2 text-cyan text-[10px]">ordenado por coluna</span>}
               {selectedIds.size > 0 && <span className="ml-2 text-cyan font-semibold">{selectedIds.size} selecionado{selectedIds.size > 1 ? 's' : ''}</span>}
             </p>
-            <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1); }}
+            <select value={sortBy} onChange={e => { setSortBy(e.target.value); setColSort(null); setPage(1); }}
               className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-1 focus:outline-none">
               <option value="newest">Mais recentes</option>
               <option value="oldest">Mais antigas</option>
@@ -730,7 +666,6 @@ export default function Products({ externalRefreshTrigger }) {
             <div className="px-4 py-2.5 bg-cyan/10 border-b border-cyan/20 flex items-center gap-3 flex-wrap">
               <span className="text-xs font-semibold text-cyan">{selectedIds.size} produto{selectedIds.size > 1 ? 's' : ''} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
               <div className="flex items-center gap-2 flex-wrap">
-
                 <button type="button" onClick={bulkPause} disabled={!!bulkActionLoading}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25 disabled:opacity-50 transition-colors">
                   {bulkActionLoading === 'pause' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
@@ -754,22 +689,13 @@ export default function Products({ externalRefreshTrigger }) {
                       {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
-                  {[
-                    { label: 'Produto', col: null },
-                    { label: 'Estoque', col: 'fba' },
-                    { label: 'Status Ads', col: 'campaign_status' },
-                    { label: 'Vendas 30d', col: 'sales' },
-                    { label: 'Spend 30d', col: 'spend' },
-                    { label: 'ACoS', col: 'acos' },
-                    { label: 'Units 30d', col: null },
-                  ].map(({ label, col }) => (
-                    <th key={label} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
-                      <span className="inline-flex items-center gap-0.5">
-                        {label}
-                        {col && <SortArrow column={col} colSort={colSort} onSort={handleColSort} />}
-                      </span>
-                    </th>
-                  ))}
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Produto</th>
+                  <SortTh label="Estoque" colKey="stock" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Status Ads" colKey="ads_status" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Vendas 30d" colKey="sales" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Spend 30d" colKey="spend" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="ACoS" colKey="acos" colSort={colSort} onSort={handleColSort} />
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Units 30d</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                     <span title="Média, mínimo e máximo das ofertas públicas encontradas para este mesmo ASIN no marketplace atual.">
                       Preço Amazon ℹ
@@ -780,26 +706,26 @@ export default function Products({ externalRefreshTrigger }) {
               </thead>
               <tbody>
                 {paginated.map(product => (
-                 <ProductRow
-                  key={product.id}
-                  product={product}
-                  account={account}
-                  onToggleCampaign={toggleCampaign}
-                  onArchiveCampaign={archiveCampaign}
-                  onKickoff={openKickoff}
-                  onAccelerator={setAcceleratorProduct}
-                  onCancelKickoff={cancelKickoff}
-                  actionLoading={actionLoading}
-                  amazonPropagating={amazonPropagating[product.id]}
-                  amazonResult={amazonResult[product.id]}
-                  selected={selectedIds.has(product.id)}
-                  onToggleSelect={toggleSelect}
-                  isFocused={focusedProductId === product.id}
-                  productMessage={productMessages[product.id]}
-                  stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
-                  onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
-                  onPriceUpdated={(id, patch) => setProducts(cur => cur.map(item => item.id === id ? { ...item, ...patch } : item))}
-                 />
+                  <ProductRow
+                    key={product.id}
+                    product={product}
+                    account={account}
+                    onToggleCampaign={toggleCampaign}
+                    onArchiveCampaign={archiveCampaign}
+                    onKickoff={openKickoff}
+                    onAccelerator={setAcceleratorProduct}
+                    onCancelKickoff={cancelKickoff}
+                    actionLoading={actionLoading}
+                    amazonPropagating={amazonPropagating[product.id]}
+                    amazonResult={amazonResult[product.id]}
+                    selected={selectedIds.has(product.id)}
+                    onToggleSelect={toggleSelect}
+                    isFocused={focusedProductId === product.id}
+                    productMessage={productMessages[product.id]}
+                    stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
+                    onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
+                    onPriceUpdated={(id, patch) => setProducts(cur => cur.map(item => item.id === id ? { ...item, ...patch } : item))}
+                  />
                 ))}
               </tbody>
             </table>
@@ -845,12 +771,13 @@ export default function Products({ externalRefreshTrigger }) {
             const pid = kickoffProduct?.id;
             setKickoffProduct(null);
             if (pid) {
-              setProductMsg(pid, { type: 'success', text: 'Campanha enviada para fila da Amazon. Este produto continuará aberto para acompanhamento.' });
+              setProductMsg(pid, { type: 'success', text: 'Campanha enviada para fila da Amazon.' });
               reloadProducts().then(() => restoreProductContext(pid));
             }
           }}
         />
       )}
+
       {acceleratorProduct && (
         <AcceleratorModal
           product={acceleratorProduct}
