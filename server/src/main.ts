@@ -139,7 +139,10 @@ async function serveStatic(url: URL): Promise<Response> {
     const ct = contentType(extname(filePath)) ?? 'application/octet-stream';
     return new Response(data, { headers: { 'content-type': ct } });
   } catch {
-    // fallback SPA -> index.html
+    // Asset com extensão que não existe (ex.: manifest.json, .png) -> 404 real
+    // (evita servir HTML no lugar de um .json e gerar erro de parse no navegador).
+    if (extname(path)) return json({ error: 'not found' }, 404);
+    // Rota do SPA (sem extensão) -> index.html
     try {
       const idx = await Deno.readFile(join(FRONTEND_DIR, 'index.html'));
       return new Response(idx, { headers: { 'content-type': 'text/html; charset=utf-8' } });
@@ -153,6 +156,12 @@ async function handler(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
 
+  if (path === '/manifest.json') {
+    return json({
+      name: 'Living Finds', short_name: 'Living Finds', start_url: '/',
+      display: 'standalone', background_color: '#0f1115', theme_color: '#0f1115', icons: [],
+    });
+  }
   if (path === '/health') {
     return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck() });
   }
