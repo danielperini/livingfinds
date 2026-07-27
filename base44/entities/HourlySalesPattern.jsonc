@@ -5,6 +5,10 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "asin": {
+      "type": "string",
+      "description": "ASIN do produto. null = padr\u00e3o da conta (agregado global)"
+    },
     "day_of_week": {
       "type": "integer",
       "minimum": 0,
@@ -113,6 +117,52 @@
     },
     "drive_file_id": {
       "type": "string"
+    },
+    "asin_peak_hours_json": {
+      "type": "string",
+      "description": "JSON: array de horas (0-23) identificadas como pico para este ASIN espec\u00edfico. Ex: [22,23,0,1]"
+    },
+    "asin_low_hours_json": {
+      "type": "string",
+      "description": "JSON: array de horas (0-23) identificadas como baixa performance para este ASIN. Ex: [10,11,12]"
+    },
+    "asin_neutral_hours_json": {
+      "type": "string",
+      "description": "JSON: array de horas (0-23) de performance neutra/m\u00e9dia para este ASIN"
+    },
+    "asin_data_maturity": {
+      "type": "string",
+      "enum": [
+        "sufficient",
+        "insufficient"
+      ],
+      "default": "insufficient",
+      "description": "sufficient = \u226530 dias hist\u00f3rico E \u226520 cliques/faixa. insufficient = continua usando regras gen\u00e9ricas da conta"
+    },
+    "asin_peak_score_threshold": {
+      "type": "number",
+      "default": 0,
+      "description": "Score m\u00ednimo calculado para classificar hora como pico neste ASIN"
+    },
+    "asin_profile_updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "\u00daltima vez que o perfil hor\u00e1rio por ASIN foi calculado"
+    },
+    "asin_days_of_data": {
+      "type": "number",
+      "default": 0,
+      "description": "Quantos dias de dados hist\u00f3ricos foram usados no c\u00e1lculo do perfil ASIN"
+    },
+    "asin_total_clicks": {
+      "type": "number",
+      "default": 0,
+      "description": "Total de cliques acumulados por faixa usados para validar maturidade"
+    },
+    "asin_peak_diverges_from_account": {
+      "type": "boolean",
+      "default": false,
+      "description": "true quando o pico do ASIN difere >3h do pico m\u00e9dio da conta"
     }
   },
   "required": [
