@@ -8,6 +8,7 @@ import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2, Clock }
 import { Link } from 'react-router-dom';
 import WeeklyReportView from '@/components/analytics/WeeklyReportView';
 import AcosEvolutionPanel from '@/components/analytics/AcosEvolutionPanel';
+import BudgetCoveragePanel from '@/components/analytics/BudgetCoveragePanel';
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
@@ -64,6 +65,7 @@ export default function Analytics() {
   const [metrics, setMetrics] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [unifiedMetrics, setUnifiedMetrics] = useState([]);
+  const [perfSettings, setPerfSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedAsin, setSelectedAsin] = useState('all');
   const [period, setPeriod] = useState(30);
@@ -80,16 +82,18 @@ export default function Analytics() {
       if (!acc) return;
 
       const aid = acc.id;
-      const [prods, mets, camps, unified] = await Promise.all([
+      const [prods, mets, camps, unified, perfList] = await Promise.all([
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 100),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 2000),
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 500),
         base44.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 1000).catch(() => []),
+        base44.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
       ]);
       setProducts(prods);
       setMetrics(mets);
       setCampaigns(camps);
       setUnifiedMetrics(unified);
+      setPerfSettings(perfList[0] || null);
     } finally {
       setLoading(false);
     }
@@ -594,6 +598,13 @@ export default function Analytics() {
                 campaigns={campaigns}
                 products={products}
                 period={period}
+              />
+
+              {/* ── Painel de Cobertura de Budget ── */}
+              <BudgetCoveragePanel
+                account={account}
+                dailyCap={Number(perfSettings?.daily_budget_limit || 0)}
+                perfSettings={perfSettings}
               />
 
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
