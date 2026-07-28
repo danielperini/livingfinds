@@ -3,8 +3,10 @@
   "imports": {
     "npm:@base44/sdk@0.8.31": "./src/sdk/mod.ts",
     "npm:@base44/sdk@0.8.38": "./src/sdk/mod.ts",
+    "npm:@base44/sdk@0.8.40": "./src/sdk/mod.ts",
     "npm:@base44/sdk": "./src/sdk/mod.ts",
     "@base44/sdk": "./src/sdk/mod.ts",
+    "base44:runtime": "./src/sdk/runtime.ts",
     "postgres": "npm:postgres@3.4.5",
     "strip-json-comments": "npm:strip-json-comments@5.0.1"
   },
