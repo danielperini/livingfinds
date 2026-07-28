@@ -21,7 +21,7 @@ Deno.serve(async (request) => {
       ...body,
       _service_role: true,
       source_function: body.source_function || 'runUnifiedDecisionEngine',
-      engine_version: 'unified-v2-native-bid-rules',
+      engine_version: 'unified-v3-zero-delivery-bootstrap',
     };
 
     const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
@@ -33,6 +33,16 @@ Deno.serve(async (request) => {
       },
     ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const scopeBefore = scopeBeforeResponse?.data || scopeBeforeResponse || {};
+
+    const bootstrapResponse = await base44.asServiceRole.functions.invoke(
+      'runManualZeroDeliveryBootstrap',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        dry_run: body.dry_run === true,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const bootstrap = bootstrapResponse?.data || bootstrapResponse || {};
 
     const result = await base44.asServiceRole.functions.invoke(
       'runDeterministicDecisionEngine',
@@ -83,10 +93,11 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: data?.ok !== false && scopeAfter?.ok !== false && nativeRules?.ok !== false && legacyQueue?.ok !== false,
       engine: 'unified',
-      engine_version: 'unified-v2-native-bid-rules',
+      engine_version: 'unified-v3-zero-delivery-bootstrap',
       delegated_to: 'runDeterministicDecisionEngine',
       amazon_account_id: body.amazon_account_id || null,
       manual_bid_scope_before: scopeBefore,
+      manual_zero_delivery_bootstrap: bootstrap,
       result: data,
       amazon_schedule_bid_rules: nativeRules,
       legacy_dayparting_queue: legacyQueue,

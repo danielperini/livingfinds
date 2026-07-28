@@ -10,6 +10,68 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
+const REQUIRED_DAILY_REPORTS = ['spCampaigns', 'spSearchTerm', 'spAdvertisedProduct'];
+
+function todayBRT() {
+  return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+}
+
+async function analyzeFreshDailyReports(db: any, accountIds: string[]) {
+  const analyses: any[] = [];
+  for (const accountId of [...new Set(accountIds.filter(Boolean))]) {
+    const jobs = await db.entities.AmazonAdsReportJob.filter(
+      { amazon_account_id: accountId, status: 'processed' }, '-processed_at', 100,
+    ).catch(() => []);
+    const reportDate = jobs.map((job: any) => String(job.end_date || '')).filter(Boolean).sort().pop();
+    if (!reportDate) continue;
+    const complete = REQUIRED_DAILY_REPORTS.every((type) =>
+      jobs.some((job: any) => job.report_type_id === type && job.end_date === reportDate)
+    );
+    if (!complete) {
+      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, reason: 'required_reports_incomplete' });
+      continue;
+    }
+    const operation = `daily_ai_report_analysis:${reportDate}`;
+    const existing = await db.entities.SyncExecutionLog.filter(
+      { amazon_account_id: accountId, operation }, '-started_at', 5,
+    ).catch(() => []);
+    if (existing.some((log: any) => ['processing', 'success', 'completed'].includes(String(log.status)))) {
+      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, reason: 'already_analyzed' });
+      continue;
+    }
+    const startedAt = new Date().toISOString();
+    const log = await db.entities.SyncExecutionLog.create({
+      amazon_account_id: accountId, operation, trigger_type: 'report_completion',
+      status: 'processing', execution_date: todayBRT(), started_at: startedAt,
+      result_summary: JSON.stringify({ report_date: reportDate, required_reports: REQUIRED_DAILY_REPORTS }),
+    });
+    try {
+      const response = await db.functions.invoke('runDailyAdsOptimization', {
+        amazon_account_id: accountId, trigger: 'fresh_daily_reports',
+        analysis_only: true, execute_actions: false, report_date: reportDate, _service_role: true,
+      });
+      const data = response?.data || response || {};
+      const ok = data?.ok !== false && data?.skipped !== true;
+      const completedAt = new Date().toISOString();
+      await db.entities.SyncExecutionLog.update(log.id, {
+        status: ok ? 'success' : 'warning', completed_at: completedAt,
+        duration_ms: Date.now() - new Date(startedAt).getTime(),
+        result_summary: JSON.stringify({ report_date: reportDate, analysis: data }).slice(0, 4000),
+        error_message: ok ? null : String(data?.reason || data?.error || 'analysis_skipped').slice(0, 500),
+      }).catch(() => {});
+      if (ok) await db.entities.AmazonAccount.update(accountId, { last_analysis_at: completedAt }).catch(() => {});
+      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: ok });
+    } catch (error: any) {
+      await db.entities.SyncExecutionLog.update(log.id, {
+        status: 'error', completed_at: new Date().toISOString(),
+        error_message: String(error?.message || error).slice(0, 500),
+      }).catch(() => {});
+      analyses.push({ amazon_account_id: accountId, report_date: reportDate, analyzed: false, error: error?.message });
+    }
+  }
+  return analyses;
+}
+
 const MAX_JOB_RETRIES = 1; // tentativas por job neste ciclo (retry adiado para próximo ciclo)
 
 function adsBase(region: string): string {
@@ -232,7 +294,14 @@ Deno.serve(async (req) => {
     }).slice(0, maxJobs);
 
     if (eligibleJobs.length === 0) {
-      return Response.json({ ok: true, polled: 0, message: 'Nenhum job elegível para polling', duration_ms: Date.now() - t0 });
+      const dailyAnalysis = await analyzeFreshDailyReports(
+        db,
+        eligibleAccounts.map((account: any) => String(account.id || '')),
+      );
+      return Response.json({
+        ok: true, polled: 0, daily_analysis: dailyAnalysis,
+        message: 'Nenhum job elegível para polling', duration_ms: Date.now() - t0,
+      });
     }
 
     // Liberar locks travados
@@ -293,6 +362,11 @@ Deno.serve(async (req) => {
     console.log(`[poll] Concluído em ${Date.now() - t0}ms | ${results.length} jobs | ${completed} completed | ${rateLimited} rate_limited | ${errors} errors`);
 
     // Sempre retornar ok:true para o agendador não acumular falhas
+    const dailyAnalysis = await analyzeFreshDailyReports(
+      db,
+      eligibleJobs.map((job: any) => String(job.amazon_account_id || '')),
+    );
+
     return Response.json({
       ok: true,
       polled: results.length,
@@ -300,6 +374,7 @@ Deno.serve(async (req) => {
       rate_limited: rateLimited,
       errors,
       results,
+      daily_analysis: dailyAnalysis,
       duration_ms: Date.now() - t0,
     });
 

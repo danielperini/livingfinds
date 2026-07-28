@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { eligibleForBudgetIncrease } from '../../shared/manualZeroDeliveryBootstrap.ts';
 
 /**
  * Controlador intra-diário de orçamento e estado de campanha.
@@ -288,7 +289,7 @@ async function checkpointAfternoon(base44: any, params: any) {
     actionsTaken.push(`Daypart+pause: desvio +${r2(deviationPct)}% — ${actionsCount} campanhas Tier C/D`);
   } else if (deviationPct < -15) {
     // Gastando pouco: aumentar budget de vencedoras
-    const winners = profiles.filter((p: any) => p.winner && p.budgetRatio >= 0.70).slice(0, 5);
+    const winners = profiles.filter((p: any) => eligibleForBudgetIncrease(p)).slice(0, 5);
     for (const profile of winners) {
       const campaign = profile.campaign;
       const cid = String(campaign.amazon_campaign_id || campaign.campaign_id || '');
@@ -482,7 +483,7 @@ async function checkpointNight(base44: any, params: any) {
 
   // Proteção de vencedoras: aumentar budget se necessário para cobrir até 23:59
   const maxBudgetIncreasePct = Math.min((Number(cfg?.max_budget_increase_pct) || 20) / 100, 0.20);
-  const winners = profiles.filter((p: any) => p.winner && (p.tier === 'A' || p.tier === 'B'));
+  const winners = profiles.filter((p: any) => eligibleForBudgetIncrease(p) && (p.tier === 'A' || p.tier === 'B'));
   let budgetBoosts = 0;
 
   for (const profile of winners) {
@@ -754,7 +755,7 @@ Deno.serve(async (request) => {
 
     if (spendPacing === 'underpacing' && controller.budget_mode !== 'PROFIT_MAX') {
       let availableBudget = Math.max(0, dailyCap - totalCampaignBudgets);
-      const winners = profiles.filter((p) => p.winner && p.budgetRatio >= 0.85 && p.budget > 0).sort((a, b) => a.acos - b.acos).slice(0, 5);
+      const winners = profiles.filter((p) => eligibleForBudgetIncrease(p) && p.budget > 0).sort((a, b) => a.acos - b.acos).slice(0, 5);
       for (const profile of winners) {
         if (availableBudget < 0.5) break;
         const campaign = profile.campaign;

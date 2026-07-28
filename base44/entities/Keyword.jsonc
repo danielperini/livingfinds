@@ -206,6 +206,30 @@
     "hourly_data_mature": {
       "type": "boolean",
       "default": false
+    },
+    "zero_delivery_attempts": {
+      "type": "number",
+      "default": 0
+    },
+    "last_bid_rescue_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "suggested_bid_low": {
+      "type": "number"
+    },
+    "suggested_bid_mid": {
+      "type": "number"
+    },
+    "suggested_bid_high": {
+      "type": "number"
+    },
+    "suggested_bid_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bootstrap_base_bid": {
+      "type": "number"
     }
   },
   "required": [

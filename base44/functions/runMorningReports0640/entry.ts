@@ -80,9 +80,9 @@ Deno.serve(async (request) => {
       const steps = [];
 
       // Solicita relatórios Ads de 30 dias sem executar decisões na Amazon.
-      steps.push(await runStep(base44, 'scheduledAdsReportSync', {
+      steps.push(await runStep(base44, 'runDailyFullReportPipeline', {
         ...payload,
-        action: 'request',
+        force: body.force === true,
       }));
 
       // Atualiza catálogo e relatórios de produto/SP-API.
@@ -104,13 +104,6 @@ Deno.serve(async (request) => {
       }, false));
 
       // Gera decisões, mas não as executa; execução permanece nas filas 00-03 e 13h.
-      steps.push(await runStep(base44, 'runDailyAdsOptimization', {
-        ...payload,
-        trigger: 'scheduled_0640',
-        analysis_only: true,
-        execute_actions: false,
-      }));
-
       steps.push(await runStep(base44, 'auditAmazonDataConsistency', {
         ...payload,
         trigger_type: 'scheduled_0640_post_analysis',
@@ -143,13 +136,12 @@ Deno.serve(async (request) => {
 
       await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
         last_reports_requested_at: completedAt,
-        last_analysis_at: completedAt,
       }).catch(() => {});
 
       results.push({
         amazon_account_id: account.id,
         ok,
-        reports_requested: steps.some((step:any) => step.step === 'scheduledAdsReportSync' && step.ok),
+        reports_requested: steps.some((step:any) => step.step === 'runDailyFullReportPipeline' && step.ok),
         amazon_actions_executed: false,
         steps,
       });
@@ -160,7 +152,8 @@ Deno.serve(async (request) => {
       schedule: '06:40 America/Sao_Paulo',
       accounts_processed: results.length,
       reports_requested: true,
-      analysis_executed: true,
+      analysis_executed: false,
+      analysis_deferred_until_reports_processed: true,
       amazon_actions_executed: false,
       execution_windows: ['00:00-04:00', '13:00-14:00'],
       started_at: startedAt,

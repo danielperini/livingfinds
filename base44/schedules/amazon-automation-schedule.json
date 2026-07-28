@@ -2,6 +2,12 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Amazon Ads Reports Poll + Daily AI - every 10 minutes",
+      "function": "pollAmazonAdsReportJobs",
+      "cron": "*/10 * * * *",
+      "payload": { "_service_role": true, "max_jobs": 10 }
+    },
+    {
       "name": "Amazon Action Queue - 00:00 BRT",
       "function": "processAmazonNightWindow",
       "cron": "0 0 * * *",
