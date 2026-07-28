@@ -24,13 +24,14 @@ function brtClock() {
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(now);
   const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
   return {
     iso: now.toISOString(),
     date: `${get('year')}-${get('month')}-${get('day')}`,
     hour: Number(get('hour') || 0) % 24,
+    minute: Number(get('minute') || 0),
   };
 }
 
@@ -618,6 +619,9 @@ Deno.serve(async (request) => {
     const cfg = configs[0] || {};
     const perf = performance[0] || {};
     const dailyCap = Number(controller.effective_daily_spend_cap || controller.user_daily_spend_cap || cfg.total_daily_budget || cfg.daily_budget_limit || account.max_daily_budget_limit || 0);
+    if (!Number.isFinite(dailyCap) || dailyCap <= 0) {
+      return Response.json({ ok: true, skipped: true, reason: 'Teto diário não configurado', actions_executed: 0 });
+    }
     const targetAcos = Number(perf.target_acos || cfg.target_acos || 15);
     const hourScores = parseObject(controller.hour_value_scores);
     const productByAsin = new Map(products.map((product: any) => [String(product.asin || ''), product]));
@@ -688,6 +692,8 @@ Deno.serve(async (request) => {
     for (let hour = 0; hour < clock.hour; hour++) {
       expectedSpend += Number(pacingCurve?.[hour]?.budget_share ?? (dailyCap > 0 ? dailyCap / 24 : 0));
     }
+    const currentHourShare = Number(pacingCurve?.[clock.hour]?.budget_share ?? dailyCap / 24);
+    expectedSpend += currentHourShare * Math.max(0, Math.min(1, clock.minute / 60));
     const pacingRatio = expectedSpend > 0 ? confirmedSpend / expectedSpend : 1;
     const spendPacing = pacingRatio > OVERPACING_THRESHOLD ? 'overpacing'
       : pacingRatio < UNDERPACING_THRESHOLD ? 'underpacing'
@@ -745,7 +751,10 @@ Deno.serve(async (request) => {
       }
     }
 
-    const reserveNeeded = ['WEAK', 'LOSS'].includes(currentSlot) && nextEliteHour !== null && nextEliteHour - clock.hour <= 4 && confirmedSpend >= effectiveCap * 0.80;
+    const reserveNeeded = ['WEAK', 'LOSS'].includes(currentSlot) &&
+      nextEliteHour !== null &&
+      nextEliteHour - clock.hour <= 4 &&
+      (confirmedSpend >= effectiveCap * 0.80 || confirmedSpend > expectedSpend * 1.10);
     if (reserveNeeded) {
       const reserve = profiles.filter((p) => ['C', 'D'].includes(p.tier) && p.spend > 0 && !p.winner && active(p.campaign.state || p.campaign.status)).sort((a, b) => b.spend - a.spend).slice(0, Math.min(3, MAX_PAUSES_PER_RUN));
       for (const profile of reserve) {
@@ -786,12 +795,13 @@ Deno.serve(async (request) => {
         actionsExecuted++;
       }
 
-      const paused = campaigns.filter((c: any) => {
+      const canResumeInCurrentSlot = ['ELITE', 'STRONG', 'NORMAL'].includes(currentSlot);
+      const paused = canResumeInCurrentSlot ? campaigns.filter((c: any) => {
         const reason = String(c.archive_reason || '');
         return norm(c.state || c.status) === 'paused' &&
           (reason.startsWith('DAYPART_RESERVE_STOP') || reason === 'OVERPACING_TEMP_STOP') &&
           stock(productByAsin.get(String(c.asin || ''))) > 0;
-      }).slice(0, MAX_RESUMES_PER_RUN);
+      }).slice(0, MAX_RESUMES_PER_RUN) : [];
       for (const campaign of paused) {
         const cid = String(campaign.amazon_campaign_id || campaign.campaign_id || '');
         if (!cid) continue;
@@ -847,6 +857,21 @@ Deno.serve(async (request) => {
       }).catch(() => {});
     }
 
+    // A mesma leitura de pacing alimenta o dayparting canônico. Assim, bids
+    // sobem apenas em slots fortes com economia segura e caem/restauram nos
+    // slots fracos sem criar um segundo motor de decisão.
+    const daypartingResponse = await base44.asServiceRole.functions.invoke(
+      'runCanonicalDaypartingEngine',
+      {
+        amazon_account_id: accountId,
+        force: true,
+        dry_run: dryRun,
+        pacing_deviation_pct: r2((pacingRatio - 1) * 100),
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const dayparting = daypartingResponse?.data || daypartingResponse || {};
+
     return Response.json({
       ok: true, dry_run: dryRun, current_hour_brt: clock.hour,
       current_slot_class: currentSlot, spend_pacing: spendPacing,
@@ -854,6 +879,7 @@ Deno.serve(async (request) => {
       expected_spend_by_now: r2(expectedSpend), projected_eod: r2(projectedEndOfDay),
       time_to_cap_hours: r2(timeToCap), next_elite_hour: nextEliteHour,
       actions_proposed: actions.length, actions_executed: actionsExecuted, actions,
+      dayparting,
       cap_status: capStatus, daily_budget: dailyCap, duration_ms: Date.now() - startedAt,
     });
   } catch (error: any) {
