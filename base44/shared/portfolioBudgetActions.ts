@@ -2,8 +2,8 @@ import { amazonCampaignId, norm } from './portfolioBudgetMath.ts';
 
 function commandOk(response: any) {
   const data = response?.data || response || {};
-  if (data?.ok === false) return false;
   if (data?.conflict_existing === true) return true;
+  if (data?.ok === false) return false;
   if (data?.ok === true && Number(data?.status || 200) !== 207) return true;
   const success = data?.payload?.campaigns?.success || data?.payload?.success || [];
   return Array.isArray(success) && success.length > 0;
