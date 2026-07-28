@@ -90,7 +90,9 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const actions: any[] = [];
     let actionsExecuted = 0;
     const pausedIds = new Set<string>(parseArray(controller?.campaigns_paused_today).map(String));
+    const windowKey = `${clock.hour}-${Math.floor(clock.minute / 30)}`;
 
+    // Pausas de pacing nunca atravessam o dia sem tentativa de retomada.
     const previousDayPaused = temporaryPaused
       .filter((profile: any) => {
         const date = String(profile.campaign?.pacing_pause_date || '');
@@ -101,7 +103,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     for (const profile of previousDayPaused) {
       const result = await setCampaignState(base44, {
         accountId, profile, state: 'ENABLED', reason: 'PACING_NEW_DAY_AUTO_RESUME',
-        date: clock.date, now: clock.iso, dryRun,
+        date: clock.date, now: clock.iso, dryRun, windowKey,
       });
       actions.push(result);
       if (result.ok && !result.dry_run) {
@@ -110,6 +112,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       }
     }
 
+    // Sem gasto real do dia, o motor não usa Campaign.spend/current_spend como substituto.
     if (!intraday.available) {
       if (!dryRun && controller?.id) {
         await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
@@ -171,7 +174,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       for (const profile of resumeCandidates) {
         const result = await setCampaignState(base44, {
           accountId, profile, state: 'ENABLED', reason: 'PACING_UNDERSPEND_RESUME',
-          date: clock.date, now: clock.iso, dryRun,
+          date: clock.date, now: clock.iso, dryRun, windowKey,
         });
         actions.push(result);
         if (result.ok && !result.dry_run) {
@@ -205,7 +208,8 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
           `esperado R$ ${expectedSpend.toFixed(2)}, projeção R$ ${projectedEod.toFixed(2)}, teto R$ ${dailyCap.toFixed(2)}`;
         const result = await setCampaignState(base44, {
           accountId, profile, state: 'PAUSED', reason, date: clock.date, now: clock.iso, dryRun,
-          resumeAfter: hardCap ? nextDayAt(0) : nextDayAt(6),
+          resumeAfter: hardCap ? nextDayAt(0) : new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+          windowKey,
         });
         actions.push(result);
         if (result.ok) {
@@ -219,6 +223,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       }
     }
 
+    // Bids continuam no motor canônico de dayparting; este retorno limita o escopo.
     let bidIncreasePct = 0;
     if (classification === 'underpacing' && !futureStrongerWindow) {
       bidIncreasePct = pacingRatio < 0.60 ? 15 : pacingRatio < 0.75 ? 10 : 5;
