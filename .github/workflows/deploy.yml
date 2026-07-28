@@ -61,6 +61,9 @@ jobs:
             # server/ NÃO é apagado (contém o .env que não está no tar).
             rm -rf base44 dist
             tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
+            test -f dist/index.html
+            # Remove resíduo de deploys antigos que excluía dist/ do contexto Docker.
+            rm -f .dockerignore
             docker compose -f server/docker-compose.yml up -d --build app
             sleep 6
             curl -sf http://localhost:8000/health && echo ' — deploy OK'
