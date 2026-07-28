@@ -2,8 +2,8 @@
  * Scheduler self-hosted do LivingFinds.
  *
  * Lê base44/schedules/amazon-automation-schedule.json e executa crons no timezone
- * configurado. Cada job possui lock em memória para impedir sobreposição quando uma
- * execução ultrapassa o próximo disparo.
+ * configurado. Cada função/conta possui lock em memória para impedir sobreposição
+ * quando uma execução ultrapassa o próximo disparo.
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
@@ -93,11 +93,12 @@ export async function startScheduler(): Promise<void> {
 
     for (const job of jobs) {
       if (!cronMatches(job.cron, now)) continue;
-      const jobKey = `${job.name}|${job.function}`;
+      const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
+      const jobKey = `${job.function}|${accountScope}`;
       const running = runningJobs.get(jobKey);
       if (running) {
         const elapsedSeconds = Math.round((Date.now() - running.startedAt) / 1000);
-        console.warn(`[scheduler] ignorando sobreposição '${job.name}' (${elapsedSeconds}s em execução)`);
+        console.warn(`[scheduler] ignorando sobreposição '${job.name}' para ${job.function}/${accountScope} (${elapsedSeconds}s em execução)`);
         continue;
       }
 
