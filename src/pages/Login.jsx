@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Lock, Loader2, ShieldCheck } from "lucide-react";
+import { Lock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,11 +37,12 @@ export default function Login() {
       <div className="w-full max-w-sm">
         {/* Logo / cabeçalho */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-cyan/10 border border-cyan/20 flex items-center justify-center mb-4">
-            <ShieldCheck className="w-7 h-7 text-cyan" />
-          </div>
-          <h1 className="text-xl font-semibold text-foreground">Living Finds</h1>
-          <p className="text-sm text-muted-foreground mt-1">Painel Ads · Acesso restrito</p>
+          <img
+            src="/logo.jpg"
+            alt="Living Finds"
+            className="w-44 rounded-2xl shadow-sm mb-4"
+          />
+          <p className="text-sm text-muted-foreground">Painel Ads · Acesso restrito</p>
         </div>
 
         {/* Card */}

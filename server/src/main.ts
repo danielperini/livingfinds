@@ -168,7 +168,8 @@ async function handler(req: Request): Promise<Response> {
   if (path === '/manifest.json') {
     return json({
       name: 'Living Finds', short_name: 'Living Finds', start_url: '/',
-      display: 'standalone', background_color: '#0f1115', theme_color: '#0f1115', icons: [],
+      display: 'standalone', background_color: '#0f1115', theme_color: '#0f1115',
+      icons: [{ src: '/logo.jpg', sizes: '1600x1600', type: 'image/jpeg' }],
     });
   }
   if (path === '/health') {

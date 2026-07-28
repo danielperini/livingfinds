@@ -9,7 +9,6 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Zap } from 'lucide-react';
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
 
@@ -209,9 +208,7 @@ export default function AppOpeningSplash({ onComplete }) {
     >
       <div className="flex flex-col items-center gap-6 w-full max-w-sm text-center">
         {/* Logo */}
-        <div className="w-14 h-14 rounded-2xl bg-cyan/20 border border-cyan/30 flex items-center justify-center">
-          <Zap className="w-7 h-7 text-cyan" />
-        </div>
+        <img src="/logo.jpg" alt="Living Finds" className="w-32 rounded-2xl shadow-sm" />
 
         {/* Saudação */}
         <div className="space-y-1">
