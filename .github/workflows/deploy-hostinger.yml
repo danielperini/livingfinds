@@ -1,0 +1,159 @@
+name: Deploy seguro para Hostinger
+
+on:
+  push:
+    branches:
+      - feat/migracao-backend-e-ajustes
+    paths:
+      - .github/workflows/deploy-hostinger.yml
+  workflow_dispatch:
+
+concurrency:
+  group: livingfinds-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VPS_HOST: 179.197.232.253
+      VPS_USER: ${{ secrets.VPS_USER || secrets.VPS_USERNAME || secrets.HOSTINGER_USER || 'root' }}
+      VPS_KEY: ${{ secrets.VPS_SSH_KEY || secrets.HOSTINGER_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+      RELEASE_SHA: ${{ github.sha }}
+      RELEASE_BRANCH: feat/migracao-backend-e-ajustes
+    steps:
+      - name: Validar credenciais
+        shell: bash
+        run: |
+          test -n "$VPS_KEY" || { echo "::error::Chave SSH do VPS ausente"; exit 1; }
+
+      - name: Implantar candidato, preservar banco e trocar com rollback
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_KEY }}
+          command_timeout: 30m
+          script_stop: true
+          envs: RELEASE_SHA,RELEASE_BRANCH
+          script: |
+            set -eu
+
+            release=$(printf '%s' "$RELEASE_SHA" | cut -c1-12)
+            current=/opt/livingfinds
+            candidate="/opt/livingfinds-candidate-$release"
+            previous="/opt/livingfinds-previous-$release"
+            image="livingfinds-app:$release"
+            rollback_image="livingfinds-rollback:$release"
+            backup_dir=/opt/livingfinds-backups
+            candidate_container="livingfinds-candidate-$release"
+
+            exec 9>/var/lock/livingfinds-deploy.lock
+            flock -n 9 || { echo "Outro deploy está em andamento"; exit 1; }
+
+            test -f "$current/server/.env"
+            test -f "$current/server/docker-compose.yml"
+            docker inspect server-app-1 >/dev/null
+            docker inspect server-db-1 >/dev/null
+
+            rm -rf "$candidate"
+            git clone --depth 1 --branch "$RELEASE_BRANCH" \
+              https://github.com/danielperini/livingfinds.git "$candidate"
+            cp "$current/server/.env" "$candidate/server/.env"
+
+            docker build --pull \
+              -t "$image" \
+              -f "$candidate/server/Dockerfile" \
+              "$candidate"
+
+            docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+            docker run -d --rm \
+              --name "$candidate_container" \
+              --network server_default \
+              --env-file "$current/server/.env" \
+              -e ENABLE_SCHEDULER=false \
+              -e RELEASE_ID="$release-candidate" \
+              -p 127.0.0.1:8001:8000 \
+              "$image"
+
+            healthy=false
+            for attempt in $(seq 1 40); do
+              if curl -fsS http://127.0.0.1:8001/health >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 3
+            done
+            if [ "$healthy" != true ]; then
+              docker logs "$candidate_container" --tail 100 || true
+              docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+              echo "Candidato não ficou saudável; produção não foi alterada"
+              exit 1
+            fi
+
+            mkdir -p "$backup_dir"
+            docker exec server-db-1 sh -c \
+              'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+              > "$backup_dir/database-$release.sql"
+            test -s "$backup_dir/database-$release.sql"
+
+            docker run --rm \
+              --network server_default \
+              --env-file "$current/server/.env" \
+              -e RELEASE_ID="$release" \
+              "$image" \
+              deno run --allow-net --allow-env --allow-read \
+              /app/server/scripts/migrate.ts
+
+            old_image=$(docker inspect server-app-1 --format '{{.Image}}')
+            docker tag "$old_image" "$rollback_image"
+            docker rm -f "$candidate_container" >/dev/null 2>&1 || true
+
+            rm -rf "$previous"
+            mv "$current" "$previous"
+            mv "$candidate" "$current"
+            docker tag "$image" server-app:latest
+
+            cd "$current"
+            docker compose -f server/docker-compose.yml up -d \
+              --no-deps --no-build --force-recreate app
+
+            live=false
+            for attempt in $(seq 1 40); do
+              if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+                live=true
+                break
+              fi
+              sleep 3
+            done
+
+            if [ "$live" != true ]; then
+              docker logs server-app-1 --tail 100 || true
+              docker tag "$rollback_image" server-app:latest
+              docker rm -f server-app-1 >/dev/null 2>&1 || true
+              rm -rf "$current"
+              mv "$previous" "$current"
+              cd "$current"
+              docker compose -f server/docker-compose.yml up -d \
+                --no-deps --no-build --force-recreate app
+              curl -fsS --retry 20 --retry-delay 3 \
+                http://127.0.0.1:8000/health >/dev/null
+              echo "Nova versão falhou; rollback concluído"
+              exit 1
+            fi
+
+            docker ps --filter name=server-app-1 \
+              --format 'DEPLOYED {{.Names}} {{.Image}} {{.Status}} {{.Ports}}'
+            echo "BACKUP=$backup_dir/database-$release.sql"
+            echo "PREVIOUS=$previous"
+            echo "RELEASE=$release"
+
+      - name: Validar produção pública
+        shell: bash
+        run: |
+          curl -fsS --retry 12 --retry-delay 5 \
+            https://livingfinds.com.br/health
