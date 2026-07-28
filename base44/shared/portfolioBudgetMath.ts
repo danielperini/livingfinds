@@ -202,14 +202,17 @@ export function aggregateIntradaySnapshots(rows: any[], nowMs: number) {
     const atSnapshot = brtClock(new Date(latest.observed));
     velocityPerHour = latest.spend / Math.max(1, atSnapshot.hour + atSnapshot.minute / 60);
   }
-  const pending = Math.max(0, velocityPerHour * Math.min(3, ageMinutes / 60));
+  const source = String(latest.campaignRows[0]?.source || 'AMAZON_ADS_SAME_DAY_REPORT');
+  const assumedSourceLagHours = source === 'AMAZON_ADS_SAME_DAY_REPORT' ? 3 : 0;
+  const pendingHours = Math.min(6, Math.max(assumedSourceLagHours, ageMinutes / 60));
+  const pending = Math.max(0, velocityPerHour * pendingHours);
   return {
     available: status === 'fresh', status,
-    source: String(latest.campaignRows[0]?.source || 'AMAZON_ADS_SAME_DAY_REPORT'),
+    source,
     observedAt: new Date(latest.observed).toISOString(), ageMinutes: r2(ageMinutes),
     campaignRows: latest.campaignRows, confirmedSpend: r2(latest.spend),
     estimatedPendingSpend: r2(pending), estimatedCurrentSpend: r2(latest.spend + pending),
-    velocityPerHour: r2(velocityPerHour), batches: batches.length,
+    velocityPerHour: r2(velocityPerHour), batches: batches.length, assumedSourceLagHours,
   };
 }
 
