@@ -142,14 +142,42 @@ async function executeOne(base44: any, decision: any) {
   }
 
   const now = new Date().toISOString();
+  const bootstrap = decision.decision_type === 'manual_zero_delivery_bootstrap' ||
+    decision.source_function === 'manual_zero_delivery_bootstrap';
   const localKeywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId, keyword_id: resolvedKeywordId }, null, 5).catch(() => []);
   for (const row of localKeywords) {
-    await base44.asServiceRole.entities.Keyword.update(row.id, { current_bid: targetBid, bid: targetBid, synced_at: now }).catch(() => {});
+    await base44.asServiceRole.entities.Keyword.update(row.id, {
+      current_bid: targetBid, bid: targetBid, synced_at: now,
+      ...(bootstrap ? {
+        bootstrap_base_bid: targetBid,
+        daypart_base_bid: targetBid,
+        zero_delivery_attempts: Number(row.zero_delivery_attempts || 0) + 1,
+        last_bid_rescue_at: now,
+      } : {}),
+    }).catch(() => {});
   }
 
   const localGroups = await base44.asServiceRole.entities.AdGroup?.filter?.({ amazon_account_id: accountId, ad_group_id: adGroupId }, null, 5).catch(() => []) || [];
   for (const row of localGroups) {
-    await base44.asServiceRole.entities.AdGroup.update(row.id, { default_bid: targetBid, bid: targetBid, synced_at: now }).catch(() => {});
+    await base44.asServiceRole.entities.AdGroup.update(row.id, {
+      default_bid: targetBid, bid: targetBid, synced_at: now,
+      ...(bootstrap ? { daypart_base_bid: targetBid } : {}),
+    }).catch(() => {});
+  }
+
+  if (bootstrap) {
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({
+      amazon_account_id: accountId, campaign_id: campaignId,
+    }, null, 5).catch(() => []);
+    const nextReview = new Date(Date.now() + 72 * 3600_000).toISOString();
+    for (const row of campaigns) {
+      await base44.asServiceRole.entities.Campaign.update(row.id, {
+        delivery_status: 'bootstrap_bid_confirmed',
+        delivery_block_reason: null,
+        last_serving_check_at: now,
+        next_delivery_review_at: nextReview,
+      }).catch(() => {});
+    }
   }
 
   await base44.asServiceRole.entities.BidHistory.create({

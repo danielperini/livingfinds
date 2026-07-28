@@ -282,6 +282,20 @@
     "excluded_from_dashboard": {
       "type": "boolean",
       "default": false
+    },
+    "delivery_status": {
+      "type": "string"
+    },
+    "delivery_block_reason": {
+      "type": "string"
+    },
+    "last_serving_check_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_delivery_review_at": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "required": [
