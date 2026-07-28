@@ -5,6 +5,7 @@
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
+import { sql } from './db.ts';
 
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any> };
@@ -93,10 +94,23 @@ export async function startScheduler(): Promise<void> {
     lastKey = key;
     for (const job of jobs) {
       if (cronMatches(job.cron, now)) {
-        console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
-        svc.invoke(job.function, job.payload ?? {})
-          .then((r) => console.log(`[scheduler] '${job.function}' ok=${r.ok} status=${r.status}`))
-          .catch((e) => console.error(`[scheduler] '${job.function}' erro:`, e?.message));
+        const executionKey = `${job.name}|${key}`;
+        try {
+          await sql.begin(async (tx) => {
+            const rows = await tx<{ locked: boolean }[]>`
+              SELECT pg_try_advisory_xact_lock(hashtext(${executionKey})) AS locked
+            `;
+            if (!rows[0]?.locked) {
+              console.log(`[scheduler] '${job.name}' já está em execução em outro worker`);
+              return;
+            }
+            console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
+            const result = await svc.invoke(job.function, job.payload ?? {});
+            console.log(`[scheduler] '${job.function}' ok=${result.ok} status=${result.status}`);
+          });
+        } catch (e) {
+          console.error(`[scheduler] '${job.function}' erro:`, (e as Error)?.message);
+        }
       }
     }
   };

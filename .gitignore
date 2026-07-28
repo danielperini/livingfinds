@@ -32,3 +32,6 @@ dist-ssr
 .env
 .vite
 base44/.app.jsonc
+server/deploy/.release.env
+server/deploy/backups/
+server/deploy/nginx/active-upstream.conf.previous

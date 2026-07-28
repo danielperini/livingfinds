@@ -147,7 +147,7 @@ Deno.serve(async (request) => {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
             queue_hour: 16, queue_window: WINDOW_LABEL, updated_at: new Date().toISOString(),
           }).catch(() => {});
-          const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
+          const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecisionV2', {
             decision_id: decision.id, decision_ids: [decision.id], _window_execution: true, _service_role: true,
           });
           const data = response?.data || response || {};

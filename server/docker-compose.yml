@@ -15,8 +15,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    ports:
-      - '5432:5432'
+    # Sem porta publicada: o banco fica acessível apenas pela rede interna.
 
   app:
     build:
@@ -30,8 +29,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://livingfinds:${DB_PASSWORD:-CHANGE_ME}@db:5432/livingfinds
+      RELEASE_ID: ${RELEASE_ID:-development}
     ports:
-      - '8000:8000'
+      - '127.0.0.1:8000:8000'
 
 volumes:
   pgdata:

@@ -217,6 +217,25 @@ export class EntityRepo {
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
+  /**
+   * Transição atômica de estado. Apenas um worker consegue trocar o status esperado,
+   * evitando que a mesma decisão seja executada simultaneamente.
+   */
+  async claim(id: string, expectedStatuses: string[], patch: Row = {}): Promise<Row | null> {
+    await ensureTable(this.table);
+    const { data } = splitSystem(patch);
+    const rows = (await sql.unsafe(
+      `UPDATE ${q(this.table)}
+          SET data = data || $3::jsonb,
+              updated_date = now()
+        WHERE id = $1
+          AND data->>'status' = ANY($2::text[])
+        RETURNING *`,
+      [id, expectedStatuses, data] as unknown as string[],
+    )) as unknown as Row[];
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
   /** Atualiza vários registros; cada item é { id, ...campos }. */
   async bulkUpdate(items: Row[] = []): Promise<Row[]> {
     const out: Row[] = [];

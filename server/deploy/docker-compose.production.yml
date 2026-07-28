@@ -1,0 +1,82 @@
+name: livingfinds
+
+x-app: &app
+  restart: unless-stopped
+  env_file:
+    - ../.env
+  environment:
+    DATABASE_URL: postgres://livingfinds:${DB_PASSWORD}@db:5432/livingfinds
+    DEPLOY_ENV: production
+    ENABLE_SCHEDULER: "false"
+  depends_on:
+    db:
+      condition: service_healthy
+  networks:
+    - private
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: livingfinds
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: livingfinds
+    volumes:
+      - livingfinds_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livingfinds -d livingfinds"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - private
+
+  app_blue:
+    <<: *app
+    image: ${BLUE_IMAGE}
+    environment:
+      DATABASE_URL: postgres://livingfinds:${DB_PASSWORD}@db:5432/livingfinds
+      DEPLOY_ENV: production
+      ENABLE_SCHEDULER: "false"
+      RELEASE_ID: ${BLUE_RELEASE}
+
+  app_green:
+    <<: *app
+    image: ${GREEN_IMAGE}
+    environment:
+      DATABASE_URL: postgres://livingfinds:${DB_PASSWORD}@db:5432/livingfinds
+      DEPLOY_ENV: production
+      ENABLE_SCHEDULER: "false"
+      RELEASE_ID: ${GREEN_RELEASE}
+
+  worker:
+    <<: *app
+    image: ${WORKER_IMAGE}
+    environment:
+      DATABASE_URL: postgres://livingfinds:${DB_PASSWORD}@db:5432/livingfinds
+      DEPLOY_ENV: production
+      ENABLE_SCHEDULER: "true"
+      RELEASE_ID: ${WORKER_RELEASE}
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - app_blue
+      - app_green
+    ports:
+      - "127.0.0.1:8000:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/active-upstream.conf:/etc/nginx/conf.d/active-upstream.conf:ro
+    networks:
+      - private
+
+volumes:
+  livingfinds_pgdata:
+    name: livingfinds_pgdata
+
+networks:
+  private:
+    name: livingfinds_private

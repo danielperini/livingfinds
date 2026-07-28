@@ -82,19 +82,32 @@ Deno.serve(async (request) => {
         results.push({ id, ok: false, error: 'Decisão não encontrada' });
         continue;
       }
-      if (!['approved', 'executing'].includes(decision.status)) {
+      if (decision.status !== 'approved') {
         results.push({ id, ok: false, skipped: true, reason: `status ${decision.status}` });
         continue;
       }
 
       const now = new Date().toISOString();
-      await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+      const decisionRepo: any = base44.asServiceRole.entities.OptimizationDecision;
+      const claimed = typeof decisionRepo.claim === 'function'
+        ? await decisionRepo.claim(decision.id, ['approved'], {
+          status: 'executing',
+          queue_status: 'processing',
+          last_attempt_at: now,
+          attempt_count: Number(decision.attempt_count || 0) + 1,
+          updated_at: now,
+        })
+        : await decisionRepo.update(decision.id, {
         status: 'executing',
         queue_status: 'processing',
         last_attempt_at: now,
         attempt_count: Number(decision.attempt_count || 0) + 1,
         updated_at: now,
       });
+      if (!claimed || claimed.status !== 'executing') {
+        results.push({ id, ok: false, skipped: true, reason: 'decisão já reivindicada por outro worker' });
+        continue;
+      }
 
       let normalized: { ok: boolean; success: any[]; errors: any[]; request_id: string | null } = {
         ok: false, success: [], errors: [{ message: 'Ação não executada' }], request_id: null,

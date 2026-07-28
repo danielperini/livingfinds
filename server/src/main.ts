@@ -19,6 +19,7 @@ import { makeIntegrations } from './sdk/integrations.ts';
 const PORT = Number(Deno.env.get('PORT') ?? 8000);
 const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
 const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') ?? '';
+const RELEASE_ID = Deno.env.get('RELEASE_ID') ?? 'development';
 // Token de sessão retornado após login. Reutiliza API_TOKEN se definido.
 const SESSION_TOKEN = API_TOKEN || ADMIN_PASSWORD;
 const FRONTEND_DIR = Deno.env.get('FRONTEND_DIR') ?? join(import.meta.dirname!, '..', '..', 'dist');
@@ -172,7 +173,11 @@ async function handler(req: Request): Promise<Response> {
     });
   }
   if (path === '/health') {
-    return json({ ok: true, service: 'livingfinds-backend', functions: registry.size, db: await healthcheck() });
+    const db = await healthcheck();
+    return json(
+      { ok: db, service: 'livingfinds-backend', release: RELEASE_ID, functions: registry.size, db },
+      db ? 200 : 503,
+    );
   }
   if (path === '/functions' && req.method === 'GET') {
     return json({ functions: [...registry.keys()].sort() });

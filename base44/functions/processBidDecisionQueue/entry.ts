@@ -149,7 +149,7 @@ Deno.serve(async (request) => {
             error_message: null, updated_at: new Date().toISOString(),
           });
 
-          const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
+          const response = await base44.asServiceRole.functions.invoke('executeAutopilotDecisionV2', {
             decision_id: decision.id, decision_ids: [decision.id], _window_execution: true, _service_role: true,
           });
           const data = response?.data || response || {};

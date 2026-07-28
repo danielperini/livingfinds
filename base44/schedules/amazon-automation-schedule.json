@@ -2,28 +2,16 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
-      "name": "Amazon Action Queue - 00:00 BRT",
+      "name": "Amazon Action Queue - 16:00 BRT",
       "function": "processAmazonNightWindow",
-      "cron": "0 0 * * *",
-      "payload": { "_service_role": true, "hour": 0 }
+      "cron": "0 16 * * *",
+      "payload": { "_service_role": true, "hour": 16 }
     },
     {
-      "name": "Amazon Action Queue - 01:00 BRT",
+      "name": "Amazon Action Queue - 17:00 BRT",
       "function": "processAmazonNightWindow",
-      "cron": "0 1 * * *",
-      "payload": { "_service_role": true, "hour": 1 }
-    },
-    {
-      "name": "Amazon Action Queue - 02:00 BRT",
-      "function": "processAmazonNightWindow",
-      "cron": "0 2 * * *",
-      "payload": { "_service_role": true, "hour": 2 }
-    },
-    {
-      "name": "Amazon Action Queue - 03:00 BRT",
-      "function": "processAmazonNightWindow",
-      "cron": "0 3 * * *",
-      "payload": { "_service_role": true, "hour": 3 }
+      "cron": "0 17 * * *",
+      "payload": { "_service_role": true, "hour": 17 }
     },
     {
       "name": "Amazon Recovery - 06:00 BRT",
@@ -36,12 +24,6 @@
       "function": "runMorningAmazonSchedule",
       "cron": "40 6 * * *",
       "payload": { "_service_role": true, "force": true }
-    },
-    {
-      "name": "Amazon Action Queue - 13:00 BRT",
-      "function": "processAmazonNightWindow",
-      "cron": "0 13 * * *",
-      "payload": { "_service_role": true, "hour": 13 }
     }
   ]
 }
