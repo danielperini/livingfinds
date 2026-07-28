@@ -1,6 +1,6 @@
--- Gerado por scripts/generate-schema.ts — schema do backend self-hosted do Living Finds.
--- Modelo: cada entidade é uma tabela-documento; os campos ficam em `data` (jsonb).
--- O runtime também cria estas tabelas sob demanda; este arquivo serve p/ provisionar de uma vez.
+-- Gerado por scripts/generate-schema.ts ? schema do backend self-hosted do Living Finds.
+-- Modelo: cada entidade ? uma tabela-documento; os campos ficam em `data` (jsonb).
+-- O runtime tamb?m cria estas tabelas sob demanda; este arquivo serve p/ provisionar de uma vez.
 
 -- ===== AIAnalysisCache =====
 --   amazon_account_id text NOT NULL
@@ -94,6 +94,44 @@ CREATE INDEX IF NOT EXISTS "ai_usage_log_created_date" ON "ai_usage_log" (create
 --   last_pacing_check_at timestamptz
 --   created_at timestamptz
 --   updated_at timestamptz
+--   today_schedule text
+--   best_profit_window text
+--   budget_mode text
+--   elite_reserve double precision
+--   affordable_active_hours double precision
+--   pacing_curve text
+--   global_kill_switch boolean
+--   global_stop_event_id text
+--   global_stop_snapshot text
+--   kill_switch_activated_at timestamptz
+--   kill_switch_reason text
+--   projected_end_of_day_spend double precision
+--   time_to_cap_hours double precision
+--   future_value_reserve double precision
+--   underpacing_alert boolean
+--   overpacing_alert boolean
+--   stop_type text
+--   spend_velocity_per_hour double precision
+--   safety_buffer double precision
+--   budget_insufficient_for_8h boolean
+--   estimated_budget_for_8h double precision
+--   hour_value_scores text
+--   last_pacing_engine_run_at timestamptz
+--   last_kill_switch_check_at timestamptz
+--   goal_alignment_status text
+--   goal_alignment_checked_at timestamptz
+--   recency_protection_active boolean
+--   acos_14d_at_last_check double precision
+--   trend_classification text
+--   checkpoint_morning_at timestamptz
+--   checkpoint_morning_spend double precision
+--   checkpoint_afternoon_at timestamptz
+--   checkpoint_afternoon_spend double precision
+--   checkpoint_evening_at timestamptz
+--   checkpoint_evening_spend double precision
+--   checkpoint_night_at timestamptz
+--   checkpoint_night_spend double precision
+--   scheduled_pause_hour double precision
 CREATE TABLE IF NOT EXISTS "account_daily_spend_controller" (
   id           text PRIMARY KEY,
   created_date timestamptz NOT NULL DEFAULT now(),
@@ -113,6 +151,14 @@ CREATE INDEX IF NOT EXISTS "account_daily_spend_controller_created_date" ON "acc
 --   state text
 --   status text
 --   default_bid double precision
+--   daypart_base_bid double precision
+--   daypart_bid_floor double precision
+--   daypart_bid_cap double precision
+--   daypart_active boolean
+--   daypart_multiplier double precision
+--   daypart_last_slot text
+--   daypart_last_adjusted_at timestamptz
+--   daypart_last_restored_at timestamptz
 --   impressions double precision
 --   clicks double precision
 --   spend double precision
@@ -224,16 +270,28 @@ CREATE INDEX IF NOT EXISTS "ads_bid_change_l_created_date" ON "ads_bid_change_l"
 --   campaign_id text
 --   campaign_name text
 --   ad_group_id text
---   keyword_id text NOT NULL
+--   entity_type text
+--   entity_id text
+--   keyword_id text
 --   keyword text
+--   keyword_text text
+--   target_id text
 --   asin text
 --   old_bid double precision
 --   new_bid double precision
+--   bid_before double precision
+--   bid_after double precision
 --   change_amount double precision
 --   change_percent double precision
---   direction text NOT NULL
+--   change_pct double precision
+--   direction text
+--   action text
 --   reason text
 --   evidence text
+--   classification text
+--   block_name text
+--   stop_type text
+--   source text
 --   ai_confidence double precision
 --   risk_level text
 --   status text
@@ -474,6 +532,8 @@ CREATE INDEX IF NOT EXISTS "alert_created_date" ON "alert" (created_date DESC);
 --   ads_active_token_source text
 --   ads_env_token_present boolean
 --   ads_token_source_conflict boolean
+--   ads_last_recovery_source text
+--   ads_last_recovery_at timestamptz
 --   region text
 --   status text
 --   country_code text
@@ -726,6 +786,55 @@ CREATE TABLE IF NOT EXISTS "amazon_report_catalog" (
 CREATE INDEX IF NOT EXISTS "amazon_report_catalog_data_gin" ON "amazon_report_catalog" USING gin (data);
 CREATE INDEX IF NOT EXISTS "amazon_report_catalog_created_date" ON "amazon_report_catalog" (created_date DESC);
 
+-- ===== AmazonScheduledRule =====
+--   amazon_account_id text NOT NULL
+--   marketplace_id text
+--   profile_id text
+--   optimization_rule_id text
+--   rule_name text NOT NULL
+--   rule_category text
+--   rule_subcategory text
+--   recurrence_type text
+--   days_of_week jsonb
+--   start_time text
+--   end_time text
+--   duration_start timestamptz
+--   duration_end timestamptz
+--   adjustment_operator text
+--   adjustment_unit text
+--   adjustment_value double precision
+--   slot_classification text
+--   campaign_ids jsonb
+--   asins jsonb
+--   targeting_types jsonb
+--   status text
+--   association_status text
+--   associated_campaign_ids jsonb
+--   failed_campaign_ids jsonb
+--   native_api_supported boolean
+--   fallback_mode text
+--   idempotency_key text NOT NULL
+--   engine_version text
+--   reason text
+--   amazon_request_id text
+--   amazon_response_status double precision
+--   amazon_response text
+--   last_error text
+--   last_synced_at timestamptz
+--   last_associated_at timestamptz
+--   next_review_at timestamptz
+--   created_at timestamptz
+--   updated_at timestamptz
+CREATE TABLE IF NOT EXISTS "amazon_scheduled_rule" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "amazon_scheduled_rule_data_gin" ON "amazon_scheduled_rule" USING gin (data);
+CREATE INDEX IF NOT EXISTS "amazon_scheduled_rule_created_date" ON "amazon_scheduled_rule" (created_date DESC);
+
 -- ===== AmazonSchedulerLock =====
 --   amazon_account_id text NOT NULL
 --   lock_key text NOT NULL
@@ -914,6 +1023,10 @@ CREATE INDEX IF NOT EXISTS "autopilot_alert_created_date" ON "autopilot_alert" (
 --   max_budget_decrease_pct double precision
 --   min_bid double precision
 --   max_bid double precision
+--   strict_bid_envelope boolean
+--   daypart_absolute_min_bid double precision
+--   amazon_native_schedule_rules_enabled boolean
+--   native_rules_sync_frequency_hours double precision
 --   target_daily_impressions double precision
 --   min_daily_impressions double precision
 --   impressions_goal_enabled boolean
@@ -1226,6 +1339,12 @@ CREATE INDEX IF NOT EXISTS "budget_rule_created_date" ON "budget_rule" (created_
 --   start_date text
 --   end_date text
 --   bidding_strategy text
+--   amazon_bidding_strategy text
+--   bid_control_mode text
+--   bidding_strategy_reason text
+--   bidding_strategy_last_changed_at timestamptz
+--   bidding_strategy_next_review_at timestamptz
+--   bidding_strategy_request_id text
 --   portfolio_id text
 --   top_of_search_adjustment double precision
 --   rest_of_search_adjustment double precision
@@ -1244,6 +1363,7 @@ CREATE INDEX IF NOT EXISTS "budget_rule_created_date" ON "budget_rule" (created_
 --   archive_reason text
 --   original_state text
 --   last_activity_at timestamptz
+--   cleanup_last_action_at timestamptz
 --   learning_eligible boolean
 --   excluded_from_dashboard boolean
 CREATE TABLE IF NOT EXISTS "campaign" (
@@ -1263,6 +1383,17 @@ CREATE INDEX IF NOT EXISTS "campaign_created_date" ON "campaign" (created_date D
 --   campaign_type text
 --   asin text
 --   consecutive_violations double precision
+--   phase text
+--   phase1_triggered_at timestamptz
+--   phase2_triggered_at timestamptz
+--   phase1_acos double precision
+--   phase2_acos double precision
+--   optimization_attempted_at timestamptz
+--   optimization_cooldown_until timestamptz
+--   bids_reduced boolean
+--   dayparting_evaluated boolean
+--   gpt_phase2_recommendation text
+--   gpt_phase2_rationale text
 --   acos_cycle_1 double precision
 --   acos_cycle_2 double precision
 --   acos_cycle_3 double precision
@@ -1401,6 +1532,60 @@ CREATE TABLE IF NOT EXISTS "campaign_creation_log" (
 );
 CREATE INDEX IF NOT EXISTS "campaign_creation_log_data_gin" ON "campaign_creation_log" USING gin (data);
 CREATE INDEX IF NOT EXISTS "campaign_creation_log_created_date" ON "campaign_creation_log" (created_date DESC);
+
+-- ===== CampaignFactoryPlan =====
+--   amazon_account_id text NOT NULL
+--   asin text NOT NULL
+--   sku text
+--   product_name text
+--   keyword_bank_id text
+--   keyword text
+--   normalized_keyword text
+--   match_type text
+--   campaign_job text
+--   campaign_type text NOT NULL
+--   source_type text NOT NULL
+--   source_campaign_id text
+--   why_created text
+--   source_metrics text
+--   target_campaign_name text
+--   initial_bid double precision
+--   sustainable_cpc double precision
+--   amazon_suggested_bid double precision
+--   initial_budget double precision
+--   bidding_strategy text
+--   target_acos double precision
+--   intent_score double precision
+--   confidence_score double precision
+--   promotion_score double precision
+--   negative_plan text
+--   learning_window_hours double precision
+--   success_criteria text
+--   failure_criteria text
+--   next_step text
+--   status text NOT NULL
+--   auto_creation_level double precision
+--   duplicate_check_hash text
+--   duplicate_found boolean
+--   duplicate_campaign_id text
+--   duplicate_action text
+--   execution_result text
+--   created_campaign_id text
+--   rejected_reason text
+--   proposed_at timestamptz
+--   approved_at timestamptz
+--   approved_by text
+--   executed_at timestamptz
+--   cycle_date date
+CREATE TABLE IF NOT EXISTS "campaign_factory_plan" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "campaign_factory_plan_data_gin" ON "campaign_factory_plan" USING gin (data);
+CREATE INDEX IF NOT EXISTS "campaign_factory_plan_created_date" ON "campaign_factory_plan" (created_date DESC);
 
 -- ===== CampaignLearningEvaluation =====
 --   amazon_account_id text NOT NULL
@@ -1625,6 +1810,106 @@ CREATE TABLE IF NOT EXISTS "competitor_asin_map" (
 CREATE INDEX IF NOT EXISTS "competitor_asin_map_data_gin" ON "competitor_asin_map" USING gin (data);
 CREATE INDEX IF NOT EXISTS "competitor_asin_map_created_date" ON "competitor_asin_map" (created_date DESC);
 
+-- ===== CrossAsinTransfer =====
+--   amazon_account_id text NOT NULL
+--   marketplace text
+--   keyword text NOT NULL
+--   normalized_keyword text
+--   match_type text
+--   source_asin text NOT NULL
+--   source_keyword_bank_id text
+--   source_orders double precision
+--   source_acos double precision
+--   source_cvr double precision
+--   source_cpc double precision
+--   source_winner_tier text
+--   destination_asin text NOT NULL
+--   destination_product_name text
+--   destination_sku text
+--   destination_fba_inventory double precision
+--   destination_aov double precision
+--   destination_target_acos double precision
+--   destination_sustainable_cpc double precision
+--   relevance_score double precision
+--   relevance_phase text
+--   heuristic_score double precision
+--   llm_score double precision
+--   llm_reason text
+--   hard_blocker_detected boolean
+--   hard_blocker_reason text
+--   relevance_breakdown text
+--   conversion_score double precision
+--   evaluation_window_hours double precision
+--   transfer_decision text NOT NULL
+--   rule_id text
+--   transfer_confidence text
+--   family_bank_boost boolean
+--   initial_bid double precision
+--   campaign_job text
+--   created_campaign_id text
+--   created_campaign_name text
+--   status text
+--   destination_orders double precision
+--   destination_acos_result double precision
+--   destination_cvr_result double precision
+--   destination_spend double precision
+--   validation_result text
+--   proposed_at timestamptz
+--   approved_at timestamptz
+--   executed_at timestamptz
+--   failed_at timestamptz
+--   cycle_date date
+--   created_at timestamptz
+CREATE TABLE IF NOT EXISTS "cross_asin_transfer" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "cross_asin_transfer_data_gin" ON "cross_asin_transfer" USING gin (data);
+CREATE INDEX IF NOT EXISTS "cross_asin_transfer_created_date" ON "cross_asin_transfer" (created_date DESC);
+
+-- ===== DailyBudgetLedger =====
+--   amazon_account_id text NOT NULL
+--   ledger_date date NOT NULL
+--   daily_budget double precision
+--   confirmed_spend double precision
+--   projected_spend double precision
+--   utilization_pct double precision
+--   active_hours double precision
+--   profitable_hours double precision
+--   planned_curve text
+--   actual_curve text
+--   elite_reserve_used double precision
+--   global_stop_events double precision
+--   stop_type_counts text
+--   learning_flags text
+--   pacing_error_pct double precision
+--   best_actual_hours text
+--   worst_actual_hours text
+--   unused_budget double precision
+--   unused_reason text
+--   acos_final double precision
+--   profit_final double precision
+--   budget_mode text
+--   hour_value_scores text
+--   best_profit_window text
+--   affordable_active_hours double precision
+--   budget_insufficient_for_8h boolean
+--   estimated_budget_for_8h double precision
+--   created_at timestamptz
+--   closed_at timestamptz
+CREATE TABLE IF NOT EXISTS "daily_budget_ledger" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "daily_budget_ledger_data_gin" ON "daily_budget_ledger" USING gin (data);
+CREATE INDEX IF NOT EXISTS "daily_budget_ledger_created_date" ON "daily_budget_ledger" (created_date DESC);
+
 -- ===== DailyProductAdsAssessment =====
 --   amazon_account_id text NOT NULL
 --   marketplace_id text
@@ -1735,6 +2020,100 @@ CREATE TABLE IF NOT EXISTS "daypart_schedule_action" (
 );
 CREATE INDEX IF NOT EXISTS "daypart_schedule_action_data_gin" ON "daypart_schedule_action" USING gin (data);
 CREATE INDEX IF NOT EXISTS "daypart_schedule_action_created_date" ON "daypart_schedule_action" (created_date DESC);
+
+-- ===== DaypartingDecision =====
+--   amazon_account_id text NOT NULL
+--   marketplace_id text
+--   entity_type text
+--   entity_id text
+--   campaign_id text
+--   ad_group_id text
+--   keyword_id text
+--   target_id text
+--   targeting_type text
+--   asin text
+--   keyword_text text
+--   match_type text
+--   day_of_week double precision
+--   hour double precision
+--   slot_label text
+--   time_slot_score double precision
+--   slot_classification text
+--   decision_type text NOT NULL
+--   rule_id text
+--   rule_version text
+--   current_bid double precision
+--   base_bid double precision
+--   bid_floor double precision
+--   bid_cap double precision
+--   proposed_bid double precision
+--   bid_change_pct double precision
+--   bid_multiplier double precision
+--   envelope_min_multiplier double precision
+--   envelope_max_multiplier double precision
+--   bid_floor_applied boolean
+--   bid_cap_applied boolean
+--   recency_protection_blocked boolean
+--   metric_window text
+--   recommendation_window text
+--   decision_window text
+--   baseline_window text
+--   requires_approval boolean
+--   status text NOT NULL
+--   slot_acos double precision
+--   slot_cvr double precision
+--   slot_cpc double precision
+--   slot_ctr double precision
+--   slot_orders double precision
+--   slot_clicks double precision
+--   slot_spend double precision
+--   slot_sales double precision
+--   slot_impressions double precision
+--   slot_roas double precision
+--   slot_aov double precision
+--   slot_cpa double precision
+--   baseline_cvr double precision
+--   baseline_acos double precision
+--   baseline_cpc double precision
+--   baseline_roas double precision
+--   baseline_cpa double precision
+--   target_acos double precision
+--   sustainable_cpc double precision
+--   acos_headroom double precision
+--   cvr_advantage double precision
+--   data_confidence text
+--   data_mature boolean
+--   occurrences double precision
+--   recent_acos_14d double precision
+--   recent_cvr_14d double precision
+--   trend_status text
+--   campaign_bidding_strategy_before text
+--   campaign_bidding_strategy_after text
+--   reason text
+--   idempotency_key text
+--   approved_by text
+--   approved_at timestamptz
+--   rejected_by text
+--   rejected_at timestamptz
+--   rejection_reason text
+--   executed_at timestamptz
+--   expires_at timestamptz
+--   next_evaluation_at timestamptz
+--   amazon_request_id text
+--   amazon_response_status double precision
+--   amazon_response text
+--   cycle_date date
+--   created_at timestamptz
+--   updated_at timestamptz
+CREATE TABLE IF NOT EXISTS "dayparting_decision" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "dayparting_decision_data_gin" ON "dayparting_decision" USING gin (data);
+CREATE INDEX IF NOT EXISTS "dayparting_decision_created_date" ON "dayparting_decision" (created_date DESC);
 
 -- ===== DaypartingRule =====
 --   amazon_account_id text NOT NULL
@@ -2083,6 +2462,51 @@ CREATE TABLE IF NOT EXISTS "hourly_metric" (
 CREATE INDEX IF NOT EXISTS "hourly_metric_data_gin" ON "hourly_metric" USING gin (data);
 CREATE INDEX IF NOT EXISTS "hourly_metric_created_date" ON "hourly_metric" (created_date DESC);
 
+-- ===== HourlySalesPattern =====
+--   amazon_account_id text NOT NULL
+--   asin text
+--   day_of_week bigint NOT NULL
+--   hour bigint NOT NULL
+--   slot_label text
+--   orders double precision
+--   sales double precision
+--   spend double precision
+--   clicks double precision
+--   impressions double precision
+--   cvr double precision
+--   acos double precision
+--   roas double precision
+--   cpc double precision
+--   aov double precision
+--   occurrences double precision
+--   orders_share_pct double precision
+--   peak_score double precision
+--   classification text
+--   bid_multiplier double precision
+--   is_peak_hour boolean
+--   data_window_days double precision
+--   last_computed_at timestamptz
+--   drive_backup_at timestamptz
+--   drive_file_id text
+--   asin_peak_hours_json text
+--   asin_low_hours_json text
+--   asin_neutral_hours_json text
+--   asin_data_maturity text
+--   asin_peak_score_threshold double precision
+--   asin_profile_updated_at timestamptz
+--   asin_days_of_data double precision
+--   asin_total_clicks double precision
+--   asin_peak_diverges_from_account boolean
+CREATE TABLE IF NOT EXISTS "hourly_sales_pattern" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "hourly_sales_pattern_data_gin" ON "hourly_sales_pattern" USING gin (data);
+CREATE INDEX IF NOT EXISTS "hourly_sales_pattern_created_date" ON "hourly_sales_pattern" (created_date DESC);
+
 -- ===== Keyword =====
 --   amazon_account_id text NOT NULL
 --   campaign_id text
@@ -2097,6 +2521,14 @@ CREATE INDEX IF NOT EXISTS "hourly_metric_created_date" ON "hourly_metric" (crea
 --   current_bid double precision
 --   bid double precision
 --   suggested_bid double precision
+--   daypart_base_bid double precision
+--   daypart_bid_floor double precision
+--   daypart_bid_cap double precision
+--   daypart_active boolean
+--   daypart_multiplier double precision
+--   daypart_last_slot text
+--   daypart_last_adjusted_at timestamptz
+--   daypart_last_restored_at timestamptz
 --   impressions double precision
 --   clicks double precision
 --   spend double precision
@@ -2131,6 +2563,84 @@ CREATE TABLE IF NOT EXISTS "keyword" (
 );
 CREATE INDEX IF NOT EXISTS "keyword_data_gin" ON "keyword" USING gin (data);
 CREATE INDEX IF NOT EXISTS "keyword_created_date" ON "keyword" (created_date DESC);
+
+-- ===== KeywordBank =====
+--   amazon_account_id text NOT NULL
+--   marketplace text
+--   asin text NOT NULL
+--   product_family text
+--   category text
+--   keyword text
+--   normalized_keyword text NOT NULL
+--   keyword_hash text
+--   match_type text
+--   campaign_job text
+--   source_type text NOT NULL
+--   source_campaign_id text
+--   source_target_id text
+--   source_asin text
+--   source_date date
+--   source_metrics text
+--   source_confidence text
+--   lifecycle_status text
+--   bank_segment text
+--   winner_tier text
+--   impressions double precision
+--   clicks double precision
+--   orders double precision
+--   sales double precision
+--   spend double precision
+--   ctr double precision
+--   cpc double precision
+--   cvr double precision
+--   acos double precision
+--   roas double precision
+--   target_acos double precision
+--   historical_best_acos double precision
+--   historical_best_cvr double precision
+--   historical_best_orders double precision
+--   intent_score double precision
+--   confidence_score double precision
+--   promotion_score double precision
+--   economic_score double precision
+--   sustainable_cpc double precision
+--   estimated_initial_bid double precision
+--   amazon_suggested_bid double precision
+--   amazon_recommended boolean
+--   recommendation_source text
+--   recommendation_date date
+--   keyword_owner_asin text
+--   campaign_usage text
+--   negative_usage text
+--   in_negative_bank boolean
+--   negative_reason text
+--   last_decision text
+--   last_decision_at timestamptz
+--   last_campaign_created_at timestamptz
+--   retest_eligible boolean
+--   retest_reason text
+--   retest_eligible_after timestamptz
+--   failed_reason text
+--   failed_at timestamptz
+--   failed_spend double precision
+--   failed_listing_version text
+--   harvest_candidate boolean
+--   harvest_action text
+--   harvest_reason text
+--   harvest_proposed_at timestamptz
+--   harvest_executed_at timestamptz
+--   first_seen_at timestamptz
+--   last_seen_at timestamptz
+--   last_updated_at timestamptz
+CREATE TABLE IF NOT EXISTS "keyword_bank" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "keyword_bank_data_gin" ON "keyword_bank" USING gin (data);
+CREATE INDEX IF NOT EXISTS "keyword_bank_created_date" ON "keyword_bank" (created_date DESC);
 
 -- ===== KeywordBidOptimizationCycle =====
 --   amazon_account_id text NOT NULL
@@ -2248,10 +2758,26 @@ CREATE INDEX IF NOT EXISTS "keyword_lifecycle_created_date" ON "keyword_lifecycl
 --   source text
 --   model_version text
 --   tail_type text
+--   tail_class_method text
+--   tail_class_confidence text
+--   demand_percentile double precision
+--   normalized_search_volume double precision
 --   word_count double precision
 --   relevance_score double precision
 --   conversion_probability double precision
 --   keyword_quality_score double precision
+--   commercial_intent text
+--   commercial_intent_score double precision
+--   specificity_score double precision
+--   product_attribute_match_score double precision
+--   evidence_level text
+--   acos_status text
+--   contradiction_flags text
+--   analysis_windows text
+--   protected_high_performance boolean
+--   last_evaluated_at timestamptz
+--   next_evaluation_at timestamptz
+--   rule_version text
 --   expected_clicks double precision
 --   expected_orders double precision
 --   expected_conversion_rate double precision
@@ -2906,66 +3432,77 @@ CREATE INDEX IF NOT EXISTS "new_product_term_bank_run_created_date" ON "new_prod
 
 -- ===== OptimizationDecision =====
 --   amazon_account_id text NOT NULL
---   run_id text
+--   marketplace_id text
+--   profile_id text
 --   decision_type text NOT NULL
---   entity_type text
+--   entity_type text NOT NULL
 --   entity_id text
 --   campaign_id text
 --   ad_group_id text
 --   keyword_id text
 --   keyword_text text
+--   target_id text
 --   asin text
---   profile_id text
---   marketplace_id text
---   country_code text
---   currency_code text
---   currency_symbol text
---   action text NOT NULL
+--   sku text
+--   action text
+--   rationale text
+--   rule_key text
+--   priority double precision
+--   data_used text
+--   metric_window text
+--   decision_window text
+--   baseline_window text
+--   data_scope_validated boolean
+--   data_scope_status text
+--   current_value double precision
+--   proposed_value double precision
 --   value_before double precision
 --   value_after double precision
 --   change_pct double precision
---   objective text
---   rationale text
---   data_used text
---   period_analyzed text
---   sample_size text
+--   current_config text
+--   proposed_config text
+--   expected_impact_pct double precision
+--   expected_impact_value double precision
 --   confidence double precision
 --   risk text
---   expected_impact text
---   reversible boolean
 --   requires_approval boolean
---   status text NOT NULL
+--   approval_status text
+--   status text
 --   queue_status text
 --   queue_hour double precision
 --   queue_window text
+--   execution_channel text
 --   queued_at timestamptz
 --   queue_processed_at timestamptz
 --   scheduled_for timestamptz
 --   next_retry_at timestamptz
---   executed_at timestamptz
---   review_date timestamptz
---   amazon_response text
---   error_message text
---   created_at timestamptz
---   updated_at timestamptz
---   legacy_source text
---   legacy_id text
---   idempotency_key text
---   trigger text
---   metrics_before text
---   metrics_after text
---   evaluation_due_at timestamptz
---   evaluated_at timestamptz
---   outcome text
---   rollback_payload text
---   rollback_status text
---   source_search_term_id text
---   source_campaign_id text
---   source_keyword_id text
---   source_function text
---   amazon_request_id text
 --   attempt_count double precision
 --   last_attempt_at timestamptz
+--   settings_source text
+--   settings_snapshot text
+--   amazon_response text
+--   amazon_response_code double precision
+--   amazon_request_id text
+--   execution_error text
+--   error_message text
+--   evaluated_at timestamptz
+--   approved_at timestamptz
+--   approved_by text
+--   rejected_at timestamptz
+--   rejected_by text
+--   rejection_reason text
+--   executed_at timestamptz
+--   evaluation_due_at timestamptz
+--   cooldown_until timestamptz
+--   idempotency_key text
+--   source_function text
+--   rule_id text
+--   run_id text
+--   country_code text
+--   currency_code text
+--   currency_symbol text
+--   created_at timestamptz
+--   updated_at timestamptz
 CREATE TABLE IF NOT EXISTS "optimization_decision" (
   id           text PRIMARY KEY,
   created_date timestamptz NOT NULL DEFAULT now(),
@@ -3018,6 +3555,9 @@ CREATE INDEX IF NOT EXISTS "pacing_log_created_date" ON "pacing_log" (created_da
 --   calculated_daily_budget double precision
 --   target_cpc double precision
 --   max_cpc double precision
+--   cpc_intraday_override double precision
+--   cpc_intraday_override_set_at timestamptz
+--   cpc_intraday_override_checkpoint text
 --   min_bid double precision
 --   max_bid double precision
 --   max_bid_increase_pct double precision
@@ -3041,6 +3581,7 @@ CREATE INDEX IF NOT EXISTS "pacing_log_created_date" ON "pacing_log" (created_da
 --   last_budget_recalculation timestamptz
 --   next_budget_recalculation timestamptz
 --   objective text
+--   objective_base text
 --   ai_auto_optimization boolean
 --   updated_at timestamptz
 CREATE TABLE IF NOT EXISTS "performance_settings" (
@@ -3055,12 +3596,24 @@ CREATE INDEX IF NOT EXISTS "performance_settings_created_date" ON "performance_s
 
 -- ===== PerformanceSettingsHistory =====
 --   amazon_account_id text NOT NULL
+--   snapshot_date date NOT NULL
+--   target_acos double precision
+--   max_acos double precision
+--   target_roas double precision
+--   target_tacos double precision
+--   min_bid double precision
+--   max_bid double precision
+--   max_bid_increase_pct double precision
+--   max_bid_decrease_pct double precision
+--   daily_budget_limit double precision
+--   objective text
+--   snapshot_reason text
 --   changed_by_id text
 --   changed_by_name text
 --   changed_by_email text
 --   snapshot jsonb
 --   changed_fields jsonb
---   changed_at timestamptz NOT NULL
+--   changed_at timestamptz
 CREATE TABLE IF NOT EXISTS "performance_settings_history" (
   id           text PRIMARY KEY,
   created_date timestamptz NOT NULL DEFAULT now(),
@@ -3070,6 +3623,37 @@ CREATE TABLE IF NOT EXISTS "performance_settings_history" (
 );
 CREATE INDEX IF NOT EXISTS "performance_settings_history_data_gin" ON "performance_settings_history" USING gin (data);
 CREATE INDEX IF NOT EXISTS "performance_settings_history_created_date" ON "performance_settings_history" (created_date DESC);
+
+-- ===== PerformanceTrendSnapshot =====
+--   amazon_account_id text NOT NULL
+--   snapshot_date date NOT NULL
+--   acos_7d double precision
+--   acos_14d double precision
+--   acos_30d double precision
+--   acos_80d double precision
+--   roas_7d double precision
+--   roas_14d double precision
+--   spend_7d double precision
+--   spend_14d double precision
+--   orders_7d double precision
+--   orders_14d double precision
+--   cvr_14d double precision
+--   trend_classification text
+--   trend_delta_14d_vs_80d double precision
+--   recency_protection_active boolean
+--   goal_alignment_status text
+--   target_acos_at_snapshot double precision
+--   account_acos_14d double precision
+--   created_at timestamptz
+CREATE TABLE IF NOT EXISTS "performance_trend_snapshot" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "performance_trend_snapshot_data_gin" ON "performance_trend_snapshot" USING gin (data);
+CREATE INDEX IF NOT EXISTS "performance_trend_snapshot_created_date" ON "performance_trend_snapshot" (created_date DESC);
 
 -- ===== Product =====
 --   amazon_account_id text NOT NULL
@@ -3158,6 +3742,23 @@ CREATE INDEX IF NOT EXISTS "performance_settings_history_created_date" ON "perfo
 --   listing_buyable boolean
 --   offer_active boolean
 --   listing_suppressed boolean
+--   market_price_average double precision
+--   market_price_minimum double precision
+--   market_price_maximum double precision
+--   market_price_median double precision
+--   market_price_offer_count double precision
+--   market_price_currency text
+--   market_price_source text
+--   market_price_provider text
+--   market_price_marketplace text
+--   market_price_status text
+--   market_price_last_checked_at timestamptz
+--   market_price_next_check_at timestamptz
+--   market_price_error text
+--   market_price_excluded_offer_count double precision
+--   market_price_basis text
+--   market_price_request_id text
+--   market_price_updated_by text
 CREATE TABLE IF NOT EXISTS "product" (
   id           text PRIMARY KEY,
   created_date timestamptz NOT NULL DEFAULT now(),
@@ -3300,6 +3901,35 @@ CREATE TABLE IF NOT EXISTS "product_economics_history" (
 CREATE INDEX IF NOT EXISTS "product_economics_history_data_gin" ON "product_economics_history" USING gin (data);
 CREATE INDEX IF NOT EXISTS "product_economics_history_created_date" ON "product_economics_history" (created_date DESC);
 
+-- ===== ProductFamilyKeywordBank =====
+--   amazon_account_id text NOT NULL
+--   family_name text NOT NULL
+--   keyword text NOT NULL
+--   normalized_keyword text
+--   winning_asins jsonb
+--   winning_asin_count double precision
+--   primary_asin text
+--   total_orders double precision
+--   total_sales double precision
+--   avg_cvr double precision
+--   avg_acos double precision
+--   best_cpc double precision
+--   best_acos double precision
+--   relevance_patterns text
+--   transfer_confidence text
+--   high_confidence_transfer boolean
+--   last_updated_at timestamptz
+--   created_at timestamptz
+CREATE TABLE IF NOT EXISTS "product_family_keyword_bank" (
+  id           text PRIMARY KEY,
+  created_date timestamptz NOT NULL DEFAULT now(),
+  updated_date timestamptz NOT NULL DEFAULT now(),
+  created_by   text,
+  data         jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS "product_family_keyword_bank_data_gin" ON "product_family_keyword_bank" USING gin (data);
+CREATE INDEX IF NOT EXISTS "product_family_keyword_bank_created_date" ON "product_family_keyword_bank" (created_date DESC);
+
 -- ===== ProductKickoffQueue =====
 --   amazon_account_id text NOT NULL
 --   asin text NOT NULL
@@ -3373,6 +4003,14 @@ CREATE INDEX IF NOT EXISTS "product_profitability_learning_created_date" ON "pro
 --   target_type text NOT NULL
 --   target_value text NOT NULL
 --   bid double precision
+--   daypart_base_bid double precision
+--   daypart_bid_floor double precision
+--   daypart_bid_cap double precision
+--   daypart_active boolean
+--   daypart_multiplier double precision
+--   daypart_last_slot text
+--   daypart_last_adjusted_at timestamptz
+--   daypart_last_restored_at timestamptz
 --   state text
 --   status text
 --   is_negative boolean
@@ -3551,6 +4189,23 @@ CREATE INDEX IF NOT EXISTS "rule_rollback_created_date" ON "rule_rollback" (crea
 --   page_views double precision
 --   buy_box_pct double precision
 --   conversion_rate double precision
+--   gross_revenue double precision
+--   net_revenue double precision
+--   amazon_fees double precision
+--   referral_fee double precision
+--   fba_fee double precision
+--   tax_withheld double precision
+--   other_fees double precision
+--   gross_profit double precision
+--   gross_margin_pct double precision
+--   mpa_pct double precision
+--   profit_after_ads double precision
+--   ads_spend double precision
+--   finance_sync_status text
+--   finance_synced_at timestamptz
+--   finance_events_count double precision
+--   seller_central_gross_ref double precision
+--   delta_vs_seller_central_pct double precision
 CREATE TABLE IF NOT EXISTS "sales_daily" (
   id           text PRIMARY KEY,
   created_date timestamptz NOT NULL DEFAULT now(),
