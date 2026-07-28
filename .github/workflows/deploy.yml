@@ -38,25 +38,30 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Enviar arquivos para a VPS
+      - name: Empacotar e enviar para a VPS
         env:
-          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
-          DEST: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_PATH }}
+          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
         run: |
-          # base44/ e server/ — SEM --delete e excluindo .env (nunca sobrescreve segredos da VPS)
-          rsync -az --delete -e "$SSH" --exclude='.env' --exclude='node_modules' base44/ "$DEST/base44/"
-          rsync -az --delete -e "$SSH" --exclude='.env' --exclude='node_modules' server/ "$DEST/server/"
-          # dist/ (frontend buildado) — com --delete para limpar assets antigos com hash
-          rsync -az --delete -e "$SSH" dist/ "$DEST/dist/"
+          # Empacota apenas os 3 diretórios que a VPS precisa. server/.env NÃO entra
+          # no tar (não existe no repo) → segredos da VPS ficam preservados na extração.
+          tar czf /tmp/deploy.tar.gz base44 server dist
+          scp $SSHOPTS /tmp/deploy.tar.gz "$TARGET:/tmp/deploy.tar.gz"
 
-      - name: Rebuild e restart do container na VPS
+      - name: Aplicar, rebuildar e verificar na VPS
+        env:
+          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "cd ${{ secrets.VPS_PATH }} && docker compose -f server/docker-compose.yml up -d --build app"
-
-      - name: Verificar saúde do serviço
-        run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            "sleep 5 && curl -sf http://localhost:8000/health && echo ' — OK'"
+          ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
+            set -e
+            cd "$VPS_PATH"
+            # base44/ e dist/ não têm segredos → limpa para remover arquivos obsoletos.
+            # server/ NÃO é apagado (contém o .env que não está no tar).
+            rm -rf base44 dist
+            tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
+            docker compose -f server/docker-compose.yml up -d --build app
+            sleep 6
+            curl -sf http://localhost:8000/health && echo ' — deploy OK'
+          EOF
