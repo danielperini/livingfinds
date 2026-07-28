@@ -8,6 +8,18 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
+      "name": "Daily Budget Pacing Plan - 00:05 BRT",
+      "function": "runDailyBudgetPacingEngine",
+      "cron": "5 0 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Hourly Budget Distribution - minute 20",
+      "function": "runIntraDayBudgetPacingCycle",
+      "cron": "20 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Amazon Action Queue - 00:00 BRT",
       "function": "processAmazonNightWindow",
       "cron": "0 0 * * *",
