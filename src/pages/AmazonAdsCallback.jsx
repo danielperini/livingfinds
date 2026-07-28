@@ -41,15 +41,10 @@ export default function AmazonAdsCallback() {
       if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
 
       try {
-        // APP_ID fixo — confirmado via base44.getConfig() e não depende de localStorage
-        const APP_ID = '6a40180bd8d170a6c59c8098';
-        const BASE_URL = 'https://base44.app';
-        const fnRes = await fetch(`${BASE_URL}/api/apps/${APP_ID}/functions/exchangeAmazonAdsCode`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: finalCode }),
-        });
-        const data = await fnRes.json();
+        // Usar SDK autenticado — garante token de usuário e URL correta
+        // base44.functions.invoke retorna { data: { ... } } — extrair .data
+        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
+        const data = res?.data ?? res;
 
         if (!data?.ok) {
           setStatus('error');
@@ -61,9 +56,9 @@ export default function AmazonAdsCallback() {
         setStatus('success');
         setMessage(data.message || 'Amazon Ads conectada com sucesso.');
         setDetails(data);
-        // Redireciona para a página de setup após 3 segundos para confirmar o token
+        // Redireciona para a página de setup após 3 segundos com flag de reconexão
         setTimeout(() => {
-          window.location.href = '/amazon-oauth-setup';
+          window.location.href = '/amazon-oauth-setup?reconnected=1';
         }, 3000);
       } catch (e) {
         setStatus('error');
@@ -153,15 +148,15 @@ export default function AmazonAdsCallback() {
                 </div>
               )}
 
-              <p className="text-xs text-slate-500 mb-4">
-                O código OAuth da Amazon expira em segundos. Inicie o fluxo novamente na página de Diagnóstico.
+              <p className="text-xs text-amber-400/80 mb-4 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                ⚠️ O código OAuth expira em segundos — inicie um novo fluxo.
               </p>
 
               <Link
-                to="/diagnostico"
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-surface-2 border border-surface-3 text-slate-300 rounded-lg text-sm font-medium hover:text-white transition-colors"
+                to="/amazon-oauth-setup"
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan/10 border border-cyan/30 text-cyan rounded-lg text-sm font-medium hover:bg-cyan/20 transition-colors"
               >
-                Voltar ao Diagnóstico
+                Tentar novamente →
               </Link>
             </>
           )}

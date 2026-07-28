@@ -304,17 +304,14 @@
     },
     "ads_authorized_by_user": {
       "type": "boolean",
-      "default": false,
-      "description": "true = inclu\u00eddo explicitamente na lista autorizada pelo usu\u00e1rio"
+      "default": false
     },
     "ads_authorized_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "Quando foi autorizado"
+      "format": "date-time"
     },
     "ads_authorized_by": {
-      "type": "string",
-      "description": "Usu\u00e1rio ou fun\u00e7\u00e3o que autorizou"
+      "type": "string"
     },
     "ads_eligibility_status": {
       "type": "string",
@@ -332,67 +329,135 @@
         "data_stale",
         "unknown"
       ],
-      "default": "unknown",
-      "description": "Estado operacional de elegibilidade para Ads. Produto precisa de authorized + eligible para ter Ads ativos."
+      "default": "unknown"
     },
     "ads_ineligibility_reason": {
-      "type": "string",
-      "description": "Motivo detalhado de inelegibilidade"
+      "type": "string"
     },
     "ads_last_eligibility_check_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "Quando foi feita a \u00faltima avalia\u00e7\u00e3o de elegibilidade"
+      "format": "date-time"
     },
     "ads_resume_pending": {
       "type": "boolean",
-      "default": false,
-      "description": "true = campanha foi pausada pelo sistema e deve ser retomada quando elegibilidade retornar"
+      "default": false
     },
     "ads_previous_campaign_state": {
-      "type": "string",
-      "description": "Estado anterior da campanha antes da pausa sist\u00eamica (para retomada segura)"
+      "type": "string"
     },
     "ads_pause_reason": {
-      "type": "string",
-      "description": "Motivo da pausa sist\u00eamica mais recente"
+      "type": "string"
     },
     "ads_paused_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "Quando o sistema pausou as campanhas deste produto"
+      "format": "date-time"
     },
     "ads_mapping_conflict_asin": {
-      "type": "string",
-      "description": "ASIN divergente detectado (quando mapping_conflict)"
+      "type": "string"
     },
     "ads_mapping_conflict_sku": {
-      "type": "string",
-      "description": "SKU com conflito registrado"
+      "type": "string"
     },
     "ads_scope_updated_at": {
       "type": "string",
-      "format": "date-time",
-      "description": "Quando o ads_scope_status foi alterado"
+      "format": "date-time"
     },
     "ads_scope_updated_by": {
-      "type": "string",
-      "description": "Fun\u00e7\u00e3o ou usu\u00e1rio que alterou o escopo"
+      "type": "string"
     },
     "listing_buyable": {
       "type": "boolean",
-      "default": true,
-      "description": "Produto compr\u00e1vel na Amazon (listing n\u00e3o suprimido)"
+      "default": true
     },
     "offer_active": {
       "type": "boolean",
-      "default": true,
-      "description": "Oferta ativa no marketplace"
+      "default": true
     },
     "listing_suppressed": {
       "type": "boolean",
-      "default": false,
-      "description": "true = listing suprimido pela Amazon"
+      "default": false
+    },
+    "market_price_average": {
+      "type": "number",
+      "description": "Pre\u00e7o m\u00e9dio das ofertas p\u00fablicas do ASIN no marketplace (n\u00e3o \u00e9 price/buy_box_price)"
+    },
+    "market_price_minimum": {
+      "type": "number",
+      "description": "Pre\u00e7o m\u00ednimo observado entre as ofertas v\u00e1lidas"
+    },
+    "market_price_maximum": {
+      "type": "number",
+      "description": "Pre\u00e7o m\u00e1ximo observado entre as ofertas v\u00e1lidas"
+    },
+    "market_price_median": {
+      "type": "number",
+      "description": "Mediana dos pre\u00e7os das ofertas v\u00e1lidas"
+    },
+    "market_price_offer_count": {
+      "type": "number",
+      "description": "Quantidade de ofertas v\u00e1lidas usadas no c\u00e1lculo"
+    },
+    "market_price_currency": {
+      "type": "string",
+      "description": "Moeda das ofertas (ex: BRL)"
+    },
+    "market_price_source": {
+      "type": "string",
+      "description": "Provedor que retornou os dados: zinc ou scrapingbee"
+    },
+    "market_price_provider": {
+      "type": "string",
+      "description": "Nome leg\u00edvel do provedor"
+    },
+    "market_price_marketplace": {
+      "type": "string",
+      "description": "Marketplace consultado (ex: BR)"
+    },
+    "market_price_status": {
+      "type": "string",
+      "enum": [
+        "not_checked",
+        "queued",
+        "processing",
+        "success",
+        "no_offers",
+        "unsupported_marketplace",
+        "rate_limited",
+        "credit_limit_reached",
+        "failed"
+      ],
+      "default": "not_checked",
+      "description": "Status da \u00faltima consulta de pre\u00e7o de mercado"
+    },
+    "market_price_last_checked_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi feita a \u00faltima consulta bem-sucedida"
+    },
+    "market_price_next_check_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Agendamento da pr\u00f3xima consulta (para retry)"
+    },
+    "market_price_error": {
+      "type": "string",
+      "description": "Mensagem de erro sanitizada da \u00faltima tentativa (sem secrets)"
+    },
+    "market_price_excluded_offer_count": {
+      "type": "number",
+      "description": "Quantidade de ofertas exclu\u00eddas por serem outliers"
+    },
+    "market_price_basis": {
+      "type": "string",
+      "description": "Como o pre\u00e7o foi calculado: ITEM_ONLY ou ITEM_PLUS_REQUIRED_SHIPPING"
+    },
+    "market_price_request_id": {
+      "type": "string",
+      "description": "Request ID retornado pelo provedor para rastreio"
+    },
+    "market_price_updated_by": {
+      "type": "string",
+      "description": "Usu\u00e1rio ou fun\u00e7\u00e3o que disparou a \u00faltima atualiza\u00e7\u00e3o"
     }
   },
   "required": [

@@ -7,8 +7,9 @@ import { base44 } from '@/api/base44Client';
 import {
   Shield, ShieldAlert, ShieldOff, ShieldCheck, RefreshCw, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Package, Megaphone, Clock,
-  Eye, Pause, Play, Info
+  Eye, Pause, Play, Info, Wifi, WifiOff,
 } from 'lucide-react';
+import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
 
 const SCOPE_CONFIG = {
   authorized:             { label: 'Autorizado',            color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', icon: ShieldCheck },
@@ -57,6 +58,8 @@ export default function AdsAuthorizationPage() {
   const [dryRunResult, setDryRunResult] = useState(null);
   const [msg, setMsg] = useState(null);
   const [filterScope, setFilterScope] = useState('all');
+
+  const { propagating: rowPropagating, propagationResult: rowResult, propagate: rowPropagate } = useAmazonPropagation();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +113,46 @@ export default function AdsAuthorizationPage() {
       setApplying(false);
       setTimeout(() => setMsg(null), 15000);
     }
+  };
+
+  /**
+   * Autoriza/desautoriza um produto individual e propaga imediatamente para a Amazon.
+   */
+  const toggleProductAuthorization = async (product) => {
+    if (!account) return;
+    const currentStatus = product.ads_scope_status || 'not_authorized';
+    const isAuthorizing = currentStatus !== 'authorized';
+    const newStatus = isAuthorizing ? 'authorized' : 'not_authorized';
+
+    // Atualização otimista
+    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, ads_scope_status: newStatus, ads_authorized_by_user: isAuthorizing } : p));
+
+    await rowPropagate(
+      product.id,
+      isAuthorizing ? 'authorize_ads_scope_user_action' : 'deauthorize_ads_scope_user_action',
+      async () => {
+        // 1. Atualizar produto no banco
+        await base44.entities.Product.update(product.id, {
+          ads_scope_status: newStatus,
+          ads_authorized_by_user: isAuthorizing,
+          ads_authorized_at: isAuthorizing ? new Date().toISOString() : null,
+          ads_scope_updated_at: new Date().toISOString(),
+        });
+        // 2. Propagar para a Amazon: aplicar escopo específico para este ASIN
+        const res = await base44.functions.invoke('applyAdsScopeAuthorization', {
+          amazon_account_id: account.id,
+          asin: product.asin,
+          dry_run: false,
+        });
+        const d = res?.data;
+        if (!d?.ok && d?.error) throw new Error(d.error);
+      },
+      {
+        amazonAccountId: account.id,
+        actionType: isAuthorizing ? 'authorize_product' : 'deauthorize_product',
+        enqueuePayload: { amazon_account_id: account.id, asin: product.asin },
+      }
+    );
   };
 
   // Deduplicar por SKU
@@ -232,7 +275,7 @@ export default function AdsAuthorizationPage() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['SKU', 'ASIN', 'Produto', 'Estoque disp.', 'Listing', 'Autorização', 'Elegibilidade', 'Motivo', 'Campanhas', 'Retomada', 'Último check'].map(h => (
+                  {['SKU', 'ASIN', 'Produto', 'Estoque disp.', 'Listing', 'Autorização', 'Elegibilidade', 'Motivo', 'Campanhas', 'Retomada', 'Último check', 'Ação'].map(h => (
                     <th key={h} className="px-3 py-2.5 text-left font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -296,6 +339,36 @@ export default function AdsAuthorizationPage() {
                         {product.ads_last_eligibility_check_at
                           ? <span className="text-[10px] text-slate-500">{new Date(product.ads_last_eligibility_check_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                           : <span className="text-slate-600 text-[10px]">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-col gap-1 items-start">
+                          <button
+                            type="button"
+                            disabled={rowPropagating[product.id]}
+                            onClick={() => toggleProductAuthorization(product)}
+                            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border transition-colors disabled:opacity-50 whitespace-nowrap ${
+                              product.ads_scope_status === 'authorized'
+                                ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20'
+                                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20'
+                            }`}
+                          >
+                            {rowPropagating[product.id]
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : product.ads_scope_status === 'authorized'
+                                ? <ShieldOff className="w-3 h-3" />
+                                : <ShieldCheck className="w-3 h-3" />
+                            }
+                            {product.ads_scope_status === 'authorized' ? 'Desautorizar' : 'Autorizar'}
+                          </button>
+                          {rowResult[product.id] && (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-semibold ${rowResult[product.id].type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {rowResult[product.id].type === 'success'
+                                ? <><Wifi className="w-2.5 h-2.5" />Sincronizado</>
+                                : <><WifiOff className="w-2.5 h-2.5" />{rowResult[product.id].text}</>
+                              }
+                            </span>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

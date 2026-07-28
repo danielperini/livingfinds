@@ -78,7 +78,7 @@ Deno.serve(async (req) => {
     const [
       catalogDone, salesDone, allJobsExist,
       campStateDone, invDone, manualTermsDone,
-      eval72hDone, backupDone,
+      eval72hDone, backupDone, acosCheckerDone,
     ] = await Promise.all([
       wasRunTodaySuccessfully(base44, aid, 'sync_catalog'),
       wasRunTodaySuccessfully(base44, aid, 'sync_sales'),
@@ -88,7 +88,12 @@ Deno.serve(async (req) => {
       wasRunTodaySuccessfully(base44, aid, 'manual_campaign_terms'),
       wasRunTodaySuccessfully(base44, aid, 'evaluate_new_campaigns_72h'),
       wasRunTodaySuccessfully(base44, aid, 'daily_backup'),
+      wasRunTodaySuccessfully(base44, aid, 'acos_violation_checker'),
     ]);
+
+    // Verificar se hoje é segunda-feira (dia 1 da semana BRT)
+    const todayBRTDate = new Date(Date.now() - 3 * 3600000);
+    const isMonday = todayBRTDate.getDay() === 1;
 
     const pendingJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
       { amazon_account_id: aid }, '-created_date', 10
@@ -146,6 +151,14 @@ Deno.serve(async (req) => {
     if (!eval72hDone || force) add('evaluateNewCampaigns72h', 'evaluate_new_campaigns_72h', {}, true);
     else skipped.push('evaluate_new_campaigns_72h');
 
+    // Promoção de search terms vencedores AUTO → MANUAL EXACT + Cross-ASIN
+    // Executado após sync de relatórios e estados de campanha (idempotente)
+    add('promoteWinningSearchTerms', 'promote_winning_terms');
+
+    // Negative Product Target Guard: bloqueia ASINs concorrentes com clicks sem conversão
+    // Executado após promoção de termos — age imediatamente na API da Amazon
+    add('runNegativeProductTargetGuard', 'negative_product_target_guard');
+
     // Bids iniciais: idempotente, só processa pendentes
     add('applyInitialBidsToAllCampaigns', 'apply_initial_bids', { batch_size: 10 });
 
@@ -154,6 +167,44 @@ Deno.serve(async (req) => {
 
     // Auditoria de estados de campanha: valida divergências locais vs Amazon
     add('auditCampaignStateSync', 'audit_campaign_states');
+
+    // Auditoria de competição AUTO vs MANUAL: sempre — detecta colisões e negativa fire-and-forget
+    add('auditAutoManualCompetition', 'audit_auto_manual_competition', { trigger_type: 'automatic' });
+
+    // Expansão de cobertura: sempre — cria campanhas canônicas para ASINs elegíveis
+    add('expandCoverageForAsin', 'expand_coverage_auto', { trigger_type: 'automatic', max_campaigns: 30 });
+
+    // 1x/dia: Auditoria de divergência de budget — ativa KillSwitch se delta > 5%
+    const budgetAuditDone = await wasRunTodaySuccessfully(base44, aid, 'audit_budget_divergence');
+    if (!budgetAuditDone || force) add('auditBudgetDivergence', 'audit_budget_divergence', {}, true);
+    else skipped.push('audit_budget_divergence');
+
+    // 1x/dia: Redução de bids proporcional ao gap de lucro (pré-filtro: 2 dias consecutivos negativos)
+    const profitBidReductionDone = await wasRunTodaySuccessfully(base44, aid, 'profit_bid_reduction');
+    if (!profitBidReductionDone || force) add('adjustBidByProfitAfterAds', 'profit_bid_reduction', { require_consecutive_days: 2 }, true);
+    else skipped.push('profit_bid_reduction');
+
+    // Sempre: motor de proteção de rentabilidade — pausa ASINs com lucro pós-Ads negativo (atua 1 dia após redução de bids)
+    add('runProfitAfterAdsPauseGuard', 'profit_after_ads_pause_guard');
+
+    // 1x/semana (segunda-feira): ACoS Violation Checker
+    if (isMonday && (!acosCheckerDone || force)) add('runAcosViolationChecker', 'acos_violation_checker', {}, true);
+    else skipped.push('acos_violation_checker');
+
+    // Sempre: deduplicar e reescandar jobs travados da fila de kick-off
+    add('rescheduleStaleKickoffJobs', 'kickoff_queue_reschedule');
+
+    // Reparo de campanhas incompletas: sempre — idempotente, só processa pendentes
+    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto', { _window_execution: true });
+    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact', { target: 'manual_only' });
+
+    // Sempre: reativar campanhas AUTO pausadas com estoque + reparar incompletas
+    add('reactivatePausedWithStock', 'reactivate_paused_with_stock', { targeting_type_filter: 'AUTO', include_incomplete: true });
+    add('repairIncompleteAutoCampaigns', 'repair_incomplete_auto');
+    add('repairIncompleteManualExactCampaigns', 'repair_incomplete_manual_exact');
+
+    // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
+    add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 });
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);

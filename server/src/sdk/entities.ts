@@ -4,8 +4,8 @@
  * Modelo de armazenamento: cada entidade é uma tabela "documento":
  *   ( id text pk, created_date timestamptz, updated_date timestamptz, created_by text, data jsonb )
  * Os campos do registro ficam em `data`; os campos de sistema (id/created_date/updated_date/created_by)
- * são colunas próprias. Isso reproduz a semântica flexível do Base44 e roda as 311 funções sem
- * precisar acertar o schema tipado de 116 entidades de antemão. A tabela é criada sob demanda.
+ * são colunas próprias. Isso reproduz a semântica flexível do Base44 e permite carregar novas
+ * funções e entidades sem alterar o armazenamento. A tabela é criada sob demanda.
  */
 import { sql } from '../db.ts';
 

@@ -181,90 +181,42 @@ Deno.serve(async (req) => {
     const endDateStr = fmtDate(endDate);
     const startDateStr = fmtDate(startDate);
 
-    // Obter token para solicitar relatórios
-    const adsToken = await getAdsToken(account);
-    // Headers padrão para relatórios v3
-    const adsHeaders: Record<string, string> = {
-      'Authorization': `Bearer ${adsToken}`,
-      'Amazon-Advertising-API-ClientId': clientId,
-      'Amazon-Advertising-API-Scope': profileId,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-
+    // ── Delegar solicitação de relatórios ao requestAmazonAdsReportV3 (deduplication via idempotency_key)
     const jobIds: Record<string, string> = {};
     const reportResults: any[] = await Promise.all(REPORT_CONFIGS.map(async (rc) => {
       try {
-        const payload: any = {
-          name: `LivingFinds_${rc.key}_${endDateStr}`,
-          startDate: startDateStr,
-          endDate: endDateStr,
-          configuration: {
-            adProduct: 'SPONSORED_PRODUCTS',
-            groupBy: rc.groupBy,
-            columns: rc.columns,
-            reportTypeId: rc.reportTypeId,
-            timeUnit: 'DAILY',
-            format: 'GZIP_JSON',
-          },
-        };
-        // Filtro para spTargeting: apenas keywords (exclui product targets)
-        if (rc.filters) {
-          payload.configuration.filters = rc.filters;
-        }
-
-        const r = await fetch(`${adsBase}/reporting/reports`, {
-          method: 'POST',
-          headers: adsHeaders,
-          body: JSON.stringify(payload),
+        const res = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
+          amazon_account_id: aid,
+          report_type_id: rc.reportTypeId,
+          ad_product: 'SPONSORED_PRODUCTS',
+          time_unit: 'DAILY',
+          group_by: rc.groupBy,
+          columns: rc.columns,
+          filters: rc.filters || null,
+          start_date: startDateStr,
+          end_date: endDateStr,
+          report_name: `LivingFinds_${rc.key}_${endDateStr}`,
+          source_function: 'runDailyFullReportPipeline',
         });
-        const d = await r.json().catch(() => ({}));
 
-        if (!r.ok) {
-          console.warn(`[Pipeline] report ${rc.key} HTTP ${r.status}: ${JSON.stringify(d).slice(0, 200)}`);
+        const d = res?.data ?? res;
+        if (d?.ok && d?.job_id) {
+          jobIds[rc.key] = d.job_id;
+          if (d.reused) {
+            // Registrar reutilização no SyncExecutionLog para rastreabilidade
+            await base44.asServiceRole.entities.SyncExecutionLog.create({
+              amazon_account_id: aid,
+              operation: `requestReport_${rc.key}`,
+              trigger_type: 'automatic',
+              status: 'skipped',
+              result_summary: `Job reutilizado: ${d.job_id} (status: ${d.status})`,
+              started_at: now,
+              completed_at: now,
+            }).catch(() => {});
+          }
+          return { key: rc.key, ok: true, job_id: d.job_id, reused: d.reused ?? false, status: d.status };
         }
-
-        if (r.ok && d.reportId) {
-          // Registrar job no banco para polling assíncrono
-          const job = await base44.asServiceRole.entities.AmazonAdsReportJob.create({
-            amazon_account_id: aid,
-            profile_id: profileId,
-            region: account.region || 'NA',
-            report_id: d.reportId,
-            report_name: payload.name,
-            report_type_id: rc.reportTypeId,
-            ad_product: 'SPONSORED_PRODUCTS',
-            time_unit: 'DAILY',
-            format: 'GZIP_JSON',
-            group_by: rc.groupBy,
-            columns: rc.columns,
-            filters: rc.filters ? JSON.stringify(rc.filters) : null,
-            start_date: startDateStr,
-            end_date: endDateStr,
-            idempotency_key: `${rc.reportTypeId}|${startDateStr}|${endDateStr}`,
-            status: 'pending',
-            amazon_status: d.status || 'PENDING',
-            requested_at: now,
-            next_poll_at: new Date(Date.now() + 10 * 60000).toISOString(), // primeiro poll após 10min
-            poll_attempts: 0,
-            source_function: 'runDailyFullReportPipeline',
-            created_at: now,
-            updated_at: now,
-          }).catch(() => null);
-
-          if (job) jobIds[rc.key] = job.id;
-          return { key: rc.key, ok: true, report_id: d.reportId, job_id: job?.id };
-        } else if (r.status === 425) {
-          // Já existe um relatório equivalente em andamento — buscar job existente
-          const existingJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
-            { amazon_account_id: aid, report_type_id: rc.reportTypeId, status: 'pending' },
-            '-created_at', 1
-          ).catch(() => []);
-          if (existingJobs[0]) jobIds[rc.key] = existingJobs[0].id;
-          return { key: rc.key, ok: true, reused: true, status: 425 };
-        } else {
-          return { key: rc.key, ok: false, error: d?.message || `HTTP ${r.status}` };
-        }
+        return { key: rc.key, ok: false, error: d?.error || 'Falha ao solicitar relatório' };
       } catch (e: any) {
         return { key: rc.key, ok: false, error: e.message };
       }
@@ -280,7 +232,9 @@ Deno.serve(async (req) => {
     // ── FASE 2: Budget Usage API — dados em tempo quase real ─────────────────
     // Budget Usage API retorna consumo do dia atual sem esperar relatório
     console.log('[Pipeline] Fase 2: Budget Usage API (tempo real)...');
+    const adsToken = await getAdsToken(account).catch(() => '');
     try {
+      if (!adsToken) throw new Error('Token Ads indisponível para Budget Usage');
       // Budget Usage API v3 (SP) — com fallback para campaigns list
       const budgetApiHeaders = {
         'Authorization': `Bearer ${adsToken}`,
@@ -372,6 +326,31 @@ Deno.serve(async (req) => {
         summary.phases.inventory = { created: invCreates.length, updated: invUpdates.length };
       }
     } catch (e: any) { console.warn('[Pipeline] Inventário FBA (não crítico):', e.message); }
+
+    // ── FASE 3b: Relatório HOURLY por ASIN para HourlySalesPattern ───────────
+    // Não bloqueante — erro aqui não aborta o pipeline
+    console.log('[Pipeline] Fase 3b: relatório HOURLY por ASIN...');
+    try {
+      const hourlyRes = await base44.asServiceRole.functions.invoke('syncUnifiedAdsReportsHourly', {
+        amazon_account_id: aid,
+        days: 7,
+        _service_role: true,
+      }).catch((e: any) => ({ ok: false, error: e?.message }));
+      const hd = hourlyRes?.data ?? hourlyRes;
+      summary.phases.hourly_asin = {
+        ok: hd?.ok ?? false,
+        records_saved: hd?.records_saved ?? 0,
+        slots_computed: hd?.slots_computed ?? 0,
+        peak_elite: hd?.peak_elite ?? 0,
+        peak_strong: hd?.peak_strong ?? 0,
+        used_asin_group_by: hd?.used_asin_group_by ?? false,
+        dayparting_triggered: hd?.dayparting_triggered ?? false,
+        error: hd?.error || null,
+      };
+    } catch (e: any) {
+      console.warn('[Pipeline] Hourly ASIN (não crítico):', e.message);
+      summary.phases.hourly_asin = { error: e.message };
+    }
 
     // ── FASE 4: Atualizar AmazonAccount ──────────────────────────────────────
     await base44.asServiceRole.entities.AmazonAccount.update(aid, { last_sync_at: now, status: 'connected' }).catch(() => {});

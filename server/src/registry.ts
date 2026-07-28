@@ -1,5 +1,5 @@
 /**
- * Registry — carrega as 311 funções Deno sem modificá-las.
+ * Registry — carrega dinamicamente as funções Deno sem modificá-las.
  *
  * Truque: cada função chama `Deno.serve(handler)` no topo do módulo. Nós substituímos
  * `Deno.serve` por um capturador ANTES de importar cada entry.ts — em vez de subir um servidor,

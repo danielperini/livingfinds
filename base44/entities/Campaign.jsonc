@@ -170,6 +170,29 @@
       "type": "string"
     },
     "bidding_strategy": {
+      "type": "string",
+      "description": "Estrat\u00e9gia leg\u00edvel do app: fixed, dynamic_down_only ou dynamic_up_down."
+    },
+    "amazon_bidding_strategy": {
+      "type": "string",
+      "description": "Estrat\u00e9gia confirmada na Amazon Ads: MANUAL, LEGACY_FOR_SALES, AUTO_FOR_SALES ou RULE_BASED."
+    },
+    "bid_control_mode": {
+      "type": "string",
+      "description": "Motor respons\u00e1vel pelo controle do lance, por exemplo livingfinds_dynamic_up_down_capped_50."
+    },
+    "bidding_strategy_reason": {
+      "type": "string"
+    },
+    "bidding_strategy_last_changed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bidding_strategy_next_review_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bidding_strategy_request_id": {
       "type": "string"
     },
     "portfolio_id": {
@@ -246,6 +269,11 @@
     "last_activity_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "cleanup_last_action_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "\u00daltima vez que o motor Auto Campaign Cleanup executou uma a\u00e7\u00e3o nesta campanha. Usado para cooldown isolado (48h), separado do last_activity_at."
     },
     "learning_eligible": {
       "type": "boolean",

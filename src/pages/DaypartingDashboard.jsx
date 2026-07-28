@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Clock, TrendingUp, TrendingDown, Activity, Loader2,
   Zap, CheckCircle, XCircle, AlertTriangle, BarChart2,
-  RefreshCw, ChevronDown, ChevronUp, Database
+  RefreshCw, ChevronDown, ChevronUp, Database, Package
 } from 'lucide-react';
+import AsinPeakProfilesPanel from '@/components/dayparting/AsinPeakProfilesPanel';
 
 // ── Classificação horária: label, cor e ação esperada ──────────────────────────
 const CLASS_CONFIG = {
@@ -279,6 +280,16 @@ export default function DaypartingDashboard() {
   const [applyingId, setApplyingId]     = useState(null);
   const [msg, setMsg]                   = useState(null);
   const [tab, setTab]                   = useState('rules');
+  const [matureAsinCount, setMatureAsinCount] = useState(0);
+
+  // Carregar contagem de perfis maduros para exibir no tab
+  useEffect(() => {
+    if (!account) return;
+    base44.entities.HourlySalesPattern.filter(
+      { amazon_account_id: account.id, day_of_week: 0, hour: 0, asin_data_maturity: 'sufficient' },
+      null, 200
+    ).then(res => setMatureAsinCount(res.filter(p => !!p.asin).length)).catch(() => {});
+  }, [account]);
 
   const loadData = useCallback(async () => {
     setLoadingRules(true);
@@ -432,6 +443,7 @@ export default function DaypartingDashboard() {
               { id: 'rules',   label: `Regras Ativas (${activeRules.length > 0 ? new Set(activeRules.map(r=>r.campaign_id)).size : 0} camp.)`, icon: Database },
               { id: 'pending', label: `Aguardando Aprovação (${pendingDecs.length})`, icon: AlertTriangle },
               { id: 'history', label: `Histórico (${executedDecs.length})`, icon: BarChart2 },
+              { id: 'asin_profiles', label: `Perfis por Produto (${matureAsinCount} maduros)`, icon: Package },
             ].map(t => {
               const Icon = t.icon;
               return (
@@ -514,6 +526,12 @@ export default function DaypartingDashboard() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {tab === 'asin_profiles' && (
+            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+              <AsinPeakProfilesPanel account={account} />
             </div>
           )}
 

@@ -50,8 +50,8 @@ Deno.serve(async (req) => {
 
     const token = await getAdsToken(refreshToken);
     
-    // Arquivar na Amazon (API v3)
-    const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns/${campaign_id}`, {
+    // Arquivar na Amazon (API v3 — endpoint batch obrigatório)
+    const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns`, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -60,12 +60,16 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/vnd.spCampaign.v3+json',
         'Accept': 'application/vnd.spCampaign.v3+json',
       },
-      body: JSON.stringify({ state: 'ARCHIVED' }),
+      body: JSON.stringify({ campaigns: [{ campaignId: campaign_id, state: 'ARCHIVED' }] }),
     });
 
     const responseData = await res.json();
     
-    if (!res.ok) {
+    // Verificar sucesso no nível do item (API v3 retorna 207 com erros por item)
+    const campaignResult = responseData?.campaigns?.success?.[0] || responseData?.campaigns?.error?.[0];
+    const hasError = responseData?.campaigns?.error?.length > 0;
+    
+    if (!res.ok || hasError) {
       return Response.json({ 
         ok: false, 
         error: 'Falha ao arquivar campanha na Amazon',

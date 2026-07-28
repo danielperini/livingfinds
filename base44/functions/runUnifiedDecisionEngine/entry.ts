@@ -1,18 +1,11 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 /**
  * runUnifiedDecisionEngine
  *
  * Entrada canônica e única do motor de decisões do LivingFinds.
- * Toda execução delega ao motor determinístico principal, que concentra:
- * - metas e guardrails de PerformanceSettings;
- * - estoque e velocidade real via SP-API;
- * - métricas Amazon Ads persistidas;
- * - idempotência, cooldown e auditoria;
- * - geração de decisões para a fila oficial do Autopilot.
- *
- * Esta função existe para impedir que motores paralelos produzam decisões
- * concorrentes para a mesma conta, campanha ou keyword.
+ * Reconciliador manual, motor determinístico, regras nativas Amazon, migração
+ * da fila antiga e monitor de tendência compartilham o mesmo ciclo.
  */
 Deno.serve(async (request) => {
   try {
@@ -28,22 +21,77 @@ Deno.serve(async (request) => {
       ...body,
       _service_role: true,
       source_function: body.source_function || 'runUnifiedDecisionEngine',
-      engine_version: 'unified-v1',
+      engine_version: 'unified-v2-native-bid-rules',
     };
+
+    const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileManualBidCycleScope',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+        skip_sync: body.skip_scope_sync === true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const scopeBefore = scopeBeforeResponse?.data || scopeBeforeResponse || {};
 
     const result = await base44.asServiceRole.functions.invoke(
       'runDeterministicDecisionEngine',
       payload,
     );
-
     const data = result?.data || result || {};
 
+    const nativeRulesResponse = await base44.asServiceRole.functions.invoke(
+      'syncAmazonScheduleBidRules',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        dry_run: body.dry_run === true,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const nativeRules = nativeRulesResponse?.data || nativeRulesResponse || {};
+
+    // Remove apenas ações legadas ainda pendentes. O histórico executado é mantido.
+    const legacyQueueResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileLegacyDaypartingQueue',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const legacyQueue = legacyQueueResponse?.data || legacyQueueResponse || {};
+
+    const scopeAfterResponse = await base44.asServiceRole.functions.invoke(
+      'reconcileManualBidCycleScope',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        _service_role: true,
+        skip_sync: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const scopeAfter = scopeAfterResponse?.data || scopeAfterResponse || {};
+
+    const trendMonitorResponse = await base44.asServiceRole.functions.invoke(
+      'runAcosTrendMonitor',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        trigger: 'runUnifiedDecisionEngine',
+        _service_role: true,
+      },
+    ).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
+    const trendMonitor = trendMonitorResponse?.data || trendMonitorResponse || {};
+
     return Response.json({
-      ok: data?.ok !== false,
+      ok: data?.ok !== false && scopeAfter?.ok !== false && nativeRules?.ok !== false && legacyQueue?.ok !== false,
       engine: 'unified',
+      engine_version: 'unified-v2-native-bid-rules',
       delegated_to: 'runDeterministicDecisionEngine',
       amazon_account_id: body.amazon_account_id || null,
+      manual_bid_scope_before: scopeBefore,
       result: data,
+      amazon_schedule_bid_rules: nativeRules,
+      legacy_dayparting_queue: legacyQueue,
+      manual_bid_scope_after: scopeAfter,
+      acos_trend_monitor: trendMonitor,
     });
   } catch (error: any) {
     return Response.json(

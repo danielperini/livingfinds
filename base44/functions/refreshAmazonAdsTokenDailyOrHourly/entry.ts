@@ -93,8 +93,34 @@ Deno.serve(async (req) => {
         }).catch(() => {});
       }
 
-      // Toda execução de 40 minutos renova de verdade. Não confiar apenas no
-      // horário salvo do access token, pois instâncias diferentes não compartilham cache.
+      // Skip se o token foi renovado há menos de 20min E ainda é válido por >10min.
+      // Evita que instâncias paralelas do watchdog forcem renovações desnecessárias.
+      const lastRefreshAt = account.ads_last_token_refresh_at
+        ? new Date(account.ads_last_token_refresh_at).getTime()
+        : 0;
+      const msSinceLastRefresh = Date.now() - lastRefreshAt;
+      const tokenExpiresAt = account.ads_access_token_expires_at
+        ? new Date(account.ads_access_token_expires_at).getTime()
+        : 0;
+      const msUntilExpiry = tokenExpiresAt - Date.now();
+      const refreshedRecently = msSinceLastRefresh < 20 * 60 * 1000; // <20min
+      const tokenStillValid   = msUntilExpiry > 10 * 60 * 1000;      // >10min restantes
+
+      if (refreshedRecently && tokenStillValid) {
+        console.log(`[Watchdog] Pulando conta ${accountId} — token renovado há ${Math.round(msSinceLastRefresh / 60000)}min, válido por mais ${Math.round(msUntilExpiry / 60000)}min.`);
+        const item = {
+          account_id: accountId,
+          ok: true,
+          refreshed: false,
+          skipped: true,
+          skip_reason: 'skipped_recent_refresh',
+          last_refresh_min_ago: Math.round(msSinceLastRefresh / 60000),
+          valid_for_min: Math.round(msUntilExpiry / 60000),
+        };
+        results.push(item);
+        continue;
+      }
+
       let finalResult: any = null;
       let attempts = 0;
 
@@ -105,7 +131,6 @@ Deno.serve(async (req) => {
         try {
           const response = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
             amazon_account_id: accountId,
-            force_refresh: true,
             _service_role: true,
           });
           finalResult = response?.data || response || {};
@@ -133,6 +158,22 @@ Deno.serve(async (req) => {
           ads_token_last_error: null,
           error_message: null,
         }).catch(() => {});
+
+        // AUTO-RECOVERY: limpar alertas ativos de token para esta conta
+        try {
+          const tokenAlerts = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: accountId,
+            status: 'active',
+          }, '-created_at', 10);
+          for (const a of tokenAlerts) {
+            if (a.alert_type === 'token_expired' || a.alert_type === 'token_revoked') {
+              await base44.asServiceRole.entities.Alert.update(a.id, {
+                status: 'resolved',
+                resolved_at: now,
+              }).catch(() => {});
+            }
+          }
+        } catch { /* não bloquear o fluxo */ }
 
         const item = {
           account_id: accountId,
@@ -166,7 +207,14 @@ Deno.serve(async (req) => {
       // 429, 5xx, 504, 524 e timeout não revogam a conexão. O próximo ciclo
       // automático tentará novamente sem depender de intervenção humana.
       if (!transient) {
-        patch.ads_requires_reauth = requiresReauth;
+        // Se requiresReauth mas o token ENV está disponível, o tokenManager já
+        // tentou o fallback. Se ele retornou ok=false, significa que ambos
+        // falharam e aí sim marcar reauth. Se a conta já tem env token presente,
+        // aguardar o resultado real do tokenManager antes de forçar reauth.
+        const envTokenPresent = account?.ads_env_token_present === true || !!String(Deno.env.get('ADS_REFRESH_TOKEN') || '').trim().startsWith('Atzr|');
+        const skipReauthFlag = requiresReauth && envTokenPresent && finalResult?.recovered_from_env_fallback !== true;
+
+        patch.ads_requires_reauth = skipReauthFlag ? false : requiresReauth;
         patch.ads_credentials_error = credentialsError;
         patch.ads_token_status = credentialsError
           ? 'credentials_error'
@@ -174,7 +222,7 @@ Deno.serve(async (req) => {
             ? 'revoked'
             : 'error';
 
-        if (requiresReauth || credentialsError) {
+        if ((requiresReauth && !skipReauthFlag) || credentialsError) {
           patch.status = 'error';
           patch.error_message = message;
         }

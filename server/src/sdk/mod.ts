@@ -1,6 +1,6 @@
 /**
  * Shim do @base44/sdk — ponto de entrada que o import-map (deno.json) injeta no lugar do
- * pacote real para todas as 311 funções. Reconstrói o objeto `base44` que elas usam:
+ * pacote real para as funções. Reconstrói o objeto `base44` que elas usam:
  *   base44.entities.<E>.{list,filter,get,create,bulkCreate,update,delete,deleteMany}
  *   base44.auth.{me,isAuthenticated}
  *   base44.integrations.Core.{InvokeLLM,SendEmail,UploadFile}

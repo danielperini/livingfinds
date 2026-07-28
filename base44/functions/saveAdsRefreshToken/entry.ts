@@ -91,6 +91,13 @@ Deno.serve(async (req) => {
       last_sync_at: new Date().toISOString(),
     });
 
+    // Após reconexão: forçar retomada do pipeline de relatórios travados (fire-and-forget)
+    base44.asServiceRole.functions.invoke('checkAndForceReportPipeline', {
+      _service_role: true,
+      force: true,
+      amazon_account_id: account.id,
+    }).catch(() => {});
+
     return Response.json({
       ok: true,
       message: 'Token validado e salvo com sucesso.',
@@ -102,6 +109,7 @@ Deno.serve(async (req) => {
         countryCode: p.countryCode,
         currencyCode: p.currencyCode,
       })),
+      pipeline_triggered: true,
     });
 
   } catch (err: any) {

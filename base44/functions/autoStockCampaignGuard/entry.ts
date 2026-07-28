@@ -12,19 +12,16 @@ function adsBase(region) {
   return 'https://advertising-api.amazon.com';
 }
 
-async function getAdsToken(account) {
-  const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
-  if (!refreshToken) throw new Error('ADS_REFRESH_TOKEN ausente');
-  const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-  const secret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: secret }),
+async function getAdsToken(base44: any, account: any): Promise<string> {
+  const res = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
+    amazon_account_id: account.id,
+    _service_role: true,
   });
-  const data = await res.json().catch(() => ({}));
-  if (!data.access_token) throw new Error(data.error_description || `Token falhou HTTP ${res.status}`);
-  return data.access_token;
+  const data = res?.data || res;
+  if (!data?.ok || !data?.access_token) {
+    throw new Error(data?.message || data?.error || 'Falha ao obter access token via tokenManager');
+  }
+  return String(data.access_token);
 }
 
 // Busca todas as campanhas da Amazon em um determinado estado e retorna Map<campaignId, state>
@@ -103,7 +100,7 @@ Deno.serve(async (req) => {
 
       let token = null;
       try {
-        token = await getAdsToken(account);
+        token = await getAdsToken(base44, account);
       } catch (e) {
         accountLog.errors.push({ step: 'token', error: e.message });
         results.push(accountLog);
@@ -165,6 +162,10 @@ Deno.serve(async (req) => {
         const isReallyPaused = realState === 'paused';
 
         // CASO A: sem estoque mas campanha ativa na Amazon → pausar
+        // Respeitar ads_protected: só pausar se realmente sem estoque (fba=0)
+        const linkedProtected = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 1)
+          .then((r: any[]) => r[0]?.ads_protected === true).catch(() => false);
+        if (linkedProtected && fba > 0) continue; // protegida e tem estoque → pular
         if (isOutOfStock && isReallyActive) {
           try {
             const linkedCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 5).catch(() => []);

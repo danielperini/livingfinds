@@ -60,6 +60,88 @@ Deno.serve(async (req) => {
     const actions = [];
     const alerts = [];
 
+    // ── 0. TOKEN HEALTH CHECK ──────────────────────────────────────────────
+    // Verificar status do token ANTES dos guardrails operacionais
+    try {
+      const tokenStatus = account.ads_token_status || 'missing';
+      const expiresAt   = account.ads_access_token_expires_at
+        ? new Date(account.ads_access_token_expires_at).getTime()
+        : 0;
+      const remainingMs = expiresAt - Date.now();
+      const CRITICAL_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutos
+
+      const tokenCritical = (
+        tokenStatus === 'expired' ||
+        tokenStatus === 'revoked' ||
+        tokenStatus === 'missing' ||
+        tokenStatus === 'error' ||
+        !account.ads_access_token ||
+        remainingMs <= CRITICAL_THRESHOLD_MS
+      );
+
+      if (tokenCritical) {
+        // Tentar auto-renovação via watchdog
+        const refreshRes = await base44.asServiceRole.functions.invoke('refreshAmazonAdsTokenDailyOrHourly', {
+          _service_role: true,
+        }).catch((e: any) => ({ data: { ok: false, error: e.message } }));
+
+        const refreshData = refreshRes?.data || {};
+        const accountResult = refreshData?.results?.find((r: any) => r.account_id === aid);
+        const renewalOk = refreshData?.ok === true || accountResult?.ok === true;
+
+        if (!renewalOk) {
+          // Renovação falhou — criar alerta de token expirado (idempotente)
+          const existingTokenAlert = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            alert_type: 'token_expired',
+            status: 'active',
+          }, '-created_at', 1).catch(() => []);
+
+          if (existingTokenAlert.length === 0) {
+            await base44.asServiceRole.entities.Alert.create({
+              amazon_account_id: aid,
+              alert_type: 'token_expired',
+              severity: 'critical',
+              title: 'Token Amazon Ads expirado',
+              message: 'Token Amazon Ads expirado ou revogado. Acesse /amazon-oauth-setup para reconectar.',
+              entity_type: 'account',
+              status: 'active',
+              created_at: now,
+            }).catch(() => {});
+          }
+
+          // Marcar requires_reauth apenas se for revogação real
+          const requiresReauth = accountResult?.requires_reauthorization === true ||
+            tokenStatus === 'revoked' || tokenStatus === 'credentials_error';
+          if (requiresReauth) {
+            await base44.asServiceRole.entities.AmazonAccount.update(aid, {
+              ads_requires_reauth: true,
+              ads_token_status: 'revoked',
+              status: 'error',
+              error_message: 'Reautorização necessária. Acesse /amazon-oauth-setup.',
+            }).catch(() => {});
+          }
+
+          actions.push({ type: 'token_alert_created', token_status: tokenStatus, renewal_attempted: true, renewal_ok: false });
+        } else {
+          // Renovação bem-sucedida — limpar alertas de token
+          const tokenAlerts = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            status: 'active',
+          }, '-created_at', 10).catch(() => []);
+          for (const a of tokenAlerts) {
+            if (a.alert_type === 'token_expired' || a.alert_type === 'token_revoked') {
+              await base44.asServiceRole.entities.Alert.update(a.id, {
+                status: 'resolved',
+                resolved_at: now,
+              }).catch(() => {});
+            }
+          }
+          actions.push({ type: 'token_renewed', token_status: tokenStatus });
+        }
+      }
+    } catch { /* guardrail de token nunca bloqueia o restante */ }
+
     // ── 1. Liberar locks travados ──────────────────────────────────────────
     const stuckRuns = await base44.asServiceRole.entities.AutopilotRun.filter(
       { amazon_account_id: aid, status: 'running' }, '-started_at', 5
@@ -103,6 +185,8 @@ Deno.serve(async (req) => {
 
       for (const c of activeCampaigns) {
         if (!c.asin || !oosByAsin.has(c.asin)) continue;
+        // Respeitar flag ads_protected: só pausar se realmente sem estoque
+        if ((c as any).ads_protected === true) continue;
 
         // Verificar se já existe decisão de pausa pendente/executada hoje
         const existingPause = await base44.asServiceRole.entities.OptimizationDecision.filter({
@@ -216,7 +300,73 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    // ── 5. Ações Amazon não confirmadas ───────────────────────────────────
+    // ── 5. Budget Kill Switch & Pacing Cycle + Trava de limite por campanha ──
+    // Kill Switch: verifica se gasto atingiu Hard Cap (global)
+    try {
+      const killSwitchRes = await base44.asServiceRole.functions.invoke('runBudgetKillSwitch', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (killSwitchRes?.data?.kill_switch_activated) {
+        actions.push({ type: 'kill_switch_activated', campaigns_paused: killSwitchRes.data.campaigns_paused });
+      }
+    } catch {}
+
+    // Trava de limite por campanha + cap global com dados em tempo real
+    try {
+      const spendEnforceRes = await base44.asServiceRole.functions.invoke('enforceCampaignSpendLimits', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      const d = spendEnforceRes?.data;
+      if (d && (d.paused_by_campaign_limit > 0 || d.paused_by_global_limit > 0)) {
+        actions.push({
+          type: 'spend_limit_enforced',
+          paused_by_campaign_limit: d.paused_by_campaign_limit,
+          paused_by_global_limit: d.paused_by_global_limit,
+          global_cap_triggered: d.global_cap_triggered,
+        });
+      }
+    } catch {}
+
+    // Pacing Cycle: executa ajustes de underpacing/overpacing/daypart reserve
+    try {
+      const pacingRes = await base44.asServiceRole.functions.invoke('runIntraDayPacingCycle', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (pacingRes?.data?.actions_executed > 0) {
+        actions.push({ type: 'pacing_cycle', actions_executed: pacingRes.data.actions_executed, spend_pacing: pacingRes.data.spend_pacing });
+      }
+    } catch {}
+
+    // ── 6. Resolver alertas budget_exhausted com dados claramente históricos ─
+    try {
+      const activebudgetAlerts = await base44.asServiceRole.entities.Alert.filter({
+        amazon_account_id: aid,
+        alert_type: 'budget_exhausted',
+        status: 'active',
+      }, '-created_at', 20).catch(() => [] as any[]);
+
+      const staleThreshold48h = new Date(Date.now() - 48 * 3600000).toISOString();
+
+      for (const a of activebudgetAlerts) {
+        const currentVal = Number(a.current_value || 0);
+        const thresholdVal = Number(a.threshold_value || 0);
+        const isHistoricalData = thresholdVal > 0 && currentVal > thresholdVal * 3;
+        const isStale = a.created_at && a.created_at < staleThreshold48h;
+
+        if (isHistoricalData || isStale) {
+          await base44.asServiceRole.entities.Alert.update(a.id, {
+            status: 'resolved',
+            resolved_at: now,
+            resolution_reason: isHistoricalData
+              ? `false_positive_historical_data: current_value (${currentVal}) > threshold × 3 (${thresholdVal * 3})`
+              : 'auto_resolved_stale: alert active > 48h',
+          }).catch(() => {});
+          actions.push({ type: 'resolved_false_positive_budget_alert', alert_id: a.id, reason: isHistoricalData ? 'historical_data' : 'stale_48h' });
+        }
+      }
+    } catch {}
+
+    // ── 8. Ações Amazon não confirmadas ───────────────────────────────────
     // Decisões executadas mas sem amazon_response válido nas últimas 4h
     const unconfirmedCutoff = new Date(Date.now() - 4 * 3600000).toISOString();
     const unconfirmed = await base44.asServiceRole.entities.OptimizationDecision.filter(

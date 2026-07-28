@@ -16,9 +16,18 @@ import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import PauseQueuePanel from '@/components/sala/PauseQueuePanel';
 import KeywordBidChangesPanel from '@/components/sala/KeywordBidChangesPanel';
 import ManualBidLifecyclePanel from '@/components/sala/ManualBidLifecyclePanel';
+import ConservativeBidDiagnosticPanel from '@/components/sala/ConservativeBidDiagnosticPanel';
 import SyncFailureMonitor from '@/components/dashboard/SyncFailureMonitor';
+import ReactivationLogPanel from '@/components/sala/ReactivationLogPanel';
+import GuardrailStatusPanel from '@/components/sala/GuardrailStatusPanel';
+import MotorExecutionPanel from '@/components/sala/MotorExecutionPanel';
 import BackupPanel from '@/components/backup/BackupPanel';
+import ReportPipelineWatchdogPanel from '@/components/sala/ReportPipelineWatchdogPanel';
+import ZeroSalesCleanupPanel from '@/components/sala/ZeroSalesCleanupPanel';
+import ZeroBidFixPanel from '@/components/sala/ZeroBidFixPanel';
+import EngineMotorsPanel from '@/components/sala/EngineMotorsPanel';
 import { Link } from 'react-router-dom';
+import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import {
   BarChart as ReBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area
@@ -77,6 +86,7 @@ const TAB_GROUPS = [
       { id: 'fila', label: 'Fila e Execuções' },
       { id: 'pausas', label: 'Pausas Pendentes' },
       { id: 'reparo', label: 'Reparo de Campanhas' },
+      { id: 'reativacoes', label: 'Reativações Auto.' },
       { id: 'bids_keywords', label: 'Alterações de Keywords e Bids' },
       { id: 'bid_lifecycle', label: 'Ciclo de Bids Manuais' },
     ],
@@ -100,6 +110,11 @@ const TAB_GROUPS = [
     ],
   },
   {
+    id: 'cleanup_group',
+    label: 'Limpeza & Expansão',
+    tabs: [{ id: 'limpeza', label: 'Limpeza & Expansão' }],
+  },
+  {
     id: 'kickoff_group',
     label: 'Kick-off',
     tabs: [{ id: 'kickoff', label: 'Produtos e Ciclos' }],
@@ -108,6 +123,7 @@ const TAB_GROUPS = [
     id: 'monitoring',
     label: 'Monitoramento',
     tabs: [
+      { id: 'motor_v8', label: 'Motor v8' },
       { id: 'alertas', label: 'Alertas' },
       { id: 'sync_monitor', label: 'Sincronizações' },
     ],
@@ -361,7 +377,7 @@ export default function SalaDeComando() {
           id: `sync-${r.id}`,
           type: 'sync',
           label: r.operation || 'Sincronização',
-          status: r.status === 'success' ? 'success' : r.status === 'running' ? 'running' : 'failed',
+          status: r.status === 'success' ? 'success' : r.status === 'running' ? 'running' : (r.status === 'warning' || r.status === 'skipped' || r.status === 'skipped_limit') ? 'warning' : 'failed',
           detail: r.records_upserted != null ? `${r.records_upserted} registros` : r.error_message || '',
           at: r.started_at || r.created_date,
           raw: r,
@@ -484,6 +500,8 @@ export default function SalaDeComando() {
     finally { setRepairRunning(false); }
   };
 
+
+
   // ── KPIs rápidos ──
   const allQueue = [...kickoffQueue, ...repairQueue, ...keywordQueue];
   const activeAlerts = alerts.filter(a => a.status === 'active').length;
@@ -535,6 +553,9 @@ export default function SalaDeComando() {
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
+
+      {/* Token Expired Banner */}
+      {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -805,6 +826,7 @@ export default function SalaDeComando() {
                         {windowActions.map(action => {
                           const isOk = action.status === 'success';
                           const isFailed = action.status === 'failed';
+                          const isWarning = action.status === 'warning';
                           const isPending = action.status === 'pending';
                           const isRunning = action.status === 'running';
                           const isPaused = action.raw?.status === 'cancelled';
@@ -838,6 +860,10 @@ export default function SalaDeComando() {
                                 ) : isFailed ? (
                                   <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-red-500/10 border-red-500/20 text-red-400 font-bold">
                                     <XCircle className="w-2.5 h-2.5" /> Falhou
+                                  </span>
+                                ) : isWarning ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-amber-500/10 border-amber-500/20 text-amber-400 font-bold">
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Aviso
                                   </span>
                                 ) : isPaused ? (
                                   <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border bg-slate-500/10 border-slate-500/20 text-slate-400 font-bold">
@@ -982,31 +1008,7 @@ export default function SalaDeComando() {
                   </button>
                 </div>
 
-                {/* Reparar Campanhas AUTO — execução manual */}
-                <div className="flex items-start gap-3 p-3 bg-surface-1 border border-amber-500/20 rounded-xl">
-                  <div className="w-7 h-7 rounded-lg bg-amber-500/15 border border-amber-500/25 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <Wrench className="w-3.5 h-3.5 text-amber-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-amber-300">Reparar Campanhas AUTO</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Repara campanhas incompletas (sem ad group ou product ads)</p>
-                  </div>
-                  <button
-                    onClick={() => runRepair()}
-                    disabled={repairRunning || !account}
-                    className="flex items-center gap-1 px-2 py-1 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-[10px] font-semibold rounded-lg disabled:opacity-40 transition-colors flex-shrink-0"
-                  >
-                    {repairRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wrench className="w-3 h-3" />}
-                    {repairRunning ? '...' : 'Reparar'}
-                  </button>
-                </div>
               </div>
-
-              {repairMsg && (
-                <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${repairMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
-                  {repairMsg.text}
-                </div>
-              )}
 
               {/* Painel de Kick-off integrado */}
               {account && (
@@ -1285,21 +1287,13 @@ export default function SalaDeComando() {
                 ))}
               </div>
 
-              {/* Decisões IA pendentes */}
-              {decisions.filter(d => d.status === 'pending').length > 0 ? (
-                <div className="bg-surface-1 border border-amber-500/20 rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <p className="text-sm font-semibold text-amber-300">{decisions.filter(d => d.status === 'pending').length} Decisões IA Pendentes</p>
-                    <Link to="/autopilot" className="text-xs text-cyan hover:underline">Ver no Autopilot →</Link>
-                  </div>
-                  {decisions.filter(d => d.status === 'pending').slice(0, 3).map(d => (
-                    <div key={d.id} className="flex items-center justify-between py-1.5 border-b border-surface-2/50 last:border-0 text-xs">
-                      <span className="text-slate-300">{d.keyword_text || d.action || d.decision_type}</span>
-                      <span className="text-amber-400">{d.risk || 'medium'} risk</span>
-                    </div>
-                  ))}
+              {/* Link para decisões IA — painel completo está em Automação IA */}
+              {pendingDecisions > 0 && (
+                <div className="flex items-center justify-between px-4 py-2.5 bg-surface-1 border border-amber-500/15 rounded-xl text-xs">
+                  <span className="text-amber-400 font-medium">{pendingDecisions} decisão(ões) IA pendente(s)</span>
+                  <button onClick={() => setTab('autopilot')} className="text-cyan hover:underline font-medium">Ver em Automação IA →</button>
                 </div>
-              ) : null}
+              )}
 
               {/* Tabela bid logs */}
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
@@ -1411,29 +1405,73 @@ export default function SalaDeComando() {
             </div>
           )}
 
+          {/* ── MOTOR V8 ─────────────────────────────────────────────────────── */}
+          {tab === 'motor_v8' && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/20 flex items-center justify-center">
+                  <Zap className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-white">Motor v8 — Execução Imediata</h2>
+                  <p className="text-xs text-slate-400 mt-0.5">Pipeline completo: sync → motor determinístico → análise IA → execução Amazon Ads</p>
+                </div>
+              </div>
+              <MotorExecutionPanel account={account} />
+            </div>
+          )}
+
           {/* ── MONITOR DE SYNC ──────────────────────────────────────────────── */}
           {tab === 'sync_monitor' && account && (
-            <SyncFailureMonitor amazonAccountId={account.id} />
+            <div className="space-y-4">
+              <ReportPipelineWatchdogPanel account={account} />
+              <SyncFailureMonitor amazonAccountId={account.id} />
+            </div>
           )}
 
           {/* ── BIDS & KEYWORDS ──────────────────────────────────────────────── */}
           {tab === 'bids_keywords' && (
-            <KeywordBidChangesPanel account={account} />
+            account
+              ? <KeywordBidChangesPanel account={account} />
+              : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
           )}
 
           {/* ── CICLO DE BIDS MANUAIS ─────────────────────────────────────────── */}
-          {tab === 'bid_lifecycle' && account && (
-            <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-              <ManualBidLifecyclePanel amazonAccountId={account.id} />
-            </div>
+          {tab === 'bid_lifecycle' && (
+            account
+              ? <div className="space-y-5">
+                  <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                    <ManualBidLifecyclePanel amazonAccountId={account.id} />
+                  </div>
+                  <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
+                    <ConservativeBidDiagnosticPanel amazonAccountId={account.id} />
+                  </div>
+                </div>
+              : <div className="flex items-center justify-center py-16"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>
+          )}
+
+          {/* ── LIMPEZA & EXPANSÃO ───────────────────────────────────────────── */}
+          {tab === 'limpeza' && account && (
+            <ZeroSalesCleanupPanel account={account} />
           )}
 
           {/* ── BACKUP ───────────────────────────────────────────────────────── */}
           {tab === 'backup' && <BackupPanel />}
 
+          {/* ── REATIVAÇÕES AUTOMÁTICAS ─────────────────────────────────────── */}
+          {tab === 'reativacoes' && account && (
+            <ReactivationLogPanel accountId={account.id} />
+          )}
+
           {/* ── REPARO ───────────────────────────────────────────────────────── */}
           {tab === 'reparo' && (
             <div className="space-y-4">
+              {/* Motores Automáticos */}
+              {account && <EngineMotorsPanel account={account} />}
+
+              {/* Guardrails e Auditoria de Causa Raiz */}
+              <GuardrailStatusPanel account={account} />
+
               <div className="bg-surface-1 border border-surface-2 rounded-xl p-5 space-y-4">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div>
@@ -1472,6 +1510,9 @@ export default function SalaDeComando() {
                   Diagnóstico
                 </Link>
               </div>
+
+              {/* Correção de Bids Zerados */}
+              {account && <ZeroBidFixPanel account={account} />}
             </div>
           )}
         </>

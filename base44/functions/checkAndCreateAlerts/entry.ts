@@ -8,8 +8,8 @@
  * - Estoque: out_of_stock (available=0) vs low_stock (positivo < limite)
  * - no_sales: exige clicks >= 10 + spend >= R$12 + dados frescos
  * - spend_overpacing: usa curva horária conservadora (nunca rate_limit)
- * - no_impressions: keyword < 72h não gera alerta; produto sem estoque não gera alerta
- * - ASIN como entity_id de keyword → entity_type = product_target
+ * - Alertas monitorados: high_acos, low_roas, no_sales, budget_exhausted, out_of_stock, low_stock, critical_stock, inventory_data_stale
+ * - no_impressions: REMOVIDO — keywords gerenciadas pelo motor determinístico, alertas existentes são resolvidos automaticamente
  * - Resolução automática: quando condição desaparece, resolve o alerta
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
@@ -220,85 +220,22 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── Keywords sem impressão ─────────────────────────────────────────────
-    // Condições antes de alertar:
-    // - campanha ativa, ad group ativo, keyword ativa
-    // - produto com estoque (available > 0)
-    // - keyword criada há mais de 72h
-    // - dados Ads frescos
-    const keywords = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: aid, impressions: 0, state: 'enabled' }, '-created_at', 200
+    // ── Cleanup: resolver todos alertas no_impressions ativos (removidos do monitor) ──
+    const staleNoImpressions = await base44.asServiceRole.entities.Alert.filter(
+      { amazon_account_id: aid, alert_type: 'no_impressions', status: 'active' }, null, 500
     ).catch(() => []);
-
-    const seventyTwoHoursAgo = new Date(Date.now() - 72 * 3600000).toISOString();
-    const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
-
-    for (const kw of keywords) {
-      const createdAt = kw.created_at || kw.created_date || '';
-      if (createdAt > seventyTwoHoursAgo) continue; // < 72h — sem alerta
-
-      // Detectar product_target (ASIN como texto)
-      const kwText = kw.keyword_text || kw.keyword || '';
-      const entityType = isAsin(kwText) ? 'product_target' : 'keyword';
-      const entityId = kw.keyword_id || kw.id;
-
-      // Verificar estoque do produto vinculado
-      const kwAsin = kw.asin || '';
-      if (kwAsin) {
-        const prod = productByAsin.get(kwAsin);
-        if (prod && (prod.fba_inventory || 0) === 0) continue; // sem estoque → não alertar
-      }
-
-      // Calcular severidade por tempo sem impressão
-      const isOlderThan14d = createdAt < fourteenDaysAgo;
-      const isOlderThan7d = createdAt < new Date(Date.now() - 7 * 86400000).toISOString();
-
-      const severity = isOlderThan14d ? 'medium' : isOlderThan7d ? 'low' : 'low';
-      const windowLabel = isOlderThan14d ? '14d' : isOlderThan7d ? '7d' : '72h';
-
-      const displayLabel = entityType === 'product_target'
-        ? `Product target "${kwText}"`
-        : `Keyword "${kwText}"`;
-
-      await upsert(base44, {
-        amazon_account_id: aid,
-        alert_type: 'no_impressions', alert_family: 'keyword',
-        severity,
-        entity_type: entityType,
-        entity_id: entityId,
-        keyword_id: entityType === 'keyword' ? entityId : undefined,
-        target_id: entityType === 'product_target' ? entityId : undefined,
-        campaign_id: kw.campaign_id,
-        asin: kwAsin || undefined,
-        term: kwText,
-        title: `Sem impressões (${windowLabel}): ${displayLabel}`,
-        message: `${displayLabel} sem impressões há mais de ${windowLabel} com campanha ativa`,
-        metric_name: 'impressions', metric_value: 0, threshold_value: 1,
-        data_window: windowLabel, source_function: SRC,
-      });
-      created++;
-    }
-
-    // ── Resolução: keywords que voltaram a ter impressões ─────────────────
-    const kwWithImpressions = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: aid, state: 'enabled' }, '-impressions', 200
-    ).catch(() => []);
-    for (const kw of kwWithImpressions) {
-      if ((kw.impressions || 0) > 0) {
-        const entityId = kw.keyword_id || kw.id;
-        await resolve(base44, aid, 'no_impressions', 'keyword', entityId, 'impressions_received', SRC);
-        await resolve(base44, aid, 'no_impressions', 'product_target', entityId, 'impressions_received', SRC);
-        resolved++;
-      }
+    for (const a of staleNoImpressions) {
+      await resolve(base44, aid, 'no_impressions', a.entity_type || 'keyword', a.entity_id || a.id, 'removed_no_longer_monitored', SRC);
+      resolved++;
     }
 
     return Response.json({
       ok: true,
       campaigns_checked: campaigns.length,
       products_checked: productByAsin.size,
-      keywords_checked: keywords.length,
       alerts_created_or_updated: created,
       alerts_resolved: resolved,
+      no_impressions_resolved: staleNoImpressions.length,
     });
 
   } catch (error: any) {

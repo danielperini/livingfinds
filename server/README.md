@@ -1,7 +1,7 @@
 # Living Finds — Backend self-hosted (fora do Base44)
 
 Este diretório é a **camada de compatibilidade** que tira o back-end do Base44 e o roda
-por conta própria (VPS), **sem reescrever** as 311 funções nem as 116 entidades.
+por conta própria (VPS), **sem reescrever** as 381 funções nem as 125 entidades.
 
 ## Como funciona
 
@@ -46,7 +46,7 @@ Pré-requisitos: Deno 2.x + um Postgres acessível em `DATABASE_URL`.
 ```bash
 cd server
 cp .env.example .env
-deno task schema     # gera schema.sql a partir das 116 entidades
+deno task schema     # gera schema.sql a partir das 125 entidades
 deno task migrate    # aplica no Postgres (opcional: as tabelas também nascem sob demanda)
 deno task start      # sobe o backend na porta 8000
 ```

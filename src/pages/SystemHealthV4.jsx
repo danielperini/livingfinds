@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { CheckCircle, AlertCircle, XCircle, Loader2 } from 'lucide-react';
+import AIUsagePanel from '@/components/system/AIUsagePanel';
 
 const statusMap = {
   healthy: ['Saudável', 'text-emerald-400', CheckCircle],
@@ -55,5 +56,6 @@ export default function SystemHealthV4() {
       <Row label="Conta Amazon" {...account} />
       <Row label="SP-API OAuth (Catálogo/Inventário)" {...spApi} />
     </div>
+    <AIUsagePanel />
   </div>;
 }

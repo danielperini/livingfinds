@@ -39,7 +39,8 @@ Deno.serve(async (request) => {
     if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const body = await request.json().catch(() => ({}));
-    const { amazon_account_id, asin, keyword, product_name, sku } = body;
+    const { amazon_account_id, asin, keyword, product_name, sku, bid_initial } = body;
+    const bid = Number(bid_initial) >= 0.30 ? Math.round(Number(bid_initial) * 100) / 100 : 0.50;
 
     if (!amazon_account_id || !asin || !String(keyword || '').trim()) {
       return Response.json({ ok: false, error: 'amazon_account_id, asin e keyword são obrigatórios' }, { status: 400 });
@@ -94,7 +95,7 @@ Deno.serve(async (request) => {
           asin,
           sku: sku || null,
           keyword: kw,
-          bid: 0.50,
+          bid,
           budget: 5,
           _service_role: true,
         });
@@ -122,7 +123,7 @@ Deno.serve(async (request) => {
       queue_window: slot.window,
       scheduled_at: slot.at.toISOString(),
       message: executed
-        ? `✓ Campanha criada agora para "${kw}" com bid R$ 0,50.`
+        ? `✓ Campanha criada agora para "${kw}" com bid R$ ${bid.toFixed(2).replace('.', ',')}.`
         : `Campanha agendada para "${kw}" — próxima janela: ${slot.window}.`,
     });
   } catch (error: any) {

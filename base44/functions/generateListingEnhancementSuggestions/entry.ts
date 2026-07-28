@@ -11,7 +11,6 @@
  * - Preço não pode ser alterado
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import Anthropic from 'npm:@anthropic-ai/sdk@0.30.1';
 
 /**
  * BRAND SAFETY — contextos de aplicação:
@@ -153,13 +152,19 @@ function buildOrganicTermProposals(params: {
 }
 
 async function generateWithAI(prompt: string, apiKey: string): Promise<string> {
-  const client = new Anthropic({ apiKey });
-  const msg = await client.messages.create({
-    model: 'claude-3-5-haiku-20241022',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: prompt }],
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 1024,
+      temperature: 0.3,
+      messages: [{ role: 'user', content: prompt }],
+    }),
   });
-  return (msg.content[0] as any).text || '';
+  if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 Deno.serve(async (req) => {
@@ -208,7 +213,7 @@ Deno.serve(async (req) => {
       .map((tb: any) => tb.keyword || tb.term || '');
     const allTopTerms = [...new Set([...topTerms, ...topTermBankTerms])].slice(0, 15);
 
-    const apiKey = Deno.env.get('ANTHROPIC_API_KEY') || '';
+    const apiKey = Deno.env.get('OPENAI_API_KEY') || '';
     const hasAI = !!apiKey;
 
     const upsertProposal = async (data: any) => {

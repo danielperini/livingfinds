@@ -14,11 +14,10 @@
  * 6. Libera lock
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import Anthropic from 'npm:@anthropic-ai/sdk@0.52.0';
 
 // ── Configuração central do modelo ──────────────────────────────────────────
 // ALTERAR APENAS AQUI para trocar o modelo de revisão semanal.
-const AI_WEEKLY_REVIEW_MODEL = Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'claude-sonnet-4-5';
+const AI_WEEKLY_REVIEW_MODEL = Deno.env.get('AI_WEEKLY_REVIEW_MODEL') || 'gpt-4o';
 const PROMPT_VERSION = '1.0.0';
 
 // ── Guardrails financeiros (imutáveis — codificados no sistema) ──────────────
@@ -547,8 +546,9 @@ Deno.serve(async (req) => {
 
     const dataHash = String(JSON.stringify(dataset).length) + '_' + agg30d.spend.toFixed(0);
 
-    // ── Chamada ao Claude ──────────────────────────────────────────────────
-    const anthropic = new Anthropic({ apiKey: Deno.env.get('ANTHROPIC_API_KEY') });
+    // ── Chamada ao GPT ──────────────────────────────────────────────────
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!openaiKey) return Response.json({ ok: false, error: 'OPENAI_API_KEY não configurada.' }, { status: 500 });
 
     const systemPrompt = `Você é o analisador semanal de regras determinísticas do Living Finds Amazon Ads.
 PAPEL: analisar dados de performance, avaliar regras vigentes, propor regras determinísticas estruturadas.
@@ -589,26 +589,38 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
     let costEstimate = 0;
 
     try {
-      const response = await anthropic.messages.create({
-        model: AI_WEEKLY_REVIEW_MODEL,
-        max_tokens: 4096,
-        temperature: 0.1,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+      const aiRaw = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: AI_WEEKLY_REVIEW_MODEL,
+          max_tokens: 4096,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        }),
       });
-      tokensUsed = response.usage?.input_tokens + response.usage?.output_tokens || 0;
+      if (!aiRaw.ok) {
+        const err = await aiRaw.json().catch(() => ({}));
+        throw new Error(`OpenAI ${aiRaw.status}: ${err.error?.message || 'erro'}`);
+      }
+      const aiData = await aiRaw.json();
+      tokensUsed = (aiData.usage?.prompt_tokens || 0) + (aiData.usage?.completion_tokens || 0);
       costEstimate = (tokensUsed / 1000) * 0.003;
-      const rawText = response.content[0]?.text || '{}';
+      const rawText = aiData.choices?.[0]?.message?.content || '{}';
       claudeResponse = JSON.parse(rawText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim());
     } catch (claudeErr) {
       await base44.asServiceRole.entities.WeeklyRuleReview.update(reviewRecord.id, {
         status: 'failed',
-        error_message: `Claude falhou: ${claudeErr.message}`,
+        error_message: `GPT falhou: ${claudeErr.message}`,
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - startTime,
       });
       return Response.json({
-        ok: false, error: 'Claude falhou — regras atuais mantidas.',
+        ok: false, error: 'GPT falhou — regras atuais mantidas.',
         detail: claudeErr.message, correlationId,
       });
     }

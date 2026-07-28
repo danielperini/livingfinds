@@ -116,6 +116,9 @@ Deno.serve(async (request) => {
         trigger_type: 'scheduled_0640_post_analysis',
       }, false));
 
+      // Sync de Finance Events da SP-API — dados econômicos reais (D-7 a D-1)
+      steps.push(await runStep(base44, 'syncFinanceEventsFromSpApi', payload, false));
+
       const requiredSteps = steps.filter((step:any) => step.required);
       const ok = requiredSteps.every((step:any) => step.ok);
       const completedAt = new Date().toISOString();

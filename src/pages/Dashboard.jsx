@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { useReportPolling } from '@/hooks/useReportPolling';
 import { base44 } from '@/api/base44Client';
 import { classifyCampaigns } from '@/lib/campaignUtils';
 import { useQueryClient } from '@tanstack/react-query';
@@ -10,16 +11,18 @@ import {
 } from 'recharts';
 import {
   RefreshCw, AlertCircle, Clock, Loader2,
-  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal
+  AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
-import SyncStatusBanner from '@/components/dashboard/SyncStatusBanner';
+import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 import MoMComparisonChart from '@/components/dashboard/MoMComparisonChart';
 import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
-import SyncStatusCard from '@/components/dashboard/SyncStatusCard';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
+import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
+import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
+import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -33,14 +36,14 @@ function getYesterday() {
   return date.toISOString().slice(0, 10);
 }
 
-function getClosedReportingPeriod(period) {
-  const yesterday = getYesterday();
-  if (period === 'yesterday') return { startDate: yesterday, endDate: yesterday, label: 'Ontem' };
+function getClosedReportingPeriod(period, anchor) {
+  // anchor = último dia com dados reais (lastAvailableAdsDate) — evita zeros por latência Amazon
+  const end = anchor || getYesterday();
+  if (period === 'yesterday') return { startDate: end, endDate: end, label: `Dados até ${fmtDateBRFull(end)}` };
   const days = Number(period);
-  // Usar BRT para calcular startDate: yesterday - (days-1) dias = janela fechada de "days" dias
-  const endDate = new Date(yesterday + 'T12:00:00Z');
+  const endDate = new Date(end + 'T12:00:00Z');
   const startDate = new Date(endDate.getTime() - (days - 1) * 86400000);
-  return { startDate: startDate.toISOString().slice(0, 10), endDate: yesterday, label: `${days} dias` };
+  return { startDate: startDate.toISOString().slice(0, 10), endDate: end, label: `${days} dias · até ${fmtDateBRFull(end)}` };
 }
 
 function safe(v, d = 2) {
@@ -225,9 +228,9 @@ function GoalRow({ label, real, target, unit = '%', lowerIsBetter = true, realLa
 
 export default function Dashboard() {
   const queryClient = useQueryClient();
-  const [syncingDashboard, setSyncingDashboard] = useState(false);
-  const [syncError, setSyncError] = useState(null);
   const [period, setPeriod] = useState('7');
+  const [justUpdated, setJustUpdated] = useState(false);
+  const justUpdatedTimerRef = useRef(null);
 
   // Camada única de dados compartilhada — React Query cuida de cache e dedup
   const {
@@ -246,6 +249,45 @@ export default function Dashboard() {
     invalidateAccountData(queryClient, account.id);
   }, [queryClient, account?.id]);
 
+  // Auto-refresh no mount: se os dados tiverem > 6h de idade (stale), invalida o cache silenciosamente
+  const autoRefreshDoneRef = useRef(false);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
+  useEffect(() => {
+    if (!account?.id || loading || autoRefreshDoneRef.current) return;
+    autoRefreshDoneRef.current = true;
+
+    const today = new Date().toISOString().slice(0, 10);
+    // Verificar se o dado mais recente é de hoje ou anterior
+    const latestDate = metricsDaily.length > 0
+      ? metricsDaily.reduce((max, m) => (m.date && m.date > max ? m.date : max), '')
+      : '';
+
+    // Stale se: sem dados, ou dado mais recente é anterior a hoje
+    const isDataStale = !latestDate || latestDate < today;
+
+    if (isDataStale) {
+      setAutoRefreshing(true);
+      invalidateAccountData(queryClient, account.id).finally(() => {
+        setTimeout(() => setAutoRefreshing(false), 1500);
+      });
+    }
+  }, [account?.id, loading, metricsDaily, queryClient]);
+
+  // Polling automático: recarrega quando chega novo relatório
+  const handleNewReport = useCallback(() => {
+    if (!account?.id) return;
+    invalidateAccountData(queryClient, account.id);
+    setJustUpdated(true);
+    clearTimeout(justUpdatedTimerRef.current);
+    justUpdatedTimerRef.current = setTimeout(() => setJustUpdated(false), 3000);
+  }, [queryClient, account?.id]);
+
+  useReportPolling({
+    accountId: account?.id,
+    onNewReport: handleNewReport,
+    enabled: !!account?.id,
+  });
+
   // Último sync para subtexto do header
   const lastSyncInfo = useMemo(() => {
     if (account?.last_sync_at) return { at: account.last_sync_at };
@@ -253,52 +295,42 @@ export default function Dashboard() {
     return last ? { at: last.completed_at || last.started_at } : null;
   }, [account, syncRuns]);
 
-  const runSync = async () => {
-    if (!account || syncingDashboard) return;
-    setSyncingDashboard(true);
-    setSyncError(null);
-    try {
-      const res = await base44.functions.invoke('syncAdsQuick', { amazon_account_id: account.id });
-      if (res?.data?.ok) invalidateAccountData(queryClient, account.id);
-      else setSyncError(res?.data?.error || 'Falha no sync.');
-    } catch (e) {
-      setSyncError(e.message);
-    } finally {
-      setSyncingDashboard(false);
-    }
-  };
-
   // ─── Cálculos com período fechado ─────────────────────────────────────────
 
   const allMetrics = useMemo(() => dedupeMetrics(metricsDaily), [metricsDaily]);
 
-  // Determinar períodos disponíveis
+  // Âncora de data: último dia com qualquer sinal de atividade Ads (spend, clicks ou impressions > 0)
+  // Não depende de sales > 0, pois dias sem conversão mas com atividade são válidos
+  const lastAvailableAdsDate = useMemo(() => {
+    const activityByDate = {};
+    for (const m of allMetrics) {
+      if (!m.date) continue;
+      activityByDate[m.date] = (activityByDate[m.date] || 0)
+        + (m.spend || 0) + (m.clicks || 0) + (m.impressions || 0);
+    }
+    const datesWithActivity = Object.keys(activityByDate)
+      .filter(d => activityByDate[d] > 0)
+      .sort();
+    return datesWithActivity.length > 0 ? datesWithActivity[datesWithActivity.length - 1] : null;
+  }, [allMetrics]);
+
+  // Determinar períodos disponíveis (baseado na contagem de dias distintos com dados)
   const availablePeriods = useMemo(() => {
-    const yesterday = getYesterday();
-    const dates = new Set(allMetrics.filter(m => m.date <= yesterday).map(m => m.date));
+    const anchor = lastAvailableAdsDate || getYesterday();
+    const dates = new Set(allMetrics.filter(m => m.date <= anchor).map(m => m.date));
     const periods = ['yesterday'];
     if (dates.size >= 7) periods.push('7');
     if (dates.size >= 14) periods.push('14');
     if (dates.size >= 28) periods.push('30');
     return periods;
-  }, [allMetrics]);
+  }, [allMetrics, lastAvailableAdsDate]);
 
   // Garantir que period seja válido
   const activePeriod = availablePeriods.includes(period) ? period : availablePeriods[availablePeriods.length - 1] || 'yesterday';
 
-  // Última data com dados de Ads (pode ser anterior a ontem por latência da Amazon)
-  const lastAvailableAdsDate = useMemo(() => {
-    const dates = allMetrics.map(m => m.date).filter(Boolean).sort();
-    return dates.length > 0 ? dates[dates.length - 1] : null;
-  }, [allMetrics]);
-
+  // Todos os períodos usam lastAvailableAdsDate como âncora — sem zeros por latência Amazon
   const { startDate, endDate, label: periodLabel } = useMemo(() => {
-    const base = getClosedReportingPeriod(activePeriod);
-    // Se "Ontem" não tem dados de Ads mas há dados mais antigos, usar o último dia disponível
-    if (activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < base.endDate) {
-      return { startDate: lastAvailableAdsDate, endDate: lastAvailableAdsDate, label: `${fmtDateBRFull(lastAvailableAdsDate)} (último c/ dados)` };
-    }
-    return base;
+    return getClosedReportingPeriod(activePeriod, lastAvailableAdsDate);
   }, [activePeriod, lastAvailableAdsDate]);
 
   const periodMetrics = useMemo(() =>
@@ -331,11 +363,21 @@ export default function Dashboard() {
     const syncRecente = syncAgeHours !== null && syncAgeHours < 23;
     const reportNormal = reportGapDays !== null && reportGapDays <= 3; // Amazon pode demorar até 3 dias
 
+    // Sync recente mas relatório desatualizado = relatório ainda não foi processado
+    const syncRecenteButStaleReport = syncRecente && !reportNormal;
+
     let source, quality, label;
     if (datesWithData.size === 0) {
       source = 'none'; quality = 'none';
       label = 'Sem dados de performance. Sincronize para começar.';
-    } else if (syncRecente || reportNormal) {
+    } else if (syncRecenteButStaleReport) {
+      // Sync aconteceu mas relatório ainda não chegou — estado mais comum após um sync manual
+      source = 'processing'; quality = 'warn';
+      const syncStr = lastSyncAt
+        ? `sync ${new Date(lastSyncAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+        : '';
+      label = `⚠ Sync recente (${syncStr}) mas relatório ainda mostra dados de ${fmtDateBRFull(lastDate)} — aguardando Amazon processar (pode levar até 2h)`;
+    } else if (reportNormal) {
       source = 'daily_report'; quality = 'high';
       const syncStr = lastSyncAt
         ? `sync ${new Date(lastSyncAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
@@ -347,7 +389,7 @@ export default function Dashboard() {
       const dias = syncAgeHours !== null ? `há ${Math.round(syncAgeHours)}h` : 'há tempo desconhecido';
       label = `Último sync ${dias} — execute Sync para obter relatório atualizado`;
     }
-    return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours };
+    return { source, quality, label, lastDate, reportGapDays, daysCount: datesWithData.size, syncAgeHours, syncRecenteButStaleReport };
   }, [allMetrics, account]);
 
   // Campanhas com métricas acumuladas (complemento quando metrics diárias estão desatualizadas)
@@ -384,12 +426,11 @@ export default function Dashboard() {
     [products]
   );
 
-  // Ontem para subtexto
-  const yesterday = getYesterday();
-  const yesterdayKpis = useMemo(() =>
-    deriveRates(calcKpis(allMetrics.filter(m => m.date === yesterday))),
-    [allMetrics, yesterday]
-  );
+  // KPIs do último dia disponível (usado como "D-1" nos subtextos dos cartões)
+  const yesterdayKpis = useMemo(() => {
+    const refDate = lastAvailableAdsDate || getYesterday();
+    return deriveRates(calcKpis(allMetrics.filter(m => m.date === refDate)));
+  }, [allMetrics, lastAvailableAdsDate]);
 
   // ─── Total de alterações da IA (soma de todos os registros de bidChanges) ──
   const totalChanges = bidChanges.length;
@@ -400,9 +441,14 @@ export default function Dashboard() {
     const map = {};
     for (const s of salesDaily) {
       if (!s.date) continue;
-      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0 };
-      map[s.date].revenue += s.ordered_product_sales || 0;
+      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0, source: 'ads_report' };
+      // Priorizar gross_revenue (Finance Events reais) sobre ordered_product_sales (estimado)
+      const rev = s.finance_sync_status === 'synced' && (s.gross_revenue || 0) > 0
+        ? s.gross_revenue
+        : (s.ordered_product_sales || 0);
+      map[s.date].revenue += rev;
       map[s.date].units += s.units_ordered || 0;
+      if (s.finance_sync_status === 'synced') map[s.date].source = 'finance_events';
     }
     return map;
   }, [salesDaily]);
@@ -582,19 +628,20 @@ export default function Dashboard() {
   const officialDailyLimitFromSettings = canonicalSettings?.daily_budget_limit || 0;
   // Limite diário: prioridade para o contexto canônico (mesma fonte do motor), depois fallbacks legacy
   const officialDailyLimit = officialDailyLimitFromSettings || budgetCfg?.calculated_daily_budget || autopilotConfig?.daily_budget_limit || autopilotConfig?.total_daily_budget || 0;
+  // Gasto do último dia com dados disponíveis (lastAvailableAdsDate) — não de "ontem" sem dados
   const spendYesterday = useMemo(() => {
-    // Filtra estritamente pela data de ontem em BRT e deduplica por campaign_id+date
+    const refDate = lastAvailableAdsDate || getYesterday();
     const seen = new Set();
     let s = 0;
     for (const m of allMetrics) {
-      if (!m.date || m.date !== yesterday) continue;
+      if (!m.date || m.date !== refDate) continue;
       const k = `${m.campaign_id}-${m.date}`;
       if (seen.has(k)) continue;
       seen.add(k);
       s += m.spend || 0;
     }
     return s;
-  }, [allMetrics, yesterday]);
+  }, [allMetrics, lastAvailableAdsDate]);
 
   // Média diária do período selecionado — divide pelos dias CALENDÁRIO do período, não pelos dias com dados
   const periodDays = activePeriod === 'yesterday' ? 1 : Number(activePeriod);
@@ -609,6 +656,44 @@ export default function Dashboard() {
   const targetTacos = cfg.target_tacos || 0;
   const targetCpc = cfg.target_cpc || 0;
   const maxCpc = cfg.max_cpc || cfg.maximum_cpc || 0;
+
+  // ─── Ajustes de Bid — Hoje (BRT) ────────────────────────────────────────
+  const bidChangesToday = useMemo(() => {
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    const todayItems = bidChanges.filter(c => {
+      const raw = c.created_date || c.created_at;
+      if (!raw) return false;
+      const dateBRT = new Date(new Date(raw).getTime() - 3 * 3600000).toISOString().slice(0, 10);
+      return dateBRT === todayBRT;
+    });
+    if (todayItems.length === 0) return null;
+
+    const counts = { increase_no_spend_10: 0, increase_no_spend_05: 0, recover_delivery_10: 0, other: 0 };
+    for (const c of todayItems) {
+      const t = String(c.change_type || c.reason || '').toLowerCase();
+      if (t.includes('no_spend') && (t.includes('0.10') || t.includes('10'))) counts.increase_no_spend_10++;
+      else if (t.includes('no_spend') && (t.includes('0.05') || t.includes('05'))) counts.increase_no_spend_05++;
+      else if (t.includes('recover') || t.includes('delivery') || t.includes('reativacao') || t.includes('reativação')) counts.recover_delivery_10++;
+      else counts.other++;
+    }
+
+    const asinMap = new Map();
+    for (const c of todayItems) {
+      const asin = c.asin || c.advertised_asin || '';
+      if (!asin || asinMap.has(asin)) continue;
+      const t = String(c.change_type || c.reason || '').toLowerCase();
+      const isRecover = t.includes('recover') || t.includes('delivery') || t.includes('reativacao') || t.includes('reativação');
+      asinMap.set(asin, {
+        asin,
+        old_bid: c.old_bid,
+        new_bid: c.new_bid,
+        label: isRecover ? 'Recuperação entrega' : 'Sem gasto',
+      });
+    }
+    const asins = [...asinMap.values()];
+
+    return { total: todayItems.length, counts, asins };
+  }, [bidChanges]);
 
   // ─── Decisões — calculado fora do JSX para evitar IIFE ──────────────────
   const decisionSummary = useMemo(() => {
@@ -675,11 +760,13 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <AutoWindowStatus />
-          <button onClick={loadData} disabled={loading}
-            className="p-2 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white rounded-lg transition-colors">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <AutoWindowStatus justUpdated={justUpdated} />
+          {(autoRefreshing || loading) ? (
+            <span className="flex items-center gap-1.5 text-[10px] text-slate-500 px-2 py-1 bg-surface-2 border border-surface-3 rounded-lg">
+              <Loader2 className="w-3 h-3 animate-spin text-cyan" />
+              Atualizando dados...
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -691,13 +778,10 @@ export default function Dashboard() {
         />
       ) : null}
 
+      {/* ── TOKEN EXPIRED BANNER ────────────────────────────────────────────── */}
+      {account ? <TokenExpiredBanner accountId={account.id} /> : null}
+
       {/* ── 2. ALERTAS ESSENCIAIS ────────────────────────────────────────────── */}
-      <div className="space-y-2">
-        {account ? <SyncStatusBanner accountId={account.id} /> : null}
-        {account && !loading ? (
-          <SyncStatusCard allMetrics={allMetrics} salesDaily={salesDaily} account={account} adsSales={kpis.sales} spRevenue={realSalesKpis.revenue} />
-        ) : null}
-      </div>
 
 
       {error ? (
@@ -707,27 +791,7 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      {/* Erro de sync automático — só aparece quando falha */}
-      {syncError ? (
-        <div className="flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl border bg-red-500/5 border-red-500/20 text-xs">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
-            <span className="text-red-300">Sync falhou: {syncError}</span>
-          </div>
-          <button onClick={() => { setSyncError(null); runSync(); }}
-            className="px-2.5 py-1.5 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors whitespace-nowrap">
-            Tentar novamente
-          </button>
-        </div>
-      ) : null}
 
-      {/* Decisões pendentes — compacto */}
-      {decisions.length > 0 ? (
-        <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border bg-violet-500/5 border-violet-500/20 text-xs">
-          <span className="text-violet-300"><span className="font-bold">{decisions.length}</span> decisões de IA pendentes de revisão.</span>
-          <Link to="/sala-de-comando" className="text-violet-400 hover:underline whitespace-nowrap">Ver na Sala de Controle →</Link>
-        </div>
-      ) : null}
 
       {/* ── 3. GRÁFICO CONSOLIDADO: range máximo de dados disponíveis ──────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
@@ -746,10 +810,32 @@ export default function Dashboard() {
           <span>Todo o histórico disponível · Vendas Ads = atribuição Amazon</span>
           {hasSalesDailyData ? <span> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></span> : null}
           <span>{' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA</span>
-          {(activePeriod === 'yesterday' && lastAvailableAdsDate && lastAvailableAdsDate < getYesterday()) ? (
-            <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>
-          ) : null}
+          {(() => {
+            if (!lastAvailableAdsDate) return null;
+            const yesterday = getYesterday();
+            const gapDays = Math.round((new Date(yesterday).getTime() - new Date(lastAvailableAdsDate).getTime()) / 86400000);
+            if (gapDays < 2) return null;
+            return <span> · <span className="text-amber-400/80">⚠ dados de Ads disponíveis até {fmtDateBR(lastAvailableAdsDate)} (latência Amazon)</span></span>;
+          })()}
         </p>
+        {(() => {
+          if (!hasSalesDailyData || !lastSpApiDate || !lastAvailableAdsDate) return null;
+          const spApiMs = new Date(lastSpApiDate).getTime();
+          const adsMs = new Date(lastAvailableAdsDate).getTime();
+          const gapDays = Math.round((adsMs - spApiMs) / 86400000);
+          if (gapDays < 2) return null;
+          // Dias ausentes: do dia seguinte ao lastSpApiDate até lastAvailableAdsDate
+          const nextDay = new Date(spApiMs + 86400000).toISOString().slice(0, 10);
+          return (
+            <div className="flex items-center gap-2 px-3 py-2 mb-2 rounded-lg bg-amber-500/8 border border-amber-500/20 text-[10px] text-amber-300">
+              <span className="flex-shrink-0">⚠</span>
+              <span>
+                Faturamento real disponível até <strong>{fmtDateBRFull(lastSpApiDate)}</strong>.
+                {' '}Dias {fmtDateBR(nextDay)}–{fmtDateBR(lastAvailableAdsDate)} aguardando sincronização SP-API (Finance Events).
+              </span>
+            </div>
+          );
+        })()}
         {hasSalesDailyData ? (
           <div className="flex flex-wrap items-center gap-3 px-3 py-2 mb-3 rounded-lg bg-orange-500/8 border border-orange-500/20 text-[10px]">
             <span className="text-slate-400">📦 Faturamento real (SP-API · {periodLabel}):</span>
@@ -799,7 +885,7 @@ export default function Dashboard() {
               {/* Linhas de valor em R$ */}
               <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} dot={false} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} dot={false} />
-              <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={hasSalesDailyData ? 2 : 0} dot={false} opacity={hasSalesDailyData ? 1 : 0} />
+              <Line yAxisId="brl" type="monotone" dataKey="faturamento real" name="Faturamento Real" stroke="#FB923C" strokeWidth={hasSalesDailyData ? 2 : 0} dot={false} opacity={hasSalesDailyData ? 1 : 0} connectNulls={false} />
             </ComposedChart>
           </ResponsiveContainer>
         )}
@@ -809,6 +895,9 @@ export default function Dashboard() {
       {!loading ? (
         <MoMComparisonChart allMetrics={allMetrics} salesDailyByDate={salesDailyByDate} />
       ) : null}
+
+      {/* ── 3b2. DIAGNÓSTICO Finance Events SP-API vs Dashboard ─────────────── */}
+      {account ? <FinanceSyncDiagnostic accountId={account.id} /> : null}
 
       {/* ── 3c. RELATÓRIOS UNIFICADOS — blocos inteligentes ─────────────────── */}
       {account ? <UnifiedMetricsPanel amazonAccountId={account.id} /> : null}
@@ -841,24 +930,19 @@ export default function Dashboard() {
         {!loading ? (
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg mb-4 text-[10px] font-medium ${
             dataQuality.quality === 'high'   ? 'bg-emerald-500/8 border border-emerald-500/15 text-emerald-400' :
+            dataQuality.quality === 'warn'   ? 'bg-amber-500/8 border border-amber-500/20 text-amber-400' :
             dataQuality.quality === 'low'    ? 'bg-red-500/8 border border-red-500/15 text-red-400' :
                                                'bg-surface-2 border border-surface-3 text-slate-500'
           }`}>
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
               dataQuality.quality === 'high' ? 'bg-emerald-400' :
+              dataQuality.quality === 'warn' ? 'bg-amber-400' :
               dataQuality.quality === 'low' ? 'bg-red-400' : 'bg-slate-600'
             }`} />
             <span>Fonte: {dataQuality.label}</span>
             {canonicalSettings ? (
               <span className="text-slate-600 hidden sm:inline">· Metas: {canonicalSettings.source}</span>
             ) : null}
-            <button onClick={runSync} disabled={syncingDashboard}
-              className={`ml-auto underline whitespace-nowrap disabled:opacity-50 flex items-center gap-1 ${
-                dataQuality.quality === 'low' ? 'text-red-400 hover:text-red-300' : 'text-emerald-500/70 hover:text-emerald-400'
-              }`}>
-              {syncingDashboard ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-              {syncingDashboard ? 'Atualizando...' : 'Atualizar agora'}
-            </button>
           </div>
         ) : null}
 
@@ -899,17 +983,11 @@ export default function Dashboard() {
               tone={kpis.orders > 0 ? 'good' : 'default'} />
             {hasSalesDailyData ? (
               <div className={`bg-surface-1 border rounded-xl p-4 ${realSalesKpis.revenue > 0 ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-surface-2'}`}>
-                <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">Fat. Real (SP-API)</p>
+                <p className="text-[10px] font-medium text-slate-500 mb-1 uppercase tracking-wide">
+                  Faturamento {salesDailyByDate[startDate]?.source === 'finance_events' ? '(Finance Events ✓)' : '(estimado)'}
+                </p>
                 <p className="text-xl font-bold text-white">{fmtBRL(realSalesKpis.revenue)}</p>
-                {realSalesKpis.revenue === 0 ? (
-                  <button onClick={runSync} disabled={syncingDashboard}
-                    className="mt-1 flex items-center gap-1 text-[10px] text-amber-400 hover:text-amber-300 transition-colors disabled:opacity-50">
-                    {syncingDashboard ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
-                    {syncingDashboard ? 'Atualizando...' : `${realSalesKpis.units} unidades · atualizar`}
-                  </button>
-                ) : (
-                  <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
-                )}
+                <p className="text-[10px] text-slate-500 mt-1">{realSalesKpis.units} unidades</p>
               </div>
             ) : null}
             {hasSalesDailyData && realSalesKpis.tacos !== null ? (
@@ -970,6 +1048,58 @@ export default function Dashboard() {
       {!loading && bidChanges.length > 0 ? (
         <AiChangesBreakdown bidChanges={bidChanges} />
       ) : null}
+
+      {/* ── 5a3. AJUSTES DE BID — HOJE ──────────────────────────────────────── */}
+      {!loading && bidChangesToday ? (() => {
+        const { total, counts, asins } = bidChangesToday;
+        const MAX_ASINS = 8;
+        const visibleAsins = asins.slice(0, MAX_ASINS);
+        const extraCount = asins.length - MAX_ASINS;
+        return (
+          <div className="bg-surface-1 border border-amber-500/20 bg-amber-500/5 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <h2 className="text-sm font-semibold text-slate-300">Ajustes de Bid — Hoje</h2>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25 font-semibold">{total} ajuste{total !== 1 ? 's' : ''}</span>
+              </div>
+              <Link to="/sala-de-comando?tab=historico" className="text-[10px] text-cyan hover:underline flex-shrink-0">Ver histórico completo →</Link>
+            </div>
+
+            {/* Contadores por tipo */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
+              {[
+                { label: '+R$0,10 sem gasto', value: counts.increase_no_spend_10, color: 'text-blue-300', bg: 'bg-blue-500/10 border-blue-500/20' },
+                { label: '+R$0,05 sem gasto', value: counts.increase_no_spend_05, color: 'text-amber-300', bg: 'bg-amber-500/10 border-amber-500/20' },
+                { label: 'Recuperação entrega', value: counts.recover_delivery_10, color: 'text-orange-300', bg: 'bg-orange-500/10 border-orange-500/20' },
+              ].map(b => (
+                <div key={b.label} className={`flex items-center justify-between px-3 py-2 rounded-lg border ${b.bg}`}>
+                  <span className={`text-[10px] font-medium ${b.color}`}>{b.label}</span>
+                  <span className={`text-sm font-bold ${b.color}`}>{b.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Lista de ASINs */}
+            <div className="space-y-1">
+              {visibleAsins.map((item) => (
+                <div key={item.asin} className="flex items-center gap-3 py-1 border-b border-amber-500/10 last:border-0">
+                  <span className="font-mono text-[10px] text-cyan flex-shrink-0 w-24">{item.asin}</span>
+                  {item.old_bid != null && item.new_bid != null ? (
+                    <span className="text-[10px] text-emerald-400 font-mono flex-shrink-0">
+                      R${Number(item.old_bid).toFixed(2)} → R${Number(item.new_bid).toFixed(2)}
+                    </span>
+                  ) : null}
+                  <span className="text-[10px] text-slate-500 truncate">{item.label}</span>
+                </div>
+              ))}
+              {extraCount > 0 && (
+                <p className="text-[10px] text-slate-500 pt-1">+ {extraCount} mais ASIN{extraCount !== 1 ? 's' : ''}</p>
+              )}
+            </div>
+          </div>
+        );
+      })() : null}
 
       {/* ── 5b. CARDS COMPLEMENTARES ─────────────────────────────────────────── */}
       {!loading ? (
@@ -1104,8 +1234,8 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <KpiCard label="Limite diário geral" value={officialDailyLimit > 0 ? fmtBRL(officialDailyLimit) : '—'} tone="cyan" />
-          <KpiCard label={`Gasto D-1 (${yesterday})`} value={fmtBRL(spendYesterday)}
-            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === yesterday).length} registros`}
+          <KpiCard label={`Gasto D-1 (${lastAvailableAdsDate || getYesterday()})`} value={fmtBRL(spendYesterday)}
+            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === (lastAvailableAdsDate || getYesterday())).length} registros`}
             tone={officialDailyLimit > 0 && spendYesterday > officialDailyLimit ? 'bad' : 'default'} />
           <KpiCard label="Média diária" value={fmtBRL(avgDailySpend)} sub={`Período: ${periodLabel}`} />
           <KpiCard label="Campanhas ativas" value={active_count} sub={`${paused_count} pausadas`} />
@@ -1113,7 +1243,7 @@ export default function Dashboard() {
         {(officialDailyLimit > 0 && spendYesterday > 0) ? (
           <div>
             <div className="flex justify-between text-[10px] text-slate-500 mb-1">
-              <span>Pacing D-1: {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
+              <span>Pacing D-1 ({lastAvailableAdsDate || getYesterday()}): {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
               <span className={`font-semibold ${spendYesterday > officialDailyLimit ? 'text-red-400' : 'text-emerald-400'}`}>
                 {Math.round(spendYesterday / officialDailyLimit * 100)}%
               </span>
@@ -1180,6 +1310,16 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* ── 8b. MOTOR & IA — STATUS POR PRODUTO ─────────────────────────────── */}
+      {account && !loading ? (
+        <MotorStatusBySku accountId={account.id} targetAcos={targetAcos} />
+      ) : null}
+
+      {/* ── 8c. HISTÓRICO DE ALTERAÇÕES DE ORÇAMENTO ─────────────────────────── */}
+      {account && !loading ? (
+        <BudgetHistoryPanel accountId={account.id} />
       ) : null}
 
       {/* ── 9. LINKS PARA ANÁLISES PROFUNDAS ────────────────────────────────── */}

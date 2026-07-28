@@ -3,93 +3,105 @@
   "type": "object",
   "properties": {
     "amazon_account_id": { "type": "string" },
-    "run_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "profile_id": { "type": "string" },
     "decision_type": {
       "type": "string",
-      "enum": ["bid_change", "budget_change", "pause", "enable", "negative_keyword", "create_keyword", "dayparting_rule", "placement_change", "harvest_search_term", "create_campaign"],
-      "default": "bid_change"
+      "description": "Tipo operacional aberto para suportar bid_change, bid_adjustment, budget, placement, campaign e demais decisões existentes."
     },
     "entity_type": {
       "type": "string",
-      "enum": ["campaign", "ad_group", "keyword", "search_term", "product_target", "account"],
-      "default": "keyword"
+      "enum": ["campaign", "ad_group", "keyword", "product_target", "product", "account"]
     },
     "entity_id": { "type": "string" },
     "campaign_id": { "type": "string" },
     "ad_group_id": { "type": "string" },
     "keyword_id": { "type": "string" },
     "keyword_text": { "type": "string" },
+    "target_id": { "type": "string" },
     "asin": { "type": "string" },
-    "profile_id": { "type": "string" },
-    "marketplace_id": { "type": "string" },
-    "country_code": { "type": "string", "default": "BR" },
-    "currency_code": { "type": "string", "default": "BRL" },
-    "currency_symbol": { "type": "string", "default": "R$" },
+    "sku": { "type": "string" },
     "action": { "type": "string" },
+    "rationale": { "type": "string" },
+    "rule_key": { "type": "string" },
+    "priority": { "type": "number" },
+    "data_used": { "type": "string" },
+    "metric_window": {
+      "type": "string",
+      "description": "Período real dos dados de performance usados."
+    },
+    "decision_window": {
+      "type": "string",
+      "description": "Período que o motor considerou como recente."
+    },
+    "baseline_window": {
+      "type": "string",
+      "description": "Período ou valor-base usado como comparativo."
+    },
+    "data_scope_validated": { "type": "boolean", "default": false },
+    "data_scope_status": {
+      "type": "string",
+      "enum": ["VALID", "PERIOD_SCOPE_MISMATCH", "DATA_SCOPE_MISSING", "PROTECT_RECENT_STRATEGY"]
+    },
+    "current_value": { "type": "number" },
+    "proposed_value": { "type": "number" },
     "value_before": { "type": "number" },
     "value_after": { "type": "number" },
     "change_pct": { "type": "number" },
-    "objective": {
-      "type": "string",
-      "enum": ["launch", "growth", "profitability", "defense", "liquidation", "ranking", "discovery", "maintenance"],
-      "default": "maintenance"
-    },
-    "rationale": { "type": "string" },
-    "data_used": { "type": "string" },
-    "period_analyzed": { "type": "string" },
-    "sample_size": { "type": "string" },
-    "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+    "current_config": { "type": "string" },
+    "proposed_config": { "type": "string" },
+    "expected_impact_pct": { "type": "number" },
+    "expected_impact_value": { "type": "number" },
+    "confidence": { "type": "number", "default": 0 },
     "risk": {
       "type": "string",
-      "enum": ["very_low", "low", "medium", "high", "very_high"],
-      "default": "medium"
+      "enum": ["low", "medium", "high", "critical"]
     },
-    "expected_impact": { "type": "string" },
-    "reversible": { "type": "boolean", "default": true },
     "requires_approval": { "type": "boolean", "default": true },
+    "approval_status": { "type": "string" },
     "status": {
       "type": "string",
-      "enum": ["pending", "approved", "rejected", "scheduled", "executing", "executed", "failed", "rolled_back", "skipped"],
-      "default": "pending"
+      "enum": ["proposed", "approved", "rejected", "executing", "executed", "failed", "cancelled", "expired", "pending_approval", "skipped", "rolled_back"],
+      "default": "proposed"
     },
     "queue_status": {
       "type": "string",
-      "enum": ["pending", "scheduled", "processing", "completed", "failed", "cancelled"],
-      "default": "pending"
+      "description": "Estado da fila: pending, scheduled, processing, completed, failed ou cancelled."
     },
-    "queue_hour": { "type": "number", "minimum": 0, "maximum": 23 },
+    "queue_hour": { "type": "number" },
     "queue_window": { "type": "string" },
+    "execution_channel": { "type": "string" },
     "queued_at": { "type": "string", "format": "date-time" },
     "queue_processed_at": { "type": "string", "format": "date-time" },
     "scheduled_for": { "type": "string", "format": "date-time" },
     "next_retry_at": { "type": "string", "format": "date-time" },
-    "executed_at": { "type": "string", "format": "date-time" },
-    "review_date": { "type": "string", "format": "date-time" },
-    "amazon_response": { "type": "string" },
-    "error_message": { "type": "string" },
-    "created_at": { "type": "string", "format": "date-time" },
-    "updated_at": { "type": "string", "format": "date-time" },
-    "legacy_source": { "type": "string" },
-    "legacy_id": { "type": "string" },
-    "idempotency_key": { "type": "string" },
-    "trigger": { "type": "string" },
-    "metrics_before": { "type": "string" },
-    "metrics_after": { "type": "string" },
-    "evaluation_due_at": { "type": "string", "format": "date-time" },
-    "evaluated_at": { "type": "string", "format": "date-time" },
-    "outcome": {
-      "type": "string",
-      "enum": ["positive", "neutral", "negative", "insufficient_data"]
-    },
-    "rollback_payload": { "type": "string" },
-    "rollback_status": { "type": "string" },
-    "source_search_term_id": { "type": "string" },
-    "source_campaign_id": { "type": "string" },
-    "source_keyword_id": { "type": "string" },
-    "source_function": { "type": "string" },
-    "amazon_request_id": { "type": "string" },
     "attempt_count": { "type": "number", "default": 0 },
-    "last_attempt_at": { "type": "string", "format": "date-time" }
+    "last_attempt_at": { "type": "string", "format": "date-time" },
+    "settings_source": { "type": "string" },
+    "settings_snapshot": { "type": "string" },
+    "amazon_response": { "type": "string" },
+    "amazon_response_code": { "type": "number" },
+    "amazon_request_id": { "type": "string" },
+    "execution_error": { "type": "string" },
+    "error_message": { "type": "string" },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "approved_at": { "type": "string", "format": "date-time" },
+    "approved_by": { "type": "string" },
+    "rejected_at": { "type": "string", "format": "date-time" },
+    "rejected_by": { "type": "string" },
+    "rejection_reason": { "type": "string" },
+    "executed_at": { "type": "string", "format": "date-time" },
+    "evaluation_due_at": { "type": "string", "format": "date-time" },
+    "cooldown_until": { "type": "string", "format": "date-time" },
+    "idempotency_key": { "type": "string" },
+    "source_function": { "type": "string" },
+    "rule_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "country_code": { "type": "string" },
+    "currency_code": { "type": "string" },
+    "currency_symbol": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
   },
-  "required": ["amazon_account_id", "decision_type", "action", "status"]
+  "required": ["amazon_account_id", "decision_type", "entity_type"]
 }

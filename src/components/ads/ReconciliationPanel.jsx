@@ -38,15 +38,11 @@ export default function ReconciliationPanel({ account, onDone }) {
         setResult(data);
         if (onDone) onDone();
       } else {
-        const errMsg = data?.error || 'Falha na conciliação.';
-        const isAuth = data?.error_type === 'auth';
-        setError(isAuth
-          ? `🔐 ${errMsg}`
-          : errMsg
-        );
+        // Preservar error_type junto da mensagem para controle de UI
+        setError({ message: data?.error || 'Falha na conciliação.', error_type: data?.error_type, requires_reauthorization: data?.requires_reauthorization });
       }
     } catch (e) {
-      setError(e.message);
+      setError({ message: e.message, error_type: 'network_error', requires_reauthorization: false });
     } finally {
       setRunning(false);
     }
@@ -119,9 +115,9 @@ export default function ReconciliationPanel({ account, onDone }) {
         <div className="mb-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg space-y-1.5">
           <div className="flex items-start gap-2">
             <AlertCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-red-300">{error}</p>
+            <p className="text-xs text-red-300">{error.message}</p>
           </div>
-          {error.includes('Token') || error.includes('🔐') ? (
+          {error.error_type === 'auth' && error.requires_reauthorization === true ? (
             <a href="/integracoes/amazon"
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-cyan hover:underline">
               → Reautorizar token Amazon Ads

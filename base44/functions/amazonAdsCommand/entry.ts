@@ -159,6 +159,19 @@ Deno.serve(async (request) => {
       return headers;
     }
 
+    // PRE-CHECK: Token expirando em menos de 10 minutos → refresh proativo
+    const TOKEN_PRECHECK_MS = 10 * 60 * 1000;
+    const tokenExpiresAt = account.ads_access_token_expires_at
+      ? new Date(account.ads_access_token_expires_at).getTime() : 0;
+    if (tokenExpiresAt > 0 && (tokenExpiresAt - Date.now()) < TOKEN_PRECHECK_MS) {
+      console.log('[adsCommand] Token expirando em < 10min — refresh proativo');
+      await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
+        amazon_account_id: body.amazon_account_id,
+        force_refresh: true,
+        _service_role: true,
+      }).catch(() => {});
+    }
+
     // Primeira tentativa
     let headers = await buildHeaders(false);
     let result = await callAmazonApi(url, method, headers, body.payload ?? null, maxAttempts);

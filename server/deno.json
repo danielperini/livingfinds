@@ -1,5 +1,5 @@
 {
-  "//": "Backend self-hosted do Living Finds. O import-map abaixo intercepta o @base44/sdk que as 311 funções importam e o redireciona para o nosso shim (src/sdk/mod.ts). Assim as funções rodam sem nenhuma alteração no código delas.",
+  "//": "Backend self-hosted do Living Finds. O import-map abaixo intercepta o @base44/sdk usado pelas funções e o redireciona para o nosso shim (src/sdk/mod.ts).",
   "imports": {
     "npm:@base44/sdk@0.8.31": "./src/sdk/mod.ts",
     "npm:@base44/sdk@0.8.38": "./src/sdk/mod.ts",

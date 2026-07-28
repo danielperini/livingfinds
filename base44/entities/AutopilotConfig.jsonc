@@ -21,7 +21,10 @@
         "profitability",
         "defense",
         "liquidation",
-        "maintenance"
+        "maintenance",
+        "aggressive_peak",
+        "flex_stock",
+        "custom"
       ],
       "default": "profitability"
     },
@@ -140,6 +143,25 @@
     "max_bid": {
       "type": "number",
       "default": 5.0
+    },
+    "strict_bid_envelope": {
+      "type": "boolean",
+      "default": true,
+      "description": "Mant\u00e9m o bid hor\u00e1rio entre 0,50x e 1,50x do bid-base. Quando ativo, a estrat\u00e9gia Amazon permanece fixa."
+    },
+    "daypart_absolute_min_bid": {
+      "type": "number",
+      "default": 0.02,
+      "description": "Piso t\u00e9cnico exclusivo do dayparting. N\u00e3o reutiliza o min_bid de lan\u00e7amento."
+    },
+    "amazon_native_schedule_rules_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Permite criar Schedule Bid Rules nativas para incrementos STRONG/ELITE."
+    },
+    "native_rules_sync_frequency_hours": {
+      "type": "number",
+      "default": 24
     },
     "target_daily_impressions": {
       "type": "number",

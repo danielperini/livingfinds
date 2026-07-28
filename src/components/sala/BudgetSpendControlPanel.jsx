@@ -13,8 +13,12 @@ import { base44 } from '@/api/base44Client';
 import {
   DollarSign, RefreshCw, Loader2, AlertTriangle, CheckCircle,
   TrendingUp, TrendingDown, Gauge, Clock, Shield,
-  Info, ChevronDown, ChevronUp, Brain, BarChart2, Pause
+  Info, ChevronDown, ChevronUp, Brain, BarChart2, Pause,
+  Zap, RotateCcw, ExternalLink
 } from 'lucide-react';
+import ProactiveBudgetOptimizerCard from './ProactiveBudgetOptimizerCard';
+import KillSwitchPauseDetail from './KillSwitchPauseDetail';
+import BudgetCheckpointsPanel from './BudgetCheckpointsPanel';
 
 const CAP_STATUS_CONFIG = {
   safe:        { label: 'Normal',       color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', bar: 'bg-emerald-500' },
@@ -55,7 +59,7 @@ function SpendBar({ confirmed, estimated, cap }) {
 }
 
 export default function BudgetSpendControlPanel({ account }) {
-  const [controller, setController] = useState(null);
+  const [controller, setController] = useState(null); // setController usado também em saveCap para patch otimista
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAiDetails, setShowAiDetails] = useState(false);
@@ -63,6 +67,10 @@ export default function BudgetSpendControlPanel({ account }) {
   const [newCapValue, setNewCapValue] = useState('');
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [runningRecovery, setRunningRecovery] = useState(false);
+  const [recoveryResult, setRecoveryResult] = useState(null);
+  const [aiDecisions, setAiDecisions] = useState([]);
+  const [showDecisions, setShowDecisions] = useState(false);
 
   const load = useCallback(async () => {
     if (!account) return;
@@ -72,7 +80,7 @@ export default function BudgetSpendControlPanel({ account }) {
       const list = await base44.entities.AccountDailySpendController.filter(
         { amazon_account_id: account.id, spend_date: today }, null, 1
       ).catch(() => []);
-      setController(list[0] || null);
+      setController(list[0] ?? null);
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     } finally {
@@ -102,26 +110,80 @@ export default function BudgetSpendControlPanel({ account }) {
     }
   };
 
+  const loadAiDecisions = useCallback(async () => {
+    if (!account) return;
+    const todayBRT = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    const decisions = await base44.entities.OptimizationDecision.filter(
+      { amazon_account_id: account.id, source_function: 'runKillSwitchRecoveryWithAI' }, '-created_at', 20
+    ).catch(() => []);
+    setAiDecisions(decisions.filter(d => (d.created_at || '').startsWith(todayBRT)));
+  }, [account]);
+
+  useEffect(() => { if (account) loadAiDecisions(); }, [loadAiDecisions]);
+
+  const runRecovery = async () => {
+    if (!account || runningRecovery) return;
+    setRunningRecovery(true);
+    setRecoveryResult(null);
+    setMsg(null);
+    try {
+      const res = await base44.functions.invoke('runKillSwitchRecoveryWithAI', { amazon_account_id: account.id });
+      const data = res?.data || res;
+      setRecoveryResult(data);
+      if (data?.ok) {
+        setMsg({ type: 'success', text: `Recuperação concluída: ${data.campaigns_reactivated || 0} campanhas reativadas, ${data.decisions_created || 0} decisões criadas.` });
+        await load();
+        await loadAiDecisions();
+      } else {
+        setMsg({ type: 'error', text: data?.message || data?.error || 'Erro na recuperação.' });
+      }
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setRunningRecovery(false);
+      setTimeout(() => setMsg(null), 8000);
+    }
+  };
+
   const saveCap = async () => {
     if (!account || !newCapValue) return;
     const val = parseFloat(newCapValue);
     if (isNaN(val) || val <= 0) return;
     setSaving(true);
+    setMsg(null);
     try {
-      const psList = await base44.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []);
-      if (psList[0]) {
-        await base44.entities.PerformanceSettings.update(psList[0].id, {
-          daily_budget_limit: val, updated_at: new Date().toISOString()
-        });
+      const res = await base44.functions.invoke('updateDailySpendCap', {
+        amazon_account_id: account.id,
+        new_cap: val,
+      });
+      const data = res?.data || res;
+      if (!data?.ok) {
+        setMsg({ type: 'error', text: data?.error || 'Erro ao salvar teto' });
+        return;
       }
+
+      // Aplicar patch no state local — sem reload completo
+      setController(prev => ({
+        ...(prev || {}),
+        user_daily_spend_cap: data.new_cap,
+        effective_daily_spend_cap: data.new_cap,
+        confirmed_spend: data.confirmed_spend,
+        estimated_pending_spend: data.estimated_pending_spend,
+        projected_total_spend: data.projected_total_spend,
+        remaining_spend: data.remaining_spend,
+        cap_status: data.cap_status,
+      }));
+
       setEditingCap(false);
-      setMsg({ type: 'success', text: `Teto atualizado para R$${val.toFixed(2)}.` });
-      await refresh();
+      setMsg({
+        type: 'success',
+        text: `Teto atualizado para ${fmtBRL(data.new_cap)} · Saldo: ${fmtBRL(data.remaining_spend)} · Status: ${data.cap_status}`,
+      });
+      setTimeout(() => setMsg(null), 6000);
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     } finally {
       setSaving(false);
-      setTimeout(() => setMsg(null), 6000);
     }
   };
 
@@ -150,6 +212,103 @@ export default function BudgetSpendControlPanel({ account }) {
       {msg && (
         <div className={`px-4 py-3 rounded-xl border text-xs font-medium ${msg.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
           {msg.text}
+        </div>
+      )}
+
+      {/* ── 0. KILL SWITCH ATIVO ─────────────────────────────────────────────── */}
+      {c?.global_kill_switch && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
+              <p className="text-sm font-bold text-red-300">⚡ Kill Switch Ativo — Campanhas Pausadas</p>
+            </div>
+            <button
+              onClick={runRecovery}
+              disabled={runningRecovery}
+              className="flex items-center gap-2 px-3 py-1.5 bg-violet-500/15 border border-violet-500/30 text-violet-300 text-xs font-semibold rounded-lg hover:bg-violet-500/25 transition-colors disabled:opacity-50"
+            >
+              {runningRecovery ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Brain className="w-3.5 h-3.5" />}
+              {runningRecovery ? 'IA analisando...' : 'Redistribuir com IA'}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
+            <div className="bg-surface-2/60 rounded-lg p-2">
+              <p className="text-slate-500 mb-0.5">Acionado às</p>
+              <p className="font-bold text-red-300">
+                {c.kill_switch_activated_at
+                  ? new Date(c.kill_switch_activated_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + ' BRT'
+                  : '—'}
+              </p>
+            </div>
+            <div className="bg-surface-2/60 rounded-lg p-2">
+              <p className="text-slate-500 mb-0.5">Horas restantes</p>
+              <p className="font-bold text-amber-300">
+                {c.kill_switch_activated_at
+                  ? `${Math.max(0, 23 - ((new Date(c.kill_switch_activated_at).getUTCHours() - 3 + 24) % 24))}h`
+                  : '—'}
+              </p>
+            </div>
+            <div className="bg-surface-2/60 rounded-lg p-2">
+              <p className="text-slate-500 mb-0.5">Campanhas pausadas</p>
+              <p className="font-bold text-red-300">{c.campaigns_paused_count || (c.campaigns_paused_today?.length || 0)}</p>
+            </div>
+          </div>
+
+          {runningRecovery && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border border-violet-500/20 rounded-lg">
+              <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
+              <p className="text-xs text-violet-300">IA analisando padrão horário e redistribuindo lances...</p>
+            </div>
+          )}
+
+          {recoveryResult?.ok && (
+            <div className="px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg space-y-1">
+              <p className="text-xs font-semibold text-emerald-300">✓ Recuperação concluída pela IA</p>
+              {recoveryResult.ai_summary && <p className="text-[10px] text-slate-300">{recoveryResult.ai_summary}</p>}
+              {recoveryResult.ai_forecast_hours && (
+                <p className="text-[10px] text-slate-400">Previsão de cobertura: {recoveryResult.ai_forecast_hours}h</p>
+              )}
+            </div>
+          )}
+
+          {aiDecisions.length > 0 && (
+            <div>
+              <button
+                onClick={() => setShowDecisions(v => !v)}
+                className="flex items-center gap-1.5 text-[10px] text-violet-400 hover:text-violet-300 transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Ver {aiDecisions.length} decisão(ões) de lance da IA
+                {showDecisions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+              {showDecisions && (
+                <div className="mt-2 space-y-1.5">
+                  {aiDecisions.map(d => (
+                    <div key={d.id} className="flex items-start gap-2 px-3 py-2 bg-surface-2/60 rounded-lg">
+                      <div className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${d.status === 'approved' ? 'bg-emerald-400' : d.status === 'executed' ? 'bg-cyan' : 'bg-amber-400'}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-mono text-slate-400 truncate">{d.campaign_id}</p>
+                        <p className="text-[10px] text-slate-300 mt-0.5 line-clamp-2">{d.rationale?.slice(0, 120)}</p>
+                      </div>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold flex-shrink-0 ${d.status === 'approved' ? 'bg-emerald-500/20 text-emerald-300' : d.status === 'executed' ? 'bg-cyan/20 text-cyan' : 'bg-amber-500/20 text-amber-300'}`}>
+                        {d.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 0b. RECUPERAÇÃO CONCLUÍDA HOJE ───────────────────────────────────── */}
+      {!c?.global_kill_switch && c?.kill_switch_activated_at && c?.kill_switch_reason?.includes('IA redistribuiu') && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/8 border border-emerald-500/20 rounded-xl">
+          <RotateCcw className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <p className="text-[10px] text-emerald-300 flex-1">{c.kill_switch_reason}</p>
         </div>
       )}
 
@@ -352,26 +511,14 @@ export default function BudgetSpendControlPanel({ account }) {
         </div>
       </div>
 
-      {/* ── 5. CAMPANHAS PAUSADAS HOJE ───────────────────────────────────────── */}
-      {c?.campaigns_paused_today?.length > 0 && (
-        <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Pause className="w-4 h-4 text-red-400" />
-            <p className="text-xs font-semibold text-red-300">Campanhas Pausadas pelo Teto Hoje</p>
-          </div>
-          <p className="text-[10px] text-slate-400 mb-2">
-            Pausa operacional temporária. Motivo: <code className="text-red-300">global_daily_cap_reached</code>.
-            Retomadas automaticamente no próximo dia operacional (meia-noite BRT).
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {c.campaigns_paused_today.map((cid) => (
-              <span key={cid} className="text-[10px] font-mono px-2 py-0.5 bg-red-500/10 border border-red-500/20 text-red-300 rounded">
-                {cid}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── 5. CAMPANHAS PAUSADAS HOJE — status detalhado ────────────────────── */}
+      <KillSwitchPauseDetail controller={c} />
+
+      {/* ── 6. CHECKPOINTS DO DIA ────────────────────────────────────────────── */}
+      <BudgetCheckpointsPanel account={account} />
+
+      {/* ── 7. OTIMIZAÇÃO PROATIVA DE BUDGET ────────────────────────────────── */}
+      <ProactiveBudgetOptimizerCard account={account} />
 
       {/* Sem dados hoje */}
       {!c && !loading && (

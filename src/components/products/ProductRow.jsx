@@ -3,8 +3,9 @@ import { base44 } from '@/api/base44Client';
 import {
   AlertCircle, Check, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
   Loader2, Megaphone, Package, Pause, Pencil, Play, ShoppingBag, Square,
-  Tag, X, XCircle, Zap,
+  Tag, X, XCircle, Zap, Wifi, WifiOff,
 } from 'lucide-react';
+import MarketPriceCell from '@/components/products/MarketPriceCell';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -259,19 +260,37 @@ export function CampaignStatusCell({ product }) {
   );
 }
 
-function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff }) {
-  const [pauseResult, setPauseResult] = useState(null);
+function PropagationBadge({ result, propagating }) {
+  if (propagating) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] text-cyan animate-pulse">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        Sincronizando...
+      </span>
+    );
+  }
+  if (!result) return null;
+  if (result.type === 'success') {
+    return (
+      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 animate-fade-in">
+        <Wifi className="w-3 h-3" />
+        Sincronizado na Amazon
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-400 animate-fade-in" title={result.text}>
+      <WifiOff className="w-3 h-3" />
+      {result.text}
+    </span>
+  );
+}
+
+function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, onArchiveCampaign, loading, onCancelKickoff, stuckQueueCount, amazonPropagating, amazonResult }) {
   const [cancelling, setCancelling] = useState(false);
 
   const handleToggle = async (p) => {
-    setPauseResult(null);
-    try {
-      await onToggleCampaign(p);
-      setPauseResult('success');
-    } catch {
-      setPauseResult('error');
-    }
-    setTimeout(() => setPauseResult(null), 4000);
+    await onToggleCampaign(p);
   };
 
   const handleCancel = async () => {
@@ -280,7 +299,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     finally { setCancelling(false); }
   };
 
-  const isLoading = loading === product.id;
+  const isLoading = loading === product.id || amazonPropagating;
   const hasCampaign = productHasCampaign(product);
   const active = isCampaignActiveFn(product);
   const incomplete = isCampaignIncomplete(product);
@@ -318,18 +337,30 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
       );
     }
     return (
-      <div className="flex items-center gap-1.5">
-        <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
-          title={incomplete ? "Reparar campanha incompleta" : "Vincular e ativar campanha para este produto"}
-          className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' : 'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'}`}>
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
-          {incomplete ? 'Reparar' : 'Vincular e Ativar'}
-        </button>
-        <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
-          Acelerar
-        </button>
+      <div className="space-y-1.5">
+        {stuckQueueCount > 0 && (
+          <div className="flex items-center gap-1 text-[10px] font-semibold text-amber-400">
+            <AlertCircle className="w-3 h-3" />
+            {stuckQueueCount} na fila — travado{stuckQueueCount > 1 ? 's' : ''}
+          </div>
+        )}
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
+            title={incomplete ? "Reparar campanha incompleta" : stuckQueueCount > 0 ? "Limpar fila travada e iniciar novo kick-off" : "Vincular e ativar campanha para este produto"}
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+              stuckQueueCount > 0 ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25' :
+              incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' :
+              'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'
+            }`}>
+            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            {incomplete ? 'Reparar' : stuckQueueCount > 0 ? 'Reiniciar Kick-off' : 'Vincular e Ativar'}
+          </button>
+          <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
+            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+            Acelerar
+          </button>
+        </div>
       </div>
     );
   }
@@ -341,32 +372,29 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
         <button type="button" onClick={() => handleToggle(product)} disabled={isLoading}
           title={active ? 'Pausar campanha' : 'Ativar campanha'}
           className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
-            pauseResult === 'success' ? 'bg-emerald-500/25 border-emerald-500/40 text-emerald-300' :
-            pauseResult === 'error'   ? 'bg-red-500/20 border-red-500/30 text-red-400' :
             active ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30' :
                      'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'
           }`}>
-          {isLoading
+          {(isLoading && amazonPropagating)
             ? <Loader2 className="w-3 h-3 animate-spin" />
-            : pauseResult === 'success' ? <Check className="w-3 h-3" />
-            : pauseResult === 'error'   ? <AlertCircle className="w-3 h-3" />
             : active ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />
           }
-          {pauseResult === 'success' ? 'Pausada!' : pauseResult === 'error' ? 'Erro' : active ? 'Pausar' : 'Ativar'}
+          {active ? 'Pausar' : 'Ativar'}
         </button>
         <button type="button" onClick={() => onArchiveCampaign(product)} disabled={isLoading}
           className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20">
-          {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+          {isLoading && !amazonPropagating ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
           Arquivar
         </button>
       </div>
+      <PropagationBadge result={amazonResult} propagating={amazonPropagating} />
     </div>
   );
 }
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, onNameUpdate, selected, onToggleSelect, isFocused, productMessage }) {
+export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, amazonPropagating, amazonResult, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated, divergenceBadge }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -451,15 +479,24 @@ export default function ProductRow({ product, onToggleCampaign, onArchiveCampaig
       <td className="px-4 py-3 text-xs text-slate-400">{formatBRL(product?.total_spend_30d || 0)}</td>
       <td className="px-4 py-3 text-xs"><span className={acosColor}>{formatPercent(acos)}</span></td>
       <td className="px-4 py-3 text-xs text-slate-400">{Number(product?.units_sold_30d || product?.total_units_30d || 0).toLocaleString('pt-BR')}</td>
+      <td className="px-4 py-3 min-w-[160px]">
+        <MarketPriceCell
+          product={product}
+          accountId={account?.id || product?.amazon_account_id}
+          onPriceUpdated={onPriceUpdated}
+        />
+      </td>
       <td className="px-4 py-3 pr-5">
         <ActionButtons product={product} onKickoff={onKickoff} onAccelerator={onAccelerator}
           onToggleCampaign={onToggleCampaign} onArchiveCampaign={onArchiveCampaign}
-          onCancelKickoff={onCancelKickoff} loading={actionLoading} />
+          onCancelKickoff={onCancelKickoff} loading={actionLoading} stuckQueueCount={stuckQueueCount || 0}
+          amazonPropagating={amazonPropagating} amazonResult={amazonResult} />
         {productMessage && (
           <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
             {productMessage.text}
           </p>
         )}
+        {divergenceBadge && <div className="mt-1">{divergenceBadge}</div>}
       </td>
     </tr>
   );

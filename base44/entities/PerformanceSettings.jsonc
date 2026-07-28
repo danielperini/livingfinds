@@ -62,6 +62,20 @@
       "type": "number",
       "default": 0
     },
+    "cpc_intraday_override": {
+      "type": "number",
+      "default": 0,
+      "description": "Override tempor\u00e1rio de CPC gerado pelo motor intraday. 0 = sem override ativo. Zerado automaticamente \u00e0s 23:30 BRT pelo runEndOfDayCpcLearning."
+    },
+    "cpc_intraday_override_set_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi aplicado o \u00faltimo override intraday de CPC"
+    },
+    "cpc_intraday_override_checkpoint": {
+      "type": "string",
+      "description": "Qual checkpoint gerou o override atual: morning, afternoon, evening ou night"
+    },
     "min_bid": {
       "type": "number",
       "default": 0.5
@@ -159,9 +173,16 @@
         "launch",
         "defense",
         "liquidation",
-        "maintenance"
+        "maintenance",
+        "aggressive_peak",
+        "flex_stock",
+        "custom"
       ],
       "default": "profitability"
+    },
+    "objective_base": {
+      "type": "string",
+      "description": "Objetivo base do preset quando objective=custom (ex: launch)."
     },
     "ai_auto_optimization": {
       "type": "boolean",

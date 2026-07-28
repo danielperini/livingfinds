@@ -4,9 +4,11 @@ import {
   CheckCircle, XCircle, Loader2, ExternalLink, RefreshCw,
   ShieldCheck, ShieldAlert, Zap, Copy, Database, Key,
   Save, Eye, EyeOff, ArrowLeft, Megaphone, CircleDot,
-  AlertTriangle, ChevronRight, Plug
+  AlertTriangle, ChevronRight, Plug, Clock, RotateCcw, Server
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import ReconnectRecoveryPanel from '@/components/amazon/ReconnectRecoveryPanel';
+import TokenHealthPanel from '@/components/amazon/TokenHealthPanel';
 
 function Step({ n, label, status }) {
   return (
@@ -43,13 +45,40 @@ export default function AmazonOAuthSetup() {
   const [showToken, setShowToken]   = useState(false);
   const [saving, setSaving]         = useState(false);
   const [saveResult, setSaveResult] = useState(null);
-
+  const [lastTokenError, setLastTokenError] = useState(null);
+  const [account, setAccount]       = useState(null);
+  const [testingFallback, setTestingFallback] = useState(false);
+  const [fallbackResult, setFallbackResult]   = useState(null);
+  const [reconnectBanner, setReconnectBanner] = useState(false);
+  const [showRecoveryPanel, setShowRecoveryPanel] = useState(false);
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await base44.functions.invoke('getOAuthSetupInfo', {});
-      setInfo(res.data);
+      const [oauthRes, me] = await Promise.all([
+        base44.functions.invoke('getOAuthSetupInfo', {}),
+        base44.auth.me().catch(() => null),
+      ]);
+      setInfo(oauthRes.data);
+
+      // Buscar última falha de token no SyncExecutionLog
+      if (me) {
+        const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id }, null, 1).catch(() => []);
+        const acc = accounts[0];
+        if (acc) {
+          setAccount(acc);
+          const logs = await base44.entities.SyncExecutionLog.filter(
+            { amazon_account_id: acc.id, status: 'error' }, '-started_at', 50
+          ).catch(() => []);
+          const tokenLog = logs.find(l =>
+            (l.operation || '').toLowerCase().includes('token') ||
+            (l.error_message || '').toLowerCase().includes('token') ||
+            (l.error_message || '').toLowerCase().includes('401') ||
+            (l.error_message || '').toLowerCase().includes('403')
+          );
+          setLastTokenError(tokenLog || null);
+        }
+      }
     } catch (e) {
       setInfo({ error: e.message });
     } finally {
@@ -57,7 +86,17 @@ export default function AmazonOAuthSetup() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    // Detectar retorno bem-sucedido do OAuth callback
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('reconnected') === '1') {
+      setReconnectBanner(true);
+      setShowRecoveryPanel(true);
+      setTimeout(() => setReconnectBanner(false), 8000);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
 
 
   const saveToken = async () => {
@@ -82,6 +121,25 @@ export default function AmazonOAuthSetup() {
     }
   };
 
+  const testFallback = async () => {
+    if (!account?.id) return;
+    setTestingFallback(true);
+    setFallbackResult(null);
+    try {
+      const res = await base44.functions.invoke('amazonAdsTokenManager', {
+        amazon_account_id: account.id,
+        force_refresh: true,
+        _service_role: true,
+      });
+      setFallbackResult(res.data);
+      if (res.data?.ok) setTimeout(() => load(), 1200);
+    } catch (e) {
+      setFallbackResult({ ok: false, message: e.message });
+    } finally {
+      setTestingFallback(false);
+    }
+  };
+
   const copyUrl = () => {
     if (info?.auth_url) {
       navigator.clipboard.writeText(info.auth_url);
@@ -90,11 +148,15 @@ export default function AmazonOAuthSetup() {
     }
   };
 
-  const tokenOk     = info?.token_status === 'valid';
+  const tokenOk      = info?.token_status === 'valid';
   const tokenInvalid = info?.token_status === 'invalid' || info?.token_status === 'not_configured';
   const hasProfiles  = info?.profiles?.length > 0;
   const clientIdOk   = !!info?.config?.client_id_preview;
   const profileIdOk  = !!info?.config?.profile_id;
+  const needsReauth  = account?.ads_requires_reauth === true || account?.ads_token_status === 'revoked';
+  const envTokenPresent = info?.config?.env_token_present === true;
+  const lastRecovery    = info?.config?.last_recovery_source;
+  const lastRecoveryAt  = info?.config?.last_recovery_at;
 
   const stepStatus = (n) => {
     if (tokenOk && hasProfiles) return 'done';
@@ -106,6 +168,24 @@ export default function AmazonOAuthSetup() {
 
   return (
     <div className="p-6 max-w-2xl space-y-6 animate-fade-in">
+
+      {/* Banner pós-reconexão */}
+      {reconnectBanner && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl border bg-emerald-500/10 border-emerald-500/30 text-sm animate-fade-in">
+          <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span className="text-emerald-300 font-medium">Reconectado · Retomando sincronização automaticamente...</span>
+        </div>
+      )}
+
+      {/* Painel de recuperação pós-reconexão */}
+      {showRecoveryPanel && account && (
+        <ReconnectRecoveryPanel account={account} />
+      )}
+
+      {/* Painel de saúde do token — aparece abaixo do banner de status */}
+      {account && !loading && (
+        <TokenHealthPanel account={account} />
+      )}
 
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -146,6 +226,38 @@ export default function AmazonOAuthSetup() {
         <div className="flex items-center gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
           <XCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
           <p className="text-sm text-red-400">{info.error}</p>
+        </div>
+      )}
+
+      {/* ── BANNER REAUTH OBRIGATÓRIO (ambos os tokens falharam) ──────── */}
+      {needsReauth && !loading && (
+        <div className="rounded-2xl border-2 border-red-500/60 bg-red-500/10 p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0">
+              <ShieldAlert className="w-5 h-5 text-red-400" />
+            </div>
+            <div className="flex-1">
+              <p className="text-base font-bold text-red-300">Reconexão obrigatória</p>
+              <p className="text-xs text-red-400/80 mt-0.5">
+                O token do banco e o token do ambiente falharam com a Amazon.
+                {account?.ads_last_lwa_error_code && (
+                  <> Erro: <code className="font-mono bg-red-500/10 px-1 rounded">{account.ads_last_lwa_error_code}</code></>
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="bg-red-500/8 rounded-xl p-3 space-y-1.5 text-xs text-red-200">
+            <p className="font-semibold">Como resolver:</p>
+            <p><span className="text-red-400 font-bold">1.</span> Clique em "Reconectar agora →" abaixo</p>
+            <p><span className="text-red-400 font-bold">2.</span> Aguarde o redirecionamento automático da Amazon para este app</p>
+          </div>
+          {info?.auth_url && (
+            <a href={info.auth_url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center justify-center gap-2 w-full px-5 py-3 bg-orange-500 hover:bg-orange-400 text-white text-sm font-bold rounded-xl transition-colors">
+              <ExternalLink className="w-4 h-4" />
+              Reconectar agora →
+            </a>
+          )}
         </div>
       )}
 
@@ -217,6 +329,81 @@ export default function AmazonOAuthSetup() {
               <ConfigPill label="Refresh Token" value={info.config?.refresh_token_preview} ok={tokenOk} />
               <ConfigPill label="Profile ID"   value={info.config?.profile_id}            ok={profileIdOk} />
               <ConfigPill label="Região"       value={info.config?.region}                ok={!!info.config?.region} />
+            </div>
+          </div>
+
+          {/* ── DIAGNÓSTICO FALLBACK AUTOMÁTICO ───────────────────────── */}
+          <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-slate-400" />
+                <h2 className="text-sm font-semibold text-white">Status do Fallback Automático</h2>
+              </div>
+              <span className="text-[10px] text-slate-500 bg-surface-2 px-2 py-0.5 rounded">ciclo 30 min</span>
+            </div>
+
+            {/* 3 indicadores em linha */}
+            <div className="grid grid-cols-3 gap-2">
+              {/* DB Token */}
+              <div className={`rounded-lg p-3 border text-center ${info.config?.db_token_present ? 'bg-emerald-500/8 border-emerald-500/20' : 'bg-red-500/8 border-red-500/20'}`}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Database className={`w-3.5 h-3.5 ${info.config?.db_token_present ? 'text-emerald-400' : 'text-red-400'}`} />
+                  <span className="text-[10px] text-slate-400 font-medium">Token DB</span>
+                </div>
+                <p className={`text-xs font-bold ${info.config?.db_token_present ? 'text-emerald-300' : 'text-red-400'}`}>
+                  {info.config?.db_token_present ? 'Presente' : 'Ausente'}
+                </p>
+                {info.config?.db_token_present && (
+                  <p className="text-[10px] font-mono text-slate-500 mt-0.5 truncate">{info.config?.refresh_token_preview}</p>
+                )}
+              </div>
+
+              {/* ENV Token */}
+              <div className={`rounded-lg p-3 border text-center ${envTokenPresent ? 'bg-emerald-500/8 border-emerald-500/20' : 'bg-surface-2 border-surface-3'}`}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Server className={`w-3.5 h-3.5 ${envTokenPresent ? 'text-emerald-400' : 'text-slate-500'}`} />
+                  <span className="text-[10px] text-slate-400 font-medium">Token ENV</span>
+                </div>
+                <p className={`text-xs font-bold ${envTokenPresent ? 'text-emerald-300' : 'text-slate-600'}`}>
+                  {envTokenPresent ? 'Presente' : 'Ausente'}
+                </p>
+                {envTokenPresent && info.config?.env_token_preview && (
+                  <p className="text-[10px] font-mono text-slate-500 mt-0.5 truncate">{info.config.env_token_preview}</p>
+                )}
+              </div>
+
+              {/* Último fallback */}
+              <div className={`rounded-lg p-3 border text-center ${lastRecovery ? 'bg-cyan/8 border-cyan/20' : 'bg-surface-2 border-surface-3'}`}>
+                <div className="flex items-center justify-center gap-1 mb-1">
+                  <Zap className={`w-3.5 h-3.5 ${lastRecovery ? 'text-cyan' : 'text-slate-500'}`} />
+                  <span className="text-[10px] text-slate-400 font-medium">Último Fallback</span>
+                </div>
+                <p className={`text-xs font-bold ${lastRecovery ? 'text-cyan' : 'text-slate-600'}`}>
+                  {lastRecovery ? 'Usado' : 'Nunca usado'}
+                </p>
+                {lastRecoveryAt && (
+                  <p className="text-[10px] text-slate-500 mt-0.5">{new Date(lastRecoveryAt).toLocaleDateString('pt-BR')}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Botão testar fallback */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={testFallback}
+                disabled={testingFallback || !account?.id}
+                className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 hover:border-cyan/30 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                {testingFallback ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                {testingFallback ? 'Testando...' : 'Testar fallback agora'}
+              </button>
+              {fallbackResult && (
+                <div className={`flex items-center gap-1.5 text-xs font-semibold ${fallbackResult.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {fallbackResult.ok
+                    ? <><CheckCircle className="w-3.5 h-3.5" /> Token renovado via {fallbackResult.active_token_source || 'lwa'}</>
+                    : <><XCircle className="w-3.5 h-3.5" /> {(fallbackResult.message || fallbackResult.error || 'Falha').slice(0, 60)}</>
+                  }
+                </div>
+              )}
             </div>
           </div>
 
@@ -369,6 +556,29 @@ export default function AmazonOAuthSetup() {
           )}
         </>
       )}
+
+      {/* ── ÚLTIMA FALHA DE TOKEN ─────────────────────────────────────────── */}
+      {lastTokenError ? (
+        <div className="bg-surface-1 border border-red-500/20 rounded-xl p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <h2 className="text-sm font-semibold text-red-300">Última falha de token</h2>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
+            <span className="font-mono bg-surface-2 px-2 py-0.5 rounded text-[10px]">{lastTokenError.operation}</span>
+            <span className="text-slate-600">·</span>
+            <span>{lastTokenError.started_at ? new Date(lastTokenError.started_at).toLocaleString('pt-BR') : '—'}</span>
+          </div>
+          {lastTokenError.error_message && (
+            <p className="text-xs text-red-300/80 font-mono bg-red-500/5 border border-red-500/15 rounded-lg px-3 py-2 break-words">
+              {lastTokenError.error_message}
+            </p>
+          )}
+          <p className="text-[10px] text-slate-500">
+            Esta informação mostra quando e por que a conexão com a Amazon caiu.
+          </p>
+        </div>
+      ) : null}
 
       {/* Footer nav */}
       <div className="flex items-center gap-4 pt-2 border-t border-surface-2">

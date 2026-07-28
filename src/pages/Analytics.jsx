@@ -4,9 +4,11 @@ import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
-import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Loader2, RefreshCw, BarChart2, Clock } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import WeeklyReportView from '@/components/analytics/WeeklyReportView';
 import AcosEvolutionPanel from '@/components/analytics/AcosEvolutionPanel';
+import BudgetCoveragePanel from '@/components/analytics/BudgetCoveragePanel';
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
@@ -63,6 +65,7 @@ export default function Analytics() {
   const [metrics, setMetrics] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [unifiedMetrics, setUnifiedMetrics] = useState([]);
+  const [perfSettings, setPerfSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedAsin, setSelectedAsin] = useState('all');
   const [period, setPeriod] = useState(30);
@@ -79,16 +82,18 @@ export default function Analytics() {
       if (!acc) return;
 
       const aid = acc.id;
-      const [prods, mets, camps, unified] = await Promise.all([
+      const [prods, mets, camps, unified, perfList] = await Promise.all([
         base44.entities.Product.filter({ amazon_account_id: aid }, '-total_sales_30d', 100),
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 2000),
         base44.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 500),
         base44.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 1000).catch(() => []),
+        base44.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
       ]);
       setProducts(prods);
       setMetrics(mets);
       setCampaigns(camps);
       setUnifiedMetrics(unified);
+      setPerfSettings(perfList[0] || null);
     } finally {
       setLoading(false);
     }
@@ -270,6 +275,11 @@ export default function Analytics() {
   const avgTopOfSearch = unifiedDailyData.length > 0 ? unifiedDailyData.reduce((s, d) => s + d.avg_top_of_search, 0) / unifiedDailyData.length : 0;
   const promotedRoas = totSpend > 0 ? totPromotedSales / totSpend : 0;
 
+  // Stale data detection: most recent date in CampaignMetricsDaily
+  const latestMetricDate = metrics.reduce((max, m) => m.date > max ? m.date : max, '');
+  const staleThresholdISO = new Date(Date.now() - 26 * 3600000).toISOString().slice(0, 10);
+  const isStale = !loading && latestMetricDate < staleThresholdISO;
+
   const half = Math.floor(dailyData.length / 2);
   const firstHalf = dailyData.slice(0, half);
   const secondHalf = dailyData.slice(half);
@@ -310,6 +320,8 @@ export default function Analytics() {
         </div>
       </div>
 
+
+
       {/* Tabs principais */}
       <div className="flex border-b border-surface-2">
         {[
@@ -333,6 +345,16 @@ export default function Analytics() {
       {/* Tab Métricas */}
       {activeMainTab === 'metricas' && (
         <>
+          {/* Stale data warning */}
+          {isStale && (
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm bg-amber-500/10 border border-amber-500/20 text-amber-400">
+              <Clock className="w-4 h-4 flex-shrink-0" />
+              <span>Dados desatualizados — a sincronização ocorre automaticamente</span>
+              <Link to="/sala-de-comando" className="ml-auto text-amber-300 hover:text-amber-200 font-medium whitespace-nowrap text-xs">
+                Ver status na Sala de Controle →
+              </Link>
+            </div>
+          )}
           {/* KPIs */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPI label={`Spend ${period}d`} value={`R$${totSpend.toFixed(2)}`} loading={loading} />
@@ -576,6 +598,13 @@ export default function Analytics() {
                 campaigns={campaigns}
                 products={products}
                 period={period}
+              />
+
+              {/* ── Painel de Cobertura de Budget ── */}
+              <BudgetCoveragePanel
+                account={account}
+                dailyCap={Number(perfSettings?.daily_budget_limit || 0)}
+                perfSettings={perfSettings}
               />
 
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">

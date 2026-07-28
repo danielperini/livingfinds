@@ -151,15 +151,31 @@ Deno.serve(async (request) => {
 
     const hour = Number(body.hour ?? currentBrazilHour());
     const forceRun = body.force === true || body._service_role === true;
+    const ignoreWindow = body.ignore_window === true || body.force === true;
+
     if (!forceRun && ![0, 1, 2, 3, 13].includes(hour)) {
       return Response.json({ ok: true, skipped: true, reason: 'Fora da janela Amazon', hour });
     }
 
+    // Quando force+ignore_window: primeiro deduplicar e reescandar via função dedicada
+    let dedupeResult: any = null;
+    if (ignoreWindow) {
+      dedupeResult = await base44.asServiceRole.functions.invoke('rescheduleStaleKickoffJobs', {
+        amazon_account_id: body.amazon_account_id,
+        _service_role: true,
+      }).catch(() => null);
+    }
+
     const cleanup = await cleanupQueue(base44, body.amazon_account_id);
-    const queue = (await base44.asServiceRole.entities.ProductKickoffQueue.filter({
+
+    // ignore_window=true: processar TODOS os scheduled sem filtro de due()
+    // limit maior (20) para desbloquear fila acumulada
+    const batchLimit = ignoreWindow ? 20 : 2;
+    const rawQueue = await base44.asServiceRole.entities.ProductKickoffQueue.filter({
       ...(body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}),
       status: 'scheduled',
-    }, 'scheduled_at', 50).catch(() => [])).filter(due).slice(0, 2);
+    }, 'scheduled_at', 100).catch(() => []);
+    const queue = ignoreWindow ? rawQueue.slice(0, batchLimit) : rawQueue.filter(due).slice(0, batchLimit);
 
     const results: any[] = [];
 
@@ -297,7 +313,7 @@ Deno.serve(async (request) => {
       }).catch(() => null);
     }
 
-    return Response.json({ ok: true, processed: results.length, batch_size: 2, spacing_seconds: 15, cleanup, results });
+    return Response.json({ ok: true, processed: results.length, batch_size: batchLimit, spacing_seconds: 15, cleanup, dedupe: dedupeResult?.data || dedupeResult || null, results });
   } catch (error) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao processar fila de Kick-off V2' }, { status: 500 });
   }

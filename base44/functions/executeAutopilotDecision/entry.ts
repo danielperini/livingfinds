@@ -1,5 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
+const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -9,18 +11,32 @@ Deno.serve(async (request) => {
     if (!ids.length) return Response.json({ ok: false, error: 'decision_id obrigatório' }, { status: 400 });
 
     const pauseIds = [];
+    const pairedBidIds = [];
     const otherIds = [];
+
     for (const id of ids) {
       const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, null, 1).catch(() => []);
-      if (rows[0]?.action === 'pause_campaign') pauseIds.push(id);
+      const decision = rows[0];
+      if (decision?.action === 'pause_campaign') pauseIds.push(id);
+      else if (decision && BID_ACTIONS.has(decision.action)) pairedBidIds.push(id);
       else otherIds.push(id);
     }
 
     const results = [];
+
     if (pauseIds.length) {
       const response = await base44.asServiceRole.functions.invoke('executePauseDecisionSafe', {
         ...body,
         decision_ids: pauseIds,
+        _service_role: true,
+      });
+      results.push(...(response?.data?.results || response?.results || []));
+    }
+
+    if (pairedBidIds.length) {
+      const response = await base44.asServiceRole.functions.invoke('executePairedManualBidDecision', {
+        ...body,
+        decision_ids: pairedBidIds,
         _service_role: true,
       });
       results.push(...(response?.data?.results || response?.results || []));
