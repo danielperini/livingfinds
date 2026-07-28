@@ -66,7 +66,7 @@ const AuthenticatedApp = () => {
     const checkSplash = async () => {
       try {
         const isAuth = await base44.auth.isAuthenticated();
-        if (!isAuth) return;
+        if (!isAuth) { setSplashDone(true); return; }
         const me = await base44.auth.me();
         const userId = me?.id || 'anon';
         let accountId = 'none';
