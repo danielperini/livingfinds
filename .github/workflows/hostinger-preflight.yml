@@ -1,0 +1,52 @@
+name: Hostinger deployment preflight
+
+on:
+  push:
+    branches:
+      - feat/migracao-backend-e-ajustes
+    paths:
+      - .github/workflows/hostinger-preflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST || secrets.HOSTINGER_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER || secrets.VPS_USERNAME || secrets.HOSTINGER_USER || 'root' }}
+      VPS_KEY: ${{ secrets.VPS_SSH_KEY || secrets.HOSTINGER_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
+    steps:
+      - name: Validate deployment credentials
+        shell: bash
+        run: |
+          test -n "$VPS_HOST" || { echo "::error::VPS host secret is missing"; exit 1; }
+          test -n "$VPS_KEY" || { echo "::error::VPS SSH key secret is missing"; exit 1; }
+
+      - name: Inspect current production without changing it
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ env.VPS_HOST }}
+          username: ${{ env.VPS_USER }}
+          key: ${{ env.VPS_KEY }}
+          script_stop: true
+          script: |
+            set -eu
+            echo "HOST=$(hostname)"
+            echo "UPTIME=$(uptime -p)"
+            echo "DISK=$(df -h / | awk 'NR==2 {print $3 \"/\" $2 \" (\" $5 \")\"}')"
+            if command -v docker >/dev/null 2>&1; then
+              echo "DOCKER=$(docker --version)"
+              docker ps --format 'CONTAINER={{.Names}} IMAGE={{.Image}} STATUS={{.Status}} PORTS={{.Ports}}'
+              docker compose ls 2>/dev/null || true
+            else
+              echo "DOCKER=not-installed"
+            fi
+            for root in /opt /srv /var/www /root; do
+              [ -d "$root" ] || continue
+              find "$root" -maxdepth 3 -type d \
+                \( -iname '*living*' -o -iname '*finds*' \) \
+                -print 2>/dev/null
+            done
