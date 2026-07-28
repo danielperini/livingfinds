@@ -394,7 +394,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
 // ── ProductRow ────────────────────────────────────────────────────────────────
 
-export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, amazonPropagating, amazonResult, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated }) {
+export default function ProductRow({ product, account, onToggleCampaign, onArchiveCampaign, onKickoff, onAccelerator, onCancelKickoff, actionLoading, amazonPropagating, amazonResult, onNameUpdate, selected, onToggleSelect, isFocused, productMessage, stuckQueueCount, onPriceUpdated, divergenceBadge }) {
   const [editingName, setEditingName] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [savingName, setSavingName] = useState(false);
@@ -496,6 +496,7 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
             {productMessage.text}
           </p>
         )}
+        {divergenceBadge && <div className="mt-1">{divergenceBadge}</div>}
       </td>
     </tr>
   );

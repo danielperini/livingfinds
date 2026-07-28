@@ -178,10 +178,85 @@ Deno.serve(async (req) => {
       } catch { /* ignora — continua com pausa local */ }
     }
 
-    // ── Atualizar banco local sempre (pausar localmente independente da API) ─
-    // Se a API falhou, a pausa local garante consistência visual e enfileira retry.
-    const confirmedIds = pausedIds.length ? unique(pausedIds) : campaignIds;
+    // ── Confirmação pós-pausa: verificar estado real na Amazon antes de persistir ─
     const now = new Date().toISOString();
+    let confirmedIds = pausedIds.length ? unique(pausedIds) : campaignIds;
+
+    if (pausedIds.length > 0) {
+      // Aguardar 1.5s e confirmar estado real (polling simples: 1 tentativa imediata)
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const baseUrl2 = getAdsBaseUrl(account.region);
+        const token2 = await getAdsToken(refreshToken);
+        const CT = 'application/vnd.spCampaign.v3+json';
+        const confirmRes = await fetch(`${baseUrl2}/sp/campaigns/list`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token2}`,
+            'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+            'Amazon-Advertising-API-Scope': String(profileId),
+            'Content-Type': CT,
+            'Accept': CT,
+          },
+          body: JSON.stringify({ campaignIdFilter: { include: pausedIds }, maxResults: pausedIds.length }),
+        });
+        const confirmData = await confirmRes.json().catch(() => ({}));
+        const realStates = new Map<string, string>();
+        for (const c of (confirmData?.campaigns || [])) {
+          if (c?.campaignId) realStates.set(String(c.campaignId), String(c.state || '').toUpperCase());
+        }
+
+        const stillEnabled: string[] = [];
+        for (const id of pausedIds) {
+          const state = realStates.get(id);
+          if (state === 'ENABLED') stillEnabled.push(id);
+        }
+
+        if (stillEnabled.length > 0) {
+          // Retry após 3s para campanhas ainda ativas
+          await new Promise(r => setTimeout(r, 3000));
+          // Tentativa de re-pausa
+          const retryRes = await fetch(`${baseUrl2}/sp/campaigns`, {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `Bearer ${token2}`,
+              'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
+              'Amazon-Advertising-API-Scope': String(profileId),
+              'Content-Type': CT,
+              'Accept': CT,
+            },
+            body: JSON.stringify({ campaigns: stillEnabled.map(id => ({ campaignId: id, state: 'PAUSED' })) }),
+          }).catch(() => null);
+
+          // Marcar campanhas que ainda não confirmaram como requires_attention
+          for (const campaign of related) {
+            if (stillEnabled.includes(String(campaign.campaign_id))) {
+              await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+                requires_attention: true,
+                amazon_status: 'enabled', // ainda não confirmado como paused
+              }).catch(() => {});
+            }
+          }
+          apiErrorMsg = apiErrorMsg || `${stillEnabled.length} campanha(s) ainda ENABLED após pausa — marcadas para atenção`;
+        }
+
+        // Atualizar amazon_status apenas para as confirmadas como PAUSED
+        for (const id of pausedIds) {
+          if (!stillEnabled.includes(id)) {
+            const campaign = related.find(c => String(c.campaign_id) === id);
+            if (campaign) {
+              await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+                amazon_status: 'paused',
+                requires_attention: false,
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch {
+        // Confirmação falhou — não bloquear, mas não atualizar amazon_status
+        apiErrorMsg = apiErrorMsg || 'Confirmação de pausa não foi possível — amazon_status não atualizado';
+      }
+    }
 
     for (const campaign of related) {
       if (!confirmedIds.includes(String(campaign.campaign_id))) continue;

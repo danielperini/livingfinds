@@ -7,6 +7,7 @@ import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCl
 import AcceleratorModal from '@/components/products/AcceleratorModal';
 import RestockedAlert from '@/components/products/RestockedAlert';
 import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
+import CampaignDivergenceBadge from '@/components/products/CampaignDivergenceBadge';
 import ProductRow, {
   offerStatus, productHasCampaign, isCampaignActiveFn, campaignIdOf,
   isConfirmedOutOfStock, stockFreshness, formatBRL,
@@ -215,7 +216,30 @@ export default function Products({ externalRefreshTrigger }) {
         accs.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))
       );
       const allProducts = allResults.flat();
-      setProducts(allProducts);
+
+      // Detectar divergências: campanhas paused no DB mas amazon_status=enabled
+      const allCampaigns = await Promise.all(
+        accs.map(acc => base44.entities.Campaign.filter({ amazon_account_id: acc.id }, null, 500).catch(() => []))
+      ).then(r => r.flat());
+
+      // Contar divergentes por ASIN
+      const divergentByAsin = {};
+      for (const c of allCampaigns) {
+        const localPaused = String(c.state || c.status || '').toLowerCase() === 'paused';
+        const amazonEnabled = String(c.amazon_status || '').toLowerCase() === 'enabled';
+        const notArchived = String(c.state || '').toLowerCase() !== 'archived' && !c.archived;
+        if (localPaused && amazonEnabled && notArchived && c.asin) {
+          divergentByAsin[c.asin] = (divergentByAsin[c.asin] || 0) + 1;
+        }
+      }
+
+      // Enriquecer produtos com contagem de divergências
+      const enriched = allProducts.map(p => ({
+        ...p,
+        _divergent_count: divergentByAsin[p.asin] || 0,
+      }));
+
+      setProducts(enriched);
 
       // Enrich names in background for products without names
       const needsEnrich = allProducts.filter(p => !p.product_name?.trim() && !p.display_name?.trim());
@@ -725,6 +749,13 @@ export default function Products({ externalRefreshTrigger }) {
                     stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
                     onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
                     onPriceUpdated={(id, patch) => setProducts(cur => cur.map(item => item.id === id ? { ...item, ...patch } : item))}
+                    divergenceBadge={product._divergent_count > 0 ? (
+                      <CampaignDivergenceBadge
+                        product={product}
+                        accountId={account?.id}
+                        onFixed={() => setProducts(cur => cur.map(p => p.id === product.id ? { ...p, _divergent_count: 0 } : p))}
+                      />
+                    ) : null}
                   />
                 ))}
               </tbody>
