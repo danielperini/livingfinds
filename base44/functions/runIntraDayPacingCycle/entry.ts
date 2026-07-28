@@ -51,7 +51,10 @@ Deno.serve(async (request) => {
     const eligibleAsins = Array.isArray(pacing?.eligible_asins_for_bid_adjustment)
       ? pacing.eligible_asins_for_bid_adjustment.filter(Boolean)
       : [];
-    if (pacing?.ok !== false && pacing?.allow_bid_actions === true && eligibleAsins.length > 0) {
+    const pacingState = String(pacing?.spend_pacing || 'unknown');
+    const bidWriteBlockedByOverspend = ['overpacing', 'hard_cap_risk'].includes(pacingState);
+    if (pacing?.ok !== false && pacing?.allow_bid_actions === true &&
+        !bidWriteBlockedByOverspend && eligibleAsins.length > 0) {
       const response = await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
         amazon_account_id: body.amazon_account_id || pacing.amazon_account_id || null,
         eligible_asins: eligibleAsins,
@@ -63,6 +66,12 @@ Deno.serve(async (request) => {
         _service_role: true,
       }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error), executed: 0 } }));
       dayparting = response?.data || response || {};
+    } else if (bidWriteBlockedByOverspend) {
+      dayparting = {
+        skipped: true,
+        reason: 'Overpacing/hard cap: controle feito por pausas específicas; restauração ou aumento de bid bloqueados',
+        executed: 0,
+      };
     }
 
     const pacingActions = Number(pacing?.actions_executed || 0);
@@ -73,7 +82,7 @@ Deno.serve(async (request) => {
       actions_executed: pacingActions + bidActions,
       campaign_state_actions_executed: pacingActions,
       bid_actions_executed: bidActions,
-      spend_pacing: pacing?.spend_pacing || 'unknown',
+      spend_pacing: pacingState,
       pacing_ratio: pacing?.pacing_ratio ?? null,
       daily_cap: pacing?.daily_cap ?? null,
       estimated_current_spend: pacing?.estimated_current_spend ?? null,
