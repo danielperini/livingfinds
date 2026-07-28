@@ -6,6 +6,7 @@ on:
       - feat/migracao-backend-e-ajustes
     paths:
       - .github/workflows/deploy-hostinger.yml
+      - server/migrations/**
   workflow_dispatch:
 
 concurrency:
