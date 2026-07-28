@@ -15,7 +15,7 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     env:
-      VPS_HOST: ${{ secrets.VPS_HOST || secrets.HOSTINGER_HOST }}
+      VPS_HOST: 179.197.232.253
       VPS_USER: ${{ secrets.VPS_USER || secrets.VPS_USERNAME || secrets.HOSTINGER_USER || 'root' }}
       VPS_KEY: ${{ secrets.VPS_SSH_KEY || secrets.HOSTINGER_SSH_KEY || secrets.SSH_PRIVATE_KEY }}
     steps:
