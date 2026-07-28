@@ -1,7 +1,9 @@
 /**
- * Scheduler — substitui o agendador do Base44. Lê base44/schedules/amazon-automation-schedule.json
- * e dispara cada função no seu horário (timezone do arquivo, ex.: America/Sao_Paulo).
- * Implementa um matcher de cron de 5 campos (min hora dia-mês mês dia-semana) verificado a cada minuto.
+ * Scheduler self-hosted do LivingFinds.
+ *
+ * Lê base44/schedules/amazon-automation-schedule.json e executa crons no timezone
+ * configurado. Cada job possui lock em memória para impedir sobreposição quando uma
+ * execução ultrapassa o próximo disparo.
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
@@ -10,10 +12,8 @@ import { makeFunctions } from './sdk/functions.ts';
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any> };
 
 function schedulesFile(): string {
-  return (
-    Deno.env.get('SCHEDULES_FILE') ??
-    join(import.meta.dirname!, '..', '..', 'base44', 'schedules', 'amazon-automation-schedule.json')
-  );
+  return Deno.env.get('SCHEDULES_FILE') ??
+    join(import.meta.dirname!, '..', '..', 'base44', 'schedules', 'amazon-automation-schedule.json');
 }
 
 function matchField(field: string, value: number): boolean {
@@ -36,17 +36,13 @@ function matchField(field: string, value: number): boolean {
 }
 
 function cronMatches(cron: string, d: { min: number; hour: number; dom: number; mon: number; dow: number }): boolean {
-  const [mi, ho, dm, mo, dw] = cron.trim().split(/\s+/);
-  return (
-    matchField(mi, d.min) &&
-    matchField(ho, d.hour) &&
-    matchField(dm, d.dom) &&
-    matchField(mo, d.mon) &&
-    matchField(dw, d.dow)
-  );
+  const fields = cron.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  const [mi, ho, dm, mo, dw] = fields;
+  return matchField(mi, d.min) && matchField(ho, d.hour) && matchField(dm, d.dom) &&
+    matchField(mo, d.mon) && matchField(dw, d.dow);
 }
 
-/** Componentes de data/hora no timezone alvo (via Intl, sem libs externas). */
 function nowInTz(tz: string) {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -57,7 +53,7 @@ function nowInTz(tz: string) {
     month: '2-digit',
     weekday: 'short',
   });
-  const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((p) => [p.type, p.value]));
+  const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((part) => [part.type, part.value]));
   const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
     min: Number(parts.minute),
@@ -73,34 +69,47 @@ export async function startScheduler(): Promise<void> {
     console.log('[scheduler] desativado (ENABLE_SCHEDULER=false)');
     return;
   }
+
   let config: { timezone?: string; jobs?: Job[] };
   try {
     config = JSON.parse(await Deno.readTextFile(schedulesFile()));
-  } catch (e) {
-    console.error('[scheduler] não consegui ler o arquivo de schedules:', (e as Error).message);
+  } catch (error) {
+    console.error('[scheduler] não consegui ler o arquivo de schedules:', (error as Error).message);
     return;
   }
-  const tz = config.timezone ?? 'America/Sao_Paulo';
-  const jobs = config.jobs ?? [];
-  const svc = makeFunctions(true);
-  console.log(`[scheduler] ${jobs.length} jobs agendados (tz=${tz})`);
 
-  let lastKey = '';
+  const timezone = config.timezone ?? 'America/Sao_Paulo';
+  const jobs = config.jobs ?? [];
+  const service = makeFunctions(true);
+  const runningJobs = new Map<string, { startedAt: number; functionName: string }>();
+  console.log(`[scheduler] ${jobs.length} jobs agendados (tz=${timezone})`);
+
+  let lastMinuteKey = '';
   const tick = async () => {
-    const now = nowInTz(tz);
-    const key = `${now.mon}-${now.dom}-${now.hour}-${now.min}`;
-    if (key === lastKey) return; // evita disparo duplo dentro do mesmo minuto
-    lastKey = key;
+    const now = nowInTz(timezone);
+    const minuteKey = `${now.mon}-${now.dom}-${now.hour}-${now.min}`;
+    if (minuteKey === lastMinuteKey) return;
+    lastMinuteKey = minuteKey;
+
     for (const job of jobs) {
-      if (cronMatches(job.cron, now)) {
-        console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
-        svc.invoke(job.function, job.payload ?? {})
-          .then((r) => console.log(`[scheduler] '${job.function}' ok=${r.ok} status=${r.status}`))
-          .catch((e) => console.error(`[scheduler] '${job.function}' erro:`, e?.message));
+      if (!cronMatches(job.cron, now)) continue;
+      const jobKey = `${job.name}|${job.function}`;
+      const running = runningJobs.get(jobKey);
+      if (running) {
+        const elapsedSeconds = Math.round((Date.now() - running.startedAt) / 1000);
+        console.warn(`[scheduler] ignorando sobreposição '${job.name}' (${elapsedSeconds}s em execução)`);
+        continue;
       }
+
+      runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
+      console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
+      service.invoke(job.function, job.payload ?? {})
+        .then((response) => console.log(`[scheduler] '${job.function}' ok=${response.ok} status=${response.status}`))
+        .catch((error) => console.error(`[scheduler] '${job.function}' erro:`, error?.message))
+        .finally(() => runningJobs.delete(jobKey));
     }
   };
-  // checa a cada 30s (o guard lastKey garante 1 disparo por minuto)
+
   setInterval(tick, 30_000);
   tick();
 }
