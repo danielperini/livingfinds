@@ -1,0 +1,55 @@
+{
+  "name": "IntradaySpendSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "ads_profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "campaign_name": { "type": "string" },
+    "campaign_status": { "type": "string" },
+    "campaign_budget": { "type": "number", "default": 0 },
+    "asin": { "type": "string" },
+    "spend_date": { "type": "string", "format": "date" },
+    "hour_brt": { "type": "integer", "minimum": 0, "maximum": 23 },
+    "report_id": { "type": "string" },
+    "snapshot_batch_id": { "type": "string" },
+    "snapshot_kind": {
+      "type": "string",
+      "enum": ["campaign_cumulative_day", "hourly_delta"],
+      "default": "campaign_cumulative_day"
+    },
+    "aggregation_mode": {
+      "type": "string",
+      "enum": ["cumulative", "incremental"],
+      "default": "cumulative"
+    },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "orders": { "type": "number", "default": 0 },
+    "acos": { "type": ["number", "null"] },
+    "roas": { "type": "number", "default": 0 },
+    "source": {
+      "type": "string",
+      "enum": [
+        "AMAZON_MARKETING_STREAM",
+        "AMAZON_ADS_SAME_DAY_REPORT",
+        "MANUAL_IMPORT"
+      ]
+    },
+    "source_event_id": { "type": "string" },
+    "idempotency_key": { "type": "string" },
+    "observed_at": { "type": "string", "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "spend_date",
+    "source",
+    "idempotency_key",
+    "observed_at"
+  ]
+}
