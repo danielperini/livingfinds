@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - feat/migracao-backend-e-ajustes
-    paths:
-      - .github/workflows/deploy-hostinger.yml
-      - server/migrations/**
   workflow_dispatch:
 
 concurrency:
@@ -65,6 +62,8 @@ jobs:
             git clone --depth 1 --branch "$RELEASE_BRANCH" \
               https://github.com/danielperini/livingfinds.git "$candidate"
             cp "$current/server/.env" "$candidate/server/.env"
+            sed -i '/^RELEASE_ID=/d' "$candidate/server/.env"
+            printf '\nRELEASE_ID=%s\n' "$release" >> "$candidate/server/.env"
 
             docker build --pull \
               -t "$image" \
