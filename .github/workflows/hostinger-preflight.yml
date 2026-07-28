@@ -41,6 +41,13 @@ jobs:
               echo "DOCKER=$(docker --version)"
               docker ps --format 'CONTAINER={{.Names}} IMAGE={{.Image}} STATUS={{.Status}} PORTS={{.Ports}}'
               docker compose ls 2>/dev/null || true
+              echo "APP_MOUNTS"
+              docker inspect server-app-1 --format '{{range .Mounts}}{{println .Type .Name .Source "->" .Destination}}{{end}}' 2>/dev/null || true
+              echo "DB_MOUNTS"
+              docker inspect server-db-1 --format '{{range .Mounts}}{{println .Type .Name .Source "->" .Destination}}{{end}}' 2>/dev/null || true
+              echo "APP_ENV_NAMES"
+              docker inspect server-app-1 --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+                | sed 's/=.*//' | sort
             else
               echo "DOCKER=not-installed"
             fi
@@ -49,4 +56,21 @@ jobs:
               find "$root" -maxdepth 3 -type d \
                 \( -iname '*living*' -o -iname '*finds*' \) \
                 -print 2>/dev/null
+            done
+            if [ -d /opt/livingfinds/.git ]; then
+              cd /opt/livingfinds
+              echo "REPO_HEAD=$(git rev-parse --short HEAD)"
+              echo "REPO_BRANCH=$(git branch --show-current)"
+              echo "REPO_REMOTE=$(git remote get-url origin | sed -E 's#(https?://)[^/@]+@#\1#')"
+              echo "REPO_STATUS_BEGIN"
+              git status --short
+              echo "REPO_STATUS_END"
+              echo "COMPOSE_SERVICES"
+              docker compose -f server/docker-compose.yml config --services
+              echo "COMPOSE_VOLUMES"
+              docker compose -f server/docker-compose.yml config --volumes
+            fi
+            for endpoint in /health /api/health; do
+              code=$(curl -sS -o /tmp/livingfinds-health -w '%{http_code}' "http://127.0.0.1:8000$endpoint" || true)
+              echo "HEALTH $endpoint $code"
             done
