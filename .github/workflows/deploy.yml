@@ -1,0 +1,62 @@
+name: Deploy para VPS
+
+# Dispara a cada push na main. O runner do GitHub builda o frontend,
+# envia server/, base44/ e dist/ para a VPS via SSH e rebuilda o container Docker.
+# O Codex (ou qualquer um) só precisa dar push — a VPS atualiza sozinha.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # permite disparar manualmente pela aba Actions
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false # não cancela um deploy no meio; enfileira
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Build do frontend
+        run: npm run build
+
+      - name: Preparar chave SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Enviar arquivos para a VPS
+        env:
+          SSH: ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
+          DEST: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_PATH }}
+        run: |
+          # base44/ e server/ — SEM --delete e excluindo .env (nunca sobrescreve segredos da VPS)
+          rsync -az --delete -e "$SSH" --exclude='.env' --exclude='node_modules' base44/ "$DEST/base44/"
+          rsync -az --delete -e "$SSH" --exclude='.env' --exclude='node_modules' server/ "$DEST/server/"
+          # dist/ (frontend buildado) — com --delete para limpar assets antigos com hash
+          rsync -az --delete -e "$SSH" dist/ "$DEST/dist/"
+
+      - name: Rebuild e restart do container na VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "cd ${{ secrets.VPS_PATH }} && docker compose -f server/docker-compose.yml up -d --build app"
+
+      - name: Verificar saúde do serviço
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "sleep 5 && curl -sf http://localhost:8000/health && echo ' — OK'"
