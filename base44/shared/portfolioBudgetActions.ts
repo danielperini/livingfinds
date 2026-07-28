@@ -58,12 +58,13 @@ export async function setCampaignState(base44: any, params: {
   now: string;
   dryRun: boolean;
   resumeAfter?: string | null;
+  windowKey?: string | null;
 }) {
-  const { accountId, profile, state, reason, date, now, dryRun, resumeAfter = null } = params;
+  const { accountId, profile, state, reason, date, now, dryRun, resumeAfter = null, windowKey = null } = params;
   const campaignId = amazonCampaignId(profile.campaign);
   const action = state === 'PAUSED' ? 'pause_campaign' : 'resume_campaign';
   const reasonCode = reason.split(':')[0];
-  const key = `${accountId}|portfolio_pacing|${action}|${campaignId}|${date}|${reasonCode}`;
+  const key = `${accountId}|portfolio_pacing|${action}|${campaignId}|${date}|${windowKey || 'daily'}|${reasonCode}`;
   if (!campaignId || await alreadyExecuted(base44, accountId, key)) {
     return { ok: false, skipped: true, campaign_id: campaignId, reason: 'idempotent_or_missing_id' };
   }
