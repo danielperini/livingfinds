@@ -14,6 +14,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 30 minutes",
+      "function": "runManualZeroDeliveryBootstrap",
+      "cron": "8,38 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Daily report freshness self-heal - hourly",
       "function": "ensureDailyReportsCurrent",
       "cron": "5 7-23 * * *",

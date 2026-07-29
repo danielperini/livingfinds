@@ -95,6 +95,22 @@ Deno.serve(async (request) => {
 
         for (const keyword of localKeywords) {
           const keywordId = String(keyword.keyword_id || '');
+          // Prefer keyword-level delivery. A campaign may be serving while one
+          // exact keyword remains at zero impressions and zero clicks.
+          const keywordMetricsFresh = fresh(
+            keyword.metrics_synced_at || keyword.synced_at || keyword.updated_at ||
+              campaign.last_sync_at || campaign.synced_at,
+            48,
+          );
+          const deliveryMetric = keywordMetricsFresh
+            ? {
+              impressions: keyword.impressions,
+              clicks: keyword.clicks,
+              spend: keyword.spend,
+              orders: keyword.orders,
+              source: 'keyword',
+            }
+            : { ...newestMetric, source: 'campaign_fallback' };
           const diagnosis = diagnoseZeroDelivery({
             campaignType: campaign.campaign_type, targetingType: campaign.targeting_type,
             matchType: keyword.match_type,
@@ -103,12 +119,12 @@ Deno.serve(async (request) => {
               remoteGroups.some((g: any) => norm(g.state) === 'enabled') &&
               remoteKeywords.some((k: any) => String(k.keywordId) === keywordId && norm(k.state) === 'enabled') &&
               remoteAds.some((a: any) => norm(a.state) === 'enabled'),
-            metricsFresh,
+            metricsFresh: metricsFresh && (keywordMetricsFresh || Boolean(newestMetric)),
             stock: product?.available_quantity ?? product?.fba_inventory ?? 0,
             stockEligible: product?.inventory_status !== 'out_of_stock',
             listingEligible: product?.ads_eligibility_status === 'eligible' && product?.listing_buyable !== false &&
               product?.offer_active !== false && product?.listing_suppressed !== true,
-            impressions: newestMetric?.impressions, clicks: newestMetric?.clicks, spend: newestMetric?.spend,
+            impressions: deliveryMetric?.impressions, clicks: deliveryMetric?.clicks, spend: deliveryMetric?.spend,
             createdAt: campaign.start_date || campaign.created_at || campaign.created_date,
             attempts: keyword.zero_delivery_attempts, lastRescueAt: keyword.last_bid_rescue_at,
           });
@@ -167,7 +183,7 @@ Deno.serve(async (request) => {
             risk: 'low', requires_approval: false, approval_status: 'auto_approved',
             status: dryRun ? 'proposed' : 'approved', queue_status: dryRun ? 'not_queued' : 'pending',
             idempotency_key: key, source_function: 'manual_zero_delivery_bootstrap',
-            evidence: JSON.stringify({ metrics: newestMetric, suggested_bid: recommendation, economic_cap: eco?.safe_max_cpc || settings.max_cpc }),
+            evidence: JSON.stringify({ metrics: deliveryMetric, suggested_bid: recommendation, economic_cap: eco?.safe_max_cpc || settings.max_cpc }),
             created_at: now, updated_at: now,
           };
           if (dryRun) {

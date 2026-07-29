@@ -1,7 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const PAUSE_SKUS = new Set(['FBA-0087C','FBA-0008P','FBA-0100','SKU-002314A','FBA-0065PR','SKU-002314V']);
-const BID_REDUCTIONS: Record<string, number> = { 'FBA-0088A': 0.15 };
+const PAUSE_SKUS = new Set(['FBA-0087C','FBA-0100','SKU-002314A','FBA-0065PR','SKU-002314V']);
+// FBA-0008P voltou a apresentar lucro pós-Ads positivo. Ele sai da pausa rígida,
+// volta a entregar e opera com bid conservador enquanto a margem se recupera.
+const RECOVERY_SKUS = new Set(['FBA-0008P']);
+const BID_REDUCTIONS: Record<string, number> = { 'FBA-0088A': 0.15, 'FBA-0008P': 0.10 };
 const DAILY_ORDER_CAPS: Record<string, number> = { 'FBA-0087B': 1 };
 const MIN_BID = 0.20;
 
@@ -95,6 +98,9 @@ Deno.serve(async (request) => {
         if (PAUSE_SKUS.has(sku)) {
           desired = 'PAUSED';
           reason = 'PROFIT_GUARD: prejuízo pós-Ads ou gasto sem vendas; pausa até correção econômica';
+        } else if (RECOVERY_SKUS.has(sku) && state === 'PAUSED') {
+          desired = 'ENABLED';
+          reason = `PROFIT_RECOVERY: ${sku} returned to positive post-Ads profit; conservative reactivation`;
         } else if (DAILY_ORDER_CAPS[sku]) {
           const orders = campaignOrders.get(campaignId) || 0;
           const cappedToday = priorEvents.some((event: any) => event.rule_key === 'sku_daily_order_cap' && event.entity_id === campaignId && String(event.executed_at || event.created_date || '').slice(0, 10) === day && event.status === 'executed');
@@ -115,7 +121,8 @@ Deno.serve(async (request) => {
             synced_at: new Date().toISOString(), last_activity_at: new Date().toISOString(),
           });
           await base44.asServiceRole.entities.RuleExecution.create({
-            amazon_account_id: account.id, rule_key: DAILY_ORDER_CAPS[sku] ? 'sku_daily_order_cap' : 'sku_profit_hard_pause',
+            amazon_account_id: account.id,
+            rule_key: DAILY_ORDER_CAPS[sku] ? 'sku_daily_order_cap' : RECOVERY_SKUS.has(sku) ? 'sku_profit_recovery' : 'sku_profit_hard_pause',
             rule_version: 1, entity_type: 'campaign', entity_id: campaignId, campaign_id: campaignId,
             asin: campaign.asin || productBySku.get(sku)?.asin || null, action_type: desired === 'PAUSED' ? 'pause_campaign' : 'enable_campaign',
             status: 'executed', reason, executed_at: new Date().toISOString(),
@@ -158,7 +165,7 @@ Deno.serve(async (request) => {
       allResults.push({ account_id: account.id, date: day, actions });
     }
 
-    return Response.json({ ok: true, dry_run: Boolean(body.dry_run), policy: { pause_skus: [...PAUSE_SKUS], bid_reductions: BID_REDUCTIONS, daily_order_caps: DAILY_ORDER_CAPS }, results: allResults });
+    return Response.json({ ok: true, dry_run: Boolean(body.dry_run), policy: { pause_skus: [...PAUSE_SKUS], recovery_skus: [...RECOVERY_SKUS], bid_reductions: BID_REDUCTIONS, daily_order_caps: DAILY_ORDER_CAPS }, results: allResults });
   } catch (error) {
     return Response.json({ ok: false, error: error?.message || 'Falha na proteção econômica por SKU' }, { status: 500 });
   }

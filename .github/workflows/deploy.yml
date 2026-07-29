@@ -85,6 +85,29 @@ jobs:
               if (!response.ok || data.ok === false) console.log("SKU_PROTECTION_ERROR=" + (data.error || "unknown"));
             ' </dev/null
 
+            echo '--- diagnostico de campanhas sem clique + resgate seguro de bid ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/runManualZeroDeliveryBootstrap", {
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true })
+              });
+              const data = await response.json().catch(() => ({}));
+              const rows = Array.isArray(data.results) ? data.results : [];
+              const counts = {};
+              for (const row of rows) {
+                const key = row.action === "increase_bid"
+                  ? (row.execution?.ok === false ? "bid_failed" : "bid_increased")
+                  : (row.status || row.reason || "unchanged");
+                counts[key] = (counts[key] || 0) + 1;
+              }
+              console.log("ZERO_DELIVERY_HTTP=" + response.status + "|OK=" + data.ok + "|CHECKED=" + rows.length + "|COUNTS=" + JSON.stringify(counts));
+              for (const row of rows.filter((r) => r.action === "increase_bid" || ["amazon_entity_not_enabled","out_of_stock","listing_ineligible","replacement_review_required","incomplete_structure"].includes(r.status))) {
+                console.log("ZERO_DELIVERY_ITEM=" + row.campaign_id + "|" + row.keyword_id + "|" + row.action + "|" + (row.status || row.reason || "") + "|" + (row.bid?.bid || ""));
+              }
+              if (!response.ok || data.ok === false) throw new Error(data.error || "zero delivery bootstrap failed");
+            ' </dev/null
+
             echo '--- verificação do frontend publicado ---'
             printf 'APP_ASSET='
             curl -fsS http://127.0.0.1:8000/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
