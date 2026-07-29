@@ -20,7 +20,9 @@ const DEFAULT_BID = 0.50;
 const DEFAULT_BUDGET = 9.00;
 const DELAY_MS = 3500;
 const MAX_ASINS_PER_RUN = 5;
-const MAX_CAMPAIGNS_PER_ASIN = 30;
+const MAX_CAMPAIGNS_PER_ASIN = 1;
+const MIN_TERM_WORDS = 3;
+const MIN_RELEVANCE_SCORE = 90;
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -33,6 +35,10 @@ function normTerm(text: string): string {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function isMediumOrLongTail(term: string): boolean {
+  return normTerm(term).split(/\s+/).filter(Boolean).length >= MIN_TERM_WORDS;
 }
 
 function extractKeywordFromCampaignName(name: string): string | null {
@@ -169,9 +175,10 @@ Deno.serve(async (req) => {
         const validStatuses = new Set(['WINNER', 'PROVEN', 'CANDIDATE']);
         for (const kb of bankTerms) {
           if (!validStatuses.has(kb.lifecycle_status)) continue;
-          if (Number(kb.intent_score || 0) < 75) continue;
+          if (Number(kb.intent_score || 0) < MIN_RELEVANCE_SCORE) continue;
+          if (Number(kb.confidence_score || kb.confidence || 0) < MIN_RELEVANCE_SCORE) continue;
           const t = normTerm(kb.normalized_keyword || kb.keyword || '');
-          if (t && !covered.has(t)) candidateTerms.add(t);
+          if (t && isMediumOrLongTail(t) && !covered.has(t)) candidateTerms.add(t);
         }
       } catch {}
 
@@ -184,8 +191,10 @@ Deno.serve(async (req) => {
         for (const s of suggestions) {
           const confidence = Number(s.confidence || s.confidence_score || s.score || 0);
           if (confidence < 0.95) continue;
+          const relevance = Number(s.relevance_score || s.amazon_relevance_score || confidence);
+          if (relevance < 0.90) continue;
           const t = normTerm(s.keyword_text || s.keyword || '');
-          if (t && !covered.has(t)) candidateTerms.add(t);
+          if (t && isMediumOrLongTail(t) && !covered.has(t)) candidateTerms.add(t);
         }
       } catch {}
 
@@ -207,7 +216,7 @@ Deno.serve(async (req) => {
           );
           for (const kw of campKws) {
             const t = normTerm(kw.keyword_text || kw.keyword || '');
-            if (t && !covered.has(t)) candidateTerms.add(t);
+            if (t && isMediumOrLongTail(t) && !covered.has(t)) candidateTerms.add(t);
           }
         }
       } catch {}

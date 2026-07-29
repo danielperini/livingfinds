@@ -35,6 +35,7 @@ Deno.serve(async (req) => {
     const validCampaigns = allCampaigns.filter(c =>
       c.campaign_id &&
       ['enabled', 'paused'].includes((c.state || c.status || '').toLowerCase()) &&
+      String(c.targeting_type || '').toUpperCase() === 'AUTO' &&
       !c.archived
     );
 
@@ -42,7 +43,7 @@ Deno.serve(async (req) => {
       return Response.json({ ok: true, skipped: true, reason: 'Nenhuma campanha válida encontrada', campaigns_checked: allCampaigns.length });
     }
 
-    const campaignIds = new Set(validCampaigns.map(c => c.campaign_id));
+    const campaignIds = new Set(validCampaigns.map(c => String(c.campaign_id)));
 
     // 2. Buscar search terms dessas campanhas — filtrar por >= 3 pedidos (30d) ou >= 2 (14d)
     const allSearchTerms = await base44.asServiceRole.entities.SearchTerm.filter(
@@ -51,8 +52,8 @@ Deno.serve(async (req) => {
 
     // Critério: orders_30d >= 3 OU orders_14d >= 2 (ambos indicam termo com conversão consistente)
     // Não restringir por campaign_id pois os IDs podem divergir entre SearchTerm e Campaign
-    const MIN_ORDERS_30D = 3;
-    const MIN_ORDERS_14D = 2;
+    const MIN_ORDERS_30D = 1;
+    const MIN_ORDERS_14D = 1;
     const autoSearchTerms = allSearchTerms.filter(st => {
       if (!st.search_term || st.search_term.length < 3) return false;
       // Ignorar ASINs como search term
@@ -60,7 +61,8 @@ Deno.serve(async (req) => {
       const o30 = st.orders_30d || 0;
       const o14 = st.orders_14d || 0;
       const oGeneric = st.orders || 0;
-      return o30 >= MIN_ORDERS_30D || o14 >= MIN_ORDERS_14D || oGeneric >= MIN_ORDERS_30D;
+      return campaignIds.has(String(st.campaign_id || '')) &&
+        (o30 >= MIN_ORDERS_30D || o14 >= MIN_ORDERS_14D || oGeneric >= MIN_ORDERS_30D);
     });
     const MIN_ORDERS = MIN_ORDERS_30D; // para o log
 

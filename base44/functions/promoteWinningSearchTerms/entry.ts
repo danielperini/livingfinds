@@ -43,6 +43,8 @@ const CFG = {
   HEURISTIC_HIGH_CONF: 95,            // acima → transfere sem LLM
   HEURISTIC_LOW_CONF: 70,             // abaixo → bloqueia sem LLM
   MAX_EXPANSIONS_PER_RUN: 10,         // rate limiting
+  MAX_ORIGINALS_PER_RUN: 5,
+  MIN_TERM_WORDS: 3,
 };
 
 // ── Normalização ──────────────────────────────────────────────────────────────
@@ -222,7 +224,7 @@ Deno.serve(async (req) => {
     const SAFE_CUTOFF   = new Date(Date.now() - safetyMs).toISOString().slice(0, 10);
 
     // ── Carregar dados base em paralelo ──────────────────────────────────
-    const [searchTerms, products, existingKeywords, existingPromos, snapshots, economics] = await Promise.all([
+    const [searchTerms, products, existingKeywords, existingPromos, snapshots, economics, campaigns] = await Promise.all([
       base44.asServiceRole.entities.SearchTerm.filter(
         { amazon_account_id: aid }, '-orders_14d', 5000
       ).catch(() => []),
@@ -231,11 +233,22 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: aid }, '-created_at', 2000).catch(() => []),
       base44.asServiceRole.entities.ListingSnapshot.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 3000).catch(() => []),
     ]);
 
     const productMap = new Map(products.map((p: any) => [p.asin, p]));
     const snapshotMap = new Map(snapshots.map((s: any) => [s.asin, s]));
     const econMap = new Map(economics.map((e: any) => [e.asin, e]));
+    const autoCampaignIds = new Set(
+      campaigns
+        .filter((campaign: any) =>
+          String(campaign.targeting_type || '').toUpperCase() === 'AUTO' &&
+          !['archived'].includes(String(campaign.state || campaign.status || '').toLowerCase())
+        )
+        .flatMap((campaign: any) => [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id])
+        .filter(Boolean)
+        .map(String)
+    );
 
     // Índice: ASIN|term → keyword exata já existe
     const exactKeyIndex = new Set(
@@ -256,6 +269,7 @@ Deno.serve(async (req) => {
 
     for (const st of searchTerms) {
       if (!st.advertised_asin || !st.search_term) continue;
+      if (!autoCampaignIds.has(String(st.campaign_id || ''))) continue;
       // Excluir apenas dados MUITO recentes (atribuição incompleta).
       // Se date >= SAFE_CUTOFF → dentro dos últimos 72h → ignorar.
       // Se date for null ou muito antigo → incluir (dados estáveis).
@@ -299,6 +313,11 @@ Deno.serve(async (req) => {
     const rejected: any[] = [];
 
     for (const [key, agg] of termMap.entries()) {
+      const wordCount = normalizeTerm(agg.search_term).split(/\s+/).filter(Boolean).length;
+      if (wordCount < CFG.MIN_TERM_WORDS) {
+        rejected.push({ ...agg, reject_reason: `cauda_curta_bloqueada: ${wordCount} palavra(s)` });
+        continue;
+      }
       // Guardrail: zero vendas → ACoS = null (nunca interpretar 0 como bom)
       if (agg.orders < MIN_ORDERS || agg.sales <= 0) {
         rejected.push({ ...agg, reject_reason: `orders=${agg.orders} < ${MIN_ORDERS} ou sales=0` });
@@ -353,7 +372,11 @@ Deno.serve(async (req) => {
     const errors: any[] = [];
     let expansionsCount = 0;
 
-    for (const winner of winners) {
+    const actionableWinners = winners
+      .sort((a: any, b: any) => (b.orders - a.orders) || (a.acos - b.acos))
+      .slice(0, CFG.MAX_ORIGINALS_PER_RUN);
+
+    for (const winner of actionableWinners) {
       if (dry_run) {
         createdOriginal.push({ ...winner, dry_run: true, campaign_name: campaignName(winner.asin, winner.search_term) });
         continue;
@@ -594,7 +617,7 @@ Deno.serve(async (req) => {
       p.status === 'active' && Number(p.fba_inventory || 0) > 0
     );
 
-    for (const winner of winners) {
+    for (const winner of actionableWinners) {
       if (expansionsCount >= CFG.MAX_EXPANSIONS_PER_RUN) break;
 
       const srcSnap = snapshotMap.get(winner.asin);

@@ -56,6 +56,18 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Campaign portfolio health and delivery cycle - daily",
+      "function": "runCampaignPortfolioGrowthCycle",
+      "cron": "45 4 * * *",
+      "payload": { "_service_role": true, "full_expansion": false }
+    },
+    {
+      "name": "AUTO winners, Keyword Bank and guarded expansion - weekly",
+      "function": "runCampaignPortfolioGrowthCycle",
+      "cron": "15 6 * * 1",
+      "payload": { "_service_role": true, "full_expansion": true }
+    },
+    {
       "name": "Hourly Metrics Bridge and Dayparting Patterns",
       "function": "rebuildHourlyMetricsFromReports",
       "cron": "55 * * * *",
