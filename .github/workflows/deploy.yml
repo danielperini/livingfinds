@@ -156,7 +156,11 @@ jobs:
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const response = await fetch("http://127.0.0.1:8000/functions/runManualZeroDeliveryBootstrap", {
                 method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true })
+                body: JSON.stringify({
+                  _service_role: true,
+                  target_asins: ["B0H59FPPKS", "B0GNW1Q6V3", "B0GNY7NYRN", "B0FCYR3VBD", "B0GR6GXS1B"],
+                  max_age_days: 45
+                })
               });
               const data = await response.json().catch(() => ({}));
               const rows = Array.isArray(data.results) ? data.results : [];

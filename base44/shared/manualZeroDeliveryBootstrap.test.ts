@@ -44,6 +44,13 @@ Deno.test('19 bid respects the absolute R$0.70 ceiling', () => {
 Deno.test('20 campaigns older than 15 days require replacement review', () => {
   assert(diagnoseZeroDelivery({ ...base, createdAt: '2025-12-01T00:00:00Z' }, now).status === 'replacement_review_required');
 });
+Deno.test('21 protected priority window permits an older campaign', () => {
+  assert(diagnoseZeroDelivery({
+    ...base,
+    createdAt: '2025-12-20T00:00:00Z',
+    maxAgeDays: 45,
+  }, now).eligible);
+});
 Deno.test('17 bid never rises without economic cap', () => assert(!calculateBootstrapBid({ currentBid: 1, suggestedLow: 1.2 }).eligible));
 Deno.test('18 idempotency and budget winner protection', () => {
   const key1 = buildBootstrapIdempotencyKey({ accountId: 'a', campaignId: 'c', keywordId: 'k', attempt: 1, window: '2026-01-10', bid: 1.2 });

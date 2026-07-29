@@ -73,7 +73,11 @@ export function diagnoseZeroDelivery(input: any, now = new Date()) {
   if (!Number.isFinite(created.getTime()) || ageDays < BOOTSTRAP_MIN_AGE_DAYS) {
     return { eligible: false, status: 'learning_under_7d' };
   }
-  if (ageDays > BOOTSTRAP_MAX_AGE_DAYS) {
+  const requestedMaxAge = n(input.maxAgeDays);
+  const maxAgeDays = requestedMaxAge > 0
+    ? Math.min(Math.max(requestedMaxAge, BOOTSTRAP_MAX_AGE_DAYS), 45)
+    : BOOTSTRAP_MAX_AGE_DAYS;
+  if (ageDays > maxAgeDays) {
     return { eligible: false, status: 'replacement_review_required' };
   }
   const attempts = n(input.attempts);

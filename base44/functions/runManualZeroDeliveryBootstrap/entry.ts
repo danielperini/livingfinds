@@ -41,6 +41,12 @@ Deno.serve(async (request) => {
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     const dryRun = body.dry_run === true;
+    const targetAsins = new Set(
+      (Array.isArray(body.target_asins) ? body.target_asins : [])
+        .map((value: any) => String(value || '').trim().toUpperCase())
+        .filter(Boolean),
+    );
+    const maxAgeDays = Math.min(Math.max(Number(body.max_age_days) || 15, 15), 45);
     const now = new Date().toISOString();
     const accountRows = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1).catch(() => [])
@@ -86,6 +92,7 @@ Deno.serve(async (request) => {
         const localKeywords = keywords.filter((k: any) => String(k.campaign_id) === campaignId && norm(k.match_type) === 'exact');
         const localAds = adsRows.filter((a: any) => String(a.campaign_id) === campaignId);
         const asin = String(campaign.asin || localAds[0]?.asin || '');
+        if (targetAsins.size && !targetAsins.has(asin.toUpperCase())) continue;
         const product = products.find((p: any) => String(p.asin) === asin);
         const eco = economics.find((e: any) => String(e.asin) === asin || (product && String(e.sku) === String(product.sku)));
         const metrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
@@ -145,6 +152,7 @@ Deno.serve(async (request) => {
               product?.offer_active !== false && product?.listing_suppressed !== true,
             impressions: deliveryMetric?.impressions, clicks: deliveryMetric?.clicks, spend: deliveryMetric?.spend,
             createdAt: campaign.start_date || campaign.created_at || campaign.created_date,
+            maxAgeDays,
             attempts: keyword.zero_delivery_attempts, lastRescueAt: keyword.last_bid_rescue_at,
           });
           if (!diagnosis.eligible) {
@@ -198,7 +206,7 @@ Deno.serve(async (request) => {
             keyword_id: keywordId, keyword_text: keyword.keyword_text, asin,
             action: 'increase_bid', current_value: currentBid, proposed_value: bid.bid,
             value_before: currentBid, value_after: bid.bid, change_pct: bid.changePct,
-            rationale: `Bootstrap controlado tentativa ${attempt}/2; campanha entre 7 e 15 dias; aumento máximo de 10% e teto absoluto de R$0,70, além do limite econômico.`,
+            rationale: `Bootstrap controlado tentativa ${attempt}/2; campanha entre 7 e ${maxAgeDays} dias; aumento máximo de 10% e teto absoluto de R$0,70, além do limite econômico.`,
             risk: 'low', requires_approval: false, approval_status: 'auto_approved',
             status: dryRun ? 'proposed' : 'approved', queue_status: dryRun ? 'not_queued' : 'pending',
             idempotency_key: key, source_function: 'manual_zero_delivery_bootstrap',
@@ -221,6 +229,8 @@ Deno.serve(async (request) => {
       ok: true,
       stage: 'manual_zero_delivery_bootstrap',
       dry_run: dryRun,
+      target_asins: [...targetAsins],
+      max_age_days: maxAgeDays,
       structure_reconciled: true,
       structure_reports: structureReports,
       results,

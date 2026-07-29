@@ -62,10 +62,11 @@ Deno.serve(async (req) => {
 
   try {
     base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    if (!body._service_role) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const amazonAccountId = body.amazon_account_id;
     if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
@@ -89,32 +90,78 @@ Deno.serve(async (req) => {
       const adsList = adsData?.productAds || (Array.isArray(adsData) ? adsData : []);
       totalReceived += adsList.length;
 
-      // Agrupar por ASIN para upsert em Product
-      const asinMap = {};
+      const [existingProductAds, existingProducts] = await Promise.all([
+        base44.asServiceRole.entities.ProductAd.filter(
+          { amazon_account_id: amazonAccountId }, null, 5000
+        ).catch(() => []),
+        base44.asServiceRole.entities.Product.filter(
+          { amazon_account_id: amazonAccountId }, null, 5000
+        ).catch(() => []),
+      ]);
+      const productAdMap = new Map(
+        existingProductAds.map((row) => [String(row.product_ad_id), row])
+      );
+      const productMap = new Map(
+        existingProducts.filter((row) => row.asin).map((row) => [String(row.asin), row])
+      );
+      const productAdsToCreate = [];
+      const productAdsToUpdate = [];
+      const productsToCreate = [];
+      const productsToUpdate = [];
+      const seenProductAsins = new Set();
+      const now = new Date().toISOString();
+
       for (const ad of adsList) {
-        const asin = ad.asin;
-        if (asin && !asinMap[asin]) {
-          asinMap[asin] = { asin, sku: ad.sku, campaign_id: String(ad.campaignId), ad_group_id: String(ad.adGroupId), state: (ad.state || 'enabled').toLowerCase() };
-        }
-        // Upsert no entity Product (campos básicos de anúncio)
-        const existingProd = await base44.asServiceRole.entities.Product.filter({
+        const productAdId = String(ad.adId || ad.productAdId || '');
+        if (!productAdId) continue;
+        const state = String(ad.state || 'enabled').toLowerCase();
+        const productAdRecord = {
           amazon_account_id: amazonAccountId,
-          asin: asin,
-        });
+          product_ad_id: productAdId,
+          campaign_id: String(ad.campaignId || ''),
+          ad_group_id: String(ad.adGroupId || ''),
+          asin: ad.asin || null,
+          sku: ad.sku || null,
+          state,
+          status: state,
+          synced_at: now,
+        };
+        const existingProductAd = productAdMap.get(productAdId);
+        if (existingProductAd) {
+          productAdsToUpdate.push({ id: existingProductAd.id, ...productAdRecord });
+        } else {
+          productAdsToCreate.push(productAdRecord);
+        }
+
+        if (!ad.asin) continue;
+        if (seenProductAsins.has(String(ad.asin))) continue;
+        seenProductAsins.add(String(ad.asin));
+        const existingProd = productMap.get(String(ad.asin));
         const prodRecord = {
           amazon_account_id: amazonAccountId,
-          asin: asin,
-          sku: ad.sku || existingProd[0]?.sku || null,
-          status: (ad.state || 'enabled').toLowerCase(),
-          synced_at: new Date().toISOString(),
+          asin: ad.asin,
+          sku: ad.sku || existingProd?.sku || null,
+          status: state,
+          synced_at: now,
         };
-        if (existingProd.length > 0) {
-          await base44.asServiceRole.entities.Product.update(existingProd[0].id, prodRecord);
+        if (existingProd) {
+          productsToUpdate.push({ id: existingProd.id, ...prodRecord });
         } else {
-          await base44.asServiceRole.entities.Product.create(prodRecord);
+          productsToCreate.push(prodRecord);
         }
-        totalUpserted++;
       }
+
+      const BATCH = 100;
+      for (let i = 0; i < productAdsToCreate.length; i += BATCH)
+        await base44.asServiceRole.entities.ProductAd.bulkCreate(productAdsToCreate.slice(i, i + BATCH));
+      for (let i = 0; i < productAdsToUpdate.length; i += BATCH)
+        await base44.asServiceRole.entities.ProductAd.bulkUpdate(productAdsToUpdate.slice(i, i + BATCH));
+      for (let i = 0; i < productsToCreate.length; i += BATCH)
+        await base44.asServiceRole.entities.Product.bulkCreate(productsToCreate.slice(i, i + BATCH));
+      for (let i = 0; i < productsToUpdate.length; i += BATCH)
+        await base44.asServiceRole.entities.Product.bulkUpdate(productsToUpdate.slice(i, i + BATCH));
+      totalUpserted += productAdsToCreate.length + productAdsToUpdate.length +
+        productsToCreate.length + productsToUpdate.length;
     } catch (e) { errors.push(`ProductAds: ${e.message}`); }
 
     // ── SP Targets (product targeting) ──
