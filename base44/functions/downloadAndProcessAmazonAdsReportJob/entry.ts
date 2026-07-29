@@ -116,6 +116,74 @@ Deno.serve(async (req) => {
     const isTargetingReport = 'targetingId' in firstRow || 'targetingExpression' in firstRow;
     const isKeywordsReport = 'keywordId' in firstRow && !isTargetingReport;
     const isSearchTermReport = 'searchTerm' in firstRow;
+    const groupBy = Array.isArray(job.group_by) ? job.group_by : [];
+    const isPlacementReport = groupBy.includes('campaignPlacement');
+    const isCanonicalCampaignReport = job.report_type_id === 'spCampaigns' &&
+      groupBy.includes('campaign') && !isPlacementReport;
+
+    const dimension = job.report_type_id === 'spTargeting' ? 'targeting'
+      : job.report_type_id === 'spAdGroups' ? 'ad_group'
+      : isPlacementReport ? 'placement'
+      : job.report_type_id === 'spPurchasedProduct' ? 'purchased_product'
+      : job.report_type_id === 'spSearchTermImpressionShare' ? 'impression_share'
+      : null;
+
+    // Relatórios auxiliares ficam em uma dimensão própria. Eles nunca podem
+    // apagar ou substituir CampaignMetricsDaily, cuja fonte canônica é spCampaigns/campaign.
+    if (dimension) {
+      const dimensionRecords = rows.map((row: any, index: number) => {
+        const date = row.date || endDate;
+        const campaignId = String(row.campaignId || '');
+        const adGroupId = String(row.adGroupId || '');
+        const targetId = String(row.targetingId || row.targetId || '');
+        const keywordId = String(row.keywordId || '');
+        const purchasedAsin = String(row.purchasedAsin || '');
+        const placement = String(row.placementClassification || '');
+        const searchTerm = String(row.searchTerm || '');
+        return {
+          amazon_account_id: accountId,
+          report_job_id: job.id,
+          report_id: String(job.report_id || ''),
+          report_type_id: String(job.report_type_id || ''),
+          dimension,
+          date,
+          campaign_id: campaignId,
+          campaign_name: row.campaignName || '',
+          ad_group_id: adGroupId,
+          ad_group_name: row.adGroupName || '',
+          keyword_id: keywordId,
+          keyword_text: row.keyword || '',
+          targeting_id: targetId,
+          targeting_expression: row.targetingExpression || row.targetingText || '',
+          match_type: String(row.matchType || '').toLowerCase(),
+          placement,
+          advertised_asin: row.advertisedAsin || '',
+          advertised_sku: row.advertisedSku || '',
+          purchased_asin: purchasedAsin,
+          search_term: searchTerm,
+          impression_share: Number(row.searchTermImpressionShare || row.impressionShare || 0),
+          impression_rank: Number(row.searchTermImpressionRank || row.impressionRank || 0),
+          impressions: Number(row.impressions || 0),
+          clicks: Number(row.clicks || 0),
+          spend: Number(row.cost || row.spend || 0),
+          sales: Number(row.sales14d || row.sales7d || row.sales30d || 0),
+          orders: Number(row.purchases14d || row.purchases7d || row.purchases30d || 0),
+          units: Number(row.unitsSoldClicks14d || row.unitsSoldClicks7d || row.unitsSoldClicks30d || 0),
+          raw_data: row,
+          unique_key: [
+            accountId, job.report_type_id, groupBy.join(','), date, campaignId,
+            adGroupId, targetId || keywordId, placement, purchasedAsin, searchTerm, index,
+          ].join('|'),
+          synced_at: now,
+        };
+      });
+      await base44.asServiceRole.entities.AdsPerformanceDimensionDaily.deleteMany({
+        amazon_account_id: accountId,
+        report_job_id: job.id,
+      }).catch(() => {});
+      await bulkUpsertBatched(base44.asServiceRole.entities.AdsPerformanceDimensionDaily, dimensionRecords);
+      console.log(`[downloadProcess] AdsPerformanceDimensionDaily/${dimension}: ${dimensionRecords.length} registros`);
+    }
 
     for (const row of rows) {
       const date = row.date || endDate;
@@ -194,7 +262,7 @@ Deno.serve(async (req) => {
       cpc: m.clicks > 0 ? (m.spend / m.clicks) : 0,
     }));
 
-    if (metricsRecords.length > 0) {
+    if (isCanonicalCampaignReport && metricsRecords.length > 0) {
       // Purgar registros com mais de 90 dias (retenção de dados)
       const cutoff90d = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       await base44.asServiceRole.entities.CampaignMetricsDaily.deleteMany({
@@ -263,9 +331,11 @@ Deno.serve(async (req) => {
       c.spend += m.spend; c.sales += m.sales; c.clicks += m.clicks; c.impressions += m.impressions; c.orders += m.orders;
     }
 
-    const existingCamps = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []);
+    const existingCamps = isCanonicalCampaignReport
+      ? await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 5000).catch(() => [])
+      : [];
     const campMap = new Map((existingCamps as any[]).map(c => [c.campaign_id, c]));
-    const campUpdates = Array.from(campAgg.entries())
+    const campUpdates = isCanonicalCampaignReport ? Array.from(campAgg.entries())
       .filter(([id]) => campMap.has(id))
       .map(([id, agg]) => {
         const existing = campMap.get(id) as any;
@@ -278,7 +348,7 @@ Deno.serve(async (req) => {
           cpc: agg.clicks > 0 ? (agg.spend / agg.clicks) : 0,
           synced_at: now,
         };
-      });
+      }) : [];
 
     if (campUpdates.length > 0) {
       for (let i = 0; i < campUpdates.length; i += 100) {

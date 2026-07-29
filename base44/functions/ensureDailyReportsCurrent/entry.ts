@@ -1,6 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const REPORTS = [
+const CORE_REPORTS: any[] = [
   {
     key: 'campaigns', reportTypeId: 'spCampaigns', groupBy: ['campaign'],
     columns: ['date','campaignId','campaignName','campaignStatus','campaignBudgetAmount','impressions','clicks','cost','purchases1d','purchases7d','purchases14d','purchases30d','sales1d','sales7d','sales14d','sales30d','acosClicks14d','roasClicks14d'],
@@ -14,6 +14,33 @@ const REPORTS = [
     columns: ['date','campaignId','campaignName','adGroupId','adGroupName','advertisedAsin','advertisedSku','impressions','clicks','cost','purchases14d','purchases30d','sales14d','sales30d'],
   },
 ];
+
+const EXTENDED_REPORTS: any[] = [
+  {
+    key: 'targeting', reportTypeId: 'spTargeting', groupBy: ['adGroup'],
+    columns: ['date','campaignId','campaignName','adGroupId','adGroupName','matchType','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
+  },
+  {
+    key: 'adGroups', reportTypeId: 'spAdGroups', groupBy: ['adGroup'],
+    columns: ['date','campaignId','campaignName','adGroupId','adGroupName','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
+  },
+  {
+    key: 'placements', reportTypeId: 'spCampaigns', variant: 'placement', groupBy: ['campaignPlacement'],
+    columns: ['date','campaignId','campaignName','placementClassification','impressions','clicks','cost','purchases7d','purchases14d','sales7d','sales14d','roasClicks14d'],
+  },
+  {
+    key: 'purchasedProducts', reportTypeId: 'spPurchasedProduct', groupBy: ['asin'],
+    columns: ['date','campaignId','campaignName','adGroupId','adGroupName','keywordId','keyword','keywordType','advertisedAsin','advertisedSku','purchasedAsin','matchType','purchases7d','purchases14d','sales7d','sales14d','unitsSoldClicks7d','unitsSoldClicks14d'],
+  },
+  {
+    key: 'searchTermImpressionShare', reportTypeId: 'spSearchTermImpressionShare', optional: true, groupBy: ['searchTerm'],
+    columns: ['date','searchTerm','impressions','clicks','cost','searchTermImpressionShare','searchTermImpressionRank'],
+  },
+];
+
+const REPORTS = [...CORE_REPORTS, ...EXTENDED_REPORTS];
+const signature = (report: any) => `${report.reportTypeId}|${report.variant || 'default'}|${(report.groupBy || []).join(',')}`;
+const jobSignature = (job: any) => `${job.report_type_id}|${(job.group_by || []).includes('campaignPlacement') ? 'placement' : 'default'}|${(job.group_by || []).join(',')}`;
 
 const ACTIVE = new Set(['pending','requested','in_progress','processing','completed']);
 const RETRY_AFTER_MS = 2 * 60 * 60 * 1000;
@@ -84,12 +111,12 @@ Deno.serve(async (request) => {
       const targetJobs = recentJobs.filter((job: any) => job.end_date === targetDate);
 
       // Um job só conta como concluído quando foi realmente processado.
-      const processedTypes = new Set(targetJobs.filter((job: any) => job.status === 'processed').map((job: any) => job.report_type_id));
+      const processedSignatures = new Set(targetJobs.filter((job: any) => job.status === 'processed').map(jobSignature));
       const requested: Array<Record<string, unknown>> = [];
 
       for (const report of REPORTS) {
-        if (processedTypes.has(report.reportTypeId)) continue;
-        const jobsOfType = targetJobs.filter((job: any) => job.report_type_id === report.reportTypeId);
+        if (processedSignatures.has(signature(report))) continue;
+        const jobsOfType = targetJobs.filter((job: any) => jobSignature(job) === signature(report));
         const active = jobsOfType.filter((job: any) => ACTIVE.has(job.status));
         const timedOut = active.filter((job: any) => jobAge(job) >= RETRY_AFTER_MS);
 
@@ -102,22 +129,26 @@ Deno.serve(async (request) => {
           }).catch(() => null);
         }
 
-        const response = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
-          amazon_account_id: account.id,
-          report_type_id: report.reportTypeId,
-          ad_product: 'SPONSORED_PRODUCTS',
-          time_unit: 'DAILY',
-          group_by: report.groupBy,
-          columns: report.columns,
-          filters: null,
-          start_date: startDate,
-          end_date: targetDate,
-          report_name: `LivingFinds_${report.key}_${targetDate}_${Date.now()}`,
-          source_function: 'ensureDailyReportsCurrent',
-          _service_role: true,
-        });
-        const result = response?.data ?? response ?? {};
-        requested.push({ report_type_id: report.reportTypeId, ok: result?.ok !== false, status: result?.status ?? null, error: result?.error ?? null });
+        try {
+          const response = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
+            amazon_account_id: account.id,
+            report_type_id: report.reportTypeId,
+            ad_product: 'SPONSORED_PRODUCTS',
+            time_unit: 'DAILY',
+            group_by: report.groupBy,
+            columns: report.columns,
+            filters: null,
+            start_date: startDate,
+            end_date: targetDate,
+            report_name: `LivingFinds_${report.key}_${targetDate}_${Date.now()}`,
+            source_function: 'ensureDailyReportsCurrent',
+            _service_role: true,
+          });
+          const result = response?.data ?? response ?? {};
+          requested.push({ key: report.key, report_type_id: report.reportTypeId, optional: report.optional === true, ok: result?.ok !== false, status: result?.status ?? null, error: result?.error ?? null });
+        } catch (error: any) {
+          requested.push({ key: report.key, report_type_id: report.reportTypeId, optional: report.optional === true, ok: false, error: error?.message || String(error) });
+        }
       }
 
       if (requested.length) {
@@ -134,15 +165,21 @@ Deno.serve(async (request) => {
         { amazon_account_id: account.id }, '-created_date', 300,
       ).catch(() => []);
       const finalTargetJobs = finalJobs.filter((job: any) => job.end_date === targetDate);
-      const finalProcessed = REPORTS.filter((report) => finalTargetJobs.some((job: any) => job.report_type_id === report.reportTypeId && job.status === 'processed'));
-      const completionPercent = Math.round(finalProcessed.length / REPORTS.length * 100);
+      const finalProcessed = REPORTS.filter((report) => finalTargetJobs.some((job: any) => jobSignature(job) === signature(report) && job.status === 'processed'));
+      const coreProcessed = CORE_REPORTS.filter((report) => finalProcessed.includes(report));
+      const requiredExtendedReports = REPORTS.filter((report) => report.optional !== true);
+      const requiredExtendedProcessed = requiredExtendedReports.filter((report) => finalProcessed.includes(report));
+      const completionPercent = Math.round(coreProcessed.length / CORE_REPORTS.length * 100);
+      const extendedCompletionPercent = Math.round(requiredExtendedProcessed.length / requiredExtendedReports.length * 100);
       if (completionPercent === 100) completeCount += 1;
 
       details.push({
         target_date: targetDate,
         completion_percent: completionPercent,
+        extended_completion_percent: extendedCompletionPercent,
         processed_types: finalProcessed.map((report) => report.reportTypeId),
-        pending_types: REPORTS.filter((report) => !finalProcessed.includes(report)).map((report) => report.reportTypeId),
+        pending_types: CORE_REPORTS.filter((report) => !finalProcessed.includes(report)).map((report) => report.reportTypeId),
+        pending_extended: EXTENDED_REPORTS.filter((report) => !finalProcessed.includes(report)).map((report) => report.key),
         requested,
       });
     }

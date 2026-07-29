@@ -34,7 +34,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
   const accountId = String(account?.id || '');
   if (!accountId) return { ok: false, error: 'AmazonAccount inválida' };
 
-  const [performanceRows, configRows, campaigns, products, economics, patterns, snapshots] = await Promise.all([
+  const [performanceRows, configRows, campaigns, products, economics, patterns, snapshots, closedMetrics] = await Promise.all([
     base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
     base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
     base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
@@ -43,6 +43,9 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []),
     base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
       { amazon_account_id: accountId, spend_date: clock.date }, '-observed_at', 10000,
+    ).catch(() => []),
+    base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: accountId }, '-date', 10000,
     ).catch(() => []),
   ]);
 
@@ -78,6 +81,36 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const expectedPct = expectedFraction(curve.weights, clock.minuteOfDay);
     const expectedSpend = r2(Math.max(2, dailyCap * expectedPct));
     const intraday = aggregateIntradaySnapshots(snapshots, Date.now());
+    const closedDayDate = new Date(`${clock.date}T12:00:00-03:00`);
+    closedDayDate.setDate(closedDayDate.getDate() - 1);
+    const closedDate = closedDayDate.toISOString().slice(0, 10);
+    const historyStartDate = new Date(`${closedDate}T12:00:00-03:00`);
+    historyStartDate.setDate(historyStartDate.getDate() - 29);
+    const historyStart = historyStartDate.toISOString().slice(0, 10);
+    const historicalRows = closedMetrics.filter((row: any) =>
+      String(row.date || '') >= historyStart && String(row.date || '') <= closedDate
+    );
+    const historicalWindow = historicalRows.reduce((sum: any, row: any) => ({
+      spend: sum.spend + Number(row.spend || 0),
+      sales: sum.sales + Number(row.sales || 0),
+      orders: sum.orders + Number(row.orders || 0),
+    }), { spend: 0, sales: 0, orders: 0 });
+    const closedDayWindow = historicalRows.filter((row: any) => String(row.date || '') === closedDate)
+      .reduce((sum: any, row: any) => ({
+        spend: sum.spend + Number(row.spend || 0),
+        sales: sum.sales + Number(row.sales || 0),
+        orders: sum.orders + Number(row.orders || 0),
+      }), { spend: 0, sales: 0, orders: 0 });
+    const metricWindows = {
+      historical_30d_spend: r2(historicalWindow.spend),
+      historical_30d_sales: r2(historicalWindow.sales),
+      historical_30d_orders: historicalWindow.orders,
+      closed_day_date: closedDate,
+      closed_day_spend: r2(closedDayWindow.spend),
+      closed_day_sales: r2(closedDayWindow.sales),
+      closed_day_orders: closedDayWindow.orders,
+      metric_windows_version: 'v1-separated',
+    };
     const profiles = buildCampaignProfiles(campaigns, products, economics, intraday.campaignRows, targetAcos);
     const activeProfiles = profiles.filter((profile: any) =>
       profile.active && profile.stock > 0 && profile.campaignId &&
@@ -117,6 +150,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       if (!dryRun && controller?.id) {
         await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
           confirmed_spend: intraday.confirmedSpend,
+          ...metricWindows,
           estimated_pending_spend: intraday.estimatedPendingSpend,
           projected_total_spend: intraday.estimatedCurrentSpend,
           remaining_spend: r2(Math.max(0, dailyCap - intraday.estimatedCurrentSpend)),
@@ -247,6 +281,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const status = capStatus(dailyCap > 0 ? estimatedSpend / dailyCap : 0);
     const summary = {
       classification, daily_cap: dailyCap, confirmed_spend: intraday.confirmedSpend,
+      metric_windows: metricWindows,
       estimated_pending_spend: intraday.estimatedPendingSpend, estimated_current_spend: estimatedSpend,
       expected_spend_by_now: expectedSpend, projected_eod: projectedEod, pacing_ratio: r2(pacingRatio),
       actions, bid_scope_asins: eligibleAsins, bid_increase_pct: bidIncreasePct,
@@ -258,6 +293,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
         effective_daily_spend_cap: dailyCap,
         daily_cap_source: dailyCapSource,
         confirmed_spend: intraday.confirmedSpend,
+        ...metricWindows,
         estimated_pending_spend: intraday.estimatedPendingSpend,
         projected_total_spend: estimatedSpend,
         projected_end_of_day_spend: projectedEod,
@@ -313,6 +349,11 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       daily_cap: dailyCap,
       daily_cap_source: dailyCapSource,
       confirmed_spend: intraday.confirmedSpend,
+      metric_windows: {
+        historical_30d: { start_date: historyStart, end_date: closedDate, spend: metricWindows.historical_30d_spend, sales: metricWindows.historical_30d_sales, orders: metricWindows.historical_30d_orders },
+        closed_day: { date: closedDate, spend: metricWindows.closed_day_spend, sales: metricWindows.closed_day_sales, orders: metricWindows.closed_day_orders },
+        intraday_confirmed: { date: clock.date, spend: intraday.confirmedSpend, observed_at: intraday.observedAt, source: intraday.source },
+      },
       estimated_pending_spend: intraday.estimatedPendingSpend,
       estimated_current_spend: estimatedSpend,
       remaining_spend: remaining,

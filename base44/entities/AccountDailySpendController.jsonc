@@ -51,6 +51,39 @@
       "type": "number",
       "default": 0
     },
+    "historical_30d_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto consolidado dos dias fechados anteriores; nunca usado como gasto de hoje"
+    },
+    "historical_30d_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_30d_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "closed_day_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "metric_windows_version": {
+      "type": "string",
+      "default": "v1"
+    },
     "estimated_pending_spend": {
       "type": "number",
       "default": 0
