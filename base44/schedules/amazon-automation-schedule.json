@@ -8,6 +8,12 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
+      "name": "Request closed-day Amazon Ads reports - 00:00:30 BRT",
+      "function": "ensureDailyReportsCurrent",
+      "cron": "30 0 0 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "SKU Profit Protection + Daily Order Cap - every 15 minutes",
       "function": "enforceSkuProfitProtection",
       "cron": "*/15 * * * *",
