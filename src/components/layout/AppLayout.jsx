@@ -26,9 +26,9 @@ function BrandMark() {
     <div
       className="w-8 h-8 rounded-lg border border-white/10 bg-no-repeat shadow-sm flex-shrink-0"
       style={{
-        backgroundImage: "url('/living-finds-brand.jpeg')",
-        backgroundSize: '300%',
-        backgroundPosition: '96% 39%',
+        backgroundImage: "url('/living-finds-mark.png')",
+        backgroundSize: '250%',
+        backgroundPosition: '50% 50%',
       }}
       role="img"
       aria-label="Living Finds"
