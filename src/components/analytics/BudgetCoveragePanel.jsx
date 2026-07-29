@@ -411,7 +411,7 @@ export default function BudgetCoveragePanel({ account, dailyCap, perfSettings })
     try {
       const cutoff = new Date(Date.now() - period * 86400000).toISOString().slice(0, 10);
 
-      const [controllers, bidLogs, hourlyMetrics] = await Promise.all([
+      const [controllers, bidLogs, hourlyMetrics, dailyMetrics] = await Promise.all([
         base44.entities.AccountDailySpendController.filter(
           { amazon_account_id: account.id }, '-spend_date', period + 2
         ).catch(() => []),
@@ -421,16 +421,30 @@ export default function BudgetCoveragePanel({ account, dailyCap, perfSettings })
         base44.entities.UnifiedAdsMetricsHourly.filter(
           { amazon_account_id: account.id }, '-date', 2000
         ).catch(() => []),
+        base44.entities.CampaignMetricsDaily.filter(
+          { amazon_account_id: account.id }, '-date', 5000
+        ).catch(() => []),
       ]);
 
-      // Agregar spend por data a partir de métricas horárias
-      const spendByDate = {};
-      const clicksByDate = {};
+      // Métricas horárias servem apenas de fallback e drill-down. Relatórios
+      // parciais não podem substituir o total diário já confirmado.
+      const hourlySpendByDate = {};
+      const hourlyClicksByDate = {};
       for (const m of hourlyMetrics) {
         const d = m.date;
         if (!d || d < cutoff) continue;
-        spendByDate[d] = (spendByDate[d] || 0) + Number(m.cost || 0);
-        clicksByDate[d] = (clicksByDate[d] || 0) + Number(m.clicks || 0);
+        hourlySpendByDate[d] = (hourlySpendByDate[d] || 0) + Number(m.cost || 0);
+        hourlyClicksByDate[d] = (hourlyClicksByDate[d] || 0) + Number(m.clicks || 0);
+      }
+
+      // Totais fechados da Amazon Ads são a fonte canônica para dias passados.
+      const dailySpendByDate = {};
+      const dailyClicksByDate = {};
+      for (const m of dailyMetrics) {
+        const d = m.date;
+        if (!d || d < cutoff || d >= today) continue;
+        dailySpendByDate[d] = (dailySpendByDate[d] || 0) + Number(m.spend || 0);
+        dailyClicksByDate[d] = (dailyClicksByDate[d] || 0) + Number(m.clicks || 0);
       }
 
       // Detectar hora de cap por data a partir de bid logs
@@ -456,9 +470,17 @@ export default function BudgetCoveragePanel({ account, dailyCap, perfSettings })
         .map(c => {
           const d = c.spend_date;
           const [, mm, dd] = d.split('-');
-          const spend = spendByDate[d] || Number(c.confirmed_spend || 0);
+          const controllerSpend = c.confirmed_spend === null || c.confirmed_spend === undefined
+            ? null
+            : Number(c.confirmed_spend);
+          const hasClosedDailyMetrics = Object.prototype.hasOwnProperty.call(dailySpendByDate, d);
+          const spend = hasClosedDailyMetrics
+            ? dailySpendByDate[d]
+            : (controllerSpend !== null && Number.isFinite(controllerSpend)
+              ? controllerSpend
+              : (hourlySpendByDate[d] ?? 0));
           const cap = Number(c.effective_daily_spend_cap || c.user_daily_spend_cap || dailyCap || 0);
-          const clicks = clicksByDate[d] || 0;
+          const clicks = dailyClicksByDate[d] ?? hourlyClicksByDate[d] ?? 0;
           const cpc_medio = clicks > 0 ? spend / clicks : 0;
           const capHour = capHourByDate[d] ?? null;
           const daypartStart = daypartStartByDate[d] ?? null;
