@@ -242,7 +242,7 @@ Deno.serve(async (req) => {
     const autoCampaignIds = new Set(
       campaigns
         .filter((campaign: any) =>
-          String(campaign.targeting_type || '').toUpperCase() === 'AUTO' &&
+          String(campaign.targeting_type || '').toUpperCase().includes('AUTO') &&
           !['archived'].includes(String(campaign.state || campaign.status || '').toLowerCase())
         )
         .flatMap((campaign: any) => [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id])

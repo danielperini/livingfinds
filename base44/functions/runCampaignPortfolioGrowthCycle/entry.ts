@@ -1,7 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 const n = (value: any) => Number(value || 0);
-const state = (row: any) => String(row?.state || row?.status || '').toLowerCase();
+const state = (row: any) => String(
+  row?.amazon_status || row?.state || row?.status || row?.campaign_status || row?.serving_status || row?.original_state || ''
+).toLowerCase();
+const isAutomatic = (row: any) => String(row?.targeting_type || '').toUpperCase().includes('AUTO');
 
 Deno.serve(async (req) => {
   const startedAt = new Date().toISOString();
@@ -31,8 +34,19 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders_30d', 5000).catch(() => []),
     ]);
 
-    const active = campaigns.filter((campaign: any) =>
-      ['enabled', 'active'].includes(state(campaign)) && !campaign.archived
+    const canonicalCampaigns = new Map<string, any>();
+    for (const campaign of campaigns) {
+      if (campaign.api_missing === true || campaign.excluded_from_dashboard === true) continue;
+      const id = String(campaign.campaign_id || campaign.amazon_campaign_id || campaign.id || '');
+      if (!id) continue;
+      const current = canonicalCampaigns.get(id);
+      const campaignTime = new Date(campaign.last_api_sync_at || campaign.last_sync_at || campaign.updated_at || campaign.created_at || 0).getTime();
+      const currentTime = new Date(current?.last_api_sync_at || current?.last_sync_at || current?.updated_at || current?.created_at || 0).getTime();
+      if (!current || campaignTime >= currentTime) canonicalCampaigns.set(id, campaign);
+    }
+    const active = [...canonicalCampaigns.values()].filter((campaign: any) =>
+      ['enabled', 'active', 'incomplete'].includes(state(campaign)) &&
+      campaign.archived !== true
     );
     const metricsByCampaign = new Map<string, any>();
     for (const row of metrics) {
@@ -74,7 +88,7 @@ Deno.serve(async (req) => {
 
     const automaticCampaignIds = new Set(
       active
-        .filter((campaign: any) => String(campaign.targeting_type || '').toUpperCase() === 'AUTO')
+        .filter(isAutomatic)
         .map((campaign: any) => String(campaign.campaign_id || campaign.amazon_campaign_id || ''))
     );
     const convertingAutoTerms = searchTerms.filter((term: any) =>

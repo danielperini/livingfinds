@@ -35,7 +35,7 @@ Deno.serve(async (req) => {
     const validCampaigns = allCampaigns.filter(c =>
       c.campaign_id &&
       ['enabled', 'paused'].includes((c.state || c.status || '').toLowerCase()) &&
-      String(c.targeting_type || '').toUpperCase() === 'AUTO' &&
+      String(c.targeting_type || '').toUpperCase().includes('AUTO') &&
       !c.archived
     );
 
