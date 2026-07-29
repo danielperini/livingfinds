@@ -46,9 +46,28 @@ Deno.serve(async (request) => {
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1).catch(() => [])
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 10).catch(() => []);
     const results: any[] = [];
+    const structureReports: any[] = [];
 
     for (const account of accountRows) {
       const aid = account.id;
+      // A estrutura local pode estar incompleta mesmo com Campaign sincronizada.
+      // Reconciliar as três entidades canônicas antes do diagnóstico evita tanto
+      // falso "zero delivery" quanto bloqueio permanente por dados parciais.
+      const [adGroupKeywordSync, productAdSync] = await Promise.all([
+        base44.asServiceRole.functions.invoke('syncAdGroupsAndKeywords', {
+          amazon_account_id: aid,
+          _service_role: true,
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } })),
+        base44.asServiceRole.functions.invoke('syncProductAds', {
+          amazon_account_id: aid,
+          _service_role: true,
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } })),
+      ]);
+      const structureSync = {
+        ad_groups_keywords: adGroupKeywordSync?.data || adGroupKeywordSync || {},
+        product_ads: productAdSync?.data || productAdSync || {},
+      };
+      structureReports.push({ amazon_account_id: aid, ...structureSync });
       const [campaigns, groups, keywords, adsRows, products, economics, settingsRows] = await Promise.all([
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
         base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
@@ -198,7 +217,14 @@ Deno.serve(async (request) => {
         }
       }
     }
-    return Response.json({ ok: true, stage: 'manual_zero_delivery_bootstrap', dry_run: dryRun, results });
+    return Response.json({
+      ok: true,
+      stage: 'manual_zero_delivery_bootstrap',
+      dry_run: dryRun,
+      structure_reconciled: true,
+      structure_reports: structureReports,
+      results,
+    });
   } catch (error: any) {
     return Response.json({ ok: false, stage: 'manual_zero_delivery_bootstrap', error: error?.message || String(error) }, { status: 500 });
   }
