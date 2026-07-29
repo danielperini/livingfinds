@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import { runCanonicalNativeDaypartSync } from '../../shared/canonicalNativeDaypartSync.ts';
+import { readConfirmedTodaySpend, resolveDailyCap } from '../../shared/portfolioBudgetMath.ts';
 
 /**
  * Motor canônico de dayparting híbrido.
@@ -326,7 +327,7 @@ Deno.serve(async (request) => {
       queuePreflight = response?.data || response || {};
     }
 
-    const [configs, performance, controllers, campaigns, products, economics, adGroups, keywords, productTargets, patterns, decisions, nativeRules] = await Promise.all([
+    const [configs, performance, controllers, campaigns, products, economics, adGroups, keywords, productTargets, patterns, decisions, nativeRules, intradaySnapshots, todayMetrics] = await Promise.all([
       base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
       base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: aid, spend_date: clock.date }, null, 1).catch(() => []),
@@ -339,6 +340,12 @@ Deno.serve(async (request) => {
       base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
       base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 5000).catch(() => []),
       base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
+      base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
+        { amazon_account_id: aid, spend_date: clock.date }, '-observed_at', 10000,
+      ).catch(() => []),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+        { amazon_account_id: aid, date: clock.date }, '-updated_at', 10000,
+      ).catch(() => []),
     ]);
 
     const cfg = configs[0] || {};
@@ -360,8 +367,24 @@ Deno.serve(async (request) => {
       ? new Set(body.eligible_asins.map((asin: any) => String(asin)))
       : null;
 
-    const dailyCap = Number(controller.effective_daily_spend_cap || controller.user_daily_spend_cap || cfg.total_daily_budget || cfg.daily_budget_limit || account.max_daily_budget_limit || 0);
-    const confirmedSpend = campaigns.reduce((sum, campaign) => sum + Number(campaign.current_spend ?? 0), 0);
+    const dailyCap = resolveDailyCap(perf, cfg, account, controller).cap;
+    const todaySpend = readConfirmedTodaySpend({
+      snapshots: intradaySnapshots,
+      dailyMetrics: todayMetrics,
+      spendDate: clock.date,
+    });
+    const confirmedSpend = todaySpend.confirmedSpend;
+    if (!todaySpend.available) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        reason: 'pacing_data_stale',
+        data_source: todaySpend.source,
+        freshness_seconds: todaySpend.freshnessSeconds,
+        confidence: todaySpend.confidence,
+        amazon_writes_blocked: true,
+      });
+    }
     const pacing = String(controller.spend_pacing || (dailyCap > 0 && confirmedSpend > dailyCap * ((clock.hour + 1) / 24) * 1.20 ? 'overpacing' : 'on_track'));
 
     const productByAsin = new Map(products.map((product: any) => [String(product.asin || ''), product]));

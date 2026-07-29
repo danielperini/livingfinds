@@ -32,10 +32,6 @@ const EXTENDED_REPORTS: any[] = [
     key: 'purchasedProducts', reportTypeId: 'spPurchasedProduct', groupBy: ['asin'],
     columns: ['date','campaignId','campaignName','adGroupId','adGroupName','keywordId','keyword','keywordType','advertisedAsin','advertisedSku','purchasedAsin','matchType','purchases7d','purchases14d','sales7d','sales14d','unitsSoldClicks7d','unitsSoldClicks14d'],
   },
-  {
-    key: 'searchTermImpressionShare', reportTypeId: 'spSearchTermImpressionShare', optional: true, groupBy: ['searchTerm'],
-    columns: ['date','searchTerm','impressions','clicks','cost','searchTermImpressionShare','searchTermImpressionRank'],
-  },
 ];
 
 const REPORTS = [...CORE_REPORTS, ...EXTENDED_REPORTS];

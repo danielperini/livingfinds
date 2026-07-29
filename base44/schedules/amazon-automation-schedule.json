@@ -8,9 +8,9 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
-      "name": "Request closed-day Amazon Ads reports - 00:00:30 BRT",
+      "name": "Request closed-day Amazon Ads reports - 00:01 BRT",
       "function": "ensureDailyReportsCurrent",
-      "cron": "30 0 0 * * *",
+      "cron": "1 0 * * *",
       "payload": { "_service_role": true }
     },
     {
@@ -46,7 +46,7 @@
     {
       "name": "Portfolio Daily Budget Pacing",
       "function": "runIntraDayPacingCycle",
-      "cron": "10,40 * * * *",
+      "cron": "10,40 6-23 * * *",
       "payload": { "_service_role": true, "source_function": "scheduler_portfolio_pacing" }
     },
     {
@@ -96,6 +96,18 @@
       "function": "processAmazonNightWindow",
       "cron": "0 13 * * *",
       "payload": { "_service_role": true, "hour": 13 }
+    },
+    {
+      "name": "Pacing full checkpoints - 06, 13, 19 and 22 BRT",
+      "function": "runIntraDayPacingCycle",
+      "cron": "0 6,13,19,22 * * *",
+      "payload": { "_service_role": true, "checkpoint": true, "source_function": "scheduler_full_checkpoint" }
+    },
+    {
+      "name": "Final daily reports reconciliation - 23:45 BRT",
+      "function": "dailyReportReconciliation",
+      "cron": "45 23 * * *",
+      "payload": { "_service_role": true }
     }
   ]
 }

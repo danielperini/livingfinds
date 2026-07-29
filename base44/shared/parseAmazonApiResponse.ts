@@ -13,7 +13,7 @@ export type ParsedAmazonResponse = {
   raw: unknown;
 };
 
-const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE = new Set([429, 500, 502, 503, 504, 524]);
 
 function headerNumber(headers: Headers, name: string): number | null {
   const value = headers.get(name);

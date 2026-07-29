@@ -1,5 +1,4 @@
 import {
-  aggregateIntradaySnapshots,
   brtClock,
   buildCampaignProfiles,
   buildPacingCurve,
@@ -10,6 +9,7 @@ import {
   positive,
   r2,
   resolveDailyCap,
+  readConfirmedTodaySpend,
 } from './portfolioBudgetMath.ts';
 import {
   acquireControllerLock,
@@ -34,9 +34,12 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
   const accountId = String(account?.id || '');
   if (!accountId) return { ok: false, error: 'AmazonAccount inválida' };
 
-  const [performanceRows, configRows, campaigns, products, economics, patterns, snapshots, closedMetrics] = await Promise.all([
+  const [performanceRows, configRows, controllerRows, campaigns, products, economics, patterns, snapshots, closedMetrics] = await Promise.all([
     base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
     base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
+    base44.asServiceRole.entities.AccountDailySpendController.filter(
+      { amazon_account_id: accountId, spend_date: clock.date }, '-updated_at', 1,
+    ).catch(() => []),
     base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
     base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
     base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
@@ -55,7 +58,8 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     return { ok: true, skipped: true, reason: 'Pacing de orçamento desabilitado', amazon_account_id: accountId };
   }
 
-  const { cap: dailyCap, source: dailyCapSource } = resolveDailyCap(performance, config, account);
+  const existingController = controllerRows[0] || {};
+  const { cap: dailyCap, source: dailyCapSource } = resolveDailyCap(performance, config, account, existingController);
   const controller = await upsertDailyController(base44, {
     accountId,
     marketplaceId: account?.marketplace_id || account?.marketplace || null,
@@ -80,7 +84,12 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const curve = buildPacingCurve(patterns, clock.dayOfWeek);
     const expectedPct = expectedFraction(curve.weights, clock.minuteOfDay);
     const expectedSpend = r2(Math.max(2, dailyCap * expectedPct));
-    const intraday = aggregateIntradaySnapshots(snapshots, Date.now());
+    const intraday = readConfirmedTodaySpend({
+      snapshots,
+      dailyMetrics: closedMetrics,
+      spendDate: clock.date,
+      nowMs: Date.now(),
+    });
     const closedDayDate = new Date(`${clock.date}T12:00:00-03:00`);
     closedDayDate.setDate(closedDayDate.getDate() - 1);
     const closedDate = closedDayDate.toISOString().slice(0, 10);
@@ -158,6 +167,14 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
           intraday_metrics_status: intraday.status,
           intraday_metric_source: intraday.source,
           intraday_metrics_observed_at: intraday.observedAt,
+          intraday_source: intraday.source,
+          intraday_captured_at: intraday.capturedAt,
+          intraday_freshness_seconds: intraday.freshnessSeconds,
+          data_confidence: intraday.confidence,
+          target_spend_by_now: expectedSpend,
+          pacing_error_value: r2(intraday.confirmedSpend - expectedSpend),
+          pacing_error_pct: expectedSpend > 0 ? r2((intraday.confirmedSpend - expectedSpend) / expectedSpend * 100) : 0,
+          pacing_engine_version: 'v2-confirmed-today',
           expected_spend_by_now: expectedSpend,
           expected_spend_pct: r2(expectedPct * 100),
           pacing_curve: JSON.stringify(curve.curve),
@@ -195,6 +212,13 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const pacingRatio = expectedSpend > 0 ? estimatedSpend / expectedSpend : 1;
     const classification = pacingClassification(pacingRatio, estimatedSpend, effectiveCap, projectedEod, dailyCap);
     const remaining = r2(Math.max(0, dailyCap - estimatedSpend));
+    const nextCheckpointMinute = Math.min(24 * 60, (Math.floor(clock.minuteOfDay / 30) + 1) * 30);
+    const nextCheckpointSpend = r2(dailyCap * expectedFraction(curve.weights, nextCheckpointMinute));
+    const pacingError = r2(estimatedSpend - expectedSpend);
+    const pacingErrorPct = expectedSpend > 0 ? r2(pacingError / expectedSpend * 100) : 0;
+    const reservedForStrongHours = r2(dailyCap * curve.weights.slice(clock.hour + 1)
+      .filter((weight) => weight >= Math.max(...curve.weights) * 0.75)
+      .reduce((sum, weight) => sum + weight, 0));
     const currentHourWeight = curve.weights[clock.hour] || 0;
     const futureMaxWeight = Math.max(0, ...curve.weights.slice(clock.hour + 1));
     const currentWindowStrong = currentHourWeight >= Math.max(...curve.weights) * 0.75;
@@ -289,8 +313,8 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
 
     if (!dryRun && controller?.id) {
       await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
-        user_daily_spend_cap: dailyCap,
-        effective_daily_spend_cap: dailyCap,
+        user_daily_spend_cap: controller.user_daily_spend_cap || dailyCap,
+        effective_daily_spend_cap: controller.effective_daily_spend_cap || controller.user_daily_spend_cap || dailyCap,
         daily_cap_source: dailyCapSource,
         confirmed_spend: intraday.confirmedSpend,
         ...metricWindows,
@@ -311,6 +335,22 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
         intraday_metrics_status: intraday.status,
         intraday_metric_source: intraday.source,
         intraday_metrics_observed_at: intraday.observedAt,
+        intraday_source: intraday.source,
+        intraday_captured_at: intraday.capturedAt,
+        intraday_freshness_seconds: intraday.freshnessSeconds,
+        data_confidence: intraday.confidence,
+        target_spend_by_now: expectedSpend,
+        target_spend_next_checkpoint: nextCheckpointSpend,
+        pacing_error_value: pacingError,
+        pacing_error_pct: pacingErrorPct,
+        reserved_for_strong_hours: reservedForStrongHours,
+        spend_available_now: r2(Math.max(0, nextCheckpointSpend - estimatedSpend)),
+        max_spend_until_next_checkpoint: r2(Math.max(0, nextCheckpointSpend - estimatedSpend - safetyBuffer)),
+        projected_overspend: r2(Math.max(0, projectedEod - dailyCap)),
+        projected_underspend: r2(Math.max(0, dailyCap - projectedEod)),
+        last_rebalance_at: actionsExecuted > 0 ? clock.iso : controller.last_rebalance_at || null,
+        next_rebalance_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        pacing_engine_version: 'v2-confirmed-today',
         pacing_curve: JSON.stringify(curve.curve),
         pacing_curve_source: curve.source,
         hour_value_scores: JSON.stringify(Object.fromEntries(curve.weights.map((weight, hour) => [hour, r2(weight * 100)]))),

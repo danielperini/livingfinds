@@ -1,0 +1,31 @@
+{
+  "name": "TargetingMetricsDaily",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "target_id": { "type": "string" },
+    "keyword_id": { "type": "string" },
+    "keyword_text": { "type": "string" },
+    "target_expression": { "type": "string" },
+    "targeting_type": { "type": "string" },
+    "match_type": { "type": "string" },
+    "date": { "type": "string", "format": "date" },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "orders": { "type": "number", "default": 0 },
+    "acos": { "type": "number", "default": 0 },
+    "roas": { "type": "number", "default": 0 },
+    "cpc": { "type": "number", "default": 0 },
+    "ctr": { "type": "number", "default": 0 },
+    "conversion_rate": { "type": "number", "default": 0 },
+    "synced_at": { "type": "string", "format": "date-time" },
+    "report_id": { "type": "string" },
+    "data_status": { "type": "string" },
+    "unique_key": { "type": "string" }
+  },
+  "required": ["amazon_account_id", "date", "unique_key"]
+}

@@ -127,6 +127,12 @@
       "type": "number",
       "default": 0
     },
+    "pacing_pause_active": { "type": "boolean", "default": false },
+    "pacing_pause_reason": { "type": "string" },
+    "pacing_paused_at": { "type": "string", "format": "date-time" },
+    "pacing_resume_at": { "type": "string", "format": "date-time" },
+    "pacing_original_state": { "type": "string" },
+    "pacing_cycle_key": { "type": "string" },
     "spend": {
       "type": "number",
       "default": 0
