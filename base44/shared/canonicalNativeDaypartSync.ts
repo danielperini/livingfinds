@@ -4,13 +4,80 @@
  * UnifiedAdsMetricsHourly (30 dias) e cria Scheduled Bid Rules nativas na
  * Amazon Ads API por campanha elegível. Idempotente; nunca pausa campanhas.
  */
-export const NATIVE_ENGINE_VERSION = 'canonical-native-daypart-v1';
+export const NATIVE_ENGINE_VERSION = 'canonical-native-daypart-v2-config-capped';
 
 const DAY_NAMES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const r2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
+
+function pct(value: any, fallback: number): number {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return Math.max(0, Math.min(50, number));
+}
+
+export function resolveNativeScheduleAdjustment(params: {
+  classification: string;
+  baseBid: number;
+  bandRoas: number;
+  targetRoas: number;
+  maxBid: number;
+  absMinBid: number;
+  strictEnvelope: boolean;
+  maxIncreasePct: number;
+  maxDecreasePct: number;
+}) {
+  const {
+    classification,
+    baseBid,
+    bandRoas,
+    targetRoas,
+    maxBid,
+    absMinBid,
+    strictEnvelope,
+    maxIncreasePct,
+    maxDecreasePct,
+  } = params;
+
+  if (!Number.isFinite(baseBid) || baseBid <= 0) {
+    return { adjustmentPct: 0, requestedPct: 0, targetBid: 0, cappedBy: ['invalid_base_bid'] };
+  }
+
+  if (classification === 'PISO') {
+    const requestedTargetBid = Math.max(absMinBid, r2(baseBid * 0.25));
+    const requestedPct = Math.round(((requestedTargetBid / baseBid) - 1) * 100);
+    const configuredFloor = r2(baseBid * (1 - maxDecreasePct / 100));
+    const envelopeFloor = strictEnvelope ? r2(baseBid * 0.50) : absMinBid;
+    const targetBid = Math.max(absMinBid, configuredFloor, envelopeFloor, requestedTargetBid);
+    const adjustmentPct = Math.min(0, Math.round(((targetBid / baseBid) - 1) * 100));
+    const cappedBy: string[] = [];
+    if (adjustmentPct > requestedPct) cappedBy.push('max_bid_decrease_pct');
+    if (targetBid === envelopeFloor && envelopeFloor > requestedTargetBid) cappedBy.push('strict_bid_envelope');
+    if (targetBid === absMinBid && absMinBid > requestedTargetBid) cappedBy.push('absolute_min_bid');
+    return { adjustmentPct, requestedPct, targetBid: r2(targetBid), cappedBy };
+  }
+
+  if (classification === 'PICO') {
+    const roasIndex = targetRoas > 0 ? bandRoas / targetRoas : 0;
+    let requestedMultiplier = roasIndex > 2 ? 2 : 1.5;
+    if (strictEnvelope) requestedMultiplier = Math.min(requestedMultiplier, 1.5);
+    const requestedPct = Math.max(0, Math.round((requestedMultiplier - 1) * 100));
+    const configuredMultiplier = 1 + maxIncreasePct / 100;
+    const maxBidMultiplier = maxBid > 0 ? maxBid / baseBid : 1;
+    const appliedMultiplier = Math.max(1, Math.min(requestedMultiplier, configuredMultiplier, maxBidMultiplier));
+    const targetBid = r2(baseBid * appliedMultiplier);
+    const adjustmentPct = Math.max(0, Math.round((appliedMultiplier - 1) * 100));
+    const cappedBy: string[] = [];
+    if (appliedMultiplier < requestedMultiplier && appliedMultiplier === configuredMultiplier) cappedBy.push('max_bid_increase_pct');
+    if (appliedMultiplier < requestedMultiplier && appliedMultiplier === maxBidMultiplier) cappedBy.push('max_bid');
+    if (strictEnvelope && requestedMultiplier >= 1.5) cappedBy.push('strict_bid_envelope');
+    return { adjustmentPct, requestedPct, targetBid, cappedBy };
+  }
+
+  return { adjustmentPct: 0, requestedPct: 0, targetBid: r2(baseBid), cappedBy: [] as string[] };
+}
 
 // Regra Canônica: 0/null = meta ignorada
 function goal(...values: any[]): number {
@@ -154,6 +221,14 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
   const absMinBid = Math.max(0.02, goal(cfg.daypart_absolute_min_bid) || 0.02);
   const strictEnvelope = cfg.strict_bid_envelope !== false;
   const minClicksPerBand = goal(cfg.min_clicks_per_time_block) || 20;
+  const maxIncreasePct = pct(perf.max_bid_increase_pct ?? cfg.max_bid_increase_pct, 15);
+  const maxDecreasePct = pct(perf.max_bid_decrease_pct ?? cfg.max_bid_decrease_pct, 20);
+  summary.configured_limits = {
+    max_increase_pct: maxIncreasePct,
+    max_decrease_pct: maxDecreasePct,
+    max_bid: maxBid,
+    strict_envelope: strictEnvelope,
+  };
 
   // 60 dias para medir a extensão do histórico; 30 dias para classificar
   const hourly = await base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter(
@@ -181,10 +256,15 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     const cid = String(campaign.amazon_campaign_id || campaign.campaign_id || '');
     summary.campaigns_evaluated++;
 
-    // Rotação: campanhas sincronizadas há menos de 20h não repetem no ciclo
+    // Rotação: campanhas sincronizadas há menos de 20h não repetem no ciclo,
+    // exceto quando uma regra existente viola os limites configurados atuais.
     const campaignRules = canonicalRules.filter((rule: any) => (rule.campaign_ids || []).map(String).includes(cid));
     const lastSynced = campaignRules.reduce((max: number, rule: any) => Math.max(max, new Date(rule.last_synced_at || 0).getTime()), 0);
-    if (lastSynced > Date.now() - 20 * 3600000) continue;
+    const hasRuleOutsideConfiguredLimits = campaignRules.some((rule: any) => {
+      const adjustment = Number(rule.adjustment_value || 0);
+      return adjustment > maxIncreasePct || adjustment < -maxDecreasePct;
+    });
+    if (lastSynced > Date.now() - 20 * 3600000 && !hasRuleOutsideConfiguredLimits) continue;
 
     // Elegibilidade (a): ≥ 30 dias de dados em UnifiedAdsMetricsHourly
     const rows = rowsByCampaign.get(cid) || [];
@@ -210,12 +290,19 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     const hourClass: string[] = [];
     for (let hour = 0; hour < 24; hour++) {
       const agg = hourAgg[hour];
-      if (agg.clicks < minClicksPerBand) { hourClass.push('EFICIENTE'); continue; }
+      if (agg.clicks < minClicksPerBand) {
+        hourClass.push('EFICIENTE');
+        continue;
+      }
       const acos = agg.sales > 0 ? (agg.cost / agg.sales) * 100 : (agg.cost > 0 ? Infinity : null);
       const roas = agg.cost > 0 ? agg.sales / agg.cost : null;
-      if ((acos !== null && acos > maxAcos * 1.5) || (roas !== null && roas < targetRoas * 0.4)) hourClass.push('PISO');
-      else if ((roas !== null && roas > targetRoas * 1.5) || (acos !== null && acos < targetAcos * 0.6)) hourClass.push('PICO');
-      else hourClass.push('EFICIENTE');
+      if ((acos !== null && acos > maxAcos * 1.5) || (roas !== null && roas < targetRoas * 0.4)) {
+        hourClass.push('PISO');
+      } else if ((roas !== null && roas > targetRoas * 1.5) || (acos !== null && acos < targetAcos * 0.6)) {
+        hourClass.push('PICO');
+      } else {
+        hourClass.push('EFICIENTE');
+      }
     }
 
     // Bid-base: bid atual do ad group principal
@@ -233,20 +320,22 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     let campaignRuleOk = false;
 
     for (const band of actionable) {
-      // Multiplicadores canônicos
-      let adjValue = 0;
-      if (band.classification === 'PISO') {
-        const bid = Math.max(absMinBid, r2(baseBid * 0.25));
-        adjValue = Math.round(((bid / baseBid) - 1) * 100);
-        if (adjValue >= 0) continue; // bid-base já está no piso técnico
-      } else {
-        const roasIndex = targetRoas > 0 ? band.roas / targetRoas : 0;
-        let multiplier = roasIndex > 2 ? 2 : 1.5;
-        if (strictEnvelope) multiplier = Math.min(multiplier, 1.5);
-        multiplier = Math.max(1, Math.min(multiplier, maxBid / baseBid));
-        adjValue = Math.round((multiplier - 1) * 100);
-        if (adjValue <= 0) continue; // max_bid já limita o bid-base
-      }
+      // A regra nativa já nasce dentro dos limites configurados. Não cria +50%/+100%
+      // para depois depender do motor local para pausar ou compensar.
+      const resolvedAdjustment = resolveNativeScheduleAdjustment({
+        classification: band.classification,
+        baseBid,
+        bandRoas: band.roas,
+        targetRoas,
+        maxBid,
+        absMinBid,
+        strictEnvelope,
+        maxIncreasePct,
+        maxDecreasePct,
+      });
+      const adjValue = resolvedAdjustment.adjustmentPct;
+      if (band.classification === 'PISO' && adjValue >= 0) continue;
+      if (band.classification === 'PICO' && adjValue <= 0) continue;
 
       const idem = `CANONV8|${aid}|${cid}|${band.start_time}|${band.end_time}`;
       desiredKeys.add(idem);
@@ -274,7 +363,7 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
           avg_roas: band.roas,
           avg_acos: band.acos || 0,
           sample_clicks: band.hours.reduce((sum: number, h: number) => sum + hourAgg[h].clicks, 0),
-          rationale: `Faixa ${band.start_time}-${band.end_time} classificada como ${band.classification} (ROAS ${band.roas}, ACoS ${band.acos ?? 'sem vendas'}) nos últimos 30 dias.`,
+          rationale: `Faixa ${band.start_time}-${band.end_time} classificada como ${band.classification} (ROAS ${band.roas}, ACoS ${band.acos ?? 'sem vendas'}) nos últimos 30 dias. Ajuste solicitado ${resolvedAdjustment.requestedPct}% e aplicado ${adjValue}% conforme limites configurados${resolvedAdjustment.cappedBy.length ? ` (${resolvedAdjustment.cappedBy.join(', ')})` : ''}.`,
           created_by: 'autopilot',
           status: 'active',
           created_at: now,
@@ -289,7 +378,10 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
       if (localEnabled && Math.abs(Number(local.adjustment_value || 0) - adjValue) <= 5) {
         summary.rules_idempotent++;
         campaignRuleOk = true;
-        await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, { last_synced_at: now, updated_at: now }).catch(() => {});
+        await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
+          last_synced_at: now,
+          updated_at: now,
+        }).catch(() => {});
         continue;
       }
 
@@ -314,14 +406,17 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
         targeting_types: [String(campaign.targeting_type || 'AUTO')],
         idempotency_key: idem,
         engine_version: NATIVE_ENGINE_VERSION,
-        reason: `${band.classification} ${band.start_time}-${band.end_time}: ROAS ${band.roas}, ACoS ${band.acos ?? 'sem vendas'}; ajuste ${adjValue}% sobre bid-base R$${baseBid.toFixed(2)}.`,
+        reason: `${band.classification} ${band.start_time}-${band.end_time}: ROAS ${band.roas}, ACoS ${band.acos ?? 'sem vendas'}; ajuste solicitado ${resolvedAdjustment.requestedPct}% e aplicado ${adjValue}% sobre bid-base R$${baseBid.toFixed(2)}; bid-alvo R$${resolvedAdjustment.targetBid.toFixed(2)}${resolvedAdjustment.cappedBy.length ? `; limitado por ${resolvedAdjustment.cappedBy.join(', ')}` : ''}.`,
         updated_at: now,
       };
 
       if (localEnabled) {
         // Diverge > 5%: atualizar via API (PUT)
         const updated = await rulesCommand(base44, aid, 'update_rules', {
-          optimizationRules: [{ optimizationRuleId: String(local.optimization_rule_id), ...rulePayload(ruleName, band, adjValue, today) }],
+          optimizationRules: [{
+            optimizationRuleId: String(local.optimization_rule_id),
+            ...rulePayload(ruleName, band, adjValue, today),
+          }],
         });
         const ok = updated?.ok === true || updated?.conflict_existing === true;
         await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
@@ -335,45 +430,76 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
           last_error: ok ? null : String(updated?.error || 'Falha ao atualizar regra').slice(0, 500),
           last_synced_at: now,
         }).catch(() => {});
-        if (ok) { summary.rules_updated++; campaignRuleOk = true; }
-        else { summary.failures++; campaignFailures.push(`update ${ruleName}`); }
+        if (ok) {
+          summary.rules_updated++;
+          campaignRuleOk = true;
+        } else {
+          summary.failures++;
+          campaignFailures.push(`update ${ruleName}`);
+        }
         await wait(350);
         continue;
       }
 
       // Criar nova regra + associar à campanha
-      if (local?.id) await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, { ...localData, status: 'creating' }).catch(() => {});
-      else local = await base44.asServiceRole.entities.AmazonScheduledRule.create({ ...localData, status: 'creating', association_status: 'pending', created_at: now }).catch(() => null);
+      if (local?.id) {
+        await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
+          ...localData,
+          status: 'creating',
+        }).catch(() => {});
+      } else {
+        local = await base44.asServiceRole.entities.AmazonScheduledRule.create({
+          ...localData,
+          status: 'creating',
+          association_status: 'pending',
+          created_at: now,
+        }).catch(() => null);
+      }
 
-      const created = await rulesCommand(base44, aid, 'create_rules', { optimizationRules: [rulePayload(ruleName, band, adjValue, today)] });
+      const created = await rulesCommand(base44, aid, 'create_rules', {
+        optimizationRules: [rulePayload(ruleName, band, adjValue, today)],
+      });
       const ruleIdValue = parseRuleId(created);
       let ok = Boolean(ruleIdValue);
       let associated = false;
       if (ok) {
-        const association = await rulesCommand(base44, aid, 'associate_rules', { optimizationRuleIds: [ruleIdValue] }, cid);
+        const association = await rulesCommand(
+          base44,
+          aid,
+          'associate_rules',
+          { optimizationRuleIds: [ruleIdValue] },
+          cid,
+        );
         associated = association?.ok === true || association?.conflict_existing === true;
         ok = associated;
         await wait(350);
       }
 
-      if (local?.id) await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
-        optimization_rule_id: ruleIdValue || null,
-        status: ok ? 'enabled' : 'failed',
-        association_status: associated ? 'associated' : 'failed',
-        associated_campaign_ids: associated ? [cid] : [],
-        native_api_supported: ok,
-        fallback_mode: ok ? 'amazon_native_positive_app_negative' : 'app_managed_only',
-        amazon_request_id: created?.request_id || null,
-        amazon_response_status: Number(created?.status || 0) || null,
-        amazon_response: JSON.stringify(created?.payload || created || {}).slice(0, 4000),
-        last_error: ok ? null : String(created?.error || 'Regra não confirmada pela Amazon').slice(0, 500),
-        last_associated_at: associated ? now : null,
-        last_synced_at: now,
-        updated_at: now,
-      }).catch(() => {});
+      if (local?.id) {
+        await base44.asServiceRole.entities.AmazonScheduledRule.update(local.id, {
+          optimization_rule_id: ruleIdValue || null,
+          status: ok ? 'enabled' : 'failed',
+          association_status: associated ? 'associated' : 'failed',
+          associated_campaign_ids: associated ? [cid] : [],
+          native_api_supported: ok,
+          fallback_mode: ok ? 'amazon_native_positive_app_negative' : 'app_managed_only',
+          amazon_request_id: created?.request_id || null,
+          amazon_response_status: Number(created?.status || 0) || null,
+          amazon_response: JSON.stringify(created?.payload || created || {}).slice(0, 4000),
+          last_error: ok ? null : String(created?.error || 'Regra não confirmada pela Amazon').slice(0, 500),
+          last_associated_at: associated ? now : null,
+          last_synced_at: now,
+          updated_at: now,
+        }).catch(() => {});
+      }
 
-      if (ok) { summary.rules_created++; campaignRuleOk = true; }
-      else { summary.failures++; campaignFailures.push(`create ${ruleName}`); }
+      if (ok) {
+        summary.rules_created++;
+        campaignRuleOk = true;
+      } else {
+        summary.failures++;
+        campaignFailures.push(`create ${ruleName}`);
+      }
       await wait(350);
     }
 
@@ -384,7 +510,10 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
       let paused = !stale.optimization_rule_id;
       if (stale.optimization_rule_id) {
         const response = await rulesCommand(base44, aid, 'update_rules', {
-          optimizationRules: [{ optimizationRuleId: String(stale.optimization_rule_id), status: 'PAUSED' }],
+          optimizationRules: [{
+            optimizationRuleId: String(stale.optimization_rule_id),
+            status: 'PAUSED',
+          }],
         });
         paused = response?.ok === true || response?.conflict_existing === true;
       }
@@ -406,7 +535,10 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
       ).catch(() => []);
       for (const keyword of campaignKeywords) {
         if (keyword.daypart_active === true) continue;
-        await base44.asServiceRole.entities.Keyword.update(keyword.id, { daypart_active: true, daypart_last_adjusted_at: now }).catch(() => {});
+        await base44.asServiceRole.entities.Keyword.update(keyword.id, {
+          daypart_active: true,
+          daypart_last_adjusted_at: now,
+        }).catch(() => {});
       }
     }
 
@@ -431,7 +563,18 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     summary.details.push({
       campaign_id: cid,
       base_bid: baseBid,
-      bands: bands.map((band: any) => ({ start: band.start_time, end: band.end_time, classification: band.classification, roas: band.roas, acos: band.acos })),
+      configured_limits: {
+        max_increase_pct: maxIncreasePct,
+        max_decrease_pct: maxDecreasePct,
+        max_bid: maxBid,
+      },
+      bands: bands.map((band: any) => ({
+        start: band.start_time,
+        end: band.end_time,
+        classification: band.classification,
+        roas: band.roas,
+        acos: band.acos,
+      })),
       failures: campaignFailures.length,
     });
   }
@@ -440,7 +583,11 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     amazon_account_id: aid,
     operation: 'canonical_dayparting_sync',
     trigger_type: options.trigger_type || 'automatic',
-    status: summary.failures > 0 && summary.rules_created + summary.rules_updated === 0 ? 'error' : summary.failures > 0 ? 'partial' : 'success',
+    status: summary.failures > 0 && summary.rules_created + summary.rules_updated === 0
+      ? 'error'
+      : summary.failures > 0
+      ? 'partial'
+      : 'success',
     execution_date: today,
     started_at: new Date(startedAt).toISOString(),
     completed_at: new Date().toISOString(),
@@ -456,8 +603,11 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
       idempotent: summary.rules_idempotent,
       failures: summary.failures,
       legacy: summary.legacy_mode.length,
+      configured_limits: summary.configured_limits,
     }).slice(0, 1500),
-    error_message: summary.failures > 0 ? `${summary.failures} regra(s) sem confirmação da Amazon; fallback app_managed_only.` : null,
+    error_message: summary.failures > 0
+      ? `${summary.failures} regra(s) sem confirmação da Amazon; fallback app_managed_only.`
+      : null,
   }).catch(() => {});
 
   summary.ok = summary.failures === 0 || summary.rules_created + summary.rules_updated > 0;
