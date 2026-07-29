@@ -1,14 +1,31 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { Lock, Loader2, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function Login() {
+  const openingAudioRef = useRef(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const playOpeningAudio = async () => {
+    const audio = openingAudioRef.current;
+    if (!audio) return;
+    try {
+      audio.currentTime = 0;
+      await audio.play();
+      await Promise.race([
+        new Promise((resolve) => audio.addEventListener("ended", resolve, { once: true })),
+        new Promise((resolve) => setTimeout(resolve, 3800)),
+      ]);
+    } catch {
+      // Alguns navegadores bloqueiam reprodução automática. O áudio é um
+      // complemento da entrada e nunca deve impedir ou atrasar o acesso.
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,6 +42,7 @@ export default function Login() {
         throw new Error(data.error || "Senha incorreta");
       }
       localStorage.setItem("base44_access_token", data.token);
+      await playOpeningAudio();
       window.location.href = "/";
     } catch (err) {
       setError(err.message || "Erro ao autenticar");
@@ -35,6 +53,12 @@ export default function Login() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-canvas px-4">
+      <audio
+        ref={openingAudioRef}
+        src="/abertura-app-ia-3s.wav"
+        preload="auto"
+        aria-hidden="true"
+      />
       <div className="w-full max-w-sm">
         {/* Logo / cabeçalho */}
         <div className="flex flex-col items-center mb-8">
