@@ -360,12 +360,13 @@ Deno.serve(async (req) => {
     }
 
     // ── Carregar dados ─────────────────────────────────────────────────
-    const [allProducts, allKeywords, allSearchTerms, allSuggestions, existingBankRaw] = await Promise.all([
+    const [allProducts, allKeywords, allSearchTerms, allSuggestions, existingBankRaw, termBankRaw] = await Promise.all([
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 1000).catch(() => []),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-spend', 1000).catch(() => []),
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: accountId }, '-orders', 1000).catch(() => []),
       base44.asServiceRole.entities.KeywordSuggestion.filter({ amazon_account_id: accountId, status: 'pending' }, '-confidence', 500).catch(() => []),
       base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: accountId }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: accountId }, '-orders', 5000).catch(() => []),
     ]);
 
     // Filtrar por ASIN se especificado
@@ -430,11 +431,13 @@ Deno.serve(async (req) => {
         source_date: today,
         source_metrics: JSON.stringify(metrics),
         source_confidence: extraFields.source_confidence || 'MEDIUM',
-        impressions: Number(existing?.impressions || 0) + Number(metrics.impressions || 0),
-        clicks:      Number(existing?.clicks || 0)      + Number(metrics.clicks || 0),
-        orders:      Number(existing?.orders || 0)      + Number(metrics.orders || 0),
-        sales:       Number(existing?.sales  || 0)      + Number(metrics.sales  || 0),
-        spend:       Number(existing?.spend  || 0)      + Number(metrics.spend  || 0),
+        // As fontes já são acumuladas pela Amazon. Usar o maior snapshot evita
+        // duplicar métricas a cada execução recorrente do Factory.
+        impressions: Math.max(Number(existing?.impressions || 0), Number(metrics.impressions || 0)),
+        clicks:      Math.max(Number(existing?.clicks || 0), Number(metrics.clicks || 0)),
+        orders:      Math.max(Number(existing?.orders || 0), Number(metrics.orders || 0)),
+        sales:       Math.max(Number(existing?.sales  || 0), Number(metrics.sales  || 0)),
+        spend:       Math.max(Number(existing?.spend  || 0), Number(metrics.spend  || 0)),
         ctr:   parseFloat(ctr.toFixed(4)),
         cpc:   parseFloat(cpc.toFixed(2)),
         cvr:   parseFloat(cvr.toFixed(4)),
@@ -508,6 +511,28 @@ Deno.serve(async (req) => {
         amazon_recommended: true,
         amazon_suggested_bid: sug.suggested_bid || null,
         recommendation_date: today,
+      });
+    }
+
+    // ── Fonte 4: TermBank histórico já validado ─────────────────────────
+    // Converte o acervo real existente no banco operacional do Campaign
+    // Factory, preservando ASIN, métricas e origem.
+    for (const term of termBankRaw) {
+      if (!term.term || !term.asin || term.status === 'archived') continue;
+      const termMatchType = String(term.recommended_match_type || term.match_type || 'exact').toLowerCase();
+      upsertBank(term.term, term.asin, term.source === 'cross_asin' ? 'HISTORICAL_WINNER' : 'KEYWORD_BANK', {
+        impressions: term.impressions || 0,
+        clicks: term.clicks || 0,
+        orders: term.orders || 0,
+        sales: term.sales || 0,
+        spend: term.spend || 0,
+        campaign_id: term.campaign_id || term.amazon_campaign_id || '',
+      }, {
+        match_type: ['exact', 'phrase', 'broad'].includes(termMatchType) ? termMatchType : 'exact',
+        source_confidence: Number(term.confidence || 0) >= 90 ? 'VERY_HIGH'
+          : Number(term.confidence || 0) >= 75 ? 'HIGH'
+          : Number(term.confidence || 0) >= 50 ? 'MEDIUM'
+          : 'LOW',
       });
     }
 
@@ -636,6 +661,7 @@ Deno.serve(async (req) => {
       failed:          toReclassify.filter((e: any) => e.lifecycle_status === 'FAILED').length,
       harvest_ready:   toReclassify.filter((e: any) => e.harvest_candidate).length,
       amazon_suggestions: allSuggestions.length,
+      term_bank_imported: termBankRaw.length,
     };
 
     return Response.json({

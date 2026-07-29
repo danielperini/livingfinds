@@ -63,12 +63,25 @@ function BidChartTooltip({ active, payload }) {
 
 // Fetch único de todos os dados da página (usado pelo cache)
 async function fetchDaypartData(accountId) {
-  const [allDecisions, campaigns, transfers, familyBank] = await Promise.all([
+  const [allDecisions, campaignsRaw, productAds, transfers, familyBank] = await Promise.all([
     base44.entities.DaypartingDecision.filter({ amazon_account_id: accountId }, '-created_date', 700),
-    base44.entities.Campaign.filter({ amazon_account_id: accountId }, null, 500).catch(() => []),
+    base44.entities.Campaign.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
+    base44.entities.ProductAd.filter({ amazon_account_id: accountId }, '-synced_at', 5000).catch(() => []),
     base44.entities.CrossAsinTransfer.filter({ amazon_account_id: accountId }, '-created_date', 200),
     base44.entities.ProductFamilyKeywordBank.filter({ amazon_account_id: accountId }, '-winning_asin_count', 50).catch(() => []),
   ]);
+  const asinByCampaign = new Map();
+  for (const ad of productAds) {
+    if (ad.campaign_id && ad.asin && !asinByCampaign.has(String(ad.campaign_id))) {
+      asinByCampaign.set(String(ad.campaign_id), String(ad.asin).toUpperCase());
+    }
+  }
+  const campaigns = campaignsRaw
+    .filter(campaign => ['enabled', 'paused'].includes(String(campaign.state || campaign.status || '').toLowerCase()))
+    .map(campaign => ({
+      ...campaign,
+      asin: campaign.asin || asinByCampaign.get(campaignRemoteId(campaign)) || '',
+    }));
   return { accountId, allDecisions, campaigns, transfers, familyBank };
 }
 

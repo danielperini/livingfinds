@@ -44,6 +44,12 @@
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Hourly Metrics Bridge and Dayparting Patterns",
+      "function": "rebuildHourlyMetricsFromReports",
+      "cron": "55 * * * *",
+      "payload": { "_service_role": true, "lookback_days": 3 }
+    },
+    {
       "name": "Portfolio Daily Budget Pacing",
       "function": "runIntraDayPacingCycle",
       "cron": "10,40 6-23 * * *",
@@ -90,6 +96,12 @@
       "function": "runMorningAmazonSchedule",
       "cron": "40 6 * * *",
       "payload": { "_service_role": true, "force": true }
+    },
+    {
+      "name": "Campaign Factory retrospective learning - 07:30 BRT",
+      "function": "runCampaignFactory",
+      "cron": "30 7 * * *",
+      "payload": { "_service_role": true }
     },
     {
       "name": "Daily Economic Assessment - 08:00 BRT",

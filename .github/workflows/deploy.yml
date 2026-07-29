@@ -93,6 +93,26 @@ jobs:
               if (!weeklyResponse.ok || weekly.ok === false) throw new Error(weekly.error || "weekly report failed");
             ' </dev/null
 
+            echo '--- retroativo Campaign Factory e métricas horárias ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const headers = { "content-type": "application/json", "x-api-token": token };
+              const call = async (name, payload = {}) => {
+                const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
+                  method: "POST", headers,
+                  body: JSON.stringify({ _service_role: true, ...payload })
+                });
+                const data = await response.json().catch(() => ({}));
+                console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 2000));
+                if (!response.ok || data.ok === false) throw new Error(data.error || (name + " failed"));
+                return data;
+              };
+              await call("updateTermBankFromAutomaticCampaigns");
+              await call("runCampaignFactory");
+              await call("rebuildHourlyMetricsFromReports", { full: true, lookback_days: 30 });
+              await call("runCanonicalDaypartingEngine", { trigger: "deploy_retroactive_hourly_rebuild" });
+            ' </dev/null
+
             echo '--- proteção econômica por SKU ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";

@@ -329,6 +329,7 @@ async function persistStage(base44: any, account: any, job: any, clock: ReturnTy
       campaign_status: String(row?.campaignStatus || row?.campaign_status || ''),
       campaign_budget: Number(row?.campaignBudgetAmount ?? row?.campaign_budget ?? 0),
       spend_date: clock.date,
+      hour_brt: clock.hour,
       report_id: String(job.report_id),
       snapshot_batch_id: String(job.id),
       snapshot_kind: 'campaign_cumulative_day', aggregation_mode: 'cumulative',
