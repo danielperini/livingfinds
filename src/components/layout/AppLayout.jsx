@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock, Users } from
+  ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock, Users } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -21,6 +21,20 @@ const navItems = [
 { path: '/settings', icon: Settings, label: 'Configurações' },
 { path: '/manual', icon: Book, label: 'Manual' }];
 
+function BrandMark() {
+  return (
+    <div
+      className="w-8 h-8 rounded-lg border border-white/10 bg-no-repeat shadow-sm flex-shrink-0"
+      style={{
+        backgroundImage: "url('/living-finds-brand.jpeg')",
+        backgroundSize: '300%',
+        backgroundPosition: '96% 39%',
+      }}
+      role="img"
+      aria-label="Living Finds"
+    />
+  );
+}
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -70,15 +84,11 @@ export default function AppLayout() {
         <div className={`flex items-center h-14 border-b border-surface-2 px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           {!collapsed ? (
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
-                <Zap className="w-4 h-4 text-white" />
-              </div>
+              <BrandMark />
               <span className="font-heading font-bold text-white text-base">Living Finds</span>
             </div>
           ) : (
-            <div className="w-7 h-7 rounded-lg bg-cyan flex items-center justify-center">
-              <Zap className="w-4 h-4 text-white" />
-            </div>
+            <BrandMark />
           )}
           <button
             type="button"
