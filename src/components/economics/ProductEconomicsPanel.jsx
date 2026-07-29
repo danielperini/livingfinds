@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
-import { DollarSign, Search, Filter, RefreshCw, Edit3, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { DollarSign, Search, Filter, RefreshCw, Edit3, Loader2, AlertCircle, TrendingUp, TrendingDown, Minus, ArrowUpDown, ChevronUp, ChevronDown } from 'lucide-react';
 import EconomicStatusBadge, { ECON_CLASS_LABELS } from './EconomicStatusBadge';
 import ProductCostEditor from './ProductCostEditor';
 
@@ -26,6 +26,19 @@ const FILTERS = [
   { key: 'unknown', label: '⬜ Sem Dados' },
 ];
 
+const SORT_COLUMNS = [
+  { key: 'sku', label: 'SKU / ASIN', value: ({ product }) => product.sku || product.asin || '' },
+  { key: 'total_cost', label: 'Custo Total', value: ({ econ }) => econ?.total_variable_cost_per_unit },
+  { key: 'price', label: 'Preço', value: ({ product, econ }) => econ?.current_price ?? product.price },
+  { key: 'margin', label: 'Margem', value: ({ econ }) => econ?.contribution_margin_percent },
+  { key: 'profit_after_ads', label: 'Lucro Pós-ADS', value: ({ econ }) => econ?.profit_after_ads_14d },
+  { key: 'break_even', label: 'Break-even', value: ({ econ }) => econ?.break_even_acos },
+  { key: 'target_acos', label: 'Target ACoS', value: ({ econ }) => econ?.target_acos },
+  { key: 'safe_cpc', label: 'Safe CPC', value: ({ econ }) => econ?.safe_max_cpc },
+  { key: 'classification', label: 'Classificação', value: ({ econ }) => econ?.economic_classification || 'unknown' },
+  { key: 'status', label: 'Status', value: ({ econ }) => econ?.economics_status || 'missing_cost' },
+];
+
 export default function ProductEconomicsPanel({ accountId }) {
   const [economics, setEconomics] = useState([]);
   const [products, setProducts] = useState([]);
@@ -35,6 +48,7 @@ export default function ProductEconomicsPanel({ accountId }) {
   const [editTarget, setEditTarget] = useState(null); // { product, economics }
   const [recalcLoading, setRecalcLoading] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [sort, setSort] = useState({ key: 'sku', direction: 'asc' });
 
   const load = useCallback(async () => {
     if (!accountId) return;
@@ -79,7 +93,26 @@ export default function ProductEconomicsPanel({ accountId }) {
       filter === cl ||
       (filter === 'missing_cost' && !econ);
     return matchSearch && matchFilter;
+  }).sort((a, b) => {
+    const column = SORT_COLUMNS.find(item => item.key === sort.key) || SORT_COLUMNS[0];
+    const aValue = column.value(a);
+    const bValue = column.value(b);
+    const aMissing = aValue === null || aValue === undefined || aValue === '';
+    const bMissing = bValue === null || bValue === undefined || bValue === '';
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+    if (aMissing && bMissing) return 0;
+    const comparison = typeof aValue === 'number' && typeof bValue === 'number'
+      ? aValue - bValue
+      : String(aValue).localeCompare(String(bValue), 'pt-BR', { numeric: true, sensitivity: 'base' });
+    return sort.direction === 'asc' ? comparison : -comparison;
   });
+
+  const toggleSort = (key) => {
+    setSort(current => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }));
+  };
 
   const stats = {
     total: rows.length,
@@ -161,14 +194,33 @@ export default function ProductEconomicsPanel({ accountId }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
-                  {['SKU / ASIN', 'Custo Total', 'Preço', 'Margem', 'Lucro Pós-ADS', 'Break-even', 'Target ACoS', 'Safe CPC', 'Classificação', 'Status', ''].map(h => (
-                    <th key={h} className="px-3 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
+                  {SORT_COLUMNS.map(column => {
+                    const active = sort.key === column.key;
+                    const SortIcon = active
+                      ? (sort.direction === 'asc' ? ChevronUp : ChevronDown)
+                      : ArrowUpDown;
+                    return (
+                      <th key={column.key} className="px-3 py-2.5 text-left whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(column.key)}
+                          className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                            active ? 'text-cyan' : 'text-slate-500 hover:text-slate-300'
+                          }`}
+                          aria-label={`Ordenar por ${column.label}`}
+                        >
+                          {column.label}
+                          <SortIcon className="w-3 h-3" />
+                        </button>
+                      </th>
+                    );
+                  })}
+                  <th className="px-3 py-2.5" aria-label="Ações" />
                 </tr>
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500 text-xs">Nenhum produto encontrado</td></tr>
+                  <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-500 text-xs">Nenhum produto encontrado</td></tr>
                 ) : filtered.map(({ product: p, econ: e }) => {
                   const name = p.display_name || p.product_name || p.sku;
                   const marginPct = e?.contribution_margin_percent;

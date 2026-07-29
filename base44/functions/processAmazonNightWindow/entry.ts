@@ -2,8 +2,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms:number) => new Promise((resolve) => setTimeout(resolve, ms));
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid']);
-const WINDOW_HOURS = [16, 17];
-const WINDOW_LABEL = '16:00-18:00';
+const WINDOW_HOURS = [0, 1, 2, 3, 13];
+const WINDOW_LABEL = '00:00-04:00 / 13:00-14:00';
 
 function brazilHour() {
   const parts = new Intl.DateTimeFormat('pt-BR', {
