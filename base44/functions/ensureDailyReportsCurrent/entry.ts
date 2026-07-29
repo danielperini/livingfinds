@@ -15,6 +15,9 @@ const REPORTS = [
   },
 ];
 
+const ACTIVE = new Set(['pending','requested','in_progress','processing','completed']);
+const RETRY_AFTER_MS = 2 * 60 * 60 * 1000;
+
 function brazilDateOffset(days: number): string {
   const today = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -32,13 +35,17 @@ function dateOffset(date: string, days: number): string {
   return reference.toISOString().slice(0, 10);
 }
 
+function jobAge(job: any): number {
+  const value = job.updated_date || job.created_date || job.requested_at;
+  const time = value ? new Date(value).getTime() : 0;
+  return time ? Date.now() - time : Number.POSITIVE_INFINITY;
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
-    if (!body._service_role) {
-      return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
-    }
+    if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
 
     const targetDate = brazilDateOffset(-1);
     const startDate = dateOffset(targetDate, -29);
@@ -52,14 +59,11 @@ Deno.serve(async (request) => {
     const details: Array<Record<string, unknown>> = [];
 
     for (const account of accounts) {
-      const recentJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
-        { amazon_account_id: account.id }, '-created_date', 250,
+      let recentJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
+        { amazon_account_id: account.id }, '-created_date', 300,
       ).catch(() => []);
 
-      // Impede que a virada UTC solicite/processe o dia ainda aberto no Brasil.
-      const futureJobs = recentJobs.filter((job: any) =>
-        job.end_date > targetDate && ['pending','requested','in_progress','processing','completed'].includes(job.status)
-      );
+      const futureJobs = recentJobs.filter((job: any) => job.end_date > targetDate && ACTIVE.has(job.status));
       for (const job of futureJobs) {
         await base44.asServiceRole.entities.AmazonAdsReportJob.update(job.id, {
           status: 'stale',
@@ -69,12 +73,35 @@ Deno.serve(async (request) => {
         futureJobsBlocked += 1;
       }
 
+      // Primeiro baixa/processa tudo que a Amazon já concluiu.
+      await base44.asServiceRole.functions.invoke('pollAmazonAdsReportJobs', {
+        amazon_account_id: account.id, max_jobs: 50, _service_role: true,
+      }).catch(() => null);
+
+      recentJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
+        { amazon_account_id: account.id }, '-created_date', 300,
+      ).catch(() => []);
       const targetJobs = recentJobs.filter((job: any) => job.end_date === targetDate);
-      const presentTypes = new Set(targetJobs.map((job: any) => job.report_type_id).filter(Boolean));
-      const missingReports = REPORTS.filter((report) => !presentTypes.has(report.reportTypeId));
+
+      // Um job só conta como concluído quando foi realmente processado.
+      const processedTypes = new Set(targetJobs.filter((job: any) => job.status === 'processed').map((job: any) => job.report_type_id));
       const requested: Array<Record<string, unknown>> = [];
 
-      for (const report of missingReports) {
+      for (const report of REPORTS) {
+        if (processedTypes.has(report.reportTypeId)) continue;
+        const jobsOfType = targetJobs.filter((job: any) => job.report_type_id === report.reportTypeId);
+        const active = jobsOfType.filter((job: any) => ACTIVE.has(job.status));
+        const timedOut = active.filter((job: any) => jobAge(job) >= RETRY_AFTER_MS);
+
+        // Evita duplicar requests normais, mas recupera automaticamente jobs travados.
+        if (active.length && timedOut.length === 0) continue;
+        for (const job of timedOut) {
+          await base44.asServiceRole.entities.AmazonAdsReportJob.update(job.id, {
+            status: 'stale', poll_in_progress: false,
+            error_message: 'Recriado automaticamente após 2h sem conclusão pela Amazon',
+          }).catch(() => null);
+        }
+
         const response = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
           amazon_account_id: account.id,
           report_type_id: report.reportTypeId,
@@ -85,57 +112,43 @@ Deno.serve(async (request) => {
           filters: null,
           start_date: startDate,
           end_date: targetDate,
-          report_name: `LivingFinds_${report.key}_${targetDate}`,
+          report_name: `LivingFinds_${report.key}_${targetDate}_${Date.now()}`,
           source_function: 'ensureDailyReportsCurrent',
           _service_role: true,
         });
         const result = response?.data ?? response ?? {};
-        requested.push({
-          report_type_id: report.reportTypeId,
-          ok: result?.ok !== false,
-          reused: result?.reused ?? false,
-          status: result?.status ?? null,
-          error: result?.error ?? null,
-        });
+        requested.push({ report_type_id: report.reportTypeId, ok: result?.ok !== false, status: result?.status ?? null, error: result?.error ?? null });
       }
 
-      if (missingReports.length > 0) {
+      if (requested.length) {
         triggeredCount += 1;
-        await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
-          last_reports_requested_at: new Date().toISOString(),
-        }).catch(() => null);
-      } else {
-        completeCount += 1;
+        await base44.asServiceRole.entities.AmazonAccount.update(account.id, { last_reports_requested_at: new Date().toISOString() }).catch(() => null);
       }
 
+      // Segunda passagem captura requests que concluíram rapidamente.
       await base44.asServiceRole.functions.invoke('pollAmazonAdsReportJobs', {
-        amazon_account_id: account.id,
-        max_jobs: 20,
-        _service_role: true,
+        amazon_account_id: account.id, max_jobs: 50, _service_role: true,
       }).catch(() => null);
+
+      const finalJobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter(
+        { amazon_account_id: account.id }, '-created_date', 300,
+      ).catch(() => []);
+      const finalTargetJobs = finalJobs.filter((job: any) => job.end_date === targetDate);
+      const finalProcessed = REPORTS.filter((report) => finalTargetJobs.some((job: any) => job.report_type_id === report.reportTypeId && job.status === 'processed'));
+      const completionPercent = Math.round(finalProcessed.length / REPORTS.length * 100);
+      if (completionPercent === 100) completeCount += 1;
 
       details.push({
         target_date: targetDate,
-        triggered: missingReports.length > 0,
-        missing_before: missingReports.map((report) => report.reportTypeId),
+        completion_percent: completionPercent,
+        processed_types: finalProcessed.map((report) => report.reportTypeId),
+        pending_types: REPORTS.filter((report) => !finalProcessed.includes(report)).map((report) => report.reportTypeId),
         requested,
-        jobs_found_before: targetJobs.length,
       });
     }
 
-    return Response.json({
-      ok: true,
-      target_date: targetDate,
-      accounts_checked: accounts.length,
-      triggered_count: triggeredCount,
-      already_complete_count: completeCount,
-      future_jobs_blocked: futureJobsBlocked,
-      details,
-    });
+    return Response.json({ ok: true, target_date: targetDate, accounts_checked: accounts.length, triggered_count: triggeredCount, complete_count: completeCount, future_jobs_blocked: futureJobsBlocked, details });
   } catch (error) {
-    return Response.json({
-      ok: false,
-      error: error?.message || 'Falha ao verificar relatórios diários',
-    }, { status: 500 });
+    return Response.json({ ok: false, error: error?.message || 'Falha ao verificar relatórios diários' }, { status: 500 });
   }
 });
