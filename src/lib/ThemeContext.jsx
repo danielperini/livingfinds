@@ -5,9 +5,9 @@ const ThemeContext = createContext({ theme: 'dark', setTheme: () => {} });
 
 export const THEMES = [
   { id: 'dark',        label: 'Escuro',        description: 'Tema padrão da plataforma' },
-  { id: 'light',       label: 'Claro',          description: 'Fundo branco, alto contraste' },
-  { id: 'beige',       label: 'Bege',           description: 'Fundo creme, visual confortável' },
-  { id: 'monochrome',  label: 'Preto e branco', description: 'Sem cores decorativas, apenas contraste' },
+  { id: 'light',       label: 'Claro',          description: 'Fundo cinza claro, cartões brancos e texto escuro' },
+  { id: 'beige',       label: 'Bege',           description: 'Fundo creme bem claro e visual confortável' },
+  { id: 'monochrome',  label: 'Preto e branco', description: 'Fundo branco, texto preto e alertas coloridos' },
 ];
 
 export function ThemeProvider({ children }) {

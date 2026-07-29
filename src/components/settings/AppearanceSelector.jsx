@@ -14,7 +14,7 @@ const THEME_META = {
   },
   light: {
     icon: Sun,
-    bg: '#F8FAFC',
+    bg: '#F3F4F6',
     surface: '#FFFFFF',
     text: '#0F172A',
     textMuted: '#64748B',
@@ -24,8 +24,8 @@ const THEME_META = {
   },
   beige: {
     icon: Coffee,
-    bg: '#F5F0E8',
-    surface: '#EDE8DE',
+    bg: '#FFF9EF',
+    surface: '#FFFCF7',
     text: '#2C1F0E',
     textMuted: '#7A6550',
     accent: '#7C5C34',
@@ -35,12 +35,12 @@ const THEME_META = {
   monochrome: {
     icon: Circle,
     bg: '#FFFFFF',
-    surface: '#F5F5F5',
+    surface: '#FFFFFF',
     text: '#0A0A0A',
     textMuted: '#606060',
-    accent: '#171717',
+    accent: '#2563EB',
     border: '#CCCCCC',
-    previewBars: ['#171717', '#525252', '#A3A3A3'],
+    previewBars: ['#2563EB', '#16A34A', '#D97706'],
   },
 };
 
