@@ -96,7 +96,7 @@ async function ensureAdminUser(): Promise<AuthUser> {
     [Deno.env.get('DEFAULT_USER_ID') ?? 'system', ADMIN_EMAIL, ADMIN_NAME],
   );
   const users = await query<AuthUser>(
-    'select id, email, full_name, role, password_hash, password_salt from app_auth_users where id = $1 limit 1',
+    'select id, email, full_name, role, password_hash, password_salt, password_changed_at from app_auth_users where id = $1 limit 1',
     [Deno.env.get('DEFAULT_USER_ID') ?? 'system'],
   );
   return users[0];
@@ -163,7 +163,16 @@ async function authenticatedUser(req: Request): Promise<AuthUser | null> {
 }
 
 function publicUser(user: AuthUser) {
-  return { id: user.id, email: user.email, full_name: user.full_name, role: user.role };
+  return {
+    id: user.id,
+    email: user.email,
+    full_name: user.full_name,
+    role: user.role,
+    // Usuários criados pelo painel recebem hash de senha inicial e ainda não
+    // possuem password_changed_at. A sessão continua válida apenas para levá-los
+    // ao formulário obrigatório de troca.
+    must_change_password: Boolean(user.password_hash && !user.password_changed_at),
+  };
 }
 
 function initialPasswordForName(name: string): string {
@@ -373,7 +382,7 @@ async function handler(req: Request): Promise<Response> {
       const created = await query<AuthUser>(
         `insert into app_auth_users (id, email, full_name, role, password_hash, password_salt)
          values ($1, $2, $3, 'admin', $4, $5)
-         returning id, email, full_name, role`,
+         returning id, email, full_name, role, password_hash, password_salt, password_changed_at`,
         [crypto.randomUUID(), email, fullName, hash, bytesToHex(salt)],
       );
       return json({ ok: true, user: publicUser(created[0]), initial_password: initialPassword }, 201);

@@ -43,7 +43,9 @@ export default function Login() {
       }
       localStorage.setItem("base44_access_token", data.token);
       await playOpeningAudio();
-      window.location.href = "/";
+      window.location.href = data.user?.must_change_password
+        ? "/users?change_password=1"
+        : "/";
     } catch (err) {
       setError(err.message || "Erro ao autenticar");
     } finally {

@@ -2,7 +2,6 @@ import React, { createContext, useState, useContext, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { appParams } from '@/lib/app-params';
 import { createAxiosClient } from '@base44/sdk/dist/utils/axios-client';
-import { isAllowedEmail, EMAIL_DOMAIN_ERROR } from '@/lib/allowedEmailDomains';
 
 const AuthContext = createContext();
 
@@ -66,15 +65,6 @@ export const AuthProvider = ({ children }) => {
     try {
       setIsLoadingAuth(true);
       const currentUser = await base44.auth.me();
-
-      if (!isAllowedEmail(currentUser?.email)) {
-        setUser(null);
-        setIsAuthenticated(false);
-        setAuthChecked(true);
-        setAuthError({ type: 'domain_not_allowed', message: EMAIL_DOMAIN_ERROR });
-        await base44.auth.logout();
-        return;
-      }
 
       setUser(currentUser);
       setIsAuthenticated(true);

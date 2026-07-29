@@ -85,6 +85,9 @@ export default function Users() {
       if (!response.ok) throw new Error(data.error || 'Não foi possível alterar a senha.');
       setForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
       setMessage({ type: 'success', text: data.message || 'Senha alterada com sucesso.' });
+      if (new URLSearchParams(window.location.search).get('change_password') === '1') {
+        window.setTimeout(() => { window.location.href = '/'; }, 700);
+      }
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
     } finally {
