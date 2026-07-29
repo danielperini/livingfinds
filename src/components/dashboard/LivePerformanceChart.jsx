@@ -84,6 +84,7 @@ function ChartTooltip({ active, payload, label }) {
 
 export default function LivePerformanceChart() {
   const [state, setState] = useState({ loading: true, refreshing: false, error: null, data: null, loadedAt: null });
+  const [syncMessage, setSyncMessage] = useState(null);
 
   const load = useCallback(async ({ silent = false } = {}) => {
     setState((current) => ({ ...current, loading: silent ? current.loading : !current.data, refreshing: silent }));
@@ -94,18 +95,43 @@ export default function LivePerformanceChart() {
       if (!account) throw new Error('Nenhuma conta Amazon conectada.');
       const since = brazilDate(-(RANGE_DAYS - 1));
 
-      const [daily, hourly, sales, bidChanges] = await Promise.all([
+      const [daily, hourly, sales, bidChanges, decisions] = await Promise.all([
         base44.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id, date: { $gte: since } }, '-date', 5000),
         base44.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: account.id, date: { $gte: brazilDate(-2) } }, '-date', 8000).catch(() => []),
         base44.entities.SalesDaily.filter({ amazon_account_id: account.id, date: { $gte: since } }, '-date', 3000),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
       ]);
 
-      setState({ loading: false, refreshing: false, error: null, loadedAt: new Date(), data: { daily, hourly, sales, bidChanges } });
+      setState({ loading: false, refreshing: false, error: null, loadedAt: new Date(), data: { accountId: account.id, daily, hourly, sales, bidChanges, decisions } });
     } catch (error) {
       setState((current) => ({ ...current, loading: false, refreshing: false, error: error?.message || 'Falha ao atualizar o gráfico.' }));
     }
   }, []);
+
+  const refreshBackend = useCallback(async () => {
+    const accountId = state.data?.accountId;
+    if (!accountId || state.refreshing) return;
+    setState((current) => ({ ...current, refreshing: true }));
+    setSyncMessage('Solicitando relatórios fechados e reconciliação SP‑API…');
+    try {
+      const response = await base44.functions.invoke('syncYesterdayClosedData', {
+        amazon_account_id: accountId,
+        force: true,
+        trigger_type: 'live_performance_chart',
+      });
+      const result = response?.data || response || {};
+      setSyncMessage(result.ok === false
+        ? 'Atualização parcial: uma fonte falhou e será tentada novamente; dados anteriores preservados.'
+        : result.report_pending
+          ? 'Relatório solicitado à Amazon; o processamento continuará automaticamente.'
+          : 'Fontes reconciliadas. Dados anteriores foram preservados.');
+      await load({ silent: true });
+    } catch (error) {
+      setSyncMessage(`Falha ao solicitar atualização: ${error?.message || 'erro desconhecido'}`);
+      setState((current) => ({ ...current, refreshing: false }));
+    }
+  }, [load, state.data?.accountId, state.refreshing]);
 
   useEffect(() => {
     load();
@@ -166,19 +192,41 @@ export default function LivePerformanceChart() {
       row.faturamentoReal = Number(row.faturamentoReal || 0) + revenue;
     }
 
+    // Os motores atuais persistem ações em duas entidades. Somamos somente
+    // execuções reais e eliminamos decisões que já possuem log correspondente.
     const changesByDate = new Map();
+    const loggedDecisionIds = new Set();
     for (const item of state.data.bidChanges || []) {
-      const date = brDateTime(item.created_at || item.created_date);
+      const status = String(item.status || '').toLowerCase();
+      if (status && !['executed', 'success', 'completed'].includes(status)) continue;
+      if (item.decision_id) loggedDecisionIds.add(String(item.decision_id));
+      const date = brDateTime(item.executed_at || item.changed_at || item.created_at || item.created_date);
       if (!date) continue;
       changesByDate.set(date, (changesByDate.get(date) || 0) + 1);
     }
-    for (const row of byDate.values()) row.alteracoes = changesByDate.get(row.isoDate) || 0;
+    const seenDecisions = new Set();
+    for (const item of state.data.decisions || []) {
+      if (String(item.status || '').toLowerCase() !== 'executed') continue;
+      if (loggedDecisionIds.has(String(item.id))) continue;
+      const identity = String(item.id || item.idempotency_key || '');
+      if (identity && seenDecisions.has(identity)) continue;
+      if (identity) seenDecisions.add(identity);
+      const date = brDateTime(item.executed_at || item.queue_processed_at || item.updated_at || item.created_at || item.created_date);
+      if (!date) continue;
+      changesByDate.set(date, (changesByDate.get(date) || 0) + 1);
+    }
+    for (const [date, count] of changesByDate) {
+      if (date < since || date > today) continue;
+      ensure(date).alteracoes = count;
+    }
 
     const chartData = Array.from(byDate.values()).sort((a, b) => a.isoDate.localeCompare(b.isoDate));
     const adsDates = daily.map((item) => item.date).filter(Boolean).sort();
     const salesDates = (state.data.sales || []).map((item) => item.date).filter(Boolean).sort();
     const lastAdsDate = adsDates.at(-1) || null;
     const lastSpDate = salesDates.at(-1) || null;
+    const aiDates = Array.from(changesByDate.keys()).filter((date) => date <= today).sort();
+    const lastAiDate = aiDates.at(-1) || null;
     const adsStart = offsetFrom(lastAdsDate, -6);
     const spStart = offsetFrom(lastSpDate, -6);
 
@@ -192,29 +240,32 @@ export default function LivePerformanceChart() {
       return acc;
     }, { gasto: 0, vendas: 0, real: 0, alteracoes: 0 });
 
-    return { chartData, lastAdsDate, lastSpDate, totals, today };
+    return { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today };
   }, [state.data]);
 
   if (state.loading) return <div className="bg-surface-1 border border-surface-2 rounded-xl h-72 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>;
   if (!derived) return <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 text-xs text-red-300 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{state.error || 'Dados indisponíveis.'}</div>;
 
-  const { chartData, lastAdsDate, lastSpDate, totals, today } = derived;
+  const { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today } = derived;
   const adsCurrent = lastAdsDate === brazilDate(-1);
   const spCurrent = lastSpDate && lastSpDate >= brazilDate(-2);
+  const aiCurrent = lastAiDate && lastAiDate >= brazilDate(-1);
 
   return (
     <section className="bg-surface-1 border border-surface-2 rounded-xl p-5" data-live-performance-chart="true">
       <div className="flex items-start justify-between gap-3 flex-wrap mb-2">
         <div><h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2><p className="text-[10px] text-slate-500 mt-0.5">Histórico completo de 90 dias · relatório diário + API Ads intradiária + faturamento SP‑API · atualização automática a cada 10 minutos</p></div>
-        <button onClick={() => load({ silent: true })} disabled={state.refreshing} className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-white border border-surface-3 rounded-lg px-2 py-1.5 disabled:opacity-50"><RefreshCw className={`w-3 h-3 ${state.refreshing ? 'animate-spin' : ''}`} />Atualizar agora</button>
+        <button onClick={refreshBackend} disabled={state.refreshing} className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-white border border-surface-3 rounded-lg px-2 py-1.5 disabled:opacity-50"><RefreshCw className={`w-3 h-3 ${state.refreshing ? 'animate-spin' : ''}`} />Atualizar agora</button>
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mb-3">
         <span className={adsCurrent ? 'text-emerald-400' : 'text-amber-400'}>Ads até {fmtDateFull(lastAdsDate)}</span>
         <span className={spCurrent ? 'text-emerald-400' : 'text-amber-400'}>SP‑API até {fmtDateFull(lastSpDate)}</span>
+        <span className={aiCurrent ? 'text-emerald-400' : 'text-amber-400'}>IA até {fmtDateFull(lastAiDate)}</span>
         <span className="text-slate-500">Hoje {fmtDateFull(today)}: API intradiária</span>
         <span className="text-slate-600">Tela atualizada {state.loadedAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
         {state.error ? <span className="text-red-400">Última tentativa: {state.error}</span> : null}
+        {syncMessage ? <span className="text-cyan-400">{syncMessage}</span> : null}
       </div>
 
       <div className="flex flex-wrap gap-4 text-[10px] mb-3">

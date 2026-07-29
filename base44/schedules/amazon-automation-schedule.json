@@ -92,6 +92,12 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
+      "name": "SP-API Finance Events freshness self-heal - 13:20 and 20:20 BRT",
+      "function": "syncFinanceEventsFromSpApi",
+      "cron": "20 13,20 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Amazon Action Queue - 13:00 BRT",
       "function": "processAmazonNightWindow",
       "cron": "0 13 * * *",

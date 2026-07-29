@@ -82,10 +82,17 @@ Deno.serve(async (request) => {
       force: body.force === true,
     });
 
+    // Finance Events alimenta o faturamento real. O upsert dessa função mantém
+    // o último snapshot válido quando a Amazon ainda não publicou o fechamento.
+    const spFinance = await invokeSafe(base44, 'syncFinanceEventsFromSpApi', {
+      ...basePayload,
+      source_function: 'syncYesterdayClosedData',
+    });
+
     const completedAt = new Date().toISOString();
     const reportPending = adsMetrics.data?.pending === true
       || ['requested', 'pending', 'processing', 'pending_unknown', 'rate_limited'].includes(String(adsMetrics.data?.status || ''));
-    const steps = [adsStates, catalog, adsMetrics, spReports];
+    const steps = [adsStates, catalog, adsMetrics, spReports, spFinance];
     const hardFailures = steps.filter((step) => !step.ok && step.data?.rate_limited !== true);
 
     await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
@@ -123,6 +130,7 @@ Deno.serve(async (request) => {
         'acos', 'roas', 'cpc', 'ctr', 'units_sold',
       ],
       sp_api_requested: true,
+      sp_finance_reconciled: spFinance.ok,
       steps,
       duration_ms: Date.now() - startedMs,
       message: reportPending
