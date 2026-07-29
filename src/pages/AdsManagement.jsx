@@ -26,6 +26,7 @@ const CAMPAIGN_REFRESH_MS = 10 * 60 * 1000;
 const AMAZON_SYNC_THROTTLE_MS = 30 * 60 * 1000;
 
 function campaignTargetingType(campaign) {
+  if (campaign._hasManualKeywords === true) return 'MANUAL';
   const name = String(campaign.name || campaign.campaign_name || '');
   if (/MANUAL|EXACT|PHRASE|BROAD/i.test(name)) return 'MANUAL';
   if (/\bAUTO(?:MATIC[AO]?)?\b/i.test(name)) return 'AUTO';
@@ -646,12 +647,49 @@ export default function AdsManagement() {
         }
       }
 
-      const [cams, prods] = await Promise.all([
-      loadAllCampaigns(acc.id),
-      base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500)]
-      );
+      const [cams, prods, keywordRows] = await Promise.all([
+        loadAllCampaigns(acc.id, {}, { includeExcluded: true }),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
+        base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => [])
+      ]);
       // Excluir apenas arquivadas e incompletas; is_operational não é critério de exibição
-      const operational = cams.filter((c) => {
+      // Keywords positivas são prova objetiva de segmentação MANUAL quando a
+      // Amazon omite ou devolve targetingType incorreto.
+      const manualCampaignIds = new Set();
+      for (const keyword of keywordRows) {
+        const keywordState = String(keyword.state || keyword.status || '').toLowerCase();
+        const matchType = String(keyword.match_type || keyword.matchType || '').toUpperCase();
+        const isPositive = ['EXACT', 'PHRASE', 'BROAD'].includes(matchType) &&
+          keyword.source !== 'search_term' &&
+          keywordState !== 'archived';
+        if (!isPositive) continue;
+        [keyword.campaign_id, keyword.amazon_campaign_id]
+          .filter(Boolean)
+          .forEach(id => manualCampaignIds.add(String(id)));
+      }
+
+      const classifiedCampaigns = cams.map(campaign => {
+        const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id]
+          .filter(Boolean)
+          .map(String);
+        return ids.some(id => manualCampaignIds.has(id))
+          ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+          : campaign;
+      });
+
+      const incorrectlyAuto = classifiedCampaigns.filter(campaign =>
+        campaign._hasManualKeywords === true &&
+        String(cams.find(row => row.id === campaign.id)?.targeting_type || '').toUpperCase() !== 'MANUAL'
+      );
+      if (incorrectlyAuto.length) {
+        await Promise.all(
+          incorrectlyAuto.map(campaign =>
+            base44.entities.Campaign.update(campaign.id, { targeting_type: 'MANUAL' }).catch(() => {})
+          )
+        );
+      }
+
+      const operational = classifiedCampaigns.filter((c) => {
         const state = (c.state || c.status || '').toLowerCase();
         return state !== 'incomplete' && !c.is_incomplete;
       });
@@ -684,7 +722,7 @@ export default function AdsManagement() {
         base44.functions.invoke('deduplicateAutoCampaignsByAsin', { amazon_account_id: acc.id }).catch(() => {});
         setTimeout(async () => {
           try {
-            const refreshed = await loadAllCampaigns(acc.id);
+            const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
             const operational3 = refreshed.filter((c) => {
               const state = (c.state || c.status || '').toLowerCase();
               return state !== 'incomplete' && !c.is_incomplete;
@@ -715,7 +753,7 @@ export default function AdsManagement() {
         // Re-fetch após 4s para refletir o novo estado (1 tentativa apenas)
         setTimeout(async () => {
           try {
-            const refreshed = await loadAllCampaigns(acc.id);
+            const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
             const operational2 = refreshed.filter((c) => {
               const state = (c.state || c.status || '').toLowerCase();
               return state !== 'incomplete' && !c.is_incomplete;

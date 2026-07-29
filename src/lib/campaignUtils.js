@@ -22,7 +22,8 @@ function timestampOf(campaign = {}) {
   return 0;
 }
 
-export async function loadAllCampaigns(amazonAccountId, extraFilter = {}) {
+export async function loadAllCampaigns(amazonAccountId, extraFilter = {}, options = {}) {
+  const { includeExcluded = false } = options;
   const allCampaigns = [];
   let offset = 0;
 
@@ -40,7 +41,7 @@ export async function loadAllCampaigns(amazonAccountId, extraFilter = {}) {
 
   const byCampaignId = new Map();
   allCampaigns.forEach((campaign) => {
-    if (campaign.api_missing === true || campaign.excluded_from_dashboard === true) return;
+    if (!includeExcluded && (campaign.api_missing === true || campaign.excluded_from_dashboard === true)) return;
     const campaignId = String(campaign?.campaign_id || campaign?.amazon_campaign_id || campaign?.id || '').trim();
     if (!campaignId) return;
     const current = byCampaignId.get(campaignId);
