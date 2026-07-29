@@ -34,6 +34,19 @@ async function bulkUpsertBatched(entity: any, records: any[], batchSize = 100) {
   }
 }
 
+async function upsertByNaturalKey(entity: any, records: any[], batchSize = 20) {
+  let upserted = 0;
+  for (let i = 0; i < records.length; i += batchSize) {
+    await Promise.all(records.slice(i, i + batchSize).map(async (record) => {
+      const existing = await entity.filter({ unique_key: record.unique_key }, '-updated_at', 1).catch(() => []);
+      if (existing[0]?.id) await entity.update(existing[0].id, record);
+      else await entity.create(record);
+      upserted++;
+    }));
+  }
+  return upserted;
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
@@ -131,7 +144,7 @@ Deno.serve(async (req) => {
     // Relatórios auxiliares ficam em uma dimensão própria. Eles nunca podem
     // apagar ou substituir CampaignMetricsDaily, cuja fonte canônica é spCampaigns/campaign.
     if (dimension) {
-      const dimensionRecords = rows.map((row: any, index: number) => {
+      const dimensionRecords = rows.map((row: any) => {
         const date = row.date || endDate;
         const campaignId = String(row.campaignId || '');
         const adGroupId = String(row.adGroupId || '');
@@ -170,19 +183,87 @@ Deno.serve(async (req) => {
           orders: Number(row.purchases14d || row.purchases7d || row.purchases30d || 0),
           units: Number(row.unitsSoldClicks14d || row.unitsSoldClicks7d || row.unitsSoldClicks30d || 0),
           raw_data: row,
-          unique_key: [
-            accountId, job.report_type_id, groupBy.join(','), date, campaignId,
-            adGroupId, targetId || keywordId, placement, purchasedAsin, searchTerm, index,
-          ].join('|'),
+          unique_key: dimension === 'targeting'
+            ? [accountId, targetId || keywordId, date].join('|')
+            : dimension === 'ad_group'
+              ? [accountId, adGroupId, date].join('|')
+              : dimension === 'placement'
+                ? [accountId, campaignId, placement, date].join('|')
+                : dimension === 'purchased_product'
+                  ? [accountId, campaignId, purchasedAsin, date].join('|')
+                  : [accountId, campaignId, keywordId, searchTerm, date].join('|'),
           synced_at: now,
         };
       });
-      await base44.asServiceRole.entities.AdsPerformanceDimensionDaily.deleteMany({
-        amazon_account_id: accountId,
-        report_job_id: job.id,
-      }).catch(() => {});
-      await bulkUpsertBatched(base44.asServiceRole.entities.AdsPerformanceDimensionDaily, dimensionRecords);
-      console.log(`[downloadProcess] AdsPerformanceDimensionDaily/${dimension}: ${dimensionRecords.length} registros`);
+      const withRatios = dimensionRecords.map((row: any) => ({
+        ...row,
+        target_id: row.targeting_id,
+        target_expression: row.targeting_expression,
+        targeting_type: row.targeting_id ? 'target' : row.keyword_id ? 'keyword' : '',
+        acos: row.sales > 0 ? row.spend / row.sales * 100 : 0,
+        roas: row.spend > 0 ? row.sales / row.spend : 0,
+        cpc: row.clicks > 0 ? row.spend / row.clicks : 0,
+        ctr: row.impressions > 0 ? row.clicks / row.impressions * 100 : 0,
+        conversion_rate: row.clicks > 0 ? row.orders / row.clicks * 100 : 0,
+        data_status: 'confirmed',
+      }));
+      const entityName = dimension === 'targeting' ? 'TargetingMetricsDaily'
+        : dimension === 'ad_group' ? 'AdGroupMetricsDaily'
+        : dimension === 'placement' ? 'PlacementMetricsDaily'
+        : dimension === 'purchased_product' ? 'PurchasedProductMetricsDaily'
+        : 'AdsPerformanceDimensionDaily';
+      const entity = base44.asServiceRole.entities[entityName];
+      const dedicatedRecords = entityName === 'AdsPerformanceDimensionDaily' ? withRatios : withRatios.map((row: any) => {
+        const common = {
+          amazon_account_id: row.amazon_account_id,
+          campaign_id: row.campaign_id,
+          ad_group_id: row.ad_group_id,
+          date: row.date,
+          synced_at: row.synced_at,
+          report_id: row.report_id,
+          unique_key: row.unique_key,
+        };
+        if (dimension === 'targeting') return {
+          ...common,
+          target_id: row.target_id,
+          keyword_id: row.keyword_id,
+          keyword_text: row.keyword_text,
+          target_expression: row.target_expression,
+          targeting_type: row.targeting_type,
+          match_type: row.match_type,
+          impressions: row.impressions, clicks: row.clicks, spend: row.spend,
+          sales: row.sales, orders: row.orders, acos: row.acos, roas: row.roas,
+          cpc: row.cpc, ctr: row.ctr, conversion_rate: row.conversion_rate,
+          data_status: row.data_status,
+        };
+        if (dimension === 'ad_group') return {
+          ...common,
+          ad_group_name: row.ad_group_name,
+          impressions: row.impressions, clicks: row.clicks, spend: row.spend,
+          sales: row.sales, orders: row.orders, acos: row.acos, roas: row.roas,
+          cpc: row.cpc, ctr: row.ctr, data_status: row.data_status,
+        };
+        if (dimension === 'placement') return {
+          ...common,
+          placement: row.placement,
+          impressions: row.impressions, clicks: row.clicks, spend: row.spend,
+          sales: row.sales, orders: row.orders, acos: row.acos, roas: row.roas,
+          cpc: row.cpc, ctr: row.ctr, conversion_rate: row.conversion_rate,
+          data_status: row.data_status,
+        };
+        return {
+          ...common,
+          keyword_id: row.keyword_id,
+          target_id: row.target_id,
+          advertised_asin: row.advertised_asin,
+          purchased_asin: row.purchased_asin,
+          units: row.units,
+          orders: row.orders,
+          sales: row.sales,
+        };
+      });
+      const persisted = await upsertByNaturalKey(entity, dedicatedRecords);
+      console.log(`[downloadProcess] ${entityName}/${dimension}: ${persisted} registros em upsert; histórico preservado`);
     }
 
     for (const row of rows) {

@@ -88,13 +88,16 @@ export async function setCampaignState(base44: any, params: {
   if (ok) {
     const patch = state === 'PAUSED'
       ? {
-          state: 'paused', status: 'paused', original_state: profile.campaign?.original_state || 'enabled',
-          archive_reason: reason, pacing_pause_reason: reason, pacing_paused_at: now,
-          pacing_pause_date: date, pacing_resume_after: resumeAfter, last_activity_at: now,
+          state: 'paused', status: 'paused',
+          pacing_pause_active: true, pacing_pause_reason: reason, pacing_paused_at: now,
+          pacing_pause_date: date, pacing_resume_at: resumeAfter, pacing_resume_after: resumeAfter,
+          pacing_original_state: profile.campaign?.state || profile.campaign?.status || 'enabled',
+          pacing_cycle_key: key, last_activity_at: now,
         }
       : {
-          state: 'enabled', status: 'enabled', archive_reason: null, pacing_pause_reason: null,
-          pacing_paused_at: null, pacing_pause_date: null, pacing_resume_after: null, last_activity_at: now,
+          state: 'enabled', status: 'enabled', pacing_pause_active: false, pacing_pause_reason: null,
+          pacing_paused_at: null, pacing_pause_date: null, pacing_resume_at: null,
+          pacing_resume_after: null, pacing_cycle_key: null, last_activity_at: now,
         };
     await base44.asServiceRole.entities.Campaign.update(profile.campaign.id, patch).catch(() => {});
   }
@@ -141,9 +144,15 @@ export async function upsertDailyController(base44: any, params: {
     campaigns_paused_today: [], global_kill_switch: false,
   };
   if (current) {
+    const currentEffective = Number(current.effective_daily_spend_cap);
+    const currentUser = Number(current.user_daily_spend_cap);
+    const preserveEffective = Number.isFinite(currentEffective) && currentEffective > 0;
+    const preserveUser = Number.isFinite(currentUser) && currentUser > 0;
     const patch = {
       marketplace_id: marketplaceId || current.marketplace_id || null,
-      timezone, user_daily_spend_cap: cap, effective_daily_spend_cap: cap,
+      timezone,
+      user_daily_spend_cap: preserveUser ? currentUser : cap,
+      effective_daily_spend_cap: preserveEffective ? currentEffective : (preserveUser ? currentUser : cap),
       daily_cap_source: capSource, updated_at: now,
     };
     await base44.asServiceRole.entities.AccountDailySpendController.update(current.id, patch).catch(() => {});

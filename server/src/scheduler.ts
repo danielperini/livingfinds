@@ -7,6 +7,7 @@
  */
 import { join } from 'jsr:@std/path@1';
 import { makeFunctions } from './sdk/functions.ts';
+import { sql } from './db.ts';
 
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any> };
@@ -35,11 +36,10 @@ function matchField(field: string, value: number): boolean {
   return false;
 }
 
-function cronMatches(cron: string, d: { sec: number; min: number; hour: number; dom: number; mon: number; dow: number }): boolean {
+function cronMatches(cron: string, d: { min: number; hour: number; dom: number; mon: number; dow: number }): boolean {
   const fields = cron.trim().split(/\s+/);
-  if (fields.length !== 5 && fields.length !== 6) return false;
-  const [se, mi, ho, dm, mo, dw] = fields.length === 6 ? fields : ['*', ...fields];
-  if (fields.length === 6 && !matchField(se, d.sec)) return false;
+  if (fields.length !== 5) return false;
+  const [mi, ho, dm, mo, dw] = fields;
   return matchField(mi, d.min) && matchField(ho, d.hour) && matchField(dm, d.dom) &&
     matchField(mo, d.mon) && matchField(dw, d.dow);
 }
@@ -48,7 +48,6 @@ function nowInTz(tz: string) {
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     hour12: false,
-    second: '2-digit',
     minute: '2-digit',
     hour: '2-digit',
     day: '2-digit',
@@ -58,7 +57,6 @@ function nowInTz(tz: string) {
   const parts = Object.fromEntries(fmt.formatToParts(new Date()).map((part) => [part.type, part.value]));
   const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
-    sec: Number(parts.second),
     min: Number(parts.minute),
     hour: Number(parts.hour === '24' ? '0' : parts.hour),
     dom: Number(parts.day),
@@ -95,10 +93,7 @@ export async function startScheduler(): Promise<void> {
       if (!cronMatches(job.cron, now)) continue;
       const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
       const jobKey = `${job.function}|${accountScope}`;
-      const hasSeconds = job.cron.trim().split(/\s+/).length === 6;
-      const slotKey = hasSeconds
-        ? `${now.mon}-${now.dom}-${now.hour}-${now.min}-${now.sec}`
-        : `${now.mon}-${now.dom}-${now.hour}-${now.min}`;
+      const slotKey = `${now.mon}-${now.dom}-${now.hour}-${now.min}`;
       if (lastRunSlots.get(jobKey) === slotKey) continue;
       lastRunSlots.set(jobKey, slotKey);
       const running = runningJobs.get(jobKey);
@@ -110,15 +105,29 @@ export async function startScheduler(): Promise<void> {
 
       runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
       console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
-      service.invoke(job.function, job.payload ?? {})
-        .then((response) => console.log(`[scheduler] '${job.function}' ok=${response.ok} status=${response.status}`))
-        .catch((error) => console.error(`[scheduler] '${job.function}' erro:`, error?.message))
-        .finally(() => runningJobs.delete(jobKey));
+      (async () => {
+        try {
+          await sql.begin(async (tx: any) => {
+            const [lock] = await tx`
+              select pg_try_advisory_xact_lock(hashtextextended(${jobKey}, 0)) as acquired
+            `;
+            if (!lock?.acquired) {
+              console.warn(`[scheduler] skipped_concurrent_execution '${job.name}'/${accountScope}`);
+              return;
+            }
+            const response = await service.invoke(job.function, job.payload ?? {});
+            console.log(`[scheduler] '${job.function}' ok=${response.ok} status=${response.status}`);
+          });
+        } catch (error) {
+          console.error(`[scheduler] '${job.function}' erro:`, (error as Error)?.message);
+        } finally {
+          runningJobs.delete(jobKey);
+        }
+      })();
     }
   };
 
-  // Um tick por segundo permite jobs de precisão subminuto. Jobs cron de cinco
-  // campos continuam deduplicados por minuto.
-  setInterval(tick, 1_000);
+  // O matcher aceita somente cron de cinco campos e deduplica cada janela de minuto.
+  setInterval(tick, 30_000);
   tick();
 }

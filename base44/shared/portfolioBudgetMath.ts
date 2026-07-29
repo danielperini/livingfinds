@@ -1,5 +1,6 @@
 export const DEFAULT_DAILY_CAP = 115;
-export const MAX_METRICS_AGE_MINUTES = 390;
+export const IDEAL_METRICS_AGE_MINUTES = 30;
+export const MAX_METRICS_AGE_MINUTES = 60;
 
 const FALLBACK_HOURLY_WEIGHTS = [
   1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
@@ -73,11 +74,15 @@ export function amazonCampaignId(campaign: any) {
   return String(campaign?.amazon_campaign_id || campaign?.campaign_id || '');
 }
 
-export function resolveDailyCap(performance: any, autopilot: any, account: any) {
+export function resolveDailyCap(performance: any, autopilot: any, account: any, controller: any = {}) {
+  const controllerEffective = positive(controller?.effective_daily_spend_cap);
+  const controllerUser = positive(controller?.user_daily_spend_cap);
   const lockedTarget = autopilot?.daily_budget_locked === true
     ? positive(autopilot?.daily_budget_target)
     : 0;
   const cap = positive(
+    controllerEffective,
+    controllerUser,
     performance?.daily_budget_limit,
     lockedTarget,
     autopilot?.daily_budget_target,
@@ -86,8 +91,12 @@ export function resolveDailyCap(performance: any, autopilot: any, account: any) 
     account?.max_daily_budget_limit,
     DEFAULT_DAILY_CAP,
   );
-  const source = positive(performance?.daily_budget_limit)
-    ? 'PerformanceSettings.daily_budget_limit'
+  const source = controllerEffective
+    ? 'AccountDailySpendController.effective_daily_spend_cap'
+    : controllerUser
+      ? 'AccountDailySpendController.user_daily_spend_cap'
+      : positive(performance?.daily_budget_limit)
+        ? 'PerformanceSettings.daily_budget_limit'
     : lockedTarget > 0
       ? 'AutopilotConfig.daily_budget_target_locked'
       : positive(autopilot?.daily_budget_target)
@@ -192,7 +201,9 @@ export function aggregateIntradaySnapshots(rows: any[], nowMs: number) {
   };
 
   const ageMinutes = Math.max(0, (nowMs - latest.observed) / 60_000);
-  const status = ageMinutes <= MAX_METRICS_AGE_MINUTES ? 'fresh' : 'stale';
+  const status = ageMinutes <= IDEAL_METRICS_AGE_MINUTES
+    ? 'fresh'
+    : ageMinutes <= MAX_METRICS_AGE_MINUTES ? 'acceptable' : 'stale';
   let velocityPerHour = 0;
   if (previous) {
     const hours = (latest.observed - previous.observed) / 3_600_000;
@@ -207,12 +218,100 @@ export function aggregateIntradaySnapshots(rows: any[], nowMs: number) {
   const pendingHours = Math.min(6, Math.max(assumedSourceLagHours, ageMinutes / 60));
   const pending = Math.max(0, velocityPerHour * pendingHours);
   return {
-    available: status === 'fresh', status,
+    available: status !== 'stale', status,
     source,
     observedAt: new Date(latest.observed).toISOString(), ageMinutes: r2(ageMinutes),
     campaignRows: latest.campaignRows, confirmedSpend: r2(latest.spend),
     estimatedPendingSpend: r2(pending), estimatedCurrentSpend: r2(latest.spend + pending),
     velocityPerHour: r2(velocityPerHour), batches: batches.length, assumedSourceLagHours,
+  };
+}
+
+function metricCapturedAt(row: any) {
+  const value = new Date(row?.synced_at || row?.updated_at || row?.created_at || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Fonte canônica do gasto de hoje. Nunca consulta Campaign.spend/current_spend:
+ * esses campos podem representar janelas agregadas e não são prova do dia atual.
+ */
+export function readConfirmedTodaySpend(params: {
+  snapshots?: any[];
+  dailyMetrics?: any[];
+  spendDate: string;
+  nowMs?: number;
+}) {
+  const { snapshots = [], dailyMetrics = [], spendDate, nowMs = Date.now() } = params;
+  const intraday = aggregateIntradaySnapshots(
+    snapshots.filter((row) => String(row?.spend_date || row?.date || '') === spendDate),
+    nowMs,
+  );
+  if (intraday.available) {
+    const spendByCampaign = Object.fromEntries(
+      intraday.campaignRows.map((row: any) => [String(row?.campaign_id || ''), r2(Number(row?.spend || 0))]),
+    );
+    return {
+      ...intraday,
+      spendByCampaign,
+      capturedAt: intraday.observedAt,
+      freshnessSeconds: intraday.ageMinutes === null ? null : Math.round(intraday.ageMinutes * 60),
+      projectedEod: intraday.estimatedCurrentSpend,
+      confidence: intraday.status === 'fresh' ? 'high' : 'medium',
+      stale: false,
+      incomplete: false,
+    };
+  }
+
+  const today = dailyMetrics.filter((row) => String(row?.date || '') === spendDate);
+  const captured = Math.max(0, ...today.map(metricCapturedAt));
+  const ageMinutes = captured ? Math.max(0, (nowMs - captured) / 60_000) : Infinity;
+  if (today.length && ageMinutes <= MAX_METRICS_AGE_MINUTES) {
+    const latestByCampaign = new Map<string, any>();
+    for (const row of today) {
+      const id = String(row?.campaign_id || '');
+      const previous = latestByCampaign.get(id);
+      if (id && (!previous || metricCapturedAt(row) >= metricCapturedAt(previous))) latestByCampaign.set(id, row);
+    }
+    const campaignRows = [...latestByCampaign.values()];
+    const confirmedSpend = r2(campaignRows.reduce((sum, row) => sum + Number(row?.spend || 0), 0));
+    return {
+      available: true,
+      status: ageMinutes <= IDEAL_METRICS_AGE_MINUTES ? 'fresh' : 'acceptable',
+      source: 'CAMPAIGN_METRICS_DAILY_TODAY',
+      capturedAt: new Date(captured).toISOString(),
+      freshnessSeconds: Math.round(ageMinutes * 60),
+      ageMinutes: r2(ageMinutes),
+      campaignRows,
+      spendByCampaign: Object.fromEntries(campaignRows.map((row) => [String(row.campaign_id), r2(Number(row.spend || 0))])),
+      confirmedSpend,
+      estimatedPendingSpend: 0,
+      estimatedCurrentSpend: confirmedSpend,
+      projectedEod: confirmedSpend,
+      velocityPerHour: 0,
+      confidence: ageMinutes <= IDEAL_METRICS_AGE_MINUTES ? 'high' : 'medium',
+      stale: false,
+      incomplete: false,
+    };
+  }
+
+  return {
+    available: false,
+    status: 'stale',
+    source: intraday.source === 'none' ? 'none' : intraday.source,
+    capturedAt: intraday.observedAt,
+    freshnessSeconds: intraday.ageMinutes === null ? null : Math.round(intraday.ageMinutes * 60),
+    ageMinutes: intraday.ageMinutes,
+    campaignRows: [],
+    spendByCampaign: {},
+    confirmedSpend: intraday.confirmedSpend || 0,
+    estimatedPendingSpend: 0,
+    estimatedCurrentSpend: intraday.confirmedSpend || 0,
+    projectedEod: intraday.confirmedSpend || 0,
+    velocityPerHour: 0,
+    confidence: 'low',
+    stale: true,
+    incomplete: true,
   };
 }
 

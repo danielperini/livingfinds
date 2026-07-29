@@ -893,7 +893,7 @@ Deno.serve(async (req) => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
     const [keywords, campaigns, products, metricsRaw, salesDailyRaw,
-           termBankRaw, profitLearnings, recentExecs, productEconomicsRaw
+           termBankRaw, profitLearnings, recentExecs, productEconomicsRaw, targetingMetricsRaw
     ] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
@@ -904,7 +904,28 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
       base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 500).catch(() => []),
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
+      base44.asServiceRole.entities.TargetingMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
     ]);
+
+    // Métricas granulares confirmadas têm precedência sobre agregados da entidade.
+    // Isso permite reduzir o target ruim e preservar outro target vencedor na mesma campanha.
+    const targetingByEntity = new Map<string, any>();
+    for (const row of targetingMetricsRaw) {
+      if (!row.date || row.date < cutoff30d) continue;
+      const id = String(row.keyword_id || row.target_id || '');
+      if (!id) continue;
+      const aggregate = targetingByEntity.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
+      aggregate.spend += Number(row.spend || 0);
+      aggregate.sales += Number(row.sales || 0);
+      aggregate.orders += Number(row.orders || 0);
+      aggregate.clicks += Number(row.clicks || 0);
+      aggregate.impressions += Number(row.impressions || 0);
+      targetingByEntity.set(id, aggregate);
+    }
+    for (const keyword of keywords) {
+      const granular = targetingByEntity.get(String(keyword.keyword_id || keyword.id || ''));
+      if (granular) Object.assign(keyword, granular, { metrics_source: 'TargetingMetricsDaily' });
+    }
 
     // ── 3. Construir índices ───────────────────────────────────────────────
     const productMap = new Map(products.map((p: any) => [p.asin, p]));

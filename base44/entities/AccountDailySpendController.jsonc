@@ -51,6 +51,26 @@
       "type": "number",
       "default": 0
     },
+    "target_spend_by_now": { "type": "number", "default": 0 },
+    "target_spend_next_checkpoint": { "type": "number", "default": 0 },
+    "pacing_error_value": { "type": "number", "default": 0 },
+    "pacing_error_pct": { "type": "number", "default": 0 },
+    "intraday_source": { "type": "string" },
+    "intraday_captured_at": { "type": "string", "format": "date-time" },
+    "intraday_freshness_seconds": { "type": "number", "default": 0 },
+    "data_confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "default": "low"
+    },
+    "reserved_for_strong_hours": { "type": "number", "default": 0 },
+    "spend_available_now": { "type": "number", "default": 0 },
+    "max_spend_until_next_checkpoint": { "type": "number", "default": 0 },
+    "projected_overspend": { "type": "number", "default": 0 },
+    "projected_underspend": { "type": "number", "default": 0 },
+    "last_rebalance_at": { "type": "string", "format": "date-time" },
+    "next_rebalance_at": { "type": "string", "format": "date-time" },
+    "pacing_engine_version": { "type": "string" },
     "historical_30d_spend": {
       "type": "number",
       "default": 0,

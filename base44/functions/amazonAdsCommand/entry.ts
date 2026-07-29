@@ -57,7 +57,7 @@ async function callAmazonApi(
       try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
 
       const ok = response.status >= 200 && response.status < 300;
-      const retryable = response.status === 503 || response.status === 502;
+      const retryable = [500, 502, 503].includes(response.status);
       const request_id = response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id') || null;
 
       lastResult = {
@@ -235,6 +235,29 @@ Deno.serve(async (request) => {
         request_id: result.request_id,
         retry_after_seconds: retryAfter,
         message: 'Comando recebido. A Amazon limitou a taxa de requisições, então a ação será efetivada em alguns instantes.',
+      });
+    }
+
+    if (result.status === 504 || result.status === 524) {
+      await base44.asServiceRole.entities.SyncExecutionLog.create({
+        amazon_account_id: account.id,
+        operation: `amazon_api:async_reschedule:${method}:${path}`,
+        status: 'pending',
+        trigger_type: 'gateway',
+        started_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        records_processed: 0,
+        error_message: `Amazon timeout HTTP ${result.status}; reagendamento assíncrono necessário`,
+        result_summary: JSON.stringify({ endpoint: path, request_id: result.request_id, retry_after_seconds: 300 }).slice(0, 1000),
+      }).catch(() => {});
+      return Response.json({
+        ok: false,
+        status: result.status,
+        retryable: true,
+        reschedule_async: true,
+        retry_after_seconds: 300,
+        request_id: result.request_id,
+        message: `Amazon retornou timeout ${result.status}; a operação deve ser reagendada sem bloquear este ciclo.`,
       });
     }
 
