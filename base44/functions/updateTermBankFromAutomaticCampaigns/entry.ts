@@ -10,6 +10,12 @@ function normalize(term) {
   return (term || '').toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+function isAutomaticCampaign(c) {
+  const type = String(c?.targeting_type || '').toUpperCase();
+  const name = String(c?.name || c?.campaign_name || '').toUpperCase();
+  return type.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -35,7 +41,7 @@ Deno.serve(async (req) => {
     const validCampaigns = allCampaigns.filter(c =>
       c.campaign_id &&
       ['enabled', 'paused'].includes((c.state || c.status || '').toLowerCase()) &&
-      String(c.targeting_type || '').toUpperCase().includes('AUTO') &&
+      isAutomaticCampaign(c) &&
       !c.archived
     );
 

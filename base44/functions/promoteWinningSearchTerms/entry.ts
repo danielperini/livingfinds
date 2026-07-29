@@ -54,6 +54,12 @@ function normalizeTerm(t: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function isAutomaticCampaign(campaign: any): boolean {
+  const type = String(campaign?.targeting_type || '').toUpperCase();
+  const name = String(campaign?.name || campaign?.campaign_name || '').toUpperCase();
+  return type.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
+}
+
 function campaignName(asin: string, term: string): string {
   const t = term.replace(/[|]/g, '-').slice(0, 55);
   return `SP | MANUAL | EXACT | ${asin} | ${t}`.slice(0, 128);
@@ -242,7 +248,7 @@ Deno.serve(async (req) => {
     const autoCampaignIds = new Set(
       campaigns
         .filter((campaign: any) =>
-          String(campaign.targeting_type || '').toUpperCase().includes('AUTO') &&
+          isAutomaticCampaign(campaign) &&
           !['archived'].includes(String(campaign.state || campaign.status || '').toLowerCase())
         )
         .flatMap((campaign: any) => [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id])

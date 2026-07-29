@@ -4,7 +4,11 @@ const n = (value: any) => Number(value || 0);
 const state = (row: any) => String(
   row?.amazon_status || row?.state || row?.status || row?.campaign_status || row?.serving_status || row?.original_state || ''
 ).toLowerCase();
-const isAutomatic = (row: any) => String(row?.targeting_type || '').toUpperCase().includes('AUTO');
+const isAutomatic = (row: any) => {
+  const type = String(row?.targeting_type || '').toUpperCase();
+  const name = String(row?.name || row?.campaign_name || '').toUpperCase();
+  return type.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
+};
 
 Deno.serve(async (req) => {
   const startedAt = new Date().toISOString();
