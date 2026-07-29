@@ -92,6 +92,18 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
+      "name": "Daily Economic Assessment - 08:00 BRT",
+      "function": "runDailyEconomicAssessment",
+      "cron": "0 8 * * *",
+      "payload": { "_service_role": true, "force": true }
+    },
+    {
+      "name": "Rolling Weekly Ads and Economics Report - 08:20 BRT",
+      "function": "runWeeklyAdsPerformanceReport",
+      "cron": "20 8 * * *",
+      "payload": { "_service_role": true, "force": true }
+    },
+    {
       "name": "SP-API Finance Events freshness self-heal - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",

@@ -18,9 +18,9 @@ function yesterdayBRT() {
   t.setUTCDate(t.getUTCDate() - 1);
   return t.toISOString().slice(0, 10);
 }
-function daysAgo(n: number) {
-  const d = new Date(Date.now() - 3 * 3600000);
-  d.setUTCDate(d.getUTCDate() - n);
+function addDays(date: string, amount: number) {
+  const d = new Date(`${date}T12:00:00-03:00`);
+  d.setUTCDate(d.getUTCDate() + amount);
   return d.toISOString().slice(0, 10);
 }
 
@@ -100,12 +100,25 @@ Deno.serve(async (req) => {
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada.' });
     const aid = account.id;
 
-    // ── Calcular período: 7 dias completos (D-8 a D-2) ────────────────────
-    // D-1 = ontem (último dia fechado)
-    // Semana = D-8 a D-2 inclusive (7 dias)
-    // Nunca incluir o dia atual parcial
-    const week_end = daysAgo(1); // ontem = último dia completo
-    const week_start = daysAgo(8); // 7 dias antes de ontem
+    // Ancorar a janela na aferição mais recente realmente processada evita
+    // relatórios vazios quando Ads ou SP-API fecham com atraso.
+    const assessments = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
+      { amazon_account_id: aid }, '-assessment_date', 2000
+    ).catch(() => []);
+    const latestProcessedDate = assessments
+      .filter((a: any) => ['complete', 'partial'].includes(String(a.data_status || '')) && a.assessment_date)
+      .map((a: any) => String(a.assessment_date))
+      .sort()
+      .pop();
+    if (!latestProcessedDate) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        reason: 'Nenhuma aferição diária processada disponível para consolidar.',
+      });
+    }
+    const week_end = latestProcessedDate;
+    const week_start = addDays(week_end, -6);
 
     const iKey = `weekly_report|${aid}|${week_start}|${week_end}`;
 
@@ -123,11 +136,6 @@ Deno.serve(async (req) => {
         week_start, week_end,
       });
     }
-
-    // ── Carregar assessments diários do período ────────────────────────────
-    const assessments = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
-      { amazon_account_id: aid }, '-assessment_date', 2000
-    ).catch(() => []);
 
     // Filtrar pelo período (week_start a week_end inclusive)
     const periodAssessments = assessments.filter((a: any) =>

@@ -53,13 +53,20 @@ export default function WeeklyReportView({ account }) {
     setLoading(true);
     try {
       const aid = account.id;
-      const [reports, prods, decs, daily] = await Promise.all([
+      const [reports, decs, daily] = await Promise.all([
         base44.entities.WeeklyAdsPerformanceReport.filter({ amazon_account_id: aid }, '-week_end', 1).catch(() => []),
-        base44.entities.WeeklyProductPerformance.filter({ amazon_account_id: aid }, '-spend_7d', 100).catch(() => []),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 50).catch(() => []),
-        base44.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 50).catch(() => []),
+        base44.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 500).catch(() => []),
       ]);
-      setReport(reports[0] || null);
+      const currentReport = reports[0] || null;
+      const prods = currentReport
+        ? await base44.entities.WeeklyProductPerformance.filter(
+            { amazon_account_id: aid, weekly_report_id: currentReport.id },
+            '-spend_7d',
+            500
+          ).catch(() => [])
+        : [];
+      setReport(currentReport);
       setProducts(prods);
       setDecisions(decs);
 
@@ -82,7 +89,7 @@ export default function WeeklyReportView({ account }) {
   });
 
   // Filtrar WeeklyProductPerformance pelo relatório atual
-  const reportProducts = report ? products.filter(p => p.week_start === report.week_start && p.week_end === report.week_end) : products.slice(0, 50);
+  const reportProducts = products;
   const decisionsWeek = report ? decisions.filter(d =>
     d.created_at && d.created_at.slice(0, 10) >= (report.week_start || '') &&
     d.created_at.slice(0, 10) <= (report.week_end || '')
