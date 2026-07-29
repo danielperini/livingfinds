@@ -14,9 +14,9 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 30 minutes",
+      "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 3 hours",
       "function": "runManualZeroDeliveryBootstrap",
-      "cron": "8,38 * * * *",
+      "cron": "8 */3 * * *",
       "payload": { "_service_role": true }
     },
     {
