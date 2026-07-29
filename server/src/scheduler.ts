@@ -107,7 +107,7 @@ export async function startScheduler(): Promise<void> {
       console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
       (async () => {
         try {
-          await sql.begin(async (tx) => {
+          await sql.begin(async (tx: any) => {
             const [lock] = await tx`
               select pg_try_advisory_xact_lock(hashtextextended(${jobKey}, 0)) as acquired
             `;
