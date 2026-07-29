@@ -13,7 +13,6 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
-import StockDivergenceReport from '@/components/products/StockDivergenceReport';
 import ProductEconomicsPanel from '@/components/economics/ProductEconomicsPanel';
 
 
@@ -1222,7 +1221,6 @@ export default function ProductsScheduled() {
 
       {activeTab === 'products' && (
         <>
-          <StockDivergenceReport accountId={account?.id} />
           <KickoffControlPanel accountId={account?.id} onRetry={retryKickoff} />
 
           <Products externalRefreshTrigger={refreshKey} />
