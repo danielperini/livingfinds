@@ -265,16 +265,20 @@ Deno.serve(async (req) => {
 
     // ── Carregar decisões da semana para contagem ──────────────────────────
     const decisionsWeek = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { amazon_account_id: aid }, '-created_at', 500
+      { amazon_account_id: aid }, '-updated_at', 2000
     ).catch(() => []);
-    const decisionsInPeriod = decisionsWeek.filter((d: any) =>
-      d.created_at && d.created_at.slice(0, 10) >= week_start && d.created_at.slice(0, 10) <= week_end
-    );
+    const decisionDate = (d: any) =>
+      String(d.executed_at || d.evaluated_at || d.updated_at || d.created_at || '').slice(0, 10);
+    const decisionsInPeriod = decisionsWeek.filter((d: any) => {
+      const date = decisionDate(d);
+      return date && date >= week_start && date <= week_end;
+    });
     const decisions_created = decisionsInPeriod.length;
     const decisions_executed = decisionsInPeriod.filter((d: any) => d.status === 'executed').length;
     const decisions_failed = decisionsInPeriod.filter((d: any) => d.status === 'failed').length;
     const decisions_pending_confirmation = decisionsInPeriod.filter((d: any) =>
-      ['pending', 'approved', 'scheduled'].includes(d.status)
+      ['proposed', 'approved', 'executing', 'pending_approval'].includes(d.status) ||
+      ['pending', 'scheduled', 'processing'].includes(d.queue_status)
     ).length;
 
     // Campanhas e keywords ajustadas

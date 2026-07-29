@@ -55,7 +55,7 @@ export default function WeeklyReportView({ account }) {
       const aid = account.id;
       const [reports, decs, daily] = await Promise.all([
         base44.entities.WeeklyAdsPerformanceReport.filter({ amazon_account_id: aid }, '-week_end', 1).catch(() => []),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 50).catch(() => []),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
         base44.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 500).catch(() => []),
       ]);
       const currentReport = reports[0] || null;
@@ -84,16 +84,27 @@ export default function WeeklyReportView({ account }) {
   const latestAssessmentDate = dailyToday[0]?.assessment_date;
   const todayAlerts = dailyToday.filter(d => ['unprofitable', 'no_sales_with_spend'].includes(d.economic_status));
   const todayDecisions48h = decisions.filter(d => {
-    const ts = new Date(d.created_at || 0).getTime();
+    const ts = new Date(d.executed_at || d.evaluated_at || d.updated_at || d.created_at || 0).getTime();
     return Date.now() - ts < 48 * 3600000;
   });
 
   // Filtrar WeeklyProductPerformance pelo relatório atual
   const reportProducts = products;
-  const decisionsWeek = report ? decisions.filter(d =>
-    d.created_at && d.created_at.slice(0, 10) >= (report.week_start || '') &&
-    d.created_at.slice(0, 10) <= (report.week_end || '')
-  ) : [];
+  const decisionDate = d =>
+    String(d.executed_at || d.evaluated_at || d.updated_at || d.created_at || '').slice(0, 10);
+  const decisionsWeek = report ? decisions.filter(d => {
+    const date = decisionDate(d);
+    return date && date >= (report.week_start || '') && date <= (report.week_end || '');
+  }) : [];
+  const adjustedDecisions = decisionsWeek.filter(d =>
+    d.campaign_id || d.keyword_id || d.entity_type === 'campaign' || d.entity_type === 'keyword'
+  );
+  const executedWeek = decisionsWeek.filter(d => d.status === 'executed').length;
+  const failedWeek = decisionsWeek.filter(d => d.status === 'failed').length;
+  const pendingWeek = decisionsWeek.filter(d =>
+    ['proposed', 'approved', 'executing', 'pending_approval'].includes(d.status) ||
+    ['pending', 'scheduled', 'processing'].includes(d.queue_status)
+  ).length;
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
@@ -290,9 +301,9 @@ export default function WeeklyReportView({ account }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {decisionsWeek.length === 0 ? (
+                    {adjustedDecisions.length === 0 ? (
                       <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-500">Nenhuma ação registrada neste período.</td></tr>
-                    ) : decisionsWeek.slice(0, 100).map((d, i) => {
+                    ) : adjustedDecisions.slice(0, 500).map((d, i) => {
                       const changePct = d.value_before && d.value_after
                         ? ((d.value_after - d.value_before) / d.value_before * 100).toFixed(1)
                         : null;
@@ -327,7 +338,7 @@ export default function WeeklyReportView({ account }) {
                             }`}>{d.status}</span>
                           </td>
                           <td className="px-4 py-3 text-slate-500 text-[10px] whitespace-nowrap">
-                            {d.created_at ? new Date(d.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                            {decisionDate(d) ? new Date(d.executed_at || d.evaluated_at || d.updated_at || d.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
                           </td>
                           <td className="px-4 py-3 text-[10px]">
                             {d.amazon_response ? (
@@ -349,10 +360,10 @@ export default function WeeklyReportView({ account }) {
           {activeTab === 'acoes' && (
             <div className="space-y-3">
               {[
-                { label: 'Decisões Criadas', value: report.decisions_created, color: 'text-white', icon: <FileText className="w-4 h-4 text-slate-400" /> },
-                { label: 'Decisões Executadas', value: report.decisions_executed, color: 'text-emerald-400', icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
-                { label: 'Falhas', value: report.decisions_failed, color: 'text-red-400', icon: <AlertTriangle className="w-4 h-4 text-red-400" /> },
-                { label: 'Aguardando Confirmação Amazon', value: report.decisions_pending_confirmation, color: 'text-amber-400', icon: <Clock className="w-4 h-4 text-amber-400" /> },
+                { label: 'Decisões da Semana', value: decisionsWeek.length, color: 'text-white', icon: <FileText className="w-4 h-4 text-slate-400" /> },
+                { label: 'Decisões Executadas', value: executedWeek, color: 'text-emerald-400', icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
+                { label: 'Falhas', value: failedWeek, color: 'text-red-400', icon: <AlertTriangle className="w-4 h-4 text-red-400" /> },
+                { label: 'Aguardando Confirmação Amazon', value: pendingWeek, color: 'text-amber-400', icon: <Clock className="w-4 h-4 text-amber-400" /> },
               ].map(item => (
                 <div key={item.label} className="flex items-center justify-between p-3 bg-surface-1 border border-surface-2 rounded-xl">
                   <div className="flex items-center gap-3">
@@ -362,6 +373,26 @@ export default function WeeklyReportView({ account }) {
                   <p className={`text-xl font-bold ${item.color}`}>{item.value}</p>
                 </div>
               ))}
+              <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-surface-2">
+                  <p className="text-xs font-semibold text-slate-300">Últimas ações no período</p>
+                </div>
+                {decisionsWeek.length === 0 ? (
+                  <p className="px-4 py-8 text-xs text-center text-slate-500">Nenhuma decisão registrada nesta semana.</p>
+                ) : decisionsWeek.slice(0, 50).map((d, index) => (
+                  <div key={d.id || index} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-surface-2/50 text-xs">
+                    <div className="min-w-0">
+                      <p className="text-slate-200 truncate">{d.keyword_text || d.action || d.decision_type || d.campaign_id || 'Decisão do motor'}</p>
+                      <p className="text-[10px] text-slate-500">{d.asin || d.sku || d.entity_type || 'conta'} · {decisionDate(d)}</p>
+                    </div>
+                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
+                      d.status === 'executed' ? 'text-emerald-400 border-emerald-500/20'
+                      : d.status === 'failed' ? 'text-red-400 border-red-500/20'
+                      : 'text-amber-400 border-amber-500/20'
+                    }`}>{d.status || d.queue_status || 'pendente'}</span>
+                  </div>
+                ))}
+              </div>
               <div className="p-4 bg-surface-1 border border-cyan/15 rounded-xl text-xs text-slate-400">
                 <p className="font-semibold text-slate-300 mb-1">Motor de Decisão Soberano</p>
                 <p>Todas as ações passam obrigatoriamente pelo <span className="text-cyan">runUnifiedDecisionEngine</span>. Reduções são proporcionais ao gap de ACoS (1ª redução: máx 25%, 2ª: máx 20%, acumulado auto máx 25%). Ações de alto risco (redução acumulada &gt;25%, pausa de campanha vencedora, alteração estrutural) exigem aprovação humana.</p>
