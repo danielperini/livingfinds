@@ -22,6 +22,17 @@ const fmtDate = (iso) =>
 const fmtDateOnly = (iso) =>
   iso ? new Date(iso).toLocaleDateString('pt-BR') : '—';
 
+const dateKeySaoPaulo = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+};
+
 // ─── Mapeamento de status ────────────────────────────────────────────────────
 
 function resolveStatus(d) {
@@ -31,8 +42,8 @@ function resolveStatus(d) {
       if (r?.keywordResponses?.[0]?.code === 'THROTTLED') return 'rate_limited';
     } catch {}
   }
-  if (d.status === 'pending' && d.requires_approval) return 'awaiting_approval';
-  if (d.status === 'pending') return 'recommended';
+  if (d.status === 'pending_approval' || (d.status === 'pending' && d.requires_approval)) return 'awaiting_approval';
+  if (d.status === 'pending' || d.status === 'proposed' || d.status === 'recommended') return 'recommended';
   if (d.status === 'approved') return 'approved';
   if (d.status === 'scheduled' || d.queue_status === 'scheduled') return 'scheduled';
   if (d.status === 'executing') return 'executing';
@@ -370,13 +381,81 @@ const EXCLUDED_SOURCE_PREFIXES = ['Settings', 'applyInitialBids', 'boostNew', 'b
 
 function isRealBidChange(d) {
   if (d.entity_type === 'account') return false;
-  if (!d.keyword_id) return false;
+  if (!d.keyword_id && d.entity_type !== 'keyword' && d.entity_type !== 'product_target') return false;
   if (EXCLUDED_ACTIONS.has(d.action)) return false;
   const src = d.source_function || '';
   if (EXCLUDED_SOURCE_PREFIXES.some(p => src.includes(p))) return false;
-  // Se tem source_function preenchido, deve ser da whitelist
-  if (src && !BID_MOTOR_SOURCES.has(src)) return false;
-  return true;
+  const hasBidValues = [d.value_before, d.value_after, d.current_value, d.proposed_value]
+    .some(v => v != null && Number.isFinite(Number(v)));
+  const isBidDecision = String(d.decision_type || '').toLowerCase().includes('bid');
+  const isKnownMotor = Boolean(src) && BID_MOTOR_SOURCES.has(src);
+  return hasBidValues || isBidDecision || isKnownMotor;
+}
+
+function bidLogToDecision(log) {
+  const before = log.old_bid ?? log.bid_before ?? null;
+  const after = log.new_bid ?? log.bid_after ?? null;
+  return {
+    id: `bidlog-${log.id}`,
+    _bid_log_id: log.id,
+    _from_bid_log: true,
+    amazon_account_id: log.amazon_account_id,
+    decision_type: 'bid_change',
+    entity_type: log.entity_type || (log.keyword_id ? 'keyword' : 'product_target'),
+    entity_id: log.entity_id || log.keyword_id || log.target_id,
+    campaign_id: log.campaign_id,
+    campaign_name: log.campaign_name,
+    ad_group_id: log.ad_group_id,
+    keyword_id: log.keyword_id || (log.entity_type === 'keyword' ? log.entity_id : null),
+    keyword_text: log.keyword_text || log.keyword,
+    target_id: log.target_id,
+    asin: log.asin,
+    action: log.action || (after > before ? 'increase_bid' : after < before ? 'decrease_bid' : 'bid_change'),
+    rationale: log.reason || log.evidence || 'Alteração registrada pelo motor de bids',
+    value_before: before,
+    value_after: after,
+    change_pct: log.change_percent ?? log.change_pct,
+    confidence: log.ai_confidence,
+    risk: log.risk_level,
+    status: log.status || 'executed',
+    amazon_response: log.amazon_response,
+    source_function: log.source || 'AdsBidChangeLog',
+    run_id: log.execution_run_id,
+    created_at: log.created_at,
+    executed_at: log.status === 'executed' ? log.created_at : null,
+    requires_approval: false,
+  };
+}
+
+function mergeDecisionSources(decisionRows, bidLogs) {
+  const byId = new Map();
+  for (const decision of decisionRows.filter(isRealBidChange)) {
+    byId.set(decision.id, decision);
+  }
+
+  for (const log of bidLogs) {
+    const linked = log.decision_id && byId.get(log.decision_id);
+    if (linked) {
+      byId.set(linked.id, {
+        ...linked,
+        value_before: linked.value_before ?? linked.current_value ?? log.old_bid ?? log.bid_before,
+        value_after: linked.value_after ?? linked.proposed_value ?? log.new_bid ?? log.bid_after,
+        keyword_id: linked.keyword_id || log.keyword_id,
+        keyword_text: linked.keyword_text || log.keyword_text || log.keyword,
+        asin: linked.asin || log.asin,
+        amazon_response: linked.amazon_response || log.amazon_response,
+        executed_at: linked.executed_at || (log.status === 'executed' ? log.created_at : null),
+        status: log.status === 'executed' ? 'executed' : linked.status,
+        _bid_log_id: log.id,
+      });
+      continue;
+    }
+    byId.set(`bidlog-${log.id}`, bidLogToDecision(log));
+  }
+
+  return [...byId.values()].sort((a, b) =>
+    new Date(b.executed_at || b.created_at || 0) - new Date(a.executed_at || a.created_at || 0)
+  );
 }
 
 // ─── Painel principal ─────────────────────────────────────────────────────────
@@ -403,6 +482,7 @@ const FILTER_DIRECTION_OPTIONS = [
 export default function KeywordBidChangesPanel({ account }) {
   const [decisions, setDecisions] = useState([]);
   const [bidHistoryList, setBidHistoryList] = useState([]);
+  const [bidChangeLogs, setBidChangeLogs] = useState([]);
   const [ruleExecutions, setRuleExecutions] = useState([]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -420,14 +500,18 @@ export default function KeywordBidChangesPanel({ account }) {
     if (!account?.id) return;
     setLoading(true);
     try {
-      const [decs, bh, re, prods] = await Promise.all([
+      const [decs, bh, logs, re, prods] = await Promise.all([
         base44.entities.OptimizationDecision.filter(
-          { amazon_account_id: account.id, decision_type: 'bid_change' },
-          '-created_at', 300
+          { amazon_account_id: account.id },
+          '-created_at', 1000
         ),
         base44.entities.BidHistory.filter(
           { amazon_account_id: account.id },
           '-created_at', 300
+        ),
+        base44.entities.AdsBidChangeLog.filter(
+          { amazon_account_id: account.id },
+          '-created_at', 1000
         ),
         base44.entities.RuleExecution.filter(
           { amazon_account_id: account.id },
@@ -438,8 +522,9 @@ export default function KeywordBidChangesPanel({ account }) {
           null, 200
         ),
       ]);
-      setDecisions(decs.filter(isRealBidChange));
+      setDecisions(mergeDecisionSources(decs, logs));
       setBidHistoryList(bh);
+      setBidChangeLogs(logs);
       setRuleExecutions(re);
       setProducts(prods);
     } finally {
@@ -474,18 +559,21 @@ export default function KeywordBidChangesPanel({ account }) {
 
   // Cards resumo
   const summary = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = dateKeySaoPaulo();
+    const statusOf = d => resolveStatus(d);
     return {
-      recommended: decisions.filter(d => ['pending', 'recommended'].includes(d.status)).length,
-      awaiting: decisions.filter(d => d.status === 'pending' && d.requires_approval).length,
-      scheduled: decisions.filter(d => d.status === 'scheduled' || d.queue_status === 'scheduled').length,
-      executedToday: decisions.filter(d => d.status === 'executed' && d.executed_at?.slice(0, 10) === today).length,
-      failed: decisions.filter(d => d.status === 'failed').length,
+      recommended: decisions.filter(d => statusOf(d) === 'recommended').length,
+      awaiting: decisions.filter(d => statusOf(d) === 'awaiting_approval').length,
+      scheduled: decisions.filter(d => statusOf(d) === 'scheduled').length,
+      executedToday: decisions.filter(d =>
+        statusOf(d) === 'executed' && dateKeySaoPaulo(d.executed_at || d.created_at) === today
+      ).length,
+      failed: decisions.filter(d => ['failed', 'rate_limited'].includes(statusOf(d))).length,
       increases: decisions.filter(d => (d.value_after ?? 0) > (d.value_before ?? 0)).length,
       decreases: decisions.filter(d => (d.value_after ?? 0) < (d.value_before ?? 0)).length,
       lastConfirmed: decisions
-        .filter(d => d.status === 'executed' && d.executed_at)
-        .sort((a, b) => new Date(b.executed_at) - new Date(a.executed_at))[0],
+        .filter(d => statusOf(d) === 'executed' && (d.executed_at || d.created_at))
+        .sort((a, b) => new Date(b.executed_at || b.created_at) - new Date(a.executed_at || a.created_at))[0],
     };
   }, [decisions]);
 
@@ -511,8 +599,8 @@ export default function KeywordBidChangesPanel({ account }) {
       if (filterWindow === 'night' && d.queue_hour != null && d.queue_hour >= 13) return false;
       if (filterWindow === 'day' && d.queue_hour != null && d.queue_hour < 13) return false;
       if (filterWindow === 'today') {
-        const today = new Date().toISOString().slice(0, 10);
-        return (d.created_at?.slice(0, 10) === today || d.executed_at?.slice(0, 10) === today);
+        const today = dateKeySaoPaulo();
+        return (dateKeySaoPaulo(d.created_at) === today || dateKeySaoPaulo(d.executed_at) === today);
       }
 
       return true;
@@ -611,7 +699,8 @@ export default function KeywordBidChangesPanel({ account }) {
         <div>
           <h2 className="text-sm font-semibold text-white">Ajustes de Bid por Performance</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Decisões dos motores de otimização · {decisions.length} registros
+            Decisões e alterações confirmadas · {decisions.length} registros
+            {bidChangeLogs.length > 0 ? ` · ${bidChangeLogs.length} logs de bid sincronizados` : ''}
           </p>
         </div>
         <button onClick={loadData} disabled={loading}
@@ -648,7 +737,7 @@ export default function KeywordBidChangesPanel({ account }) {
           {summary.lastConfirmed ? (
             <>
               <p className="text-xs font-bold text-emerald-400 truncate">{summary.lastConfirmed.keyword_text || summary.lastConfirmed.entity_id || '—'}</p>
-              <p className="text-[10px] text-slate-500">{fmtDate(summary.lastConfirmed.executed_at)}</p>
+              <p className="text-[10px] text-slate-500">{fmtDate(summary.lastConfirmed.executed_at || summary.lastConfirmed.created_at)}</p>
             </>
           ) : (
             <p className="text-xl font-bold text-slate-600">—</p>
@@ -658,7 +747,7 @@ export default function KeywordBidChangesPanel({ account }) {
 
       {/* Variação média */}
       {(() => {
-        const execs = decisions.filter(d => d.status === 'executed' && d.value_before && d.value_after);
+        const execs = decisions.filter(d => resolveStatus(d) === 'executed' && d.value_before && d.value_after);
         if (execs.length === 0) return null;
         const avgPct = execs.reduce((s, d) => s + ((d.value_after - d.value_before) / d.value_before * 100), 0) / execs.length;
         return (
