@@ -49,6 +49,8 @@ export default function ZeroSalesCleanupPanel({ account }) {
       loadCleanupLogs();
       loadMonitoringKws();
       loadPromotedTerms();
+      runPreview();
+      runMonitor();
     }
   }, [account]);
 
@@ -159,8 +161,10 @@ export default function ZeroSalesCleanupPanel({ account }) {
       });
       const d = res?.data;
       setMonitorResult(d);
+      if (d?.ok) {
+        await loadMonitoringKws();
+      }
       if (d?.reactivated > 0) {
-        loadMonitoringKws();
         loadPromotedTerms();
       }
     } catch (e) {
@@ -560,7 +564,9 @@ export default function ZeroSalesCleanupPanel({ account }) {
               </p>
               {monitorResult && (
                 <div className={`mt-2 text-xs font-semibold ${monitorResult.error ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {monitorResult.error ? `Erro: ${monitorResult.error}` : `✓ ${monitorResult.monitored} termos verificados · ${monitorResult.reactivated} reativados`}
+                  {monitorResult.error
+                    ? `Erro: ${monitorResult.error}`
+                    : `✓ ${monitorResult.monitored} termos verificados · ${monitorResult.reconstructed || 0} recuperados do histórico · ${monitorResult.reactivated} reativados`}
                 </div>
               )}
             </div>

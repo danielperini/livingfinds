@@ -44,6 +44,18 @@
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Motor v8 complete hourly pipeline",
+      "function": "runMotorImediato",
+      "cron": "25 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Zero-sales reactivation monitor - every 3 hours",
+      "function": "monitorZeroSalesReactivation",
+      "cron": "42 */3 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Hourly Metrics Bridge and Dayparting Patterns",
       "function": "rebuildHourlyMetricsFromReports",
       "cron": "55 * * * *",

@@ -8,22 +8,75 @@ export default async function(req) {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
-    const { amazon_account_id } = body;
+    let { amazon_account_id } = body;
+    if (!amazon_account_id) {
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
+        { status: 'connected' },
+        '-created_date',
+        1
+      ).catch(() => []);
+      amazon_account_id = accounts[0]?.id;
+    }
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
 
     const base44sr = base44.asServiceRole;
     const now = new Date();
     const since14 = new Date(now.getTime() - 14 * 86400000).toISOString().slice(0, 10);
 
-    // Buscar keywords arquivadas por zero_sales
+    // Reconstruir o monitoramento legado a partir das campanhas efetivamente
+    // arquivadas por zero venda. Antes desta rotina existir, as campanhas eram
+    // marcadas, mas suas keywords não recebiam archive_reason.
+    const [campaigns, allKeywords] = await Promise.all([
+      base44sr.entities.Campaign.filter({ amazon_account_id }, '-archived_at', 3000).catch(() => []),
+      base44sr.entities.Keyword.filter({ amazon_account_id }, '-last_seen_at', 5000).catch(() => []),
+    ]);
+    const zeroSalesCampaignIds = new Set();
+    for (const campaign of campaigns) {
+      const state = String(campaign.state || campaign.status || '').toLowerCase();
+      const reason = String(campaign.archive_reason || '').toLowerCase();
+      if (state !== 'archived') continue;
+      if (!reason.includes('zero_sales') && !reason.includes('zero sales') && !reason.includes('spend_without_conversion')) continue;
+      for (const id of [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id]) {
+        if (id) zeroSalesCampaignIds.add(String(id));
+      }
+    }
+
+    const keywordsToReconstruct = [];
+    for (const keyword of allKeywords) {
+      if (!zeroSalesCampaignIds.has(String(keyword.campaign_id || ''))) continue;
+      if (keyword.archive_reason === 'archived_from_zero_sales') continue;
+      keywordsToReconstruct.push(keyword);
+    }
+    let reconstructed = 0;
+    for (let offset = 0; offset < keywordsToReconstruct.length; offset += 50) {
+      const batch = keywordsToReconstruct.slice(offset, offset + 50);
+      const results = await Promise.all(batch.map((keyword) =>
+        base44sr.entities.Keyword.update(keyword.id, {
+          state: 'archived',
+          status: 'archived',
+          archive_reason: 'archived_from_zero_sales',
+          archived_from_campaign_id: keyword.campaign_id,
+          archived_at: keyword.archived_at || now.toISOString(),
+        }).then(() => true).catch(() => false)
+      ));
+      reconstructed += results.filter(Boolean).length;
+    }
+
+    // Buscar keywords arquivadas por zero_sales, incluindo as reconstruídas.
     const archivedKws = await base44sr.entities.Keyword.filter(
       { amazon_account_id, archive_reason: 'archived_from_zero_sales' },
       '-archived_at',
-      500
+      2000
     ).catch(() => []);
 
     if (archivedKws.length === 0) {
-      return Response.json({ ok: true, monitored: 0, reactivated: 0, message: 'Nenhuma keyword em monitoramento' });
+      return Response.json({
+        ok: true,
+        monitored: 0,
+        reconstructed,
+        reactivated: 0,
+        message: 'Nenhuma keyword historicamente arquivada por zero vendas foi encontrada',
+      });
     }
 
     // Buscar métricas dos últimos 14 dias para detectar conversões
@@ -150,6 +203,7 @@ export default async function(req) {
     return Response.json({
       ok: true,
       monitored: archivedKws.length,
+      reconstructed,
       reactivated,
       reactivated_terms: reactivatedTerms,
     });
