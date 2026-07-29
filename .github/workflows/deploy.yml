@@ -67,4 +67,17 @@ jobs:
             docker compose -f server/docker-compose.yml up -d --build app
             sleep 6
             curl -sf http://localhost:8000/health && echo ' — deploy OK'
+
+            echo '--- verificação do frontend publicado ---'
+            docker compose -f server/docker-compose.yml exec -T app sh -lc "grep -R -q 'dos relatórios processados' /app/dist/assets && echo 'BUNDLE_MARKER=new' || echo 'BUNDLE_MARKER=old_or_missing'"
+            printf 'APP_ASSET='
+            curl -fsS http://127.0.0.1:8000/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
+            printf 'PROXY_ASSET='
+            curl -fsS http://127.0.0.1/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
+
+            echo '--- atualização dos relatórios (sem dados sensíveis) ---'
+            printf 'SCHEDULER='
+            docker compose -f server/docker-compose.yml exec -T app sh -lc 'echo \${ENABLE_SCHEDULER:-unset}'
+            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select coalesce(data->>'end_date','sem_data'), coalesce(data->>'status','sem_status'), count(*) from amazon_ads_report_job group by 1,2 order by 1 desc,2 limit 12;" || true
+            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select 'METRICS_MAX=' || coalesce(max(data->>'date'),'sem_data') || '|ROWS=' || count(*) from campaign_metrics_daily;" || true
           EOF
