@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  Zap, ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock } from
+  Zap, ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock, Users } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -17,6 +17,7 @@ const navItems = [
 { path: '/campaign-factory', icon: Factory, label: 'Campaign Factory' },
 { path: '/daypart-crossasin', icon: Clock, label: 'Daypart & Cross-ASIN' },
 { path: '/sala-de-comando', icon: Terminal, label: 'Sala de Controle' },
+{ path: '/users', icon: Users, label: 'Usuários' },
 { path: '/settings', icon: Settings, label: 'Configurações' },
 { path: '/manual', icon: Book, label: 'Manual' }];
 

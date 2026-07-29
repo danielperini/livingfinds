@@ -11,8 +11,8 @@ type User = Record<string, any>;
 export function makeAuth(_req?: Request) {
   const user: User = {
     id: Deno.env.get('DEFAULT_USER_ID') ?? 'system',
-    email: Deno.env.get('DEFAULT_USER_EMAIL') ?? 'daniel@livingfinds.com.br',
-    full_name: Deno.env.get('DEFAULT_USER_NAME') ?? 'Living Finds System',
+    email: 'contato@livingfinds.com.br',
+    full_name: 'Daniel Perini',
     role: 'admin',
   };
   return {

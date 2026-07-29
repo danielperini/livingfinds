@@ -49,6 +49,7 @@ import CampaignFactory from '@/pages/CampaignFactory';
 import DaypartCrossAsinPage from '@/pages/DaypartCrossAsinPage';
 import ListingEnhancementPage from '@/pages/ListingEnhancementPage';
 import AdsAuthorizationPage from '@/pages/AdsAuthorizationPage';
+import Users from '@/pages/Users';
 
 import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
 import SalaDeComando from '@/pages/SalaDeComando';
@@ -141,6 +142,7 @@ const AuthenticatedApp = () => {
           <Route path="/report" element={<Report />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/users" element={<Users />} />
           <Route path="/sp-api-setup" element={<SpApiSetup />} />
           <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
           <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />

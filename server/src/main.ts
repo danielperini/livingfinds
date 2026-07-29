@@ -12,7 +12,7 @@ import { join, extname } from 'jsr:@std/path@1';
 import { contentType } from 'jsr:@std/media-types@1';
 import { loadFunctions, registry } from './registry.ts';
 import { startScheduler } from './scheduler.ts';
-import { healthcheck } from './db.ts';
+import { healthcheck, query } from './db.ts';
 import { makeEntities } from './sdk/entities.ts';
 import { makeIntegrations } from './sdk/integrations.ts';
 
@@ -23,6 +23,90 @@ const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') ?? '';
 const SESSION_TOKEN = API_TOKEN || ADMIN_PASSWORD;
 const FRONTEND_DIR = Deno.env.get('FRONTEND_DIR') ?? join(import.meta.dirname!, '..', '..', 'dist');
 const entities = makeEntities();
+const ADMIN_EMAIL = 'contato@livingfinds.com.br';
+const ADMIN_NAME = 'Daniel Perini';
+
+type AuthUser = {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+  password_hash: string | null;
+  password_salt: string | null;
+};
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const pairs = hex.match(/.{1,2}/g) ?? [];
+  return new Uint8Array(pairs.map((pair) => Number.parseInt(pair, 16)));
+}
+
+async function passwordHash(password: string, salt: Uint8Array): Promise<string> {
+  const material = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 210_000 },
+    material,
+    256,
+  );
+  return bytesToHex(new Uint8Array(bits));
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+async function ensureAdminUser(): Promise<AuthUser> {
+  await query(`
+    create table if not exists app_auth_users (
+      id text primary key,
+      email text not null unique,
+      full_name text not null,
+      role text not null default 'admin',
+      password_hash text,
+      password_salt text,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      password_changed_at timestamptz
+    )
+  `);
+  await query(
+    `insert into app_auth_users (id, email, full_name, role)
+     values ($1, $2, $3, 'admin')
+     on conflict (id) do update set
+       email = excluded.email,
+       full_name = excluded.full_name,
+       role = 'admin',
+       updated_at = now()`,
+    [Deno.env.get('DEFAULT_USER_ID') ?? 'system', ADMIN_EMAIL, ADMIN_NAME],
+  );
+  const users = await query<AuthUser>(
+    'select id, email, full_name, role, password_hash, password_salt from app_auth_users where id = $1 limit 1',
+    [Deno.env.get('DEFAULT_USER_ID') ?? 'system'],
+  );
+  return users[0];
+}
+
+async function verifyAdminPassword(password: string, user: AuthUser): Promise<boolean> {
+  if (user.password_hash && user.password_salt) {
+    const candidate = await passwordHash(password, hexToBytes(user.password_salt));
+    return constantTimeEqual(candidate, user.password_hash);
+  }
+  return Boolean(ADMIN_PASSWORD) && constantTimeEqual(password, ADMIN_PASSWORD);
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -31,8 +115,8 @@ function json(data: unknown, status = 200): Response {
 function defaultUser() {
   return {
     id: Deno.env.get('DEFAULT_USER_ID') ?? 'system',
-    email: Deno.env.get('DEFAULT_USER_EMAIL') ?? 'daniel@livingfinds.com.br',
-    full_name: Deno.env.get('DEFAULT_USER_NAME') ?? 'Living Finds',
+    email: ADMIN_EMAIL,
+    full_name: ADMIN_NAME,
     role: 'admin',
   };
 }
@@ -182,10 +266,41 @@ async function handler(req: Request): Promise<Response> {
   if (path === '/api/auth/login' && req.method === 'POST') {
     if (!ADMIN_PASSWORD) return json({ ok: true, token: 'selfhosted' });
     const body = await req.json().catch(() => ({}));
-    if (body.password !== ADMIN_PASSWORD) {
+    const user = await ensureAdminUser();
+    if (!await verifyAdminPassword(String(body.password ?? ''), user)) {
       return json({ ok: false, error: 'Senha incorreta' }, 401);
     }
     return json({ ok: true, token: SESSION_TOKEN });
+  }
+  if (path === '/api/auth/profile' && req.method === 'GET') {
+    if (!apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const user = await ensureAdminUser();
+    return json({ id: user.id, email: user.email, full_name: user.full_name, role: user.role });
+  }
+  if (path === '/api/auth/change-password' && req.method === 'POST') {
+    if (!apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const body = await req.json().catch(() => ({}));
+    const currentPassword = String(body.current_password ?? '');
+    const newPassword = String(body.new_password ?? '');
+    if (newPassword.length < 10) {
+      return json({ ok: false, error: 'A nova senha deve ter pelo menos 10 caracteres.' }, 400);
+    }
+    const user = await ensureAdminUser();
+    if (!await verifyAdminPassword(currentPassword, user)) {
+      return json({ ok: false, error: 'A senha atual está incorreta.' }, 401);
+    }
+    if (constantTimeEqual(currentPassword, newPassword)) {
+      return json({ ok: false, error: 'A nova senha deve ser diferente da senha atual.' }, 400);
+    }
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const hash = await passwordHash(newPassword, salt);
+    await query(
+      `update app_auth_users
+       set password_hash = $1, password_salt = $2, password_changed_at = now(), updated_at = now()
+       where id = $3`,
+      [hash, bytesToHex(salt), user.id],
+    );
+    return json({ ok: true, message: 'Senha alterada com sucesso.' });
   }
   if (path === '/api/auth/logout') {
     return json({ ok: true });
