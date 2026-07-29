@@ -259,21 +259,28 @@ export default function CampaignFactory() {
       setAccount(acc);
       if (!acc) return;
 
-      // Background tasks
-      setTimeout(() => {
-        base44.functions.invoke('updateTermBankFromAutomaticCampaigns', { amazon_account_id: acc.id }).catch(() => {});
-        base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id }).catch(() => {});
-      }, 3000);
+      base44.functions.invoke('cleanupLegacySuggestions', { amazon_account_id: acc.id }).catch(() => {});
 
-      const [bankData, plansData, termData, sugData, prodData, kwData, stData] = await Promise.all([
-        base44.entities.KeywordBank.filter({ amazon_account_id: acc.id }, '-promotion_score', 500).catch(() => []),
-        base44.entities.CampaignFactoryPlan.filter({ amazon_account_id: acc.id }, '-proposed_at', 100).catch(() => []),
+      // The learning pipeline writes with service-role permissions. This authenticated
+      // snapshot refreshes it and returns the same rows without hiding valid data from
+      // the dashboard because of entity-level read rules.
+      const snapshotResponse = await base44.functions.invoke('getCampaignFactorySnapshot', {
+        amazon_account_id: acc.id,
+        refresh: true,
+      }).catch(() => null);
+      const snapshot = snapshotResponse?.data;
+
+      const [fallbackBank, fallbackPlans, termData, sugData, prodData, kwData, stData] = await Promise.all([
+        snapshot?.ok ? Promise.resolve([]) : base44.entities.KeywordBank.filter({ amazon_account_id: acc.id }, '-promotion_score', 500).catch(() => []),
+        snapshot?.ok ? Promise.resolve([]) : base44.entities.CampaignFactoryPlan.filter({ amazon_account_id: acc.id }, '-proposed_at', 100).catch(() => []),
         base44.entities.TermBank.filter({ amazon_account_id: acc.id }, '-confidence', 500).catch(() => []),
         base44.entities.KeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_at', 500).catch(() => []),
         base44.entities.Product.filter({ amazon_account_id: acc.id }, '-updated_at', 200).catch(() => []),
         base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-spend', 500).catch(() => []),
         base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-spend', 500).catch(() => []),
       ]);
+      const bankData = snapshot?.ok ? (snapshot.keyword_bank || []) : fallbackBank;
+      const plansData = snapshot?.ok ? (snapshot.plans || []) : fallbackPlans;
 
       setBankEntries(bankData);
       setPlans(plansData);
