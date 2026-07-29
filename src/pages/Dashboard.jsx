@@ -10,7 +10,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts';
 import {
-  RefreshCw, AlertCircle, Clock, Loader2,
+  RefreshCw, AlertCircle, Loader2,
   AlertTriangle, BarChart2, Megaphone, BookOpen, Terminal, Zap
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
@@ -732,35 +732,33 @@ export default function Dashboard() {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
   const firstName = user?.full_name?.split(' ')[0] || 'gestor';
+  const dashboardUpdatedLabel = nextSyncLabel?.syncDate.toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  }) || null;
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
 
       {/* ── 1. HEADER ───────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-lg font-bold text-white">{greeting}, {firstName}.</h1>
-          <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
-            <span>
-              {loading ? (
-                <span>Carregando...</span>
-              ) : account ? (
-                <span><span className="text-emerald-400/80">{campaigns.length} campanhas</span>{' · '}<span>{active_count} ativas</span>{' · '}<span>{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length} produtos com estoque</span></span>
-              ) : (
-                <Link to="/settings" className="text-cyan hover:underline">Configure sua conta Amazon →</Link>
-              )}
-            </span>
-            {nextSyncLabel ? (
-                <span className="flex items-center gap-1 text-slate-500 ml-1">
-                  <span>{' · '}</span><Clock className="w-3 h-3" />
-                  <span>Atualizado em {nextSyncLabel.syncDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                  <span className="text-slate-600">{'· Próximo sync '}{nextSyncLabel.label}</span>
-                </span>
-            ) : null}
-          </p>
+          {loading ? <p className="text-xs text-slate-500 mt-2">Carregando resumo operacional…</p> : account ? (
+            <div className="flex flex-wrap gap-2 mt-3">
+              <span className="px-2.5 py-1 rounded-lg bg-cyan/10 border border-cyan/20 text-[11px] text-cyan"><strong>{campaigns.length}</strong> campanhas</span>
+              <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-400"><strong>{active_count}</strong> ativas</span>
+              <span className="px-2.5 py-1 rounded-lg bg-surface-2 border border-surface-3 text-[11px] text-slate-300"><strong>{products.filter(p => p.status === 'active' && (p.fba_inventory || 0) > 0).length}</strong> produtos com estoque</span>
+            </div>
+          ) : (
+            <Link to="/settings" className="text-xs text-cyan hover:underline mt-2 inline-block">Configure sua conta Amazon →</Link>
+          )}
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <AutoWindowStatus justUpdated={justUpdated} />
+        <div className="flex items-center gap-2 flex-wrap xl:justify-end">
+          <AutoWindowStatus
+            justUpdated={justUpdated}
+            dashboardUpdatedAt={dashboardUpdatedLabel}
+            nextSyncText={nextSyncLabel?.label || null}
+          />
           {(autoRefreshing || loading) ? (
             <span className="flex items-center gap-1.5 text-[10px] text-slate-500 px-2 py-1 bg-surface-2 border border-surface-3 rounded-lg">
               <Loader2 className="w-3 h-3 animate-spin text-cyan" />

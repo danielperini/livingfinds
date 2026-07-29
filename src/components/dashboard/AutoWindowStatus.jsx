@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Clock } from 'lucide-react';
+import { CalendarClock, CheckCircle2, Clock, Database } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
 const REQUIRED_REPORTS = ['spCampaigns', 'spSearchTerm', 'spAdvertisedProduct'];
@@ -13,7 +13,12 @@ function closedDayBrt() {
   return date.toISOString().slice(0, 10);
 }
 
-export default function AutoWindowStatus({ justUpdated = false, compact = false }) {
+export default function AutoWindowStatus({
+  justUpdated = false,
+  compact = false,
+  dashboardUpdatedAt = null,
+  nextSyncText = null,
+}) {
   const [lastSync, setLastSync] = useState(null);
   const [lastReportDate, setLastReportDate] = useState(null);
   const [successRate, setSuccessRate] = useState(null);
@@ -61,17 +66,37 @@ export default function AutoWindowStatus({ justUpdated = false, compact = false 
   };
 
   return (
-    <div className={`flex items-center gap-2 px-3 py-1.5 bg-surface-2 border border-surface-3 rounded-lg transition-all ${compact ? 'max-w-full' : ''}`}>
-      <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-      <div className="text-[11px] flex items-center gap-1.5 flex-wrap">
-        {justUpdated ? <span className="text-emerald-400 font-semibold">✓ Atualizado</span> : (
-          <>
-            {!compact && <span className="text-slate-400">{fmtSync(lastSync) ? `Sync: ${fmtSync(lastSync)}` : 'Aguardando sync'}</span>}
-            <span className={`font-semibold ${rateColor}`}>
-              {successRate !== null ? `· ${successRate}% dos relatórios obrigatórios processados` : 'Verificando relatórios'}
-            </span>
-            {lastReportDate && <span className="text-slate-500">· Métricas até: <span className="text-emerald-400/80">{fmtReportDate(lastReportDate)}</span></span>}
-          </>
+    <div className={`bg-surface-2 border border-surface-3 rounded-xl px-4 py-3 transition-all ${compact ? 'max-w-full' : 'min-w-[310px]'}`}>
+      <div className="flex items-center justify-between gap-3 mb-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Atualização dos dados</p>
+        {justUpdated && <span className="text-[10px] text-emerald-400 font-semibold">✓ Atualizado</span>}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2 text-[11px]">
+        {dashboardUpdatedAt && (
+          <div className="flex items-start gap-2">
+            <Database className="w-3.5 h-3.5 text-cyan mt-0.5 flex-shrink-0" />
+            <div><p className="text-slate-600 text-[9px] uppercase">Dados do painel</p><p className="text-slate-300">{dashboardUpdatedAt}</p></div>
+          </div>
+        )}
+        {!compact && (
+          <div className="flex items-start gap-2">
+            <Clock className="w-3.5 h-3.5 text-slate-500 mt-0.5 flex-shrink-0" />
+            <div><p className="text-slate-600 text-[9px] uppercase">Última execução</p><p className="text-slate-300">{fmtSync(lastSync) || 'Aguardando sync'}</p></div>
+          </div>
+        )}
+        <div className="flex items-start gap-2">
+          <CheckCircle2 className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${rateColor}`} />
+          <div>
+            <p className="text-slate-600 text-[9px] uppercase">Relatórios obrigatórios</p>
+            <p className={`font-semibold ${rateColor}`}>{successRate !== null ? `${successRate}% processados` : 'Verificando'}</p>
+            {lastReportDate && <p className="text-slate-500">Métricas até {fmtReportDate(lastReportDate)}</p>}
+          </div>
+        </div>
+        {nextSyncText && (
+          <div className="flex items-start gap-2">
+            <CalendarClock className="w-3.5 h-3.5 text-amber-400 mt-0.5 flex-shrink-0" />
+            <div><p className="text-slate-600 text-[9px] uppercase">Próxima sincronização</p><p className="text-amber-300">{nextSyncText}</p></div>
+          </div>
         )}
       </div>
     </div>
