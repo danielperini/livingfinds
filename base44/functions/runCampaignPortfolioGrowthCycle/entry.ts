@@ -129,6 +129,11 @@ Deno.serve(async (req) => {
     if (fullExpansion) {
       stages.push(await invoke('updateTermBankFromAutomaticCampaigns'));
       stages.push(await invoke('runCampaignFactory', { dry_run: dryRun }));
+      stages.push(await invoke('scheduleWeeklyCampaignFactoryLaunches', {
+        max_campaigns: 10,
+        trigger_type: 'weekly_portfolio_growth',
+        dry_run: dryRun,
+      }));
       stages.push(await invoke('promoteWinningSearchTerms', { dry_run: dryRun }));
       if (!dryRun) {
         stages.push(await invoke('expandCoverageForAsin', {

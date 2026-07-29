@@ -117,6 +117,7 @@ jobs:
               };
               await call("updateTermBankFromAutomaticCampaigns");
               await call("runCampaignFactory");
+              await call("scheduleWeeklyCampaignFactoryLaunches", { max_campaigns: 10, trigger_type: "deploy_initial_rule_activation" });
               await callOptional("monitorZeroSalesReactivation");
               await callOptional("runMotorImediato", { force: false });
               await callOptional("syncUnifiedAdsReportsHourly", { days: 14, force: true });

@@ -221,7 +221,7 @@ Deno.serve(async (request) => {
               sku: item.sku || product?.sku || null,
               product_name: item.product_name || product?.product_name || item.asin,
               keyword: item.keyword,
-              bid: 0.5,
+              bid: Math.max(0.25, Number(item.bid_initial || 0.5)),
               budget: 5,
               _window_execution: true,
               _service_role: true,
@@ -256,6 +256,15 @@ Deno.serve(async (request) => {
             started_at: null,
             last_error: null,
           });
+          if (item.source_keyword_bank_id) {
+            await base44.asServiceRole.entities.KeywordBank.update(item.source_keyword_bank_id, {
+              lifecycle_status: 'HARVESTED',
+              harvest_executed_at: new Date().toISOString(),
+              last_campaign_created_at: new Date().toISOString(),
+              last_decision: flags.duplicate ? 'MANUAL_EXACT_DUPLICATE_CONFIRMED' : 'MANUAL_EXACT_CREATED',
+              last_decision_at: new Date().toISOString(),
+            }).catch(() => {});
+          }
           results.push({ id: item.id, asin: item.asin, ok: true, duplicate_resolved: flags.duplicate, response: data });
           continue;
         }
@@ -308,6 +317,17 @@ Deno.serve(async (request) => {
         _service_role: true,
       }).catch(() => null);
       await base44.asServiceRole.functions.invoke('fixProductCampaignLinks', {
+        amazon_account_id: accountId,
+        _service_role: true,
+      }).catch(() => null);
+      // Toda campanha criada pelo Factory entra imediatamente na mesma jornada
+      // das campanhas manuais existentes: reconciliação de escopo, ciclo de bid
+      // e, depois da janela de aprendizado, avaliação de 72 horas.
+      await base44.asServiceRole.functions.invoke('reconcileManualBidCycleScope', {
+        amazon_account_id: accountId,
+        _service_role: true,
+      }).catch(() => null);
+      await base44.asServiceRole.functions.invoke('runManualCampaignBidLifecycle', {
         amazon_account_id: accountId,
         _service_role: true,
       }).catch(() => null);
