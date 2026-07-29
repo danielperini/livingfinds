@@ -23,6 +23,9 @@ function addDays(date: string, amount: number) {
   d.setUTCDate(d.getUTCDate() + amount);
   return d.toISOString().slice(0, 10);
 }
+function sevenDayWindow(endDate: string) {
+  return Array.from({ length: 7 }, (_, index) => addDays(endDate, index - 6));
+}
 
 // ── Gerar resumo executivo determinístico ────────────────────────────────────
 function generateExecutiveSummary(params: {
@@ -102,7 +105,7 @@ Deno.serve(async (req) => {
 
     // Ancorar a janela na aferição mais recente realmente processada evita
     // relatórios vazios quando Ads ou SP-API fecham com atraso.
-    const assessments = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
+    let assessments = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
       { amazon_account_id: aid }, '-assessment_date', 2000
     ).catch(() => []);
     const latestProcessedDate = assessments
@@ -119,6 +122,31 @@ Deno.serve(async (req) => {
     }
     const week_end = latestProcessedDate;
     const week_start = addDays(week_end, -6);
+
+    // Autocura da cobertura: se algum dos sete dias ainda não tem aferição
+    // válida, reconstruí-lo a partir dos relatórios diários persistidos antes
+    // de consolidar a semana.
+    const validAssessmentDates = new Set(
+      assessments
+        .filter((a: any) => ['complete', 'partial'].includes(String(a.data_status || '')))
+        .map((a: any) => String(a.assessment_date || ''))
+    );
+    const missingDates = sevenDayWindow(week_end).filter((date) => !validAssessmentDates.has(date));
+    const backfillResults: any[] = [];
+    for (const assessmentDate of missingDates) {
+      const response = await base44.asServiceRole.functions.invoke('runDailyEconomicAssessment', {
+        amazon_account_id: aid,
+        assessment_date: assessmentDate,
+        force: true,
+        _service_role: true,
+      }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+      backfillResults.push({ assessment_date: assessmentDate, ...(response?.data || response || {}) });
+    }
+    if (missingDates.length > 0) {
+      assessments = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
+        { amazon_account_id: aid }, '-assessment_date', 2000
+      ).catch(() => assessments);
+    }
 
     const iKey = `weekly_report|${aid}|${week_start}|${week_end}`;
 
@@ -407,6 +435,10 @@ Deno.serve(async (req) => {
       result_summary: JSON.stringify({
         week_start, week_end,
         data_coverage_percent,
+        backfilled_dates: backfillResults.map((result: any) => ({
+          assessment_date: result.assessment_date,
+          ok: result.ok !== false,
+        })),
         products: weeklyProducts.length,
         profitable: count_profitable,
         unprofitable: count_unprofitable,
@@ -420,6 +452,10 @@ Deno.serve(async (req) => {
       report_id: reportId,
       report_status: reportData.report_status,
       data_coverage_percent,
+      backfilled_dates: backfillResults.map((result: any) => ({
+        assessment_date: result.assessment_date,
+        ok: result.ok !== false,
+      })),
       products_analyzed: weeklyProducts.length,
       profitable: count_profitable,
       unprofitable: count_unprofitable,
