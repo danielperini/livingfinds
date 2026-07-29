@@ -131,9 +131,11 @@ Deno.serve(async (request) => {
         for (const keyword of keywords) {
           const campaignId = String(keyword.campaign_id || '');
           if (!campaignIds.has(campaignId)) continue;
-          const keywordId = String(keyword.keyword_id || '');
+          const keywordId = String(keyword.amazon_keyword_id || keyword.keyword_id || '');
           const oldBid = Number(keyword.bid || keyword.current_bid || 0);
-          if (!keywordId || oldBid <= 0) continue;
+          // A Amazon aceita somente o ID remoto numérico. Registros legados "kw_*"
+          // são IDs locais e nunca devem ser enviados à Ads API.
+          if (!/^\d+$/.test(keywordId) || oldBid <= 0) continue;
           const already = priorEvents.some((event: any) => event.idempotency_key === `sku_guard_bid|${account.id}|${sku}|${keywordId}|${day}`);
           if (already) continue;
           const newBid = Math.max(MIN_BID, Math.round(oldBid * (1 - reduction) * 100) / 100);
