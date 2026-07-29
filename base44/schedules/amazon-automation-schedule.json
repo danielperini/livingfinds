@@ -8,6 +8,12 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
+      "name": "Daily report freshness self-heal - hourly",
+      "function": "ensureDailyReportsCurrent",
+      "cron": "5 7-23 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Daily Budget Pacing Plan - 00:05 BRT",
       "function": "runDailyBudgetPacingEngine",
       "cron": "5 0 * * *",
