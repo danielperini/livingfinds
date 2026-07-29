@@ -21,6 +21,7 @@ const API_TOKEN = Deno.env.get('API_TOKEN') ?? '';
 const ADMIN_PASSWORD = Deno.env.get('ADMIN_PASSWORD') ?? '';
 // Token de sessão retornado após login. Reutiliza API_TOKEN se definido.
 const SESSION_TOKEN = API_TOKEN || ADMIN_PASSWORD;
+const SESSION_SECRET = API_TOKEN || ADMIN_PASSWORD || 'living-finds-local-session';
 const FRONTEND_DIR = Deno.env.get('FRONTEND_DIR') ?? join(import.meta.dirname!, '..', '..', 'dist');
 const entities = makeEntities();
 const ADMIN_EMAIL = 'contato@livingfinds.com.br';
@@ -33,6 +34,7 @@ type AuthUser = {
   role: string;
   password_hash: string | null;
   password_salt: string | null;
+  password_changed_at?: string | null;
 };
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -108,6 +110,68 @@ async function verifyAdminPassword(password: string, user: AuthUser): Promise<bo
   return Boolean(ADMIN_PASSWORD) && constantTimeEqual(password, ADMIN_PASSWORD);
 }
 
+function base64Url(value: string | Uint8Array): string {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
+function fromBase64Url(value: string): string {
+  const normalized = value.replaceAll('-', '+').replaceAll('_', '/');
+  const binary = atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '='));
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+}
+
+async function signValue(value: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(SESSION_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return base64Url(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))));
+}
+
+async function createUserSession(user: AuthUser): Promise<string> {
+  const payload = base64Url(JSON.stringify({
+    sub: user.id,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+  }));
+  return `${payload}.${await signValue(payload)}`;
+}
+
+async function authenticatedUser(req: Request): Promise<AuthUser | null> {
+  const auth = req.headers.get('authorization') ?? '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : req.headers.get('x-api-token') ?? '';
+  if (!token) return null;
+  if (SESSION_TOKEN && token === SESSION_TOKEN) return await ensureAdminUser();
+  const [payload, signature] = token.split('.');
+  if (!payload || !signature || !constantTimeEqual(await signValue(payload), signature)) return null;
+  try {
+    const parsed = JSON.parse(fromBase64Url(payload));
+    if (!parsed.sub || Number(parsed.exp || 0) < Date.now()) return null;
+    const users = await query<AuthUser>(
+      'select id, email, full_name, role, password_hash, password_salt, password_changed_at from app_auth_users where id = $1 limit 1',
+      [parsed.sub],
+    );
+    return users[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function publicUser(user: AuthUser) {
+  return { id: user.id, email: user.email, full_name: user.full_name, role: user.role };
+}
+
+function initialPasswordForName(name: string): string {
+  const firstName = name.trim().split(/\s+/)[0] || 'Usuario';
+  const normalized = firstName.normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^\p{L}\p{N}]/gu, '');
+  return `${normalized || 'Usuario'}@12345`;
+}
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -129,9 +193,9 @@ function authorized(req: Request): boolean {
 }
 
 // Valida token para rotas de API (entities/functions). Só aplica se ADMIN_PASSWORD estiver definida.
-function apiAuthorized(req: Request): boolean {
+async function apiAuthorized(req: Request): Promise<boolean> {
   if (!ADMIN_PASSWORD) return true;
-  return authorized(req);
+  return authorized(req) || Boolean(await authenticatedUser(req));
 }
 
 async function invokeFn(name: string, req: Request): Promise<Response> {
@@ -152,7 +216,8 @@ async function handleEntities(req: Request, url: URL, entity: string, rest: stri
   const m = req.method;
 
   if (entity === 'User' && rest === '/me') {
-    return json(defaultUser()); // GET/PUT — single-tenant
+    const user = await authenticatedUser(req);
+    return json(user ? publicUser(user) : defaultUser());
   }
   if (rest === '/bulk') {
     if (m === 'POST') return json(await repo.bulkCreate(await req.json().catch(() => [])));
@@ -264,28 +329,70 @@ async function handler(req: Request): Promise<Response> {
   }
   // ── Auth endpoints ──────────────────────────────────────────────────────────
   if (path === '/api/auth/login' && req.method === 'POST') {
-    if (!ADMIN_PASSWORD) return json({ ok: true, token: 'selfhosted' });
     const body = await req.json().catch(() => ({}));
-    const user = await ensureAdminUser();
+    const admin = await ensureAdminUser();
+    const email = String(body.email || ADMIN_EMAIL).trim().toLowerCase();
+    const users = await query<AuthUser>(
+      'select id, email, full_name, role, password_hash, password_salt, password_changed_at from app_auth_users where lower(email) = $1 limit 1',
+      [email],
+    );
+    const user = users[0] || (email === ADMIN_EMAIL ? admin : null);
+    if (!user) return json({ ok: false, error: 'E-mail ou senha incorretos' }, 401);
     if (!await verifyAdminPassword(String(body.password ?? ''), user)) {
-      return json({ ok: false, error: 'Senha incorreta' }, 401);
+      return json({ ok: false, error: 'E-mail ou senha incorretos' }, 401);
     }
-    return json({ ok: true, token: SESSION_TOKEN });
+    return json({ ok: true, token: await createUserSession(user), user: publicUser(user) });
   }
   if (path === '/api/auth/profile' && req.method === 'GET') {
-    if (!apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
-    const user = await ensureAdminUser();
-    return json({ id: user.id, email: user.email, full_name: user.full_name, role: user.role });
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    const user = await authenticatedUser(req) || await ensureAdminUser();
+    return json(publicUser(user));
+  }
+  if (path === '/api/auth/users' && req.method === 'GET') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    await ensureAdminUser();
+    const users = await query<AuthUser>(
+      'select id, email, full_name, role, password_changed_at from app_auth_users order by created_at asc',
+    );
+    return json({ users: users.map(publicUser) });
+  }
+  if (path === '/api/auth/users' && req.method === 'POST') {
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    await ensureAdminUser();
+    const body = await req.json().catch(() => ({}));
+    const fullName = String(body.full_name || '').trim();
+    const email = String(body.email || '').trim().toLowerCase();
+    if (fullName.length < 2) return json({ ok: false, error: 'Informe o nome do usuário.' }, 400);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return json({ ok: false, error: 'Informe um e-mail válido.' }, 400);
+    }
+    const initialPassword = initialPasswordForName(fullName);
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const hash = await passwordHash(initialPassword, salt);
+    try {
+      const created = await query<AuthUser>(
+        `insert into app_auth_users (id, email, full_name, role, password_hash, password_salt)
+         values ($1, $2, $3, 'admin', $4, $5)
+         returning id, email, full_name, role`,
+        [crypto.randomUUID(), email, fullName, hash, bytesToHex(salt)],
+      );
+      return json({ ok: true, user: publicUser(created[0]), initial_password: initialPassword }, 201);
+    } catch (error) {
+      if ((error as { code?: string })?.code === '23505') {
+        return json({ ok: false, error: 'Já existe um usuário com esse e-mail.' }, 409);
+      }
+      throw error;
+    }
   }
   if (path === '/api/auth/change-password' && req.method === 'POST') {
-    if (!apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
+    if (!await apiAuthorized(req)) return json({ ok: false, error: 'Não autorizado' }, 401);
     const body = await req.json().catch(() => ({}));
     const currentPassword = String(body.current_password ?? '');
     const newPassword = String(body.new_password ?? '');
     if (newPassword.length < 10) {
       return json({ ok: false, error: 'A nova senha deve ter pelo menos 10 caracteres.' }, 400);
     }
-    const user = await ensureAdminUser();
+    const user = await authenticatedUser(req) || await ensureAdminUser();
     if (!await verifyAdminPassword(currentPassword, user)) {
       return json({ ok: false, error: 'A senha atual está incorreta.' }, 401);
     }
@@ -308,7 +415,7 @@ async function handler(req: Request): Promise<Response> {
   if (path.startsWith('/api/')) {
     // Rotas públicas (public-settings, chamadas sem auth do AuthContext)
     const isPublic = path.startsWith('/api/apps/public/');
-    if (!isPublic && !apiAuthorized(req)) {
+    if (!isPublic && !await apiAuthorized(req)) {
       return json({ ok: false, error: 'Não autorizado' }, 401);
     }
     return await handleApi(req, url);
