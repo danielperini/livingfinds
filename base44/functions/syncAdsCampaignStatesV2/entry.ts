@@ -58,7 +58,13 @@ async function getAdsToken(account: any): Promise<string> {
   return data.access_token;
 }
 
-async function listCampaignsForState(token: string, profileId: string, region: string, state: string): Promise<any[]> {
+async function listCampaignsForState(
+  token: string,
+  profileId: string,
+  region: string,
+  state: string,
+  targetingType?: 'AUTO' | 'MANUAL'
+): Promise<any[]> {
   const base = adsBase(region);
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
   const results: any[] = [];
@@ -67,6 +73,7 @@ async function listCampaignsForState(token: string, profileId: string, region: s
 
   do {
     const bodyPayload: any = { stateFilter: { include: [state] }, maxResults: 500 };
+    if (targetingType) bodyPayload.targetingTypeFilter = [targetingType];
     if (nextToken) bodyPayload.nextToken = nextToken;
 
     const res = await fetch(`${base}/sp/campaigns/list`, {
@@ -89,7 +96,7 @@ async function listCampaignsForState(token: string, profileId: string, region: s
 
     const payload = await res.json().catch(() => ({}));
     const campaigns: any[] = Array.isArray(payload?.campaigns) ? payload.campaigns : [];
-    console.log(`[syncV8] state=${state} page campaigns=${campaigns.length}`);
+    console.log(`[syncV8] state=${state} targeting=${targetingType || 'ALL'} page campaigns=${campaigns.length}`);
     results.push(...campaigns);
 
     nextToken = payload?.nextToken || null;
@@ -126,8 +133,25 @@ Deno.serve(async (request) => {
     // Coletar campanhas de todos os estados, deduplicar por prioridade
     const found = new Map<string, any>();
     for (const state of STATES) {
-      const campaigns = await listCampaignsForState(token, profileId, account.region || 'NA', state);
-      for (const campaign of campaigns) {
+      const [manualCampaigns, autoCampaigns] = await Promise.all([
+        listCampaignsForState(token, profileId, account.region || 'NA', state, 'MANUAL'),
+        listCampaignsForState(token, profileId, account.region || 'NA', state, 'AUTO'),
+      ]);
+      let classifiedCampaigns = [
+        ...manualCampaigns.map((campaign) => ({ ...campaign, _resolvedTargetingType: 'MANUAL' })),
+        ...autoCampaigns.map((campaign) => ({ ...campaign, _resolvedTargetingType: 'AUTO' })),
+      ];
+
+      // Compatibilidade com perfis/regiões que não aceitem targetingTypeFilter.
+      if (classifiedCampaigns.length === 0) {
+        const unfiltered = await listCampaignsForState(token, profileId, account.region || 'NA', state);
+        classifiedCampaigns = unfiltered.map((campaign) => ({
+          ...campaign,
+          _resolvedTargetingType: targetingType(campaign),
+        }));
+      }
+
+      for (const campaign of classifiedCampaigns) {
         const id = String(campaign.campaignId);
         const existing = found.get(id);
         const candidateState = String(campaign.state || state).toUpperCase();
@@ -167,7 +191,7 @@ Deno.serve(async (request) => {
         name: campaign.name,
         campaign_name: campaign.name,
         campaign_type: 'SP',
-        targeting_type: targetingType(campaign, local),
+        targeting_type: campaign._resolvedTargetingType || targetingType(campaign, local),
         amazon_status: remoteState,
         state: remoteState,
         status: remoteState,

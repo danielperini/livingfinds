@@ -633,7 +633,7 @@ export default function AdsManagement() {
       if (!acc) return;
 
       if (syncFromAmazon) {
-        const syncKey = `ads-campaign-sync:${acc.id}`;
+        const syncKey = `ads-campaign-sync:v2:${acc.id}`;
         const lastSync = Number(window.localStorage.getItem(syncKey) || 0);
         if (Date.now() - lastSync >= AMAZON_SYNC_THROTTLE_MS) {
           window.localStorage.setItem(syncKey, String(Date.now()));
