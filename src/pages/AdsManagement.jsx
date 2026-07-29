@@ -81,8 +81,7 @@ function needsMigration(campaign, keywords) {
 const STATE_FILTERS = [
 { key: 'all', label: 'Todas' },
 { key: 'enabled', label: 'Ativas' },
-{ key: 'paused', label: 'Pausadas' },
-{ key: 'archived', label: 'Arquivadas' }];
+{ key: 'paused', label: 'Pausadas' }];
 
 
 const PAGE_SIZE = 50;
@@ -690,8 +689,8 @@ export default function AdsManagement() {
       }
 
       const operational = classifiedCampaigns.filter((c) => {
-        const state = (c.state || c.status || '').toLowerCase();
-        return state !== 'incomplete' && !c.is_incomplete;
+        const state = campaignState(c);
+        return state === 'enabled' || state === 'paused';
       });
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
@@ -723,9 +722,15 @@ export default function AdsManagement() {
         setTimeout(async () => {
           try {
             const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
-            const operational3 = refreshed.filter((c) => {
-              const state = (c.state || c.status || '').toLowerCase();
-              return state !== 'incomplete' && !c.is_incomplete;
+            const refreshedClassified = refreshed.map(campaign => {
+              const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
+              return ids.some(id => manualCampaignIds.has(id))
+                ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+                : campaign;
+            });
+            const operational3 = refreshedClassified.filter((c) => {
+              const state = campaignState(c);
+              return state === 'enabled' || state === 'paused';
             });
             setCampaigns(operational3);
           } catch {}
@@ -754,9 +759,15 @@ export default function AdsManagement() {
         setTimeout(async () => {
           try {
             const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
-            const operational2 = refreshed.filter((c) => {
-              const state = (c.state || c.status || '').toLowerCase();
-              return state !== 'incomplete' && !c.is_incomplete;
+            const refreshedClassified = refreshed.map(campaign => {
+              const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
+              return ids.some(id => manualCampaignIds.has(id))
+                ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+                : campaign;
+            });
+            const operational2 = refreshedClassified.filter((c) => {
+              const state = campaignState(c);
+              return state === 'enabled' || state === 'paused';
             });
             setCampaigns(operational2);
             const stillPending = operational2.some(
