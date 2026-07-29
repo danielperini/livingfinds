@@ -130,7 +130,6 @@ function applyDashboardLayout() {
   const header = root.querySelector('h1');
   setPlacement(root, header, 1, 12);
 
-  setPlacement(root, findByText(root, '*', 'Dashboard e IA sincronizados'), 2, 4);
   setPlacement(root, findByText(root, '*', 'Sincronização das APIs'), 2, 8);
   setPlacement(root, findByText(root, '*', 'próxima em 5min'), 3, 12);
 

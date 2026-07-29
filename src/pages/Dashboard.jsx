@@ -19,7 +19,6 @@ import UnifiedMetricsPanel from '@/components/dashboard/UnifiedMetricsPanel';
 import PerformanceGoalsPanel from '@/components/dashboard/PerformanceGoalsPanel';
 import AutoWindowStatus from '@/components/dashboard/AutoWindowStatus';
 import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
-import DataConsistencyBadge from '@/components/dashboard/DataConsistencyBadge';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
@@ -240,7 +239,7 @@ export default function Dashboard() {
     bidChanges, syncRuns,
     autopilotConfig, budgetCfg,
     performanceSettings,
-    canonicalContext, canonicalLoading,
+    canonicalContext,
     loading, error,
   } = useAccountData();
 
@@ -769,13 +768,6 @@ export default function Dashboard() {
       </div>
 
       {/* ── 1b. INDICADOR DE CONSISTÊNCIA Dashboard ↔ Motor de IA ───────────── */}
-      {account && !loading ? (
-        <DataConsistencyBadge
-          canonicalContext={canonicalContext}
-          loading={canonicalLoading}
-        />
-      ) : null}
-
       {/* ── TOKEN EXPIRED BANNER ────────────────────────────────────────────── */}
       {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
