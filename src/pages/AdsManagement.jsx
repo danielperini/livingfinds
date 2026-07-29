@@ -22,6 +22,17 @@ import ReactivateWithBudgetModal from '@/components/ads/ReactivateWithBudgetModa
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
+const CAMPAIGN_REFRESH_MS = 10 * 60 * 1000;
+const AMAZON_SYNC_THROTTLE_MS = 30 * 60 * 1000;
+
+function campaignTargetingType(campaign) {
+  const name = String(campaign.name || campaign.campaign_name || '');
+  if (/MANUAL|EXACT|PHRASE|BROAD/i.test(name)) return 'MANUAL';
+  if (/\bAUTO(?:MATIC[AO]?)?\b/i.test(name)) return 'AUTO';
+
+  const explicit = String(campaign.targeting_type || campaign.targetingType || '').toUpperCase();
+  return explicit === 'MANUAL' ? 'MANUAL' : 'AUTO';
+}
 
 function isNew24h(campaign) {
   const ts =
@@ -606,14 +617,35 @@ export default function AdsManagement() {
     setTimeout(() => setTokenCheck(null), 15000);
   };
 
-  const loadCampaigns = async () => {
-    setLoading(true);
+  const loadCampaigns = async ({ syncFromAmazon = false, silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
       const me = await base44.auth.me();
-      const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!accounts.length) {
+        accounts = await base44.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_date', 1);
+      }
+      if (!accounts.length) {
+        accounts = await base44.entities.AmazonAccount.list('-updated_date', 1);
+      }
       const acc = accounts[0] || null;
       setAccount(acc);
       if (!acc) return;
+
+      if (syncFromAmazon) {
+        const syncKey = `ads-campaign-sync:${acc.id}`;
+        const lastSync = Number(window.localStorage.getItem(syncKey) || 0);
+        if (Date.now() - lastSync >= AMAZON_SYNC_THROTTLE_MS) {
+          window.localStorage.setItem(syncKey, String(Date.now()));
+          await base44.functions.invoke('syncAdsCampaignStatesV2', {
+            amazon_account_id: acc.id,
+            _service_role: true,
+            force: true,
+            trigger_type: 'ads_page_auto_refresh'
+          }).catch(() => {});
+        }
+      }
+
       const [cams, prods] = await Promise.all([
       loadAllCampaigns(acc.id),
       base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500)]
@@ -701,11 +733,27 @@ export default function AdsManagement() {
         }, 4000);
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
-  useEffect(() => {loadCampaigns();}, []);
+  useEffect(() => {
+    loadCampaigns({ syncFromAmazon: true });
+    const timer = window.setInterval(
+      () => loadCampaigns({ syncFromAmazon: true, silent: true }),
+      CAMPAIGN_REFRESH_MS
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadCampaigns({ syncFromAmazon: true, silent: true });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
 
   const loadKeywordsForCampaign = async (campaign) => {
     setKwLoading(true);
@@ -960,7 +1008,7 @@ export default function AdsManagement() {
   });
 
   // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
-  const rawAuto = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() === 'AUTO')).
+  const rawAuto = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'AUTO')).
   filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
 
   const autoByAsin = (() => {
@@ -987,7 +1035,7 @@ export default function AdsManagement() {
   })();
 
   const autoCampaigns = autoByAsin;
-  const manualCampaigns = applySearch(campaigns.filter((c) => (c.targeting_type || '').toUpperCase() !== 'AUTO')).
+  const manualCampaigns = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'MANUAL')).
   filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual).
   sort((a, b) => {
     const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
@@ -1154,30 +1202,6 @@ export default function AdsManagement() {
                   ));
                 }} />
               
-                  <button
-                onClick={reactivateAutoWithStock}
-                disabled={!account || reactivatingAuto}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
-                
-                    {reactivatingAuto ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar AUTO com estoque</>}
-                  </button>
-                  {reactivateAutoResult &&
-              <p className={`text-[10px] text-center font-medium ${reactivateAutoResult.type === 'success' ? 'text-emerald-400' : reactivateAutoResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {reactivateAutoResult.text}
-                    </p>
-              }
-                  <button
-                onClick={pauseAutoNoStockActive}
-                disabled={!account || pausingNoStockActive}
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50">
-                
-                    {pausingNoStockActive ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar AUTO sem estoque</>}
-                  </button>
-                  {pauseNoStockActiveResult &&
-              <p className={`text-[10px] text-center font-medium ${pauseNoStockActiveResult.type === 'success' ? 'text-orange-400' : pauseNoStockActiveResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                      {pauseNoStockActiveResult.text}
-                    </p>
-              }
                   
 
 
@@ -1228,34 +1252,7 @@ export default function AdsManagement() {
               onQuickResume={quickResumeCampaign}
               onReactivateBudget={(c) => setReactivateBudgetModal(c)}
               onQuickArchive={archiveCampaignAction}
-              extraAction={
-              <div className="flex flex-col gap-1">
-                    <button
-                  onClick={reactivateManualWithStock}
-                  disabled={!account || reactivatingManual}
-                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
-                  
-                      {reactivatingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Reativando...</> : <><Play className="w-3 h-3" /> Reativar MANUAL com estoque</>}
-                    </button>
-                    {reactivateManualResult &&
-                <p className={`text-[10px] text-center font-medium ${reactivateManualResult.type === 'success' ? 'text-emerald-400' : reactivateManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                        {reactivateManualResult.text}
-                      </p>
-                }
-                    <button
-                  onClick={pauseManualNoStock}
-                  disabled={!account || pausingManual}
-                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1 text-[10px] font-semibold bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 rounded-lg transition-colors disabled:opacity-50">
-                  
-                      {pausingManual ? <><Loader2 className="w-3 h-3 animate-spin" /> Pausando...</> : <><Pause className="w-3 h-3" /> Pausar MANUAL sem estoque</>}
-                    </button>
-                    {pauseManualResult &&
-                <p className={`text-[10px] text-center font-medium ${pauseManualResult.type === 'success' ? 'text-orange-400' : pauseManualResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
-                        {pauseManualResult.text}
-                      </p>
-                }
-                  </div>
-              } />
+              />
             
             </>
           }

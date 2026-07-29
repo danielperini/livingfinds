@@ -13,6 +13,18 @@ function normalizedState(value: any) {
   return 'incomplete';
 }
 
+function targetingType(campaign: any, local?: any) {
+  const name = String(campaign.name || local?.name || local?.campaign_name || '');
+  if (/MANUAL|EXACT|PHRASE|BROAD/i.test(name)) return 'MANUAL';
+  if (/\bAUTO(?:MATIC[AO]?)?\b/i.test(name)) return 'AUTO';
+
+  const remote = String(campaign.targetingType || '').toUpperCase();
+  if (remote === 'AUTO' || remote === 'MANUAL') return remote;
+
+  const existing = String(local?.targeting_type || '').toUpperCase();
+  return existing === 'MANUAL' ? 'MANUAL' : 'AUTO';
+}
+
 function adsBase(region: string) {
   const r = String(region || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
@@ -147,6 +159,7 @@ Deno.serve(async (request) => {
     for (const campaign of found.values()) {
       const id = String(campaign.campaignId);
       const remoteState = normalizedState(campaign.state);
+      const local = existingById.get(id);
       const record = {
         amazon_account_id: accountId,
         campaign_id: id,
@@ -154,7 +167,7 @@ Deno.serve(async (request) => {
         name: campaign.name,
         campaign_name: campaign.name,
         campaign_type: 'SP',
-        targeting_type: String(campaign.targetingType || 'AUTO').toUpperCase(),
+        targeting_type: targetingType(campaign, local),
         amazon_status: remoteState,
         state: remoteState,
         status: remoteState,
@@ -168,7 +181,6 @@ Deno.serve(async (request) => {
         last_api_sync_at: new Date().toISOString(),
       };
 
-      const local = existingById.get(id);
       if (local) toUpdate.push({ id: local.id, ...record });
       else toCreate.push(record);
     }
