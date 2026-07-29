@@ -29,6 +29,11 @@ function sevenDayWindow(endDate: string) {
 
 // ── Gerar resumo executivo determinístico ────────────────────────────────────
 function generateExecutiveSummary(params: {
+  week_start: string;
+  week_end: string;
+  products: any[];
+  campaigns: any[];
+  decisions: any[];
   profitable: number;
   unprofitable: number;
   no_sales_with_spend: number;
@@ -39,39 +44,100 @@ function generateExecutiveSummary(params: {
   decisions_executed: number;
   total_spend: number;
   total_ads_sales: number;
+  total_real_sales: number;
+  total_profit_after_ads: number;
   account_acos: number | null;
+  account_roas: number;
   data_coverage_percent: number;
 }): string {
   const lines: string[] = [];
   const {
+    week_start, week_end, products, campaigns, decisions,
     profitable, unprofitable, no_sales_with_spend, low_profit, break_even_number,
     campaigns_adjusted, keywords_adjusted, decisions_executed,
-    total_spend, total_ads_sales, account_acos, data_coverage_percent
+    total_spend, total_ads_sales, total_real_sales, total_profit_after_ads,
+    account_acos, account_roas, data_coverage_percent
   } = params;
 
-  const total = profitable + unprofitable + no_sales_with_spend + low_profit + break_even_number;
-  if (total === 0) return 'Sem dados suficientes para gerar resumo desta semana.';
+  const total = products.length;
+  if (total === 0) return `No período de ${week_start} a ${week_end}, ainda não houve produtos com aferição econômica válida para consolidar.`;
 
-  if (data_coverage_percent < 70) {
-    lines.push(`Cobertura de dados parcial (${data_coverage_percent.toFixed(0)}%) — resumo pode não refletir a semana completa.`);
-  }
+  lines.push(`Entre ${week_start} e ${week_end}, o banco acumulou ${data_coverage_percent.toFixed(0)}% dos dias previstos e avaliou ${total} produto(s).`);
 
-  lines.push(`Na semana, ${total} produto(s) foram avaliados com gasto de R$${total_spend.toFixed(2)}.`);
+  const revenueText = total_real_sales > 0
+    ? `faturamento real de R$${total_real_sales.toFixed(2)}`
+    : 'faturamento real ainda parcial na SP-API';
+  lines.push(`A semana registrou gasto de R$${total_spend.toFixed(2)}, vendas atribuídas aos Ads de R$${total_ads_sales.toFixed(2)}, ${revenueText} e lucro pós-Ads consolidado de R$${total_profit_after_ads.toFixed(2)}.`);
 
   if (account_acos !== null) {
-    const acosStr = `ACoS consolidado: ${account_acos.toFixed(1)}%`;
-    lines.push(acosStr);
+    lines.push(`O ACoS consolidado foi de ${account_acos.toFixed(1)}% e o ROAS de ${account_roas.toFixed(2)}x.`);
   }
 
-  if (profitable > 0) lines.push(`${profitable} produto(s) permaneceram lucrativos dentro da meta de ACoS.`);
-  if (low_profit > 0) lines.push(`${low_profit} produto(s) apresentaram lucro positivo mas com ACoS acima da meta — receberam ajuste gradual de bid.`);
-  if (break_even_number > 0) lines.push(`${break_even_number} produto(s) operaram próximo ao break-even — sob monitoramento.`);
-  if (unprofitable > 0) lines.push(`${unprofitable} produto(s) apresentaram prejuízo confirmado (ACoS acima do break-even ou lucro negativo) — bids reduzidos e keywords revisadas.`);
-  if (no_sales_with_spend > 0) lines.push(`${no_sales_with_spend} produto(s) tiveram gasto sem vendas atribuídas — search terms revisados e bids reduzidos em 10%.`);
+  const bidDecisions = decisions.filter((decision: any) => {
+    const searchable = [
+      decision.decision_type, decision.action, decision.rule_key, decision.entity_type,
+    ].map((value) => String(value || '').toLowerCase()).join('|');
+    return searchable.includes('bid') || (
+      decision.value_before != null && decision.value_after != null &&
+      Number(decision.value_before) !== Number(decision.value_after)
+    );
+  });
+  const bidExecuted = bidDecisions.filter((decision: any) => decision.status === 'executed').length;
+  const bidReductions = bidDecisions.filter((decision: any) =>
+    decision.status === 'executed' &&
+    Number(decision.value_after ?? decision.proposed_value ?? 0) <
+      Number(decision.value_before ?? decision.current_value ?? 0)
+  ).length;
+  const bidIncreases = bidDecisions.filter((decision: any) =>
+    decision.status === 'executed' &&
+    Number(decision.value_after ?? decision.proposed_value ?? 0) >
+      Number(decision.value_before ?? decision.current_value ?? 0)
+  ).length;
+  lines.push(`O motor/IA realizou ${decisions.length} interação(ões) de decisão; ${decisions_executed} foram executadas. Foram identificadas ${bidDecisions.length} interação(ões) de bid, com ${bidExecuted} executadas (${bidReductions} reduções e ${bidIncreases} aumentos), além de ${campaigns_adjusted} campanha(s) e ${keywords_adjusted} keyword(s) ajustadas.`);
 
-  if (campaigns_adjusted > 0) lines.push(`${campaigns_adjusted} campanha(s) ajustada(s) pelo motor determinístico.`);
-  if (keywords_adjusted > 0) lines.push(`${keywords_adjusted} keyword(s) ajustada(s) (redução de bid ou pausa).`);
-  if (decisions_executed > 0) lines.push(`${decisions_executed} decisão(ões) de baixo risco executada(s) automaticamente.`);
+  const named = (product: any) =>
+    product?.product_name || product?.sku || product?.asin || 'produto não identificado';
+  const profitableProducts = products.filter((product: any) => Number(product.profit_after_ads_7d) > 0);
+  const winner = [...profitableProducts].sort((a: any, b: any) =>
+    Number(b.profit_after_ads_7d || 0) - Number(a.profit_after_ads_7d || 0)
+  )[0] || [...products].sort((a: any, b: any) =>
+    Number(b.ads_sales_7d || 0) - Number(a.ads_sales_7d || 0)
+  )[0];
+  if (winner) {
+    const winningCampaign = campaigns.find((campaign: any) => String(campaign.asin || '') === String(winner.asin || ''));
+    const winningCampaignText = winningCampaign
+      ? `, associado à campanha “${winningCampaign.campaign_name || winningCampaign.name || winningCampaign.campaign_id}”`
+      : '';
+    lines.push(`O destaque vencedor foi “${named(winner)}” (${winner.sku || winner.asin})${winningCampaignText}, com R$${Number(winner.ads_sales_7d || 0).toFixed(2)} em vendas Ads e R$${Number(winner.profit_after_ads_7d || 0).toFixed(2)} de lucro pós-Ads.`);
+  }
+
+  const loser = [...products]
+    .filter((product: any) => product.profit_after_ads_7d != null)
+    .sort((a: any, b: any) => Number(a.profit_after_ads_7d) - Number(b.profit_after_ads_7d))[0];
+  if (loser && Number(loser.profit_after_ads_7d) < 0) {
+    const losingCampaign = campaigns.find((campaign: any) => String(campaign.asin || '') === String(loser.asin || ''));
+    const losingCampaignText = losingCampaign
+      ? `, na campanha “${losingCampaign.campaign_name || losingCampaign.name || losingCampaign.campaign_id}”`
+      : '';
+    const loserActions = decisions.filter((decision: any) =>
+      (decision.asin && decision.asin === loser.asin) ||
+      (decision.sku && decision.sku === loser.sku)
+    );
+    const executedLoserActions = loserActions.filter((decision: any) => decision.status === 'executed');
+    const actionText = executedLoserActions.length > 0
+      ? `${executedLoserActions.length} ação(ões) executadas, incluindo redução/controle de bid ou revisão de entrega conforme as regras econômicas`
+      : `monitoramento e recomendação “${loser.recommended_action || 'revisar bids e termos de busca'}”`;
+    lines.push(`O maior prejuízo ficou com “${named(loser)}” (${loser.sku || loser.asin})${losingCampaignText}, em R$${Math.abs(Number(loser.profit_after_ads_7d)).toFixed(2)} negativos após Ads; para conter a perda, houve ${actionText}.`);
+  }
+
+  const noSale = [...products]
+    .filter((product: any) => Number(product.spend_7d) > 0 && Number(product.ads_sales_7d) === 0)
+    .sort((a: any, b: any) => Number(b.spend_7d) - Number(a.spend_7d))[0];
+  if (noSale) {
+    lines.push(`O principal ponto sem retorno foi “${named(noSale)}” (${noSale.sku || noSale.asin}), que consumiu R$${Number(noSale.spend_7d).toFixed(2)} sem venda atribuída; permanece sob redução de exposição, revisão de termos e possível pausa caso ultrapasse o limite econômico.`);
+  }
+
+  lines.push(`Distribuição econômica: ${profitable} lucrativo(s), ${low_profit} com lucro baixo, ${break_even_number} no break-even, ${unprofitable} deficitário(s) e ${no_sales_with_spend} com gasto sem vendas.`);
 
   return lines.join(' ');
 }
@@ -186,9 +252,14 @@ Deno.serve(async (req) => {
     }
 
     // ── Carregar produtos para nomes e info adicional ──────────────────────
-    const products = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: aid }, null, 200
-    ).catch(() => []);
+    const [products, campaigns] = await Promise.all([
+      base44.asServiceRole.entities.Product.filter(
+        { amazon_account_id: aid }, null, 200
+      ).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: aid }, null, 1000
+      ).catch(() => []),
+    ]);
     const productMap = new Map<string, any>();
     for (const p of products) if (p.asin) productMap.set(p.asin, p);
 
@@ -335,6 +406,11 @@ Deno.serve(async (req) => {
 
     // ── Resumo executivo ───────────────────────────────────────────────────
     const executive_summary = generateExecutiveSummary({
+      week_start,
+      week_end,
+      products: weeklyProducts,
+      campaigns,
+      decisions: decisionsInPeriod,
       profitable: count_profitable,
       unprofitable: count_unprofitable,
       no_sales_with_spend: count_no_sales,
@@ -345,7 +421,10 @@ Deno.serve(async (req) => {
       decisions_executed,
       total_spend,
       total_ads_sales,
+      total_real_sales,
+      total_profit_after_ads,
       account_acos,
+      account_roas,
       data_coverage_percent,
     });
 
