@@ -142,6 +142,45 @@
       "type": "number",
       "default": 0
     },
+    "daily_sales_velocity_30d": {
+      "type": "number",
+      "default": 0,
+      "description": "Velocidade diária de unidades calculada com vendas reais da SP-API."
+    },
+    "days_of_supply": {
+      "type": "number",
+      "description": "Dias de cobertura usando somente estoque vendável disponível agora."
+    },
+    "days_of_supply_with_inbound": {
+      "type": "number",
+      "description": "Cobertura projetada incluindo inbound; não remove a proteção do estoque atual."
+    },
+    "inventory_coverage_status": {
+      "type": "string",
+      "enum": [
+        "out_of_stock",
+        "insufficient_history",
+        "no_velocity",
+        "critical",
+        "low",
+        "healthy"
+      ]
+    },
+    "inventory_signal_quality": {
+      "type": "string",
+      "enum": [
+        "sufficient",
+        "insufficient_history"
+      ]
+    },
+    "inventory_signal_observed_days": {
+      "type": "number",
+      "default": 0
+    },
+    "inventory_signal_calculated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "acos": {
       "type": "number",
       "default": 0

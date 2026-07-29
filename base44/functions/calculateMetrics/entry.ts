@@ -4,6 +4,11 @@
  * Retorna dados estruturados para o motor de regras (Camada 2).
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  calculateInventoryCoverage,
+  calculateObservedWindowDays,
+  calculateRealTacos,
+} from '../../shared/decisionMetrics.ts';
 
 function safeDiv(a, b, decimals = 2) {
   if (!b || b === 0) return 0;
@@ -62,7 +67,7 @@ Deno.serve(async (req) => {
     const breakEvenACoS = calculateBreakEvenACoS(marginPct);
 
     // Carregar dados conforme tipo de entidade
-    let campaigns = [], keywords = [], searchTerms = [], products = [];
+    let campaigns = [], keywords = [], searchTerms = [], products = [], salesDaily = [];
 
     if (!entity_type || entity_type === 'campaign') {
       campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, '-spend', 1000);
@@ -76,6 +81,24 @@ Deno.serve(async (req) => {
     if (!entity_type || entity_type === 'product') {
       products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id }, '-total_sales_30d', 500);
     }
+    if (!entity_type || entity_type === 'campaign' || entity_type === 'product') {
+      salesDaily = await base44.asServiceRole.entities.SalesDaily.filter(
+        { amazon_account_id }, '-date', 2000
+      ).catch(() => []);
+    }
+
+    const cutoff30d = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const realSalesByAsin = new Map();
+    const salesDates = new Set();
+    for (const row of salesDaily) {
+      if (!row.asin || !row.date || row.date < cutoff30d) continue;
+      const aggregate = realSalesByAsin.get(row.asin) || { revenue: 0, units: 0 };
+      aggregate.revenue += Number(row.ordered_product_sales || 0);
+      aggregate.units += Number(row.units_ordered || 0);
+      realSalesByAsin.set(row.asin, aggregate);
+      salesDates.add(row.date);
+    }
+    const observedSalesDays = calculateObservedWindowDays([...salesDates]);
 
     // Processar campanhas
     const processedCampaigns = campaigns.map(c => {
@@ -93,7 +116,8 @@ Deno.serve(async (req) => {
       const ctr = safeDiv(clicks, impressions, 2);
       const cvr = safeDiv(orders, clicks, 3);
       const profit = calculateProfit(sales, spend, marginPct);
-      const tacos = safeDiv(spend, sales, 1); // TACoS = Spend / Sales
+      const realSales = c.asin ? Number(realSalesByAsin.get(c.asin)?.revenue || 0) : 0;
+      const tacos = calculateRealTacos(spend, realSales);
       const budgetConsumedPct = dailyBudget > 0 ? safeDiv(currentSpend, dailyBudget, 1) : 0;
       const daysRunning = daysSince(c.start_date);
 
@@ -109,6 +133,8 @@ Deno.serve(async (req) => {
         metrics: {
           spend, sales, clicks, impressions, orders,
           acos, roas, cpc, ctr, cvr, profit, tacos,
+          real_sales_30d: realSales,
+          tacos_data_partial: realSales <= 0,
           budget_consumed_pct: budgetConsumedPct,
           break_even_acos: breakEvenACoS,
           target_acos: rule.target_acos,
@@ -214,26 +240,43 @@ Deno.serve(async (req) => {
     // Processar produtos
     const processedProducts = products.map(p => {
       const spend30d = p.total_spend_30d || 0;
-      const sales30d = p.total_sales_30d || p.total_revenue_30d || 0;
-      const units30d = p.total_units_30d || p.units_sold_30d || 0;
-      const fbaInventory = p.fba_inventory || 0;
-      const acos = safeDiv(spend30d, sales30d, 1);
-      const roas = safeDiv(sales30d, spend30d, 2);
-      const profit = calculateProfit(sales30d, spend30d, marginPct);
-      const daysOutOfStock = fbaInventory === 0 ? 999 : 0;
+      const adsSales30d = p.total_sales_30d || p.total_revenue_30d || 0;
+      const realSales = realSalesByAsin.get(p.asin) || { revenue: 0, units: 0 };
+      const realSales30d = Number(realSales.revenue || 0);
+      const units30d = Number(realSales.units || p.total_units_30d || p.units_sold_30d || 0);
+      const acos = safeDiv(spend30d, adsSales30d, 1);
+      const roas = safeDiv(adsSales30d, spend30d, 2);
+      const profit = calculateProfit(realSales30d || adsSales30d, spend30d, marginPct);
+      const tacos = calculateRealTacos(spend30d, realSales30d);
+      const inventoryCoverage = calculateInventoryCoverage({
+        fbaInventory: p.fba_inventory,
+        availableQuantity: p.available_quantity,
+        reservedInventory: p.reserved_inventory,
+        inboundInventory: p.inbound_inventory,
+        unitsSold: units30d,
+        observedDays: observedSalesDays,
+      });
 
       return {
         ...p,
         metrics: {
           spend_30d: spend30d,
-          sales_30d: sales30d,
+          sales_30d: adsSales30d,
+          real_sales_30d: realSales30d,
           units_30d: units30d,
-          acos, roas, profit,
+          acos, roas, tacos, profit,
+          tacos_data_partial: realSales30d <= 0,
+          daily_sales_velocity: inventoryCoverage.daily_sales_velocity,
+          days_of_supply: inventoryCoverage.days_of_supply,
+          days_of_supply_with_inbound: inventoryCoverage.days_of_supply_with_inbound,
+          inventory_coverage_status: inventoryCoverage.status,
           break_even_acos: breakEvenACoS,
         },
         signals: {
-          is_out_of_stock: fbaInventory === 0,
-          is_low_stock: fbaInventory > 0 && fbaInventory < 5,
+          is_out_of_stock: inventoryCoverage.status === 'out_of_stock',
+          is_low_stock: ['critical', 'low'].includes(inventoryCoverage.status),
+          inventory_signal_actionable: inventoryCoverage.actionable,
+          inventory_data_quality: inventoryCoverage.data_quality,
           is_profitable: profit > 0,
           has_no_campaign: !(p.has_campaign || p.linked_campaign_id),
         },

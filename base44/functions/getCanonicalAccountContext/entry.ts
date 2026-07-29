@@ -15,6 +15,11 @@
  * Usado por: useAccountData (frontend) + qualquer módulo que precise dos KPIs
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  calculateInventoryCoverage,
+  calculateObservedWindowDays,
+  calculateRealTacos,
+} from '../../shared/decisionMetrics.ts';
 
 const FALLBACK_TARGET_ACOS = 10;
 const FALLBACK_MAX_ACOS = 15;
@@ -218,6 +223,7 @@ Deno.serve(async (req) => {
 
     // ── 6. Agregar SalesDaily — MESMO CÁLCULO DO MOTOR ───────────────────────
     const salesByAsin = new Map<string, { revenue: number; units: number; orders: number; dates: Set<string> }>();
+    const realKpis14d = { revenue: 0, units: 0, orders: 0 };
     for (const s of salesDailyRaw) {
       if (!s.asin || !s.date || s.date < since30) continue;
       if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { revenue: 0, units: 0, orders: 0, dates: new Set() });
@@ -226,6 +232,11 @@ Deno.serve(async (req) => {
       e.units += s.units_ordered || 0;
       if ((s.units_ordered || 0) > 0) e.orders++;
       if (s.date) e.dates.add(s.date);
+      if (s.date >= since14) {
+        realKpis14d.revenue += s.ordered_product_sales || 0;
+        realKpis14d.units += s.units_ordered || 0;
+        if ((s.units_ordered || 0) > 0) realKpis14d.orders++;
+      }
     }
 
     // KPIs reais agregados de toda a conta (SP-API)
@@ -237,8 +248,30 @@ Deno.serve(async (req) => {
     }
 
     // TACoS real da conta (30d)
-    const tacos30d = realKpis30d.revenue > 0 ? (kpis30d.spend / realKpis30d.revenue) * 100 : null;
-    const tacos14d = realKpis30d.revenue > 0 ? (kpis14d.spend / realKpis30d.revenue) * 100 : null;
+    const tacos30d = calculateRealTacos(kpis30d.spend, realKpis30d.revenue);
+    const tacos14d = calculateRealTacos(kpis14d.spend, realKpis14d.revenue);
+
+    const spDates30 = salesDailyRaw
+      .filter((s: any) => s.date && s.date >= since30)
+      .map((s: any) => s.date);
+    const observedSalesDays = calculateObservedWindowDays(spDates30);
+    const inventorySignals = products
+      .filter((product: any) => product.asin)
+      .map((product: any) => {
+        const sales = salesByAsin.get(product.asin);
+        return {
+          asin: product.asin,
+          sku: product.sku,
+          ...calculateInventoryCoverage({
+            fbaInventory: product.fba_inventory,
+            availableQuantity: product.available_quantity,
+            reservedInventory: product.reserved_inventory,
+            inboundInventory: product.inbound_inventory,
+            unitsSold: sales?.units || 0,
+            observedDays: observedSalesDays,
+          }),
+        };
+      });
 
     // ── 7. Qualidade de dados — mesmo diagnóstico do motor ───────────────────
     const lastSyncAt = account.ads_data_fresh_at || account.ads_metrics_last_sync_at || account.last_sync_at || null;
@@ -282,7 +315,16 @@ Deno.serve(async (req) => {
       kpis_yesterday: deriveKpis(kpisYesterday),
 
       // Faturamento real (SP-API Orders)
+      real_kpis_14d: realKpis14d,
       real_kpis_30d: realKpis30d,
+      inventory_coverage: {
+        observed_days: observedSalesDays,
+        critical: inventorySignals.filter((signal: any) => signal.status === 'critical').length,
+        low: inventorySignals.filter((signal: any) => signal.status === 'low').length,
+        out_of_stock: inventorySignals.filter((signal: any) => signal.status === 'out_of_stock').length,
+        insufficient_history: inventorySignals.filter((signal: any) => signal.status === 'insufficient_history').length,
+        products: inventorySignals,
+      },
 
       // Metas vs realidade (14d — mesmo que o motor usa para decisões)
       goal_status: {

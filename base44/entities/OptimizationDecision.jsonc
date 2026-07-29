@@ -100,6 +100,26 @@
     "country_code": { "type": "string" },
     "currency_code": { "type": "string" },
     "currency_symbol": { "type": "string" },
+    "stock_coverage_days": {
+      "type": "number",
+      "description": "Cobertura do estoque vendável no momento da decisão."
+    },
+    "stock_coverage_with_inbound_days": {
+      "type": "number",
+      "description": "Cobertura projetada incluindo estoque inbound."
+    },
+    "stock_qty": { "type": "number" },
+    "stock_inbound_qty": { "type": "number" },
+    "stock_reserved_qty": { "type": "number" },
+    "stock_urgency": {
+      "type": "string",
+      "enum": ["critical", "low", "healthy", "unknown"]
+    },
+    "sales_velocity_daily": { "type": "number" },
+    "inventory_signal_quality": {
+      "type": "string",
+      "enum": ["sufficient", "insufficient_history"]
+    },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   },

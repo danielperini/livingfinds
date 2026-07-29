@@ -25,6 +25,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { runImmediateBudgetRescue } from '../../shared/immediateBudgetRescue.ts';
+import { calculateInventoryCoverage, calculateObservedWindowDays } from '../../shared/decisionMetrics.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HIERARQUIA CANÔNICA DE DECISÃO v7
@@ -995,6 +996,7 @@ Deno.serve(async (req) => {
 
     // ── 5. Métricas por ASIN ──────────────────────────────────────────────
     const salesByAsin = new Map<string, { revenue: number; units: number; days: Set<string> }>();
+    const salesWindowDates = new Set<string>();
     for (const s of salesDailyRaw) {
       if (!s.asin || !s.date || s.date < cutoff30d) continue;
       if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { revenue: 0, units: 0, days: new Set() });
@@ -1002,6 +1004,39 @@ Deno.serve(async (req) => {
       e.revenue += s.ordered_product_sales || 0;
       e.units += s.units_ordered || 0;
       e.days.add(s.date);
+      salesWindowDates.add(s.date);
+    }
+    const observedSalesDays = calculateObservedWindowDays([...salesWindowDates]);
+    const inventoryCoverageByAsin = new Map<string, ReturnType<typeof calculateInventoryCoverage>>();
+    for (const product of products) {
+      if (!product.asin) continue;
+      const sales = salesByAsin.get(product.asin);
+      const coverage = calculateInventoryCoverage({
+        fbaInventory: product.fba_inventory,
+        availableQuantity: product.available_quantity,
+        reservedInventory: product.reserved_inventory,
+        inboundInventory: product.inbound_inventory,
+        unitsSold: sales?.units || 0,
+        observedDays: observedSalesDays,
+      });
+      inventoryCoverageByAsin.set(product.asin, coverage);
+
+      const changed = product.inventory_coverage_status !== coverage.status
+        || Number(product.days_of_supply ?? -1) !== Number(coverage.days_of_supply ?? -1)
+        || Number(product.days_of_supply_with_inbound ?? -1) !== Number(coverage.days_of_supply_with_inbound ?? -1)
+        || Number(product.daily_sales_velocity_30d || 0) !== Number(coverage.daily_sales_velocity || 0)
+        || product.inventory_signal_calculated_at?.slice(0, 10) !== today;
+      if (changed) {
+        await base44.asServiceRole.entities.Product.update(product.id, {
+          daily_sales_velocity_30d: coverage.daily_sales_velocity,
+          days_of_supply: coverage.days_of_supply,
+          days_of_supply_with_inbound: coverage.days_of_supply_with_inbound,
+          inventory_coverage_status: coverage.status,
+          inventory_signal_quality: coverage.data_quality,
+          inventory_signal_observed_days: coverage.observed_days,
+          inventory_signal_calculated_at: now,
+        }).catch(() => {});
+      }
     }
 
     // ── 6. Meta econômica dinâmica + Lucro Pós-ADS por ASIN ──────────────
@@ -1452,11 +1487,11 @@ Deno.serve(async (req) => {
         }
       }
 
-      const stockQty = product?.fba_inventory || 0;
-      const salesM = resolvedAsin ? salesByAsin.get(resolvedAsin) : null;
-      const realUnits30d = salesM?.units || 0;
-      const stockVelocity = realUnits30d / 30;
-      const stockCovDays = stockVelocity > 0 ? stockQty / stockVelocity : (stockQty > 0 ? 999 : 0);
+      const inventoryCoverage = resolvedAsin
+        ? inventoryCoverageByAsin.get(resolvedAsin)
+        : calculateInventoryCoverage({ fbaInventory: product?.fba_inventory });
+      const stockQty = inventoryCoverage?.available_now || 0;
+      const stockCovDays = inventoryCoverage?.days_of_supply;
 
       if (stockQty <= 0) {
         const currentBid = kw.bid || kw.current_bid || 0.25;
@@ -1473,6 +1508,12 @@ Deno.serve(async (req) => {
               search_intent: kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null,
               settings_source: settings.source, settings_snapshot: settingsSnapshot,
               idempotency_key: iKey, stock_coverage_days: 0, stock_qty: 0,
+              stock_coverage_with_inbound_days: inventoryCoverage?.days_of_supply_with_inbound,
+              stock_inbound_qty: inventoryCoverage?.inbound_inventory || 0,
+              stock_reserved_qty: inventoryCoverage?.reserved_inventory || 0,
+              sales_velocity_daily: inventoryCoverage?.daily_sales_velocity || 0,
+              inventory_signal_quality: inventoryCoverage?.data_quality || 'insufficient_history',
+              stock_urgency: 'critical',
               opportunity_state: 'no_opportunity',
             }));
             entityChangedThisCycle.set(entityId, 'stock_zero');
@@ -1533,8 +1574,8 @@ Deno.serve(async (req) => {
       const lastGrowthTs = lastGrowthByEntity.get(entityId) || 0;
       const growthCooldownActive = lastGrowthTs > 0 && (Date.now() - lastGrowthTs) / 3600000 < settings.growth_cooldown_hours;
 
-      if (stockCovDays > 0 && stockCovDays < 21) {
-        const isCritical = stockCovDays < 7;
+      if (inventoryCoverage && ['critical', 'low'].includes(inventoryCoverage.status) && stockCovDays != null) {
+        const isCritical = inventoryCoverage.status === 'critical';
         const reductionPct = isCritical
           ? settings.max_bid_decrease_pct * 0.90
           : settings.max_bid_decrease_pct * 0.40;
@@ -1548,11 +1589,17 @@ Deno.serve(async (req) => {
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
             rationale: isCritical
-              ? `⚠️ ESTOQUE CRÍTICO: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido ${Math.round(reductionPct * 100)}% para conservar orçamento exclusivamente para produtos com estoque suficiente.`
-              : `📦 ESTOQUE BAIXO: ${Math.round(stockCovDays)}d de cobertura. Bid reduzido ${Math.round(reductionPct * 100)}% preventivamente — orçamento direcionado a produtos com estoque pleno.`,
+              ? `⚠️ ESTOQUE CRÍTICO: ${Math.round(stockCovDays)}d de cobertura disponível${inventoryCoverage.inbound_inventory > 0 ? ` (${Math.round(inventoryCoverage.days_of_supply_with_inbound || 0)}d projetados com inbound)` : ''}. Bid reduzido ${Math.round(reductionPct * 100)}% para conservar estoque vendável.`
+              : `📦 ESTOQUE BAIXO: ${Math.round(stockCovDays)}d de cobertura disponível${inventoryCoverage.inbound_inventory > 0 ? ` (${Math.round(inventoryCoverage.days_of_supply_with_inbound || 0)}d projetados com inbound)` : ''}. Bid reduzido ${Math.round(reductionPct * 100)}% preventivamente.`,
             rule_key: ruleKey, risk: isCritical ? 'medium' : 'low', priority: PRIORITY.stock,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, stock_coverage_days: stockCovDays,
+            stock_coverage_with_inbound_days: inventoryCoverage.days_of_supply_with_inbound,
+            stock_qty: inventoryCoverage.available_now,
+            stock_inbound_qty: inventoryCoverage.inbound_inventory,
+            stock_reserved_qty: inventoryCoverage.reserved_inventory,
+            sales_velocity_daily: inventoryCoverage.daily_sales_velocity,
+            inventory_signal_quality: inventoryCoverage.data_quality,
             opportunity_state: 'no_opportunity',
             stock_urgency: isCritical ? 'critical' : 'low',
           }));
@@ -1654,14 +1701,14 @@ Deno.serve(async (req) => {
         acos: kw_acos !== null ? Math.round(kw_acos * 10) / 10 : null,
         orders: kw_orders,
         profit_after_ads: asinMeta?.profit_after_ads_14d,
-        stock_days: Math.round(stockCovDays),
+        stock_days: stockCovDays != null ? Math.round(stockCovDays) : null,
         safe_max_cpc: effectiveSafeMaxCpc,
         partial_cost: econStatus.allow_conservative_growth && econStatus.economic_data_incomplete,
       });
 
       if (protection.protected) {
         stats.protected++;
-        if (stockCovDays >= settings.min_stock_days && opp.can_grow && !growthCooldownActive) {
+        if (stockCovDays != null && stockCovDays >= settings.min_stock_days && opp.can_grow && !growthCooldownActive) {
           const increase = getGrowthIncrement('moderate') * 0.5;
           const proposed = clamp(currentBid * (1 + increase), settings.min_bid, settings.max_bid);
           if (proposed > currentBid * 1.02 && econStatus.economic_confidence !== 'none') {
@@ -1715,7 +1762,7 @@ Deno.serve(async (req) => {
         const replacementDue = kwAgeHours > FB.ZERO_IMP_KEYWORD_PAUSE_DAYS * 24
           && bootstrapAttempts >= 2;
 
-        if (hasZeroImpressions && replacementDue && stockCovDays > 0) {
+        if (hasZeroImpressions && replacementDue && stockCovDays != null && stockCovDays > 0) {
           const iKey = `zero_imp_replace_15d|${aid}|${entityId}|${today}`;
           if (!usedIdemKeys.has(iKey)) {
             decisions.push(buildDecision(aid, correlationId, {
@@ -2141,6 +2188,13 @@ Deno.serve(async (req) => {
           settings_source: d.settings_source,
           data_quality: dataFreshness,
           stock_coverage_days: d.stock_coverage_days,
+          stock_coverage_with_inbound_days: d.stock_coverage_with_inbound_days,
+          stock_qty: d.stock_qty,
+          stock_inbound_qty: d.stock_inbound_qty,
+          stock_reserved_qty: d.stock_reserved_qty,
+          stock_urgency: d.stock_urgency,
+          sales_velocity_daily: d.sales_velocity_daily,
+          inventory_signal_quality: d.inventory_signal_quality,
         }))
       ).catch(() => []);
       saved += batch.length;
