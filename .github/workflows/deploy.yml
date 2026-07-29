@@ -119,7 +119,6 @@ jobs:
               await call("runCampaignFactory");
               await callOptional("monitorZeroSalesReactivation");
               await callOptional("runMotorImediato", { force: false });
-              await callOptional("runCampaignPortfolioGrowthCycle", { full_expansion: true, dry_run: false });
               await callOptional("syncUnifiedAdsReportsHourly", { days: 14, force: true });
               await call("rebuildHourlyMetricsFromReports", { full: true, lookback_days: 30 });
               await call("runCanonicalDaypartingEngine", { trigger: "deploy_retroactive_hourly_rebuild" });

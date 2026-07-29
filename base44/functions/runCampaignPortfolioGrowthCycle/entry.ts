@@ -95,6 +95,12 @@ Deno.serve(async (req) => {
         .filter(isAutomatic)
         .map((campaign: any) => String(campaign.campaign_id || campaign.amazon_campaign_id || ''))
     );
+    const asinByCampaignId = new Map(
+      active.map((campaign: any) => [
+        String(campaign.campaign_id || campaign.amazon_campaign_id || ''),
+        campaign.asin,
+      ])
+    );
     const convertingAutoTerms = searchTerms.filter((term: any) =>
       automaticCampaignIds.has(String(term.campaign_id || '')) &&
       Math.max(n(term.orders_30d), n(term.orders_14d), n(term.orders)) > 0 &&
@@ -138,7 +144,9 @@ Deno.serve(async (req) => {
       spend_without_conversion: spendWithoutConversion.length,
       automatic_campaigns_monitored: automaticCampaignIds.size,
       converting_auto_terms: convertingAutoTerms.length,
-      converting_auto_asins: new Set(convertingAutoTerms.map((term: any) => term.advertised_asin).filter(Boolean)).size,
+      converting_auto_asins: new Set(convertingAutoTerms.map((term: any) =>
+        term.advertised_asin || asinByCampaignId.get(String(term.campaign_id || ''))
+      ).filter(Boolean)).size,
       full_expansion: fullExpansion,
       stages_ok: stages.filter(stage => stage.ok).length,
       stages_failed: stages.filter(stage => !stage.ok).length,
@@ -163,7 +171,7 @@ Deno.serve(async (req) => {
       spend_without_conversion: spendWithoutConversion.slice(0, 100),
       active_without_spend: activeWithoutSpend.slice(0, 300),
       converting_auto_terms_sample: convertingAutoTerms.slice(0, 50).map((term: any) => ({
-        asin: term.advertised_asin,
+        asin: term.advertised_asin || asinByCampaignId.get(String(term.campaign_id || '')),
         term: term.search_term,
         orders: Math.max(n(term.orders_30d), n(term.orders_14d), n(term.orders)),
         spend: n(term.spend),

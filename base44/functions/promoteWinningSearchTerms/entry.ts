@@ -255,6 +255,12 @@ Deno.serve(async (req) => {
         .filter(Boolean)
         .map(String)
     );
+    const campaignById = new Map<string, any>();
+    for (const campaign of campaigns) {
+      for (const id of [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id]) {
+        if (id) campaignById.set(String(id), campaign);
+      }
+    }
 
     // Índice: ASIN|term → keyword exata já existe
     const exactKeyIndex = new Set(
@@ -274,21 +280,23 @@ Deno.serve(async (req) => {
     const termMap = new Map<string, any>();
 
     for (const st of searchTerms) {
-      if (!st.advertised_asin || !st.search_term) continue;
+      const sourceCampaign = campaignById.get(String(st.campaign_id || ''));
+      const advertisedAsin = st.advertised_asin || sourceCampaign?.asin;
+      if (!advertisedAsin || !st.search_term) continue;
       if (!autoCampaignIds.has(String(st.campaign_id || ''))) continue;
       // Excluir apenas dados MUITO recentes (atribuição incompleta).
       // Se date >= SAFE_CUTOFF → dentro dos últimos 72h → ignorar.
       // Se date for null ou muito antigo → incluir (dados estáveis).
       if (st.date && st.date >= SAFE_CUTOFF) continue;
-      if (force_asin && st.advertised_asin !== force_asin) continue;
+      if (force_asin && advertisedAsin !== force_asin) continue;
 
       const norm = normalizeTerm(st.search_term);
       if (!norm || norm.length < 2) continue;
 
-      const key = `${st.advertised_asin}|${norm}`;
+      const key = `${advertisedAsin}|${norm}`;
       if (!termMap.has(key)) {
         termMap.set(key, {
-          asin: st.advertised_asin,
+          asin: advertisedAsin,
           search_term: st.search_term, // texto original preservado
           normalized_term: norm,
           campaign_id: st.campaign_id,
