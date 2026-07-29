@@ -106,10 +106,27 @@ Deno.serve(async (request) => {
         let remoteAds: any[] = [];
         if (localGroups.length && localKeywords.length && metricsFresh) {
           const [rc, rg, rk, ra] = await Promise.all([
-            ads(base44, aid, 'bootstrapConfirmCampaign', '/sp/campaigns/list', { campaignIdFilter: [campaignId], maxResults: 10 }, 'application/vnd.spCampaign.v3+json').catch(() => ({})),
-            ads(base44, aid, 'bootstrapConfirmAdGroup', '/sp/adGroups/list', { campaignIdFilter: [campaignId], maxResults: 100 }, 'application/vnd.spAdGroup.v3+json').catch(() => ({})),
-            ads(base44, aid, 'bootstrapConfirmKeyword', '/sp/keywords/list', { campaignIdFilter: [campaignId], matchTypeFilter: ['EXACT'], maxResults: 100 }, 'application/vnd.spKeyword.v3+json').catch(() => ({})),
-            ads(base44, aid, 'bootstrapConfirmProductAd', '/sp/productAds/list', { campaignIdFilter: [campaignId], maxResults: 100 }, 'application/vnd.spProductAd.v3+json').catch(() => ({})),
+            ads(base44, aid, 'bootstrapConfirmCampaign', '/sp/campaigns/list', {
+              campaignIdFilter: { include: [campaignId] },
+              stateFilter: { include: ['ENABLED', 'PAUSED'] },
+              maxResults: 10,
+            }, 'application/vnd.spCampaign.v3+json').catch(() => ({})),
+            ads(base44, aid, 'bootstrapConfirmAdGroup', '/sp/adGroups/list', {
+              campaignIdFilter: { include: [campaignId] },
+              stateFilter: { include: ['ENABLED', 'PAUSED'] },
+              maxResults: 100,
+            }, 'application/vnd.spAdGroup.v3+json').catch(() => ({})),
+            ads(base44, aid, 'bootstrapConfirmKeyword', '/sp/keywords/list', {
+              campaignIdFilter: { include: [campaignId] },
+              stateFilter: { include: ['ENABLED', 'PAUSED'] },
+              matchTypeFilter: ['EXACT'],
+              maxResults: 100,
+            }, 'application/vnd.spKeyword.v3+json').catch(() => ({})),
+            ads(base44, aid, 'bootstrapConfirmProductAd', '/sp/productAds/list', {
+              campaignIdFilter: { include: [campaignId] },
+              stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
+              maxResults: 100,
+            }, 'application/vnd.spProductAd.v3+json').catch(() => ({})),
           ]);
           remoteCampaign = list(rc, 'campaigns')[0];
           remoteGroups = list(rg, 'adGroups');

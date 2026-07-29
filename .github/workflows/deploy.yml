@@ -154,6 +154,30 @@ jobs:
             echo '--- diagnostico de campanhas sem clique + resgate seguro de bid ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const targets = [
+                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira sensor banheiro" },
+                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset gamer com fio usb" },
+                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset vermelho com microfone" },
+                { asin: "B0GNY7NYRN", name: "SP | MANUAL | EXACT | B0GNY7NYRN | headset gamer 71 surround" },
+                { asin: "B0GNY7NYRN", name: "SP | MANUAL | EXACT | B0GNY7NYRN | headset profissional azul usb fio 18m" },
+                { asin: "B0FCYR3VBD", name: "SP | MANUAL | EXACT | B0FCYR3VBD | kit completo organizador bagagem viagem" },
+                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | cesto de lixo para banheiro" },
+                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira para banheiro" },
+                { asin: "B0GNW1Q6V3", name: "SP | MANUAL | EXACT | B0GNW1Q6V3 | headset 71" },
+                { asin: "B0GR6GXS1B", name: "SP | MANUAL | EXACT | B0GR6GXS1B | fechadura eletrônica biométrica wi-fi co" },
+                { asin: "B0GR6GXS1B", name: "SP | MANUAL | EXACT | B0GR6GXS1B | fechadura eletronica digital" },
+                { asin: "B0H59FPPKS", name: "SP | MANUAL | EXACT | B0H59FPPKS | lixeira antiodor bebe" }
+              ];
+              const repairResponse = await fetch("http://127.0.0.1:8000/functions/repairPriorityManualCampaigns", {
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, targets })
+              });
+              const repair = await repairResponse.json().catch(() => ({}));
+              console.log("PRIORITY_REPAIR_HTTP=" + repairResponse.status + "|OK=" + repair.ok + "|CHECKED=" + (repair.checked || 0) + "|VERIFIED=" + (repair.verified || 0) + "|FAILED=" + (repair.failed || 0));
+              for (const row of repair.results || []) {
+                console.log("PRIORITY_REPAIR_ITEM=" + row.asin + "|" + row.campaign_name + "|" + row.status + "|" + (row.campaign_id || "") + "|" + (row.details?.error || ""));
+              }
+
               const response = await fetch("http://127.0.0.1:8000/functions/runManualZeroDeliveryBootstrap", {
                 method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
                 body: JSON.stringify({
