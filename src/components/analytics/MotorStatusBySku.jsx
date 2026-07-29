@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import {
   ChevronDown, ChevronRight, HelpCircle, ChevronUp,
   Loader2, Filter, Clock, TrendingUp, TrendingDown,
-  AlertTriangle, CheckCircle, Zap, Package, Eye, EyeOff
+  AlertTriangle, CheckCircle, Zap, Package, Eye, EyeOff, ArrowUpDown
 } from 'lucide-react';
 
 // ─── Classificação do Motor ───────────────────────────────────────────────────
@@ -278,12 +278,32 @@ function Legend({ open, onToggle }) {
 
 const PAGE_SIZE = 10;
 
+const SORT_COLUMNS = [
+  { key: 'asin', label: 'ASIN / SKU', value: row => row.asin || row.sku || '' },
+  { key: 'product', label: 'Produto', value: row => row.product_name || '' },
+  { key: 'motor', label: 'Motor / IA', value: row => row.motorStatus || '' },
+  { key: 'spend', label: 'Custo', value: row => row.spend },
+  { key: 'acos', label: 'ACoS', value: row => row.acos },
+  { key: 'roas', label: 'ROAS', value: row => row.roas },
+  { key: 'sales', label: 'Vendas', value: row => row.sales },
+  { key: 'clicks', label: 'Cliques', value: row => row.clicks },
+  {
+    key: 'last_action',
+    label: 'Última ação',
+    value: row => {
+      const date = row.lastDecision?.evaluated_at || row.lastDecision?.created_at;
+      return date ? new Date(date).getTime() : null;
+    },
+  },
+];
+
 export default function MotorStatusBySku({ accountId, targetAcos = 0 }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [filter, setFilter] = useState('all'); // all | ALERTA | BLOQUEADO | OTIMIZANDO | PROTEGIDO | MONITORANDO | IGNORADO
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState({ key: null, direction: 'asc' });
 
   useEffect(() => {
     if (!accountId) return;
@@ -391,10 +411,32 @@ export default function MotorStatusBySku({ accountId, targetAcos = 0 }) {
     load();
   }, [accountId, targetAcos]);
 
-  const filtered = useMemo(() =>
-    filter === 'all' ? rows : rows.filter(r => r.motorStatus === filter),
-    [rows, filter]
-  );
+  const filtered = useMemo(() => {
+    const result = filter === 'all' ? [...rows] : rows.filter(r => r.motorStatus === filter);
+    if (!sort.key) return result;
+    const column = SORT_COLUMNS.find(item => item.key === sort.key);
+    if (!column) return result;
+    return result.sort((a, b) => {
+      const aValue = column.value(a);
+      const bValue = column.value(b);
+      const aMissing = aValue === null || aValue === undefined || aValue === '';
+      const bMissing = bValue === null || bValue === undefined || bValue === '';
+      if (aMissing !== bMissing) return aMissing ? 1 : -1;
+      if (aMissing && bMissing) return 0;
+      const comparison = typeof aValue === 'number' && typeof bValue === 'number'
+        ? aValue - bValue
+        : String(aValue).localeCompare(String(bValue), 'pt-BR', { numeric: true, sensitivity: 'base' });
+      return sort.direction === 'asc' ? comparison : -comparison;
+    });
+  }, [rows, filter, sort]);
+
+  const toggleSort = (key) => {
+    setSort(current => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+    }));
+    setPage(1);
+  };
 
   const paginated = useMemo(() =>
     filtered.slice(0, page * PAGE_SIZE),
@@ -461,17 +503,33 @@ export default function MotorStatusBySku({ accountId, targetAcos = 0 }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-surface-2 bg-surface-1/80">
-                {['ASIN / SKU', 'Produto', 'Motor / IA', 'Custo', 'ACoS', 'ROAS', 'Vendas', 'Cliques', 'Última ação'].map((h, i) => (
-                  <th key={h} className={`px-3 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap ${
+                {SORT_COLUMNS.map((column, i) => {
+                  const active = sort.key === column.key;
+                  const SortIcon = active
+                    ? (sort.direction === 'asc' ? ChevronUp : ChevronDown)
+                    : ArrowUpDown;
+                  return (
+                  <th key={column.key} className={`px-3 py-2.5 text-left whitespace-nowrap ${
                     i === 1 ? 'hidden sm:table-cell' :
                     i === 5 || i === 6 ? 'hidden md:table-cell' :
                     i === 7 ? 'hidden lg:table-cell' :
                     i === 8 ? 'hidden xl:table-cell text-left' :
                     i >= 3 ? 'text-right' : ''
                   }`}>
-                    {h}
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(column.key)}
+                      className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                        active ? 'text-cyan' : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                      aria-label={`Ordenar por ${column.label}`}
+                    >
+                      {column.label}
+                      <SortIcon className="w-3 h-3" />
+                    </button>
                   </th>
-                ))}
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
