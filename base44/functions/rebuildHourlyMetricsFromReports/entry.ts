@@ -102,7 +102,13 @@ Deno.serve(async (request) => {
         for (let index = 0; index < rows.length; index++) {
           const current = rows[index];
           const previous = rows[index - 1];
-          const hour = n(current.hour_brt ?? new Date(current.observed_at).getHours());
+          const observedAt = new Date(current.observed_at);
+          const fallbackHour = Number(new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Sao_Paulo',
+            hour: '2-digit',
+            hourCycle: 'h23',
+          }).format(observedAt));
+          const hour = n(current.hour_brt ?? fallbackHour);
           if (!previous && hour > 2) continue;
           const delta = (field: string) => Math.max(0, n(current[field]) - n(previous?.[field]));
           const candidate = {

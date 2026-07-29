@@ -104,6 +104,18 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Amazon Ads hourly history - 05:15 BRT",
+      "function": "syncUnifiedAdsReportsHourly",
+      "cron": "15 5 * * *",
+      "payload": { "_service_role": true, "days": 14, "force": true }
+    },
+    {
+      "name": "Full hourly rebuild after Amazon report - 05:35 BRT",
+      "function": "rebuildHourlyMetricsFromReports",
+      "cron": "35 5 * * *",
+      "payload": { "_service_role": true, "full": true, "lookback_days": 30 }
+    },
+    {
       "name": "Daily Economic Assessment - 08:00 BRT",
       "function": "runDailyEconomicAssessment",
       "cron": "0 8 * * *",

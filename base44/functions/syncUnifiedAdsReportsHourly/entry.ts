@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
       account = accs[0];
     }
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' });
-    if (!account.unified_reports_access) {
+    if (!account.unified_reports_access && body.force !== true) {
       return Response.json({ ok: false, skipped: true, reason: 'unified_reports_access=false' });
     }
 

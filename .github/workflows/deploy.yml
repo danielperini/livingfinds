@@ -107,8 +107,17 @@ jobs:
                 if (!response.ok || data.ok === false) throw new Error(data.error || (name + " failed"));
                 return data;
               };
+              const callOptional = async (name, payload = {}) => {
+                try {
+                  return await call(name, payload);
+                } catch (error) {
+                  console.log(name.toUpperCase() + "_OPTIONAL_ERROR=" + String(error?.message || error));
+                  return null;
+                }
+              };
               await call("updateTermBankFromAutomaticCampaigns");
               await call("runCampaignFactory");
+              await callOptional("syncUnifiedAdsReportsHourly", { days: 14, force: true });
               await call("rebuildHourlyMetricsFromReports", { full: true, lookback_days: 30 });
               await call("runCanonicalDaypartingEngine", { trigger: "deploy_retroactive_hourly_rebuild" });
             ' </dev/null

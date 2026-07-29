@@ -4,7 +4,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
  * Pipeline assíncrono de métricas intradiárias de Sponsored Products.
  * Cada execução avança apenas uma etapa: request -> poll -> download -> persist.
  */
-const MIN_NEW_REPORT_INTERVAL_MINUTES = 150;
+const MIN_NEW_REPORT_INTERVAL_MINUTES = 60;
 const MAX_ATTEMPTS = 3;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const r2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
