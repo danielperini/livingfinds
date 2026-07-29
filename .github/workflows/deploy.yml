@@ -1,16 +1,13 @@
 name: Deploy para VPS
 
-# Dispara a cada push na main. O runner do GitHub builda o frontend,
-# envia server/, base44/ e dist/ para a VPS via SSH e rebuilda o container Docker.
-# O Codex (ou qualquer um) só precisa dar push — a VPS atualiza sozinha.
 on:
   push:
     branches: [main]
-  workflow_dispatch: {} # permite disparar manualmente pela aba Actions
+  workflow_dispatch: {}
 
 concurrency:
   group: deploy-vps
-  cancel-in-progress: false # não cancela um deploy no meio; enfileira
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -43,8 +40,6 @@ jobs:
           SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
         run: |
-          # Empacota apenas os 3 diretórios que a VPS precisa. server/.env NÃO entra
-          # no tar (não existe no repo) → segredos da VPS ficam preservados na extração.
           tar czf /tmp/deploy.tar.gz base44 server dist
           scp $SSHOPTS /tmp/deploy.tar.gz "$TARGET:/tmp/deploy.tar.gz"
 
@@ -57,12 +52,9 @@ jobs:
           ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
             set -e
             cd "$VPS_PATH"
-            # base44/ e dist/ não têm segredos → limpa para remover arquivos obsoletos.
-            # server/ NÃO é apagado (contém o .env que não está no tar).
             rm -rf base44 dist
             tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
             test -f dist/index.html
-            # Remove resíduo de deploys antigos que excluía dist/ do contexto Docker.
             rm -f .dockerignore
             docker compose -f server/docker-compose.yml up -d --build app
             sleep 6
@@ -72,35 +64,44 @@ jobs:
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const response = await fetch("http://127.0.0.1:8000/functions/ensureDailyReportsCurrent", {
-                method: "POST",
-                headers: { "content-type": "application/json", "x-api-token": token },
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
                 body: JSON.stringify({ _service_role: true })
               });
               const data = await response.json().catch(() => ({}));
               console.log("REPORT_SELF_HEAL_HTTP=" + response.status + "|OK=" + data.ok + "|TARGET=" + (data.target_date || "unknown") + "|TRIGGERED=" + (data.triggered_count ?? 0));
             ' </dev/null
 
+            echo '--- proteção econômica por SKU ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/enforceSkuProfitProtection", {
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true })
+              });
+              const data = await response.json().catch(() => ({}));
+              const actions = (data.results || []).flatMap((row) => row.actions || []);
+              console.log("SKU_PROTECTION_HTTP=" + response.status + "|OK=" + data.ok + "|ACTIONS=" + actions.length);
+              for (const action of actions) console.log("SKU_ACTION=" + action.sku + "|" + action.action + "|" + (action.campaign_id || action.keyword_id || "unknown"));
+              if (!response.ok || data.ok === false) console.log("SKU_PROTECTION_ERROR=" + (data.error || "unknown"));
+            ' </dev/null
+
             echo '--- verificação do frontend publicado ---'
-            docker compose -f server/docker-compose.yml exec -T app sh -lc "grep -R -q 'dos relatórios processados' /app/dist/assets && echo 'BUNDLE_MARKER=new' || echo 'BUNDLE_MARKER=old_or_missing'" </dev/null
             printf 'APP_ASSET='
             curl -fsS http://127.0.0.1:8000/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
-            printf 'PROXY_ASSET='
-            curl -fsS http://127.0.0.1/ | grep -oE 'assets/index-[^\" ]+\.js' | head -1 || true
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const base = Deno.env.get("APP_BASE_URL");
-              if (!base) { console.log("PUBLIC_ASSET=app_base_url_unset"); }
+              if (!base) console.log("PUBLIC_ASSET=app_base_url_unset");
               else {
                 try {
                   const html = await (await fetch(base)).text();
-                  const asset = html.match(/assets\/index-[^\" ]+\.js/)?.[0] || "not_found";
-                  console.log("PUBLIC_ASSET=" + asset);
+                  console.log("PUBLIC_ASSET=" + (html.match(/assets\/index-[^\" ]+\.js/)?.[0] || "not_found"));
                 } catch { console.log("PUBLIC_ASSET=unreachable"); }
               }
             ' </dev/null
 
-            echo '--- atualização dos relatórios (sem dados sensíveis) ---'
             printf 'SCHEDULER='
             docker compose -f server/docker-compose.yml exec -T app sh -lc 'echo \${ENABLE_SCHEDULER:-unset}' </dev/null
             docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select coalesce(data->>'end_date','sem_data'), coalesce(data->>'status','sem_status'), count(*) from amazon_ads_report_job group by 1,2 order by 1 desc,2 limit 12;" </dev/null || true
             docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select 'METRICS_MAX=' || coalesce(max(data->>'date'),'sem_data') || '|ROWS=' || count(*) from campaign_metrics_daily;" </dev/null || true
+            docker compose -f server/docker-compose.yml exec -T db psql -U livingfinds -d livingfinds -Atc "select 'SKU_RULE_EXECUTIONS=' || count(*) from rule_execution where data->>'rule_key' in ('sku_profit_hard_pause','sku_daily_order_cap','sku_low_margin_bid_reduction');" </dev/null || true
           EOF
