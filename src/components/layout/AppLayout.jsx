@@ -43,6 +43,40 @@ export default function AppLayout() {
   const [account, setAccount] = useState(null);
   const location = useLocation();
 
+  // O item legado "Perfil" pode ser injetado por menus auxiliares fora de
+  // navItems. A rota e os dados continuam intactos; apenas o atalho lateral
+  // é ocultado, inclusive quando aparece depois da hidratação.
+  useEffect(() => {
+    const normalize = (value) => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim()
+      .toLowerCase();
+
+    const hideLegacyProfileItems = () => {
+      document.querySelectorAll('aside a, aside button, [role="navigation"] a, [role="navigation"] button')
+        .forEach((element) => {
+          const href = normalize(element.getAttribute('href'));
+          const label = normalize(
+            element.getAttribute('aria-label')
+            || element.getAttribute('title')
+            || element.textContent
+          );
+          const isProfileRoute = /(^|\/)profile\/?$/.test(href) || /(^|\/)perfil\/?$/.test(href);
+          if (isProfileRoute || label === 'perfil') {
+            element.hidden = true;
+            element.setAttribute('aria-hidden', 'true');
+            element.setAttribute('data-hidden-sidebar-profile', 'true');
+          }
+        });
+    };
+
+    hideLegacyProfileItems();
+    const observer = new MutationObserver(hideLegacyProfileItems);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
   // Inicializar conta (apenas leitura do banco — sem chamar Amazon)
   useEffect(() => {
     let mounted = true;
