@@ -91,10 +91,8 @@ Deno.serve(async (request) => {
         const localGroups = groups.filter((g: any) => String(g.campaign_id || g.amazon_campaign_id) === campaignId);
         const localKeywords = keywords.filter((k: any) => String(k.campaign_id) === campaignId && norm(k.match_type) === 'exact');
         const localAds = adsRows.filter((a: any) => String(a.campaign_id) === campaignId);
-        const asin = String(campaign.asin || localAds[0]?.asin || '');
-        if (targetAsins.size && !targetAsins.has(asin.toUpperCase())) continue;
-        const product = products.find((p: any) => String(p.asin) === asin);
-        const eco = economics.find((e: any) => String(e.asin) === asin || (product && String(e.sku) === String(product.sku)));
+        let asin = String(campaign.asin || localAds[0]?.asin || '');
+        if (targetAsins.size && asin && !targetAsins.has(asin.toUpperCase())) continue;
         const metrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter({
           amazon_account_id: aid, campaign_id: campaignId,
         }, '-date', 2).catch(() => []);
@@ -106,7 +104,7 @@ Deno.serve(async (request) => {
         let remoteGroups: any[] = [];
         let remoteKeywords: any[] = [];
         let remoteAds: any[] = [];
-        if (localGroups.length && localKeywords.length && localAds.length && metricsFresh) {
+        if (localGroups.length && localKeywords.length && metricsFresh) {
           const [rc, rg, rk, ra] = await Promise.all([
             ads(base44, aid, 'bootstrapConfirmCampaign', '/sp/campaigns/list', { campaignIdFilter: [campaignId], maxResults: 10 }, 'application/vnd.spCampaign.v3+json').catch(() => ({})),
             ads(base44, aid, 'bootstrapConfirmAdGroup', '/sp/adGroups/list', { campaignIdFilter: [campaignId], maxResults: 100 }, 'application/vnd.spAdGroup.v3+json').catch(() => ({})),
@@ -118,6 +116,10 @@ Deno.serve(async (request) => {
           remoteKeywords = list(rk, 'keywords');
           remoteAds = list(ra, 'productAds');
         }
+        if (!asin) asin = String(remoteAds[0]?.asin || '');
+        if (targetAsins.size && !targetAsins.has(asin.toUpperCase())) continue;
+        const product = products.find((p: any) => String(p.asin) === asin);
+        const eco = economics.find((e: any) => String(e.asin) === asin || (product && String(e.sku) === String(product.sku)));
 
         for (const keyword of localKeywords) {
           const keywordId = String(keyword.keyword_id || '');
@@ -140,7 +142,7 @@ Deno.serve(async (request) => {
           const diagnosis = diagnoseZeroDelivery({
             campaignType: campaign.campaign_type, targetingType: campaign.targeting_type,
             matchType: keyword.match_type,
-            structureComplete: Boolean(localGroups.length && localAds.length && keywordId),
+            structureComplete: Boolean(localGroups.length && (localAds.length || remoteAds.length) && keywordId),
             remoteEnabled: norm(remoteCampaign?.state) === 'enabled' &&
               remoteGroups.some((g: any) => norm(g.state) === 'enabled') &&
               remoteKeywords.some((k: any) => String(k.keywordId) === keywordId && norm(k.state) === 'enabled') &&
@@ -157,7 +159,15 @@ Deno.serve(async (request) => {
           });
           if (!diagnosis.eligible) {
             await updateDiagnosis(base44, campaign, diagnosis.status, diagnosis.status, now, dryRun);
-            results.push({ campaign_id: campaignId, keyword_id: keywordId, action: 'none', ...diagnosis });
+            results.push({
+              campaign_id: campaignId,
+              campaign_name: campaign.name || campaign.campaign_name,
+              asin,
+              keyword_id: keywordId,
+              keyword_text: keyword.keyword_text,
+              action: 'none',
+              ...diagnosis,
+            });
             continue;
           }
 
@@ -214,14 +224,34 @@ Deno.serve(async (request) => {
             created_at: now, updated_at: now,
           };
           if (dryRun) {
-            results.push({ campaign_id: campaignId, keyword_id: keywordId, action: 'increase_bid', dry_run: true, bid, idempotency_key: key });
+            results.push({
+              campaign_id: campaignId,
+              campaign_name: campaign.name || campaign.campaign_name,
+              asin,
+              keyword_id: keywordId,
+              keyword_text: keyword.keyword_text,
+              action: 'increase_bid',
+              dry_run: true,
+              bid,
+              idempotency_key: key,
+            });
             continue;
           }
           const decision = await base44.asServiceRole.entities.OptimizationDecision.create(decisionData);
           const execution = await base44.asServiceRole.functions.invoke('executePairedManualBidDecision', {
             decision_id: decision.id, _service_role: true,
           }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-          results.push({ campaign_id: campaignId, keyword_id: keywordId, action: 'increase_bid', bid, decision_id: decision.id, execution: execution?.data || execution });
+          results.push({
+            campaign_id: campaignId,
+            campaign_name: campaign.name || campaign.campaign_name,
+            asin,
+            keyword_id: keywordId,
+            keyword_text: keyword.keyword_text,
+            action: 'increase_bid',
+            bid,
+            decision_id: decision.id,
+            execution: execution?.data || execution,
+          });
         }
       }
     }

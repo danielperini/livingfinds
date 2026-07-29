@@ -172,8 +172,9 @@ jobs:
                 counts[key] = (counts[key] || 0) + 1;
               }
               console.log("ZERO_DELIVERY_HTTP=" + response.status + "|OK=" + data.ok + "|CHECKED=" + rows.length + "|COUNTS=" + JSON.stringify(counts));
+              console.log("ZERO_DELIVERY_STRUCTURE=" + JSON.stringify(data.structure_reports || []).slice(0, 6000));
               for (const row of rows.filter((r) => r.action === "increase_bid" || ["amazon_entity_not_enabled","out_of_stock","listing_ineligible","replacement_review_required","incomplete_structure"].includes(r.status))) {
-                console.log("ZERO_DELIVERY_ITEM=" + row.campaign_id + "|" + row.keyword_id + "|" + row.action + "|" + (row.status || row.reason || "") + "|" + (row.bid?.bid || ""));
+                console.log("ZERO_DELIVERY_ITEM=" + (row.asin || "") + "|" + (row.campaign_name || row.campaign_id) + "|" + (row.keyword_text || row.keyword_id) + "|" + row.action + "|" + (row.status || row.reason || "") + "|" + (row.bid?.bid || ""));
               }
               if (!response.ok || data.ok === false) throw new Error(data.error || "zero delivery bootstrap failed");
             ' </dev/null
