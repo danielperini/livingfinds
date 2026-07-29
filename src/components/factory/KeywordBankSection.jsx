@@ -6,13 +6,12 @@
  * KeywordBankTab e KeywordInvestigatorTab do Campaign Factory.
  */
 import { useState } from 'react';
-import { BookOpen, Star, Share2, Search } from 'lucide-react';
+import { BookOpen, Star, Share2 } from 'lucide-react';
 
 const SUB_TABS = [
   { key: 'terms',       label: 'Terms',                icon: Star },
   { key: 'suggested',   label: 'Suggested',            icon: Share2 },
   { key: 'bank',        label: 'Keyword Bank',         icon: BookOpen },
-  { key: 'investigator',label: 'Keyword Investigator', icon: Search },
 ];
 
 export default function KeywordBankSection({ children, defaultTab = 'terms', counts = {} }) {

@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 import IASuggestionsTab from '@/components/factory/IASuggestionsTab';
-import KeywordInvestigatorTab from '@/components/factory/KeywordInvestigatorTab';
 import KeywordBankSection from '@/components/factory/KeywordBankSection';
 import KeywordBankTab from '@/components/factory/KeywordBankTab';
 
@@ -741,10 +740,6 @@ export default function CampaignFactory() {
                     sourceFilter={sourceFilter}
                     setSourceFilter={setSourceFilter}
                   />
-                )}
-                {/* Keyword Investigator */}
-                {subTab === 'investigator' && (
-                  <KeywordInvestigatorTab account={account} products={products} />
                 )}
               </>
             )}
