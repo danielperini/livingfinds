@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { base44 } from '@/api/base44Client';
 import { usePerformanceData } from '@/hooks/usePerformanceData';
 import {
@@ -69,7 +69,156 @@ async function fetchDaypartData(accountId) {
     base44.entities.CrossAsinTransfer.filter({ amazon_account_id: accountId }, '-created_date', 200),
     base44.entities.ProductFamilyKeywordBank.filter({ amazon_account_id: accountId }, '-winning_asin_count', 50).catch(() => []),
   ]);
-  return { allDecisions, campaigns, transfers, familyBank };
+  return { accountId, allDecisions, campaigns, transfers, familyBank };
+}
+
+function campaignRemoteId(campaign) {
+  return String(campaign.campaign_id || campaign.amazon_campaign_id || campaign.id || '');
+}
+
+function campaignAsin(campaign) {
+  const direct = campaign.asin;
+  if (direct) return String(direct).toUpperCase();
+  const match = String(campaign.name || campaign.campaign_name || '').match(/\bB0[A-Z0-9]{8}\b/i);
+  return match ? match[0].toUpperCase() : '';
+}
+
+function SalesHeatmap({ campaigns, decisions, accountId }) {
+  const monitored = campaigns;
+
+  const defaultCampaignId = useMemo(() => {
+    const withDecision = new Set((decisions || []).map(decision => String(decision.campaign_id || '')));
+    const preferred = monitored.find(campaign => withDecision.has(campaignRemoteId(campaign)));
+    return preferred ? campaignRemoteId(preferred) : (monitored[0] ? campaignRemoteId(monitored[0]) : '');
+  }, [decisions, monitored]);
+
+  const [selectedId, setSelectedId] = useState('');
+  const activeId = selectedId && monitored.some(c => campaignRemoteId(c) === selectedId)
+    ? selectedId
+    : defaultCampaignId;
+  const selectedCampaign = monitored.find(c => campaignRemoteId(c) === activeId);
+  const [selectedMetrics, setSelectedMetrics] = useState([]);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!accountId || !activeId) {
+      setSelectedMetrics([]);
+      return;
+    }
+    let cancelled = false;
+    setMetricsLoading(true);
+    (async () => {
+      let rows = await base44.entities.HourlyMetric.filter(
+        { amazon_account_id: accountId, campaign_id: activeId },
+        '-date',
+        5000
+      ).catch(() => []);
+      if (!rows.length && campaignAsin(selectedCampaign || {})) {
+        rows = await base44.entities.HourlyMetric.filter(
+          { amazon_account_id: accountId, asin: campaignAsin(selectedCampaign) },
+          '-date',
+          5000
+        ).catch(() => []);
+      }
+      if (!cancelled) setSelectedMetrics(rows);
+    })().finally(() => {
+      if (!cancelled) setMetricsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [accountId, activeId, selectedCampaign]);
+
+  const heatmap = useMemo(() => {
+    const cells = new Map();
+    for (const row of selectedMetrics) {
+      const date = String(row.date || '').slice(0, 10);
+      const hour = Number(row.hour);
+      if (!date || hour < 0 || hour > 23) continue;
+      const key = `${date}:${hour}`;
+      const current = cells.get(key) || { orders: 0, sales: 0, clicks: 0 };
+      current.orders += Number(row.orders || row.units || 0);
+      current.sales += Number(row.sales || 0);
+      current.clicks += Number(row.clicks || 0);
+      cells.set(key, current);
+    }
+    const dates = [...new Set([...cells.keys()].map(key => key.slice(0, 10)))].sort();
+    const maxOrders = Math.max(1, ...[...cells.values()].map(cell => cell.orders));
+    return { cells, dates, maxOrders };
+  }, [selectedMetrics]);
+
+  const colorFor = (orders) => {
+    if (!orders) return 'bg-surface-3/40';
+    const ratio = orders / heatmap.maxOrders;
+    if (ratio >= 0.75) return 'bg-emerald-400';
+    if (ratio >= 0.5) return 'bg-emerald-500/70';
+    if (ratio >= 0.25) return 'bg-cyan/55';
+    return 'bg-cyan/25';
+  };
+
+  return (
+    <div className="bg-surface-2 rounded-xl border border-surface-3 p-4 min-w-0">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <p className="text-xs font-semibold text-slate-300">Concentração de vendas por horário</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Histórico acumulado disponível · dias × 24 horas</p>
+        </div>
+        <select
+          value={activeId}
+          onChange={event => setSelectedId(event.target.value)}
+          className="max-w-[220px] bg-surface-1 border border-surface-3 rounded-lg px-2 py-1 text-[10px] text-slate-300"
+        >
+          {monitored.map(campaign => (
+            <option key={campaignRemoteId(campaign)} value={campaignRemoteId(campaign)}>
+              {campaignAsin(campaign) || 'Sem ASIN'} · {campaign.name || campaign.campaign_name || campaignRemoteId(campaign)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {metricsLoading ? (
+        <div className="h-[180px] flex items-center justify-center">
+          <Loader2 className="w-5 h-5 text-cyan animate-spin" />
+        </div>
+      ) : heatmap.dates.length === 0 ? (
+        <div className="h-[180px] flex flex-col items-center justify-center text-center">
+          <Clock className="w-7 h-7 text-slate-600 mb-2" />
+          <p className="text-xs text-slate-500">Sem vendas horárias importadas para esta campanha.</p>
+          <p className="text-[10px] text-slate-600 mt-1">O quadro será preenchido pelos relatórios HourlyMetric.</p>
+        </div>
+      ) : (
+        <div className="overflow-auto max-h-[250px]">
+          <div className="min-w-[660px]">
+            <div className="grid gap-1" style={{ gridTemplateColumns: '58px repeat(24, minmax(16px, 1fr))' }}>
+              <div className="text-[9px] text-slate-500">Dia</div>
+              {Array.from({ length: 24 }, (_, hour) => (
+                <div key={hour} className="text-[8px] text-center text-slate-500">{String(hour).padStart(2, '0')}</div>
+              ))}
+              {heatmap.dates.map(date => (
+                <React.Fragment key={date}>
+                  <div className="text-[9px] text-slate-400">{date.slice(8, 10)}/{date.slice(5, 7)}</div>
+                  {Array.from({ length: 24 }, (_, hour) => {
+                    const cell = heatmap.cells.get(`${date}:${hour}`);
+                    const orders = cell?.orders || 0;
+                    return (
+                      <div
+                        key={hour}
+                        className={`h-4 rounded-sm ${colorFor(orders)}`}
+                        title={`${selectedCampaign?.name || 'Campanha'} · ${date} ${String(hour).padStart(2, '0')}:00 · ${orders} pedido(s) · R$ ${(cell?.sales || 0).toFixed(2)} em vendas`}
+                      />
+                    );
+                  })}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-3 mt-3 text-[9px] text-slate-500">
+        <span>{monitored.length} campanhas monitoradas</span>
+        <span>{selectedMetrics.length} registros horários</span>
+        <span>{campaignAsin(selectedCampaign || {}) || 'ASIN não vinculado'}</span>
+      </div>
+    </div>
+  );
 }
 
 // ── Dayparting Tab ────────────────────────────────────────────────────────
@@ -80,6 +229,7 @@ function DaypartingTab({ data, loading, onLocalUpdate }) {
 
   const allDecisions = data?.allDecisions || [];
   const campaigns    = data?.campaigns    || [];
+  const monitoredCampaigns = campaigns;
 
   // Derivados em memória — sem queries ao trocar filtro
   const decisions         = useMemo(() => filter === 'all' ? allDecisions : allDecisions.filter(d => d.status === filter), [allDecisions, filter]);
@@ -145,8 +295,9 @@ function DaypartingTab({ data, loading, onLocalUpdate }) {
   return (
     <div className="p-4 space-y-4">
       {/* KPIs */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
+          { label: 'Monitoradas', value: monitoredCampaigns.length, color: 'text-violet-300' },
           { label: 'Pendentes', value: pending,  color: 'text-amber-400' },
           { label: 'Aprovadas', value: approved, color: 'text-cyan' },
           { label: 'Executadas', value: executed, color: 'text-emerald-400' },
@@ -184,6 +335,8 @@ function DaypartingTab({ data, loading, onLocalUpdate }) {
           )}
         </div>
 
+        <SalesHeatmap campaigns={campaigns} decisions={allDecisions} accountId={data?.accountId} />
+
         {campaignsNoBudget.length > 0 && (
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
@@ -208,6 +361,25 @@ function DaypartingTab({ data, loading, onLocalUpdate }) {
             </div>
           </div>
         )}
+      </div>
+
+      <div className="bg-surface-2 rounded-xl border border-surface-3 p-4">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <p className="text-xs font-semibold text-slate-300">Campanhas monitoradas pelo Dayparting</p>
+          <span className="text-[10px] text-violet-300">{monitoredCampaigns.length} de {campaigns.length}</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-x-4 max-h-[190px] overflow-y-auto scrollbar-thin">
+          {monitoredCampaigns.map((campaign, index) => (
+            <div key={campaign.id || index} className="flex items-center gap-2 py-1.5 border-b border-surface-3/50">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-slate-300 truncate">{campaign.name || campaign.campaign_name || campaignRemoteId(campaign)}</p>
+                <p className="text-[9px] text-slate-600 font-mono">{campaignAsin(campaign) || 'ASIN não vinculado'}</p>
+              </div>
+              <span className="text-[9px] text-slate-500 uppercase">{campaign.state || campaign.status || 'monitorada'}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
@@ -497,8 +669,14 @@ export default function DaypartCrossAsinPage() {
   useEffect(() => {
     (async () => {
       try {
-        const me   = await base44.auth.me();
-        const accs = await base44.entities.AmazonAccount.filter({ user_id: me.id }, null, 1);
+        const me = await base44.auth.me();
+        let accs = await base44.entities.AmazonAccount.filter({ user_id: me.id }, null, 1);
+        if (!accs.length) {
+          accs = await base44.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_date', 1);
+        }
+        if (!accs.length) {
+          accs = await base44.entities.AmazonAccount.list('-updated_date', 1);
+        }
         setAccount(accs[0] || null);
       } catch {}
     })();
