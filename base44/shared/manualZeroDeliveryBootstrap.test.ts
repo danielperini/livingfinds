@@ -30,12 +30,19 @@ Deno.test('09 listing eligible required', () => assert(diagnoseZeroDelivery({ ..
 Deno.test('10 impressions mean delivering', () => assert(diagnoseZeroDelivery({ ...base, impressions: 1 }, now).status === 'delivering'));
 Deno.test('11 clicks mean delivering', () => assert(diagnoseZeroDelivery({ ...base, clicks: 1 }, now).status === 'delivering'));
 Deno.test('12 spend means delivering', () => assert(diagnoseZeroDelivery({ ...base, spend: .01 }, now).status === 'delivering'));
-Deno.test('13 minimum age is 24h', () => assert(diagnoseZeroDelivery({ ...base, createdAt: '2026-01-09T12:00:00Z' }, now).status === 'learning_under_24h'));
+Deno.test('13 minimum age is 7 days', () => assert(diagnoseZeroDelivery({ ...base, createdAt: '2026-01-04T12:00:00Z' }, now).status === 'learning_under_7d'));
 Deno.test('14 maximum two attempts', () => assert(diagnoseZeroDelivery({ ...base, attempts: 2 }, now).status === 'replacement_review_required'));
 Deno.test('15 cooldown is 72h', () => assert(diagnoseZeroDelivery({ ...base, attempts: 1, lastRescueAt: '2026-01-08T00:00:00Z' }, now).status === 'cooldown'));
-Deno.test('16 bid increase is capped at 20 percent and economic cap', () => {
+Deno.test('16 bid increase is capped at 10 percent and economic cap', () => {
   const result = calculateBootstrapBid({ currentBid: 1, suggestedLow: 2, suggestedMid: 3, safeMaxCpc: 1.15, maxBid: 5 });
-  assert(result.eligible && result.bid === 1.15);
+  assert(!result.eligible && result.bid === 1);
+});
+Deno.test('19 bid respects the absolute R$0.70 ceiling', () => {
+  const result = calculateBootstrapBid({ currentBid: 0.60, suggestedLow: 0.90, suggestedMid: 1, safeMaxCpc: 1, maxBid: 5 });
+  assert(result.eligible && result.bid === 0.66);
+});
+Deno.test('20 campaigns older than 15 days require replacement review', () => {
+  assert(diagnoseZeroDelivery({ ...base, createdAt: '2025-12-01T00:00:00Z' }, now).status === 'replacement_review_required');
 });
 Deno.test('17 bid never rises without economic cap', () => assert(!calculateBootstrapBid({ currentBid: 1, suggestedLow: 1.2 }).eligible));
 Deno.test('18 idempotency and budget winner protection', () => {

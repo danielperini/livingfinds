@@ -179,7 +179,7 @@ Deno.serve(async (request) => {
             keyword_id: keywordId, keyword_text: keyword.keyword_text, asin,
             action: 'increase_bid', current_value: currentBid, proposed_value: bid.bid,
             value_before: currentBid, value_after: bid.bid, change_pct: bid.changePct,
-            rationale: `Bootstrap controlado tentativa ${attempt}/2; zero entrega confirmado; limite econômico aplicado.`,
+            rationale: `Bootstrap controlado tentativa ${attempt}/2; campanha entre 7 e 15 dias; aumento máximo de 10% e teto absoluto de R$0,70, além do limite econômico.`,
             risk: 'low', requires_approval: false, approval_status: 'auto_approved',
             status: dryRun ? 'proposed' : 'approved', queue_status: dryRun ? 'not_queued' : 'pending',
             idempotency_key: key, source_function: 'manual_zero_delivery_bootstrap',

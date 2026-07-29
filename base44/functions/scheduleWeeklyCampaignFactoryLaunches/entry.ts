@@ -5,6 +5,14 @@ const norm = (value: unknown) => String(value || '')
   .toLowerCase().trim().replace(/\s+/g, ' ');
 const number = (value: unknown) => Number(value || 0);
 const words = (value: unknown) => norm(value).split(' ').filter(Boolean);
+const campaignState = (row: any) => norm(
+  row.amazon_status || row.state || row.status || row.campaign_status || row.original_state,
+);
+const isManual = (row: any) => {
+  const type = String(row.targeting_type || '').toUpperCase();
+  const name = String(row.name || row.campaign_name || '').toUpperCase();
+  return type.includes('MANUAL') || /^SP\s*\|\s*MANUAL\s*\|/.test(name);
+};
 const weekKey = (date = new Date()) => {
   const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const day = utc.getUTCDay() || 7;
@@ -71,17 +79,65 @@ Deno.serve(async (request) => {
         } catch { return sum; }
       }, 0);
       const available = Math.max(0, cap - alreadyScheduled);
-      if (available === 0) {
-        reports.push({ amazon_account_id: aid, week: currentWeek, scheduled: 0, skipped: 'weekly_cap_reached' });
-        continue;
-      }
 
-      const [bank, products, campaigns, queue] = await Promise.all([
+      const since15 = new Date(Date.now() - 15 * 86400000).toISOString().slice(0, 10);
+      const [bank, products, campaigns, queue, dailyMetrics] = await Promise.all([
         base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: aid }, '-promotion_score', 5000).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 1000).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-created_date', 3000).catch(() => []),
+        base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
       ]);
+
+      const metrics15 = new Map<string, { clicks: number; orders: number; spend: number }>();
+      for (const row of dailyMetrics) {
+        if (String(row.date || '') < since15) continue;
+        const id = String(row.campaign_id || '');
+        if (!id) continue;
+        const aggregate = metrics15.get(id) || { clicks: 0, orders: 0, spend: 0 };
+        aggregate.clicks += number(row.clicks);
+        aggregate.orders += number(row.orders);
+        aggregate.spend += number(row.spend);
+        metrics15.set(id, aggregate);
+      }
+      const activeManual = campaigns.filter((campaign: any) =>
+        isManual(campaign)
+        && ['enabled', 'active', 'incomplete'].includes(campaignState(campaign))
+        && campaign.archived !== true
+        && campaign.api_missing !== true
+      );
+      const manualZeroClick = activeManual.filter((campaign: any) => {
+        const id = String(campaign.campaign_id || campaign.amazon_campaign_id || '');
+        return number(metrics15.get(id)?.clicks) === 0;
+      }).length;
+      const zeroClickRatio = activeManual.length > 0 ? manualZeroClick / activeManual.length : 0;
+      const portfolioSaturated = activeManual.length >= 50
+        && (manualZeroClick >= 100 || zeroClickRatio >= 0.60);
+      // Quando a carteira está saturada, só termos já comprovados por venda
+      // podem furar a trava, e no máximo dois por semana.
+      const effectiveAvailable = portfolioSaturated ? Math.min(available, 2) : available;
+      const bankById = new Map(bank.map((row: any) => [String(row.id || ''), row]));
+      const speculativeQueued = portfolioSaturated
+        ? queue.filter((item: any) => {
+          if (String(item.status || '').toLowerCase() !== 'scheduled') return false;
+          if (String(item.source || '').toLowerCase() !== 'campaign_factory_weekly') return false;
+          const source = bankById.get(String(item.source_keyword_bank_id || '')) as any;
+          const sourceType = String(source?.source_type || source?.source || '').toUpperCase();
+          return number(source?.orders) <= 0 || ![
+            'AUTO_SEARCH_TERM', 'HISTORICAL_WINNER', 'SEARCH_TERM_AUTO',
+          ].includes(sourceType);
+        })
+        : [];
+      if (!dryRun) {
+        for (const item of speculativeQueued) {
+          await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
+            status: 'held_portfolio_saturation',
+            hold_reason: `Carteira saturada: ${manualZeroClick}/${activeManual.length} campanhas manuais sem clique em 15 dias. Aguardando termo com venda comprovada.`,
+            held_at: new Date().toISOString(),
+          }).catch(() => {});
+          item.status = 'held_portfolio_saturation';
+        }
+      }
 
       const productByAsin = new Map(products.map((row: any) => [String(row.asin || '').toUpperCase(), row]));
       const used = new Set<string>();
@@ -123,6 +179,16 @@ Deno.serve(async (request) => {
             rejected.duplicate = (rejected.duplicate || 0) + 1;
             return false;
           }
+          if (portfolioSaturated) {
+            const source = String(row.source_type || row.source || '').toUpperCase();
+            const provenSource = [
+              'AUTO_SEARCH_TERM', 'HISTORICAL_WINNER', 'SEARCH_TERM_AUTO',
+            ].includes(source);
+            if (number(row.orders) <= 0 || !provenSource) {
+              rejected.portfolio_saturated_unproven = (rejected.portfolio_saturated_unproven || 0) + 1;
+              return false;
+            }
+          }
           return true;
         })
         .sort((a: any, b: any) =>
@@ -132,7 +198,7 @@ Deno.serve(async (request) => {
           || number(b.row.confidence_score) - number(a.row.confidence_score)
         );
 
-      const selected = candidates.slice(0, available);
+      const selected = candidates.slice(0, effectiveAvailable);
       if (dryRun) {
         reports.push({
           amazon_account_id: aid,
@@ -140,6 +206,14 @@ Deno.serve(async (request) => {
           dry_run: true,
           weekly_cap: cap,
           previously_scheduled: alreadyScheduled,
+          portfolio_gate: {
+            saturated: portfolioSaturated,
+            active_manual: activeManual.length,
+            zero_click_15d: manualZeroClick,
+            zero_click_ratio: Number(zeroClickRatio.toFixed(4)),
+            policy: portfolioSaturated ? 'proven_terms_only_max_2' : 'normal_max_10',
+            speculative_queue_held: speculativeQueued.length,
+          },
           eligible: candidates.length,
           scheduled: 0,
           rejected,
@@ -158,7 +232,7 @@ Deno.serve(async (request) => {
         const product: any = productByAsin.get(asin);
         const keyword = String(row.keyword || row.normalized_keyword).trim();
         const bid = Math.max(0.25, Math.min(
-          1.50,
+          0.70,
           number(row.estimated_initial_bid || row.sustainable_cpc || row.amazon_suggested_bid || 0.50),
         ));
         const queueItem = await base44.asServiceRole.entities.ProductKickoffQueue.create({
@@ -197,6 +271,14 @@ Deno.serve(async (request) => {
         week: currentWeek,
         weekly_cap: cap,
         previously_scheduled: alreadyScheduled,
+        portfolio_gate: {
+          saturated: portfolioSaturated,
+          active_manual: activeManual.length,
+          zero_click_15d: manualZeroClick,
+          zero_click_ratio: Number(zeroClickRatio.toFixed(4)),
+          policy: portfolioSaturated ? 'proven_terms_only_max_2' : 'normal_max_10',
+          speculative_queue_held: speculativeQueued.length,
+        },
         eligible: candidates.length,
         scheduled: scheduled.length,
         rejected,

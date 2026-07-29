@@ -1,6 +1,9 @@
 export const BOOTSTRAP_MAX_ATTEMPTS = 2;
-export const BOOTSTRAP_MAX_INCREASE_PCT = 20;
+export const BOOTSTRAP_MAX_INCREASE_PCT = 10;
 export const BOOTSTRAP_COOLDOWN_HOURS = 72;
+export const BOOTSTRAP_MIN_AGE_DAYS = 7;
+export const BOOTSTRAP_MAX_AGE_DAYS = 15;
+export const BOOTSTRAP_ABSOLUTE_MAX_BID = 0.70;
 
 const n = (value: unknown) => {
   const parsed = Number(value);
@@ -26,8 +29,14 @@ export function calculateBootstrapBid(input: BidCaps) {
 
   const low = n(input.suggestedLow);
   const mid = n(input.suggestedMid);
-  const hardCaps = [...economicCaps, n(input.maxBid), mid].filter((v) => v > 0);
-  const proposed = Math.max(current * 1.2, low);
+  const hardCaps = [
+    ...economicCaps,
+    n(input.maxBid),
+    mid,
+    BOOTSTRAP_ABSOLUTE_MAX_BID,
+    current * (1 + BOOTSTRAP_MAX_INCREASE_PCT / 100),
+  ].filter((v) => v > 0);
+  const proposed = Math.max(current * (1 + BOOTSTRAP_MAX_INCREASE_PCT / 100), low);
   const bid = r2(Math.min(proposed, ...hardCaps));
   if (bid <= current) return { eligible: false, reason: 'caps_do_not_allow_increase', bid: current };
   return {
@@ -58,8 +67,14 @@ export function diagnoseZeroDelivery(input: any, now = new Date()) {
   if (input.listingEligible === false) return { eligible: false, status: 'listing_ineligible' };
   if (n(input.impressions) || n(input.clicks) || n(input.spend)) return { eligible: false, status: 'delivering' };
   const created = new Date(input.createdAt || 0);
-  if (!Number.isFinite(created.getTime()) || now.getTime() - created.getTime() < 24 * 3600_000) {
-    return { eligible: false, status: 'learning_under_24h' };
+  const ageDays = Number.isFinite(created.getTime())
+    ? (now.getTime() - created.getTime()) / 86400000
+    : 0;
+  if (!Number.isFinite(created.getTime()) || ageDays < BOOTSTRAP_MIN_AGE_DAYS) {
+    return { eligible: false, status: 'learning_under_7d' };
+  }
+  if (ageDays > BOOTSTRAP_MAX_AGE_DAYS) {
+    return { eligible: false, status: 'replacement_review_required' };
   }
   const attempts = n(input.attempts);
   if (attempts >= BOOTSTRAP_MAX_ATTEMPTS) return { eligible: false, status: 'replacement_review_required' };

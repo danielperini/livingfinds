@@ -119,8 +119,8 @@ function checkWinnerProtection(params: {
 
 // ── Fallbacks do sistema ──────────────────────────────────────────────────────
 const FB = {
-  MIN_BID: 0.40, MAX_BID: 1.00,
-  MAX_INCREASE_PCT: 0.15, MAX_DECREASE_PCT: 0.20,
+  MIN_BID: 0.25, MAX_BID: 0.70,
+  MAX_INCREASE_PCT: 0.10, MAX_DECREASE_PCT: 0.25,
   DAILY_BUDGET_CAP: 56,
   TARGET_ACOS: 10, MAX_ACOS: 15,
   TARGET_ROAS: 4, TARGET_TACOS: 5,
@@ -136,13 +136,13 @@ const FB = {
   PARTIAL_COST_MAX_INCREASE: 0.05,
   GROWTH_COOLDOWN_HOURS: 48,        // alinhado ao bid_change_cooldown_hours
   // Sem vendas — revisão e pausa
-  NO_SALES_FIRST_REVIEW_HOURS: 72,
-  NO_SALES_SECOND_REVIEW_DAYS: 5,
-  NO_SALES_CAMPAIGN_PAUSE_DAYS: 7,
+  NO_SALES_FIRST_REVIEW_HOURS: 7 * 24,
+  NO_SALES_SECOND_REVIEW_DAYS: 10,
+  NO_SALES_CAMPAIGN_PAUSE_DAYS: 14,
   NEW_PRODUCT_MAX_LEARNING_DAYS: 14,
   // Zero impressões
-  ZERO_IMP_FIRST_REVIEW_HOURS: 72,
-  ZERO_IMP_KEYWORD_PAUSE_DAYS: 14,
+  ZERO_IMP_FIRST_REVIEW_HOURS: 7 * 24,
+  ZERO_IMP_KEYWORD_PAUSE_DAYS: 15,
   ZERO_IMP_CAMPAIGN_PAUSE_DAYS: 21,
   // Baixas impressões
   LOW_IMP_REVIEW_DAYS: 7,
@@ -818,6 +818,19 @@ Deno.serve(async (req) => {
         product_page_limit: 0,
       };
     }
+
+    // Guardrails econômicos absolutos do portfólio. Configuração pode ser
+    // mais conservadora, mas nunca ultrapassar estes limites.
+    settings.max_bid = Math.min(Number(settings.max_bid || FB.MAX_BID), FB.MAX_BID);
+    settings.min_bid = Math.min(Number(settings.min_bid || FB.MIN_BID), settings.max_bid);
+    settings.max_bid_increase_pct = Math.min(
+      Number(settings.max_bid_increase_pct || FB.MAX_INCREASE_PCT),
+      FB.MAX_INCREASE_PCT,
+    );
+    settings.max_bid_decrease_pct = Math.min(
+      Math.max(Number(settings.max_bid_decrease_pct || FB.MAX_DECREASE_PCT), 0.10),
+      FB.MAX_DECREASE_PCT,
+    );
 
     const settingsSnapshot = JSON.stringify({ ...settings, captured_at: now });
 
@@ -1696,18 +1709,22 @@ Deno.serve(async (req) => {
         const kwCreatedAt = kw.created_at || kw.created_date || null;
         const kwAgeHours = kwCreatedAt ? (Date.now() - new Date(kwCreatedAt).getTime()) / 3600000 : 0;
         const hasZeroImpressions = (kw_impressions ?? 0) === 0;
-        const isStale72h = kwAgeHours >= FB.ZERO_IMP_FIRST_REVIEW_HOURS;
+        const isEligibleForBootstrap = kwAgeHours >= FB.ZERO_IMP_FIRST_REVIEW_HOURS
+          && kwAgeHours <= FB.ZERO_IMP_KEYWORD_PAUSE_DAYS * 24;
+        const bootstrapAttempts = Number(kw.zero_delivery_attempts || 0);
+        const replacementDue = kwAgeHours > FB.ZERO_IMP_KEYWORD_PAUSE_DAYS * 24
+          && bootstrapAttempts >= 2;
 
-        if (hasZeroImpressions && isStale72h && stockCovDays > 0) {
-          const iKey = `zero_imp_pause_72h|${aid}|${entityId}|${today}`;
+        if (hasZeroImpressions && replacementDue && stockCovDays > 0) {
+          const iKey = `zero_imp_replace_15d|${aid}|${entityId}|${today}`;
           if (!usedIdemKeys.has(iKey)) {
             decisions.push(buildDecision(aid, correlationId, {
               decision_type: 'reduce_waste', entity_type: 'keyword', entity_id: entityId,
               campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
               keyword_text: kw.keyword_text, action: 'pause_keyword',
               value_before: currentBid, value_after: currentBid,
-              rationale: `⛔ ZERO IMPRESSÕES após ${Math.round(kwAgeHours)}h no ar. Bid R$${currentBid.toFixed(2)} já não é baixo — aumentar não resolve se a Amazon não exibe a keyword. Palavra irrelevante ou fora da categoria. PAUSANDO para substituição.`,
-              rule_key: 'zero_impressions_pause_72h', risk: 'low', priority: PRIORITY.waste_reduction,
+              rationale: `ZERO IMPRESSÕES após ${Math.round(kwAgeHours / 24)} dias e duas tentativas controladas de bootstrap. Pausa somente da keyword para substituição por termo comprovado; a campanha e demais entidades vencedoras são preservadas.`,
+              rule_key: 'zero_impressions_replace_after_15d', risk: 'low', priority: PRIORITY.waste_reduction,
               search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
               idempotency_key: iKey, opportunity_state: 'no_opportunity',
             }));
@@ -1717,24 +1734,14 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        if (!isStale72h && kw_spend < 1 && stockCovDays >= settings.min_stock_days && !growthCooldownActive) {
-          if (currentBid <= settings.min_bid * 1.2) {
-            const iKey = `calibrate_bid|${aid}|${entityId}|${today}`;
-            if (!usedIdemKeys.has(iKey)) {
-              decisions.push(buildDecision(aid, correlationId, {
-                decision_type: 'bid_change', entity_type: 'keyword', entity_id: entityId,
-                campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
-                keyword_text: kw.keyword_text, action: 'set_bid',
-                value_before: currentBid, value_after: settings.min_bid * 1.1,
-                rationale: `Keyword nova (${Math.round(kwAgeHours)}h), bid muito baixo, sem impressões ainda. Calibrando uma vez para gerar dados iniciais.`,
-                rule_key: 'calibrate_no_impressions', risk: 'low', priority: PRIORITY.maintenance,
-                search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
-                idempotency_key: iKey, opportunity_state: 'insufficient_data',
-              }));
-              entityChangedThisCycle.set(entityId, 'calibrate');
-              stats.bid_increase++;
-            }
-          }
+        if (hasZeroImpressions && isEligibleForBootstrap) {
+          skipped.push({
+            entity_id: entityId,
+            reason: 'delegated_to_controlled_zero_delivery_bootstrap',
+            age_days: Math.round(kwAgeHours / 24),
+            attempts: bootstrapAttempts,
+            asin: resolvedAsin,
+          });
         }
         continue;
       }
@@ -1824,7 +1831,7 @@ Deno.serve(async (req) => {
           const newBid = shouldPause
             ? settings.min_bid
             : clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
-          const phase = canPauseCampaign ? '3ª revisão (7d+)' : isSecondReview ? '2ª revisão (5d+)' : '1ª revisão (72h+)';
+          const phase = canPauseCampaign ? '3ª revisão (14d+)' : isSecondReview ? '2ª revisão (10d+)' : '1ª revisão (7d+)';
           decisions.push(buildDecision(aid, correlationId, {
             decision_type: shouldPause ? 'reduce_waste' : 'bid_change',
             entity_type: 'keyword', entity_id: entityId,
