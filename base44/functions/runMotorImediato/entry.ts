@@ -58,13 +58,16 @@ Deno.serve(async (req) => {
   let base44;
   let aid;
   let syncLogId = null;
+  const lockKey = 'motor_v8_pipeline';
+  let lockAcquired = false;
 
   try {
     base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    if (!body._service_role) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const force = body.force === true;
 
     // ── Resolver conta ──────────────────────────────────────────────────────
@@ -83,31 +86,30 @@ Deno.serve(async (req) => {
     }
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada.' });
     aid = account.id;
-
-    // ── Verificar lock ativo ────────────────────────────────────────────────
-    if (!force) {
-      const locks = await base44.asServiceRole.entities.AmazonSchedulerLock.filter(
-        { amazon_account_id: aid }, '-created_date', 1
-      ).catch(() => []);
-      if (locks.length > 0) {
-        const lock = locks[0];
-        const lockAge = (Date.now() - new Date(lock.created_date || lock.started_at || 0).getTime()) / 60000;
-        if (lockAge < 30 && lock.status === 'locked') {
-          return Response.json({
-            ok: false,
-            locked: true,
-            correlation_id: lock.correlation_id || lock.id,
-            message: `Motor em execução (lock ativo há ${Math.round(lockAge)}min). Use force=true para forçar.`,
-          });
-        }
-      }
+    const lockResponse = await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+      amazon_account_id: aid,
+      lock_key: lockKey,
+      owner_id: correlationId,
+      ttl_ms: 55 * 60 * 1000,
+      _service_role: true,
+    });
+    const acquiredLock = lockResponse?.data || lockResponse || {};
+    if (acquiredLock?.acquired !== true) {
+      return Response.json({
+        ok: false,
+        locked: true,
+        correlation_id: acquiredLock?.owner_id || null,
+        expires_at: acquiredLock?.expires_at || null,
+        message: 'Motor já está em execução para esta conta.',
+      }, { status: 409 });
     }
+    lockAcquired = true;
 
     // ── PRIMEIRA OP: criar SyncExecutionLog com status=started ─────────────
     const syncLogData = await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
       operation: 'motor_v8_pipeline',
-      trigger_type: force ? 'manual_force' : 'manual',
+      trigger_type: body._service_role ? 'scheduler' : force ? 'manual_force' : 'manual',
       status: 'started',
       execution_date: new Date().toISOString().slice(0, 10),
       started_at: startedAt,
@@ -125,7 +127,14 @@ Deno.serve(async (req) => {
 
     // Responder imediatamente — pipeline roda em background via Deno
     // Usar EdgeRuntime.waitUntil se disponível, senão fire-and-forget
-    const pipelinePromise = runPipeline({ base44, aid, account, correlationId, syncLogId, force, startedAt });
+    const pipelinePromise = runPipeline({ base44, aid, account, correlationId, syncLogId, force, startedAt })
+      .finally(() => base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+        amazon_account_id: aid,
+        lock_key: lockKey,
+        owner_id: correlationId,
+        action: 'release',
+        _service_role: true,
+      }).catch(() => {}));
 
     // Tentar waitUntil para garantir execução em background
     try {
@@ -150,6 +159,16 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('[runMotorImediato] erro inicial:', error.message);
+
+    if (lockAcquired && aid) {
+      await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+        amazon_account_id: aid,
+        lock_key: lockKey,
+        owner_id: correlationId,
+        action: 'release',
+        _service_role: true,
+      }).catch(() => {});
+    }
 
     if (syncLogId) {
       base44?.asServiceRole?.entities?.SyncExecutionLog?.update(syncLogId, {
@@ -419,6 +438,11 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
           campaignMetricsForGuard[c.campaign_id] = { orders_14d: c.orders_14d, acos_14d: c.acos_14d };
         }
 
+        const existingAiShadow = await base44.asServiceRole.entities.OptimizationDecision.filter({
+          amazon_account_id: aid,
+          source_function: 'motor_v8_ai_layer',
+        }, '-created_at', 500).catch(() => []);
+        const existingShadowKeys = new Set(existingAiShadow.map((item) => String(item.idempotency_key || '')));
         const validDecisions = [];
         for (const dec of rawDecisions) {
           const check = validateAiDecision(dec, settings, campaignMetricsForGuard);
@@ -426,6 +450,15 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
             console.log(`[IA] Decisão rejeitada: ${check.reason}`);
             continue;
           }
+          const shadowKey = [
+            'ai_shadow',
+            aid,
+            now2.slice(0, 10),
+            dec.campaign_id || dec.keyword_id || dec.asin || 'account',
+            dec.action || dec.decision_type || 'unknown',
+          ].join('|');
+          if (existingShadowKeys.has(shadowKey)) continue;
+          existingShadowKeys.add(shadowKey);
           validDecisions.push({
             amazon_account_id: aid,
             run_id: correlationId,
@@ -440,7 +473,14 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
             confidence: 70,
             value_before: dec.value_before,
             value_after: dec.value_after,
-            status: 'approved',
+            status: 'proposed',
+            requires_approval: true,
+            approval_status: 'shadow_only',
+            execution_mode: 'MANUAL_REVIEW',
+            priority_class: 'P4',
+            confirmation_required: true,
+            idempotency_key: shadowKey,
+            model_version: `motor-v8-ai-shadow:${modelName}`,
             source_function: 'motor_v8_ai_layer',
             created_at: now2,
           });
@@ -453,6 +493,7 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
 
         summary.phase3 = {
           status: 'success',
+          mode: 'shadow',
           duration_ms: Date.now() - p3Start,
           ai_decisions_added: aiDecisionsAdded,
           raw_suggestions: rawDecisions.length,
@@ -521,9 +562,13 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
     const confirmData = confirmRes?.data || confirmRes;
 
     summary.phase5 = {
-      status: 'success',
+      status: confirmData?.ok === false ? 'error' : 'success',
       duration_ms: Date.now() - p5Start,
-      reconciled: confirmData?.reconciled || 0,
+      checked: confirmData?.decisions_checked || 0,
+      confirmed: confirmData?.confirmed || 0,
+      divergences: confirmData?.divergences || 0,
+      propagation_note: 'Decisões com menos de 5 minutos são confirmadas pelo scheduler de 10 minutos.',
+      error: confirmData?.ok === false ? confirmData?.error : undefined,
     };
   } catch (e) {
     summary.phase5 = {
@@ -534,12 +579,6 @@ async function runPipeline({ base44, aid, account, correlationId, syncLogId, for
   }
 
   // ── Liberar lock (fire-and-forget) ─────────────────────────────────────────
-  base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
-    amazon_account_id: aid,
-    action: 'release',
-    _service_role: true,
-  }).catch(() => {});
-
   // ── Status final ───────────────────────────────────────────────────────────
   const hasError = ['phase1', 'phase2'].some(p => summary[p].status === 'error');
   const hasWarning = ['phase3', 'phase4', 'phase5'].some(p => summary[p].status === 'error' || summary[p].status === 'warning');

@@ -50,6 +50,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Confirm canonical Amazon decisions - every 10 minutes",
+      "function": "confirmExecutedDecisions",
+      "cron": "7,17,27,37,47,57 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Amazon offer availability verification - every 10 minutes",
       "function": "syncAmazonOfferAvailability",
       "cron": "1,11,21,31,41,51 * * * *",

@@ -12,6 +12,31 @@ Deno.serve(async (req) => {
 
     const now = new Date();
     const ownerId = body.owner_id || crypto.randomUUID();
+
+    if (body.action === 'release') {
+      const acquired = await base44.asServiceRole.entities.AmazonSchedulerLock.filter({
+        amazon_account_id: body.amazon_account_id,
+        lock_key: body.lock_key,
+        status: 'acquired',
+      }, '-acquired_at', 50).catch(() => []);
+      const owned = body.owner_id
+        ? acquired.filter((lock: any) => String(lock.owner_id) === String(body.owner_id))
+        : acquired;
+      for (const lock of owned) {
+        await base44.asServiceRole.entities.AmazonSchedulerLock.update(lock.id, {
+          status: 'released',
+          released_at: now.toISOString(),
+          heartbeat_at: now.toISOString(),
+        }).catch(() => {});
+      }
+      return Response.json({
+        ok: true,
+        released: owned.length,
+        owner_id: body.owner_id || null,
+        lock_key: body.lock_key,
+      });
+    }
+
     const ttlMs = Math.max(60000, Math.min(Number(body.ttl_ms || 900000), 3600000));
     const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
 

@@ -244,28 +244,24 @@ Deno.serve(async (req) => {
         // Idempotência: verificar se já disparou ação automática hoje via SyncExecutionLog
         const autoActionLogs = await base44.asServiceRole.entities.SyncExecutionLog.filter({
           amazon_account_id: accountId,
-          operation: 'acos_trend_auto_action',
+          operation: 'acos_trend_shadow_signal',
           execution_date: todayBRT,
         }, null, 1).catch(() => []);
 
         if (autoActionLogs.length === 0) {
           await base44.asServiceRole.entities.SyncExecutionLog.create({
             amazon_account_id: accountId,
-            operation: 'acos_trend_auto_action',
-            status: 'started',
-            trigger_type: 'automatic',
+            operation: 'acos_trend_shadow_signal',
+            status: 'skipped',
+            trigger_type: 'observe_only',
             execution_date: todayBRT,
             started_at: now,
+            completed_at: now,
+            result_summary: 'Tendência degradante registrada; escrita delegada exclusivamente ao motor canônico.',
           }).catch(() => {});
 
-          base44.asServiceRole.functions.invoke('runAcosBidReductionEngine', {
-            amazon_account_id: accountId,
-            trigger: 'acos_trend_monitor',
-            force: true,
-            _service_role: true,
-          }).catch(() => {});
-
-          autoActionTriggered = true;
+          // Observe-only: o monitor não pode disparar um motor de redução
+          // paralelo. O próximo ciclo canônico consumirá o alerta e os dados.
         }
       }
     }
