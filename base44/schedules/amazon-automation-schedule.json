@@ -140,6 +140,12 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
+      "name": "AUTO search-term harvest into Term Bank - 07:15 BRT",
+      "function": "updateTermBankFromAutomaticCampaigns",
+      "cron": "15 7 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Campaign Factory retrospective learning - 07:30 BRT",
       "function": "runCampaignFactory",
       "cron": "30 7 * * *",

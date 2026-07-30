@@ -36,7 +36,7 @@ Deno.serve(async (req) => {
     // 1. Buscar campanhas AUTO e MANUAL confirmadas (enabled ou paused, com campaign_id real)
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({
       amazon_account_id: aid,
-    }, '-spend', 500);
+    }, '-spend', 5000);
 
     const validCampaigns = allCampaigns.filter(c =>
       c.campaign_id &&
@@ -53,7 +53,7 @@ Deno.serve(async (req) => {
 
     // 2. Buscar search terms dessas campanhas — filtrar por >= 3 pedidos (30d) ou >= 2 (14d)
     const allSearchTerms = await base44.asServiceRole.entities.SearchTerm.filter(
-      { amazon_account_id: aid }, '-orders_30d', 3000
+      { amazon_account_id: aid }, '-orders_30d', 10000
     );
 
     // Critério: orders_30d >= 3 OU orders_14d >= 2 (ambos indicam termo com conversão consistente)

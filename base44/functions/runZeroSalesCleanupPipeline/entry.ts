@@ -309,18 +309,34 @@ export default async function(req) {
       // ── FASE 3: Promoção de termos lucrativos ──────────────────────────────
       const since7 = new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
 
-      // Buscar keywords/search terms com bom desempenho
-      const goodKeywords = await base44sr.entities.Keyword.filter(
-        { amazon_account_id },
-        '-orders',
-        500
-      ).catch(() => []);
+      // Atualizar a fonte canônica antes de promover: termos de busca que
+      // converteram nas campanhas AUTO -> TermBank -> KeywordBank/Factory.
+      const termRefreshResponse = await base44sr.functions.invoke(
+        'updateTermBankFromAutomaticCampaigns',
+        { amazon_account_id, _service_role: true },
+      ).catch((e) => ({ data: { ok: false, error: e.message } }));
+      const factoryRefreshResponse = await base44sr.functions.invoke(
+        'runCampaignFactory',
+        { amazon_account_id, _service_role: true },
+      ).catch((e) => ({ data: { ok: false, error: e.message } }));
+      const termRefresh = termRefreshResponse?.data || termRefreshResponse || {};
+      const factoryRefresh = factoryRefreshResponse?.data || factoryRefreshResponse || {};
 
-      const winnerKws = goodKeywords.filter(k => {
-        const orders = k.orders || k.historical_orders || 0;
-        const acos = k.acos || k.historical_acos || 0;
-        const kState = (k.state || k.status || '').toLowerCase();
-        return kState !== 'archived' && orders >= 1 && acos > 0 && acos <= targetAcos;
+      const factoryBank = await base44sr.entities.KeywordBank.filter(
+        { amazon_account_id },
+        '-promotion_score',
+        5000,
+      ).catch(() => []);
+      const winnerKws = factoryBank.filter((entry) => {
+        const source = String(entry.source_type || '').toUpperCase();
+        const lifecycle = String(entry.lifecycle_status || '').toUpperCase();
+        return ['AUTO_SEARCH_TERM', 'BROAD_SEARCH_TERM', 'PHRASE_SEARCH_TERM'].includes(source)
+          && ['PROVEN', 'WINNER'].includes(lifecycle)
+          && entry.harvest_candidate === true
+          && Number(entry.orders || 0) >= 1
+          && Number(entry.acos || 0) > 0
+          && Number(entry.acos || 0) <= Number(entry.target_acos || targetAcos)
+          && Number(entry.intent_score || 0) >= 72;
       });
 
       let terms_promoted = 0;
@@ -347,13 +363,14 @@ export default async function(req) {
       }
 
       for (const kw of winnerKws.slice(0, 20)) {
-        if (!kw.keyword_text || !kw.asin) continue;
-        const key = `${kw.asin}::${normalize(kw.keyword_text)}`;
+        const keywordText = kw.keyword || kw.normalized_keyword;
+        if (!keywordText || !kw.asin) continue;
+        const key = `${kw.asin}::${normalize(keywordText)}`;
         if (existingExactTerms.has(key)) continue;
 
         // Verificar se já tem kickoff pendente para este termo
         const existingKickoff = await base44sr.entities.ProductKickoffQueue.filter(
-          { amazon_account_id, asin: kw.asin, keyword: kw.keyword_text, status: 'scheduled' },
+          { amazon_account_id, asin: kw.asin, keyword: keywordText, status: 'scheduled' },
           null,
           1
         ).catch(() => []);
@@ -363,17 +380,22 @@ export default async function(req) {
         await base44sr.entities.ProductKickoffQueue.create({
           amazon_account_id,
           asin: kw.asin,
-          keyword: kw.keyword_text,
+          keyword: keywordText,
           mode: 'manual_only',
+          source: 'cleanup_auto_search_term_harvest',
+          source_keyword_bank_id: kw.id,
+          source_score: Number(kw.promotion_score || kw.intent_score || 0),
           status: 'scheduled',
           queue_hour: now.getHours(),
           queue_window: 'cleanup_promotion',
           scheduled_at: new Date(now.getTime() + 5 * 60000).toISOString(), // 5 min delay
+          attempt_count: 0,
+          max_attempts: 5,
         }).catch(() => {});
 
         promotedTerms.push({
           asin: kw.asin,
-          keyword: kw.keyword_text,
+          keyword: keywordText,
           orders: kw.orders || 0,
           acos: kw.acos || 0,
         });
@@ -430,6 +452,10 @@ export default async function(req) {
         keywords_marked,
         terms_promoted,
         promoted_terms: promotedTerms,
+        learning_refresh: {
+          term_bank: termRefresh,
+          campaign_factory: factoryRefresh,
+        },
         discovery_queued,
         failed,
         errors: archiveErrors.slice(0, 10),

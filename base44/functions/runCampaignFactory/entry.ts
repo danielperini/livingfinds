@@ -17,6 +17,12 @@
  * 13. Dry-run ou execução conforme auto_creation_level
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  calculateFactoryIntentScore,
+  campaignFactoryPlanKey,
+  extractFactorySearchTermSignal,
+  normalizeFactoryKeyword,
+} from '../../shared/campaignFactorySignals.ts';
 
 // ── Config defaults (configuráveis via PerformanceSettings) ──────────────
 const DEFAULT_MIN_ORDERS_PROVEN       = 2;
@@ -34,11 +40,7 @@ const DEFAULT_HARD_NO_SALE_LIMIT_MULT = 2.0;   // × Target CPA
 
 // ── Normalização ────────────────────────────────────────────────────────
 function normalizeKeyword(kw: string): string {
-  return (kw || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')   // remove acentos para comparação
-    .replace(/\s+/g, ' ')
-    .trim();
+  return normalizeFactoryKeyword(kw);
 }
 
 function kwHash(marketplace: string, asin: string, normalized: string, matchType: string, job: string): string {
@@ -48,34 +50,7 @@ function kwHash(marketplace: string, asin: string, normalized: string, matchType
 // ── Intent Score heurístico (evita LLM por ciclo) ──────────────────────
 // Score baseado em sobreposição de tokens com keywords do produto
 function calcIntentScore(kwText: string, productName: string, category: string): number {
-  const norm = (s: string) => normalizeKeyword(s || '').split(' ').filter(Boolean);
-  const kwTokens   = new Set(norm(kwText));
-  const prodTokens = norm(productName + ' ' + category);
-
-  if (kwTokens.size === 0) return 0;
-
-  // Tokens de intenção comercial de alta relevância
-  const highIntentTokens = ['automatica', 'automatico', 'sensor', 'eletrico', 'eletrica', 'profissional',
-    'inox', 'preto', 'branco', 'grande', 'pequeno', 'mini', 'portatil', 'sem', 'fio', 'bivolt', 'led'];
-  const lowIntentTokens = ['casa', 'como', 'para', 'comprar', 'barato', 'melhor', 'o', 'a', 'de', 'da', 'do'];
-
-  let overlap = 0;
-  let boost   = 0;
-  let penalty = 0;
-
-  for (const t of prodTokens) {
-    if (kwTokens.has(t)) overlap++;
-  }
-  for (const t of highIntentTokens) {
-    if (kwTokens.has(t)) boost += 5;
-  }
-  for (const t of lowIntentTokens) {
-    if (kwTokens.has(t)) penalty += 3;
-  }
-
-  const overlapRatio = prodTokens.length > 0 ? overlap / prodTokens.length : 0;
-  const base = Math.min(100, Math.round(overlapRatio * 80 + boost - penalty));
-  return Math.max(0, Math.min(100, base));
+  return calculateFactoryIntentScore(kwText, productName, category);
 }
 
 // ── Sustainable CPC ─────────────────────────────────────────────────────
@@ -171,6 +146,18 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
     return { status: 'WINNER', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };
   }
 
+  // Uma venda atribuída, economicamente saudável e semanticamente aderente já
+  // constitui performance comprovada. Ela ainda não é um WINNER escalável, mas
+  // deve aparecer no Factory e pode entrar no harvest controlado.
+  if (
+    orders >= 1 &&
+    Number(entry.sales || 0) > 0 &&
+    acos > 0 && acos <= Number(goal.max_acos || goal.target_acos) &&
+    intent >= 72
+  ) {
+    return { status: 'PROVEN', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };
+  }
+
   // VALIDATING
   if (orders >= 1 || clicks >= DEFAULT_MIN_CLICKS_PROVEN) {
     return { status: 'VALIDATING', winnerTier: 'NONE', bankSegment: 'DISCOVERY_BANK' };
@@ -215,7 +202,7 @@ function generateCampaignPlan(
     campaignJob  = 'SCALE';
     matchType    = 'exact';
     whyCreated   = `Strong Winner: ${entry.orders} pedidos, ACoS ${acos.toFixed(1)}% vs meta ${targetAcos}%`;
-  } else if (lifecycle === 'WINNER') {
+  } else if (lifecycle === 'WINNER' || lifecycle === 'PROVEN') {
     campaignType = 'MANUAL_EXACT';
     campaignJob  = sourceType === 'HISTORICAL_WINNER' ? 'PROFIT' : 'PROFIT';
     matchType    = 'exact';
@@ -251,7 +238,7 @@ function generateCampaignPlan(
   const campaignName = `SP | MANUAL | EXACT | ${asin} | ${nameSuffix}`;
 
   // Duplicate check hash (PRD §78)
-  const hash = kwHash('BR', asin, entry.normalized_keyword, matchType, campaignJob);
+  const hash = campaignFactoryPlanKey(asin, entry.normalized_keyword, matchType);
   if (existingHashes.has(hash)) {
     return {
       _duplicate: true,
@@ -354,8 +341,9 @@ Deno.serve(async (req) => {
     const avgCvrMap    = new Map<string, number>();
     for (const e of economicsList) {
       if (e.asin) {
-        breakEvenMap.set(e.asin, Number(e.break_even_acos || 30));
-        avgAovMap.set(e.asin, Number(e.average_sale_price || e.current_price || 0));
+        const asin = String(e.asin).toUpperCase();
+        breakEvenMap.set(asin, Number(e.break_even_acos || 30));
+        avgAovMap.set(asin, Number(e.average_sale_price || e.current_price || 0));
       }
     }
 
@@ -377,10 +365,14 @@ Deno.serve(async (req) => {
     const bankByHash   = new Map<string, any>();
     const bankByKwAsin = new Map<string, any>(); // key: normalized_keyword|asin
 
-    for (const p of allProducts) { if (p.asin) productMap.set(p.asin, p); }
+    for (const p of allProducts) {
+      if (p.asin) productMap.set(String(p.asin).toUpperCase(), p);
+    }
     for (const b of existingBankRaw) {
       if (b.keyword_hash)     bankByHash.set(b.keyword_hash, b);
-      if (b.normalized_keyword && b.asin) bankByKwAsin.set(`${b.normalized_keyword}|${b.asin}`, b);
+      if (b.normalized_keyword && b.asin) {
+        bankByKwAsin.set(`${b.normalized_keyword}|${String(b.asin).toUpperCase()}`, b);
+      }
     }
 
     // ── PASSO 1-3: Coletar sinais e atualizar Bank ─────────────────────
@@ -394,7 +386,8 @@ Deno.serve(async (req) => {
       metrics: any, extraFields: any = {},
     ) => {
       if (!kwText || !asin) return;
-      if (filterAsin && asin !== filterAsin) return;
+      asin = String(asin).toUpperCase();
+      if (filterAsin && asin !== String(filterAsin).toUpperCase()) return;
 
       const normalized = normalizeKeyword(kwText);
       if (!normalized) return;
@@ -482,18 +475,17 @@ Deno.serve(async (req) => {
 
     // ── Fonte 2: Search Terms ──────────────────────────────────────────
     for (const st of allSearchTerms) {
-      if (!st.asin || !st.query) continue;
+      const signal = extractFactorySearchTermSignal(st);
+      if (!signal.asin || !signal.keyword) continue;
       // Determinar source_type pelo match type da campanha de origem
       const sourceType = st.match_type === 'broad' ? 'BROAD_SEARCH_TERM'
         : st.match_type === 'phrase' ? 'PHRASE_SEARCH_TERM'
         : 'AUTO_SEARCH_TERM';
-      upsertBank(st.query, st.asin, sourceType, {
-        impressions: st.impressions || 0, clicks: st.clicks || 0,
-        orders: st.orders || 0, sales: st.sales || 0, spend: st.spend || 0,
-        campaign_id: st.campaign_id,
-      }, {
+      upsertBank(signal.keyword, signal.asin, sourceType, signal.metrics, {
         match_type: 'exact', // Search terms se promovem para exact
-        source_confidence: st.orders >= 2 ? 'HIGH' : st.orders >= 1 ? 'MEDIUM' : 'LOW',
+        source_confidence: signal.metrics.orders >= 2 ? 'HIGH'
+          : signal.metrics.orders >= 1 ? 'MEDIUM'
+          : 'LOW',
       });
     }
 
@@ -520,7 +512,11 @@ Deno.serve(async (req) => {
     for (const term of termBankRaw) {
       if (!term.term || !term.asin || term.status === 'archived') continue;
       const termMatchType = String(term.recommended_match_type || term.match_type || 'exact').toLowerCase();
-      upsertBank(term.term, term.asin, term.source === 'cross_asin' ? 'HISTORICAL_WINNER' : 'KEYWORD_BANK', {
+      const termSource = String(term.source || '').toLowerCase();
+      const sourceType = termSource === 'cross_asin' ? 'HISTORICAL_WINNER'
+        : termSource.includes('search_term') ? 'AUTO_SEARCH_TERM'
+        : 'KEYWORD_BANK';
+      upsertBank(term.term, term.asin, sourceType, {
         impressions: term.impressions || 0,
         clicks: term.clicks || 0,
         orders: term.orders || 0,
@@ -554,8 +550,9 @@ Deno.serve(async (req) => {
       bankMap.set(key, u);
     }
 
-    // Recalcular promotion_score e lifecycle para todos que mudaram
-    const toReclassify = [...bankUpdates, ...bankCreates];
+    // Recalcular todo o banco para recuperar registros históricos gravados
+    // antes da normalização dos aliases dos relatórios.
+    const toReclassify = [...bankMap.values()];
     for (const entry of toReclassify) {
       entry.promotion_score = calcPromotionScore(entry, goal.target_acos);
       entry.confidence_score = Math.min(100,
@@ -594,31 +591,50 @@ Deno.serve(async (req) => {
     let bankUpdatedCount = 0;
     if (!dry_run) {
       if (bankCreates.length > 0) {
-        await base44.asServiceRole.entities.KeywordBank.bulkCreate(bankCreates).catch(() => {});
+        await base44.asServiceRole.entities.KeywordBank.bulkCreate(bankCreates);
         bankCreatedCount = bankCreates.length;
       }
+      const persistedUpdates = toReclassify.filter((entry: any) => entry.id);
       // Bulk update em lotes de 100
-      for (let i = 0; i < bankUpdates.length; i += 100) {
-        const batch = bankUpdates.slice(i, i + 100);
-        await base44.asServiceRole.entities.KeywordBank.bulkUpdate(batch).catch(() => {});
+      for (let i = 0; i < persistedUpdates.length; i += 100) {
+        const batch = persistedUpdates.slice(i, i + 100);
+        await base44.asServiceRole.entities.KeywordBank.bulkUpdate(batch);
         bankUpdatedCount += batch.length;
       }
     }
 
     // ── PASSO 8-12: Gerar Campaign Factory Plans ───────────────────────
-    const winners      = toReclassify.filter((e: any) => e.lifecycle_status === 'WINNER' && e.harvest_candidate);
+    const winners      = toReclassify.filter((e: any) =>
+      ['WINNER', 'PROVEN'].includes(e.lifecycle_status) && e.harvest_candidate
+    );
     const candidates   = toReclassify.filter((e: any) => ['CANDIDATE', 'VALIDATING'].includes(e.lifecycle_status) && e.amazon_recommended && e.intent_score >= 85);
 
     // Limite de criações por dia (PRD §77)
     const planTargets = [...winners, ...candidates].slice(0, DEFAULT_MAX_NEW_PER_DAY);
 
-    // Hashes existentes para dedup (PRD §78)
-    const existingHashSet = new Set<string>(existingBankRaw.map((b: any) => b.keyword_hash).filter(Boolean));
-    // Também verificar planos criados hoje
-    const plansToday = await base44.asServiceRole.entities.CampaignFactoryPlan.filter({
-      amazon_account_id: accountId, cycle_date: today,
-    }, null, 200).catch(() => []);
-    for (const p of plansToday) { if (p.duplicate_check_hash) existingHashSet.add(p.duplicate_check_hash); }
+    // Deduplicar contra keywords/campanhas e planos reais. O keyword_hash do
+    // próprio banco identifica a fonte e não significa que a campanha existe.
+    const existingPlans = await base44.asServiceRole.entities.CampaignFactoryPlan.filter({
+      amazon_account_id: accountId,
+    }, '-proposed_at', 2000).catch(() => []);
+    const plansToday = existingPlans.filter((plan: any) => plan.cycle_date === today);
+    const existingHashSet = new Set<string>();
+    for (const keyword of allKeywords) {
+      const state = String(keyword.state || keyword.status || '').toLowerCase();
+      if (!keyword.asin || !keyword.keyword_text || state === 'archived') continue;
+      existingHashSet.add(campaignFactoryPlanKey(
+        keyword.asin,
+        keyword.keyword_text,
+        keyword.match_type || 'exact',
+      ));
+    }
+    for (const plan of existingPlans) {
+      if (['FAILED', 'REJECTED'].includes(String(plan.status || '').toUpperCase())) continue;
+      existingHashSet.add(
+        plan.duplicate_check_hash
+        || campaignFactoryPlanKey(plan.asin, plan.keyword, plan.match_type || 'exact'),
+      );
+    }
 
     const plans: any[] = [];
     const dupes: any[] = [];
@@ -628,7 +644,9 @@ Deno.serve(async (req) => {
       if (!product) continue;
 
       // Verificar limite por ASIN (PRD §77)
-      const plansForAsin = plansToday.filter((p: any) => p.asin === entry.asin && p.status === 'PROPOSED').length;
+      const plansForAsin = plansToday.filter((p: any) =>
+        p.asin === entry.asin && ['PROPOSED', 'APPROVED', 'EXECUTING'].includes(p.status)
+      ).length + plans.filter((p: any) => p.asin === entry.asin).length;
       if (plansForAsin >= DEFAULT_MAX_CAMPAIGNS_PER_ASIN) continue;
 
       const plan = generateCampaignPlan(entry, product, goal, [], existingHashSet, now, today);
@@ -647,14 +665,14 @@ Deno.serve(async (req) => {
     // ── Persistir Plans ────────────────────────────────────────────────
     let plansCreated = 0;
     if (!dry_run && plans.length > 0) {
-      await base44.asServiceRole.entities.CampaignFactoryPlan.bulkCreate(plans).catch(() => {});
+      await base44.asServiceRole.entities.CampaignFactoryPlan.bulkCreate(plans);
       plansCreated = plans.length;
     }
 
     // ── Sumário de aprendizado ─────────────────────────────────────────
     const summary = {
       total_bank_entries: bankMap.size,
-      winners:         toReclassify.filter((e: any) => e.lifecycle_status === 'WINNER').length,
+      winners:         toReclassify.filter((e: any) => ['WINNER', 'PROVEN'].includes(e.lifecycle_status)).length,
       strong_winners:  toReclassify.filter((e: any) => e.winner_tier === 'STRONG_WINNER').length,
       candidates:      toReclassify.filter((e: any) => e.lifecycle_status === 'CANDIDATE').length,
       validating:      toReclassify.filter((e: any) => e.lifecycle_status === 'VALIDATING').length,
@@ -670,7 +688,7 @@ Deno.serve(async (req) => {
       cycle_date: today,
       terms_processed: termsProcessed,
       bank_created: dry_run ? bankCreates.length : bankCreatedCount,
-      bank_updated: dry_run ? bankUpdates.length : bankUpdatedCount,
+      bank_updated: dry_run ? toReclassify.filter((entry: any) => entry.id).length : bankUpdatedCount,
       plans_generated: plans.length,
       plans_created: plansCreated,
       duplicates_blocked: dupes.length,
@@ -681,7 +699,7 @@ Deno.serve(async (req) => {
         why_created: p.why_created,
       })),
       top_winners: toReclassify
-        .filter((e: any) => e.lifecycle_status === 'WINNER')
+        .filter((e: any) => ['WINNER', 'PROVEN'].includes(e.lifecycle_status))
         .sort((a: any, b: any) => b.promotion_score - a.promotion_score)
         .slice(0, 10)
         .map((e: any) => ({

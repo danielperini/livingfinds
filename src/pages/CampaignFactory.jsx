@@ -249,6 +249,7 @@ export default function CampaignFactory() {
   const [schedulingId, setSchedulingId] = useState(null);
   const [scheduledIds, setScheduledIds] = useState({});
   const [termMsg, setTermMsg]       = useState(null);
+  const [refreshHealth, setRefreshHealth] = useState(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -269,6 +270,9 @@ export default function CampaignFactory() {
         refresh: true,
       }).catch(() => null);
       const snapshot = snapshotResponse?.data;
+      setRefreshHealth(snapshot?.refresh || (snapshotResponse ? null : {
+        snapshot: { ok: false, error: 'Snapshot do Factory indisponível.' },
+      }));
 
       const [fallbackBank, fallbackPlans, termData, sugData, prodData, kwData, stData] = await Promise.all([
         snapshot?.ok ? Promise.resolve([]) : base44.entities.KeywordBank.filter({ amazon_account_id: acc.id }, '-promotion_score', 500).catch(() => []),
@@ -368,7 +372,7 @@ export default function CampaignFactory() {
   // ── Métricas ─────────────────────────────────────────────────────────
   const stats = useMemo(() => ({
     total:      bankEntries.length,
-    winners:    bankEntries.filter(e => e.lifecycle_status === 'WINNER').length,
+    winners:    bankEntries.filter(e => ['WINNER', 'PROVEN'].includes(e.lifecycle_status)).length,
     strong:     bankEntries.filter(e => e.winner_tier === 'STRONG_WINNER').length,
     harvest:    bankEntries.filter(e => e.harvest_candidate).length,
     candidates: bankEntries.filter(e => e.lifecycle_status === 'CANDIDATE').length,
@@ -389,7 +393,7 @@ export default function CampaignFactory() {
     return list;
   }, [bankEntries, search, lifecycleFilter, sourceFilter]);
 
-  const winners  = useMemo(() => bankEntries.filter(e => e.lifecycle_status === 'WINNER').sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
+  const winners  = useMemo(() => bankEntries.filter(e => ['WINNER', 'PROVEN'].includes(e.lifecycle_status)).sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
   const harvests = useMemo(() => bankEntries.filter(e => e.harvest_candidate).sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
 
   const funnel = useMemo(() => {
@@ -478,6 +482,15 @@ export default function CampaignFactory() {
           </button>
         ))}
       </div>
+
+      {refreshHealth && Object.values(refreshHealth).some(result => result?.ok === false) && (
+        <div className="mx-6 mt-3 px-3 py-2 rounded-lg border border-red-500/25 bg-red-500/10 text-[11px] text-red-300">
+          Atualização parcial do Campaign Factory: {Object.entries(refreshHealth)
+            .filter(([, result]) => result?.ok === false)
+            .map(([stage, result]) => `${stage}: ${result?.error || result?.reason || 'falha sem detalhe'}`)
+            .join(' · ')}
+        </div>
+      )}
 
       {/* Search bar for keyword bank sub-tabs */}
       {tab === 'keyword_bank' && (
