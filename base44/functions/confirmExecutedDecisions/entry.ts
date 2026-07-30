@@ -12,7 +12,7 @@
  * Se o valor na Amazon diverge do valor esperado:
  *   - Marca a decisão como 'failed' com motivo
  *   - Atualiza o banco local com o valor real da Amazon
- *   - Agenda retry via OptimizationDecision com status='approved'
+ *   - Delega uma eventual nova proposta ao próximo ciclo canônico
  *
  * Janela de confirmação: decisões executadas nas últimas 6h (Amazon pode demorar até 5min para propagar)
  */
@@ -89,13 +89,19 @@ Deno.serve(async (req) => {
     const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
     const now = new Date().toISOString();
     const cutoff6h = new Date(Date.now() - 6 * 3600000).toISOString();
+    const propagationCutoff = new Date(Date.now() - 5 * 60000).toISOString();
 
     // Carregar decisões executadas nas últimas 6h
     const executed = await base44.asServiceRole.entities.OptimizationDecision.filter(
       { amazon_account_id: aid, status: 'executed' }, '-executed_at', 100
     ).catch(() => []);
 
-    const recent = executed.filter((d: any) => d.executed_at && d.executed_at >= cutoff6h);
+    const recent = executed.filter((d: any) =>
+      d.executed_at
+      && d.executed_at >= cutoff6h
+      && d.executed_at <= propagationCutoff
+      && d.confirmation_status !== 'confirmed'
+    );
 
     if (recent.length === 0) {
       return Response.json({ ok: true, confirmed: 0, divergences: 0, retried: 0, message: 'Nenhuma decisão recente para confirmar' });
@@ -103,10 +109,19 @@ Deno.serve(async (req) => {
 
     // Separar por tipo de entidade
     const bidDecisions = recent.filter((d: any) => ['set_bid', 'reduce_bid', 'increase_bid', 'update_bid'].includes(d.action));
+    const keywordStateDecisions = recent.filter((d: any) => ['pause_keyword', 'enable_keyword'].includes(d.action));
     const campDecisions = recent.filter((d: any) => ['pause_campaign', 'enable_campaign', 'set_budget', 'update_budget', 'reduce_budget', 'increase_budget'].includes(d.action));
+    const confirmableIds = new Set([...bidDecisions, ...keywordStateDecisions, ...campDecisions].map((d: any) => String(d.id)));
+    const unsupportedDecisions = recent.filter((d: any) => !confirmableIds.has(String(d.id)));
+    for (const decision of unsupportedDecisions) {
+      await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+        confirmation_status: 'unsupported',
+        confirmation_error: `CONFIRMATION_PROBE_UNAVAILABLE:${decision.action || 'unknown'}`,
+      }).catch(() => {});
+    }
 
     // ── 1. Confirmar bids de keywords ─────────────────────────────────────
-    const kwIds = [...new Set(bidDecisions.map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
+    const kwIds = [...new Set([...bidDecisions, ...keywordStateDecisions].map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
     const amazonKwById = new Map<string, any>();
 
     for (let i = 0; i < kwIds.length; i += 50) {
@@ -144,7 +159,17 @@ Deno.serve(async (req) => {
     for (const d of bidDecisions) {
       const kwId = String(d.entity_id || d.keyword_id || '');
       const amz = amazonKwById.get(kwId);
-      if (!amz) continue; // keyword pode estar pausada e não aparecer — ok
+      if (!amz) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'failed',
+          confirmation_status: 'not_found',
+          confirmation_error: 'Keyword não encontrada no probe remoto após a janela de propagação.',
+          error_message: 'Confirmação Amazon falhou: keyword não encontrada.',
+          updated_at: now,
+        }).catch(() => {});
+        continue;
+      }
 
       const amzBid = Number(amz.bid?.amount ?? amz.bid ?? 0);
       const expectedBid = Number(d.value_after || 0);
@@ -152,6 +177,11 @@ Deno.serve(async (req) => {
 
       if (diff < 0.01) {
         confirmed++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          confirmation_status: 'confirmed',
+          confirmation_error: null,
+          confirmed_at: now,
+        }).catch(() => {});
         // Garantir que o banco local está atualizado
         const kws = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, keyword_id: kwId }, null, 1).catch(() => []);
         if (kws[0] && Math.abs(Number(kws[0].bid || 0) - amzBid) > 0.01) {
@@ -161,9 +191,11 @@ Deno.serve(async (req) => {
         divergences++;
         divergenceLog.push({ type: 'bid_mismatch', keyword_id: kwId, expected: expectedBid, amazon: amzBid, diff });
 
-        // Marcar decisão como failed e criar retry
+        // Marcar a decisão como failed e devolver o caso ao motor canônico.
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
           status: 'failed',
+          confirmation_status: 'divergent',
+          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
           error_message: `Confirmação Amazon divergente: esperado R$${expectedBid.toFixed(2)}, Amazon retornou R$${amzBid.toFixed(2)}`,
           updated_at: now,
         }).catch(() => {});
@@ -174,38 +206,60 @@ Deno.serve(async (req) => {
           await base44.asServiceRole.entities.Keyword.update(kws[0].id, { bid: amzBid, current_bid: amzBid, synced_at: now }).catch(() => {});
         }
 
-        // Criar nova decisão de retry se a diferença for relevante (>5%)
-        if (expectedBid > 0 && diff / expectedBid > 0.05) {
-          await base44.asServiceRole.entities.OptimizationDecision.create({
-            amazon_account_id: aid,
-            decision_type: 'bid_change',
-            entity_type: d.entity_type || 'keyword',
-            entity_id: d.entity_id,
-            keyword_id: d.keyword_id,
-            campaign_id: d.campaign_id,
-            keyword_text: d.keyword_text,
-            asin: d.asin,
-            action: 'set_bid',
-            value_before: amzBid,
-            value_after: expectedBid,
-            rationale: `RETRY confirmação: bid Amazon (R$${amzBid.toFixed(2)}) diverge do esperado (R$${expectedBid.toFixed(2)}). Re-aplicando.`,
-            status: 'approved',
-            approval_status: 'auto_approved',
-            risk: 'low',
-            confidence: 90,
-            idempotency_key: `confirm_retry_${d.id}`,
-            source_function: 'confirmExecutedDecisions',
-            created_at: now,
-          }).catch(() => {});
-          retried++;
-        }
+        // Não repetir cegamente uma decisão divergente. O motor canônico deve
+        // reavaliar dados e metas no próximo ciclo antes de propor nova escrita.
+      }
+    }
+
+    for (const d of keywordStateDecisions) {
+      const kwId = String(d.entity_id || d.keyword_id || '');
+      const amz = amazonKwById.get(kwId);
+      if (!amz) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'failed',
+          confirmation_status: 'not_found',
+          confirmation_error: 'Keyword não encontrada no probe remoto após a janela de propagação.',
+          error_message: 'Confirmação Amazon falhou: keyword não encontrada.',
+          updated_at: now,
+        }).catch(() => {});
+        continue;
+      }
+      const expectedState = d.action === 'pause_keyword' ? 'paused' : 'enabled';
+      const amazonState = String(amz.state || '').toLowerCase();
+      if (amazonState === expectedState) {
+        confirmed++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          confirmation_status: 'confirmed',
+          confirmation_error: null,
+          confirmed_at: now,
+        }).catch(() => {});
+      } else {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'failed',
+          confirmation_status: 'divergent',
+          confirmation_error: `Estado remoto ${amazonState || 'desconhecido'} diverge do esperado ${expectedState}.`,
+          error_message: `Estado da keyword divergente: esperado ${expectedState}, Amazon retornou ${amazonState || 'desconhecido'}.`,
+          updated_at: now,
+        }).catch(() => {});
       }
     }
 
     for (const d of campDecisions) {
       const campId = String(d.campaign_id || d.entity_id || '');
       const amz = amazonCampById.get(campId);
-      if (!amz) continue;
+      if (!amz) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'failed',
+          confirmation_status: 'not_found',
+          confirmation_error: 'Campanha não encontrada no probe remoto após a janela de propagação.',
+          error_message: 'Confirmação Amazon falhou: campanha não encontrada.',
+          updated_at: now,
+        }).catch(() => {});
+        continue;
+      }
 
       const amzState = (amz.state || '').toLowerCase();
       const amzBudget = Number(amz.budget?.budget ?? amz.dailyBudget ?? 0);
@@ -221,27 +275,20 @@ Deno.serve(async (req) => {
 
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
             status: 'failed',
+            confirmation_status: 'divergent',
+            confirmation_error: `Estado remoto ${amzState || 'desconhecido'} diverge do esperado ${expectedState}.`,
             error_message: `Estado Amazon divergente: esperado ${expectedState}, Amazon retornou ${amzState}`,
             updated_at: now,
           }).catch(() => {});
 
-          // Criar retry
-          await base44.asServiceRole.entities.OptimizationDecision.create({
-            amazon_account_id: aid,
-            decision_type: 'pause', entity_type: 'campaign',
-            entity_id: campId, campaign_id: campId, asin: d.asin,
-            action: d.action,
-            value_before: amzState, value_after: expectedState,
-            rationale: `RETRY estado: Amazon retornou ${amzState} em vez de ${expectedState}`,
-            status: 'approved', approval_status: 'auto_approved',
-            risk: 'low', confidence: 90,
-            idempotency_key: `confirm_retry_${d.id}`,
-            source_function: 'confirmExecutedDecisions',
-            created_at: now,
-          }).catch(() => {});
-          retried++;
+          // Divergências de estado voltam ao motor canônico; não há retry cego.
         } else {
           confirmed++;
+          await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+            confirmation_status: 'confirmed',
+            confirmation_error: null,
+            confirmed_at: now,
+          }).catch(() => {});
         }
       }
 
@@ -256,6 +303,8 @@ Deno.serve(async (req) => {
 
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
             status: 'failed',
+            confirmation_status: 'divergent',
+            confirmation_error: `Budget remoto R$${amzBudget.toFixed(2)} diverge do esperado R$${expectedBudget.toFixed(2)}.`,
             error_message: `Budget Amazon divergente: esperado R$${expectedBudget.toFixed(2)}, Amazon retornou R$${amzBudget.toFixed(2)}`,
             updated_at: now,
           }).catch(() => {});
@@ -267,6 +316,11 @@ Deno.serve(async (req) => {
           }
         } else if (!hasDivergence) {
           confirmed++;
+          await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+            confirmation_status: 'confirmed',
+            confirmation_error: null,
+            confirmed_at: now,
+          }).catch(() => {});
         }
       }
     }
@@ -284,13 +338,6 @@ Deno.serve(async (req) => {
       records_processed: recent.length,
       result_summary: JSON.stringify({ confirmed, divergences, retried, kw_checked: kwIds.length, camp_checked: campIds.length }).slice(0, 500),
     }).catch(() => {});
-
-    // Disparar fila se houver retries
-    if (retried > 0) {
-      base44.asServiceRole.functions.invoke('executeApprovedDecisionQueue', {
-        amazon_account_id: aid, _service_role: true,
-      }).catch(() => {});
-    }
 
     return Response.json({
       ok: true,

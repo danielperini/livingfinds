@@ -92,6 +92,11 @@
     "expected_loss_if_delayed": { "type": "number" },
     "execution_sla_seconds": { "type": "number" },
     "confirmation_required": { "type": "boolean", "default": true },
+    "confirmation_status": {
+      "type": "string",
+      "enum": ["pending", "confirmed", "divergent", "unsupported", "not_found"]
+    },
+    "confirmation_error": { "type": "string" },
     "confirmed_at": { "type": "string", "format": "date-time" },
     "queued_at": { "type": "string", "format": "date-time" },
     "queue_processed_at": { "type": "string", "format": "date-time" },

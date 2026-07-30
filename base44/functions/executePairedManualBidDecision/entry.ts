@@ -31,6 +31,7 @@ function message(data: any) {
 
 async function markDecision(base44: any, decision: any, ok: boolean, detail: any) {
   const now = new Date().toISOString();
+  const requestIds = Array.isArray(detail?.request_ids) ? detail.request_ids.filter(Boolean) : [];
   await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
     status: ok ? 'executed' : 'failed',
     queue_status: ok ? 'completed' : 'failed',
@@ -38,6 +39,7 @@ async function markDecision(base44: any, decision: any, ok: boolean, detail: any
     executed_at: ok ? now : null,
     error_message: ok ? null : message(detail),
     amazon_response: JSON.stringify(detail).slice(0, 4000),
+    amazon_request_id: requestIds.join(',').slice(0, 500) || detail?.request_id || detail?.amazon_request_id || null,
     updated_at: now,
   });
 }
@@ -196,7 +198,19 @@ async function executeOne(base44: any, decision: any) {
     created_at: now,
   }).catch(() => {});
 
-  return { ok: true, status: 'executed', decision_id: decision.id, campaign_id: campaignId, ad_group_id: adGroupId, keyword_id: resolvedKeywordId, bid: targetBid };
+  return {
+    ok: true,
+    status: 'executed',
+    decision_id: decision.id,
+    campaign_id: campaignId,
+    ad_group_id: adGroupId,
+    keyword_id: resolvedKeywordId,
+    bid: targetBid,
+    request_ids: [
+      groupUpdate?.request_id || groupUpdate?.amazon_request_id,
+      keywordUpdate?.request_id || keywordUpdate?.amazon_request_id,
+    ].filter(Boolean),
+  };
 }
 
 Deno.serve(async (request) => {

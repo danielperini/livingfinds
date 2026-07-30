@@ -303,6 +303,13 @@ Deno.serve(async (request) => {
           results.push({ id: decision.id, action: decision.action, ok: false, cancelled: true });
           skipped++;
         } else {
+          if (ok && capability.definition?.confirmationRequired) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              confirmation_status: 'pending',
+              confirmation_error: null,
+              confirmed_at: null,
+            }).catch(() => {});
+          }
           results.push({ id: decision.id, action: decision.action, ok });
           if (ok) executed++; else if (data?.scheduled) skipped++; else failed++;
         }

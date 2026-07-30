@@ -84,8 +84,12 @@ Deno.serve(async (request) => {
           amazon_account_id: decision.amazon_account_id,
           operation: 'pauseCampaignSafe',
           method: 'PUT',
-          path: '/v2/sp/campaigns',
-          payload: [{ campaignId: String(campaign.campaign_id), state: 'paused' }],
+          path: '/sp/campaigns',
+          content_type: 'application/vnd.spCampaign.v3+json',
+          accept: 'application/vnd.spCampaign.v3+json',
+          payload: {
+            campaigns: [{ campaignId: String(campaign.campaign_id), state: 'PAUSED' }],
+          },
           _service_role: true,
         });
         response = apiResponse?.data || apiResponse || {};
@@ -98,6 +102,7 @@ Deno.serve(async (request) => {
         executed_at: success ? now : null,
         error_message: success ? null : String(response?.errors?.[0]?.message || response?.error || 'Falha ao pausar campanha').slice(0, 500),
         amazon_response: JSON.stringify(response || {}).slice(0, 4000),
+        amazon_request_id: response?.request_id || response?.amazon_request_id || response?.headers?.request_id || null,
       });
 
       if (success) {

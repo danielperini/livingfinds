@@ -9,6 +9,7 @@ export type AmazonActionDefinition = {
   rollbackAction?: string;
   allowedModes: ExecutionMode[];
   confirmationRequired: boolean;
+  confirmationProbe?: string;
   supported: boolean;
 };
 
@@ -25,6 +26,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'set_bid',
     allowedModes: QUEUED,
     confirmationRequired: true,
+    confirmationProbe: 'confirmExecutedDecisions:keyword_bid',
     supported: true,
   })),
   ...['update_budget', 'reduce_budget', 'increase_budget', 'set_budget'].map(actionCode => ({
@@ -36,6 +38,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'set_budget',
     allowedModes: QUEUED,
     confirmationRequired: true,
+    confirmationProbe: 'confirmExecutedDecisions:campaign_budget',
     supported: true,
   })),
   {
@@ -47,6 +50,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'enable_campaign',
     allowedModes: STATE_MODES,
     confirmationRequired: true,
+    confirmationProbe: 'confirmExecutedDecisions:campaign_state',
     supported: true,
   },
   {
@@ -58,6 +62,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'pause_campaign',
     allowedModes: QUEUED,
     confirmationRequired: true,
+    confirmationProbe: 'confirmExecutedDecisions:campaign_state',
     supported: true,
   },
   ...['pause_keyword', 'enable_keyword'].map(actionCode => ({
@@ -69,6 +74,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: actionCode === 'pause_keyword' ? 'enable_keyword' : 'pause_keyword',
     allowedModes: STATE_MODES,
     confirmationRequired: true,
+    confirmationProbe: 'confirmExecutedDecisions:keyword_state',
     supported: true,
   })),
   ...['negative_exact', 'negative_keyword'].map(actionCode => ({
@@ -79,7 +85,7 @@ const definitions: AmazonActionDefinition[] = [
     reversible: false,
     allowedModes: ['STANDARD_QUEUE'] as ExecutionMode[],
     confirmationRequired: true,
-    supported: true,
+    supported: false,
   })),
   {
     actionCode: 'create_keyword',
@@ -90,7 +96,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'pause_keyword',
     allowedModes: ['STANDARD_QUEUE'],
     confirmationRequired: true,
-    supported: true,
+    supported: false,
   },
   {
     actionCode: 'apply_dayparting',
@@ -101,7 +107,7 @@ const definitions: AmazonActionDefinition[] = [
     rollbackAction: 'set_bid',
     allowedModes: ['SCHEDULED_WINDOW'],
     confirmationRequired: true,
-    supported: true,
+    supported: false,
   },
 ];
 
@@ -115,6 +121,13 @@ export function validateAmazonAction(input: { action?: string; execution_mode?: 
   const definition = getAmazonActionDefinition(input.action);
   if (!definition?.supported) {
     return { valid: false, reason: `UNSUPPORTED_AMAZON_ACTION:${input.action || 'missing'}`, definition };
+  }
+  if (definition.confirmationRequired && !definition.confirmationProbe) {
+    return {
+      valid: false,
+      reason: `MISSING_CONFIRMATION_PROBE:${input.action}`,
+      definition,
+    };
   }
   if (input.execution_mode && !definition.allowedModes.includes(input.execution_mode)) {
     return {
