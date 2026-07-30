@@ -225,6 +225,44 @@ Deno.serve(async (req) => {
     }
 
     if (fetchError) {
+      const permissionDenied = /Finance Events 403|Access to requested resource is denied|Unauthorized/i.test(fetchError);
+      if (permissionDenied) {
+        const fallbackResponse = await base44.asServiceRole.functions.invoke('syncProductSalesMetrics', {
+          amazon_account_id: aid,
+          lookback_days: 7,
+          source_function: 'syncFinanceEventsFromSpApi_permission_fallback',
+          _service_role: true,
+        }).catch((error) => ({ data: { ok: false, error: error?.message || String(error) } }));
+        const fallback = fallbackResponse?.data || fallbackResponse || {};
+        if (fallback?.ok === true) {
+          await base44.asServiceRole.entities.SyncExecutionLog.create({
+            amazon_account_id: aid,
+            operation: 'syncFinanceEventsFromSpApi',
+            status: 'success',
+            trigger_type: body._service_role ? 'automatic' : 'manual',
+            started_at: new Date(t0).toISOString(),
+            completed_at: now,
+            duration_ms: Date.now() - t0,
+            records_processed: Number(fallback.records_saved || fallback.days_processed || 0),
+            result_summary: JSON.stringify({
+              degraded: true,
+              source: 'sp_api_orders_report',
+              finance_events_error: fetchError,
+              fallback,
+            }).slice(0, 4000),
+          }).catch(() => {});
+          return Response.json({
+            ok: true,
+            degraded: true,
+            source: 'sp_api_orders_report',
+            finance_events_permission_missing: true,
+            finance_events_error: fetchError,
+            ...fallback,
+          });
+        }
+        fetchError = `${fetchError} | Orders report fallback: ${fallback?.error || 'falhou sem detalhe'}`;
+      }
+
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: aid,
         operation: 'syncFinanceEventsFromSpApi',
@@ -292,6 +330,7 @@ Deno.serve(async (req) => {
         ads_spend: adsSpend,
         profit_after_ads: profitAfterAds,
         finance_sync_status: agg.events_count > 0 ? 'synced' : 'no_events',
+        source: 'sp_api_finance_events',
         finance_synced_at: now,
         finance_events_count: agg.events_count,
         // Campos para exibição no Dashboard

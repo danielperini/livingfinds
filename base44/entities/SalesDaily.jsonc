@@ -8,6 +8,9 @@
     "asin": {
       "type": "string"
     },
+    "sku": {
+      "type": "string"
+    },
     "date": {
       "type": "string",
       "format": "date"
@@ -19,6 +22,18 @@
     "ordered_product_sales": {
       "type": "number",
       "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "sp_api_finance_events",
+        "sp_api_orders_report",
+        "ads_report"
+      ]
     },
     "sessions": {
       "type": "number",
@@ -101,6 +116,7 @@
       "enum": [
         "pending",
         "synced",
+        "orders_synced",
         "error",
         "no_events"
       ],
