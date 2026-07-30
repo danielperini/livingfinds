@@ -127,6 +127,7 @@ jobs:
                   return null;
                 }
               };
+              await call("syncFinanceEventsFromSpApi");
               await call("updateTermBankFromAutomaticCampaigns");
               await call("runCampaignFactory");
               await call("scheduleWeeklyCampaignFactoryLaunches", { max_campaigns: 10, trigger_type: "deploy_initial_rule_activation" });

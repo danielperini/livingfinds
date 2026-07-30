@@ -16,6 +16,17 @@ function brtDateStr(daysAgo = 0) {
   return d.toISOString().slice(0, 10);
 }
 
+function dateRangeInclusive(startDate, endDate) {
+  const dates = [];
+  const cursor = new Date(`${startDate}T12:00:00-03:00`);
+  const end = new Date(`${endDate}T12:00:00-03:00`);
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 async function getSpAccessToken() {
   // Tenta todas as combinações de credenciais disponíveis
   const combos = [
@@ -245,7 +256,21 @@ Deno.serve(async (req) => {
     const results = [];
     let updatedDays = 0;
 
-    for (const [date, agg] of Object.entries(byDate)) {
+    // Registrar todos os dias efetivamente consultados. A ausência de
+    // ShipmentEvent é um resultado válido (`no_events`), não uma falha de
+    // sincronização. Sem isso, a data máxima do dashboard fica parada no
+    // último dia com venda e parece desatualizada.
+    for (const date of dateRangeInclusive(postedAfter, postedBefore)) {
+      const agg = byDate[date] || {
+        gross_revenue: 0,
+        referral_fee: 0,
+        fba_fee: 0,
+        tax_withheld: 0,
+        other_fees: 0,
+        orders: 0,
+        units: 0,
+        events_count: 0,
+      };
       const totalFees  = r2(agg.referral_fee + agg.fba_fee + agg.other_fees);
       const grossRev   = r2(agg.gross_revenue);
       const netRev     = r2(grossRev - totalFees - agg.tax_withheld);
@@ -266,7 +291,7 @@ Deno.serve(async (req) => {
         mpa_pct: mpaPct,
         ads_spend: adsSpend,
         profit_after_ads: profitAfterAds,
-        finance_sync_status: 'synced',
+        finance_sync_status: agg.events_count > 0 ? 'synced' : 'no_events',
         finance_synced_at: now,
         finance_events_count: agg.events_count,
         // Campos para exibição no Dashboard
@@ -282,17 +307,31 @@ Deno.serve(async (req) => {
       const aggRecord = dayRecords.find(r => !r.asin);
 
       if (aggRecord) {
-        await base44.asServiceRole.entities.SalesDaily.update(aggRecord.id, financeData).catch(() => {});
+        await base44.asServiceRole.entities.SalesDaily.update(aggRecord.id, financeData);
       } else {
         await base44.asServiceRole.entities.SalesDaily.create({
           amazon_account_id: aid,
           date,
           ...financeData,
-        }).catch(() => {});
+        });
       }
 
       updatedDays++;
-      results.push({ date, gross_revenue: grossRev, net_revenue: netRev, amazon_fees: totalFees, mpa_pct: mpaPct, ads_spend: adsSpend, tacos, profit_after_ads: profitAfterAds, orders: agg.orders, units: agg.units, ticket_medio: ticketMedio, events_count: agg.events_count });
+      results.push({
+        date,
+        sync_status: agg.events_count > 0 ? 'synced' : 'no_events',
+        gross_revenue: grossRev,
+        net_revenue: netRev,
+        amazon_fees: totalFees,
+        mpa_pct: mpaPct,
+        ads_spend: adsSpend,
+        tacos,
+        profit_after_ads: profitAfterAds,
+        orders: agg.orders,
+        units: agg.units,
+        ticket_medio: ticketMedio,
+        events_count: agg.events_count,
+      });
     }
 
     const yesterday = brtDateStr(1);
@@ -317,6 +356,8 @@ Deno.serve(async (req) => {
       pages_fetched: pages,
       total_events: allEvents.length,
       days_processed: updatedDays,
+      latest_synced_date: postedBefore,
+      days_without_events: results.filter((row) => row.sync_status === 'no_events').length,
       results,
       duration_ms: Date.now() - t0,
     });

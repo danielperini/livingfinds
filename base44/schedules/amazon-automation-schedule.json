@@ -176,7 +176,13 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
-      "name": "SP-API Finance Events freshness self-heal - 13:20 and 20:20 BRT",
+      "name": "SP-API Finance Events freshness self-heal - 05:50, 13:20 and 20:20 BRT",
+      "function": "syncFinanceEventsFromSpApi",
+      "cron": "50 5 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "SP-API Finance Events refresh - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",
       "payload": { "_service_role": true }

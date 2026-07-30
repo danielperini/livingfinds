@@ -2,6 +2,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const STEPS = [
   ['yesterday_closed_data', 'syncYesterdayClosedData'],
+  ['sp_api_finance_events', 'syncFinanceEventsFromSpApi'],
   ['unified_reports_access_test', 'testUnifiedReportsAccess'],
   ['unified_reports_daily', 'syncUnifiedAdsReportsDaily'],
   ['unified_reports_hourly', 'syncUnifiedAdsReportsHourly'],
