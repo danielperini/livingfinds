@@ -181,6 +181,29 @@
       "type": "number",
       "default": 0
     },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_units": {
+      "type": "number",
+      "default": 0
+    },
+    "total_attributed_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "attribution_window": {
+      "type": "string",
+      "default": "14d"
+    },
+    "advertised_asin": {
+      "type": "string"
+    },
     "promoted_roas": {
       "type": "number",
       "default": 0

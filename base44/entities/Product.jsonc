@@ -431,6 +431,22 @@
       "type": "boolean",
       "default": false
     },
+    "economic_circuit_state": {
+      "type": "string",
+      "enum": ["NORMAL", "VIGILANT", "DEFENSIVE", "LOSS_CONFIRMED", "NOT_BUYABLE"]
+    },
+    "economic_attribution_status": {
+      "type": "string",
+      "enum": ["ALIGNED", "HALO_OR_PERIOD_MISMATCH", "INSUFFICIENT_DATA"]
+    },
+    "economic_growth_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "economic_last_reconciled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "market_price_average": {
       "type": "number",
       "description": "Pre\u00e7o m\u00e9dio das ofertas p\u00fablicas do ASIN no marketplace (n\u00e3o \u00e9 price/buy_box_price)"

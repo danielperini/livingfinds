@@ -152,6 +152,12 @@
       "payload": { "_service_role": true, "full": true, "lookback_days": 30 }
     },
     {
+      "name": "Same-SKU Ads and SP-API economic reconciliation - 07:50 BRT",
+      "function": "reconcileSkuEconomicReality",
+      "cron": "50 7 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Daily Economic Assessment - 08:00 BRT",
       "function": "runDailyEconomicAssessment",
       "cron": "0 8 * * *",

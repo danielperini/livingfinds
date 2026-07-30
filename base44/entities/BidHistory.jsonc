@@ -79,6 +79,16 @@
     "sales_at_change": {
       "type": "number"
     },
+    "same_sku_sales": { "type": "number" },
+    "same_sku_orders": { "type": "number" },
+    "same_sku_acos": { "type": "number" },
+    "cpc_at_change": { "type": "number" },
+    "cpa_at_change": { "type": "number" },
+    "roas_at_change": { "type": "number" },
+    "profit_after_ads": { "type": "number" },
+    "excess_spend": { "type": "number" },
+    "rule_key": { "type": "string" },
+    "metric_date": { "type": "string", "format": "date" },
     "created_at": {
       "type": "string",
       "format": "date-time"
