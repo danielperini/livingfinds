@@ -158,13 +158,14 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
     'PHRASE_SEARCH_TERM',
     'HISTORICAL_WINNER',
   ].includes(sourceType);
+  const provenScore = confirmedSearchTermOrder ? Math.max(intent, promo) : intent;
   const economicsPassed = sales > 0
     ? isFactoryEconomicallyHealthy(entry, Number(goal.max_acos || goal.target_acos))
     : confirmedSearchTermOrder;
   if (
     orders >= 1 &&
     economicsPassed &&
-    intent >= 72
+    provenScore >= 72
   ) {
     return { status: 'PROVEN', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };
   }
