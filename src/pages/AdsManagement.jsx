@@ -302,4 +302,1468 @@ export default function AdsManagement() {
   const [loading, setLoading] = useState(true);
   const [kwLoading, setKwLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [pendingBids, setPendingBids] = useStatÛMýîÚ$z{-®éÜj×FV×2Ö6VçFW"vÓ"‚ÓB’Ó"&rÖ7–âó&÷&FW"&÷&FW"Ö7–âó#FW‡BÖ7–â†÷fW#¦&rÖ7–âó#FW‡B×‡2föçB×6VÖ–&öÆB&÷VæFVBÖÆrG&ç6—F–öâÖ6öÆ÷'2#àÐ¢ Ð¢Å&Vg&W6„7r6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óâ7–æ2¶W—v÷&G0Ð¢Âö'WGFöãàÐ¢Æ'WGFöàÐ¢öä6Æ–6³×²‚’ÓâÆöD¶W—v÷&G4f÷$6×–vâ‡6VÆV7FVD6×–vâ—ÐÐ¢6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓ"‚ÓB’Ó"&r×7W&f6RÓ"&÷&FW"&÷&FW"×7W&f6RÓ2FW‡B×6ÆFRÓ3†÷fW#§FW‡B×v†—FRFW‡B×‡2föçB×6VÖ–&öÆB&÷VæFVBÖÆrG&ç6—F–öâÖ6öÆ÷'2#àÐ¢ Ð¢Å&Vg&W6„7r6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óâ&V6'&Vv Ð¢Âö'WGFöãàÐ¢ÂöF—càÐ¢ÂöF—câ Ð Ð¢ÇF&ÆR6Æ74æÖSÒ'rÖgVÆÂFW‡B×6Ò#àÐ¢ÇF†VB6Æ74æÖSÒ'7F–6·’F÷Ó&rÕ²3CcEÒ¢Ó#àÐ¢ÇG"6Æ74æÖSÒ&&÷&FW"Ö"&÷&FW"×7W&f6RÓ"#àÐ¢µ²u&öGWFòò4µRrÂt¶W—v÷&BrÂtÖF6‚rÂtW7FFòrÂtÖVÆ†÷"†÷,:&–òrÂt&–BGVÂrÂtæ÷fò&–BrÂt6õ2rÂt6Æ—VW2rÂu7VæBrÂufVæF2uÒæÖ‚†‚’ÓàÐ¢ÇF‚¶W“×¶‡Ò6Æ74æÖSÒ'‚ÓB’Ó2FW‡BÖÆVgBFW‡B×‡2föçB×6VÖ–&öÆBFW‡B×6ÆFRÓSWW&66RG&6¶–ær×v–FW"v†—FW76RÖæ÷w&#ç¶‡ÓÂ÷FƒàÐ¢—ÐÐ¢Â÷G#àÐ¢Â÷F†VCàÐ¢ÇF&öG“àÐ¢¶¶W—v÷&G2æÖ‚†·rÂ’’Óâ°Ð¢6öç7B6†ævVBÒ·ræ–B–âVæF–æt&–G3°Ð¢6öç7B·u&öGV7BÒ·ræ6–âðÐ¢&öGV7G2æf–æB‚‡’Óâæ6–âÓÓÒ·ræ6–â’ÇÂ&öGV7G2æf–æB‚‡’Óâæ6–âÓÓÒ6VÆV7FVD6×–vãòæ6–â’ Ð¢&öGV7G2æf–æB‚‡’Óâæ6–âÓÓÒ6VÆV7FVD6×–vãòæ6–â“°Ð¢6öç7B6÷46öÆ÷"Ò†·ræ6÷2ÇÂ’âSòwFW‡B×&VBÓCr¢†·ræ6÷2ÇÂ’â3òwFW‡BÖÖ&W"ÓCr¢wFW‡BÖVÖW&ÆBÓCs°Ð¢6öç7B&VæFW$&W7D†÷W"Ò‚’Óâ°Ð¢–b‚·ræ†÷W&Ç•öFFöÖGW&RÇÂ·ræ&W7Eö†÷W%÷7F'BÓÒçVÆÂ’°Ð¢&WGW&âÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓFW‡B×6ÆFRÓS#ãÄ6Æö6²6Æ74æÖSÒ'rÓ2‚Ó2"óãÇ7â6Æ74æÖSÒ'FW‡BÕ³…Ò#ä&VæFVæFóÂ÷7ããÂöF—cã°Ð¢ÐÐ¢6öç7B2Ò7G&–ær†·ræ&W7Eö†÷W%÷7F'B’çE7F'Bƒ"Âsr“°Ð¢6öç7BRÒ7G&–ær†·ræ&W7Eö†÷W%öVæB’çE7F'Bƒ"Âsr“°Ð¢&WGW&â€Ð¢ÆF—b6Æ74æÖSÒ'76R×’ÓãR#àÐ¢ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓ#ãÄ6Æö6²6Æ74æÖSÒ'rÓ2‚Ó2FW‡BÖ7–â"óãÇ7â6Æ74æÖSÒ'FW‡B×‡2föçB×6VÖ–&öÆBFW‡B×v†—FR#ç·7ÖŽ(	7¶WÖƒÂ÷7ããÂöF—càÐ¢¶·ræ&W7Eö†÷W%÷&ö2òÆF—b6Æ74æÖSÒ'FW‡BÕ³…ÒFW‡B×6ÆFRÓC#å$ô2¶·ræ&W7Eö†÷W%÷&ö7Ò+r¶·ræ&W7Eö†÷W%÷6ÆW7ÒfVæF3ÂöF—câ¢çVÆÇÐÐ¢ÂöF—câ“°Ð Ð¢Ó°Ð¢&WGW&â€Ð¢ÇG"¶W“×¶·ræ–BÇÂ—Ò6Æ74æÖS×¶&÷&FW"Ö"&÷&FW"×7W&f6RÓ"óSG&ç6—F–öâÖ6öÆ÷'2G¶6†ævVBòv&rÖ7–âóRr¢v†÷fW#¦&r×7W&f6RÓ"wÖÓàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRÖ–â×rÕ³#…Ò#àÐ¢¶·u&öGV7BðÐ¢ÆF—b6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"vÓ"#àÐ¢¶·u&öGV7Bç&öGV7Eö–ÖvU÷W&ÂðÐ¢Æ–Ör7&3×¶·u&öGV7Bç&öGV7Eö–ÖvU÷W&ÇÒÇCÒ""6Æ74æÖSÒ'rÓr‚Ór&÷VæFVBö&¦V7BÖ6÷fW"&r×7W&f6RÓ2fÆW‚×6‡&–æ²Ó"óâ Ð¢ÆF—b6Æ74æÖSÒ'rÓr‚Ór&÷VæFVB&r×7W&f6RÓ2fÆW‚—FV×2Ö6VçFW"§W7F–g’Ö6VçFW"fÆW‚×6‡&–æ²Ó#ãÅ6¶vR6Æ74æÖSÒ'rÓ2‚Ó2FW‡B×6ÆFRÓc"óãÂöF—cçÐÐ¢ÆF—b6Æ74æÖSÒ&Ö–â×rÓ#àÐ¢Ç6Æ74æÖSÒ'FW‡BÕ³…ÒföçBÖÖöæòFW‡BÖ7–âG'Væ6FR#ç¶·u&öGV7Bæ6–çÓÂ÷àÐ¢¶·u&öGV7Bç6·RbbÇ6Æ74æÖSÒ'FW‡BÕ³…ÒFW‡B×6ÆFRÓSG'Væ6FR#å4µS¢¶·u&öGV7Bç6·WÓÂ÷çÐÐ¢ÂöF—càÐ¢ÂöF—câ Ð¢Ç7â6Æ74æÖSÒ'FW‡BÕ³…ÒFW‡B×6ÆFRÓcföçBÖÖöæò#ç¶·ræ6–âÇÂ6VÆV7FVD6×–vãòæ6–âÇÂ~(	BwÓÂ÷7ãçÐÐ¢Â÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRföçBÖÖVF—VÒFW‡B×v†—FRÖ‚×rÕ³#…ÒG'Væ6FR#ç¶·ræ¶W—v÷&E÷FW‡BÇÂ~(	BwÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#ãÇ7â6Æ74æÖSÒ'FW‡B×‡2‚Ó"’ÓãR&r×7W&f6RÓ2FW‡B×6ÆFRÓC&÷VæFVB#ç¶·ræÖF6…÷G—RÇÂ~(	BwÓÂ÷7ããÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#ãÅ7FGW4&FvR7FGW3×¶·rç7FFRÇÂvVæ&ÆVBwÒ6—¦SÒ'‡2"óãÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#ç·&VæFW$&W7D†÷W"‚—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓ3#å"G²†·ræ&–BÇÂ’çFôf—†VBƒ"—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#àÐ¢Æ–çWBG—SÒ&çVÖ&W""7FWÒ#ã"Ö–ãÒ#ã""FVfVÇEfÇVS×²†·ræ&–BÇÂ’çFôf—†VBƒ"—ÐÐ¢öä6†ævS×²†R’Óâ6WEVæF–æt&–G2‚‡&Wb’Óâ‡²ââç&WbÂ¶·ræ–EÓ¢'6TfÆöB†RçF&vWBçfÇVR’ÇÂÒ’—ÐÐ¢6Æ74æÖSÒ'rÓ#‚Ó"’Ó&r×7W&f6RÓ2&÷&FW"&÷&FW"×7W&f6RÓ2&÷VæFVBFW‡B×‡2FW‡B×v†—FRfö7W3¦÷WFÆ–æRÖæöæRfö7W3¦&÷&FW"Ö7–âóS"óàÐ¢Â÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#ãÇ7â6Æ74æÖS×¶föçB×6VÖ–&öÆBFW‡B×‡2G¶6÷46öÆ÷'ÖÓç²†·ræ6÷2ÇÂ’çFôf—†VBƒ—ÒSÂ÷7ããÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓC#ç²†·ræ6Æ–6·2ÇÂ’çFôÆö6ÆU7G&–ær‚—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓC#å"G²†·rç7VæBÇÂ’çFôf—†VBƒ"—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡BÖVÖW&ÆBÓC#å"G²†·rç6ÆW2ÇÂ’çFôf—†VBƒ"—ÓÂ÷FCàÐ¢Â÷G#â“°Ð Ð¢Ò—ÐÐ¢Â÷F&öG“àÐ¢Â÷F&ÆSàÐ¢ÐÐ¢Âóâ¢€Ð Ð¢ò¢6V&6‚FW&×2F"¢ðÐ¢ÆF—b6Æ74æÖSÒ'ÓB76R×’ÓB#àÐ¢¶æVu7VvvW7F–öç2æÆVæwF‚âðÐ¢ÆF—càÐ¢Æƒ26Æ74æÖSÒ'FW‡B×‡2föçB×6VÖ–&öÆBFW‡B×&VBÓCÖ"Ó"fÆW‚—FV×2Ö6VçFW"vÓãR#àÐ¢ÅG&VæF–ætF÷vâ6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óâ¶æVu7VvvW7F–öç2æÆVæwF‡ÒFW&Ö÷2&æVvF—f Ð¢Âöƒ3àÐ¢ÆF—b6Æ74æÖSÒ'76R×’Ó"#àÐ¢¶æVu7VvvW7F–öç2æÖ‚†æVr’ÓàÐ¢ÆF—b¶W“×¶æVræ–GÒ6Æ74æÖSÒ&fÆW‚—FV×2Ö6VçFW"§W7F–g’Ö&WGvVVâÓ2&r×&VBÓSóR&÷&FW"&÷&FW"×&VBÓSó#&÷VæFVBÖÆr#àÐ¢ÆF—b6Æ74æÖSÒ&fÆW‚ÓÖ–â×rÓ#àÐ¢Ç6Æ74æÖSÒ'FW‡B×6ÒföçBÖÖVF—VÒFW‡B×v†—FRG'Væ6FR#ç¶æVræ¶W—v÷&E÷FW‡GÓÂ÷àÐ¢Ç6Æ74æÖSÒ'FW‡B×‡2FW‡B×6ÆFRÓC×BÓãR#àÐ¢¶æVræ6Æ–6·2ÇÂÒ6Æ–6·2+r"G²†æVrç7VæBÇÂ’çFôf—†VBƒ"—Ò+r¶æVrç6ÆW2âò"BG²†æVrç6ÆW2ÇÂ’çFôf—†VBƒ"—ÒfVæF6¢w¦W&òfVæF2wÐÐ¢Â÷àÐ¢Ç6Æ74æÖSÒ'FW‡B×‡2FW‡B×&VBÓC×BÓãR#ç¶æVrç&V6öçÓÂ÷àÐ¢ÂöF—càÐ¢Æ'WGFöâöä6Æ–6³×²‚’ÓâæVvFT¶W—v÷&B†æVr—ÐÐ¢6Æ74æÖSÒ&ÖÂÓ2‚Ó2’ÓãRFW‡B×‡2föçB×6VÖ–&öÆB&r×&VBÓSó#FW‡B×&VBÓC&÷&FW"&÷&FW"×&VBÓSó3&÷VæFVBÖÆr†÷fW#¦&r×&VBÓSó3G&ç6—F–öâÖ6öÆ÷'2fÆW‚—FV×2Ö6VçFW"vÓãR#àÐ¢Å‚6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óâæVvF—f Ð¢Âö'WGFöãàÐ¢ÂöF—càÐ¢—ÐÐ¢ÂöF—càÐ¢ÂöF—câ Ð¢çVÆÇÐÐ¢ÆF—càÐ¢Æƒ26Æ74æÖSÒ'FW‡B×‡2föçB×6VÖ–&öÆBFW‡B×6ÆFRÓ3Ö"Ó"fÆW‚—FV×2Ö6VçFW"vÓãR#àÐ¢ÄÆ—7Df–ÇFW"6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óâ·6V&6…FW&×2æÆVæwF‡Ò6V&6‚FW&×26GW&F÷0Ð¢Âöƒ3àÐ¢·6V&6…FW&×2æÆVæwF‚ÓÓÒðÐ¢Ç6Æ74æÖSÒ'FW‡B×6ÒFW‡B×6ÆFRÓSFW‡BÖ6VçFW"’Ó‚#å6VÒ6V&6‚FW&×2–æFãÂ÷â Ð Ð¢ÇF&ÆR6Æ74æÖSÒ'rÖgVÆÂFW‡B×6Ò#àÐ¢ÇF†VCàÐ¢ÇG"6Æ74æÖSÒ&&÷&FW"Ö"&÷&FW"×7W&f6RÓ"#àÐ¢µ²u6V&6‚FW&ÒrÂt6Æ–6·2rÂu7VæBrÂufVæF2rÂt6õ2rÂt:|:6òuÒæÖ‚†‚’ÓàÐ¢ÇF‚¶W“×¶‡Ò6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡BÖÆVgBFW‡B×‡2föçB×6VÖ–&öÆBFW‡B×6ÆFRÓSWW&66RG&6¶–ær×v–FW"v†—FW76RÖæ÷w&#ç¶‡ÓÂ÷FƒàÐ¢—ÐÐ¢Â÷G#àÐ¢Â÷F†VCàÐ¢ÇF&öG“àÐ¢·6V&6…FW&×2æÖ‚‡7B’Óâ°Ð¢6öç7B—5v7F–ærÒ‡7Bæ6Æ–6·2ÇÂ’ãÒRbb‡7Bç7VæBÇÂ’ãÒ"bb‡7Bç6ÆW2ÇÂ’ÓÓÒ°Ð¢6öç7B—4vööBÒ‡7Bç6ÆW2ÇÂ’âbb‡7Bæ6÷2ÇÂ’âbb‡7Bæ6÷2ÇÂ’ÂC°Ð¢&WGW&â€Ð¢ÇG"¶W“×·7Bæ–GÒ6Æ74æÖSÒ&&÷&FW"Ö"&÷&FW"×7W&f6RÓ"óC†÷fW#¦&r×7W&f6RÓ"ó3#àÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓ3Ö‚×rÕ³#…ÒG'Væ6FR#ç·7Bæ¶W—v÷&E÷FW‡BÇÂ7Bæ¶W—v÷&BÇÂ~(	BwÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓC#ç²‡7Bæ6Æ–6·2ÇÂ’çFôÆö6ÆU7G&–ær‚—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡B×6ÆFRÓC#å"G²‡7Bç7VæBÇÂ’çFôf—†VBƒ"—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãRFW‡BÖVÖW&ÆBÓC#å"G²‡7Bç6ÆW2ÇÂ’çFôf—†VBƒ"—ÓÂ÷FCàÐ¢ÇFB6Æ74æÖS×¶‚ÓB’Ó"ãRföçB×6VÖ–&öÆBG²‡7Bæ6÷2ÇÂ’âSòwFW‡B×&VBÓCr¢‡7Bæ6÷2ÇÂ’â3òwFW‡BÖÖ&W"ÓCr¢‡7Bæ6÷2ÇÂ’âòwFW‡BÖVÖW&ÆBÓCr¢wFW‡B×6ÆFRÓcwÖÓàÐ¢²‡7Bæ6÷2ÇÂ’âòG²‡7Bæ6÷2ÇÂ’çFôf—†VBƒ—ÒV¢~(	BwÐÐ¢Â÷FCàÐ¢ÇFB6Æ74æÖSÒ'‚ÓB’Ó"ãR#àÐ¢¶—4vööBðÐ¢òò6×æ†2ÔåT•3¢7&–"æ÷f6×æ†VÒfW¢FRF–6–öæ"¶W—v÷&@Ð¢‡6VÆV7FVD6×–vãòçF&vWF–æu÷G—RÇÂrr’çFõWW$66R‚’ÓÓÒtÔåTÂrðÐ¢Æ'WGFöàÐ¢öä6Æ–6³×²‚’Óâ°Ð¢6öç7B&öBÒ&öGV7G2æf–æB‚‡’Óâæ6–âÓÓÒ‡7BæGfW'F—6VEö6–âÇÂ6VÆV7FVD6×–vãòæ6–â’“°Ð¢–b‡&öB’6WD¶–6¶öfe&öGV7B‡&öB“°Ð¢×ÐÐ¢F—FÆSÒ$7&–æ÷f6×æ†6ì;Fæ–6&W7FRFW&Öòƒ6×æ†Ò¶W—v÷&BU„5B’ Ð¢6Æ74æÖSÒ'‚Ó"ãR’ÓFW‡B×‡2föçB×6VÖ–&öÆB&r×f–öÆWBÓSó#FW‡B×f–öÆWBÓC&÷&FW"&÷&FW"×f–öÆWBÓSó3&÷VæFVBÖÆr†÷fW#¦&r×f–öÆWBÓSó3G&ç6—F–öâÖ6öÆ÷'2fÆW‚—FV×2Ö6VçFW"vÓ#àÐ¢ÅÇW26Æ74æÖSÒ'rÓ2‚Ó2"óâæ÷f6×æ†Ð¢Âö'WGFöãâ Ð Ð¢Æ'WGFöâöä6Æ–6³×²‚’Óâ&öÖ÷FT¶W—v÷&B‡7B—ÐÐ¢6Æ74æÖSÒ'‚Ó"ãR’ÓFW‡B×‡2föçB×6VÖ–&öÆB&rÖVÖW&ÆBÓSó#FW‡BÖVÖW&ÆBÓC&÷&FW"&÷&FW"ÖVÖW&ÆBÓSó3&÷VæFVBÖÆr†÷fW#¦&rÖVÖW&ÆBÓSó3G&ç6—F–öâÖ6öÆ÷'2fÆW‚—FV×2Ö6VçFW"vÓ#àÐ¢ÅÇW26Æ74æÖSÒ'rÓ2‚Ó2"óâ&öÖ÷fW Ð¢Âö'WGFöãâ Ð Ð¢—5v7F–ærðÐ¢Ç7â6Æ74æÖSÒ'FW‡B×‡2FW‡B×&VBÓCfÆW‚—FV×2Ö6VçFW"vÓ#ãÅG&VæF–ætF÷vâ6Æ74æÖSÒ'rÓ2‚Ó2"óâFW7W&L:Ö6–óÂ÷7ãâ Ð Ð¢Ç7â6Æ74æÖSÒ'FW‡B×‡2FW‡B×6ÆFRÓS#äö'6W'f#Â÷7ãàÐ¢ÐÐ¢Â÷FCàÐ¢Â÷G#â“°Ð Ð¢Ò—ÐÐ¢Â÷F&öG“àÐ¢Â÷F&ÆSàÐ¢ÐÐ¢ÂöF—càÐ¢ÂöF—câÐ¢ÐÐ¢ÂöF—càÐ¢ÂóàÐ¢ÐÐ¢ÂöF—càÐ Ð¢²ò¢Fö7BFR7V6W76ò&&VF—f"²'VFvWB¢÷ÐÐ¢·&V7F—fFT'VFvWEFö7Bbb€Ð¢ÆF—b6Æ74æÖSÒ&f—†VB&÷GFöÒÓb&–v‡BÓb¢ÓSfÆW‚—FV×2×7F'BvÓ2‚ÓB’Ó2&rÕ²3ƒ#uÒ&÷&FW"&÷&FW"ÖVÖW&ÆBÓSó3&÷VæFVB×†Â6†F÷rÓ'†ÂÖ‚×r×6Òæ–ÖFRÖfFRÖ–â#àÐ¢Ä6†V6´6—&6ÆR6Æ74æÖSÒ'rÓB‚ÓBFW‡BÖVÖW&ÆBÓCfÆW‚×6‡&–æ²Ó×BÓãR"óàÐ¢ÆF—b6Æ74æÖSÒ&fÆW‚ÓÖ–â×rÓ#àÐ¢Ç6Æ74æÖSÒ'FW‡B×6ÒföçB×6VÖ–&öÆBFW‡B×v†—FR#ä6×æ†&VF—fF6öÒ7V6W76òÂ÷àÐ¢Ç6Æ74æÖSÒ'FW‡B×‡2FW‡B×6ÆFRÓC×BÓãRG'Væ6FR#ç·&V7F—fFT'VFvWEFö7Bæ6×–väæÖWÓÂ÷àÐ¢Ç6Æ74æÖSÒ'FW‡B×‡2FW‡BÖVÖW&ÆBÓC×BÓãR#àÐ¢'VFvWC¢"G·&V7F—fFT'VFvWEFö7Bç&Wd'VFvWBçFôf—†VBƒ"—Ò(i""G·&V7F—fFT'VFvWEFö7BææWt'VFvWBçFôf—†VBƒ"—Ò+r7FGW3¢W6Fò(i"Tä$ÄT@Ð¢Â÷àÐ¢·&V7F—fFT'VFvWEFö7Bæ'VFvWEv&æ–ærbb€Ð¢Ç6Æ74æÖSÒ'FW‡B×‡2FW‡BÖÖ&W"ÓC×BÓãR#î)ª·&V7F—fFT'VFvWEFö7Bæ'VFvWEv&æ–æwÓÂ÷àÐ¢—ÐÐ¢ÂöF—càÐ¢Æ'WGFöâöä6Æ–6³×²‚’Óâ6WE&V7F—fFT'VFvWEFö7B†çVÆÂ—Ò6Æ74æÖSÒ'FW‡B×6ÆFRÓS†÷fW#§FW‡B×v†—FRfÆW‚×6‡&–æ²Ó#àÐ¢Å‚6Æ74æÖSÒ'rÓ2ãR‚Ó2ãR"óàÐ¢Âö'WGFöãàÐ¢ÂöF—càÐ¢—ÐÐ Ð¢²ò¢&VF—f"²§W7F"'VFvWBÖöFÂ¢÷ÐÐ¢·&V7F—fFT'VFvWDÖöFÂbb66÷VçBbb€Ð¢Å&V7F—fFUv—F„'VFvWDÖöFÀÐ¢6×–vã×·&V7F—fFT'VFvWDÖöFÇÐÐ¢66÷VçC×¶66÷VçGÐÐ¢öä6Æ÷6S×²‚’Óâ6WE&V7F—fFT'VFvWDÖöFÂ†çVÆÂ—ÐÐ¢öäFöæS×²‡WFFW2’Óâ°Ð¢6öç7B–BÒ&V7F—fFT'VFvWDÖöFÂæ–C°Ð¢òòâGVÆ—¦"Æ—7F(	B&÷L:6ò6×–vä6öÇVÖâFW6&V6R‡7FFRÒwW6VBrÐ¢6WD6×–vç2‚‡&Wb’Óâ&WbæÖ‚†2’ÓàÐ¢2æ–BÓÓÒ–Bò²ââæ2ÂââçWFFW2Â7FFS¢vVæ&ÆVBrÂ7FGW3¢vVæ&ÆVBrÒ¢0Ð¢’“°Ð¢òò"âGVÆ—¦"6×æ†6VÆV6–öæF(	B&÷L:6ò†VFW"FW6&V6PÐ¢–b‡6VÆV7FVD6×–vãòæ–BÓÓÒ–B’°Ð¢6WE6VÆV7FVD6×–vâ‚‡&Wb’Óâ‡²ââç&WbÂââçWFFW2Â7FFS¢vVæ&ÆVBrÂ7FGW3¢vVæ&ÆVBrÒ’“°Ð¢ÐÐ¢òò2âfV6†"ÖöFÀÐ¢6WE&V7F—fFT'VFvWDÖöFÂ†çVÆÂ“°Ð¢×ÐÐ¢óàÐ¢—ÐÐ Ð¢¶¶–6¶öfe&öGV7Bbb66÷VçBðÐ¢Ä¶–6¶öfdÖöFÀÐ¢&öGV7C×¶¶–6¶öfe&öGV7GÐÐ¢66÷VçC×¶66÷VçGÐÐ¢öä6Æ÷6S×²‚’Óâ6WD¶–6¶öfe&öGV7B†çVÆÂ—ÐÐ¢öäFöæS×²‚’Óâ·6WD¶–6¶öfe&öGV7B†çVÆÂ“¶ÆöD6×–vç2‚“·×Òóâ Ð¢çVÆÇÐÐ Ð¢·6†÷u&÷÷6ÄÖöFÂbb66÷VçBðÐ¢ÄÖçVÄ6×–vå&÷÷6ÄÖöFÀÐ¢66÷VçC×¶66÷VçGÐÐ¢öä6Æ÷6S×²‚’Óâ6WE6†÷u&÷÷6ÄÖöFÂ†fÇ6R—ÐÐ¢öäFöæS×¶ÆöD6×–vç7Òóâ Ð Ð¢çVÆÇÐÐ Ð¢·6†÷t7&VFUv—¦&Bbb66÷VçBðÐ¢Ä7&VFT6×–våv—¦&@Ð¢66÷VçC×¶66÷VçGÐÐ¢&öGV7G3×·&öGV7G7ÐÐ¢öä6Æ÷6S×²‚’Óâ6WE6†÷t7&VFUv—¦&B†fÇ6R—ÐÐ¢öäFöæS×¶ÆöD6×–vç7Òóâ Ð¢çVÆÇÐÐ¢ÂöF—câ“°Ð Ð§Ð
+  const [pendingBids, setPendingBids] = useState({});
+  const [saveState, setSaveState] = useState('idle');
+  const [saveError, setSaveError] = useState(null);
+  const [stateFilterAuto, setStateFilterAuto] = useState('all');
+  const [stateFilterManual, setStateFilterManual] = useState('all');
+  const [activeTab, setActiveTab] = useState('keywords');
+  const [searchTerms, setSearchTerms] = useState([]);
+  const [negSuggestions, setNegSuggestions] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [campaignAction, setCampaignAction] = useState(null); // 'pausing' | 'removing' | null
+  const [campaignActionMsg, setCampaignActionMsg] = useState(null);
+  const [kickoffProduct, setKickoffProduct] = useState(null);
+  const [showCreateWizard, setShowCreateWizard] = useState(false);
+  const [showProposalModal, setShowProposalModal] = useState(false);
+  const [tokenCheck, setTokenCheck] = useState(null);
+  const [pausingNoStock, setPausingNoStock] = useState(false);
+  const [pauseNoStockMsg, setPauseNoStockMsg] = useState(null);
+  const [reactivateBudgetModal, setReactivateBudgetModal] = useState(null); // campaign object
+  const [reactivateBudgetToast, setReactivateBudgetToast] = useState(null); // { campaignName, prevBudget, newBudget, budgetWarning }
+
+  const [migrationInProgress, setMigrationInProgress] = useState(false);
+  const [repairPhase, setRepairPhase] = useState(null); // null | 'phase1' | 'phase1_done' | 'phase2' | 'done' | 'error'
+  const [repairSummary, setRepairSummary] = useState(null);
+  const [reactivatingAuto, setReactivatingAuto] = useState(false);
+  const [reactivateAutoResult, setReactivateAutoResult] = useState(null);
+  const [reactivatingManual, setReactivatingManual] = useState(false);
+  const [reactivateManualResult, setReactivateManualResult] = useState(null);
+  const [pausingNoStockActive, setPausingNoStockActive] = useState(false);
+  const [pauseNoStockActiveResult, setPauseNoStockActiveResult] = useState(null);
+  const [pausingNoAsin, setPausingNoAsin] = useState(false);
+  const [pauseNoAsinResult, setPauseNoAsinResult] = useState(null);
+  const [archivingDuplicates, setArchivingDuplicates] = useState(false);
+  const [archiveDuplicatesResult, setArchiveDuplicatesResult] = useState(null);
+  const [pausingManual, setPausingManual] = useState(false);
+  const [pauseManualResult, setPauseManualResult] = useState(null);
+  const [hideNoStock, setHideNoStock] = useState(false);
+  const [hidePaused, setHidePaused] = useState(false);
+  const [columnTab, setColumnTab] = useState('auto');
+
+
+  const reactivateManualWithStock = async () => {
+    if (!account || reactivatingManual) return;
+    setReactivatingManual(true);
+    setReactivateManualResult(null);
+    try {
+      const res = await base44.functions.invoke('reactivatePausedWithStock', {
+        amazon_account_id: account.id,
+        targeting_type_filter: 'MANUAL',
+        include_incomplete: true,
+        _service_role: true
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        setReactivateManualResult({
+          type: d.reactivated > 0 ? 'success' : 'info',
+          text: `${d.reactivated ?? 0} reativadas Â· ${d.skipped_no_stock ?? 0} sem estoque Â· ${d.skipped_already_active ?? 0} jÃ¡ ativas`
+        });
+        await loadCampaigns();
+      } else {
+        setReactivateManualResult({ type: 'error', text: d?.error || 'Erro ao reativar' });
+      }
+    } catch (e) {
+      setReactivateManualResult({ type: 'error', text: e.message });
+    } finally {
+      setReactivatingManual(false);
+      setTimeout(() => setReactivateManualResult(null), 10000);
+    }
+  };
+
+  const pauseAutoNoStockActive = async () => {
+    if (!account || pausingNoStockActive) return;
+    setPausingNoStockActive(true);
+    setPauseNoStockActiveResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id,
+        dry_run: false
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const paused = d.paused ?? d.campaigns_paused ?? 0;
+        setPauseNoStockActiveResult({
+          type: paused > 0 ? 'success' : 'info',
+          text: `${paused} pausadas Â· motivo: sem estoque`
+        });
+        if (paused > 0) await loadCampaigns();
+      } else {
+        setPauseNoStockActiveResult({ type: 'error', text: d?.error || 'Erro ao pausar' });
+      }
+    } catch (e) {
+      setPauseNoStockActiveResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoStockActive(false);
+      setTimeout(() => setPauseNoStockActiveResult(null), 10000);
+    }
+  };
+
+  const pauseManualNoStock = async () => {
+    if (!account || pausingManual) return;
+    setPausingManual(true);
+    setPauseManualResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        targeting_type_filter: 'MANUAL'
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        const paused = d.paused ?? d.campaigns_paused ?? 0;
+        setPauseManualResult({
+          type: paused > 0 ? 'success' : 'info',
+          text: `${paused} pausadas Â· motivo: sem estoque`
+        });
+        if (paused > 0) await loadCampaigns();
+      } else {
+        setPauseManualResult({ type: 'error', text: d?.error || 'Erro ao pausar' });
+      }
+    } catch (e) {
+      setPauseManualResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingManual(false);
+      setTimeout(() => setPauseManualResult(null), 10000);
+    }
+  };
+
+  const archiveAutoDuplicates = async () => {
+    if (!account || archivingDuplicates) return;
+    if (!window.confirm('Arquivar na Amazon e localmente todas as campanhas AUTO duplicadas? Apenas a com maior spend por ASIN serÃ¡ mantida. Esta aÃ§Ã£o Ã© irreversÃ­vel.')) return;
+    setArchivingDuplicates(true);
+    setArchiveDuplicatesResult(null);
+    try {
+      const res = await base44.functions.invoke('deduplicateAutoCampaignsByAsin', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        _service_role: true
+      });
+      const d = res?.data ?? res;
+      if (d?.ok) {
+        const archived = d.archived ?? 0;
+        const asins = d.asins_processed ?? 0;
+        setArchiveDuplicatesResult({
+          type: archived > 0 ? 'success' : 'info',
+          text: archived > 0 ?
+          `${archived} arquivadas Â· ${asins} ASINs limpos` :
+          'Nenhuma duplicata encontrada'
+        });
+        if (archived > 0) await loadCampaigns();
+      } else {
+        setArchiveDuplicatesResult({ type: 'error', text: d?.error || 'Erro ao arquivar' });
+      }
+    } catch (e) {
+      setArchiveDuplicatesResult({ type: 'error', text: e.message });
+    } finally {
+      setArchivingDuplicates(false);
+      setTimeout(() => setArchiveDuplicatesResult(null), 12000);
+    }
+  };
+
+  const pauseAndArchiveAutoNoAsin = async () => {
+    if (!account || pausingNoAsin) return;
+    if (!window.confirm('Pausar na Amazon e arquivar localmente todas as campanhas AUTO sem ASIN vinculado?\n\nCampanhas com pedidos nos Ãºltimos 30 dias serÃ£o preservadas automaticamente.')) return;
+    setPausingNoAsin(true);
+    setPauseNoAsinResult(null);
+    try {
+      const res = await base44.functions.invoke('pauseAndArchiveAutoNoAsin', {
+        amazon_account_id: account.id,
+        dry_run: false,
+        _service_role: true
+      });
+      const d = res?.data ?? res;
+      if (d?.ok) {
+        setPauseNoAsinResult({
+          type: d.paused > 0 ? 'success' : 'info',
+          text: `${d.paused} pausadas/arquivadas Â· ${d.preserved} preservadas (com pedidos) Â· ${d.failed} falhas`
+        });
+        if (d.paused > 0) await loadCampaigns();
+      } else {
+        setPauseNoAsinResult({ type: 'error', text: d?.error || 'Erro ao executar' });
+      }
+    } catch (e) {
+      setPauseNoAsinResult({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoAsin(false);
+      setTimeout(() => setPauseNoAsinResult(null), 12000);
+    }
+  };
+
+  const reactivateAutoWithStock = async () => {
+    if (!account || reactivatingAuto) return;
+    setReactivatingAuto(true);
+    setReactivateAutoResult(null);
+    try {
+      const res = await base44.functions.invoke('reactivatePausedWithStock', {
+        amazon_account_id: account.id,
+        targeting_type_filter: 'AUTO',
+        include_incomplete: true,
+        _service_role: true
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        setReactivateAutoResult({
+          type: d.reactivated > 0 ? 'success' : 'info',
+          text: `${d.reactivated ?? 0} reativadas Â· ${d.skipped_no_stock ?? 0} sem estoque Â· ${d.skipped_already_active ?? 0} jÃ¡ tÃªm AUTO ativa`
+        });
+        await loadCampaigns();
+      } else {
+        setReactivateAutoResult({ type: 'error', text: d?.error || 'Erro ao reativar' });
+      }
+    } catch (e) {
+      setReactivateAutoResult({ type: 'error', text: e.message });
+    } finally {
+      setReactivatingAuto(false);
+      setTimeout(() => setReactivateAutoResult(null), 10000);
+    }
+  };
+
+  const repairAndReconcile = async () => {
+    if (!account || repairPhase) return;
+    setRepairPhase('phase1');
+    setRepairSummary(null);
+
+    let repaired = 0;
+    // FASE 1 â€” Repair incompletas (timeout 90s)
+    try {
+      const p1 = base44.functions.invoke('repairIncompleteManualExactCampaigns', {
+        amazon_account_id: account.id,
+        _service_role: true,
+        target: 'manual_only'
+      });
+      const timeout1 = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 90000));
+      const res1 = await Promise.race([p1, timeout1]).catch(async (e) => {
+        if (e?.message?.includes('429') || e?.message?.includes('502') || e?.message?.includes('rate')) {
+          setRepairSummary({ type: 'warning', text: 'Rate limit Amazon â€” tentando novamente em 60s...' });
+          await new Promise((r) => setTimeout(r, 60000));
+          return base44.functions.invoke('repairIncompleteManualExactCampaigns', {
+            amazon_account_id: account.id, _service_role: true, target: 'manual_only'
+          }).catch(() => null);
+        }
+        return null; // timeout â€” continua para fase 2
+      });
+      repaired = res1?.data?.repaired ?? res1?.data?.campaigns_repaired ?? 0;
+    } catch {/* continua para fase 2 */}
+
+    setRepairPhase('phase1_done');
+    await new Promise((r) => setTimeout(r, 400));
+    setRepairPhase('phase2');
+
+    // FASE 2 â€” ReconciliaÃ§Ã£o de estados
+    let synced = 0;
+    let divergencias = 0;
+    try {
+      const res2 = await base44.functions.invoke('syncAdsCampaignStatesV2', {
+        amazon_account_id: account.id,
+        _service_role: true,
+        targeting_type: 'MANUAL',
+        force: true
+      }).catch(() => null);
+      synced = res2?.data?.synced ?? res2?.data?.campaigns_synced ?? res2?.data?.updated ?? 0;
+      divergencias = res2?.data?.divergencias ?? res2?.data?.divergences ?? res2?.data?.review_required ?? 0;
+    } catch {/* falha parcial â€” nÃ£o bloqueia */}
+
+    setRepairPhase('done');
+    setRepairSummary({
+      type: 'success',
+      text: `${repaired} reparada(s) Â· ${synced} estado(s) sincronizado(s)${divergencias > 0 ? ` Â· ${divergencias} divergÃªncia(s)` : ''}`
+    });
+    setTimeout(() => {setRepairPhase(null);setRepairSummary(null);}, 12000);
+    await loadCampaigns();
+  };
+
+
+
+  const pauseNoStockCampaigns = async (dryRun = false) => {
+    if (!account || pausingNoStock) return;
+    if (!dryRun && !window.confirm('Pausar campanhas automÃ¡ticas sem estoque ou kickoff? Esta aÃ§Ã£o serÃ¡ aplicada na Amazon Ads API.')) return;
+    setPausingNoStock(true);
+    setPauseNoStockMsg(null);
+    try {
+      const res = await base44.functions.invoke('pauseAutoCampaignsNoStock', {
+        amazon_account_id: account.id, dry_run: dryRun
+      });
+      const d = res?.data;
+      if (d?.ok) {
+        if (dryRun) {
+          setPauseNoStockMsg({ type: 'info', text: `SimulaÃ§Ã£o: ${d.would_pause} campanha(s) seriam pausadas.` });
+        } else {
+          setPauseNoStockMsg({ type: 'success', text: d.message });
+          await loadCampaigns();
+        }
+      } else {
+        setPauseNoStockMsg({ type: 'error', text: d?.error || 'Erro ao pausar.' });
+      }
+    } catch (e) {
+      setPauseNoStockMsg({ type: 'error', text: e.message });
+    } finally {
+      setPausingNoStock(false);
+      setTimeout(() => setPauseNoStockMsg(null), 10000);
+    }
+  };
+
+  const checkToken = async () => {
+    setTokenCheck('checking');
+    const t0 = Date.now();
+    try {
+      const res = await base44.functions.invoke('listAdsProfiles', {});
+      const latency = Date.now() - t0;
+      const profiles = res?.data?.profiles || [];
+      setTokenCheck({ ok: profiles.length > 0, profiles, latency, checkedAt: new Date().toLocaleTimeString('pt-BR') });
+    } catch (e) {
+      setTokenCheck({ ok: false, error: e.message, latency: Date.now() - t0, checkedAt: new Date().toLocaleTimeString('pt-BR') });
+    }
+    setTimeout(() => setTokenCheck(null), 15000);
+  };
+
+  const loadCampaigns = async ({ syncFromAmazon = false, silent = false } = {}) => {
+    if (!silent) setLoading(true);
+    try {
+      const me = await base44.auth.me();
+      let accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
+      if (!accounts.length) {
+        accounts = await base44.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_date', 1);
+      }
+      if (!accounts.length) {
+        accounts = await base44.entities.AmazonAccount.list('-updated_date', 1);
+      }
+      const acc = accounts[0] || null;
+      setAccount(acc);
+      if (!acc) return;
+
+      if (syncFromAmazon) {
+        const syncKey = `ads-campaign-sync:v2:${acc.id}`;
+        const lastSync = Number(window.localStorage.getItem(syncKey) || 0);
+        if (Date.now() - lastSync >= AMAZON_SYNC_THROTTLE_MS) {
+          window.localStorage.setItem(syncKey, String(Date.now()));
+          await base44.functions.invoke('syncAdsCampaignStatesV2', {
+            amazon_account_id: acc.id,
+            _service_role: true,
+            force: true,
+            trigger_type: 'ads_page_auto_refresh'
+          }).catch(() => {});
+        }
+      }
+
+      const [cams, prods, keywordRows] = await Promise.all([
+        loadAllCampaigns(acc.id, {}, { includeExcluded: true }),
+        base44.entities.Product.filter({ amazon_account_id: acc.id }, null, 500),
+        base44.entities.Keyword.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => [])
+      ]);
+      // Excluir apenas arquivadas e incompletas; is_operational nÃ£o Ã© critÃ©rio de exibiÃ§Ã£o
+      // Keywords positivas sÃ£o prova objetiva de segmentaÃ§Ã£o MANUAL quando a
+      // Amazon omite ou devolve targetingType incorreto.
+      const manualCampaignIds = new Set();
+      for (const keyword of keywordRows) {
+        const keywordState = String(keyword.state || keyword.status || '').toLowerCase();
+        const matchType = String(keyword.match_type || keyword.matchType || '').toUpperCase();
+        const isPositive = ['EXACT', 'PHRASE', 'BROAD'].includes(matchType) &&
+          keyword.source !== 'search_term' &&
+          keywordState !== 'archived';
+        if (!isPositive) continue;
+        [keyword.campaign_id, keyword.amazon_campaign_id]
+          .filter(Boolean)
+          .forEach(id => manualCampaignIds.add(String(id)));
+      }
+
+      const classifiedCampaigns = cams.map(campaign => {
+        const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id]
+          .filter(Boolean)
+          .map(String);
+        return ids.some(id => manualCampaignIds.has(id))
+          ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+          : campaign;
+      });
+
+      const incorrectlyAuto = classifiedCampaigns.filter(campaign =>
+        campaign._hasManualKeywords === true &&
+        String(cams.find(row => row.id === campaign.id)?.targeting_type || '').toUpperCase() !== 'MANUAL'
+      );
+      if (incorrectlyAuto.length) {
+        await Promise.all(
+          incorrectlyAuto.map(campaign =>
+            base44.entities.Campaign.update(campaign.id, { targeting_type: 'MANUAL' }).catch(() => {})
+          )
+        );
+      }
+
+      const operational = classifiedCampaigns.filter((c) => {
+        const state = campaignState(c);
+        return state === 'enabled' || state === 'paused';
+      });
+
+      // Garantir que campanhas externas (nÃ£o criadas pelo app) tambÃ©m sejam marcadas como elegÃ­veis para IA
+      const toEnable = operational.filter((c) => !c.created_by_app && c.learning_eligible === false);
+      if (toEnable.length > 0) {
+        await Promise.all(
+          toEnable.map((c) => base44.entities.Campaign.update(c.id, { learning_eligible: true }).catch(() => {}))
+        );
+        toEnable.forEach((c) => {c.learning_eligible = true;});
+      }
+
+      setCampaigns(operational);
+      setProducts(prods);
+      setMigrationInProgress(false);
+
+      // Deduplicar campanhas AUTO duplicadas por ASIN â€” fire-and-forget silencioso
+      const hasAutoDuplicates = (() => {
+        const asinCount = {};
+        for (const c of operational) {
+          if ((c.targeting_type || '').toUpperCase() !== 'AUTO') continue;
+          const asin = c.asin || (() => {const m = (c.name || c.campaign_name || '').match(/B0[A-Z0-9]{8}/i);return m ? m[0].toUpperCase() : null;})();
+          if (!asin) continue;
+          asinCount[asin] = (asinCount[asin] || 0) + 1;
+        }
+        return Object.values(asinCount).some((n) => n > 1);
+      })();
+      if (hasAutoDuplicates) {
+        base44.functions.invoke('deduplicateAutoCampaignsByAsin', { amazon_account_id: acc.id }).catch(() => {});
+        setTimeout(async () => {
+          try {
+            const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
+            const refreshedClassified = refreshed.map(campaign => {
+              const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
+              return ids.some(id => manualCampaignIds.has(id))
+                ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+                : campaign;
+            });
+            const operational3 = refreshedClassified.filter((c) => {
+              const state = campaignState(c);
+              return state === 'enabled' || state === 'paused';
+            });
+            setCampaigns(operational3);
+          } catch {}
+        }, 3000);
+      }
+
+      // Reativar campanhas canÃ´nicas pausadas â€” fire-and-forget, sem bloquear UI
+      const hasCanonicalPaused = operational.some(
+        (c) => campaignState(c) === 'paused' &&
+        /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
+      );
+      if (hasCanonicalPaused) {
+        base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
+      }
+
+      // Disparar migraÃ§Ã£o canÃ´nica automaticamente em background se houver pendentes
+      const hasPendingMigration = operational.some(
+        (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+        !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
+        (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+      );
+      if (hasPendingMigration) {
+        setMigrationInProgress(true);
+        base44.functions.invoke('enforceCanonicalManualCampaigns', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
+        // Re-fetch apÃ³s 4s para refletir o novo estado (1 tentativa apenas)
+        setTimeout(async () => {
+          try {
+            const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
+            const refreshedClassified = refreshed.map(campaign => {
+              const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
+              return ids.some(id => manualCampaignIds.has(id))
+                ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
+                : campaign;
+            });
+            const operational2 = refreshedClassified.filter((c) => {
+              const state = campaignState(c);
+              return state === 'enabled' || state === 'paused';
+            });
+            setCampaigns(operational2);
+            const stillPending = operational2.some(
+              (c) => (c.targeting_type || '').toUpperCase() === 'MANUAL' &&
+              !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
+              (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
+            );
+            if (!stillPending) setMigrationInProgress(false);
+          } catch {
+            setMigrationInProgress(false);
+          }
+        }, 4000);
+      }
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCampaigns({ syncFromAmazon: true });
+    const timer = window.setInterval(
+      () => loadCampaigns({ syncFromAmazon: true, silent: true }),
+      CAMPAIGN_REFRESH_MS
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadCampaigns({ syncFromAmazon: true, silent: true });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
+  const loadKeywordsForCampaign = async (campaign) => {
+    setKwLoading(true);
+    try {
+      // Buscar por todos os IDs possÃ­veis: campaign_id (Amazon ID), amazon_campaign_id, e o id interno Base44
+      const possibleIds = [...new Set([
+      campaign.campaign_id,
+      campaign.amazon_campaign_id,
+      campaign.id].
+      filter(Boolean))];
+
+      const kwBatches = await Promise.all(
+        possibleIds.map((cid) =>
+        base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
+        )
+      );
+      // Buscar por ASIN apenas para campanhas NÃƒO canÃ´nicas (fallback para campanhas sem campaign_id linkado)
+      // Campanhas canÃ´nicas (SP | MANUAL | EXACT | ...) tÃªm exatamente 1 keyword â€” busca por ASIN inflaria o count com keywords de outras campanhas do mesmo produto
+      const isCanonical = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(campaign.name || campaign.campaign_name || '');
+      let asinKws = [];
+      if (!isCanonical && campaign.asin && account?.id) {
+        asinKws = await base44.entities.Keyword.filter({ amazon_account_id: account.id, asin: campaign.asin }, '-spend', 200).catch(() => []);
+      }
+
+      const allKws = [...kwBatches.flat(), ...asinKws];
+      const kwMap = new Map(allKws.map((k) => [k.id, k]));
+      const dedupedKws = Array.from(kwMap.values());
+
+      const negBatches = await Promise.all(
+        possibleIds.map((cid) =>
+        base44.entities.NegativeKeywordSuggestion.filter({ campaign_id: cid, status: 'pending' }, '-created_date', 50).catch(() => [])
+        )
+      );
+      const negMap = new Map(negBatches.flat().map((n) => [n.id, n]));
+
+      setKeywords(dedupedKws.filter((k) => k.source !== 'search_term'));
+      setSearchTerms(dedupedKws.filter((k) => k.source === 'search_term'));
+      setNegSuggestions(Array.from(negMap.values()));
+
+      if ((campaign.days_running || 0) >= 30) {
+        base44.functions.invoke('analyzeKeywordHourlyPerformance', {
+          amazon_account_id: account?.id,
+          campaign_id: campaign.amazon_campaign_id || campaign.campaign_id
+        }).then(async () => {
+          const updBatches = await Promise.all(
+            possibleIds.map((cid) =>
+            base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
+            )
+          );
+          const updMap = new Map(updBatches.flat().map((k) => [k.id, k]));
+          setKeywords(Array.from(updMap.values()).filter((k) => k.source !== 'search_term'));
+        }).catch(() => {});
+      }
+    } catch {
+      setKeywords([]);setSearchTerms([]);setNegSuggestions([]);
+    } finally {
+      setKwLoading(false);
+    }
+  };
+
+  const selectCampaign = async (campaign) => {
+    setSelectedCampaign(campaign);
+    setPendingBids({});
+    setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
+    // Mudar aba para corresponder ao tipo da campanha selecionada
+    const isAuto = (campaign.targeting_type || '').toUpperCase() === 'AUTO';
+    setColumnTab(isAuto ? 'auto' : 'manual');
+    await loadKeywordsForCampaign(campaign);
+  };
+
+  const applyBids = async () => {
+    if (Object.keys(pendingBids).length === 0) return;
+    setSaveState('loading');setSaveError(null);
+    try {
+      await base44.entities.Keyword.bulkUpdate(Object.entries(pendingBids).map(([id, bid]) => ({ id, bid })));
+      setKeywords((prev) => prev.map((kw) => pendingBids[kw.id] !== undefined ? { ...kw, bid: pendingBids[kw.id] } : kw));
+      setSaveState('success');setPendingBids({});
+      setTimeout(() => setSaveState('idle'), 3000);
+    } catch (err) {
+      setSaveState('error');setSaveError(err.message || 'Erro ao aplicar bids');
+      setTimeout(() => setSaveState('idle'), 4000);
+    }
+  };
+
+  const negateKeyword = async (suggestion) => {
+    try {
+      await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, { status: 'approved' });
+      setNegSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+      await base44.entities.AgentAction.create({
+        amazon_account_id: account.id, action: 'negative_keyword',
+        campaign_id: suggestion.campaign_id, keyword: suggestion.keyword_text,
+        reason: 'NegativaÃ§Ã£o manual via dashboard',
+        evidence: `Search term: ${suggestion.keyword_text}, Spend: R$${(suggestion.spend || 0).toFixed(2)}, Clicks: ${suggestion.clicks || 0}`,
+        risk_level: 'medium', requires_approval: false, status: 'pending'
+      });
+    } catch (err) {console.error('Erro ao negativar:', err);}
+  };
+
+  const promoteKeyword = async (searchTerm) => {
+    try {
+      const existing = await base44.entities.Keyword.filter({ amazon_account_id: account.id, campaign_id: searchTerm.campaign_id, keyword_text: searchTerm.keyword_text, source: 'manual' });
+      if (existing.length > 0) {alert(`Keyword "${searchTerm.keyword_text}" jÃ¡ existe nesta campanha.`);return;}
+      await base44.entities.Keyword.create({
+        amazon_account_id: account.id, campaign_id: searchTerm.campaign_id,
+        ad_group_id: searchTerm.ad_group_id || '',
+        keyword_id: `manual_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        keyword_text: searchTerm.keyword_text, match_type: 'exact',
+        state: 'enabled', status: 'enabled', current_bid: 0.30, bid: 0.30, source: 'manual',
+        first_seen_at: new Date().toISOString(), last_seen_at: new Date().toISOString(), synced_at: new Date().toISOString()
+      });
+      const asin = searchTerm.advertised_asin || selectedCampaign?.asin;
+      if (asin && searchTerm.keyword_text) {
+        base44.functions.invoke('negateKeywordInAutoCampaign', {
+          amazon_account_id: account.id, asin,
+          keyword_text: searchTerm.keyword_text,
+          manual_campaign_id: searchTerm.campaign_id,
+          triggered_by: 'user_promote'
+        }).catch(() => {});
+      }
+      setSearchTerms((prev) => prev.filter((st) => st.id !== searchTerm.id));
+    } catch (err) {console.error('Erro ao promover:', err);alert('Erro ao promover keyword: ' + err.message);}
+  };
+
+  const pauseCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    setCampaignAction('pausing');
+    setCampaignActionMsg(null);
+    try {
+      const response = await base44.functions.invoke('pauseCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: selectedCampaign.campaign_id,
+        asin: selectedCampaign.asin,
+        lock_product_paused: true,
+        pause_source: 'user_manual'
+      });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar campanha');
+      // Atualizar estado local imediatamente
+      setSelectedCampaign((prev) => ({ ...prev, state: 'paused', status: 'paused' }));
+      setCampaigns((prev) => prev.map((c) => c.id === selectedCampaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
+      const msg = response.data.api_warning ?
+      `Pausada localmente. SincronizaÃ§Ã£o com Amazon pendente.` :
+      'Campanha pausada com sucesso.';
+      setCampaignActionMsg({ type: 'success', text: msg });
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+      setTimeout(() => setCampaignActionMsg(null), 7000);
+    }
+  };
+
+  const quickPauseCampaign = async (campaign) => {
+    try {
+      const response = await base44.functions.invoke('pauseCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.campaign_id,
+        asin: campaign.asin,
+        lock_product_paused: true,
+        pause_source: 'user_manual'
+      });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao pausar');
+      setCampaigns((prev) => prev.map((c) => c.id === campaign.id ? { ...c, state: 'paused', status: 'paused' } : c));
+      if (selectedCampaign?.id === campaign.id) {
+        setSelectedCampaign((prev) => ({ ...prev, state: 'paused', status: 'paused' }));
+      }
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao pausar: ' + e.message });
+      setTimeout(() => setCampaignActionMsg(null), 5000);
+    }
+  };
+
+  const quickResumeCampaign = async (campaign) => {
+    try {
+      const res = await base44.functions.invoke('reactivateWinnerCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.campaign_id || campaign.amazon_campaign_id,
+        campaign_db_id: campaign.id,
+        asin: campaign.asin,
+        force: true,
+        clear_product_pause_lock: true,
+        _service_role: true
+      });
+      if (!res?.data?.ok) throw new Error(res?.data?.error || 'Falha ao reativar');
+      setCampaigns((prev) => prev.map((c) => c.id === campaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+      if (selectedCampaign?.id === campaign.id) {
+        setSelectedCampaign((prev) => ({ ...prev, state: 'enabled', status: 'enabled' }));
+      }
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao reativar: ' + e.message });
+      setTimeout(() => setCampaignActionMsg(null), 5000);
+    }
+  };
+
+  const removeCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    if (!window.confirm(`Remover a campanha "${selectedCampaign.name || selectedCampaign.campaign_name}" do painel? Ela serÃ¡ marcada como arquivada localmente.`)) return;
+    setCampaignAction('removing');
+    try {
+      await base44.entities.Campaign.update(selectedCampaign.id, { archived: true, state: 'archived', status: 'archived' });
+      setCampaigns((prev) => prev.filter((c) => c.id !== selectedCampaign.id));
+      setSelectedCampaign(null);
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao remover: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+    }
+  };
+
+  const archiveCampaignAction = async (campaign) => {
+    if (!account) return;
+    setCampaignAction('archiving');
+    setCampaignActionMsg(null);
+    try {
+      const response = await base44.functions.invoke('archiveCampaign', {
+        amazon_account_id: account.id,
+        campaign_id: campaign.amazon_campaign_id || campaign.campaign_id,
+        asin: campaign.asin,
+      });
+      const data = response?.data || response;
+      if (!data?.ok) throw new Error(data?.error || 'Falha ao arquivar campanha na Amazon');
+      // Remover da lista localmente (otimista pÃ³s-confirmaÃ§Ã£o)
+      setCampaigns((prev) => prev.filter((c) => c.id !== campaign.id));
+      if (selectedCampaign?.id === campaign.id) setSelectedCampaign(null);
+      setCampaignActionMsg({ type: 'success', text: 'Campanha arquivada na Amazon com sucesso.' });
+    } catch (e) {
+      setCampaignActionMsg({ type: 'error', text: 'Erro ao arquivar: ' + e.message });
+    } finally {
+      setCampaignAction(null);
+      setTimeout(() => setCampaignActionMsg(null), 7000);
+    }
+  };
+
+  const archiveSelectedCampaign = async () => {
+    if (!selectedCampaign || campaignAction) return;
+    const name = selectedCampaign.name || selectedCampaign.campaign_name || 'esta campanha';
+    if (!window.confirm(`Arquivar "${name}" na Amazon Ads? Ela serÃ¡ removida do painel e arquivada permanentemente. Esta aÃ§Ã£o Ã© irreversÃ­vel.`)) return;
+    await archiveCampaignAction(selectedCampaign);
+  };
+
+  const hasPending = Object.keys(pendingBids).length > 0;
+
+  // â”€â”€ Separar AUTO / MANUAL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Mapa de ASIN â†’ produto para filtro de estoque
+  const productsByAsin = Object.fromEntries(products.map((p) => [p.asin, p]));
+
+  const applySearch = (list) => list.filter((c) => {
+    if (search && !(c.name || '').toLowerCase().includes(search.toLowerCase()) && !(c.campaign_name || '').toLowerCase().includes(search.toLowerCase())) return false;
+    if (hideNoStock) {
+      const asin = getCampaignAsin(c);
+      if (asin) {
+        const prod = productsByAsin[asin];
+        if (prod && (prod.inventory_status === 'out_of_stock' || prod.fba_inventory === 0)) return false;
+      }
+    }
+    if (hidePaused && campaignState(c) === 'paused') return false;
+    return true;
+  });
+
+  // Agrupar campanhas automÃ¡ticas por ASIN: mostra a mais recente/ativa, com contagem
+  const rawAuto = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'AUTO')).
+  filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
+
+  const autoByAsin = (() => {
+    const map = new Map();
+    for (const c of rawAuto) {
+      const asin = getCampaignAsin(c) || c.id;
+      if (!map.has(asin)) {map.set(asin, []);}
+      map.get(asin).push(c);
+    }
+    return Array.from(map.values()).map((group) => {
+      // Priorizar enabled, depois mais recente
+      const enabled = group.filter((c) => (c.state || c.status) === 'enabled');
+      const representative = enabled.length > 0 ? enabled[0] : group[0];
+      const resolvedAsin = getCampaignAsin(representative);
+      // SÃ³ usar _asin_resolved como prefixo de display se for um ASIN Amazon real (comeÃ§a com B0 e tem 10 chars)
+      const isRealAsin = resolvedAsin && /^B0[A-Z0-9]{8}$/.test(resolvedAsin);
+      return { ...representative, _asin_resolved: isRealAsin ? resolvedAsin : null, _group_count: group.length, _group_all: group };
+    }).sort((a, b) => {
+      const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
+      const sDiff = stateOrder(a) - stateOrder(b);
+      if (sDiff !== 0) return sDiff;
+      return new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime();
+    });
+  })();
+
+  const autoCampaigns = autoByAsin;
+  const manualCampaigns = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'MANUAL')).
+  filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual).
+  sort((a, b) => {
+    const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
+    const sDiff = stateOrder(a) - stateOrder(b);
+    if (sDiff !== 0) return sDiff;
+    return new Date(b.created_date || b.created_at || 0).getTime() - new Date(a.created_date || a.created_at || 0).getTime();
+  });
+
+  const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
+  const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
+  const { active_count: activeCount, paused_count: pausedCount, total_current } = classifyCampaigns(campaigns);
+  const newCount = campaigns.filter(isNew24h).length;
+
+  return (
+    <div className="flex h-full">
+
+      {/* â”€â”€ Sidebar dupla coluna â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      <div className="w-[480px] flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
+
+        {/* Header */}
+        <div className="p-3 border-b border-surface-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs font-bold text-slate-300">Campanhas</span>
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setShowCreateWizard(true)} disabled={!account}
+              className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors disabled:opacity-50">
+                <Plus className="w-3 h-3" /> Criar
+              </button>
+
+              
+
+
+
+              
+              
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              
+              
+
+
+
+              
+            </div>
+          </div>
+
+          {/* Stats row */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[10px] text-slate-500">{total_current} operacionais Â· {activeCount} ativas Â· {pausedCount} pausadas</span>
+            {newCount > 0 ?
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                {newCount} NEW (24h)
+              </span> :
+            null}
+          </div>
+
+          {pauseNoStockMsg ?
+          <p className={`text-[10px] mt-1.5 ${pauseNoStockMsg.type === 'success' ? 'text-emerald-400' : pauseNoStockMsg.type === 'info' ? 'text-cyan' : 'text-red-400'}`}>{pauseNoStockMsg.text}</p> :
+          null}
+
+          {repairSummary ?
+          <p className={`text-[10px] mt-1.5 font-semibold ${repairSummary.type === 'success' ? 'text-emerald-400' : repairSummary.type === 'warning' ? 'text-amber-400' : 'text-red-400'}`}>
+            ðŸ”§ {repairSummary.text}
+          </p> :
+          null}
+          {tokenCheck && tokenCheck !== 'checking' ?
+          <div className={`mt-1.5 px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-2 ${tokenCheck.ok ? 'bg-emerald-500/10 border border-emerald-500/20' : 'bg-red-500/10 border border-red-500/20'}`}>
+              {tokenCheck.ok ?
+            <><Wifi className="w-3 h-3 text-emerald-400 flex-shrink-0" /><span className="text-emerald-300">API OK Â· {tokenCheck.profiles?.length} profile(s) Â· {tokenCheck.latency}ms Â· {tokenCheck.checkedAt}</span></> :
+            <><WifiOff className="w-3 h-3 text-red-400 flex-shrink-0" /><span className="text-red-300">Falha: {tokenCheck.error?.slice(0, 80)} Â· {tokenCheck.checkedAt}</span></>
+            }
+            </div> :
+          null}
+
+        </div>
+
+        {/* Search filter */}
+        <div className="px-3 py-2 border-b border-surface-2 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Pesquisar campanhas..."
+            className="w-full pl-6 pr-2 py-1 bg-surface-2 border border-surface-3 rounded text-[10px] text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
+          </div>
+          <button
+            onClick={() => setHideNoStock((v) => !v)}
+            title="Esconder campanhas de produtos sem estoque"
+            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
+            hideNoStock ?
+            'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
+            'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`
+            }>
+            
+            ðŸ“¦ {hideNoStock ? 'c/ estoque' : 'todos'}
+          </button>
+          <button
+            onClick={() => setHidePaused((v) => !v)}
+            title="Ocultar campanhas pausadas"
+            className={`flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border transition-colors flex-shrink-0 ${
+            hidePaused ?
+            'bg-cyan/20 text-cyan border-cyan/30' :
+            'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`
+            }>
+            
+            â–¶ {hidePaused ? 'ativas' : 'todas'}
+          </button>
+        </div>
+
+        {/* Tab switcher AUTO | MANUAL */}
+        <div className="flex border-b border-surface-2 flex-shrink-0">
+          <button
+            onClick={() => setColumnTab('auto')}
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'auto' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            
+            AutomÃ¡ticas ({autoCampaigns.length})
+          </button>
+          <button
+            onClick={() => setColumnTab('manual')}
+            className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+            
+            Manuais ({manualCampaigns.length})
+          </button>
+        </div>
+
+        {/* Single-column campaign list */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          {columnTab === 'auto' ?
+          <CampaignColumn
+            title="AutomÃ¡ticas"
+            icon={Zap}
+            color="text-amber-400"
+            campaigns={autoCampaigns}
+            products={products}
+            selectedId={selectedCampaign?.id}
+            onSelect={selectCampaign}
+            loading={loading}
+            stateFilter={stateFilterAuto}
+            onStateFilter={setStateFilterAuto}
+            onQuickPause={quickPauseCampaign}
+            onQuickResume={quickResumeCampaign}
+            onReactivateBudget={(c) => setReactivateBudgetModal(c)}
+            onQuickArchive={archiveCampaignAction}
+            extraAction={
+            <div className="flex flex-col gap-1">
+                  <StaleInventoryWarningPanel
+                campaigns={campaigns}
+                products={products}
+                account={account}
+                onReactivated={(campaignId) => {
+                  setCampaigns((prev) => prev.map((c) =>
+                  c.id === campaignId ? { ...c, state: 'enabled', status: 'enabled' } : c
+                  ));
+                }} />
+              
+                  
+
+
+
+
+
+              
+                  {pauseNoAsinResult &&
+              <p className={`text-[10px] text-center font-medium ${pauseNoAsinResult.type === 'success' ? 'text-emerald-400' : pauseNoAsinResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {pauseNoAsinResult.text}
+                    </p>
+              }
+                  
+
+
+
+
+
+              
+                  {archiveDuplicatesResult &&
+              <p className={`text-[10px] text-center font-medium ${archiveDuplicatesResult.type === 'success' ? 'text-emerald-400' : archiveDuplicatesResult.type === 'info' ? 'text-slate-400' : 'text-red-400'}`}>
+                      {archiveDuplicatesResult.text}
+                    </p>
+              }
+                </div>
+            } /> :
+
+
+          <>
+              {migrationInProgress &&
+            <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-1.5 flex-shrink-0">
+                  <Settings className="w-3 h-3 text-amber-400 animate-spin" />
+                  <span className="text-[10px] text-amber-400 font-medium">MigraÃ§Ã£o canÃ´nica em progresso...</span>
+                </div>
+            }
+              <CampaignColumn
+              title="Manuais"
+              icon={Sparkles}
+              color="text-cyan"
+              campaigns={manualCampaigns}
+              products={products}
+              selectedId={selectedCampaign?.id}
+              onSelect={selectCampaign}
+              loading={loading}
+              stateFilter={stateFilterManual}
+              onStateFilter={setStateFilterManual}
+              onQuickPause={quickPauseCampaign}
+              onQuickResume={quickResumeCampaign}
+              onReactivateBudget={(c) => setReactivateBudgetModal(c)}
+              onQuickArchive={archiveCampaignAction}
+              />
+            
+            </>
+          }
+        </div>
+
+        {/* KPI bottom */}
+        <div className="p-3 border-t border-surface-2 grid grid-cols-2 gap-2">
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-[10px] text-slate-500 mb-0.5">Spend Total</p>
+            <p className="text-sm font-bold text-white">R${totalSpend.toFixed(0)}</p>
+          </div>
+          <div className="bg-surface-2 rounded-lg p-2">
+            <p className="text-[10px] text-slate-500 mb-0.5">Vendas Total</p>
+            <p className="text-sm font-bold text-emerald-400">R${totalSales.toFixed(0)}</p>
+          </div>
+        </div>
+
+        {/* Reconciliation Panel */}
+        <div className="p-3 border-t border-surface-2">
+          <ReconciliationPanel account={account} onDone={loadCampaigns} />
+        </div>
+      </div>
+
+      {/* â”€â”€ Painel de detalhes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {!selectedCampaign ?
+        <CampaignHealthPanel campaigns={campaigns} products={products} /> :
+
+
+        <>
+            {/* Campaign header */}
+            <div className="px-6 py-4 border-b border-surface-2 bg-surface-1 flex-shrink-0">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <h2 className="text-base font-bold text-white truncate">{selectedCampaign.name || selectedCampaign.campaign_name}</h2>
+                    {isNew24h(selectedCampaign) ?
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">NEW</span> :
+                  null}
+                    {(selectedCampaign.targeting_type || '').toUpperCase() === 'AUTO' ?
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-400/10 text-amber-400 border border-amber-400/20 flex items-center gap-1">
+                        <Zap className="w-3 h-3" /> AUTO
+                      </span> :
+
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-cyan/10 text-cyan border border-cyan/20 flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> MANUAL
+                      </span>
+                  }
+                    {isAiManaged(selectedCampaign) ?
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20 flex items-center gap-1">
+                        <Bot className="w-3 h-3" /> Gerida pela IA
+                      </span> :
+                  null}
+                    {/* Badge MIGRAÃ‡ÃƒO PENDENTE na view de detalhes */}
+                    {needsMigration(selectedCampaign, keywords) ?
+                  <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 flex items-center gap-1">
+                        âš  MIGRAÃ‡ÃƒO PENDENTE â€” mÃºltiplas keywords detectadas
+                      </span> :
+                  null}
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
+                    <StatusBadge status={campaignState(selectedCampaign) || 'enabled'} />
+                    <span className="text-xs text-slate-400">OrÃ§amento: <span className="text-white">R${(selectedCampaign.daily_budget || 0).toFixed(2)}/dia</span>
+                      {selectedCampaign.recommended_daily_budget > 0 && Math.abs((selectedCampaign.recommended_daily_budget || 0) - (selectedCampaign.daily_budget || 0)) > 0.5 && (
+                        <span className="ml-1.5 text-[10px] text-amber-400/80">Â· Recomendado: R${Number(selectedCampaign.recommended_daily_budget).toFixed(2)}</span>
+                      )}
+                    </span>
+                    <span className="text-xs text-slate-400">Spend: <span className="text-white">R${(selectedCampaign.spend || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">Vendas: <span className="text-emerald-400">R${(selectedCampaign.sales || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">ACoS: <span className={`font-semibold ${(selectedCampaign.acos || 0) > 40 ? 'text-red-400' : 'text-emerald-400'}`}>{(selectedCampaign.acos || 0).toFixed(1)}%</span></span>
+                    <span className="text-xs text-slate-400">ROAS: <span className="text-cyan">{(selectedCampaign.roas || 0).toFixed(2)}x</span></span>
+                    <span className="text-xs text-slate-400">CPC: <span className="text-white">R${(selectedCampaign.cpc || 0).toFixed(2)}</span></span>
+                    <span className="text-xs text-slate-400">Cliques: <span className="text-white">{(selectedCampaign.clicks || 0).toLocaleString()}</span></span>
+                    <span className="text-xs text-slate-400">Pedidos: <span className="text-white">{selectedCampaign.orders || 0}</span></span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                  {campaignActionMsg ?
+                <span className={`text-xs px-2 py-1 rounded ${campaignActionMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {campaignActionMsg.text}
+                    </span> :
+                null}
+                  {/* Kick-off manual para a campanha selecionada */}
+                  {(() => {
+                  const prod = selectedCampaign.asin ? products.find((p) => p.asin === selectedCampaign.asin) : null;
+                  if (!prod) return null;
+                  return (
+                    <button onClick={() => setKickoffProduct(prod)}
+                    className="px-3 py-2 text-xs font-semibold bg-violet-500/15 border border-violet-500/30 text-violet-400 hover:bg-violet-500/25 rounded-lg transition-colors flex items-center gap-1.5">
+                        <Rocket className="w-3.5 h-3.5" /> Kick-off
+                      </button>);
+
+                })()}
+                  {/* Pausar / Reativar */}
+                  {campaignState(selectedCampaign) === 'enabled' ?
+                <button onClick={pauseCampaign} disabled={!!campaignAction}
+                className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                      {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Pause className="w-3.5 h-3.5" />}
+                      Pausar
+                    </button> :
+                campaignState(selectedCampaign) === 'paused' ?
+                <button onClick={async () => {
+                  setCampaignAction('pausing');
+                  try {
+                    const res = await base44.functions.invoke('reactivateWinnerCampaign', {
+                      amazon_account_id: account.id,
+                      campaign_id: selectedCampaign.campaign_id || selectedCampaign.amazon_campaign_id,
+                      campaign_db_id: selectedCampaign.id,
+                      asin: selectedCampaign.asin,
+                      force: true,
+                      _service_role: true
+                    });
+                    if (res?.data?.ok) {
+                      setSelectedCampaign((prev) => ({ ...prev, state: 'enabled', status: 'enabled' }));
+                      setCampaigns((prev) => prev.map((c) => c.id === selectedCampaign.id ? { ...c, state: 'enabled', status: 'enabled' } : c));
+                      setCampaignActionMsg({ type: 'success', text: 'Campanha reativada!' });
+                    } else {
+                      setCampaignActionMsg({ type: 'error', text: res?.data?.error || 'Falha ao reativar.' });
+                    }
+                  } catch (e) {
+                    setCampaignActionMsg({ type: 'error', text: e.message });
+                  } finally {
+                    setCampaignAction(null);
+                    setTimeout(() => setCampaignActionMsg(null), 7000);
+                  }
+                }} disabled={!!campaignAction}
+                className="px-3 py-2 text-xs font-semibold bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                    {campaignAction === 'pausing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                    Reativar
+                  </button> :
+                null}
+                  {/* Arquivar na Amazon */}
+                  {campaignState(selectedCampaign) !== 'archived' && (
+                    <button onClick={archiveSelectedCampaign} disabled={!!campaignAction}
+                  className="px-3 py-2 text-xs font-semibold bg-rose-500/15 border border-rose-500/40 text-rose-300 hover:bg-rose-500/25 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                      {campaignAction === 'archiving' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Archive className="w-3.5 h-3.5" />}
+                      Arquivar
+                    </button>
+                  )}
+                  {/* Remover do painel (apenas local) */}
+                  <button onClick={removeCampaign} disabled={!!campaignAction}
+                className="px-3 py-2 text-xs font-semibold bg-red-500/10 border border-red-500/25 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50">
+                    {campaignAction === 'removing' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    Remover
+                  </button>
+                  <button onClick={async () => {
+                  try {await base44.functions.invoke('monitorSearchTerms', { amazon_account_id: account.id });}
+                  catch (e) {console.error(e);}
+                }} className="px-3 py-2 text-xs font-semibold bg-surface-2 border border-surface-3 text-slate-300 hover:text-white rounded-lg transition-colors flex items-center gap-1.5">
+                    <Brain className="w-3.5 h-3.5" /> Analisar Search Terms
+                  </button>
+                  {keywords.length > 0 ?
+                <button onClick={() => {const b = {};keywords.forEach((kw) => {b[kw.id] = 0.50;});setPendingBids(b);}}
+                className="px-3 py-2 text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 rounded-lg transition-colors flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5" /> Bids â†’ R$0,50
+                    </button> :
+                null}
+                  {hasPending ?
+                <button onClick={applyBids} disabled={saveState === 'loading'}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${saveState === 'success' ? 'bg-emerald-600 text-white' : saveState === 'error' ? 'bg-red-600 text-white' : 'bg-cyan hover:bg-cyan/90 text-white'}`}>
+                      {saveState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : saveState === 'success' ? <CheckCircle className="w-4 h-4" /> : saveState === 'error' ? <AlertCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                      {saveState === 'loading' ? 'Guardando...' : saveState === 'success' ? 'Bids guardados!' : saveState === 'error' ? saveError || 'Erro' : `Guardar ${Object.keys(pendingBids).length} bid(s)`}
+                    </button> :
+                null}
+                </div>
+              </div>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b border-surface-2 bg-[#0D0F14] flex-shrink-0">
+              {[
+            {
+              key: 'keywords',
+              label: (() => {
+                const isCanonicalTab = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(selectedCampaign?.name || selectedCampaign?.campaign_name || '');
+                if ((selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' && !isCanonicalTab) {
+                  const activeExact = keywords.filter((k) => (k.match_type || '').toLowerCase() === 'exact' && (k.state || '').toLowerCase() !== 'archived');
+                  if (activeExact.length > 1) return `âš  Keywords (${keywords.length}) â€” MIGRAÃ‡ÃƒO PENDENTE`;
+                }
+                return `Keyword${keywords.length !== 1 ? 's' : ''} (${keywords.length})`;
+              })()
+            },
+            { key: 'search-terms', label: `Search Terms${searchTerms.length > 0 ? ` (${searchTerms.length})` : ''}${negSuggestions.length > 0 ? ` Â· ${negSuggestions.length} neg.` : ''}` },
+            { key: 'config', label: 'ConfiguraÃ§Ãµes', icon: Settings },
+            { key: 'history', label: 'HistÃ³rico', icon: History }].
+            map((tab) =>
+            <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+            className={`px-5 py-3 text-xs font-semibold border-b-2 transition-colors flex items-center gap-1.5 ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
+                  {tab.icon && <tab.icon className="w-3.5 h-3.5" />}
+                  {tab.label}
+                </button>
+            )}
+            </div>
+
+            {/* Tab content */}
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
+              {activeTab === 'config' ?
+            <CampaignConfigPanel campaign={selectedCampaign} account={account} products={products}
+            onSaved={(updated) => {setSelectedCampaign(updated);setCampaigns((prev) => prev.map((c) => c.id === updated.id ? updated : c));}} /> :
+            activeTab === 'history' ?
+            <CampaignHistoryTab campaign={selectedCampaign} account={account} /> :
+            activeTab === 'keywords' ?
+            <>
+                  {kwLoading ?
+              <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div> :
+              keywords.length === 0 ?
+              <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+                      <Search className="w-8 h-8 text-slate-600" />
+                      <div>
+                        <p className="text-sm text-slate-400">Sem keywords para esta campanha.</p>
+                        <p className="text-xs text-slate-600 mt-1">Execute um Sync para importar keywords da Amazon.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                    onClick={async () => {
+                      setKwLoading(true);
+                      try {
+                        await base44.functions.invoke('syncAdGroupsAndKeywords', { amazon_account_id: account?.id, campaign_id: selectedCampaign?.campaign_id || selectedCampaign?.amazon_campaign_id });
+                      } catch {}
+                      await loadKeywordsForCampaign(selectedCampaign);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors">
+                    
+                          <RefreshCw className="w-3.5 h-3.5" /> Sync Keywords
+                        </button>
+                        <button
+                    onClick={() => loadKeywordsForCampaign(selectedCampaign)}
+                    className="flex items-center gap-2 px-4 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors">
+                    
+                          <RefreshCw className="w-3.5 h-3.5" /> Recarregar
+                        </button>
+                      </div>
+                    </div> :
+
+              <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-[#0D0F14] z-10">
+                        <tr className="border-b border-surface-2">
+                          {['Produto / SKU', 'Keyword', 'Match', 'Estado', 'Melhor horÃ¡rio', 'Bid Atual', 'Novo Bid', 'ACoS', 'Cliques', 'Spend', 'Vendas'].map((h) =>
+                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {keywords.map((kw, i) => {
+                    const changed = kw.id in pendingBids;
+                    const kwProduct = kw.asin ?
+                    products.find((p) => p.asin === kw.asin) || products.find((p) => p.asin === selectedCampaign?.asin) :
+                    products.find((p) => p.asin === selectedCampaign?.asin);
+                    const acosColor = (kw.acos || 0) > 50 ? 'text-red-400' : (kw.acos || 0) > 30 ? 'text-amber-400' : 'text-emerald-400';
+                    const renderBestHour = () => {
+                      if (!kw.hourly_data_mature || kw.best_hour_start == null) {
+                        return <div className="flex items-center gap-1 text-slate-500"><Clock className="w-3 h-3" /><span className="text-[10px]">Aprendendo</span></div>;
+                      }
+                      const s = String(kw.best_hour_start).padStart(2, '0');
+                      const e = String(kw.best_hour_end).padStart(2, '0');
+                      return (
+                        <div className="space-y-0.5">
+                                <div className="flex items-center gap-1"><Clock className="w-3 h-3 text-cyan" /><span className="text-xs font-semibold text-white">{s}hâ€“{e}h</span></div>
+                                {kw.best_hour_roas ? <div className="text-[10px] text-slate-400">ROAS {kw.best_hour_roas} Â· {kw.best_hour_sales} vendas</div> : null}
+                              </div>);
+
+                    };
+                    return (
+                      <tr key={kw.id || i} className={`border-b border-surface-2/50 transition-colors ${changed ? 'bg-cyan/5' : 'hover:bg-surface-2'}`}>
+                              <td className="px-4 py-2.5 min-w-[120px]">
+                                {kwProduct ?
+                          <div className="flex items-center gap-2">
+                                    {kwProduct.product_image_url ?
+                            <img src={kwProduct.product_image_url} alt="" className="w-7 h-7 rounded object-cover bg-surface-3 flex-shrink-0" /> :
+                            <div className="w-7 h-7 rounded bg-surface-3 flex items-center justify-center flex-shrink-0"><Package className="w-3 h-3 text-slate-600" /></div>}
+                                    <div className="min-w-0">
+                                      <p className="text-[10px] font-mono text-cyan truncate">{kwProduct.asin}</p>
+                                      {kwProduct.sku && <p className="text-[10px] text-slate-500 truncate">SKU: {kwProduct.sku}</p>}
+                                    </div>
+                                  </div> :
+                          <span className="text-[10px] text-slate-600 font-mono">{kw.asin || selectedCampaign?.asin || 'â€”'}</span>}
+                              </td>
+                              <td className="px-4 py-2.5 font-medium text-white max-w-[200px] truncate">{kw.keyword_text || 'â€”'}</td>
+                              <td className="px-4 py-2.5"><span className="text-xs px-2 py-0.5 bg-surface-3 text-slate-400 rounded">{kw.match_type || 'â€”'}</span></td>
+                              <td className="px-4 py-2.5"><StatusBadge status={kw.state || 'enabled'} size="xs" /></td>
+                              <td className="px-4 py-2.5">{renderBestHour()}</td>
+                              <td className="px-4 py-2.5 text-slate-300">R${(kw.bid || 0).toFixed(2)}</td>
+                              <td className="px-4 py-2.5">
+                                <input type="number" step="0.01" min="0.02" defaultValue={(kw.bid || 0).toFixed(2)}
+                          onChange={(e) => setPendingBids((prev) => ({ ...prev, [kw.id]: parseFloat(e.target.value) || 0 }))}
+                          className="w-20 px-2 py-1 bg-surface-3 border border-surface-3 rounded text-xs text-white focus:outline-none focus:border-cyan/50" />
+                              </td>
+                              <td className="px-4 py-2.5"><span className={`font-semibold text-xs ${acosColor}`}>{(kw.acos || 0).toFixed(1)}%</span></td>
+                              <td className="px-4 py-2.5 text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
+                              <td className="px-4 py-2.5 text-slate-400">R${(kw.spend || 0).toFixed(2)}</td>
+                              <td className="px-4 py-2.5 text-emerald-400">R${(kw.sales || 0).toFixed(2)}</td>
+                            </tr>);
+
+                  })}
+                      </tbody>
+                    </table>
+              }
+                </> : (
+
+            /* Search Terms Tab */
+            <div className="p-4 space-y-4">
+                  {negSuggestions.length > 0 ?
+              <div>
+                      <h3 className="text-xs font-semibold text-red-400 mb-2 flex items-center gap-1.5">
+                        <TrendingDown className="w-3.5 h-3.5" /> {negSuggestions.length} termos para negativar
+                      </h3>
+                      <div className="space-y-2">
+                        {negSuggestions.map((neg) =>
+                  <div key={neg.id} className="flex items-center justify-between p-3 bg-red-500/5 border border-red-500/20 rounded-lg">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-white truncate">{neg.keyword_text}</p>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {neg.clicks || 0} clicks Â· R${(neg.spend || 0).toFixed(2)} Â· {neg.sales > 0 ? `R$${(neg.sales || 0).toFixed(2)} vendas` : 'zero vendas'}
+                              </p>
+                              <p className="text-xs text-red-400 mt-0.5">{neg.reason}</p>
+                            </div>
+                            <button onClick={() => negateKeyword(neg)}
+                    className="ml-3 px-3 py-1.5 text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/30 transition-colors flex items-center gap-1.5">
+                              <X className="w-3.5 h-3.5" /> Negativar
+                            </button>
+                          </div>
+                  )}
+                      </div>
+                    </div> :
+              null}
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                      <ListFilter className="w-3.5 h-3.5" /> {searchTerms.length} search terms capturados
+                    </h3>
+                    {searchTerms.length === 0 ?
+                <p className="text-sm text-slate-500 text-center py-8">Sem search terms ainda.</p> :
+
+                <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-surface-2">
+                            {['Search Term', 'Clicks', 'Spend', 'Vendas', 'ACoS', 'AÃ§Ã£o'].map((h) =>
+                      <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {searchTerms.map((st) => {
+                      const isWasting = (st.clicks || 0) >= 5 && (st.spend || 0) >= 2 && (st.sales || 0) === 0;
+                      const isGood = (st.sales || 0) > 0 && (st.acos || 0) > 0 && (st.acos || 0) < 40;
+                      return (
+                        <tr key={st.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
+                                <td className="px-4 py-2.5 text-slate-300 max-w-[200px] truncate">{st.keyword_text || st.keyword || 'â€”'}</td>
+                                <td className="px-4 py-2.5 text-slate-400">{(st.clicks || 0).toLocaleString()}</td>
+                                <td className="px-4 py-2.5 text-slate-400">R${(st.spend || 0).toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-emerald-400">R${(st.sales || 0).toFixed(2)}</td>
+                                <td className={`px-4 py-2.5 font-semibold ${(st.acos || 0) > 50 ? 'text-red-400' : (st.acos || 0) > 30 ? 'text-amber-400' : (st.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
+                                  {(st.acos || 0) > 0 ? `${(st.acos || 0).toFixed(1)}%` : 'â€”'}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  {isGood ?
+                            // Campanhas MANUAIS: criar nova campanha em vez de adicionar keyword
+                            (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' ?
+                            <button
+                              onClick={() => {
+                                const prod = products.find((p) => p.asin === (st.advertised_asin || selectedCampaign?.asin));
+                                if (prod) setKickoffProduct(prod);
+                              }}
+                              title="Cria nova campanha canÃ´nica para este termo (1 campanha = 1 keyword EXACT)"
+                              className="px-2.5 py-1 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-lg hover:bg-violet-500/30 transition-colors flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> Nova campanha
+                                </button> :
+
+                            <button onClick={() => promoteKeyword(st)}
+                            className="px-2.5 py-1 text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg hover:bg-emerald-500/30 transition-colors flex items-center gap-1">
+                                <Plus className="w-3 h-3" /> Promover
+                                </button> :
+
+                            isWasting ?
+                            <span className="text-xs text-red-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> DesperdÃ­cio</span> :
+
+                            <span className="text-xs text-slate-500">Observar</span>
+                            }
+                                </td>
+                              </tr>);
+
+                    })}
+                        </tbody>
+                      </table>
+                }
+                  </div>
+                </div>)
+            }
+            </div>
+          </>
+        }
+      </div>
+
+      {/* Toast de sucesso para Reativar + Budget */}
+      {reactivateBudgetToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-start gap-3 px-4 py-3 bg-[#111827] border border-emerald-500/30 rounded-xl shadow-2xl max-w-sm animate-fade-in">
+          <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white">Campanha reativada com sucesso!</p>
+            <p className="text-xs text-slate-400 mt-0.5 truncate">{reactivateBudgetToast.campaignName}</p>
+            <p className="text-xs text-emerald-400 mt-0.5">
+              Budget: R${reactivateBudgetToast.prevBudget.toFixed(2)} â†’ R${reactivateBudgetToast.newBudget.toFixed(2)} Â· Status: pausado â†’ ENABLED
+            </p>
+            {reactivateBudgetToast.budgetWarning && (
+              <p className="text-xs text-amber-400 mt-0.5">âš  {reactivateBudgetToast.budgetWarning}</p>
+            )}
+          </div>
+          <button onClick={() => setReactivateBudgetToast(null)} className="text-slate-500 hover:text-white flex-shrink-0">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Reativar + Ajustar Budget modal */}
+      {reactivateBudgetModal && account && (
+        <ReactivateWithBudgetModal
+          campaign={reactivateBudgetModal}
+          account={account}
+          onClose={() => setReactivateBudgetModal(null)}
+          onDone={(updates) => {
+            const id = reactivateBudgetModal.id;
+            // 1. Atualizar lista â€” botÃ£o CampaignColumn desaparece (state != 'paused')
+            setCampaigns((prev) => prev.map((c) =>
+              c.id === id ? { ...c, ...updates, state: 'enabled', status: 'enabled' } : c
+            ));
+            // 2. Atualizar campanha selecionada â€” botÃ£o header desaparece
+            if (selectedCampaign?.id === id) {
+              setSelectedCampaign((prev) => ({ ...prev, ...updates, state: 'enabled', status: 'enabled' }));
+            }
+            // 3. Fechar modal
+            setReactivateBudgetModal(null);
+          }}
+        />
+      )}
+
+      {kickoffProduct && account ?
+      <KickoffModal
+        product={kickoffProduct}
+        account={account}
+        onClose={() => setKickoffProduct(null)}
+        onDone={() => {setKickoffProduct(null);loadCampaigns();}} /> :
+      null}
+
+      {showProposalModal && account ?
+      <ManualCampaignProposalModal
+        account={account}
+        onClose={() => setShowProposalModal(false)}
+        onDone={loadCampaigns} /> :
+
+      null}
+
+      {showCreateWizard && account ?
+      <CreateCampaignWizard
+        account={account}
+        products={products}
+        onClose={() => setShowCreateWizard(false)}
+        onDone={loadCampaigns} /> :
+      null}
+    </div>);
+
+}

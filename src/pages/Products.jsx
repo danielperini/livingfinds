@@ -332,5 +332,503 @@ export default function Products({ externalRefreshTrigger }) {
     for (const p of active) {
       const key = p.asin || p.id;
       const existing = byAsin.get(key);
-      if (!existing) { byAsin.s„ù7∂âûÀk∫wµÁE±ΩÖë•πúÄòòÅÖççΩ’π–ÄòòÄÒ!•ù°ë°ï…ïπçï±ï…–ÅÖççΩ’π—%êıÌÖççΩ’π–π•ëÙÄº˘Ù4(4(ÄÄÄÄÄÅÏÖ±ΩÖë•πúÄòòÅ…ïÕ—Ωç≠ïëA…Ωë’ç—Ãπ±ïπù—†Ä¯Ä¿ÄòòÄ†4(ÄÄÄÄÄÄÄÄÒIïÕ—Ωç≠ïë±ï…–Å¡…Ωë’ç—ÃıÌ…ïÕ—Ωç≠ïëA…Ωë’ç—ÕÙÅÖççΩ’π–ıÌÖççΩ’π—ÙÅΩπΩπîıÌ±ΩÖëÙÄº¯4(ÄÄÄÄÄÄ•Ù4(4(ÄÄÄÄÄÅÏº®Å-A%ÃÄ®ΩÙ4(ÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâù…•êÅù…•êµçΩ±Ã¥»Å±úÈù…•êµçΩ±Ã¥‘ÅùÖ¿¥Ãà¯4(ÄÄÄÄÄÄÄÄÒ-¡•Ö…êÅ±Öâï∞Ùâ¥ÅÕ—Ω≈’îàÅŸÖ±’îıÌ±ΩÖë•πúÄ¸ÄüäPúÄËÅÖç—•Ÿï=ôôï…ÕÙÅëï—Ö•∞ıÌÄëÌ±Ω›M—Ωç≠ÙÅâÖ•·ºÅïÕ—Ω≈’ïÅÙÅ—ΩπîÙâÕ’ççïÕÃàÄº¯4(ÄÄÄÄÄÄÄÄÒ-¡•Ö…êÅ±Öâï∞ÙâïÕÖ—’Ö±•ÈÖëºàÅŸÖ±’îıÌ±ΩÖë•πúÄ¸ÄüäPúÄËÅÕ—Ö±ïM—Ωç≠ÙÅëï—Ö•∞ÙâÕ•πç…Ωπ•ÈáüçºÅπïçïÕœÖ…•ÑàÅ—ΩπîıÌÕ—Ö±ïM—Ωç¨Ä¯Ä¿Ä¸Äù›Ö…π•πúúÄËÄùëïôÖ’±–ùÙÄº¯4(ÄÄÄÄÄÄÄÄÒ-¡•Ö…êÅ±Öâï∞ÙâëÃÅ—•ŸΩÃàÅŸÖ±’îıÌ±ΩÖë•πúÄ¸ÄüäPúÄËÅÖç—•ŸïëÕÙÅëï—Ö•∞ıÌÄëÌ¡Ö’ÕïëëÕÙÅ¡Ö’ÕÖëΩÕÅÙÅ—ΩπîÙâçÂÖ∏àÄº¯4(ÄÄÄÄÄÄÄÄÒ-¡•Ö…êÅ±Öâï∞ÙâMï¥ÅÖµ¡Öπ°ÑàÅŸÖ±’îıÌ±ΩÖë•πúÄ¸ÄüäPúÄËÅ›•—°Ω’—Öµ¡Ö•ùπÙÅëï—Ö•∞ıÌÄëÌï±•ù•â±ïΩ…-•ç≠ΩôôÙÅï±ïüµŸï•ÃÅ¿ºÅ-•ç¨µΩôôÅÙÅ—ΩπîıÌ›•—°Ω’—Öµ¡Ö•ù∏Ä¯Ä¿Ä¸Äù›Ö…π•πúúÄËÄùëïôÖ’±–ùÙÄº¯4(ÄÄÄÄÄÄÄÄÒ-¡•Ö…êÅ±Öâï∞ÙâAÖ’ÕÖëΩÃÅ¿ºÅÕ—Ω≈’îàÅŸÖ±’îıÌ±ΩÖë•πúÄ¸ÄüäPúÄËÅ¡Ö’Õïë	ÂM—Ωç≠ÙÅëï—Ö•∞Ùâ¡Ö’ÕÑÅÖ’—Ω∑Ö—•çÑÅÖ¡±•çÖëÑàÅ—ΩπîıÌ¡Ö’Õïë	ÂM—Ωç¨Ä¯Ä¿Ä¸ÄùŸ•Ω±ï–úÄËÄùëïôÖ’±–ùÙÄº¯4(ÄÄÄÄÄÄΩë•ÿ¯4(4(ÄÄÄÄÄÅÏº®Å	’ÕçÑÄ®ΩÙ4(ÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥»à¯4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâ…ï±Ö—•ŸîÅô±ï‡¥ƒà¯4(ÄÄÄÄÄÄÄÄÄÄÒMïÖ…ç†Åç±ÖÕÕ9ÖµîÙâÖâÕΩ±’—îÅ±ïô–¥ÃÅ—Ω¿¥ƒº»Äµ—…ÖπÕ±Ö—îµ‰¥ƒº»Å‹¥–Å†¥–Å—ï·–µÕ±Ö—î¥‘¿¿Å¡Ω•π—ï»µïŸïπ—ÃµπΩπîàÄº¯4(ÄÄÄÄÄÄÄÄÄÄÒ•π¡’–4(ÄÄÄÄÄÄÄÄÄÄÄÅŸÖ±’îıÌÕïÖ…ç°%π¡’—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÅΩπ°ÖπùîıÌîÄÙ¯ÅÕï—MïÖ…ç°%π¡’–°îπ—Ö…ùï–πŸÖ±’î•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÅΩπ-ïÂΩ›∏ıÌîÄÙ¯ÅÏÅ•òÄ°îπ≠ï‰ÄÙÙÙÄùπ—ï»ú§ÅÏÅÕï—MïÖ…ç†°ÕïÖ…ç°%π¡’–π—…•¥†§§ÏÅÕï—AÖùî†ƒ§ÏÅÙÅıÙ4(ÄÄÄÄÄÄÄÄÄÄÄÅ¡±Öçï°Ω±ëï»Ùâ	’ÕçÖ»Å¡Ω»ÅM%8∞ÅM-TÅΩ‘ÅπΩµî∏∏∏à4(ÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâ‹µô’±∞Å¡∞¥ƒ¿Å¡»¥–Å¡‰¥»∏‘ÅâúµÕ’…ôÖçî¥ƒÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥»Å…Ω’πëïêµ±úÅ—ï·–µÕ¥Å—ï·–µÕ±Ö—î¥Ã¿¿Å¡±Öçï°Ω±ëï»µÕ±Ö—î¥ÿ¿¿ÅôΩç’ÃÈΩ’—±•πîµπΩπîÅôΩç’ÃÈâΩ…ëï»µçÂÖ∏º‘¿à4(ÄÄÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄÄÄÒâ’——Ω∏4(ÄÄÄÄÄÄÄÄÄÅ—Â¡îÙââ’——Ω∏à4(ÄÄÄÄÄÄÄÄÄÅΩπ±•ç¨ıÏ†§ÄÙ¯ÅÏÅÕï—MïÖ…ç†°ÕïÖ…ç°%π¡’–π—…•¥†§§ÏÅÕï—AÖùî†ƒ§ÏÅıÙ4(ÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥»∏‘ÅâúµçÂÖ∏ºƒ‘ÅâΩ…ëï»ÅâΩ…ëï»µçÂÖ∏ºÃ¿Å—ï·–µçÂÖ∏Å—ï·–µÕ¥ÅôΩπ–µÕïµ•âΩ±êÅ…Ω’πëïêµ±úÅ°ΩŸï»ÈâúµçÂÖ∏º»‘Å—…ÖπÕ•—•Ω∏µçΩ±Ω…ÃÅ›°•—ïÕ¡ÖçîµπΩ›…Ö¿à4(ÄÄÄÄÄÄÄÄ¯4(ÄÄÄÄÄÄÄÄÄÅ	’ÕçÖ»4(ÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÅÌÕïÖ…ç†ÄòòÄ†4(ÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏4(ÄÄÄÄÄÄÄÄÄÄÄÅ—Â¡îÙââ’——Ω∏à4(ÄÄÄÄÄÄÄÄÄÄÄÅΩπ±•ç¨ıÏ†§ÄÙ¯ÅÏÅÕï—MïÖ…ç°%π¡’–†úú§ÏÅÕï—MïÖ…ç††úú§ÏÅÕï—AÖùî†ƒ§ÏÅıÙ4(ÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥ƒÅ¡‡¥ÃÅ¡‰¥»∏‘ÅâúµÕ’…ôÖçî¥»ÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥ÃÅ—ï·–µÕ±Ö—î¥–¿¿Å°ΩŸï»È—ï·–µ›°•—îÅ—ï·–µÕ¥Å…Ω’πëïêµ±úÅ—…ÖπÕ•—•Ω∏µçΩ±Ω…Ãà4(ÄÄÄÄÄÄÄÄÄÄ¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒ`Åç±ÖÕÕ9ÖµîÙâ‹¥Ã∏‘Å†¥Ã∏‘àÄº¯4(ÄÄÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄ•Ù4(ÄÄÄÄÄÄΩë•ÿ¯4(4(ÄÄÄÄÄÅÏº®Å•±—…ΩÃÄ®ΩÙ4(ÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Åô±ï‡µçΩ∞ÅùÖ¿¥»à¯4(ÄÄÄÄÄÄÄÅÌÕïÖ…ç†ÄòòÄ†4(ÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥»Å—ï·–µ·ÃÅ—ï·–µÕ±Ö—î¥–¿¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâ¡‡¥»∏‘Å¡‰¥ƒÅ…Ω’πëïêµô’±∞ÅâúµçÂÖ∏ºƒ¿ÅâΩ…ëï»ÅâΩ…ëï»µçÂÖ∏º»¿Å—ï·–µçÂÖ∏ÅôΩπ–µÕïµ•âΩ±êà¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌô•±—ï…ïêπ±ïπù—°ÙÅ¡…Ωë’—ΩÌô•±—ï…ïêπ±ïπù—†ÄÑÙÙÄƒÄ¸ÄùÃúÄËÄúùÙÅïπçΩπ—…ÖëΩÌô•±—ï…ïêπ±ïπù—†ÄÑÙÙÄƒÄ¸ÄùÃúÄËÄúùÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄΩÕ¡Ö∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒÕ¡Ö∏˘¡Ö…ÑÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâ—ï·–µÕ±Ö—î¥Ã¿¿ÅôΩπ–µµïë•’¥à¯âÌÕïÖ…ç°ÙàΩÕ¡Ö∏¯ΩÕ¡Ö∏¯4(ÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄÄÄ•Ù4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥ƒ∏‘Åô±ï‡µ›…Ö¿à¯4(ÄÄÄÄÄÄÄÄÄÄÒ•±—ï»Åç±ÖÕÕ9ÖµîÙâ‹¥Ã∏‘Å†¥Ã∏‘Å—ï·–µÕ±Ö—î¥‘¿¿Åô±ï‡µÕ°…•π¨¥¿àÄº¯4(ÄÄÄÄÄÄÄÄÄÅÌl4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùÖ±∞ú∞Å±Öâï∞ËÅÅQΩëΩÃÄ†ëÌŸ•Õ•â±ïA…Ωë’ç—Ãπ±ïπù—°Ù•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùΩôôï…}Öç—•Ÿîú∞Å±Öâï∞ËÅÅÕ—Ω≈’îÅ=,Ä†ëÌÖç—•Ÿï=ôôï…ÕÙ•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄù±Ω›}Õ—Ωç¨ú∞Å±Öâï∞ËÅÅ	Ö•·ºÅÕ—Ω≈’îÄ†ëÌ±Ω›M—Ωç≠Ù•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùÕ—Ö±ï}Õ—Ωç¨ú∞Å±Öâï∞ËÅÅïÕÖ—’Ö±•ÈÖëºÄ†ëÌÕ—Ö±ïM—Ωç≠Ù•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùÖëÕ}Öç—•Ÿîú∞Å±Öâï∞ËÅÅëÃÅ—•ŸΩÃÄ†ëÌÖç—•ŸïëÕÙ•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùÖëÕ}¡Ö’Õïêú∞Å±Öâï∞ËÅÅëÃÅAÖ’ÕÖëΩÃÄ†ëÌ¡Ö’ÕïëëÕÙ•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÅÏÅ≠ï‰ËÄùπΩ}çÖµ¡Ö•ù∏ú∞Å±Öâï∞ËÅÅMï¥ÅÖµ¡Öπ°ÑÄ†ëÌ›•—°Ω’—Öµ¡Ö•ùπÙ•ÄÅÙ∞4(ÄÄÄÄÄÄÄÄÄÄÄÄ∏∏∏°…ïÕ—Ωç≠ïêÄ¯Ä¿Ä¸ÅmÏÅ≠ï‰ËÄù…ïÕ—Ωç≠ïêú∞Å±Öâï∞ËÅÉ¬~RÅIïÖâÖÕ—ïç•ëΩÃÄ†ëÌ…ïÕ—Ωç≠ïëÙ•ÄÅıtÄËÅmt§∞4(ÄÄÄÄÄÄÄÄÄÅtπµÖ¿°•—ï¥ÄÙ¯Ä†4(ÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅ≠ï‰ıÌ•—ï¥π≠ïÂÙÅΩπ±•ç¨ıÏ†§ÄÙ¯ÅÏÅÕï—•±—ï»°•—ï¥π≠ï‰§ÏÅÕï—AÖùî†ƒ§ÏÅıÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîıÌÅ—ï·–µ·ÃÅ¡‡¥ÃÅ¡‰¥ƒ∏‘Å…Ω’πëïêµô’±∞ÅâΩ…ëï»Å—…ÖπÕ•—•Ω∏µçΩ±Ω…ÃÅ›°•—ïÕ¡ÖçîµπΩ›…Ö¿ÄëÌô•±—ï»ÄÙÙÙÅ•—ï¥π≠ï‰Ä¸ÄùâúµçÂÖ∏º»¿Å—ï·–µçÂÖ∏ÅâΩ…ëï»µçÂÖ∏ºÃ¿úÄËÄùâúµÕ’…ôÖçî¥»Å—ï·–µÕ±Ö—î¥‘¿¿ÅâΩ…ëï»µÕ’…ôÖçî¥ÃÅ°ΩŸï»È—ï·–µÕ±Ö—î¥Ã¿¿ùıÅÙ¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌ•—ï¥π±Öâï±Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄ§•Ù4(ÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄΩë•ÿ¯4(4(ÄÄÄÄÄÅÌ±ΩÖë•πúÄ¸Ä†4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»Å©’Õ—•ô‰µçïπ—ï»Å¡‰¥»¿à¯Ò1ΩÖëï»»Åç±ÖÕÕ9ÖµîÙâ‹¥‹Å†¥‹Å—ï·–µçÂÖ∏ÅÖπ•µÖ—îµÕ¡•∏àÄº¯Ωë•ÿ¯4(ÄÄÄÄÄÄ§ÄËÄÖÖççΩ’π–Ä¸Ä†4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Åô±ï‡µçΩ∞Å•—ïµÃµçïπ—ï»Å©’Õ—•ô‰µçïπ—ï»Å¡‰¥»¿ÅùÖ¿¥ÃÅ—ï·–µçïπ—ï»à¯4(ÄÄÄÄÄÄÄÄÄÄÒAÖç≠ÖùîÅç±ÖÕÕ9ÖµîÙâ‹¥ƒ»Å†¥ƒ»Å—ï·–µÕ±Ö—î¥ÿ¿¿àÄº¯4(ÄÄÄÄÄÄÄÄÄÄÒ¿Åç±ÖÕÕ9ÖµîÙâ—ï·–µÕ¥Å—ï·–µÕ±Ö—î¥–¿¿à˘9ïπ°’µÑÅçΩπ—ÑÅµÖÈΩ∏ÅçΩπô•ù’…ÖëÑ∏Ω¿¯4(ÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄ§ÄËÅô•±—ï…ïêπ±ïπù—†ÄÙÙÙÄ¿Ä¸Ä†4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Åô±ï‡µçΩ∞Å•—ïµÃµçïπ—ï»Å©’Õ—•ô‰µçïπ—ï»Å¡‰¥»¿ÅùÖ¿¥ÃÅ—ï·–µçïπ—ï»à¯4(ÄÄÄÄÄÄÄÄÄÄÒAÖç≠ÖùîÅç±ÖÕÕ9ÖµîÙâ‹¥ƒ»Å†¥ƒ»Å—ï·–µÕ±Ö—î¥ÿ¿¿àÄº¯4(ÄÄÄÄÄÄÄÄÄÄÒ¿Åç±ÖÕÕ9ÖµîÙâ—ï·–µÕ¥Å—ï·–µÕ±Ö—î¥–¿¿à˘Ì¡…Ωë’ç—Ãπ±ïπù—†ÄÙÙÙÄ¿Ä¸ÄùMï¥Å¡…Ωë’—ΩÃ∏Å·ïç’—îÅ’¥ÅMÂπåÅπºÅÖÕ°âΩÖ…ê∏úÄËÄù9ïπ°’¥Å¡…Ωë’—ºÅïπçΩπ—…ÖëºÅçΩ¥ÅïÕ—ïÃÅô•±—…ΩÃ∏ùÙΩ¿¯4(ÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄ§ÄËÄ†4(ÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙââúµÕ’…ôÖçî¥ƒÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥»Å…Ω’πëïêµ·∞ÅΩŸï…ô±Ω‹µ°•ëëï∏à¯4(ÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥ÃÅâΩ…ëï»µàÅâΩ…ëï»µÕ’…ôÖçî¥»Åô±ï‡Å•—ïµÃµçïπ—ï»Å©’Õ—•ô‰µâï—›ïï∏à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒ¿Åç±ÖÕÕ9ÖµîÙâ—ï·–µ·ÃÅ—ï·–µÕ±Ö—î¥‘¿¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌô•±—ï…ïêπ±ïπù—°ÙÅ¡…Ωë’—ΩÃÉ
-‹Å√Öù•πÑÅÌÕÖôïAÖùïÙÅëîÅÌ—Ω—Ö±AÖùïÕÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌçΩ±MΩ…–ÄòòÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâµ∞¥»Å—ï·–µçÂÖ∏Å—ï·–µlƒ¡¡·tà˘Ω…ëïπÖëºÅ¡Ω»ÅçΩ±’πÑΩÕ¡Ö∏˘Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌÕï±ïç—ïë%ëÃπÕ•ÈîÄ¯Ä¿ÄòòÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâµ∞¥»Å—ï·–µçÂÖ∏ÅôΩπ–µÕïµ•âΩ±êà˘ÌÕï±ïç—ïë%ëÃπÕ•ÈïÙÅÕï±ïç•ΩπÖëΩÌÕï±ïç—ïë%ëÃπÕ•ÈîÄ¯ÄƒÄ¸ÄùÃúÄËÄúùÙΩÕ¡Ö∏˘Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄΩ¿¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒÕï±ïç–ÅŸÖ±’îıÌÕΩ…—	ÂÙÅΩπ°ÖπùîıÌîÄÙ¯ÅÏÅÕï—MΩ…—	‰°îπ—Ö…ùï–πŸÖ±’î§ÏÅÕï—Ω±MΩ…–°π’±∞§ÏÅÕï—AÖùî†ƒ§ÏÅıÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâ—ï·–µ·ÃÅâúµÕ’…ôÖçî¥»ÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥ÃÅ—ï·–µÕ±Ö—î¥Ã¿¿Å…Ω’πëïêµ±úÅ¡‡¥»Å¡‰¥ƒÅôΩç’ÃÈΩ’—±•πîµπΩπîà¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâπï›ïÕ–à˘5Ö•ÃÅ…ïçïπ—ïÃΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâΩ±ëïÕ–à˘5Ö•ÃÅÖπ—•ùÖÃΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâÕ—Ωç≠}°•ù†à˘5Ö•Ω»ÅïÕ—Ω≈’îΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâÕ—Ωç≠}±Ω‹à˘5ïπΩ»ÅïÕ—Ω≈’îΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâÖëÕ}Öç—•Ÿîà˘ëÃÅÖ—•ŸΩÃÅ¡…•µï•…ºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâπΩ}çÖµ¡Ö•ù∏à˘Mï¥ÅçÖµ¡Öπ°ÑÅ¡…•µï•…ºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâΩ’—}Ωô}Õ—Ωç¨à˘Mï¥ÅïÕ—Ω≈’îÅ¡…•µï•…ºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ±ÖÕ—}’¡ëÖ—îà˚i±—•µÑÅÖ—’Ö±•ÈáüçºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâç°Öµ¡•ΩπÃà˚¬~>ÅÖµ¡ó’ïÃÄ°YïπëÖÃÄ¨ÅΩL§ΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ—Ω—Ö±}ÕÖ±ïÕ|Ã¡êà˘YïπëÖÃÄÃ¡êΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ—Ω—Ö±}Õ¡ïπë|Ã¡êà˘M¡ïπêÄÃ¡êΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ¡…•çï}ÖŸù}°•ù†à˚¬~J¿Å5Ö•Ω»Å¡…óùºÅ∑•ë•ºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ¡…•çï}ÖŸù}±Ω‹à˚¬~J¿Å5ïπΩ»Å¡…óùºÅ∑•ë•ºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒΩ¡—•Ω∏ÅŸÖ±’îÙâ¡…•çï}πΩ—}ç°ïç≠ïêà˘Mï¥Å¡…óùºÅçΩπÕ’±—ÖëºΩΩ¡—•Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄΩÕï±ïç–¯4(ÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(4(ÄÄÄÄÄÄÄÄÄÅÌÕï±ïç—ïë%ëÃπÕ•ÈîÄ¯Ä¿ÄòòÄ†4(ÄÄÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥»∏‘ÅâúµçÂÖ∏ºƒ¿ÅâΩ…ëï»µàÅâΩ…ëï»µçÂÖ∏º»¿Åô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥ÃÅô±ï‡µ›…Ö¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâ—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ—ï·–µçÂÖ∏à˘ÌÕï±ïç—ïë%ëÃπÕ•ÈïÙÅ¡…Ωë’—ΩÌÕï±ïç—ïë%ëÃπÕ•ÈîÄ¯ÄƒÄ¸ÄùÃúÄËÄúùÙÅÕï±ïç•ΩπÖëΩÌÕï±ïç—ïë%ëÃπÕ•ÈîÄ¯ÄƒÄ¸ÄùÃúÄËÄúùÙΩÕ¡Ö∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥»Åô±ï‡µ›…Ö¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅΩπ±•ç¨ıÌâ’±≠AÖ’ÕïÙÅë•ÕÖâ±ïêıÏÑÖâ’±≠ç—•Ωπ1ΩÖë•πùÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥ƒ∏‘Å¡‡¥ÃÅ¡‰¥ƒ∏‘Å—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ…Ω’πëïêµ±úÅâΩ…ëï»ÅâúµÖµâï»¥‘¿¿ºƒ‘ÅâΩ…ëï»µÖµâï»¥‘¿¿ºÃ¿Å—ï·–µÖµâï»¥–¿¿Å°ΩŸï»ÈâúµÖµâï»¥‘¿¿º»‘Åë•ÕÖâ±ïêÈΩ¡Öç•—‰¥‘¿Å—…ÖπÕ•—•Ω∏µçΩ±Ω…Ãà¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌâ’±≠ç—•Ωπ1ΩÖë•πúÄÙÙÙÄù¡Ö’ÕîúÄ¸ÄÒ1ΩÖëï»»Åç±ÖÕÕ9ÖµîÙâ‹¥ÃÅ†¥ÃÅÖπ•µÖ—îµÕ¡•∏àÄº¯ÄËÄÒAÖ’ÕîÅç±ÖÕÕ9ÖµîÙâ‹¥ÃÅ†¥ÃàÄº˘Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅAÖ’ÕÖ»ÅçÖµ¡Öπ°ÖÃ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅΩπ±•ç¨ıÌç±ïÖ…Mï±ïç—•ΩπÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»ÅùÖ¿¥ƒÅ¡‡¥»∏‘Å¡‰¥ƒ∏‘Å—ï·–µ·ÃÅ—ï·–µÕ±Ö—î¥–¿¿Å°ΩŸï»È—ï·–µ›°•—îÅ—…ÖπÕ•—•Ω∏µçΩ±Ω…Ãà¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ`Åç±ÖÕÕ9ÖµîÙâ‹¥ÃÅ†¥ÃàÄº˘1•µ¡Ö»ÅÕï±óüçº4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄÄÄÄÄ•Ù4(4(ÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâΩŸï…ô±Ω‹µ‡µÖ’—ºà¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÒ—Öâ±îÅç±ÖÕÕ9ÖµîÙâ‹µô’±∞Å—ï·–µÕ¥à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—°ïÖê¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—»Åç±ÖÕÕ9ÖµîÙââΩ…ëï»µàÅâΩ…ëï»µÕ’…ôÖçî¥»ÅâúµÕ’…ôÖçî¥»º–¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—†Åç±ÖÕÕ9ÖµîÙâ¡‡¥ÃÅ¡‰¥ÃÅ‹¥ƒ¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅΩπ±•ç¨ıÌ—Ωùù±ïMï±ïç—±±Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîıÌÅ¿¥¿∏‘Å…Ω’πëïêÅ—…ÖπÕ•—•Ω∏µçΩ±Ω…ÃÄëÌÕï±ïç—ïë%ëÃπÕ•ÈîÄÙÙÙÅ¡Öù•πÖ—ïêπ±ïπù—†ÄòòÅ¡Öù•πÖ—ïêπ±ïπù—†Ä¯Ä¿Ä¸Äù—ï·–µçÂÖ∏úÄËÄù—ï·–µÕ±Ö—î¥ÿ¿¿Å°ΩŸï»È—ï·–µÕ±Ö—î¥–¿¿ùıÅÙ¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌÕï±ïç—ïë%ëÃπÕ•ÈîÄÙÙÙÅ¡Öù•πÖ—ïêπ±ïπù—†ÄòòÅ¡Öù•πÖ—ïêπ±ïπù—†Ä¯Ä¿Ä¸ÄÒ°ïç≠M≈’Ö…îÅç±ÖÕÕ9ÖµîÙâ‹¥–Å†¥–àÄº¯ÄËÄÒM≈’Ö…îÅç±ÖÕÕ9ÖµîÙâ‹¥–Å†¥–àÄº˘Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩ—†¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—†Åç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥ÃÅ—ï·–µ±ïô–Å—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ—ï·–µÕ±Ö—î¥‘¿¿Å’¡¡ï…çÖÕîÅ—…Öç≠•πúµ›•ëï»Å›°•—ïÕ¡ÖçîµπΩ›…Ö¿à˘A…Ωë’—ºΩ—†¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒMΩ…—Q†Å±Öâï∞ÙâÕ—Ω≈’îàÅçΩ±-ï‰ÙâÕ—Ωç¨àÅçΩ±MΩ…–ıÌçΩ±MΩ…—ÙÅΩπMΩ…–ıÌ°Öπë±ïΩ±MΩ…—ÙÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒMΩ…—Q†Å±Öâï∞ÙâM—Ö—’ÃÅëÃàÅçΩ±-ï‰ÙâÖëÕ}Õ—Ö—’ÃàÅçΩ±MΩ…–ıÌçΩ±MΩ…—ÙÅΩπMΩ…–ıÌ°Öπë±ïΩ±MΩ…—ÙÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒMΩ…—Q†Å±Öâï∞ÙâYïπëÖÃÄÃ¡êàÅçΩ±-ï‰ÙâÕÖ±ïÃàÅçΩ±MΩ…–ıÌçΩ±MΩ…—ÙÅΩπMΩ…–ıÌ°Öπë±ïΩ±MΩ…—ÙÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒMΩ…—Q†Å±Öâï∞ÙâM¡ïπêÄÃ¡êàÅçΩ±-ï‰ÙâÕ¡ïπêàÅçΩ±MΩ…–ıÌçΩ±MΩ…—ÙÅΩπMΩ…–ıÌ°Öπë±ïΩ±MΩ…—ÙÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒMΩ…—Q†Å±Öâï∞ÙâΩLàÅçΩ±-ï‰ÙâÖçΩÃàÅçΩ±MΩ…–ıÌçΩ±MΩ…—ÙÅΩπMΩ…–ıÌ°Öπë±ïΩ±MΩ…—ÙÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—†Åç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥ÃÅ—ï·–µ±ïô–Å—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ—ï·–µÕ±Ö—î¥‘¿¿Å’¡¡ï…çÖÕîÅ—…Öç≠•πúµ›•ëï»Å›°•—ïÕ¡ÖçîµπΩ›…Ö¿à˘Uπ•—ÃÄÃ¡êΩ—†¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—†Åç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥ÃÅ—ï·–µ±ïô–Å—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ—ï·–µÕ±Ö—î¥‘¿¿Å’¡¡ï…çÖÕîÅ—…Öç≠•πúµ›•ëï»Å›°•—ïÕ¡ÖçîµπΩ›…Ö¿à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒÕ¡Ö∏Å—•—±îÙâ7•ë•Ñ∞Å∑µπ•µºÅîÅ∑Ö·•µºÅëÖÃÅΩôï…—ÖÃÅ√Èâ±•çÖÃÅïπçΩπ—…ÖëÖÃÅ¡Ö…ÑÅïÕ—îÅµïÕµºÅM%8ÅπºÅµÖ…≠ï—¡±ÖçîÅÖ—’Ö∞∏à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅA…óùºÅµÖÈΩ∏Éä‰4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩÕ¡Ö∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩ—†¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—†Åç±ÖÕÕ9ÖµîÙâ¡‡¥–Å¡‰¥ÃÅ—ï·–µ±ïô–Å—ï·–µ·ÃÅôΩπ–µÕïµ•âΩ±êÅ—ï·–µÕ±Ö—î¥‘¿¿Å’¡¡ï…çÖÕîÅ—…Öç≠•πúµ›•ëï»Å›°•—ïÕ¡ÖçîµπΩ›…Ö¿à˘ü’ïÃΩ—†¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩ—»¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩ—°ïÖê¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒ—âΩë‰¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÌ¡Öù•πÖ—ïêπµÖ¿°¡…Ωë’ç–ÄÙ¯Ä†4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒA…Ωë’ç—IΩ‹4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅ≠ï‰ıÌ¡…Ωë’ç–π•ëÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç–ıÌ¡…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÖççΩ’π–ıÌÖççΩ’π—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπQΩùù±ïÖµ¡Ö•ù∏ıÌ—Ωùù±ïÖµ¡Ö•ùπÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπ…ç°•ŸïÖµ¡Ö•ù∏ıÌÖ…ç°•ŸïÖµ¡Ö•ùπÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπ-•ç≠ΩôòıÌΩ¡ïπ-•ç≠ΩôôÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπççï±ï…Ö—Ω»ıÌÕï—ççï±ï…Ö—Ω…A…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπÖπçï±-•ç≠ΩôòıÌçÖπçï±-•ç≠ΩôôÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÖç—•Ωπ1ΩÖë•πúıÌÖç—•Ωπ1ΩÖë•πùÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÖµÖÈΩπA…Ω¡ÖùÖ—•πúıÌÖµÖÈΩπA…Ω¡ÖùÖ—•πùm¡…Ωë’ç–π•ëuÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÖµÖÈΩπIïÕ’±–ıÌÖµÖÈΩπIïÕ’±—m¡…Ωë’ç–π•ëuÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÕï±ïç—ïêıÌÕï±ïç—ïë%ëÃπ°ÖÃ°¡…Ωë’ç–π•ê•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπQΩùù±ïMï±ïç–ıÌ—Ωùù±ïMï±ïç—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅ•ÕΩç’ÕïêıÌôΩç’ÕïëA…Ωë’ç—%êÄÙÙÙÅ¡…Ωë’ç–π•ëÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç—5ïÕÕÖùîıÌ¡…Ωë’ç—5ïÕÕÖùïÕm¡…Ωë’ç–π•ëuÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÕ—’ç≠E’ï’ïΩ’π–ıÌÕ—’ç≠E’ï’ï	ÂÕ•πmM—…•πú°¡…Ωë’ç–πÖÕ•∏ÅÒÄúú§π—ΩU¡¡ï…ÖÕî†•tÅÒÄ¡Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπ9ÖµïU¡ëÖ—îıÏ°•ê∞ÅπÖµî§ÄÙ¯ÅÕï—A…Ωë’ç—Ã°ç’»ÄÙ¯Åç’»πµÖ¿°•—ï¥ÄÙ¯Å•—ï¥π•êÄÙÙÙÅ•êÄ¸ÅÏÄ∏∏π•—ï¥∞Åë•Õ¡±ÖÂ}πÖµîËÅπÖµîÅÙÄËÅ•—ï¥§•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπA…•çïU¡ëÖ—ïêıÏ°•ê∞Å¡Ö—ç†§ÄÙ¯ÅÕï—A…Ωë’ç—Ã°ç’»ÄÙ¯Åç’»πµÖ¿°•—ï¥ÄÙ¯Å•—ï¥π•êÄÙÙÙÅ•êÄ¸ÅÏÄ∏∏π•—ï¥∞Ä∏∏π¡Ö—ç†ÅÙÄËÅ•—ï¥§•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅë•Ÿï…ùïπçï	ÖëùîıÌ¡…Ωë’ç–π}ë•Ÿï…ùïπ—}çΩ’π–Ä¯Ä¿Ä¸Ä†4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒÖµ¡Ö•ùπ•Ÿï…ùïπçï	Öëùî4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç–ıÌ¡…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅÖççΩ’π—%êıÌÖççΩ’π–¸π•ëÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅΩπ•·ïêıÏ†§ÄÙ¯ÅÕï—A…Ωë’ç—Ã°ç’»ÄÙ¯Åç’»πµÖ¿°¿ÄÙ¯Å¿π•êÄÙÙÙÅ¡…Ωë’ç–π•êÄ¸ÅÏÄ∏∏π¿∞Å}ë•Ÿï…ùïπ—}çΩ’π–ËÄ¿ÅÙÄËÅ¿§•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ§ÄËÅπ’±±Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ§•Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄΩ—âΩë‰¯4(ÄÄÄÄÄÄÄÄÄÄÄÄΩ—Öâ±î¯4(ÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(4(ÄÄÄÄÄÄÄÄÄÅÌ—Ω—Ö±AÖùïÃÄ¯ÄƒÄòòÄ†4(ÄÄÄÄÄÄÄÄÄÄÄÄÒë•ÿÅç±ÖÕÕ9ÖµîÙâô±ï‡Å•—ïµÃµçïπ—ï»Å©’Õ—•ô‰µçïπ—ï»ÅùÖ¿¥»Å¡‡¥–Å¡‰¥ÃÅâΩ…ëï»µ–ÅâΩ…ëï»µÕ’…ôÖçî¥»à¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅΩπ±•ç¨ıÏ†§ÄÙ¯ÅÕï—AÖùî°åÄÙ¯Å5Ö—†πµÖ‡†ƒ∞ÅåÄ¥Äƒ§•ÙÅë•ÕÖâ±ïêıÌÕÖôïAÖùîÄÙÙÙÄ≈Ù4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâ¡‡¥ÃÅ¡‰¥ƒ∏‘Å—ï·–µ·ÃÅ…Ω’πëïêµ±úÅâúµÕ’…ôÖçî¥»ÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥ÃÅ—ï·–µÕ±Ö—î¥–¿¿Å°ΩŸï»È—ï·–µ›°•—îÅë•ÕÖâ±ïêÈΩ¡Öç•—‰¥–¿Å—…ÖπÕ•—•Ω∏µçΩ±Ω…Ãà˚ä@Åπ—ï…•Ω»Ωâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒÕ¡Ö∏Åç±ÖÕÕ9ÖµîÙâ—ï·–µ·ÃÅ—ï·–µÕ±Ö—î¥‘¿¿à˘ÌÕÖôïAÖùïÙÄºÅÌ—Ω—Ö±AÖùïÕÙΩÕ¡Ö∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÒâ’——Ω∏Å—Â¡îÙââ’——Ω∏àÅΩπ±•ç¨ıÏ†§ÄÙ¯ÅÕï—AÖùî°åÄÙ¯Å5Ö—†πµ•∏°—Ω—Ö±AÖùïÃ∞ÅåÄ¨Äƒ§•ÙÅë•ÕÖâ±ïêıÌÕÖôïAÖùîÄÙÙÙÅ—Ω—Ö±AÖùïÕÙ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÅç±ÖÕÕ9ÖµîÙâ¡‡¥ÃÅ¡‰¥ƒ∏‘Å—ï·–µ·ÃÅ…Ω’πëïêµ±úÅâúµÕ’…ôÖçî¥»ÅâΩ…ëï»ÅâΩ…ëï»µÕ’…ôÖçî¥ÃÅ—ï·–µÕ±Ö—î¥–¿¿Å°ΩŸï»È—ï·–µ›°•—îÅë•ÕÖâ±ïêÈΩ¡Öç•—‰¥–¿Å—…ÖπÕ•—•Ω∏µçΩ±Ω…Ãà˘AÀÕ·•µÑÉäHΩâ’——Ω∏¯4(ÄÄÄÄÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄÄÄÄÄ•Ù4(ÄÄÄÄÄÄÄÄΩë•ÿ¯4(ÄÄÄÄÄÄ•Ù4(4(ÄÄÄÄÄÅÌ≠•ç≠ΩôôA…Ωë’ç–ÄòòÅ≠•ç≠ΩôôM—’ç≠%—ïµÃÄòòÄ†4(ÄÄÄÄÄÄÄÄÒ-•ç≠Ωôô]•—°E’ï’ï±ïÖπ5ΩëÖ∞4(ÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç–ıÌ≠•ç≠ΩôôA…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÅÖççΩ’π–ıÌÖççΩ’π—Ù4(ÄÄÄÄÄÄÄÄÄÅÕ—’ç≠%—ïµÃıÌ≠•ç≠ΩôôM—’ç≠%—ïµÕÙ4(ÄÄÄÄÄÄÄÄÄÅΩπ±ΩÕîıÏ†§ÄÙ¯ÅÏÅÕï—-•ç≠ΩôôA…Ωë’ç–°π’±∞§ÏÅÕï—-•ç≠ΩôôM—’ç≠%—ïµÃ°π’±∞§ÏÅıÙ4(ÄÄÄÄÄÄÄÄÄÅΩπΩπîıÏ†§ÄÙ¯ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅçΩπÕ–Å¡•êÄÙÅ≠•ç≠ΩôôA…Ωë’ç–¸π•êÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅÕï—-•ç≠ΩôôA…Ωë’ç–°π’±∞§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅÕï—-•ç≠ΩôôM—’ç≠%—ïµÃ°π’±∞§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅ•òÄ°¡•ê§ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÕï—A…Ωë’ç—5Õú°¡•ê∞ÅÏÅ—Â¡îËÄùÕ’ççïÕÃú∞Å—ï·–ËÄù•±ÑÅ±•µ¡Ñ∏Å9ΩŸºÅ≠•ç¨µΩôòÅÖùïπëÖëºÅ¡Ö…ÑÅÑÅ¡ÀÕ·•µÑÅ©Öπï±Ñ∏úÅÙ§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅ…ï±ΩÖëA…Ωë’ç—Ã†§π—°ï∏††§ÄÙ¯Å…ïÕ—Ω…ïA…Ωë’ç—Ωπ—ï·–°¡•ê§§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅ•òÄ°ÖççΩ’π–¸π•ê§Å±ΩÖëM—’ç≠E’ï’î°ÖççΩ’π–π•ê§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅÙ4(ÄÄÄÄÄÄÄÄÄÅıÙ4(ÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄ•Ù4(4(ÄÄÄÄÄÅÌ≠•ç≠ΩôôA…Ωë’ç–ÄòòÄÖ≠•ç≠ΩôôM—’ç≠%—ïµÃÄòòÄ†4(ÄÄÄÄÄÄÄÄÒ-•ç≠Ωôô5ΩëÖ∞4(ÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç–ıÌ≠•ç≠ΩôôA…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÅÖççΩ’π–ıÌÖççΩ’π—Ù4(ÄÄÄÄÄÄÄÄÄÅΩπ±ΩÕîıÏ†§ÄÙ¯ÅÕï—-•ç≠ΩôôA…Ωë’ç–°π’±∞•Ù4(ÄÄÄÄÄÄÄÄÄÅΩπΩπîıÏ†§ÄÙ¯ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅçΩπÕ–Å¡•êÄÙÅ≠•ç≠ΩôôA…Ωë’ç–¸π•êÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅÕï—-•ç≠ΩôôA…Ωë’ç–°π’±∞§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅ•òÄ°¡•ê§ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÕï—A…Ωë’ç—5Õú°¡•ê∞ÅÏÅ—Â¡îËÄùÕ’ççïÕÃú∞Å—ï·–ËÄùÖµ¡Öπ°ÑÅïπŸ•ÖëÑÅ¡Ö…ÑÅô•±ÑÅëÑÅµÖÈΩ∏∏úÅÙ§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅ…ï±ΩÖëA…Ωë’ç—Ã†§π—°ï∏††§ÄÙ¯Å…ïÕ—Ω…ïA…Ωë’ç—Ωπ—ï·–°¡•ê§§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅÙ4(ÄÄÄÄÄÄÄÄÄÅıÙ4(ÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄ•Ù4(4(ÄÄÄÄÄÅÌÖççï±ï…Ö—Ω…A…Ωë’ç–ÄòòÄ†4(ÄÄÄÄÄÄÄÄÒççï±ï…Ö—Ω…5ΩëÖ∞4(ÄÄÄÄÄÄÄÄÄÅ¡…Ωë’ç–ıÌÖççï±ï…Ö—Ω…A…Ωë’ç—Ù4(ÄÄÄÄÄÄÄÄÄÅÖççΩ’π–ıÌÖççΩ’π—Ù4(ÄÄÄÄÄÄÄÄÄÅΩπ±ΩÕîıÏ†§ÄÙ¯ÅÕï—ççï±ï…Ö—Ω…A…Ωë’ç–°π’±∞•Ù4(ÄÄÄÄÄÄÄÄÄÅΩπΩπîıÏ†§ÄÙ¯ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅçΩπÕ–Å¡•êÄÙÅÖççï±ï…Ö—Ω…A…Ωë’ç–¸π•êÏ4(ÄÄÄÄÄÄÄÄÄÄÄÅÕï—ççï±ï…Ö—Ω…A…Ωë’ç–°π’±∞§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅ•òÄ°¡•ê§ÅÏ4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅÕï—A…Ωë’ç—5Õú°¡•ê∞ÅÏÅ—Â¡îËÄùÕ’ççïÕÃú∞Å—ï·–ËÄùÖµ¡Öπ°ÑÅç…•ÖëÑÅîÅŸ•πç’±ÖëÑÅÑÅïÕ—îÅ¡…Ωë’—º∏úÅÙ§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÄÄÅ…ï±ΩÖëA…Ωë’ç—Ã†§π—°ï∏††§ÄÙ¯Å…ïÕ—Ω…ïA…Ωë’ç—Ωπ—ï·–°¡•ê§§Ï4(ÄÄÄÄÄÄÄÄÄÄÄÅÙ4(ÄÄÄÄÄÄÄÄÄÅıÙ4(ÄÄÄÄÄÄÄÄº¯4(ÄÄÄÄÄÄ•Ù4(ÄÄÄÄΩë•ÿ¯4(ÄÄ§Ï4)Ù(
+      if (!existing) { byAsin.set(key, p); continue; }
+      const newStock = Number(p.fba_inventory || 0);
+      const existStock = Number(existing.fba_inventory || 0);
+      const newSync = new Date(p.last_sync_at || p.synced_at || 0).getTime();
+      const existSync = new Date(existing.last_sync_at || existing.synced_at || 0).getTime();
+      if (newStock > existStock || (newStock === existStock && newSync > existSync)) {
+        byAsin.set(key, p);
+      }
+    }
+    return Array.from(byAsin.values());
+  }, [products, maxFbaByAsin]);
+
+  const counters = useMemo(() => {
+    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active' && stockFreshness(p) === 'fresh').length;
+    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock' && stockFreshness(p) === 'fresh').length;
+    const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
+    const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
+    const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
+    const withoutCampaign = visibleProducts.filter(p => !productHasCampaign(p)).length;
+    const pausedByStock = visibleProducts.filter(p => p.pause_reason === 'out_of_stock_confirmed' || String(p.pause_reason || '').includes('estoque zerado')).length;
+    const restocked = products.filter(p => p.status === 'active' && Number(p.fba_inventory || 0) > 0 && (p.previous_inventory_status === 'out_of_stock' || (p.campaign_status === 'paused' && p.pause_reason?.includes('stock')))).length;
+    return { activeOffers, lowStock, staleStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked };
+  }, [products, visibleProducts]);
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const base = visibleProducts.filter(product => {
+      const matchesSearch = !term ||
+        String(product?.asin || '').toLowerCase().includes(term) ||
+        String(product?.sku || '').toLowerCase().includes(term) ||
+        String(product?.product_name || '').toLowerCase().includes(term) ||
+        String(product?.display_name || '').toLowerCase().includes(term);
+      const hasCampaign = productHasCampaign(product);
+      const active = isCampaignActiveFn(product);
+      const matchesFilter =
+        filter === 'all' ||
+        (filter === 'offer_active' && offerStatus(product) === 'active') ||
+        (filter === 'low_stock' && offerStatus(product) === 'low_stock') ||
+        (filter === 'stale_stock' && stockFreshness(product) === 'stale') ||
+        (filter === 'ads_active' && hasCampaign && active) ||
+        (filter === 'ads_paused' && hasCampaign && !active) ||
+        (filter === 'no_campaign' && !hasCampaign) ||
+        (filter === 'paused_by_stock' && (product.pause_reason === 'out_of_stock_confirmed')) ||
+        (filter === 'restocked' && Number(product.fba_inventory || 0) > 0 && (product.previous_inventory_status === 'out_of_stock' || (product.campaign_status === 'paused' && product.pause_reason?.includes('stock'))));
+      return matchesSearch && matchesFilter;
+    });
+    return applySort(base, sortBy, colSort);
+  }, [products, search, filter, sortBy, colSort]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+
+  // ‚îÄ‚îÄ A√ß√µes ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ‚îÄ
+  const toggleCampaign = async (product) => {
+    const campaignId = campaignIdOf(product);
+    if (!account) return;
+    const active = isCampaignActiveFn(product);
+    setActionLoading(product.id);
+    const optimisticStatus = active ? 'paused' : 'active';
+    setProducts(cur => cur.map(p =>
+      p.id === product.id ? { ...p, campaign_status: optimisticStatus, has_campaign: true } : p
+    ));
+    const { ok, classified } = await amazonPropagate(
+      product.id,
+      active ? 'pause_campaign_user_action' : 'enable_campaign_user_action',
+      async () => {
+        if (active) {
+          const payload = { amazon_account_id: product.amazon_account_id || account.id };
+          payload.lock_product_paused = true;
+          payload.pause_source = 'user_manual';
+          if (campaignId) payload.campaign_id = campaignId;
+          if (product.asin) payload.asin = product.asin;
+          if (product.sku) payload.sku = product.sku;
+          const response = await base44.functions.invoke('pauseCampaign', payload);
+          if (!response?.data?.ok) throw Object.assign(new Error(response?.data?.error || 'Falha ao pausar campanha'), { status: response?.data?.status });
+        } else {
+          const agentAction = await base44.entities.AgentAction.create({
+            amazon_account_id: product.amazon_account_id || account.id, action: 'enable_campaign', asin: product.asin,
+            campaign_id: campaignId, reason: 'Ativa√ß√£o manual', evidence: `Produto: ${product.asin}`,
+            risk_level: 'medium', requires_approval: false,
+            clear_product_pause_lock: true,
+          });
+          await base44.functions.invoke('executeAgentAction', { action_id: agentAction.id, approve: true });
+        }
+      },
+      {
+        amazonAccountId: product.amazon_account_id || account.id,
+        actionType: active ? 'pause_campaign' : 'enable_campaign',
+        enqueuePayload: { amazon_account_id: product.amazon_account_id || account.id, campaign_id: campaignId, asin: product.asin },
+      }
+    );
+    if (!ok) {
+      setProducts(cur => cur.map(p =>
+        p.id === product.id ? { ...p, campaign_status: active ? 'active' : 'paused' } : p
+      ));
+      if (classified?.code === 'auth') {
+        setActionMsg({ type: 'error', text: 'Token expirado ‚Äî reconecte em Configura√ß√µes' });
+        setTimeout(() => setActionMsg(null), 8000);
+      }
+    } else {
+      await reloadProducts();
+    }
+    restoreProductContext(product.id);
+    setActionLoading(null);
+  };
+
+  const cancelKickoff = async (product) => {
+    if (!account || !product?.asin) return;
+    try {
+      const queue = await base44.entities.ProductKickoffQueue.filter({
+        amazon_account_id: product.amazon_account_id || account.id, asin: product.asin, status: 'scheduled',
+      });
+      for (const item of queue) {
+        await base44.entities.ProductKickoffQueue.update(item.id, { status: 'cancelled' });
+      }
+      base44.functions.invoke('autoStockCampaignGuard', {
+        amazon_account_id: product.amazon_account_id || account.id,
+        asin: product.asin,
+        trigger: 'kickoff_cancelled_user',
+      }).catch(() => {});
+      setProductMsg(product.id, { type: 'success', text: 'Solicita√ß√£o cancelada.' });
+      await reloadProducts();
+    } catch (e) {
+      setProductMsg(product.id, { type: 'error', text: e.message || 'Erro ao cancelar.' });
+    }
+  };
+
+  const archiveCampaign = async (product) => {
+    const campaignId = campaignIdOf(product);
+    if (!campaignId || !account) return;
+    if (!window.confirm(`Tem certeza que deseja arquivar a campanha de ${product.asin}?`)) return;
+    setActionLoading(product.id);
+    try {
+      const response = await base44.functions.invoke('archiveCampaign', {
+        amazon_account_id: product.amazon_account_id || account.id, campaign_id: campaignId,
+        archive_reason: `Arquivamento manual via interface - ${new Date().toLocaleDateString('pt-BR')}`,
+      });
+      if (!response?.data?.ok) throw new Error(response?.data?.error || 'Falha ao arquivar campanha.');
+      setProductMsg(product.id, { type: 'success', text: 'Campanha arquivada.' });
+      await reloadProducts();
+      restoreProductContext(product.id);
+    } catch (error) {
+      setProductMsg(product.id, { type: 'error', text: error?.message || 'Erro ao arquivar campanha.' });
+      restoreProductContext(product.id);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const toggleSelect = (id) => setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  const toggleSelectAll = () => selectedIds.size === paginated.length ? setSelectedIds(new Set()) : setSelectedIds(new Set(paginated.map(p => p.id)));
+  const clearSelection = () => setSelectedIds(new Set());
+  const selectedProducts = paginated.filter(p => selectedIds.has(p.id));
+
+  const bulkPause = async () => {
+    if (!account || !selectedProducts.length) return;
+    const targets = selectedProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p));
+    if (!targets.length) { setActionMsg({ type: 'error', text: 'Nenhum produto selecionado com campanha ativa.' }); setTimeout(() => setActionMsg(null), 5000); return; }
+    setBulkActionLoading('pause');
+    setActionMsg({ type: 'info', text: `Pausando ${targets.length} campanhas...` });
+    let success = 0, failed = 0;
+    for (const product of targets) {
+      try {
+        const pausePayload = { amazon_account_id: product.amazon_account_id || account.id };
+        pausePayload.lock_product_paused = true;
+        pausePayload.pause_source = 'user_manual';
+        const cid = campaignIdOf(product);
+        if (cid) pausePayload.campaign_id = cid;
+        if (product.asin) pausePayload.asin = product.asin;
+        if (product.sku) pausePayload.sku = product.sku;
+        const r = await base44.functions.invoke('pauseCampaign', pausePayload);
+        r?.data?.ok ? success++ : failed++;
+      } catch { failed++; }
+    }
+    setBulkActionLoading(null);
+    setActionMsg({ type: success > 0 ? 'success' : 'error', text: `${success} campanhas pausadas${failed > 0 ? ` ¬∑ ${failed} falharam` : ''}` });
+    clearSelection();
+    await reloadProducts();
+    setTimeout(() => setActionMsg(null), 10000);
+  };
+
+  const { activeOffers, lowStock, staleStock, activeAds, pausedAds, withoutCampaign, pausedByStock, restocked } = counters;
+  const eligibleForKickoff = visibleProducts.filter(p => !productHasCampaign(p) && !isConfirmedOutOfStock(p)).length;
+
+  return (
+    <div className="p-6 space-y-5 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
+            <Package className="w-5 h-5 text-cyan" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
+            <p className="text-xs text-slate-400">
+              {visibleProducts.length} ASINs ativos ¬∑ {activeAds} ads ativos ¬∑ {withoutCampaign} sem campanha
+              {accounts.length > 1 && <span className="text-cyan ml-1">¬∑ {accounts.length} contas</span>}
+            </p>
+          </div>
+        </div>
+        {account && (
+          <button
+            type="button"
+            disabled={priceQueryLoading}
+            onClick={async () => {
+              if (!account || priceQueryLoading) return;
+              setPriceQueryLoading(true);
+              setActionMsg({ type: 'info', text: 'Consultando pre√ßo do pr√≥ximo produto ativo‚Ä¶' });
+              try {
+                const res = await base44.functions.invoke('refreshProductMarketPrice', {
+                  amazon_account_id: account.id,
+                  next_active: true,
+                  force: false,
+                });
+                const data = res?.data || res;
+                if (data?.cache_hit) {
+                  setActionMsg({ type: 'info', text: `Cache v√°lido para ${data.asin}. ${data.message}` });
+                } else if (data?.ok && data?.status === 'success') {
+                  setActionMsg({ type: 'success', text: `‚úì ${data.asin} ¬∑ ${data.provider} ¬∑ R$ ${data.average} ¬∑ ${data.offer_count} ofertas` });
+                  await reloadProducts();
+                } else {
+                  setActionMsg({ type: 'error', text: data?.message || data?.error || 'Sem resultado' });
+                }
+              } catch (e) {
+                setActionMsg({ type: 'error', text: e?.message || 'Erro ao consultar pre√ßo' });
+              } finally {
+                setPriceQueryLoading(false);
+                setTimeout(() => setActionMsg(null), 12000);
+              }
+            }}
+            className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            {priceQueryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
+            Consultar pr√≥ximo ativo
+          </button>
+        )}
+      </div>
+
+      {actionMsg && (
+        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-400' : 'bg-cyan/10 border-cyan/20 text-cyan'}`}>
+          {actionMsg.text}
+        </div>
+      )}
+
+      {!loading && account && <HighAdherenceAlert accountId={account.id} />}
+
+      {!loading && restockedProducts.length > 0 && (
+        <RestockedAlert products={restockedProducts} account={account} onDone={load} />
+      )}
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <KpiCard label="Em Estoque" value={loading ? '‚Äî' : activeOffers} detail={`${lowStock} baixo estoque`} tone="success" />
+        <KpiCard label="Desatualizado" value={loading ? '‚Äî' : staleStock} detail="sincroniza√ß√£o necess√°ria" tone={staleStock > 0 ? 'warning' : 'default'} />
+        <KpiCard label="Ads Ativos" value={loading ? '‚Äî' : activeAds} detail={`${pausedAds} pausados`} tone="cyan" />
+        <KpiCard label="Sem Campanha" value={loading ? '‚Äî' : withoutCampaign} detail={`${eligibleForKickoff} eleg√≠veis p/ Kick-off`} tone={withoutCampaign > 0 ? 'warning' : 'default'} />
+        <KpiCard label="Pausados p/ Estoque" value={loading ? '‚Äî' : pausedByStock} detail="pausa autom√°tica aplicada" tone={pausedByStock > 0 ? 'violet' : 'default'} />
+      </div>
+
+      {/* Busca */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+          <input
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { setSearch(searchInput.trim()); setPage(1); } }}
+            placeholder="Buscar por ASIN, SKU ou nome..."
+            className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => { setSearch(searchInput.trim()); setPage(1); }}
+          className="px-4 py-2.5 bg-cyan/15 border border-cyan/30 text-cyan text-sm font-semibold rounded-lg hover:bg-cyan/25 transition-colors whitespace-nowrap"
+        >
+          Buscar
+        </button>
+        {search && (
+          <button
+            type="button"
+            onClick={() => { setSearchInput(''); setSearch(''); setPage(1); }}
+            className="flex items-center gap-1 px-3 py-2.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Filtros */}
+      <div className="flex flex-col gap-2">
+        {search && (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="px-2.5 py-1 rounded-full bg-cyan/10 border border-cyan/20 text-cyan font-semibold">
+              {filtered.length} produto{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
+            </span>
+            <span>para <span className="text-slate-300 font-medium">"{search}"</span></span>
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+          {[
+            { key: 'all', label: `Todos (${visibleProducts.length})` },
+            { key: 'offer_active', label: `Estoque OK (${activeOffers})` },
+            { key: 'low_stock', label: `Baixo Estoque (${lowStock})` },
+            { key: 'stale_stock', label: `Desatualizado (${staleStock})` },
+            { key: 'ads_active', label: `Ads Ativos (${activeAds})` },
+            { key: 'ads_paused', label: `Ads Pausados (${pausedAds})` },
+            { key: 'no_campaign', label: `Sem Campanha (${withoutCampaign})` },
+            ...(restocked > 0 ? [{ key: 'restocked', label: `üîÑ Reabastecidos (${restocked})` }] : []),
+          ].map(item => (
+            <button type="button" key={item.key} onClick={() => { setFilter(item.key); setPage(1); }}
+              className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === item.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
+      ) : !account ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
+          <Package className="w-12 h-12 text-slate-600" />
+          <p className="text-sm text-slate-400">Nenhuma conta Amazon configurada.</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
+          <Package className="w-12 h-12 text-slate-600" />
+          <p className="text-sm text-slate-400">{products.length === 0 ? 'Sem produtos. Execute um Sync no Dashboard.' : 'Nenhum produto encontrado com estes filtros.'}</p>
+        </div>
+      ) : (
+        <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-surface-2 flex items-center justify-between">
+            <p className="text-xs text-slate-500">
+              {filtered.length} produtos ¬∑ p√°gina {safePage} de {totalPages}
+              {colSort && <span className="ml-2 text-cyan text-[10px]">ordenado por coluna</span>}
+              {selectedIds.size > 0 && <span className="ml-2 text-cyan font-semibold">{selectedIds.size} selecionado{selectedIds.size > 1 ? 's' : ''}</span>}
+            </p>
+            <select value={sortBy} onChange={e => { setSortBy(e.target.value); setColSort(null); setPage(1); }}
+              className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-1 focus:outline-none">
+              <option value="newest">Mais recentes</option>
+              <option value="oldest">Mais antigas</option>
+              <option value="stock_high">Maior estoque</option>
+              <option value="stock_low">Menor estoque</option>
+              <option value="ads_active">Ads ativos primeiro</option>
+              <option value="no_campaign">Sem campanha primeiro</option>
+              <option value="out_of_stock">Sem estoque primeiro</option>
+              <option value="last_update">√öltima atualiza√ß√£o</option>
+              <option value="champions">üèÜ Campe√µes (Vendas + ACoS)</option>
+              <option value="total_sales_30d">Vendas 30d</option>
+              <option value="total_spend_30d">Spend 30d</option>
+              <option value="price_avg_high">üí∞ Maior pre√ßo m√©dio</option>
+              <option value="price_avg_low">üí∞ Menor pre√ßo m√©dio</option>
+              <option value="price_not_checked">Sem pre√ßo consultado</option>
+            </select>
+          </div>
+
+          {selectedIds.size > 0 && (
+            <div className="px-4 py-2.5 bg-cyan/10 border-b border-cyan/20 flex items-center gap-3 flex-wrap">
+              <span className="text-xs font-semibold text-cyan">{selectedIds.size} produto{selectedIds.size > 1 ? 's' : ''} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button type="button" onClick={bulkPause} disabled={!!bulkActionLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25 disabled:opacity-50 transition-colors">
+                  {bulkActionLoading === 'pause' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
+                  Pausar campanhas
+                </button>
+                <button type="button" onClick={clearSelection}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+                  <X className="w-3 h-3" />Limpar sele√ß√£o
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-surface-2 bg-surface-2/40">
+                  <th className="px-3 py-3 w-10">
+                    <button type="button" onClick={toggleSelectAll}
+                      className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
+                      {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Produto</th>
+                  <SortTh label="Estoque" colKey="stock" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Status Ads" colKey="ads_status" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Vendas 30d" colKey="sales" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="Spend 30d" colKey="spend" colSort={colSort} onSort={handleColSort} />
+                  <SortTh label="ACoS" colKey="acos" colSort={colSort} onSort={handleColSort} />
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Units 30d</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                    <span title="M√©dia, m√≠nimo e m√°ximo das ofertas p√∫blicas encontradas para este mesmo ASIN no marketplace atual.">
+                      Pre√ßo Amazon ‚Ñπ
+                    </span>
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">A√ß√µes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginated.map(product => (
+                  <ProductRow
+                    key={product.id}
+                    product={product}
+                    account={account}
+                    onToggleCampaign={toggleCampaign}
+                    onArchiveCampaign={archiveCampaign}
+                    onKickoff={openKickoff}
+                    onAccelerator={setAcceleratorProduct}
+                    onCancelKickoff={cancelKickoff}
+                    actionLoading={actionLoading}
+                    amazonPropagating={amazonPropagating[product.id]}
+                    amazonResult={amazonResult[product.id]}
+                    selected={selectedIds.has(product.id)}
+                    onToggleSelect={toggleSelect}
+                    isFocused={focusedProductId === product.id}
+                    productMessage={productMessages[product.id]}
+                    stuckQueueCount={stuckQueueByAsin[String(product.asin || '').toUpperCase()] || 0}
+                    onNameUpdate={(id, name) => setProducts(cur => cur.map(item => item.id === id ? { ...item, display_name: name } : item))}
+                    onPriceUpdated={(id, patch) => setProducts(cur => cur.map(item => item.id === id ? { ...item, ...patch } : item))}
+                    divergenceBadge={product._divergent_count > 0 ? (
+                      <CampaignDivergenceBadge
+                        product={product}
+                        accountId={account?.id}
+                        onFixed={() => setProducts(cur => cur.map(p => p.id === product.id ? { ...p, _divergent_count: 0 } : p))}
+                      />
+                    ) : null}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 px-4 py-3 border-t border-surface-2">
+              <button type="button" onClick={() => setPage(c => Math.max(1, c - 1))} disabled={safePage === 1}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">‚Üê Anterior</button>
+              <span className="text-xs text-slate-500">{safePage} / {totalPages}</span>
+              <button type="button" onClick={() => setPage(c => Math.min(totalPages, c + 1))} disabled={safePage === totalPages}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">Pr√≥xima ‚Üí</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {kickoffProduct && kickoffStuckItems && (
+        <KickoffWithQueueCleanModal
+          product={kickoffProduct}
+          account={account}
+          stuckItems={kickoffStuckItems}
+          onClose={() => { setKickoffProduct(null); setKickoffStuckItems(null); }}
+          onDone={() => {
+            const pid = kickoffProduct?.id;
+            setKickoffProduct(null);
+            setKickoffStuckItems(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Fila limpa. Novo kick-off agendado para a pr√≥xima janela.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+              if (account?.id) loadStuckQueue(account.id);
+            }
+          }}
+        />
+      )}
+
+      {kickoffProduct && !kickoffStuckItems && (
+        <KickoffModal
+          product={kickoffProduct}
+          account={account}
+          onClose={() => setKickoffProduct(null)}
+          onDone={() => {
+            const pid = kickoffProduct?.id;
+            setKickoffProduct(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Campanha enviada para fila da Amazon.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+            }
+          }}
+        />
+      )}
+
+      {acceleratorProduct && (
+        <AcceleratorModal
+          product={acceleratorProduct}
+          account={account}
+          onClose={() => setAcceleratorProduct(null)}
+          onDone={() => {
+            const pid = acceleratorProduct?.id;
+            setAcceleratorProduct(null);
+            if (pid) {
+              setProductMsg(pid, { type: 'success', text: 'Campanha criada e vinculada a este produto.' });
+              reloadProducts().then(() => restoreProductContext(pid));
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
