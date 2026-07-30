@@ -30,6 +30,10 @@
     "advertised_sku": {
       "type": "string"
     },
+    "advertised_asin": {
+      "type": "string",
+      "description": "ASIN anunciado, usado para vincular o histórico horário ao produto e ao Dayparting."
+    },
     "targeting": {
       "type": "string"
     },

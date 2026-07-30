@@ -223,13 +223,15 @@ Deno.serve(async (req) => {
     const toUpdate: any[] = [];
     for (const r of records) {
       const advertisedAsin = (withAsin ? (r.advertisedAsin || '') : '') || campAsinMap.get(String(r.campaignId || '')) || '';
-      const key = `${r.date}|${Number(r.hour || 0)}|${r.campaignId}|${r.adGroupId}|${advertisedAsin}`;
       // HOURLY timeUnit: campo 'hour' vem como propriedade separada; se não presente, extrair do startDate/date
       const hourVal = r.hour ?? r.startHour ?? (r.date && r.date.includes('T') ? new Date(r.date).getHours() : 0);
+      const metricDate = String(r.date || r.startDate || '').slice(0, 10);
+      const metricHour = Number(hourVal || 0);
+      const key = `${metricDate}|${metricHour}|${r.campaignId}|${r.adGroupId || ''}|${advertisedAsin}`;
       const rec = {
         amazon_account_id: account.id,
-        date: (r.date || '').slice(0, 10),
-        hour: Number(hourVal || 0),
+        date: metricDate,
+        hour: metricHour,
         ad_product: 'SPONSORED_PRODUCTS',
         campaign_id: String(r.campaignId || ''),
         campaign_name: r.campaignName || '',
@@ -251,9 +253,9 @@ Deno.serve(async (req) => {
         synced_at: now,
       };
       const existing = hourlyKeys.has(key) ? existingHourly.find((h: any) =>
-        h.date === r.date && h.hour === Number(r.hour || 0) &&
+        h.date === metricDate && Number(h.hour) === metricHour &&
         h.campaign_id === String(r.campaignId || '') &&
-        h.ad_group_id === String(r.adGroupId || '') &&
+        String(h.ad_group_id || '') === String(r.adGroupId || '') &&
         (h.advertised_asin || '') === advertisedAsin
       ) : null;
       if (existing) toUpdate.push({ id: existing.id, ...rec });
@@ -261,14 +263,25 @@ Deno.serve(async (req) => {
     }
 
     let saved = 0;
+    const persistenceErrors: string[] = [];
     for (let i = 0; i < toCreate.length; i += 100) {
-      await base44.asServiceRole.entities.UnifiedAdsMetricsHourly.bulkCreate(toCreate.slice(i, i + 100)).catch(() => {});
-      saved += Math.min(100, toCreate.length - i);
+      const batch = toCreate.slice(i, i + 100);
+      try {
+        await base44.asServiceRole.entities.UnifiedAdsMetricsHourly.bulkCreate(batch);
+        saved += batch.length;
+      } catch (error: any) {
+        persistenceErrors.push(`create[${i}]: ${error?.message || String(error)}`);
+      }
     }
     for (let i = 0; i < toUpdate.length; i += 100) {
-      await base44.asServiceRole.entities.UnifiedAdsMetricsHourly.bulkUpdate(toUpdate.slice(i, i + 100)).catch(() => {});
+      const batch = toUpdate.slice(i, i + 100);
+      try {
+        await base44.asServiceRole.entities.UnifiedAdsMetricsHourly.bulkUpdate(batch);
+        saved += batch.length;
+      } catch (error: any) {
+        persistenceErrors.push(`update[${i}]: ${error?.message || String(error)}`);
+      }
     }
-    saved += toUpdate.length;
 
     // ── Verificar se snapshotHourlySalesPattern já foi rodado hoje com >= 24 slots
     const todayBRT = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })).toISOString().slice(0, 10);
@@ -373,7 +386,7 @@ Deno.serve(async (req) => {
       amazon_account_id: account.id,
       operation: 'hourly_asin_pattern_sync',
       trigger_type: 'automatic',
-      status: 'success',
+      status: persistenceErrors.length === 0 ? 'success' : saved > 0 ? 'partial' : 'error',
       execution_date: todayBRT,
       started_at: now,
       completed_at: new Date().toISOString(),
@@ -385,16 +398,21 @@ Deno.serve(async (req) => {
         pattern_result: patternResult,
         bid_dispatch: bidDispatchResult,
         period: `${startDate} → ${endDate}`,
+        persistence_errors: persistenceErrors.slice(0, 5),
       }),
+      error_message: persistenceErrors.length > 0 ? persistenceErrors.join(' | ').slice(0, 1000) : null,
     }).catch(() => {});
 
     return Response.json({
-      ok: true, report_id: reportId,
+      ok: persistenceErrors.length === 0,
+      partial: persistenceErrors.length > 0 && saved > 0,
+      report_id: reportId,
       with_asin: withAsin,
       records_saved: saved,
       period: `${startDate} → ${endDate}`,
       pattern_update: patternResult,
       bid_dispatch: bidDispatchResult,
+      persistence_errors: persistenceErrors.slice(0, 10),
     });
 
   } catch (error) {

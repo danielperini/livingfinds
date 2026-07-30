@@ -11,7 +11,7 @@
  *     (accountId) => Promise.all([...queries...]).then(([a, b]) => ({ a, b }))
  *   );
  */
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 // Cache global em memória de módulo (não persiste entre reloads de página)
 const store = new Map();
@@ -24,6 +24,7 @@ function cacheKey(pageKey, accountId) {
 export function usePerformanceData(pageKey, accountId, fetchFn) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshToken, setRefreshToken] = useState(0);
   const fetchingRef = useRef(false);
 
   useEffect(() => {
@@ -47,7 +48,12 @@ export function usePerformanceData(pageKey, accountId, fetchFn) {
       fetchingRef.current = false;
       setLoading(false);
     });
-  }, [pageKey, accountId, fetchFn]);
+  }, [pageKey, accountId, fetchFn, refreshToken]);
 
-  return { data, loading };
+  const refresh = useCallback(() => {
+    if (accountId) store.delete(cacheKey(pageKey, accountId));
+    setRefreshToken(value => value + 1);
+  }, [pageKey, accountId]);
+
+  return { data, loading, refresh };
 }

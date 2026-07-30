@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { usePerformanceData } from '@/hooks/usePerformanceData';
 import {
   Clock, Loader2, CheckCircle, XCircle,
-  AlertTriangle, ArrowRightLeft, Zap, Play, Search
+  AlertTriangle, ArrowRightLeft, Zap, Play, Search, RefreshCw
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
@@ -699,7 +699,32 @@ export default function DaypartCrossAsinPage() {
   const fetchFn = useCallback(fetchDaypartData, []);
 
   // Um único fetch para todos os dados da página — ambas as abas consomem do mesmo cache
-  const { data, loading } = usePerformanceData('dayparting', account?.id, fetchFn);
+  const { data, loading, refresh } = usePerformanceData('dayparting', account?.id, fetchFn);
+  const [refreshingMetrics, setRefreshingMetrics] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState('');
+
+  const refreshHourlyMetrics = useCallback(async () => {
+    if (!account?.id || refreshingMetrics) return;
+    setRefreshingMetrics(true);
+    setRefreshMessage('');
+    try {
+      const response = await base44.functions.invoke('rebuildHourlyMetricsFromReports', {
+        amazon_account_id: account.id,
+        full: true,
+        lookback_days: 30,
+      });
+      const result = response?.data || response || {};
+      const accountResult = result?.results?.[0] || {};
+      setRefreshMessage(result?.ok
+        ? `${accountResult.hourly_created || 0} registros criados · ${accountResult.hourly_updated || 0} atualizados`
+        : `Falha: ${result?.error || 'não foi possível reconstruir os dados horários'}`);
+      refresh();
+    } catch (error) {
+      setRefreshMessage(`Falha: ${error?.response?.data?.error || error?.message || 'erro desconhecido'}`);
+    } finally {
+      setRefreshingMetrics(false);
+    }
+  }, [account?.id, refreshingMetrics, refresh]);
 
   // Permite mutações otimistas locais sem invalidar o cache
   const [localData, setLocalData] = useState(null);
@@ -720,9 +745,20 @@ export default function DaypartCrossAsinPage() {
               <p className="text-xs text-slate-400">Motor determinístico de otimização por horário e transferência de keywords entre ASINs</p>
             </div>
           </div>
-          {loading && (
-            <Loader2 className="w-4 h-4 text-slate-500 animate-spin" />
-          )}
+          <div className="flex items-center gap-2">
+            {refreshMessage && <span className="text-[10px] text-slate-400">{refreshMessage}</span>}
+            <button
+              type="button"
+              onClick={refreshHourlyMetrics}
+              disabled={refreshingMetrics || loading}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-2 border border-surface-3 text-[11px] text-slate-300 hover:text-white disabled:opacity-50"
+            >
+              {refreshingMetrics
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <RefreshCw className="w-3.5 h-3.5" />}
+              Atualizar dados horários
+            </button>
+          </div>
         </div>
       </div>
 
