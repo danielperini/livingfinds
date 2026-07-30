@@ -31,6 +31,15 @@ import {
   calculateExpectedClicksPerOrder,
   calculateMaximumEconomicCpc,
 } from '../../shared/bidDecisionEvidence.ts';
+import {
+  detectSequentialDeterioration,
+  estimateMatureClicks,
+} from '../../shared/decisionStatistics.ts';
+import { estimateCpcAuctionState } from '../../shared/auctionStateEstimator.ts';
+import { classifySkuEconomicState } from '../../shared/economicDecisionState.ts';
+import { resolveGoalPolicy } from '../../shared/goalPolicyResolver.ts';
+import { classifyExecutionPolicy } from '../../shared/decisionExecutionPolicy.ts';
+import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HIERARQUIA CANÔNICA DE DECISÃO v7
@@ -126,7 +135,7 @@ function checkWinnerProtection(params: {
 // ── Fallbacks do sistema ──────────────────────────────────────────────────────
 const FB = {
   MIN_BID: 0.25, MAX_BID: 0.70,
-  MAX_INCREASE_PCT: 0.10, MAX_DECREASE_PCT: 0.25,
+  MAX_INCREASE_PCT: 0.10, MAX_DECREASE_PCT: 0.20,
   DAILY_BUDGET_CAP: 56,
   TARGET_ACOS: 10, MAX_ACOS: 15,
   TARGET_ROAS: 4, TARGET_TACOS: 5,
@@ -444,14 +453,15 @@ function calcFunnel(params: {
   const ctr = impressions > 0 ? clicks / impressions : 0;
   const cvr = clicks > 0 ? orders / clicks : 0;
   const cpc = clicks > 0 ? spend / clicks : 0;
-  const actual_cpa = orders > 0 ? spend / orders : 0;
+  const actual_cpa = orders > 0 ? spend / orders : spend;
   const ecpm = impressions > 0 ? (spend / impressions) * 1000 : 0;
   const impressions_per_order = orders > 0 ? impressions / orders : 0;
   const expected_cpa = cvr > 0 ? cpc / cvr : (cpc > 0 ? cpc * 20 : 0);
   const maximum_profitable_cpa = Math.max(0, contribution_margin_amount - minimum_profit_per_order);
   const ad_spend_per_order = orders > 0 ? spend / orders : spend > 0 ? spend : 0;
-  const profit_after_ads = contribution_margin_amount - (orders > 0 ? ad_spend_per_order : 0);
-  const profit_after_ads_percent = sales > 0 ? (profit_after_ads / (sales / Math.max(1, orders))) * 100 : 0;
+  const total_contribution = orders * contribution_margin_amount;
+  const profit_after_ads = total_contribution - spend;
+  const profit_after_ads_percent = sales > 0 ? (profit_after_ads / sales) * 100 : 0;
   const is_economically_sustainable = maximum_profitable_cpa > 0
     && (orders > 0 ? actual_cpa <= maximum_profitable_cpa : expected_cpa <= maximum_profitable_cpa);
   return { ctr, cvr, cpc, actual_cpa, expected_cpa, ecpm, impressions_per_order, maximum_profitable_cpa, profit_after_ads, profit_after_ads_percent, is_economically_sustainable, ad_spend_per_order };
@@ -463,9 +473,12 @@ function calcProfitAfterAds(params: {
   spend: number;
   orders: number;
 }): { profit_after_ads: number; ad_spend_per_order: number } {
-  if (params.orders <= 0) return { profit_after_ads: params.contribution_margin_amount, ad_spend_per_order: 0 };
-  const ad_spend_per_order = params.spend / params.orders;
-  return { profit_after_ads: params.contribution_margin_amount - ad_spend_per_order, ad_spend_per_order };
+  const orders = Math.max(0, Number(params.orders || 0));
+  const spend = Math.max(0, Number(params.spend || 0));
+  const totalContribution = orders * Number(params.contribution_margin_amount || 0);
+  const totalProfitAfterAds = totalContribution - spend;
+  const ad_spend_per_order = orders > 0 ? spend / orders : spend;
+  return { profit_after_ads: totalProfitAfterAds, ad_spend_per_order };
 }
 
 // ── Classificar status econômico ──────────────────────────────────────────────
@@ -745,8 +758,10 @@ Deno.serve(async (req) => {
         const _psTargetAcos = psNum(ps.target_acos) ?? CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS;
         settings = {
           source: 'PerformanceSettings', source_id: ps.id,
+          objective: ps.objective || ps.primary_goal || 'profitability',
           target_acos: _psTargetAcos,
           max_acos: psNum(ps.max_acos),
+          target_cpc: Number(ps.target_cpc ?? 0),
           target_roas: deriveTargetRoas(_psTargetAcos),
           target_tacos: psNum(ps.target_tacos),
           min_bid: psReq(ps.min_bid, FB.MIN_BID),
@@ -780,8 +795,10 @@ Deno.serve(async (req) => {
           const _cfgTargetAcos = Number(cfg.target_acos ?? FB.TARGET_ACOS);
           settings = {
             source: 'AutopilotConfig', source_id: cfg.id,
+            objective: cfg.objective || 'profitability',
             target_acos: _cfgTargetAcos,
             max_acos: Number(cfg.maximum_acos ?? FB.MAX_ACOS),
+            target_cpc: Number(cfg.target_cpc ?? 0),
             target_roas: deriveTargetRoas(_cfgTargetAcos),
             target_tacos: Number(cfg.target_tacos ?? FB.TARGET_TACOS),
             min_bid: Number(cfg.min_bid ?? FB.MIN_BID),
@@ -807,7 +824,9 @@ Deno.serve(async (req) => {
     if (!settings) {
       settings = {
         source: 'system_defaults', source_id: null,
+        objective: 'profitability',
         target_acos: FB.TARGET_ACOS, max_acos: FB.MAX_ACOS,
+        target_cpc: 0,
         target_roas: FB.TARGET_ROAS, target_tacos: FB.TARGET_TACOS,
         min_bid: FB.MIN_BID, max_bid: FB.MAX_BID, max_cpc: 0,
         max_bid_increase_pct: FB.MAX_INCREASE_PCT,
@@ -835,7 +854,28 @@ Deno.serve(async (req) => {
     );
     settings.max_bid_decrease_pct = Math.min(
       Math.max(Number(settings.max_bid_decrease_pct || FB.MAX_DECREASE_PCT), 0.10),
-      FB.MAX_DECREASE_PCT,
+      CANONICAL_CONFIG.MAX_BID_CHANGE_PCT,
+    );
+
+    const accountGoalPolicy = resolveGoalPolicy({
+      objective: settings.objective,
+      targetAcos: settings.target_acos,
+      maximumAcos: settings.max_acos,
+      targetAverageCpc: settings.target_cpc,
+      hardMaximumCpc: settings.max_cpc,
+      maximumDailySpend: settings.daily_budget_cap,
+      maximumBidChangePct: Math.max(settings.max_bid_increase_pct, settings.max_bid_decrease_pct),
+    });
+    settings.target_acos = accountGoalPolicy.effectiveTargets.targetAcos;
+    settings.max_acos = accountGoalPolicy.effectiveTargets.maximumAcos;
+    settings.daily_budget_cap = accountGoalPolicy.effectiveTargets.maximumDailySpend;
+    settings.max_bid_increase_pct = Math.min(
+      settings.max_bid_increase_pct,
+      accountGoalPolicy.constraints.maximumBidChangePct,
+    );
+    settings.max_bid_decrease_pct = Math.min(
+      settings.max_bid_decrease_pct,
+      accountGoalPolicy.constraints.maximumBidChangePct,
     );
 
     const settingsSnapshot = JSON.stringify({ ...settings, captured_at: now });
@@ -912,7 +952,8 @@ Deno.serve(async (req) => {
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
     const [keywords, campaigns, products, metricsRaw, salesDailyRaw,
-           termBankRaw, profitLearnings, recentExecs, productEconomicsRaw, targetingMetricsRaw
+           termBankRaw, profitLearnings, recentExecs, productEconomicsRaw, targetingMetricsRaw,
+           unifiedAdsMetricsRaw
     ] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
@@ -924,26 +965,62 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 500).catch(() => []),
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
       base44.asServiceRole.entities.TargetingMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
+      base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
     ]);
+    const latestMetricsDate = [...metricsRaw, ...targetingMetricsRaw, ...unifiedAdsMetricsRaw]
+      .map((row: any) => String(row.date || ''))
+      .filter(Boolean)
+      .sort()
+      .at(-1) || yesterday;
 
     // Métricas granulares confirmadas têm precedência sobre agregados da entidade.
     // Isso permite reduzir o target ruim e preservar outro target vencedor na mesma campanha.
     const targetingByEntity = new Map<string, any>();
+    const targetingHistoryByEntity = new Map<string, any[]>();
     for (const row of targetingMetricsRaw) {
       if (!row.date || row.date < cutoff30d) continue;
       const id = String(row.keyword_id || row.target_id || '');
       if (!id) continue;
-      const aggregate = targetingByEntity.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
+      const aggregate = targetingByEntity.get(id) || {
+        spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0,
+        same_sku_orders: 0, same_sku_sales: 0, halo_orders: 0, halo_sales: 0,
+        has_same_sku_attribution: false,
+      };
       aggregate.spend += Number(row.spend || 0);
       aggregate.sales += Number(row.sales || 0);
       aggregate.orders += Number(row.orders || 0);
       aggregate.clicks += Number(row.clicks || 0);
       aggregate.impressions += Number(row.impressions || 0);
+      if (row.same_sku_orders != null || row.same_sku_sales != null) {
+        aggregate.same_sku_orders += Number(row.same_sku_orders || 0);
+        aggregate.same_sku_sales += Number(row.same_sku_sales || 0);
+        aggregate.halo_orders += Number(row.halo_orders || 0);
+        aggregate.halo_sales += Number(row.halo_sales || 0);
+        aggregate.has_same_sku_attribution = true;
+      }
       targetingByEntity.set(id, aggregate);
+      if (!targetingHistoryByEntity.has(id)) targetingHistoryByEntity.set(id, []);
+      targetingHistoryByEntity.get(id)!.push(row);
     }
     for (const keyword of keywords) {
       const granular = targetingByEntity.get(String(keyword.keyword_id || keyword.id || ''));
       if (granular) Object.assign(keyword, granular, { metrics_source: 'TargetingMetricsDaily' });
+    }
+
+    // A CVR do SKU deve vir do produto promovido. Unidades orgânicas da SP-API
+    // não são denominador de conversão publicitária.
+    const sameSkuByProductKey = new Map<string, { clicks: number; orders: number; sales: number }>();
+    for (const row of unifiedAdsMetricsRaw) {
+      if (!row.date || row.date < cutoff30d) continue;
+      const keys = [row.advertised_product_id, row.advertised_sku].filter(Boolean).map(String);
+      if (keys.length === 0 || (row.promoted_purchases == null && row.promoted_sales == null)) continue;
+      for (const key of keys) {
+        const aggregate = sameSkuByProductKey.get(key) || { clicks: 0, orders: 0, sales: 0 };
+        aggregate.clicks += Number(row.clicks || 0);
+        aggregate.orders += Number(row.promoted_purchases || 0);
+        aggregate.sales += Number(row.promoted_sales || 0);
+        sameSkuByProductKey.set(key, aggregate);
+      }
     }
 
     // ── 3. Construir índices ───────────────────────────────────────────────
@@ -1058,9 +1135,11 @@ Deno.serve(async (req) => {
         const break_even = margin;
         const target = Math.min(FB.MAX_ACOS * 2, Math.max(5, break_even * settings.safety_factor));
         const selling_price = Number(econ?.current_price || p.price || 0);
-        const salesM = salesByAsin.get(p.asin);
-        const cvr = salesM && salesM.units > 0 && salesM.days.size > 3
-          ? salesM.units / (salesM.units + 50) : settings.fallback_cvr;
+        const promoted = sameSkuByProductKey.get(String(p.asin))
+          || sameSkuByProductKey.get(String(p.sku || ''));
+        const cvr = promoted && promoted.clicks > 0
+          ? promoted.orders / promoted.clicks
+          : settings.fallback_cvr;
         const safe_cpc = calcSafeMaxCpc({ selling_price, gross_margin_pct: margin, cvr_estimate: cvr, safety_factor: settings.safety_factor });
 
         const campIds = campaigns.filter((c: any) => c.asin === p.asin).map((c: any) => c.campaign_id || c.amazon_campaign_id).filter(Boolean);
@@ -1077,6 +1156,31 @@ Deno.serve(async (req) => {
           profit_after_ads_3d: r3.profit_after_ads,
           profit_before_ads: contribution_margin_amount,
         });
+        const skuEconomicState = classifySkuEconomicState({
+          realRevenue: salesByAsin.get(p.asin)?.revenue || 0,
+          adSpend: spend14d,
+          contributionBeforeAds: (promoted?.orders ?? orders14d) * contribution_margin_amount,
+          targetAcosPercent: target,
+          breakEvenAcosPercent: break_even,
+          buyable: p.listing_buyable !== false,
+          offerActive: p.offer_active !== false,
+          listingSuppressed: p.listing_suppressed === true,
+          adsEligible: !p.ads_eligibility_status || p.ads_eligibility_status === 'eligible',
+        });
+        if (skuEconomicState.state === 'LOSS_CONFIRMED' || skuEconomicState.state === 'NOT_BUYABLE') {
+          profit_protection.mode = 'paused';
+          profit_protection.alert = true;
+          profit_protection.reason = skuEconomicState.state;
+        } else if (skuEconomicState.state === 'DEFENSIVE') {
+          profit_protection.mode = 'defensive';
+          profit_protection.alert = true;
+          profit_protection.reason = 'DEFENSIVE';
+        } else if (skuEconomicState.state === 'VIGILANT') {
+          profit_protection.mode = 'vigilant';
+          profit_protection.reason = 'VIGILANT';
+        } else {
+          profit_protection.mode = 'normal';
+        }
 
         acosByAsin.set(p.asin, {
           target: Math.round(target * 10) / 10,
@@ -1087,6 +1191,8 @@ Deno.serve(async (req) => {
           profit_after_ads_14d: r14.profit_after_ads,
           profit_after_ads_3d: r3.profit_after_ads,
           profit_protection,
+          economic_state: skuEconomicState.state,
+          block_growth: skuEconomicState.block_growth,
           selling_price: Number(econ?.current_price || p.price || 0),
         });
       }
@@ -1215,10 +1321,13 @@ Deno.serve(async (req) => {
     const seasonal = getSeasonalContext(today);
 
     // ── 9. Cooldown index ─────────────────────────────────────────────────
-    const usedIdemKeys = new Set<string>(
-      recentExecs.filter((e: any) => (e.created_date || '').slice(0, 10) === today)
-        .map((e: any) => e.idempotency_key).filter(Boolean)
-    );
+    const usedIdemKeys = new Set<string>();
+    for (const execution of recentExecs) {
+      const key = String(execution.idempotency_key || '');
+      if (!key) continue;
+      usedIdemKeys.add(key);
+      usedIdemKeys.add(key.split('|window:')[0]);
+    }
     const lastExecByRuleEntity = new Map<string, any>();
     for (const ex of recentExecs) {
       const k = `${ex.rule_key || ex.action_type}|${ex.entity_id || ex.keyword_id}`;
@@ -1538,19 +1647,45 @@ Deno.serve(async (req) => {
       const kw_impressions_3d = wm?.d3?.impressions ?? 0;
       const kw_clicks = kw.clicks || (wm?.d14?.clicks ?? 0);
       const kw_spend = kw.spend || (wm?.d14?.spend ?? 0);
-      const kw_orders = kw.orders || (wm?.d14?.orders ?? 0);
-      const kw_sales = kw.sales || (wm?.d14?.sales ?? 0);
-      const kw_acos = kw.acos || (wm?.d14?.acos ?? null);
+      const totalAttributedOrders = kw.orders || (wm?.d14?.orders ?? 0);
+      const totalAttributedSales = kw.sales || (wm?.d14?.sales ?? 0);
+      const attributionConfidence = kw.has_same_sku_attribution === true
+        ? 'complete'
+        : (kw.attribution_confidence === 'partial' ? 'partial' : 'unknown');
+      const sameSkuOrders = attributionConfidence === 'complete' ? Number(kw.same_sku_orders || 0) : null;
+      const sameSkuSales = attributionConfidence === 'complete' ? Number(kw.same_sku_sales || 0) : null;
+      const kw_orders = sameSkuOrders ?? totalAttributedOrders;
+      const kw_sales = sameSkuSales ?? totalAttributedSales;
+      const kw_acos = kw_sales > 0 ? (kw_spend / kw_sales) * 100 : null;
       const kw_cvr = kw_clicks > 0 ? kw_orders / kw_clicks : 0;
       const kw_cpc = kw_clicks > 0 ? kw_spend / kw_clicks : 0;
       const kw_ctr = kw_impressions > 0 ? kw_clicks / kw_impressions : 0;
+      const entityHistory = targetingHistoryByEntity.get(String(entityId)) || [];
+      const clickMaturity = estimateMatureClicks(
+        entityHistory.map((row: any) => ({ date: row.date, clicks: row.clicks })),
+      );
+      const deterioration = detectSequentialDeterioration(
+        entityHistory.map((row: any) => ({
+          date: row.date,
+          clicks: row.clicks,
+          orders: attributionConfidence === 'complete' ? row.same_sku_orders : row.orders,
+          spend: row.spend,
+        })),
+      );
+      const auctionState = estimateCpcAuctionState(
+        entityHistory.map((row: any) => ({
+          cpc: row.cpc,
+          spend: row.spend,
+          clicks: row.clicks,
+        })),
+      );
 
       const asinMeta = resolvedAsin ? acosByAsin.get(resolvedAsin) : null;
-      const effectiveTargetAcos = effectiveTargetAcos_fn(
+      let effectiveTargetAcos = effectiveTargetAcos_fn(
         settings.target_acos ?? CANONICAL_CONFIG.ACCOUNT_TARGET_ACOS,
         asinMeta?.break_even ?? null
       );
-      const effectiveMaxAcos = asinMeta
+      let effectiveMaxAcos = asinMeta
         ? Math.min(asinMeta.break_even, (settings.max_acos ?? FB.MAX_ACOS) * 1.5)
         : settings.max_acos;
       const productSafeMaxCpc = asinMeta?.safe_max_cpc || 0;
@@ -1560,10 +1695,17 @@ Deno.serve(async (req) => {
         : null;
       const econStatus = classifyEconomicStatus(econForProduct);
 
-      const protection = isHighPerformanceProtected(kw, settings, wm ? {
-        acos_14d: wm.d14.acos, acos_30d: wm.d30.acos,
-        roas_14d: wm.d14.roas, orders_14d: wm.d14.orders, orders_30d: wm.d30.orders,
-      } : null);
+      const protection = attributionConfidence === 'complete'
+        ? isHighPerformanceProtected(
+            { ...kw, orders: kw_orders, sales: kw_sales, acos: kw_acos },
+            settings,
+            wm ? {
+              acos_14d: kw_acos, acos_30d: kw_acos,
+              roas_14d: kw_spend > 0 ? kw_sales / kw_spend : 0,
+              orders_14d: kw_orders, orders_30d: kw_orders,
+            } : null,
+          )
+        : { protected: false, reason: 'attribution_promoted_vs_halo_unknown' };
 
       const kwIntent = kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null;
       const campaignHistoricalCvr = (wm?.d30?.clicks || 0) > 0 && (wm?.d30?.orders || 0) > 0
@@ -1578,6 +1720,19 @@ Deno.serve(async (req) => {
         targetAcosPercent: effectiveTargetAcos,
         safetyFactor: settings.safety_factor,
       });
+      const keywordGoalPolicy = resolveGoalPolicy({
+        objective: settings.objective,
+        targetAcos: effectiveTargetAcos,
+        maximumAcos: effectiveMaxAcos,
+        breakEvenAcos: asinMeta?.break_even,
+        targetAverageCpc: settings.target_cpc,
+        hardMaximumCpc: settings.max_cpc,
+        maximumEconomicCpc,
+        maximumDailySpend: settings.daily_budget_cap,
+        maximumBidChangePct: Math.max(settings.max_bid_increase_pct, settings.max_bid_decrease_pct),
+      });
+      effectiveTargetAcos = keywordGoalPolicy.effectiveTargets.targetAcos;
+      effectiveMaxAcos = keywordGoalPolicy.effectiveTargets.maximumAcos;
       const cpcLimits = [
         productSafeMaxCpc,
         maximumEconomicCpc,
@@ -1711,6 +1866,20 @@ Deno.serve(async (req) => {
         safe_max_cpc: effectiveSafeMaxCpc,
         data_freshness: dataFreshness,
       });
+      const predictedCpcUnsafe = effectiveSafeMaxCpc > 0
+        && auctionState.predicted_cpc_next_window > effectiveSafeMaxCpc;
+      if (
+        attributionConfidence !== 'complete'
+        || asinMeta?.block_growth === true
+        || predictedCpcUnsafe
+      ) {
+        opp.can_grow = false;
+        opp.block_reason = attributionConfidence !== 'complete'
+          ? 'attribution_promoted_vs_halo_unknown'
+          : asinMeta?.block_growth === true
+            ? `sku_economic_state_${asinMeta?.economic_state || 'defensive'}`
+            : 'predicted_cpc_above_safe_limit';
+      }
 
       opportunities.push({
         entity_id: entityId,
@@ -1734,6 +1903,11 @@ Deno.serve(async (req) => {
         stock_days: stockCovDays != null ? Math.round(stockCovDays) : null,
         safe_max_cpc: effectiveSafeMaxCpc,
         partial_cost: econStatus.allow_conservative_growth && econStatus.economic_data_incomplete,
+        attribution_confidence: attributionConfidence,
+        same_sku_orders: sameSkuOrders,
+        same_sku_sales: sameSkuSales,
+        predicted_cpc: auctionState.predicted_cpc_next_window,
+        auction_pressure_state: auctionState.auction_pressure_state,
       });
 
       if (protection.protected) {
@@ -1775,7 +1949,9 @@ Deno.serve(async (req) => {
         protected_high_performance: false,
         recent_sale_protection_hours: FB.RECENT_SALE_PROTECTION_HOURS,
       });
-      const recentSaleProtected = FB.WINNER_PROTECTION_ENABLED && wpKwResult.protected;
+      const recentSaleProtected = attributionConfidence === 'complete'
+        && FB.WINNER_PROTECTION_ENABLED
+        && wpKwResult.protected;
 
       const adaptiveMinimumClicks = kw_orders === 0
         ? Math.min(FB.MIN_CLICKS_BEFORE_PAUSE, expectedClicksPerOrder)
@@ -1912,27 +2088,58 @@ Deno.serve(async (req) => {
       }
 
       const isLowIntent = kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational';
+      const latestEntityDataAt = entityHistory
+        .map((row: any) => String(row.date || ''))
+        .filter(Boolean)
+        .sort()
+        .at(-1) || null;
+      const previousReduction = recentExecs.find((execution: any) => {
+        const executionEntity = String(execution.entity_id || execution.keyword_id || '');
+        if (executionEntity !== String(entityId)) return false;
+        const before = Number(execution.value_before);
+        const after = Number(execution.value_after);
+        return (Number.isFinite(before) && Number.isFinite(after) && after < before)
+          || String(execution.rule_key || '').includes('reduce');
+      });
+      const previousReductionAt = previousReduction?.executed_at || previousReduction?.created_date || null;
+      const hasNewDataAfterReduction = Boolean(
+        previousReductionAt
+        && latestEntityDataAt
+        && latestEntityDataAt > String(previousReductionAt).slice(0, 10),
+      );
       const noConversionEvidence = assessNoConversionEvidence({
         clicks: kw_clicks,
+        matureClicks: clickMaturity.mature_clicks,
         spend: kw_spend,
         conversionRate: historicalConversionRate,
         fallbackConversionRate: settings.fallback_cvr,
         maximumAcquisitionSpend: noConvMinSpend,
         persistentLowRelevance: isLowIntent && isSecondReview,
+        priorReduction: Boolean(previousReduction) && hasNewDataAfterReduction,
+        attributionConfidence,
+        ageDays: campAgeDays,
+        isNewProduct,
+        currentCpc: kw_cpc,
+        safeCpc: effectiveSafeMaxCpc,
+        deteriorationLevel: deterioration.level,
       });
 
       if (!recentSaleProtected && hasMinExposureTime
           && kw_orders === 0 && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE
-          && noConvDataValid && noConversionEvidence.level !== 'wait_for_data') {
+          && noConvDataValid
+          && (attributionConfidence === 'complete' || noConversionEvidence.financial_evidence)
+          && noConversionEvidence.level !== 'wait_for_data') {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
           const shouldPause = canPauseCampaign
             && noConversionEvidence.level === 'pause_candidate'
             && !isNewProduct;
-          const reductionPct = Math.min(
-            settings.max_bid_decrease_pct,
-            Math.max(0.10, noConversionEvidence.recommended_reduction_pct),
-          );
+          const reductionPct = attributionConfidence === 'complete'
+            ? Math.min(
+                settings.max_bid_decrease_pct,
+                Math.max(0.10, noConversionEvidence.recommended_reduction_pct),
+              )
+            : Math.min(0.10, settings.max_bid_decrease_pct);
           const newBid = shouldPause
             ? settings.min_bid
             : clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
@@ -1962,6 +2169,32 @@ Deno.serve(async (req) => {
             target_acos: effectiveTargetAcos,
             decision_confidence_level: confidence >= 85 ? 'high' : 'medium',
             next_review_days: nextReviewDays,
+            model_version: 'probabilistic-economic-v1',
+            economic_state: asinMeta?.economic_state || 'UNKNOWN',
+            intervention_state: noConversionEvidence.internal_state,
+            posterior_cvr: noConversionEvidence.posterior_cvr,
+            posterior_cvr_low_95: noConversionEvidence.posterior_cvr_low_95,
+            posterior_cvr_high_95: noConversionEvidence.posterior_cvr_high_95,
+            probability_below_sustainable: noConversionEvidence.probability_below_sustainable,
+            raw_clicks: clickMaturity.raw_clicks,
+            mature_clicks: clickMaturity.mature_clicks,
+            maturity_ratio: clickMaturity.maturity_ratio,
+            same_sku_orders: sameSkuOrders,
+            same_sku_sales: sameSkuSales,
+            halo_orders: attributionConfidence === 'complete' ? Number(kw.halo_orders || 0) : null,
+            halo_sales: attributionConfidence === 'complete' ? Number(kw.halo_sales || 0) : null,
+            attribution_confidence: attributionConfidence,
+            contribution_margin_per_order: asinMeta?.contribution_margin_amount || 0,
+            profit_after_ads_total: asinMeta?.profit_after_ads_14d,
+            maximum_profitable_cpa: funnel.maximum_profitable_cpa,
+            safe_cpc: effectiveSafeMaxCpc,
+            ...auctionState,
+            deterioration_level: deterioration.level,
+            prior_reduction: Boolean(previousReduction) && hasNewDataAfterReduction,
+            data_window_start: cutoff30d,
+            data_window_end: latestEntityDataAt,
+            last_change_version: previousReductionAt || 'none',
+            goal_policy_snapshot: JSON.stringify(keywordGoalPolicy),
           }));
           entityChangedThisCycle.set(entityId, 'no_conversion');
           if (shouldPause) stats.paused++; else stats.bid_reduce++;
@@ -1969,7 +2202,11 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      if (effectiveSafeMaxCpc > 0 && kw_cpc > effectiveSafeMaxCpc && kw_clicks >= MRC.MIN_CLICKS) {
+      if (
+        effectiveSafeMaxCpc > 0
+        && (kw_cpc > effectiveSafeMaxCpc || auctionState.predicted_cpc_next_window > effectiveSafeMaxCpc)
+        && kw_clicks >= MRC.MIN_CLICKS
+      ) {
         const newBid = clamp(currentBid * (1 - Math.min(settings.max_bid_decrease_pct, 0.20)), settings.min_bid, settings.max_bid);
         const iKey = `cpc_above_safe|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey) && newBid < currentBid - 0.01) {
@@ -1978,7 +2215,7 @@ Deno.serve(async (req) => {
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `CPC R$${kw_cpc.toFixed(2)} acima do safe max R$${effectiveSafeMaxCpc.toFixed(2)}. Bid reduzido.`,
+            rationale: `CPC atual R$${kw_cpc.toFixed(2)} / previsto R$${auctionState.predicted_cpc_next_window.toFixed(2)} acima do safe max R$${effectiveSafeMaxCpc.toFixed(2)}. Bid reduzido.`,
             rule_key: 'cpc_above_safe_max', risk: 'medium', priority: PRIORITY.margin,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, opportunity_state: 'no_opportunity',
@@ -1987,6 +2224,15 @@ Deno.serve(async (req) => {
             current_acos: kw_acos,
             target_acos: effectiveTargetAcos,
             next_review_days: 3,
+            safe_cpc: effectiveSafeMaxCpc,
+            ...auctionState,
+            deterioration_level: deterioration.level,
+            attribution_confidence: attributionConfidence,
+            same_sku_orders: sameSkuOrders,
+            same_sku_sales: sameSkuSales,
+            data_window_start: cutoff30d,
+            data_window_end: entityHistory.map((row: any) => row.date).filter(Boolean).sort().at(-1) || null,
+            goal_policy_snapshot: JSON.stringify(keywordGoalPolicy),
           }));
           entityChangedThisCycle.set(entityId, 'cpc_safe');
           stats.bid_reduce++;
@@ -2024,10 +2270,21 @@ Deno.serve(async (req) => {
         if (ppLimit  > 0 && pp  > ppLimit)  placementViolations.push(`PP ${pp}% > limite ${ppLimit}%`);
 
         if (placementViolations.length > 0) {
-          skipped.push({ entity_id: entityId, reason: 'placement_above_limit', violations: placementViolations, asin: resolvedAsin });
+          skipped.push({
+            entity_id: entityId,
+            reason: 'placement_above_limit_executor_not_canonical',
+            violations: placementViolations,
+            asin: resolvedAsin,
+          });
 
           const campForPlacement = campForKw.campaign_id || campForKw.amazon_campaign_id;
-          if (campForPlacement) {
+          // O executor canônico ainda não suporta placement_change. Registrar a
+          // lacuna, mas não criar uma decisão aprovada que inevitavelmente falhará.
+          const placementExecutionSupported = validateAmazonAction({
+            action: 'reduce_placement_adjustment',
+            execution_mode: 'EXPEDITED_QUEUE',
+          }).valid;
+          if (placementExecutionSupported && campForPlacement) {
             const placementIKey = `placement_cap|${campForPlacement}|${today}`;
             if (!usedIdemKeys.has(placementIKey) && !entityChangedThisCycle.has(`placement|${campForPlacement}`)) {
               usedIdemKeys.add(placementIKey);
@@ -2185,12 +2442,9 @@ Deno.serve(async (req) => {
       }
     }
 
-    // ── 10e. Motor de redução de ACoS por keyword (fire-and-forget) ──────
-    base44.asServiceRole.functions.invoke('runAcosBidReductionEngine', {
-      amazon_account_id: aid,
-      _service_role: true,
-      source_function: 'runDeterministicDecisionEngine',
-    }).catch(() => {});
+    // A redução de ACoS é decidida acima, por entidade, dentro deste motor.
+    // Não dispare runAcosBidReductionEngine em paralelo: ele poderia produzir
+    // uma segunda decisão para a mesma keyword com outra janela de dados.
 
     // ── 10b. IMMEDIATE_BUDGET_RESCUE (substitui Cenário C) ────────────────
     // Executa sincronamente: aumenta orçamento de campanhas SP rentáveis com
@@ -2216,6 +2470,22 @@ Deno.serve(async (req) => {
 
     // Combinar decisões (rescue já executou diretamente — não entra no allDecisions)
     const allDecisions = [...decisions, ...campaignBudgetDecisions];
+    for (const decision of allDecisions) {
+      decision.data_window_start = decision.data_window_start || cutoff30d;
+      decision.data_window_end = decision.data_window_end || latestMetricsDate;
+      const previousChange = recentExecs.find((execution: any) =>
+        String(execution.entity_id || execution.keyword_id || '') === String(decision.entity_id || '')
+      );
+      decision.last_change_version = decision.last_change_version
+        || previousChange?.executed_at
+        || previousChange?.created_date
+        || 'none';
+      const baseKey = String(
+        decision.idempotency_key
+        || `${decision.rule_key}|${aid}|${decision.entity_id}`,
+      );
+      decision.idempotency_key = `${baseKey}|window:${decision.data_window_end}|change:${decision.last_change_version}`;
+    }
 
     // ── 10d. Priorização ──────────────────────────────────────────────────
     const STOCK_RULES = new Set(['stock_zero', 'stock_critical', 'stock_low']);
@@ -2255,6 +2525,15 @@ Deno.serve(async (req) => {
           approval_status: d.approval_status || 'auto_approved',
           autopilot_authorized: true,
           requires_approval: false,
+          execution_mode: d.execution_mode,
+          priority_class: d.priority_class,
+          urgency_reason_code: d.urgency_reason_code,
+          execution_sla_seconds: d.execution_sla_seconds,
+          expected_loss_if_delayed: d.expected_loss_if_delayed,
+          conflict_group: d.conflict_group,
+          requires_fresh_data: d.requires_fresh_data,
+          maximum_data_age_minutes: d.maximum_data_age_minutes,
+          confirmation_required: d.confirmation_required,
           idempotency_key: d.idempotency_key,
           source_function: 'runDeterministicDecisionEngine_v7',
           created_at: now,
@@ -2279,6 +2558,37 @@ Deno.serve(async (req) => {
           expected_clicks_per_order: d.expected_clicks_per_order,
           no_conversion_click_multiple: d.no_conversion_click_multiple,
           maximum_acquisition_spend: d.maximum_acquisition_spend,
+          model_version: d.model_version || 'probabilistic-economic-v1',
+          economic_state: d.economic_state,
+          intervention_state: d.intervention_state,
+          posterior_cvr: d.posterior_cvr,
+          posterior_cvr_low_95: d.posterior_cvr_low_95,
+          posterior_cvr_high_95: d.posterior_cvr_high_95,
+          probability_below_sustainable: d.probability_below_sustainable,
+          raw_clicks: d.raw_clicks,
+          mature_clicks: d.mature_clicks,
+          maturity_ratio: d.maturity_ratio,
+          same_sku_orders: d.same_sku_orders,
+          same_sku_sales: d.same_sku_sales,
+          halo_orders: d.halo_orders,
+          halo_sales: d.halo_sales,
+          attribution_confidence: d.attribution_confidence,
+          contribution_margin_per_order: d.contribution_margin_per_order,
+          profit_after_ads_total: d.profit_after_ads_total,
+          maximum_profitable_cpa: d.maximum_profitable_cpa,
+          safe_cpc: d.safe_cpc,
+          cpc_kalman_level: d.cpc_kalman_level,
+          cpc_kalman_trend: d.cpc_kalman_trend,
+          predicted_cpc_next_window: d.predicted_cpc_next_window,
+          innovation: d.innovation,
+          innovation_z_score: d.innovation_z_score,
+          auction_pressure_state: d.auction_pressure_state,
+          deterioration_level: d.deterioration_level,
+          prior_reduction: d.prior_reduction,
+          data_window_start: d.data_window_start,
+          data_window_end: d.data_window_end,
+          last_change_version: d.last_change_version,
+          goal_policy_snapshot: d.goal_policy_snapshot || JSON.stringify(accountGoalPolicy),
           decision_confidence_level: d.decision_confidence_level,
           next_review_days: d.next_review_days,
         }))
@@ -2465,9 +2775,19 @@ function buildDecision(aid: string, correlationId: string, params: any): any {
     conversion: params.simulation?.expected_additional_orders > 0 ? 1.0 : intentScore,
     goal_alignment: riskFactor,
   });
+  const executionPolicy = classifyExecutionPolicy({
+    action: params.action,
+    ruleKey: params.rule_key,
+    urgencyReasonCode: params.urgency_reason_code,
+    entityType: params.entity_type,
+    entityId: params.entity_id,
+    scheduledFor: params.scheduled_for,
+    expectedLossIfDelayed: params.expected_loss_if_delayed,
+  });
 
   return {
     ...params,
+    ...executionPolicy,
     amazon_account_id: aid,
     correlation_id: correlationId,
     priority: params.priority || 9,
