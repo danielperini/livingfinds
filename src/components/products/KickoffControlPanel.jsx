@@ -49,6 +49,20 @@ const STATUS_CONFIG = {
     bg: 'bg-orange-400/10 border-orange-400/25',
     dot: 'bg-orange-400',
   },
+  waiting_stock: {
+    label: 'Aguardando Estoque',
+    icon: Package,
+    color: 'text-orange-400',
+    bg: 'bg-orange-400/10 border-orange-400/25',
+    dot: 'bg-orange-400',
+  },
+  held_portfolio_saturation: {
+    label: 'Aguardando capacidade',
+    icon: Pause,
+    color: 'text-amber-400',
+    bg: 'bg-amber-400/10 border-amber-400/25',
+    dot: 'bg-amber-400',
+  },
 };
 
 function StatusTab({ status, count, active, onClick }) {
@@ -80,7 +94,9 @@ function KickoffRow({ item, onRetry, onCancel, stockMap }) {
     stockMap[item.asin]?.inventory_status === 'out_of_stock' ||
     (stockMap[item.asin]?.fba_inventory ?? 1) === 0
   );
-  const status = (rawStatus === 'failed' && outOfStock) ? 'awaiting_stock' : rawStatus;
+  const status = rawStatus === 'waiting_stock'
+    ? 'waiting_stock'
+    : (rawStatus === 'failed' && outOfStock) ? 'awaiting_stock' : rawStatus;
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.scheduled;
   const Icon = cfg.icon;
 
@@ -146,13 +162,30 @@ function KickoffRow({ item, onRetry, onCancel, stockMap }) {
               Agendado: <span className="text-slate-300">{formatDate(item.scheduled_at)}</span>
             </span>
           )}
+          {item.last_stage && (
+            <span className="text-[11px] text-slate-500">
+              Etapa: <span className="text-slate-300">{item.last_stage}</span>
+            </span>
+          )}
+          {item.error_code && (
+            <span className="text-[11px] text-slate-500">
+              Código: <span className="font-mono text-slate-300">{item.error_code}</span>
+            </span>
+          )}
         </div>
 
-        {(rawStatus === 'failed' || status === 'awaiting_stock') && (
-          <p className={`mt-1 text-[11px] truncate max-w-[380px] ${status === 'awaiting_stock' ? 'text-orange-400/90' : 'text-red-400/90'}`}>
-            {status === 'awaiting_stock'
+        {(rawStatus === 'failed' || ['awaiting_stock', 'waiting_stock', 'held_portfolio_saturation'].includes(status)) && (
+          <p className={`mt-1 text-[11px] break-words max-w-[680px] ${['awaiting_stock', 'waiting_stock'].includes(status) ? 'text-orange-400/90' : status === 'held_portfolio_saturation' ? 'text-amber-400/90' : 'text-red-400/90'}`}>
+            {['awaiting_stock', 'waiting_stock'].includes(status)
               ? 'Produto sem estoque FBA — o Kick-off será reativado quando o estoque for reposto'
-              : formatError(item.last_error)}
+              : status === 'held_portfolio_saturation'
+                ? (item.last_error || 'Carteira saturada; aguardando espaço para nova campanha.')
+                : `Motivo: ${formatError(item.last_error) || 'Falha sem detalhe retornado pela Amazon'}`}
+          </p>
+        )}
+        {item.amazon_request_id && (
+          <p className="mt-1 text-[10px] text-slate-600 font-mono break-all">
+            Amazon request: {item.amazon_request_id}
           </p>
         )}
       </div>
@@ -293,7 +326,7 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
 
   // Contar "awaiting_stock" separado de "failed" para a aba
   const awaitingStockAsins = new Set(
-    items.filter(i => i.status === 'failed' && stockMap[i.asin] && (stockMap[i.asin].inventory_status === 'out_of_stock' || (stockMap[i.asin].fba_inventory ?? 1) === 0)).map(i => i.asin)
+    items.filter(i => (i.status === 'failed' || i.status === 'waiting_stock') && stockMap[i.asin] && (stockMap[i.asin].inventory_status === 'out_of_stock' || (stockMap[i.asin].fba_inventory ?? 1) === 0)).map(i => i.asin)
   );
 
   const counts = {
@@ -302,14 +335,19 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
     processing: items.filter(i => i.status === 'processing').length,
     completed: items.filter(i => i.status === 'completed').length,
     failed: items.filter(i => i.status === 'failed' && !awaitingStockAsins.has(i.asin)).length,
-    awaiting_stock: items.filter(i => i.status === 'failed' && awaitingStockAsins.has(i.asin)).length,
+    awaiting_stock: items.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin))).length,
+    held_portfolio_saturation: items.filter(i => i.status === 'held_portfolio_saturation').length,
     cancelled: items.filter(i => i.status === 'cancelled').length,
   };
 
-  const filtered = activeTab === 'all' ? items : items.filter(i => i.status === activeTab);
+  const filtered = activeTab === 'all'
+    ? items
+    : activeTab === 'awaiting_stock'
+      ? items.filter(i => i.status === 'waiting_stock' || (i.status === 'failed' && awaitingStockAsins.has(i.asin)))
+      : items.filter(i => i.status === activeTab);
 
   // Ordenar: failed (sem estoque) > failed > processing > scheduled > completed > cancelled
-  const ORDER = { failed: 0, processing: 1, scheduled: 2, completed: 3, cancelled: 4, awaiting_stock: 0 };
+  const ORDER = { failed: 0, waiting_stock: 1, held_portfolio_saturation: 2, processing: 3, scheduled: 4, completed: 5, cancelled: 6, awaiting_stock: 1 };
   const sorted = [...filtered].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
 
   if (!accountId) return null;
@@ -424,7 +462,7 @@ export default function KickoffControlPanel({ accountId, onRetry }) {
               </span>
             </button>
 
-            {['scheduled', 'processing', 'failed', 'awaiting_stock', 'completed', 'cancelled'].map(s =>
+            {['scheduled', 'processing', 'failed', 'awaiting_stock', 'held_portfolio_saturation', 'completed', 'cancelled'].map(s =>
               counts[s] > 0 ? (
                 <StatusTab
                   key={s}

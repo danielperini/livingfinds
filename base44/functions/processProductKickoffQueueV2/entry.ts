@@ -56,7 +56,6 @@ async function setWaitingStock(base44: any, item: any, product: any, reason = 'P
     status: 'waiting_stock',
     started_at: null,
     completed_at: null,
-    scheduled_at: null,
     last_error: reason,
     waiting_stock_since: item.waiting_stock_since || new Date().toISOString(),
     stock_quantity_at_wait: stockQuantity(product),
@@ -199,7 +198,9 @@ Deno.serve(async (request) => {
         await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
           status: scopeStatus !== 'authorized' ? 'cancelled' : 'waiting_stock',
           last_error: `Kickoff bloqueado: ads_scope_status=${scopeStatus}, ads_eligibility_status=${eligStatus}`,
-          scheduled_at: null,
+          last_stage: 'eligibility_guard',
+          error_code: scopeStatus !== 'authorized' ? 'ads_scope_not_authorized' : 'ads_not_eligible',
+          retryable: scopeStatus === 'authorized',
         }).catch(() => {});
         results.push({ id: item.id, asin: item.asin, ok: false, blocked: true, reason: `scope=${scopeStatus} eligibility=${eligStatus}` });
         continue;
@@ -211,6 +212,11 @@ Deno.serve(async (request) => {
         started_at: new Date().toISOString(),
         attempt_count: attempts,
         last_error: null,
+        last_stage: 'preflight',
+        error_code: null,
+        amazon_request_id: null,
+        retryable: false,
+        last_attempt_at: new Date().toISOString(),
       });
 
       try {
@@ -250,11 +256,18 @@ Deno.serve(async (request) => {
         }
 
         if (success || flags.duplicate) {
+          const requestIds = Array.isArray(data?.amazon_request_ids)
+            ? data.amazon_request_ids.filter(Boolean)
+            : [data?.amazon_request_id, data?.request_id].filter(Boolean);
           await base44.asServiceRole.entities.ProductKickoffQueue.update(item.id, {
             status: 'completed',
             completed_at: new Date().toISOString(),
             started_at: null,
             last_error: null,
+            last_stage: data?.stage || (flags.duplicate ? 'duplicate_guard' : 'completed'),
+            error_code: null,
+            amazon_request_id: requestIds.join(',').slice(0, 500) || null,
+            retryable: false,
           });
           if (item.source_keyword_bank_id) {
             await base44.asServiceRole.entities.KeywordBank.update(item.source_keyword_bank_id, {
@@ -280,6 +293,10 @@ Deno.serve(async (request) => {
           started_at: null,
           scheduled_at: retry ? new Date(Date.now() + backoffMs).toISOString() : item.scheduled_at,
           last_error: errorText(data).slice(0, 500),
+          last_stage: String(data?.stage || 'campaign_creation').slice(0, 100),
+          error_code: String(data?.error_code || data?.reason || flags.status || 'campaign_creation_failed').slice(0, 200),
+          amazon_request_id: String(data?.amazon_request_id || data?.request_id || '').slice(0, 500) || null,
+          retryable: retryable,
         });
 
         results.push({ id: item.id, asin: item.asin, ok: false, retry_scheduled: retry, retry_in_seconds: retry ? Math.round(backoffMs / 1000) : 0, response: data });
@@ -303,6 +320,13 @@ Deno.serve(async (request) => {
           completed_at: retry ? null : new Date().toISOString(),
           started_at: null,
           last_error: text.slice(0, 500),
+          last_stage: 'function_exception',
+          error_code: flags.auth ? 'amazon_auth'
+            : flags.timeout ? 'timeout'
+            : flags.throttled ? 'rate_limited'
+            : flags.malformed ? 'malformed_payload'
+            : 'unhandled_exception',
+          retryable: retry,
         });
         results.push({ id: item.id, asin: item.asin, ok: false, retry_scheduled: retry, error: text });
       }
