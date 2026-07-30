@@ -101,9 +101,11 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   const acos    = Number(entry.acos    || 0);
   const clicks  = Number(entry.clicks  || 0);
   const spend   = Number(entry.spend   || 0);
+  const sales   = Number(entry.sales   || 0);
   const intent  = Number(entry.intent_score || 0);
   const promo   = Number(entry.promotion_score || 0);
   const failed  = entry.lifecycle_status === 'FAILED';
+  const sourceType = String(entry.source_type || '').toUpperCase();
 
   // Hard failures não saem do FAILED sem retest_reason
   if (failed && !entry.retest_eligible) {
@@ -150,9 +152,18 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   // Uma venda atribuída, economicamente saudável e semanticamente aderente já
   // constitui performance comprovada. Ela ainda não é um WINNER escalável, mas
   // deve aparecer no Factory e pode entrar no harvest controlado.
+  const confirmedSearchTermOrder = orders >= 1 && [
+    'AUTO_SEARCH_TERM',
+    'BROAD_SEARCH_TERM',
+    'PHRASE_SEARCH_TERM',
+    'HISTORICAL_WINNER',
+  ].includes(sourceType);
+  const economicsPassed = sales > 0
+    ? isFactoryEconomicallyHealthy(entry, Number(goal.max_acos || goal.target_acos))
+    : confirmedSearchTermOrder;
   if (
     orders >= 1 &&
-    isFactoryEconomicallyHealthy(entry, Number(goal.max_acos || goal.target_acos)) &&
+    economicsPassed &&
     intent >= 72
   ) {
     return { status: 'PROVEN', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };
@@ -206,7 +217,9 @@ function generateCampaignPlan(
     campaignType = 'MANUAL_EXACT';
     campaignJob  = sourceType === 'HISTORICAL_WINNER' ? 'PROFIT' : 'PROFIT';
     matchType    = 'exact';
-    whyCreated   = `Winner proven: ${entry.orders} pedidos, ACoS ${acos.toFixed(1)}%, Intent ${intent}`;
+    whyCreated   = Number(entry.sales || 0) > 0
+      ? `Winner proven: ${entry.orders} pedidos, ACoS ${acos.toFixed(1)}%, Intent ${intent}`
+      : `Termo convertido: ${entry.orders} pedido(s), faturamento atribuído pendente, Intent ${intent}`;
   } else if ((lifecycle === 'CANDIDATE' || lifecycle === 'VALIDATING') && intent >= 85 && entry.amazon_recommended) {
     campaignType = 'MANUAL_EXACT';
     campaignJob  = 'VALIDATION';
