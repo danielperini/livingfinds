@@ -21,6 +21,7 @@ import {
   calculateFactoryIntentScore,
   campaignFactoryPlanKey,
   extractFactorySearchTermSignal,
+  isFactoryEconomicallyHealthy,
   normalizeFactoryKeyword,
 } from '../../shared/campaignFactorySignals.ts';
 
@@ -130,7 +131,7 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   // STRONG_WINNER
   if (
     orders >= goal.min_orders_strong &&
-    acos > 0 && acos <= goal.target_acos * DEFAULT_STRONG_ACOS_RATIO &&
+    isFactoryEconomicallyHealthy(entry, goal.target_acos * DEFAULT_STRONG_ACOS_RATIO) &&
     intent >= goal.min_intent_proven
   ) {
     return { status: 'WINNER', winnerTier: 'STRONG_WINNER', bankSegment: 'PROFIT_BANK' };
@@ -139,7 +140,7 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   // WINNER / PROVEN
   if (
     orders >= goal.min_orders_proven &&
-    acos > 0 && acos <= goal.target_acos * DEFAULT_MAX_ACOS_RATIO &&
+    isFactoryEconomicallyHealthy(entry, goal.target_acos * DEFAULT_MAX_ACOS_RATIO) &&
     intent >= goal.min_intent_proven &&
     clicks >= DEFAULT_MIN_CLICKS_PROVEN
   ) {
@@ -151,8 +152,7 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   // deve aparecer no Factory e pode entrar no harvest controlado.
   if (
     orders >= 1 &&
-    Number(entry.sales || 0) > 0 &&
-    acos > 0 && acos <= Number(goal.max_acos || goal.target_acos) &&
+    isFactoryEconomicallyHealthy(entry, Number(goal.max_acos || goal.target_acos)) &&
     intent >= 72
   ) {
     return { status: 'PROVEN', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };

@@ -86,3 +86,21 @@ export function campaignFactoryPlanKey(
     'CAMPAIGN_FACTORY',
   ].join('|');
 }
+
+export function isFactoryEconomicallyHealthy(
+  metrics: { sales?: unknown; spend?: unknown; acos?: unknown },
+  maxAcos: number,
+): boolean {
+  const sales = Math.max(0, Number(metrics.sales || 0));
+  const spend = Math.max(0, Number(metrics.spend || 0));
+  const reportedAcos = Math.max(0, Number(metrics.acos || 0));
+  if (sales <= 0) return false;
+
+  // A atribuição da venda pode chegar antes do gasto ou sem o ACoS calculado.
+  // Gasto zero é saudável; com gasto positivo, recalculamos o ACoS quando
+  // necessário para não promover um termo deficitário por dado incompleto.
+  const effectiveAcos = reportedAcos > 0 ? reportedAcos
+    : spend > 0 ? (spend / sales) * 100
+    : 0;
+  return spend === 0 || effectiveAcos <= Math.max(0, Number(maxAcos || 0));
+}

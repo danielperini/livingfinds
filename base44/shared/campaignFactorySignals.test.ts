@@ -3,6 +3,7 @@ import {
   calculateFactoryIntentScore,
   campaignFactoryPlanKey,
   extractFactorySearchTermSignal,
+  isFactoryEconomicallyHealthy,
 } from './campaignFactorySignals.ts';
 
 Deno.test('Factory lê os campos canônicos do relatório de search terms', () => {
@@ -48,4 +49,9 @@ Deno.test('Hash de plano é independente do hash operacional do Keyword Bank', (
     campaignFactoryPlanKey('b0abc12345', 'Lixeira Automática', 'EXACT'),
     'BR|B0ABC12345|lixeira automatica|exact|CAMPAIGN_FACTORY',
   );
+});
+
+Deno.test('Venda atribuída sem gasto não é descartada do Harvest', () => {
+  assert.ok(isFactoryEconomicallyHealthy({ sales: 89.9, spend: 0, acos: 0 }, 25));
+  assert.ok(!isFactoryEconomicallyHealthy({ sales: 100, spend: 40, acos: 0 }, 25));
 });
