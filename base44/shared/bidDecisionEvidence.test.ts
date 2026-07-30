@@ -30,45 +30,91 @@ Deno.test('cliques esperados acompanham a conversão histórica', () => {
   assert(calculateExpectedClicksPerOrder(0, 0.05) === 20);
 });
 
-Deno.test('menos de uma venda esperada aguarda dados', () => {
+Deno.test('pouca exposição econômica aguarda dados', () => {
   const evidence = assessNoConversionEvidence({
-    clicks: 9,
-    spend: 30,
+    clicks: 5,
+    matureClicks: 5,
+    spend: 8,
     conversionRate: 0.10,
     maximumAcquisitionSpend: 20,
+    attributionConfidence: 'complete',
+    ageDays: 7,
   });
   assert(evidence.level === 'wait_for_data');
 });
 
-Deno.test('uma a duas vendas esperadas reduz suavemente', () => {
+Deno.test('alerta antecipado reduz suavemente antes do prejuízo integral', () => {
   const evidence = assessNoConversionEvidence({
-    clicks: 15,
-    spend: 25,
+    clicks: 8,
+    matureClicks: 8,
+    spend: 12,
     conversionRate: 0.10,
     maximumAcquisitionSpend: 20,
+    attributionConfidence: 'complete',
+    ageDays: 7,
   });
   assert(evidence.level === 'reduce_soft');
-  assert(evidence.recommended_reduction_pct === 0.12);
+  assert(evidence.recommended_reduction_pct === 0.10);
 });
 
-Deno.test('duas vendas esperadas com gasto relevante reduz fortemente', () => {
+Deno.test('um ciclo econômico completo sem venda reduz fortemente', () => {
   const evidence = assessNoConversionEvidence({
-    clicks: 40,
-    spend: 25,
-    conversionRate: 0.05,
+    clicks: 10,
+    matureClicks: 10,
+    spend: 20,
+    conversionRate: 0.10,
     maximumAcquisitionSpend: 20,
+    attributionConfidence: 'complete',
+    ageDays: 7,
   });
   assert(evidence.level === 'reduce_strong');
-  assert(evidence.click_multiple === 2);
+  assert(evidence.recommended_reduction_pct === 0.20);
 });
 
-Deno.test('pausa é apenas candidata com baixa relevância persistente e gasto dobrado', () => {
+Deno.test('atribuição parcial recente é tratada como espera', () => {
+  const evidence = assessNoConversionEvidence({
+    clicks: 15,
+    matureClicks: 7,
+    spend: 15,
+    conversionRate: 0.10,
+    maximumAcquisitionSpend: 20,
+    attributionConfidence: 'partial',
+    ageDays: 1,
+  });
+  assert(evidence.level === 'wait_for_data');
+  assert(evidence.internal_state === 'hold_for_attribution');
+});
+
+Deno.test('pausa exige redução anterior, maturidade e evidência probabilística forte', () => {
   const evidence = assessNoConversionEvidence({
     clicks: 40,
+    matureClicks: 40,
     spend: 40,
-    conversionRate: 0.05,
+    conversionRate: 0.10,
     maximumAcquisitionSpend: 20,
     persistentLowRelevance: true,
+    priorReduction: true,
+    attributionConfidence: 'complete',
+    ageDays: 14,
+    isNewProduct: false,
+    deteriorationLevel: 'change',
   });
   assert(evidence.level === 'pause_candidate');
+  assert((evidence.probability_below_sustainable || 0) >= 0.95);
+});
+
+Deno.test('sem redução anterior nunca pausa diretamente', () => {
+  const evidence = assessNoConversionEvidence({
+    clicks: 60,
+    matureClicks: 60,
+    spend: 60,
+    conversionRate: 0.10,
+    maximumAcquisitionSpend: 20,
+    persistentLowRelevance: true,
+    priorReduction: false,
+    attributionConfidence: 'complete',
+    ageDays: 30,
+    deteriorationLevel: 'change',
+  });
+  assert(evidence.level === 'reduce_strong');
 });
