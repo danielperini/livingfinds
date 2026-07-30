@@ -401,7 +401,8 @@ Deno.serve(async (req) => {
 
       const kwAsinKey = `${normalized}|${asin}`;
       const existing  = bankByKwAsin.get(kwAsinKey);
-      const intentScore = calcIntentScore(kwText, product.product_name || product.display_name || '', product.category || '');
+      const productTitle = product.product_name || product.display_name || product.title || product.name || '';
+      const intentScore = calcIntentScore(kwText, productTitle, product.category || '');
 
       const acos   = (metrics.spend > 0 && metrics.sales > 0) ? (metrics.spend / metrics.sales) * 100 : 0;
       const ctr    = (metrics.impressions > 0 && metrics.clicks > 0) ? (metrics.clicks / metrics.impressions) * 100 : 0;
