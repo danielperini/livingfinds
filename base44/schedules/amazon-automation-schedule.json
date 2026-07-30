@@ -50,9 +50,15 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "Persistent Product Campaign Pause Guard - every 15 minutes",
+      "name": "Amazon offer availability verification - every 10 minutes",
+      "function": "syncAmazonOfferAvailability",
+      "cron": "1,11,21,31,41,51 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Persistent Product Campaign Pause Guard - every 10 minutes",
       "function": "autoStockCampaignGuard",
-      "cron": "3,18,33,48 * * * *",
+      "cron": "3,13,23,33,43,53 * * * *",
       "payload": { "_service_role": true, "enforce_pause_locks": true }
     },
     {

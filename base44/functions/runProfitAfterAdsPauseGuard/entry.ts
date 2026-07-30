@@ -25,6 +25,58 @@ function daysAgo(n: number) {
 const BID_FLOOR = 0.50;
 const PAUSE_DURATION_HOURS = 72;
 const CONSECUTIVE_DAYS_THRESHOLD = 2;
+const BID_REDUCTION_PCT = 0.20;
+const BID_REVIEW_HOURS = 48;
+
+async function reduceMostCostlyKeyword(base44: any, aid: string, asin: string, campaigns: any[], product: any, today: string) {
+  const candidates: any[] = [];
+  for (const campaign of campaigns) {
+    const campaignId = String(campaign.campaign_id || campaign.amazon_campaign_id || '');
+    if (!campaignId) continue;
+    const keywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, campaign_id: campaignId }, null, 500).catch(() => []);
+    for (const keyword of keywords as any[]) {
+      const keywordId = String(keyword.amazon_keyword_id || keyword.keyword_id || '');
+      const bid = Number(keyword.current_bid ?? keyword.bid ?? 0);
+      const state = String(keyword.state || keyword.status || '').toLowerCase();
+      if (!/^\d+$/.test(keywordId) || state !== 'enabled' || bid <= BID_FLOOR) continue;
+      const spend = Number(keyword.spend || 0);
+      const sales = Number(keyword.sales || 0);
+      const orders = Number(keyword.orders || 0);
+      const wasteScore = spend * (orders <= 0 || sales <= 0 ? 3 : Math.max(1, Number(keyword.acos || 0) / 100));
+      candidates.push({ campaign, campaignId, keyword, keywordId, bid, spend, sales, orders, wasteScore });
+    }
+  }
+  const worst = candidates.sort((a, b) => b.wasteScore - a.wasteScore || b.spend - a.spend)[0];
+  if (!worst || worst.spend <= 0) return { reduced: false, reason: 'no_keyword_cost_data' };
+
+  const idempotencyKey = `profit_guard_bid_down_${asin}_${worst.keywordId}_${today}`;
+  const existing = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid, idempotency_key: idempotencyKey }, null, 1).catch(() => []);
+  if (existing.length) return { reduced: true, reason: 'already_reduced', keyword: worst.keyword };
+
+  const newBid = Math.max(BID_FLOOR, Math.round(worst.bid * (1 - BID_REDUCTION_PCT) * 100) / 100);
+  if (newBid >= worst.bid) return { reduced: false, reason: 'bid_at_floor' };
+  const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+    amazon_account_id: aid, command: 'update_keyword',
+    payload: { campaign_id: worst.campaignId, ad_group_id: worst.keyword.ad_group_id, keyword_id: worst.keywordId, bid: newBid },
+    _service_role: true,
+  }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+  const data = response?.data || response || {};
+  const executed = data?.ok !== false;
+  if (executed) await base44.asServiceRole.entities.Keyword.update(worst.keyword.id, { bid: newBid, current_bid: newBid, last_bid_change_at: nowIso() }).catch(() => {});
+  await base44.asServiceRole.entities.OptimizationDecision.create({
+    amazon_account_id: aid, decision_type: 'bid_adjustment', entity_type: 'keyword', entity_id: worst.keywordId,
+    campaign_id: worst.campaignId, ad_group_id: worst.keyword.ad_group_id, keyword_id: worst.keywordId,
+    keyword_text: worst.keyword.keyword_text || worst.keyword.keyword, asin, sku: product?.sku || null,
+    action: `Reduzir bid da keyword de maior custo em ${Math.round(BID_REDUCTION_PCT * 100)}%`,
+    rationale: `Primeira ação contra prejuízo: ${worst.keyword.keyword_text || worst.keyword.keyword || worst.keywordId} consumiu R$${worst.spend.toFixed(2)} com ${worst.orders} pedido(s).`,
+    current_value: worst.bid, proposed_value: newBid, value_before: worst.bid, value_after: newBid, change_pct: -BID_REDUCTION_PCT * 100,
+    confidence: 85, risk: 'low', requires_approval: false, status: executed ? 'executed' : 'failed',
+    execution_error: executed ? null : String(data?.error || 'Amazon Ads não confirmou o ajuste'), source_function: 'runProfitAfterAdsPauseGuard',
+    idempotency_key: idempotencyKey, executed_at: executed ? nowIso() : null, created_at: nowIso(), updated_at: nowIso(),
+    data_used: JSON.stringify({ spend: worst.spend, sales: worst.sales, orders: worst.orders, waste_score: worst.wasteScore }),
+  }).catch(() => {});
+  return { reduced: executed, reason: executed ? 'bid_reduced' : 'bid_update_failed', keyword: worst.keyword };
+}
 
 Deno.serve(async (req) => {
   const t0 = Date.now();
@@ -53,6 +105,7 @@ Deno.serve(async (req) => {
     const today = todayBRT();
     const results = {
       paused: [] as string[],
+      bid_reduced: [] as string[],
       resumed: [] as string[],
       still_negative: [] as string[],
       skipped: [] as string[],
@@ -280,7 +333,27 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Verificar idempotência
+        // A pausa só é considerada depois de uma redução real do bid na
+        // keyword que concentrou o custo e de 48h de reavaliação.
+        const priorBidActions = await base44.asServiceRole.entities.OptimizationDecision.filter(
+          { amazon_account_id: aid, asin, source_function: 'runProfitAfterAdsPauseGuard' },
+          '-created_at', 100
+        ).catch(() => []);
+        const matureBidAction = priorBidActions.find((decision: any) =>
+          decision.decision_type === 'bid_adjustment' && decision.status === 'executed' &&
+          Date.now() - new Date(decision.executed_at || decision.created_at || 0).getTime() >= BID_REVIEW_HOURS * 3600000
+        );
+        if (!matureBidAction) {
+          const bidAction = await reduceMostCostlyKeyword(base44, aid, asin, asinCampaigns, product, today);
+          if (bidAction.reduced) {
+            results.bid_reduced.push(`${asin}:${bidAction.keyword?.keyword_text || bidAction.keyword?.keyword || 'keyword'}`);
+          } else {
+            results.skipped.push(`${asin}:bid_first_action_${bidAction.reason}`);
+          }
+          continue;
+        }
+
+        // Verificar idempotência da pausa após a janela de revisão.
         const pauseIdKey = `profit_guard_pause_${asin}_${today}`;
         const existingPause = await base44.asServiceRole.entities.OptimizationDecision.filter(
           { amazon_account_id: aid, idempotency_key: pauseIdKey },

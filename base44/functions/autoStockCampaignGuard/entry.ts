@@ -8,6 +8,7 @@ import {
   campaignMatchesProduct,
   isProductCampaignPauseLocked,
   manualPauseLockPatch,
+  productOfferEligibility,
 } from '../../shared/productCampaignPauseGuard.ts';
 
 function adsBase(region) {
@@ -101,7 +102,7 @@ Deno.serve(async (req) => {
     for (const account of accounts) {
       const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
       const region = account.region || 'NA';
-      const accountLog = { account_id: account.id, paused: 0, activated: 0, synced: 0, unlocked: 0, errors: [] };
+      const accountLog = { account_id: account.id, paused: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, errors: [] };
 
       let token = null;
       try {
@@ -181,6 +182,43 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        // Estoque FBA não é confirmação de que a oferta está comprável. A
+        // sincronização SP-API grava esses sinais antes deste guard; qualquer
+        // indisponibilidade explícita interrompe toda a publicidade do SKU.
+        const offer = productOfferEligibility(product);
+        if (!offer.eligible) {
+          const linkedCampaigns = localCampaigns.filter(c => campaignMatchesProduct(c, product));
+          const now = new Date().toISOString();
+          for (const lc of linkedCampaigns) {
+            const aid = lc.amazon_campaign_id || lc.campaign_id;
+            if (!aid || String(lc.state || lc.status || '').toLowerCase() === 'archived') continue;
+            const realState = amazonStates.get(String(aid)) || String(lc.state || lc.status || '').toLowerCase();
+            try {
+              if (realState === 'enabled') {
+                const pauseResult = await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
+                if (!pauseResult.ok) throw new Error(`Amazon HTTP ${pauseResult.status}`);
+                accountLog.paused++;
+                accountLog.paused_not_buyable++;
+              }
+              await db.entities.Campaign.update(lc.id, {
+                state: 'paused', status: 'paused', amazon_status: 'paused', is_operational: false,
+                last_pause_reason: offer.reason, synced_at: now,
+              });
+            } catch (e) {
+              accountLog.errors.push({ asin: product.asin, campaign_id: aid, step: 'enforce_offer_availability', error: e.message });
+            }
+          }
+          await db.entities.Product.update(product.id, {
+            campaign_status: 'paused',
+            pause_reason: String(offer.reason || 'LISTING_NOT_BUYABLE').toLowerCase(),
+            ads_pause_reason: offer.reason,
+            ads_paused_at: now,
+            ads_resume_pending: false,
+            should_activate_campaign: false,
+          }).catch(() => {});
+          continue;
+        }
+
         const isOutOfStock = invStatus === 'out_of_stock' || fba === 0;
         const isPausedByStock = pauseReason === 'out_of_stock_confirmed' || pauseReason.includes('stock');
 
@@ -223,7 +261,7 @@ Deno.serve(async (req) => {
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (!isOutOfStock && fba > 0 && isPausedByStock && isReallyPaused) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyPaused) {
           try {
             const linkedCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 5).catch(() => []);
             for (const lc of linkedCampaigns) {
@@ -241,7 +279,7 @@ Deno.serve(async (req) => {
         }
 
         // CASO C: tem estoque, pause_reason=stock, mas campanha já está ativa na Amazon → desbloquear registro local
-        if (!isOutOfStock && fba > 0 && isPausedByStock && isReallyActive) {
+        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyActive) {
           try {
             await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
             accountLog.unlocked++;

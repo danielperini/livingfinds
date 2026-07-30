@@ -3,6 +3,7 @@ import {
   campaignMatchesProduct,
   findPauseLockedProduct,
   isProductCampaignPauseLocked,
+  productOfferEligibility,
 } from './productCampaignPauseGuard.ts';
 
 const campaign = { id: 'db-1', campaign_id: '123', asin: 'B0ABC', sku: 'SKU-1' };
@@ -14,5 +15,9 @@ assert.equal(isProductCampaignPauseLocked({ campaign_status: 'active' }), false)
 assert.equal(campaignMatchesProduct(campaign, { linked_campaign_ids: ['123'] }), true);
 assert.equal(campaignMatchesProduct(campaign, { asin: 'b0abc' }), true);
 assert.equal(findPauseLockedProduct([{ asin: 'B0ABC', campaign_status: 'paused' }], campaign)?.asin, 'B0ABC');
+assert.equal(productOfferEligibility({ listing_buyable: false }).reason, 'LISTING_NOT_BUYABLE');
+assert.equal(productOfferEligibility({ offer_active: false }).reason, 'OFFER_INACTIVE');
+assert.equal(productOfferEligibility({ listing_suppressed: true }).reason, 'LISTING_SUPPRESSED');
+assert.equal(productOfferEligibility({ listing_buyable: true, offer_active: true }).eligible, true);
 
 console.log('productCampaignPauseGuard tests passed');

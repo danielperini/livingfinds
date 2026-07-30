@@ -15,6 +15,29 @@ export function isStockPause(product: any): boolean {
   return reason.includes('stock') || reason.includes('estoque');
 }
 
+/**
+ * A quantidade FBA não confirma que o cliente consegue comprar o item.
+ * Estes campos são alimentados pela consulta Listings Items da SP-API e têm
+ * precedência sobre estoque para qualquer ativação de publicidade.
+ */
+export function productOfferEligibility(product: any): { eligible: boolean; reason: string | null } {
+  const status = norm(product?.ads_eligibility_status);
+  if (product?.listing_suppressed === true || status === 'listing_suppressed') {
+    return { eligible: false, reason: 'LISTING_SUPPRESSED' };
+  }
+  if (product?.offer_active === false || ['offer_inactive', 'listing_inactive'].includes(status)) {
+    return { eligible: false, reason: 'OFFER_INACTIVE' };
+  }
+  if (product?.listing_buyable === false || status === 'not_buyable') {
+    return { eligible: false, reason: 'LISTING_NOT_BUYABLE' };
+  }
+  return { eligible: true, reason: null };
+}
+
+export function isProductEligibleForCampaignActivation(product: any): boolean {
+  return productOfferEligibility(product).eligible && !isProductCampaignPauseLocked(product);
+}
+
 export function isProductCampaignPauseLocked(product: any): boolean {
   if (!product) return false;
   if (product.campaign_pause_lock === true) return true;

@@ -1,6 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const PAUSE_SKUS = new Set(['FBA-0087C','FBA-0100','SKU-002314A','FBA-0065PR','SKU-002314V']);
+// Não há lista fixa de pausa por SKU: prejuízo precisa ser atribuído a uma
+// keyword/campanha e receber redução de bid antes de qualquer pausa.
+const PAUSE_SKUS = new Set<string>();
 // FBA-0008P voltou a apresentar lucro pós-Ads positivo. Ele sai da pausa rígida,
 // volta a entregar e opera com bid conservador enquanto a margem se recupera.
 const RECOVERY_SKUS = new Set(['FBA-0008P']);
