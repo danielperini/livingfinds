@@ -26,6 +26,11 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { runImmediateBudgetRescue } from '../../shared/immediateBudgetRescue.ts';
 import { calculateInventoryCoverage, calculateObservedWindowDays } from '../../shared/decisionMetrics.ts';
+import {
+  assessNoConversionEvidence,
+  calculateExpectedClicksPerOrder,
+  calculateMaximumEconomicCpc,
+} from '../../shared/bidDecisionEvidence.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HIERARQUIA CANÔNICA DE DECISÃO v7
@@ -1548,7 +1553,7 @@ Deno.serve(async (req) => {
       const effectiveMaxAcos = asinMeta
         ? Math.min(asinMeta.break_even, (settings.max_acos ?? FB.MAX_ACOS) * 1.5)
         : settings.max_acos;
-      const effectiveSafeMaxCpc = asinMeta?.safe_max_cpc || (settings.max_cpc > 0 ? settings.max_cpc : 0);
+      const productSafeMaxCpc = asinMeta?.safe_max_cpc || 0;
 
       const econForProduct = resolvedAsin
         ? (econByNsku.get(normSku(product?.sku || '')) || econByNsku.get(`ASIN:${resolvedAsin}`) || null)
@@ -1561,6 +1566,31 @@ Deno.serve(async (req) => {
       } : null);
 
       const kwIntent = kw.keyword_text ? classifySearchIntent(kw.keyword_text) : null;
+      const campaignHistoricalCvr = (wm?.d30?.clicks || 0) > 0 && (wm?.d30?.orders || 0) > 0
+        ? wm.d30.orders / wm.d30.clicks
+        : null;
+      const historicalConversionRate = kw_orders > 0 && kw_clicks > 0
+        ? kw_cvr
+        : campaignHistoricalCvr;
+      const maximumEconomicCpc = calculateMaximumEconomicCpc({
+        averageSalePrice: kw_orders > 0 ? kw_sales / kw_orders : asinMeta?.selling_price,
+        conversionRate: historicalConversionRate,
+        targetAcosPercent: effectiveTargetAcos,
+        safetyFactor: settings.safety_factor,
+      });
+      const cpcLimits = [
+        productSafeMaxCpc,
+        maximumEconomicCpc,
+        settings.max_cpc > 0 ? settings.max_cpc : 0,
+      ].filter((value: number | null) => value != null && value > 0) as number[];
+      const effectiveSafeMaxCpc = cpcLimits.length > 0 ? Math.min(...cpcLimits) : 0;
+      const expectedClicksPerOrder = calculateExpectedClicksPerOrder(
+        historicalConversionRate,
+        settings.fallback_cvr,
+      );
+      const preliminaryAcquisitionSpend = (asinMeta?.selling_price || 0) > 0 && effectiveTargetAcos > 0
+        ? asinMeta.selling_price * (effectiveTargetAcos / 100)
+        : 0;
 
       const lastExec = lastExecByRuleEntity.get(`bid_change|${entityId}`);
       if (lastExec) {
@@ -1747,7 +1777,15 @@ Deno.serve(async (req) => {
       });
       const recentSaleProtected = FB.WINNER_PROTECTION_ENABLED && wpKwResult.protected;
 
-      const hasMinEvidence = kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && kw_spend >= MRC.MIN_SPEND;
+      const adaptiveMinimumClicks = kw_orders === 0
+        ? Math.min(FB.MIN_CLICKS_BEFORE_PAUSE, expectedClicksPerOrder)
+        : FB.MIN_CLICKS_BEFORE_PAUSE;
+      const adaptiveMinimumSpend = kw_orders === 0 && preliminaryAcquisitionSpend > 0
+        ? Math.min(MRC.MIN_SPEND, preliminaryAcquisitionSpend)
+        : MRC.MIN_SPEND;
+      const hasMinEvidence = kw_clicks >= adaptiveMinimumClicks
+        && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE
+        && kw_spend >= adaptiveMinimumSpend;
       const hasCtrQuality = kw_impressions > 0 && kw_ctr >= MRC.MIN_CTR;
 
       if (!hasMinEvidence) {
@@ -1850,7 +1888,13 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      const noConvMinSpend = funnel.maximum_profitable_cpa > 0 ? funnel.maximum_profitable_cpa : MRC.MIN_SPEND;
+      const acquisitionLimits = [
+        funnel.maximum_profitable_cpa,
+        preliminaryAcquisitionSpend,
+      ].filter((value: number) => value > 0);
+      const noConvMinSpend = acquisitionLimits.length > 0
+        ? Math.min(...acquisitionLimits)
+        : MRC.MIN_SPEND;
       const noConvDataValid = econStatus.economic_confidence !== 'none' && dataFreshness !== 'stale';
       const campCreatedAt = campForKw?.created_at || campForKw?.created_date || null;
       const campAgeHours = campCreatedAt ? (Date.now() - new Date(campCreatedAt).getTime()) / 3600000 : 999;
@@ -1867,29 +1911,57 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      if (!recentSaleProtected && hasMinExposureTime && kw_spend >= noConvMinSpend
-          && kw_orders === 0 && kw_clicks >= FB.MIN_CLICKS_BEFORE_PAUSE
-          && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE && noConvDataValid) {
+      const isLowIntent = kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational';
+      const noConversionEvidence = assessNoConversionEvidence({
+        clicks: kw_clicks,
+        spend: kw_spend,
+        conversionRate: historicalConversionRate,
+        fallbackConversionRate: settings.fallback_cvr,
+        maximumAcquisitionSpend: noConvMinSpend,
+        persistentLowRelevance: isLowIntent && isSecondReview,
+      });
+
+      if (!recentSaleProtected && hasMinExposureTime
+          && kw_orders === 0 && kw_impressions >= FB.MIN_IMP_BEFORE_PAUSE
+          && noConvDataValid && noConversionEvidence.level !== 'wait_for_data') {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
-          const isLowIntent = kwIntent?.purchase_intent === 'low' || kwIntent?.intent_type === 'informational';
-          const shouldPause = canPauseCampaign && isLowIntent && kw_spend >= noConvMinSpend * 2 && !isNewProduct;
-          const reductionPct = isSecondReview ? settings.max_bid_decrease_pct : settings.max_bid_decrease_pct * 0.5;
+          const shouldPause = canPauseCampaign
+            && noConversionEvidence.level === 'pause_candidate'
+            && !isNewProduct;
+          const reductionPct = Math.min(
+            settings.max_bid_decrease_pct,
+            Math.max(0.10, noConversionEvidence.recommended_reduction_pct),
+          );
           const newBid = shouldPause
             ? settings.min_bid
             : clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
           const phase = canPauseCampaign ? '3ª revisão (14d+)' : isSecondReview ? '2ª revisão (10d+)' : '1ª revisão (7d+)';
+          const confidence = noConversionEvidence.level === 'pause_candidate'
+            ? 90
+            : noConversionEvidence.level === 'reduce_strong' ? 82 : 70;
+          const nextReviewDays = noConversionEvidence.level === 'reduce_soft' ? 5 : 3;
           decisions.push(buildDecision(aid, correlationId, {
             decision_type: shouldPause ? 'reduce_waste' : 'bid_change',
             entity_type: 'keyword', entity_id: entityId,
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
             keyword_text: kw.keyword_text, action: shouldPause ? 'pause_keyword' : 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `[${phase}] ${kw_clicks} cliques, ${kw_impressions} impr, R$${kw_spend.toFixed(2)} gastos (≥ CPA máx R$${noConvMinSpend.toFixed(2)}), ZERO conversões, campanha com ${Math.round(campAgeDays)}d. Intenção: ${kwIntent?.intent_type || 'desconhecida'}. ${shouldPause ? 'PAUSA — todos os critérios atendidos.' : `Bid reduzido ${Math.round(reductionPct * 100)}%.`}`,
+            rationale: `[${phase}] ZERO conversões após ${kw_clicks} cliques (${noConversionEvidence.click_multiple}× os ${noConversionEvidence.expected_clicks_per_order} cliques esperados por pedido) e R${kw_spend.toFixed(2)} de gasto (${noConversionEvidence.spend_multiple ?? 0}× o limite de aquisição R${noConvMinSpend.toFixed(2)}). Intenção: ${kwIntent?.intent_type || 'desconhecida'}. ${shouldPause ? 'PAUSA — baixa relevância persistente, maturidade e evidência financeira confirmadas.' : `Bid reduzido ${Math.round(reductionPct * 100)}%.`}`,
             rule_key: shouldPause ? 'no_conversion_pause' : 'no_conversion_reduce',
             risk: shouldPause ? 'medium' : 'low', priority: PRIORITY.waste_reduction,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, opportunity_state: 'no_opportunity',
+            confidence,
+            expected_clicks_per_order: noConversionEvidence.expected_clicks_per_order,
+            no_conversion_click_multiple: noConversionEvidence.click_multiple,
+            maximum_acquisition_spend: noConvMinSpend,
+            maximum_economic_cpc: maximumEconomicCpc,
+            current_cpc: kw_cpc,
+            current_acos: kw_acos,
+            target_acos: effectiveTargetAcos,
+            decision_confidence_level: confidence >= 85 ? 'high' : 'medium',
+            next_review_days: nextReviewDays,
           }));
           entityChangedThisCycle.set(entityId, 'no_conversion');
           if (shouldPause) stats.paused++; else stats.bid_reduce++;
@@ -1910,6 +1982,11 @@ Deno.serve(async (req) => {
             rule_key: 'cpc_above_safe_max', risk: 'medium', priority: PRIORITY.margin,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, opportunity_state: 'no_opportunity',
+            maximum_economic_cpc: maximumEconomicCpc,
+            current_cpc: kw_cpc,
+            current_acos: kw_acos,
+            target_acos: effectiveTargetAcos,
+            next_review_days: 3,
           }));
           entityChangedThisCycle.set(entityId, 'cpc_safe');
           stats.bid_reduce++;
@@ -2195,6 +2272,15 @@ Deno.serve(async (req) => {
           stock_urgency: d.stock_urgency,
           sales_velocity_daily: d.sales_velocity_daily,
           inventory_signal_quality: d.inventory_signal_quality,
+          current_cpc: d.current_cpc,
+          maximum_economic_cpc: d.maximum_economic_cpc,
+          current_acos: d.current_acos,
+          target_acos: d.target_acos,
+          expected_clicks_per_order: d.expected_clicks_per_order,
+          no_conversion_click_multiple: d.no_conversion_click_multiple,
+          maximum_acquisition_spend: d.maximum_acquisition_spend,
+          decision_confidence_level: d.decision_confidence_level,
+          next_review_days: d.next_review_days,
         }))
       ).catch(() => []);
       saved += batch.length;
