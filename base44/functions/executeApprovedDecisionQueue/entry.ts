@@ -1,4 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import {
+  priorityRank,
+  shouldSupersedeDecision,
+  type PriorityClass,
+} from '../../shared/decisionExecutionPolicy.ts';
+import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 
 const MAX_BATCH = 30;
 const API_DELAY_MS = 400;
@@ -55,6 +61,11 @@ function prioritize(decisions: any[]): any[] {
     budget_change: 4, update_budget: 4, reduce_budget: 4, increase_budget: 4,
   };
   return [...decisions].sort((a, b) => {
+    const priorityDelta = priorityRank((a.priority_class || 'P2') as PriorityClass)
+      - priorityRank((b.priority_class || 'P2') as PriorityClass);
+    if (priorityDelta !== 0) return priorityDelta;
+    if (a.execution_mode === 'EXECUTE_NOW' && b.execution_mode !== 'EXECUTE_NOW') return -1;
+    if (b.execution_mode === 'EXECUTE_NOW' && a.execution_mode !== 'EXECUTE_NOW') return 1;
     const pa = order[a.action] ?? 9;
     const pb = order[b.action] ?? 9;
     if (pa !== pb) return pa - pb;
@@ -110,6 +121,62 @@ Deno.serve(async (request) => {
     // Antes de executar: verificar se decisões de pausa ainda são válidas.
     // Se campanha tem vendas recentes (orders_14d>0) E ACoS<=15% → cancelar decisão.
     let preAutoCancel = 0;
+    const deferredDecisionIds = new Set<string>();
+    const dominantByConflict = new Map<string, any>();
+    for (const decision of prioritize(approved)) {
+      const nowMs = Date.now();
+      if (decision.execution_mode === 'MANUAL_REVIEW') {
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'pending_approval',
+          requires_approval: true,
+          approval_status: 'manual_review_required',
+        }).catch(() => {});
+        preAutoCancel++;
+        continue;
+      }
+      if (decision.not_before && new Date(decision.not_before).getTime() > nowMs) {
+        deferredDecisionIds.add(String(decision.id));
+        continue;
+      }
+      const expiration = decision.execute_before || decision.expires_at;
+      if (expiration && new Date(expiration).getTime() < nowMs) {
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'expired',
+          error_message: 'DECISION_WINDOW_EXPIRED: a janela operacional terminou antes da execução.',
+        }).catch(() => {});
+        preAutoCancel++;
+        continue;
+      }
+      if (decision.requires_fresh_data === true && decision.data_window_end) {
+        const reference = decision.execution_mode === 'EXECUTE_NOW'
+          ? decision.created_at
+          : `${String(decision.data_window_end).slice(0, 10)}T23:59:59Z`;
+        const maximumAge = Number(decision.maximum_data_age_minutes || 36 * 60);
+        const ageMinutes = reference ? (nowMs - new Date(reference).getTime()) / 60000 : 0;
+        if (ageMinutes > maximumAge) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'expired',
+            error_message: `STALE_DATA_EXPIRED: evidência com ${Math.round(ageMinutes)} min excede ${maximumAge} min.`,
+          }).catch(() => {});
+          preAutoCancel++;
+          continue;
+        }
+      }
+
+      const conflictGroup = String(decision.conflict_group || '');
+      if (!conflictGroup) continue;
+      const dominant = dominantByConflict.get(conflictGroup);
+      if (dominant && shouldSupersedeDecision(dominant, decision)) {
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'cancelled',
+          cancelled_by_decision_id: dominant.id,
+          error_message: `SUPERSEDED_BY_HIGHER_PRIORITY: ${dominant.priority_class || 'P2'} venceu no grupo ${conflictGroup}.`,
+        }).catch(() => {});
+        preAutoCancel++;
+        continue;
+      }
+      dominantByConflict.set(conflictGroup, decision);
+    }
     const pauseDecisions = approved.filter(d =>
       d.action === 'pause_campaign' || d.action === 'pause_keyword' || d.action === 'archive_campaign'
     );
@@ -174,7 +241,9 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
     }
 
-    const toProcess = prioritize(stillApproved).slice(0, MAX_BATCH);
+    const toProcess = prioritize(stillApproved)
+      .filter(decision => !deferredDecisionIds.has(String(decision.id)))
+      .slice(0, MAX_BATCH);
     const results: any[] = [];
     let executed = 0, failed = 0, skipped = 0;
 
@@ -182,6 +251,26 @@ Deno.serve(async (request) => {
       if (Date.now() - t0 > 90000) break;
 
       try {
+        const capability = validateAmazonAction({
+          action: decision.action,
+          execution_mode: decision.execution_mode,
+        });
+        if (!capability.valid) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'skipped',
+            error_message: capability.reason,
+          }).catch(() => {});
+          results.push({
+            id: decision.id,
+            action: decision.action,
+            ok: false,
+            skipped: true,
+            reason: capability.reason,
+          });
+          skipped++;
+          continue;
+        }
+
         // HARD GUARD: bloquear create_keyword se campanha já tem keyword ativa
         // Regra canônica: 1 campanha manual = 1 keyword EXACT
         if (
