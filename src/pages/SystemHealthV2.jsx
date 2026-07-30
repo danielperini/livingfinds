@@ -45,26 +45,23 @@ export default function SystemHealthV2() {
       }
 
       const accountId = account.id;
-      const [campaigns, products, keywords, logs, pendingBefore, approvedBefore] = await Promise.all([
-        base44.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_date', 1),
-        base44.entities.Product.filter({ amazon_account_id: accountId }, '-created_date', 1),
-        base44.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_date', 1),
-        base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 30),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId, status: 'pending' }, '-created_at', 100),
-        base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId, status: 'approved' }, 'created_at', 50),
+      const [campaigns, products, keywords, logs, decisions, locks] = await Promise.all([
+        base44.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_date', 1000),
+        base44.entities.Product.filter({ amazon_account_id: accountId }, '-created_date', 500),
+        base44.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_date', 1000),
+        base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-started_at', 200),
+        base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 500),
+        base44.entities.AmazonSchedulerLock.filter({ amazon_account_id: accountId }, '-acquired_at', 50),
       ]);
 
-      let queue = { executed: 0, failed: 0 };
-      if (approvedBefore.length) {
-        try {
-          const response = await base44.functions.invoke('executeApprovedDecisionQueue', { amazon_account_id: accountId, limit: 50 });
-          queue = response?.data || queue;
-        } catch (error) {
-          queue = { executed: 0, failed: approvedBefore.length, error: error?.response?.data?.error || error.message };
-        }
-      }
-
-      const approvedAfter = await base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId, status: 'approved' }, 'created_at', 50);
+      // Diagnóstico é estritamente read-only: abrir o painel nunca executa
+      // decisões nem produz escrita na Amazon.
+      const byStatus = (status) => decisions.filter((decision) => decision.status === status);
+      const proposed = byStatus('proposed');
+      const approved = byStatus('approved');
+      const executed = byStatus('executed');
+      const confirmed = executed.filter((decision) => decision.confirmed_at || decision.confirmation_status === 'confirmed');
+      const activeLocks = locks.filter((lock) => lock.status === 'acquired' && new Date(lock.expires_at || 0).getTime() > Date.now());
       const actualErrors = logs.filter((log) => String(log.status).toLowerCase() === 'error' && !benignLock(log));
       const recoveredLocks = logs.filter((log) => benignLock(log));
       const successfulLogs = logs.filter((log) => ['success', 'completed'].includes(String(log.status).toLowerCase()));
@@ -100,8 +97,20 @@ export default function SystemHealthV2() {
           detail: actualErrors.length ? `${actualErrors.length} erro(s) real(is): ${actualErrors[0]?.error_message?.slice(0, 100) || 'sem detalhe'}` : `Sem erros reais${recoveredLocks.length ? ` · ${recoveredLocks.length} lock(s) recuperado(s) ignorado(s)` : ''}`,
         },
         pendingDecisions: {
-          status: approvedAfter.length || queue.failed ? 'degraded' : pendingBefore.length > 20 ? 'degraded' : 'healthy',
-          detail: `${pendingBefore.length} pendentes · ${approvedAfter.length} aprovadas aguardando execução · ${queue.executed || 0} executadas agora${queue.failed ? ` · ${queue.failed} falharam` : ''}`,
+          status: approved.length ? 'degraded' : proposed.length > 20 ? 'degraded' : 'healthy',
+          detail: `${proposed.length} propostas/shadow · ${approved.length} aprovadas aguardando execução · diagnóstico somente leitura`,
+        },
+        confirmations: {
+          status: executed.length === confirmed.length ? 'healthy' : executed.length - confirmed.length > 10 ? 'unavailable' : 'degraded',
+          detail: `${executed.length} executadas · ${confirmed.length} confirmadas · ${byStatus('failed').length} falhas · ${byStatus('expired').length} expiradas · ${byStatus('cancelled').length} canceladas · ${byStatus('rolled_back').length} rollbacks`,
+        },
+        shadow: {
+          status: proposed.some((decision) => decision.approval_status === 'shadow_only') ? 'degraded' : 'healthy',
+          detail: `${proposed.filter((decision) => decision.approval_status === 'shadow_only').length} propostas IA em shadow · nenhuma é executada automaticamente`,
+        },
+        lock: {
+          status: activeLocks.length > 1 ? 'unavailable' : 'healthy',
+          detail: activeLocks.length ? `${activeLocks.length} lock ativo até ${dateText(activeLocks[0].expires_at)}` : 'Nenhum lock ativo neste momento',
         },
         scheduler: {
           status: !schedulerKnown ? 'degraded' : schedulerErrors.length ? 'unavailable' : 'healthy',
@@ -138,7 +147,7 @@ export default function SystemHealthV2() {
       <Section title="Conta e integração Amazon" icon={Globe}><Row label="Conta Amazon" {...checks.account} icon={Shield} /><Row label="Amazon Ads OAuth" {...checks.adsAuth} icon={Shield} /><Row label="SP-API Catálogo/Inventário" {...checks.spApi} icon={Shield} /></Section>
       <Section title="Banco de Dados" icon={Database}><Row label="Entidades principais" {...checks.database} icon={Database} /><Row label="Erros de Sync recentes" {...checks.syncErrors} icon={AlertCircle} /><Row label="Decisões pendentes" {...checks.pendingDecisions} icon={Zap} /></Section>
       <Section title="Schedulers e sincronização" icon={Clock}><Row label="Schedulers" {...checks.scheduler} icon={Clock} /><Row label="Último sync bem-sucedido" {...checks.lastSync} icon={RefreshCw} /></Section>
-      <Section title="Motor IA" icon={Activity}><Row label="Fila de execução automática" status={checks.pendingDecisions?.status || 'checking'} detail="Decisões aprovadas são executadas durante o diagnóstico e pela fila automática." icon={Zap} /><Row label="Guardrail de lock" status="healthy" detail="Locks liberados por timeout são tratados como recuperação, não como erro de sync." icon={Shield} /></Section>
+      <Section title="Motor IA" icon={Activity}><Row label="Fila de execução automática" status={checks.pendingDecisions?.status || 'checking'} detail={checks.pendingDecisions?.detail || 'Verificando fila'} icon={Zap} /><Row label="Confirmação e resultados" {...checks.confirmations} icon={CheckCircle} /><Row label="Funções em shadow" {...checks.shadow} icon={Activity} /><Row label="Guardrail de lock" {...checks.lock} icon={Shield} /></Section>
     </div>
   </div>;
 }
