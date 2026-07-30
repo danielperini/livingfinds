@@ -120,6 +120,30 @@
       "type": "string",
       "enum": ["sufficient", "insufficient_history"]
     },
+    "current_cpc": { "type": "number" },
+    "maximum_economic_cpc": {
+      "type": "number",
+      "description": "Teto calculado por preço médio × CVR histórica × ACoS-alvo × fator de segurança."
+    },
+    "current_acos": { "type": "number" },
+    "target_acos": { "type": "number" },
+    "expected_clicks_per_order": {
+      "type": "number",
+      "description": "Amostra esperada para uma conversão com base na CVR histórica ou fallback configurado."
+    },
+    "no_conversion_click_multiple": {
+      "type": "number",
+      "description": "Cliques sem venda divididos pelos cliques esperados por pedido."
+    },
+    "maximum_acquisition_spend": {
+      "type": "number",
+      "description": "Menor limite entre margem disponível e preço × ACoS-alvo."
+    },
+    "decision_confidence_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "next_review_days": { "type": "number" },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" }
   },
