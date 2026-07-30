@@ -3,6 +3,7 @@
  * Usa as credenciais da AmazonAccount da própria ação, com fallback nos secrets.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { clearManualPauseLockPatch, campaignMatchesProduct } from '../../shared/productCampaignPauseGuard.ts';
 
 const tokenCache = {};
 
@@ -210,6 +211,21 @@ Deno.serve(async (request) => {
           campaigns: [{ campaignId: String(action.campaign_id), state: 'ENABLED' }],
         }, 'application/vnd.spCampaign.v3+json');
         await updateCampaignLocal(base44, action, 'enabled', now);
+        {
+          const campaignRows = await base44.asServiceRole.entities.Campaign.filter({
+            amazon_account_id: action.amazon_account_id,
+            campaign_id: String(action.campaign_id),
+          }).catch(() => []);
+          const products = await base44.asServiceRole.entities.Product.filter({
+            amazon_account_id: action.amazon_account_id,
+          }, null, 2000).catch(() => []);
+          for (const product of products.filter(p => campaignRows.some(c => campaignMatchesProduct(c, p)))) {
+            await base44.asServiceRole.entities.Product.update(
+              product.id,
+              clearManualPauseLockPatch(now, user.email || user.id)
+            ).catch(() => {});
+          }
+        }
         break;
 
       case 'negative_keyword':

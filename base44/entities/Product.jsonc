@@ -94,6 +94,21 @@
       ],
       "default": "none"
     },
+    "campaign_pause_lock": {
+      "type": "boolean",
+      "default": false,
+      "description": "Trava persistente: impede qualquer reativação automática enquanto o produto permanecer pausado."
+    },
+    "campaign_pause_lock_reason": {
+      "type": "string"
+    },
+    "campaign_pause_locked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "campaign_pause_locked_by": {
+      "type": "string"
+    },
     "should_activate_campaign": {
       "type": "boolean",
       "default": false

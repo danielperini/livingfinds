@@ -190,6 +190,9 @@ export default function CampaignCard({ asin, accountId, onCampaignChange }) {
       const res = await base44.functions.invoke('pauseCampaign', {
         amazon_account_id: accountId,
         campaign_id: campaign.campaign_id,
+        asin,
+        lock_product_paused: true,
+        pause_source: 'user_manual',
       });
 
       if (res.data?.ok) {
@@ -217,9 +220,17 @@ export default function CampaignCard({ asin, accountId, onCampaignChange }) {
     setUiState(UI_STATES.ACTIVATING);
 
     try {
-      const res = await base44.functions.invoke('reactivateCampaigns', {
+      const action = await base44.entities.AgentAction.create({
         amazon_account_id: accountId,
-        campaign_ids: [campaign.campaign_id],
+        action: 'enable_campaign',
+        campaign_id: campaign.campaign_id,
+        asin,
+        reason: 'Ativação manual via Produtos',
+        requires_approval: false,
+      });
+      const res = await base44.functions.invoke('executeAgentAction', {
+        action_id: action.id,
+        approve: true,
       });
 
       if (res.data?.ok) {

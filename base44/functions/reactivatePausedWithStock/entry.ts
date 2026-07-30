@@ -5,6 +5,7 @@
 // targeting_type_filter='AUTO' filtra somente campanhas automáticas.
 // include_incomplete=true inclui campanhas com state='incomplete'.
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
 
 const BLOCKED_REASONS = ['OUT_OF_STOCK', 'USER_MANUAL', 'POLICY', 'ABOVE_BREAK_EVEN', 'LISTING_BLOCKED'];
 
@@ -234,6 +235,7 @@ Deno.serve(async (req) => {
       for (const c of localCandidates) {
         // Excluir arquivadas
         if (c.archived || String(c.state || '').toLowerCase() === 'archived') { log.skipped_other++; continue; }
+        if (findPauseLockedProduct(products, c)) { log.skipped_other++; continue; }
 
         // Filtrar por targeting_type se solicitado
         if (targetingFilter) {

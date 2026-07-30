@@ -4,6 +4,11 @@
 // 3. Reativa campanhas pausadas por estoque de produtos que foram reabastecidos
 // 4. Desbloqueia registros presos (pause_reason setado mas campanha já ativa na Amazon)
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  campaignMatchesProduct,
+  isProductCampaignPauseLocked,
+  manualPauseLockPatch,
+} from '../../shared/productCampaignPauseGuard.ts';
 
 function adsBase(region) {
   const r = String(region || 'NA').toUpperCase();
@@ -141,6 +146,40 @@ Deno.serve(async (req) => {
 
         const hasCampaign = Boolean(amazonId || product.has_campaign || ['active', 'enabled', 'paused'].includes(campStatus));
         if (!hasCampaign) continue;
+
+        // REGRA SOBERANA: produto pausado manualmente permanece pausado.
+        // Também migra pausas legadas (sem pause_reason de estoque) para a trava explícita.
+        if (isProductCampaignPauseLocked(product)) {
+          const lockedCampaigns = localCampaigns.filter(c => campaignMatchesProduct(c, product));
+          const now = new Date().toISOString();
+          for (const lc of lockedCampaigns) {
+            const aid = lc.amazon_campaign_id || lc.campaign_id;
+            if (!aid || String(lc.state || '').toLowerCase() === 'archived') continue;
+            const realState = amazonStates.get(String(aid)) || String(lc.state || lc.status || '').toLowerCase();
+            try {
+              if (realState === 'enabled') {
+                const pauseResult = await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
+                if (!pauseResult.ok) throw new Error(`Amazon HTTP ${pauseResult.status}`);
+                accountLog.paused++;
+              }
+              await db.entities.Campaign.update(lc.id, {
+                state: 'paused',
+                status: 'paused',
+                amazon_status: 'paused',
+                is_operational: false,
+                last_pause_reason: 'USER_MANUAL_PRODUCT_LOCK',
+                synced_at: now,
+              });
+            } catch (e) {
+              accountLog.errors.push({ asin: product.asin, campaign_id: aid, step: 'enforce_manual_pause', error: e.message });
+            }
+          }
+          await db.entities.Product.update(product.id, {
+            ...manualPauseLockPatch(now, product.campaign_pause_locked_by || 'pause_guard_migration'),
+            has_campaign: true,
+          }).catch(() => {});
+          continue;
+        }
 
         const isOutOfStock = invStatus === 'out_of_stock' || fba === 0;
         const isPausedByStock = pauseReason === 'out_of_stock_confirmed' || pauseReason.includes('stock');

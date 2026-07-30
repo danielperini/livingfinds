@@ -4,6 +4,7 @@
  * Centraliza autenticação via secret ADS_REFRESH_TOKEN (fonte primária).
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { manualPauseLockPatch } from '../../shared/productCampaignPauseGuard.ts';
 
 async function getAdsToken(refreshToken: string): Promise<string> {
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
@@ -53,6 +54,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, campaign_id, asin, sku } = body;
+    const lockProductPaused = body.lock_product_paused === true;
 
     if (!amazon_account_id || (!campaign_id && !asin && !sku)) {
       return Response.json({ ok: false, error: 'amazon_account_id + (campaign_id | asin | sku) obrigatórios' }, { status: 400 });
@@ -263,6 +265,7 @@ Deno.serve(async (req) => {
       await base44.asServiceRole.entities.Campaign.update(campaign.id, {
         state: 'paused', status: 'paused',
         original_state: campaign.state,
+        last_pause_reason: lockProductPaused ? 'USER_MANUAL_PRODUCT_LOCK' : campaign.last_pause_reason,
         last_activity_at: now, synced_at: now, last_sync_at: now,
       });
     }
@@ -281,6 +284,7 @@ Deno.serve(async (req) => {
       await base44.asServiceRole.entities.Product.update(product.id, {
         has_campaign: true, campaign_status: 'paused',
         ads_paused_at: now,
+        ...(lockProductPaused ? manualPauseLockPatch(now, user.email || user.id) : {}),
       });
     }
 

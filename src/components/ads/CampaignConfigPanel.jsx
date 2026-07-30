@@ -45,17 +45,25 @@ export default function CampaignConfigPanel({ campaign, account, products, onSav
           await base44.functions.invoke('pauseCampaign', {
             amazon_account_id: account.id,
             campaign_id: campaign.campaign_id,
+            asin: campaign.asin,
+            lock_product_paused: true,
+            pause_source: 'user_manual',
           });
         }
         // Para 'enabled' usa agentAction
         if (form.state === 'enabled') {
-          await base44.entities.AgentAction.create({
+          const action = await base44.entities.AgentAction.create({
             amazon_account_id: account.id,
             action: 'enable_campaign',
             campaign_id: campaign.campaign_id,
             reason: 'Ativação manual via configurações',
             requires_approval: false,
           });
+          const execution = await base44.functions.invoke('executeAgentAction', {
+            action_id: action.id,
+            approve: true,
+          });
+          if (!execution?.data?.ok) throw new Error(execution?.data?.error || 'Falha ao ativar campanha');
         }
       }
 

@@ -9,6 +9,7 @@
  * - Log de erro apenas em falha real (não em 429 esperado)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
@@ -128,6 +129,46 @@ Deno.serve(async (request) => {
     const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID') || null;
     const maxAttempts = Number(body.max_attempts || 3);
 
+    // Guardrail central: nenhum comando interno pode reativar campanha de
+    // produto pausado. A liberação só ocorre por ação manual explícita da UI.
+    let guardedPayload = body.payload ?? null;
+    if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
+      const enabling = guardedPayload.campaigns.filter((item: any) =>
+        String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId
+      );
+      if (enabling.length > 0) {
+        const localCampaigns = await base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: body.amazon_account_id }, null, 3000
+        ).catch(() => []);
+        const products = await base44.asServiceRole.entities.Product.filter(
+          { amazon_account_id: body.amazon_account_id }, null, 2000
+        ).catch(() => []);
+        const blockedIds = new Set<string>();
+        for (const item of enabling) {
+          const local = localCampaigns.find((c: any) =>
+            String(c.campaign_id || '') === String(item.campaignId) ||
+            String(c.amazon_campaign_id || '') === String(item.campaignId)
+          ) || { campaign_id: String(item.campaignId) };
+          if (findPauseLockedProduct(products, local)) blockedIds.add(String(item.campaignId));
+        }
+        if (blockedIds.size > 0) {
+          guardedPayload = {
+            ...guardedPayload,
+            campaigns: guardedPayload.campaigns.filter((item: any) => !blockedIds.has(String(item?.campaignId))),
+          };
+          if (guardedPayload.campaigns.length === 0) {
+            return Response.json({
+              ok: false,
+              blocked: true,
+              error: 'PRODUCT_CAMPAIGN_PAUSE_LOCK',
+              blocked_campaign_ids: [...blockedIds],
+              message: 'Reativação bloqueada: o produto permanece pausado.',
+            }, { status: 409 });
+          }
+        }
+      }
+    }
+
     async function buildHeaders(forceRefresh = false): Promise<Record<string, string>> {
       const tokenResult = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
         amazon_account_id: body.amazon_account_id,
@@ -174,14 +215,14 @@ Deno.serve(async (request) => {
 
     // Primeira tentativa
     let headers = await buildHeaders(false);
-    let result = await callAmazonApi(url, method, headers, body.payload ?? null, maxAttempts);
+    let result = await callAmazonApi(url, method, headers, guardedPayload, maxAttempts);
 
     // Em 401/403: força refresh e tenta uma vez mais
     if (result.status === 401 || result.status === 403) {
       console.log(`[adsCommand] ${result.status} — forçando refresh de token`);
       try {
         headers = await buildHeaders(true);
-        result = await callAmazonApi(url, method, headers, body.payload ?? null, 1);
+        result = await callAmazonApi(url, method, headers, guardedPayload, 1);
         if (result.status === 401 || result.status === 403) {
           await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
             ads_token_status: 'revoked',

@@ -1,4 +1,8 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  clearManualPauseLockPatch,
+  findPauseLockedProduct,
+} from '../../shared/productCampaignPauseGuard.ts';
 
 const tokenCache = {};
 
@@ -71,11 +75,41 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const { action, campaign_id, index, total } = body;
 
+    const guardActivation = async (id) => {
+      const campaigns = await base44.asServiceRole.entities.Campaign.filter(
+        body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}, null, 2000
+      ).catch(() => []);
+      const campaign = campaigns.find(c =>
+        String(c.campaign_id || '') === String(id) ||
+        String(c.amazon_campaign_id || '') === String(id)
+      ) || { campaign_id: id };
+      const products = await base44.asServiceRole.entities.Product.filter(
+        body.amazon_account_id ? { amazon_account_id: body.amazon_account_id } : {}, null, 2000
+      ).catch(() => []);
+      const locked = findPauseLockedProduct(products, campaign);
+      if (locked && body.clear_product_pause_lock !== true) {
+        return { blocked: true, product: locked, campaign, products };
+      }
+      return { blocked: false, product: locked, campaign, products };
+    };
+
+    const clearLockAfterManualActivation = async (guard) => {
+      if (!guard?.product || body.clear_product_pause_lock !== true) return;
+      await base44.asServiceRole.entities.Product.update(
+        guard.product.id,
+        clearManualPauseLockPatch(new Date().toISOString(), user.email || user.id)
+      );
+    };
+
     if (!action) return Response.json({ error: 'action required' }, { status: 400 });
 
     switch (action) {
       case 'reactivate_one': {
         if (!campaign_id) return Response.json({ error: 'campaign_id required' });
+        const guard = await guardActivation(campaign_id);
+        if (guard.blocked) {
+          return Response.json({ ok: false, blocked: true, error: 'Produto pausado manualmente.' }, { status: 409 });
+        }
         
         // Validate campaign exists on Amazon
         const check = await adsRequest(`/sp/campaigns/${campaign_id}`);
@@ -84,8 +118,10 @@ Deno.serve(async (req) => {
 
         // Reactivate
         const res = await adsRequest('/sp/campaigns', 'PUT', [{ campaignId: campaign_id, state: 'enabled' }]);
+        if (!res.error) await clearLockAfterManualActivation(guard);
         
         return Response.json({
+          ok: !res.error,
           campaign_id,
           amazon_state: amazonState,
           updated: !res.error,
@@ -101,6 +137,12 @@ Deno.serve(async (req) => {
         const results = [];
         for (let i = 0; i < ids.length; i++) {
           const id = ids[i];
+          const guard = await guardActivation(id);
+          if (guard.blocked) {
+            results.push({ id, amazon_state: 'PAUSED', amazon_name: null, updated: false, blocked: true });
+            last_error = 'Produto pausado manualmente';
+            continue;
+          }
           const check = await adsRequest(`/sp/campaigns/${id}`);
           if (check.error) {
             results.push({ id, amazon_state: 'ERROR', amazon_name: null, updated: false });
@@ -108,6 +150,7 @@ Deno.serve(async (req) => {
             continue;
           }
           const res = await adsRequest('/sp/campaigns', 'PUT', [{ campaignId: id, state: 'enabled' }]);
+          if (!res.error) await clearLockAfterManualActivation(guard);
           if (res.error) last_error = res.details;
           results.push({ id, amazon_state: (check.data.state || '').toUpperCase(), amazon_name: check.data.name, updated: !res.error });
           await new Promise(r => setTimeout(r, 500));

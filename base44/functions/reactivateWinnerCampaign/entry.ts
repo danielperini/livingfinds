@@ -2,6 +2,10 @@
  * reactivateWinnerCampaign — Reativa campanha vencedora pausada indevidamente e aplica proteção anti-pausa automática
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import {
+  clearManualPauseLockPatch,
+  findPauseLockedProduct,
+} from '../../shared/productCampaignPauseGuard.ts';
 
 async function getAdsToken(base44: any, accountId: string): Promise<string> {
   const res = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
@@ -34,6 +38,25 @@ Deno.serve(async (req) => {
     const { amazon_account_id, campaign_db_id, campaign_id, asin, force, new_budget } = body;
     if (!amazon_account_id || !campaign_id) {
       return Response.json({ error: 'amazon_account_id e campaign_id são obrigatórios' }, { status: 400 });
+    }
+
+    const products = await base44.asServiceRole.entities.Product.filter(
+      { amazon_account_id }, null, 2000
+    ).catch(() => []);
+    const campaignRows = await base44.asServiceRole.entities.Campaign.filter(
+      { amazon_account_id }, null, 2000
+    ).catch(() => []);
+    const campaignForGuard = campaignRows.find((c: any) =>
+      String(c.campaign_id || '') === String(campaign_id) ||
+      String(c.amazon_campaign_id || '') === String(campaign_id)
+    ) || { campaign_id, asin };
+    const lockedProduct = findPauseLockedProduct(products, campaignForGuard);
+    if (lockedProduct && body.clear_product_pause_lock !== true) {
+      return Response.json({
+        ok: false,
+        blocked: true,
+        error: `Produto ${lockedProduct.asin || lockedProduct.sku} está pausado manualmente; reativação automática bloqueada.`,
+      }, { status: 409 });
     }
 
     // Resolver o DB id: pode vir como campaign_db_id ou precisar ser buscado
@@ -115,6 +138,13 @@ Deno.serve(async (req) => {
         { amazon_account_id, campaign_id },
         { $set: dbUpdate }
       ).catch(() => {});
+    }
+
+    if (amazonSuccess && lockedProduct && body.clear_product_pause_lock === true) {
+      await base44.asServiceRole.entities.Product.update(
+        lockedProduct.id,
+        clearManualPauseLockPatch(now, user.email || user.id)
+      );
     }
 
     // ── 3. Log de execução ──

@@ -50,6 +50,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Persistent Product Campaign Pause Guard - every 15 minutes",
+      "function": "autoStockCampaignGuard",
+      "cron": "3,18,33,48 * * * *",
+      "payload": { "_service_role": true, "enforce_pause_locks": true }
+    },
+    {
       "name": "Zero-sales reactivation monitor - every 3 hours",
       "function": "monitorZeroSalesReactivation",
       "cron": "42 */3 * * *",

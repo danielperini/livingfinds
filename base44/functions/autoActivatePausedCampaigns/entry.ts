@@ -4,6 +4,7 @@
  * e reativa essas campanhas diretamente na Amazon Ads API.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { findPauseLockedProduct, isProductCampaignPauseLocked } from '../../shared/productCampaignPauseGuard.ts';
 
 async function getAdsToken(refreshToken: string) {
   const params = new URLSearchParams({
@@ -77,7 +78,8 @@ Deno.serve(async (req) => {
       const eligible = products.filter(p =>
         (p.fba_inventory || 0) > 0 &&
         p.campaign_status === 'paused' &&
-        p.linked_campaign_id
+        p.linked_campaign_id &&
+        !isProductCampaignPauseLocked(p)
       );
 
       if (eligible.length === 0) { totalSkipped++; continue; }
@@ -91,7 +93,8 @@ Deno.serve(async (req) => {
       );
       const pausedCamps = campaigns.filter(c =>
         campaignIds.includes(c.campaign_id) &&
-        (c.state === 'paused' || c.status === 'paused')
+        (c.state === 'paused' || c.status === 'paused') &&
+        !findPauseLockedProduct(products, c)
       );
 
       if (pausedCamps.length === 0) { totalSkipped++; continue; }
