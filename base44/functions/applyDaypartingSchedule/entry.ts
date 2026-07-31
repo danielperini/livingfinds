@@ -1,272 +1,203 @@
-/**
- * applyDaypartingSchedule v2 — Aplica dayparting por bid direto em keywords
- *
- * Lê o `dayparting_schedule` gravado no `data_used` da OptimizationDecision e:
- *   1. Para cada keyword da campanha: atualiza o bid direto conforme a hora agendada
- *      (na prática: grava o mapeamento hora→bid em DaypartingRule para o ciclo noturno)
- *   2. Cria Budget Rules nativas da Amazon para aumentar bid nos horários de pico
- *   3. Grava DaypartingRule para cada janela para que o ciclo horário (runHourlyAdsGuardrails)
- *      possa aplicar os bids programaticamente em tempo real
- *
- * Regras de bid:
- *   - peak_high_profit / peak_conversion → bid = recommendedBid (até +130%)
- *   - efficient → bid = baseBid (sem alteração)
- *   - deficit / low_efficiency → bid = R$0,25 (piso)
- */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { clamp, numberValue, roundMoney } from '../../shared/profitGuardPolicy.ts';
 
-const tokenCache: Record<string, any> = {};
+const MAX_INCREASE_PCT = 20;
+const MAX_DECREASE_PCT = 15;
+const remoteId = (value: unknown) => /^\d+$/.test(String(value || '')) ? String(value) : '';
 
-async function getAdsToken(refreshToken: string) {
-  const cached = tokenCache['ads'];
-  if (cached && cached.expires_at > Date.now() + 5000) return cached.access_token;
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
-  });
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || data.error || 'Token failed');
-  tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
-  return data.access_token;
+function nextBrtHourUtc(hour: number): Date {
+  const now = new Date();
+  const brtNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+  const targetBrt = new Date(brtNow);
+  targetBrt.setHours(hour, 0, 0, 0);
+  if (targetBrt.getTime() <= brtNow.getTime() + 5 * 60000) targetBrt.setDate(targetBrt.getDate() + 1);
+  const offset = brtNow.getTime() - now.getTime();
+  return new Date(targetBrt.getTime() - offset);
 }
 
-function getAdsBaseUrl() {
-  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
-  return 'https://advertising-api.amazon.com';
-}
-
-async function adsRequest(method: string, path: string, body: any, refreshToken: string, profileId: string, contentType = 'application/json') {
-  const token = await getAdsToken(refreshToken);
-  const res = await fetch(`${getAdsBaseUrl()}${path}`, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-      'Amazon-Advertising-API-Scope': String(profileId),
-      'Content-Type': contentType,
-      'Accept': contentType,
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
-  return { status: res.status, data, requestId: res.headers.get('x-amzn-requestid') || '' };
+function parseData(value: any): any {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return {}; }
 }
 
 Deno.serve(async (req) => {
+  const startedAt = new Date().toISOString();
   try {
     const base44 = createClientFromRequest(req);
-
-    // Aceita chamadas autenticadas (frontend) e chamadas internas de automação
-    const isAuthenticated = await base44.auth.isAuthenticated().catch(() => false);
     const body = await req.json().catch(() => ({}));
+    const authenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
-    const { opportunity_id, approve = false, auto_apply = false } = body;
-    if (!opportunity_id) return Response.json({ ok: false, error: 'opportunity_id required' }, { status: 400 });
-
-    // Carregar decisão
-    const opps = await base44.asServiceRole.entities.OptimizationDecision.filter({ id: opportunity_id });
-    if (!opps.length) return Response.json({ ok: false, error: 'Decisão não encontrada' }, { status: 404 });
-    const opp = opps[0];
-
-    // Autorização: manual approve OU auto_apply com confiança >= 90
-    const confidenceScore = opp.confidence || 0;
-    const isAutoEligible = auto_apply && confidenceScore >= 90;
-    if (!approve && !isAutoEligible) {
-      return Response.json({ ok: false, error: `Aprovação necessária (confiança ${confidenceScore}% < 90% para auto-apply)` }, { status: 403 });
+    const opportunityId = body.opportunity_id;
+    if (!opportunityId) return Response.json({ ok: false, error: 'opportunity_id obrigatório' }, { status: 400 });
+    const decisions = await base44.asServiceRole.entities.OptimizationDecision.filter({ id: opportunityId }, null, 1);
+    const decision = decisions[0];
+    if (!decision) return Response.json({ ok: false, error: 'Decisão não encontrada' }, { status: 404 });
+    if (!body.approve && !(body.auto_apply === true && numberValue(decision.confidence, 0) >= 90)) {
+      return Response.json({ ok: false, error: 'Aprovação necessária ou confiança inferior a 90%' }, { status: 403 });
     }
 
-    const accountId = opp.amazon_account_id;
-    const campaignId = opp.campaign_id || opp.entity_id;
+    const aid = decision.amazon_account_id;
+    const campaignId = String(decision.campaign_id || decision.entity_id || '');
+    const data = parseData(decision.data_used);
+    const schedule = Array.isArray(data.dayparting_schedule) ? data.dayparting_schedule : [];
+    if (!campaignId || !schedule.length) return Response.json({ ok: false, error: 'Campanha ou schedule ausente na decisão' }, { status: 400 });
 
-    // Carregar conta
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId });
-    if (!accounts.length) return Response.json({ ok: false, error: 'Conta não encontrada' }, { status: 404 });
-    const account = accounts[0];
-
-    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
-    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
-    if (!refreshToken || !profileId) return Response.json({ ok: false, error: 'Credenciais Amazon ausentes' }, { status: 400 });
-
-    const now = new Date();
-    const nowIso = now.toISOString();
-
-    // Ler schedule gravado pelo runDailyDayparting
-    let dataUsed: any = {};
-    try { dataUsed = JSON.parse(opp.data_used || '{}'); } catch {}
-    const schedule: any[] = dataUsed.dayparting_schedule || [];
-    const baseBid: number = dataUsed.base_bid || 0.50;
-    const BID_FLOOR = dataUsed.bid_floor || 0.25;
-
-    if (schedule.length === 0) {
-      return Response.json({ ok: false, error: 'dayparting_schedule vazio na decisão — rode runDailyDayparting novamente' }, { status: 400 });
-    }
-
-    // ── Carregar keywords da campanha ─────────────────────────────────────
-    const campaignKeywords = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: accountId, campaign_id: campaignId, state: 'enabled' }, null, 200
+    const [configRows, keywords, existingRules] = await Promise.all([
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid, campaign_id: campaignId }, null, 1000).catch(() => []),
+      base44.asServiceRole.entities.DaypartingRule.filter({ amazon_account_id: aid, campaign_id: campaignId }, '-updated_at', 500).catch(() => []),
+    ]);
+    const config = configRows[0] || {};
+    const minBid = numberValue(config.min_bid, numberValue(data.bid_floor, 0.20));
+    const maxBid = numberValue(config.max_bid, 5.00);
+    const activeKeywords = keywords.filter((keyword: any) =>
+      ['enabled', 'active'].includes(String(keyword.state || keyword.status || '').toLowerCase()) &&
+      remoteId(keyword.amazon_keyword_id || keyword.keyword_id)
     );
+    if (!activeKeywords.length) return Response.json({ ok: false, error: 'Nenhuma keyword ativa com ID Amazon na campanha' }, { status: 409 });
 
-    const results = {
-      campaign_id: campaignId,
-      rules_created: [] as any[],
-      keywords_scheduled: 0,
-      errors: [] as string[],
-      base_bid: baseBid,
-      bid_floor: BID_FLOOR,
-      peak_windows: schedule.filter(s => ['peak_high_profit', 'peak_conversion'].includes(s.classification)).length,
-      deficit_windows: schedule.filter(s => ['deficit', 'low_efficiency'].includes(s.classification)).length,
-    };
+    const results = { rules_created: 0, rules_updated: 0, actions_created: 0, actions_existing: 0, skipped: 0, errors: [] as any[] };
+    const now = new Date().toISOString();
 
-    // ── Gravar DaypartingRule para CADA JANELA HORÁRIA ─────────────────────
-    // O ciclo runHourlyAdsGuardrails lê essas regras e aplica os bids em tempo real
     for (const slot of schedule) {
-      const isPeak    = ['peak_high_profit', 'peak_conversion'].includes(slot.classification);
-      const isDeficit = ['deficit', 'low_efficiency'].includes(slot.classification);
+      const hour = Number(slot.hour);
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+      const classification = String(slot.classification || 'efficient');
+      const isIncrease = ['peak_high_profit', 'peak_conversion'].includes(classification);
+      const isDecrease = ['deficit', 'low_efficiency'].includes(classification);
+      if (!isIncrease && !isDecrease) continue;
+      const scheduledAt = nextBrtHourUtc(hour);
+      const restoreAt = new Date(scheduledAt.getTime() + 3600000);
 
-      if (!isPeak && !isDeficit) continue; // 'efficient' e 'discovery' não alteram bid
-
-      const adjustmentValue = isPeak
-        ? Math.round(slot.bidChangePct)   // ex: +130
-        : -100; // déficit → bid vai para o piso (sinalizador)
-
-      try {
-        await base44.asServiceRole.entities.DaypartingRule.create({
-          amazon_account_id: accountId,
-          campaign_id: campaignId,
-          asin: opp.asin,
-          rule_type: 'bid_schedule',
-          days_of_week: [0, 1, 2, 3, 4, 5, 6], // todos os dias (análise horária geral)
-          start_hour: slot.hour,
-          end_hour: slot.hour,  // janela de 1 hora
-          adjustment_type: isDeficit ? 'floor' : 'percentage',
-          adjustment_value: adjustmentValue,
-          bid_base_before: baseBid,
-          bid_floor: BID_FLOOR,
-          recommended_bid: slot.recommendedBid,
-          status: 'active',
-          confidence: confidenceScore,
-          classification: slot.classification,
-          roas_at_creation: slot.roas,
-          rationale: isPeak
-            ? `Pico ${slot.hour}h: ROAS ${slot.roas}x (índice ${slot.roasIndex}x) → bid R$${slot.recommendedBid} (+${slot.bidChangePct.toFixed(0)}%)`
-            : `Baixa ${slot.hour}h: sem retorno → bid piso R$${BID_FLOOR}`,
-          created_by: 'ai',
-          approved_by: isAuthenticated ? 'user' : 'autopilot',
-          approved_at: nowIso,
-          executed_at: nowIso,
-          created_at: nowIso,
-          updated_at: nowIso,
-        });
-
-        results.rules_created.push({
-          hour: slot.hour,
-          classification: slot.classification,
-          base_bid: baseBid,
-          recommended_bid: slot.recommendedBid,
-          bid_change_pct: slot.bidChangePct,
-        });
-      } catch (e) {
-        results.errors.push(`Erro ao gravar regra hora ${slot.hour}: ${e.message}`);
+      const existingRule = existingRules.find((rule: any) =>
+        numberValue(rule.start_hour, -1) === hour &&
+        String(rule.rule_type || '') === 'bid_schedule' &&
+        String(rule.status || '') === 'active'
+      );
+      const rulePayload = {
+        amazon_account_id: aid,
+        campaign_id: campaignId,
+        campaign_name: decision.entity_name || '',
+        asin: decision.asin,
+        rule_type: 'bid_schedule',
+        days_of_week: [0, 1, 2, 3, 4, 5, 6],
+        start_hour: hour,
+        end_hour: hour,
+        adjustment_type: 'percentage',
+        adjustment_value: isIncrease ? Math.min(MAX_INCREASE_PCT, Math.max(0, numberValue(slot.bidChangePct, 0))) : -Math.min(MAX_DECREASE_PCT, Math.abs(numberValue(slot.bidChangePct, MAX_DECREASE_PCT))),
+        bid_base_before: numberValue(slot.baseBid, data.base_bid),
+        bid_floor: minBid,
+        recommended_bid: numberValue(slot.recommendedBid, data.base_bid),
+        classification,
+        roas_at_creation: numberValue(slot.roas, 0),
+        roas_index: numberValue(slot.roasIndex, 0),
+        sales_freq_index: numberValue(slot.salesFreqIndex, 0),
+        status: 'active',
+        confidence: numberValue(decision.confidence, 0),
+        sample_days: numberValue(data.days_with_data, 0),
+        sample_clicks: numberValue(slot.clicks, 0),
+        sample_orders: numberValue(slot.orders, 0),
+        avg_roas: numberValue(data.avg_roas, 0),
+        avg_acos: numberValue(data.avg_acos, 0),
+        rationale: `${classification} ${hour}h: ajuste limitado a +${MAX_INCREASE_PCT}%/-${MAX_DECREASE_PCT}% com restauração em 1h.`,
+        created_by: 'autopilot',
+        approved_by: authenticated ? 'user' : 'autopilot',
+        approved_at: now,
+        updated_at: now,
+      };
+      if (existingRule) {
+        await base44.asServiceRole.entities.DaypartingRule.update(existingRule.id, rulePayload).catch((error: any) => results.errors.push({ hour, stage: 'update_rule', error: error.message }));
+        results.rules_updated++;
+      } else {
+        await base44.asServiceRole.entities.DaypartingRule.create({ ...rulePayload, created_at: now }).catch((error: any) => results.errors.push({ hour, stage: 'create_rule', error: error.message }));
+        results.rules_created++;
       }
-    }
 
-    // ── Tentar criar Budget Rules nativas da Amazon para os picos ──────────
-    // (Bid Adjustment Rules via /sp/bidAdjustments — melhor suporte nativo)
-    const peakSlots = schedule.filter(s => ['peak_high_profit', 'peak_conversion'].includes(s.classification));
-    for (const slot of peakSlots.slice(0, 10)) { // máx 10 regras
-      const increasePct = Math.min(130, Math.max(10, Math.round(slot.bidChangePct)));
-      if (increasePct <= 0) continue;
-
-      try {
-        // Regra nativa via /sp/rules (Schedule Bid Adjustments)
-        const rulePayload = {
-          name: `DP-${campaignId.slice(-6)}-H${slot.hour}-+${increasePct}PCT`,
-          campaignId,
-          rules: [{
-            conditions: [{ timeRange: { start: `${String(slot.hour).padStart(2, '0')}:00`, end: `${String(slot.hour).padStart(2, '0')}:59` } }],
-            bidMultiplier: increasePct,
-          }],
-          timeZone: 'America/Sao_Paulo',
-        };
-        const resp = await adsRequest('POST', '/sp/rules', rulePayload, refreshToken, profileId, 'application/vnd.spRule.v1+json');
-        if ([200, 201, 207].includes(resp.status)) {
-          const ruleId = resp.data?.ruleId || resp.data?.[0]?.ruleId || 'ok';
-          // Atualizar a DaypartingRule com o amazon_rule_id
-          results.rules_created.filter(r => r.hour === slot.hour).forEach(r => r.amazon_rule_id = ruleId);
+      for (const keyword of activeKeywords) {
+        const keywordId = remoteId(keyword.amazon_keyword_id || keyword.keyword_id);
+        const currentBid = numberValue(keyword.current_bid || keyword.bid, numberValue(data.base_bid, 0.50));
+        const rawRecommended = numberValue(slot.recommendedBid, currentBid);
+        const lowerBound = Math.max(minBid, currentBid * (1 - MAX_DECREASE_PCT / 100));
+        const upperBound = Math.min(maxBid, currentBid * (1 + MAX_INCREASE_PCT / 100));
+        const targetBid = roundMoney(clamp(rawRecommended, lowerBound, upperBound));
+        if (Math.abs(targetBid - currentBid) < 0.005) {
+          results.skipped++;
+          continue;
         }
-        // Rate limit
-        await new Promise(r => setTimeout(r, 300));
-      } catch {
-        // Falha na regra nativa não é crítica — regra local já foi gravada
+        const operation = targetBid > currentBid ? 'daypart_bid_increase' : 'daypart_bid_decrease';
+        const key = `daypart_v3|${aid}|${campaignId}|${keywordId}|${scheduledAt.toISOString().slice(0, 13)}|${targetBid}`;
+        const existing = await base44.asServiceRole.entities.AmazonActionQueue.filter({
+          amazon_account_id: aid,
+          idempotency_key: key,
+        }, null, 1).catch(() => []);
+        if (existing.length) {
+          results.actions_existing++;
+          continue;
+        }
+        await base44.asServiceRole.entities.AmazonActionQueue.create({
+          amazon_account_id: aid,
+          operation,
+          entity_type: 'keyword',
+          entity_id: keywordId,
+          keyword_id: keywordId,
+          campaign_id: campaignId,
+          payload: {
+            bid: targetBid,
+            bid_before: currentBid,
+            base_bid: currentBid,
+            restore_bid: currentBid,
+            restore_at: restoreAt.toISOString(),
+            hour,
+            end_hour: (hour + 1) % 24,
+            classification,
+            decision_id: decision.id,
+          },
+          idempotency_key: key,
+          priority: isDecrease ? 'high' : 'normal',
+          confidence: numberValue(decision.confidence, 0),
+          status: 'pending',
+          scheduled_at: scheduledAt.toISOString(),
+          attempt_count: 0,
+          max_attempts: 3,
+          source: 'applyDaypartingSchedule',
+          created_at: now,
+          updated_at: now,
+        }).catch((error: any) => results.errors.push({ hour, keyword_id: keywordId, stage: 'queue', error: error.message }));
+        results.actions_created++;
       }
     }
 
-    // ── Salvar bid original para rollback ────────────────────────────────
-    try {
-      const existing = await base44.asServiceRole.entities.BidHistory.filter({
-        amazon_account_id: accountId,
-        entity_type: 'campaign',
-        entity_id: campaignId,
-        reason: 'Dayparting original bid capture',
-      });
-      if (!existing.length) {
-        await base44.asServiceRole.entities.BidHistory.create({
-          amazon_account_id: accountId,
-          entity_type: 'campaign',
-          entity_id: campaignId,
-          entity_name: campaignId,
-          old_bid: baseBid,
-          new_bid: baseBid,
-          change_pct: 0,
-          reason: 'Dayparting original bid capture',
-          status: 'executed',
-          applied_by: 'dayparting',
-          decision_id: opp.id,
-          created_at: nowIso,
-          executed_at: nowIso,
-        });
-      }
-    } catch {}
-
-    results.keywords_scheduled = campaignKeywords.length;
-
-    // Finalizar decisão
-    await base44.asServiceRole.entities.OptimizationDecision.update(opp.id, {
-      status: 'executed',
-      executed_at: nowIso,
+    await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+      status: results.errors.length ? 'executing' : 'executed',
+      executed_at: now,
       amazon_response: JSON.stringify({
-        rules_created: results.rules_created.length,
-        peak_windows: results.peak_windows,
-        deficit_windows: results.deficit_windows,
-        keywords_in_campaign: results.keywords_scheduled,
-        errors: results.errors,
-      }).slice(0, 2000),
+        mode: 'local_idempotent_queue',
+        native_schedule_rule_called: false,
+        max_increase_pct: MAX_INCREASE_PCT,
+        max_decrease_pct: MAX_DECREASE_PCT,
+        ...results,
+      }).slice(0, 4000),
     });
 
     return Response.json({
-      ok: true,
-      results,
-      schedule_summary: {
-        total_windows: schedule.length,
-        peak_windows: results.peak_windows,
-        deficit_windows: results.deficit_windows,
-        base_bid: baseBid,
-        bid_floor: BID_FLOOR,
-        max_bid: Math.max(...schedule.map(s => s.recommendedBid || baseBid)),
+      ok: results.errors.length === 0,
+      policy: {
+        max_increase_pct: MAX_INCREASE_PCT,
+        max_decrease_pct: MAX_DECREASE_PCT,
+        restore_after_hours: 1,
+        queue_idempotent: true,
+        execute_only_at_scheduled_time: true,
+        native_rule_endpoint_used: false,
       },
-      executed_at: nowIso,
+      campaign_id: campaignId,
+      active_keywords: activeKeywords.length,
+      results,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
     });
-
-  } catch (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  } catch (error: any) {
+    return Response.json({ ok: false, error: error?.message || 'Falha ao aplicar dayparting' }, { status: 500 });
   }
 });
