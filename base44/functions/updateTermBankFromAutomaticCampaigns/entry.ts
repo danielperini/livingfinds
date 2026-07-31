@@ -85,9 +85,9 @@ Deno.serve(async (req) => {
       if (!normalized || isAsinTerm(normalized)) continue;
       const words = normalized.split(/\s+/).filter(Boolean).length;
       if (words < 2) continue;
+
       const key = `${asin}|${normalized}`;
       const aggregate = aggregates.get(key) || {
-        amazon_account_id: aid,
         asin,
         sku: row.advertised_sku || campaign.sku || '',
         term: row.search_term,
@@ -101,11 +101,24 @@ Deno.serve(async (req) => {
         sales: 0,
         last_seen_at: null,
       };
-      aggregate.impressions += numberValue(row.impressions);
-      aggregate.clicks += numberValue(row.clicks);
-      aggregate.spend += numberValue(row.spend);
-      aggregate.orders += Math.max(numberValue(row.orders_14d), numberValue(row.orders_30d), numberValue(row.orders));
-      aggregate.sales += Math.max(numberValue(row.sales_14d), numberValue(row.sales_30d), numberValue(row.sales));
+
+      // SearchTerm costuma conter janelas móveis (14d/30d). Usar o maior
+      // snapshot evita somar o mesmo histórico várias vezes e criar evidência fictícia.
+      aggregate.impressions = Math.max(aggregate.impressions, numberValue(row.impressions));
+      aggregate.clicks = Math.max(aggregate.clicks, numberValue(row.clicks));
+      aggregate.spend = Math.max(aggregate.spend, numberValue(row.spend));
+      aggregate.orders = Math.max(
+        aggregate.orders,
+        numberValue(row.orders_14d),
+        numberValue(row.orders_30d),
+        numberValue(row.orders),
+      );
+      aggregate.sales = Math.max(
+        aggregate.sales,
+        numberValue(row.sales_14d),
+        numberValue(row.sales_30d),
+        numberValue(row.sales),
+      );
       if (row.date && (!aggregate.last_seen_at || row.date > aggregate.last_seen_at)) aggregate.last_seen_at = row.date;
       aggregates.set(key, aggregate);
     }
@@ -123,26 +136,29 @@ Deno.serve(async (req) => {
         rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: 'economia_incompleta' });
         continue;
       }
+
       const minOrders = aggregate.words === 2 ? MIN_MEDIUM_TAIL_ORDERS : MIN_LONG_TAIL_ORDERS;
       if (aggregate.orders < minOrders || aggregate.sales <= 0) {
         rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: `evidencia_insuficiente_${aggregate.orders}_${minOrders}` });
         continue;
       }
+
       const policy = resolveOperatingAcos(econ, accountTargetAcos);
-      const acos = aggregate.sales > 0 ? (aggregate.spend / aggregate.sales) * 100 : null;
+      const acos = aggregate.sales > 0 ? aggregate.spend / aggregate.sales * 100 : null;
       if (acos === null || (policy.break_even_acos && acos >= policy.break_even_acos)) {
         rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: 'acos_acima_break_even', acos: roundMoney(acos || 0) });
         continue;
       }
+
       const cpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
       const cvr = aggregate.clicks > 0 ? aggregate.orders / aggregate.clicks * 100 : 0;
-      const classification = acos <= policy.target_acos ? 'winner' : 'profitable_learning';
+      const classification = acos <= policy.target_acos ? 'winner' : 'learning';
       eligible.push({ ...aggregate, policy, acos, cpc, cvr, classification });
     }
 
     const existingIndex = new Map<string, any>();
     for (const item of existingTerms) {
-      const key = `${item.asin || ''}|${normalizeTerm(item.term || item.keyword || item.term_normalized || item.normalized_search_term || '')}`;
+      const key = `${item.asin || ''}|${normalizeTerm(item.term || item.term_normalized || '')}`;
       existingIndex.set(key, item);
     }
 
@@ -157,16 +173,15 @@ Deno.serve(async (req) => {
       const record = {
         amazon_account_id: aid,
         term: item.term,
-        keyword: item.term,
         term_normalized: item.normalized,
-        normalized_search_term: item.normalized,
         asin: item.asin,
         sku: item.sku,
         product_name: productByAsin.get(item.asin)?.product_name || productByAsin.get(item.asin)?.display_name || '',
         match_type: 'exact',
+        recommended_match_type: 'EXACT',
         source: 'search_term_auto',
-        source_type: 'AUTO_SEARCH_TERM',
-        source_detail: `AUTO | ${item.source_campaign_id}`,
+        source_detail: `AUTO | ${item.source_campaign_id} | target_acos=${item.policy.target_acos} | break_even=${item.policy.break_even_acos ?? 'n/a'}`,
+        term_type: item.words === 2 ? 'mid_tail' : 'long_tail',
         campaign_id: item.source_campaign_id,
         amazon_campaign_id: item.source_campaign_id,
         impressions: item.impressions,
@@ -183,13 +198,9 @@ Deno.serve(async (req) => {
         status: 'active',
         classification: item.classification,
         confidence,
-        confidence_score: confidence,
-        promotion_status: item.classification === 'winner' ? 'eligible_for_manual_exact' : 'profitable_learning',
-        is_winner: item.classification === 'winner',
-        winner_tier: item.classification === 'winner' ? (item.orders >= 5 ? 'STRONG_WINNER' : 'WINNER') : 'NONE',
-        target_acos: item.policy.target_acos,
-        break_even_acos: item.policy.break_even_acos,
+        promotion_status: item.classification === 'winner' ? 'kickoff_candidate' : 'in_auto_campaign',
         last_seen_at: item.last_seen_at ? `${item.last_seen_at}T23:59:59-03:00` : now,
+        last_performance_update: now,
         updated_at: now,
       };
       const existing = existingIndex.get(key);
@@ -205,7 +216,7 @@ Deno.serve(async (req) => {
       await base44.asServiceRole.entities.TermBank.bulkUpdate(toUpdate.slice(i, i + batchSize));
     }
 
-    const nowCompleted = new Date().toISOString();
+    const completedAt = new Date().toISOString();
     const summary = {
       automatic_campaigns: new Set([...autoCampaignById.values()].map((c: any) => c.id || c.campaign_id)).size,
       search_terms_read: searchTerms.length,
@@ -224,9 +235,9 @@ Deno.serve(async (req) => {
       operation: 'update_term_bank_from_auto_profit_aware',
       trigger_type: body._service_role ? 'scheduler' : 'manual',
       status: 'success',
-      execution_date: nowCompleted.slice(0, 10),
+      execution_date: completedAt.slice(0, 10),
       started_at: startedAt,
-      completed_at: nowCompleted,
+      completed_at: completedAt,
       records_processed: eligible.length,
       result_summary: JSON.stringify(summary),
     }).catch(() => {});
