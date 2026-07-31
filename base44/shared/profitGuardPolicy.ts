@@ -80,8 +80,14 @@ export function economicsAreActionable(economics: any, assessment?: any): boolea
   if (!economics) return false;
   const status = normalizeState(economics.economics_status);
   const confidence = numberValue(economics.final_economic_confidence, 0);
-  const assessmentConfidence = assessment ? numberValue(assessment.confidence, 0) : 1;
-  const hasCoreEconomics = resolveBreakEvenAcos(economics) !== null && (numberValue(economics.current_price, 0) > 0 || numberValue(economics.average_sale_price, 0) > 0);
+  const assessmentStatus = normalizeState(assessment?.economic_status);
+  const assessmentDataStatus = normalizeState(assessment?.data_status);
+  const assessmentIsUsable = Boolean(assessment) &&
+    !['insufficient_data', 'stock_blocked', 'listing_blocked'].includes(assessmentStatus) &&
+    !['failed', 'stale', 'reconciliation_pending'].includes(assessmentDataStatus);
+  const assessmentConfidence = assessmentIsUsable ? numberValue(assessment?.confidence, 0) : 1;
+  const hasCoreEconomics = resolveBreakEvenAcos(economics) !== null &&
+    (numberValue(economics.current_price, 0) > 0 || numberValue(economics.average_sale_price, 0) > 0);
   const economicsConfidenceOk = confidence >= 0.65 || confidence >= 65 || hasCoreEconomics;
   const assessmentConfidenceOk = assessmentConfidence >= 0.65 || assessmentConfidence >= 65;
   return ['complete', 'partial'].includes(status) && economicsConfidenceOk && assessmentConfidenceOk;
@@ -100,18 +106,21 @@ export function isProtectedWinner(params: {
   if (params.orders > 0 && acos !== null && acos <= params.targetAcos) {
     return { protected: true, reason: `winner_acos_${roundMoney(acos)}_target_${params.targetAcos}` };
   }
-  if (params.lastSaleAt) {
+  if (params.lastSaleAt && params.orders > 0 && acos !== null && acos <= params.targetAcos * 1.25) {
     const ageHours = (Date.now() - new Date(params.lastSaleAt).getTime()) / 3600000;
     if (Number.isFinite(ageHours) && ageHours <= 72) {
-      return { protected: true, reason: `recent_sale_${roundMoney(ageHours)}h` };
+      return { protected: true, reason: `recent_profitable_sale_${roundMoney(ageHours)}h_acos_${roundMoney(acos)}` };
     }
   }
   return { protected: false, reason: 'not_protected' };
 }
 
 export function classifyProfitPressure(assessment: any, economics: any): 'healthy' | 'watch' | 'defensive' | 'critical' | 'unknown' {
-  const status = normalizeState(assessment?.economic_status || economics?.economic_classification);
-  const profit = assessment?.profit_after_ads == null
+  const assessmentStatus = normalizeState(assessment?.economic_status);
+  const status = !assessmentStatus || ['insufficient_data', 'stock_blocked', 'listing_blocked'].includes(assessmentStatus)
+    ? normalizeState(economics?.economic_classification)
+    : assessmentStatus;
+  const profit = assessment?.profit_after_ads == null || assessmentStatus === 'insufficient_data'
     ? numberValue(economics?.profit_after_ads, Number.NaN)
     : numberValue(assessment.profit_after_ads, Number.NaN);
   if (['unprofitable', 'no_sales_with_spend'].includes(status) || (Number.isFinite(profit) && profit < -0.5)) return 'critical';
