@@ -31,8 +31,8 @@ async function scheduleRetry(base44: any, action: any, response: any) {
       status: 'failed',
       attempt_count: attempts,
       completed_at: nowIso(),
-      last_error: String(response?.message || response?.error || `Amazon HTTP ${response?.status || 0}`).slice(0, 1000),
-      result: JSON.stringify({ status: response?.status, request_id: response?.request_id }).slice(0, 1000),
+      last_error: String(response?.message || response?.error || response?.errors?.[0]?.message || `Amazon HTTP ${response?.status || 0}`).slice(0, 1000),
+      result: JSON.stringify({ status: response?.status, request_id: response?.request_id, errors: response?.errors }).slice(0, 2000),
       updated_at: nowIso(),
     }).catch(() => {});
     return 'failed';
@@ -42,8 +42,8 @@ async function scheduleRetry(base44: any, action: any, response: any) {
     status: 'pending',
     attempt_count: attempts,
     scheduled_at: new Date(Date.now() + retryAfter * 1000).toISOString(),
-    last_error: String(response?.message || response?.error || `Amazon HTTP ${response?.status || 0}`).slice(0, 1000),
-    result: JSON.stringify({ status: response?.status, request_id: response?.request_id, retry_after_seconds: retryAfter }).slice(0, 1000),
+    last_error: String(response?.message || response?.error || response?.errors?.[0]?.message || `Amazon HTTP ${response?.status || 0}`).slice(0, 1000),
+    result: JSON.stringify({ status: response?.status, request_id: response?.request_id, retry_after_seconds: retryAfter, errors: response?.errors }).slice(0, 2000),
     updated_at: nowIso(),
   }).catch(() => {});
   return 'retrying';
@@ -193,10 +193,11 @@ Deno.serve(async (req) => {
         max_attempts: 3,
       }).catch((error: any) => ({ ok: false, error: error.message, retryable: true })));
 
-      if (!(amazon.ok === true || amazon.status === 207)) {
+      if (amazon.ok !== true) {
         const status = await scheduleRetry(base44, action, amazon);
-        stats[status === 'failed' ? 'failed' : 'retrying']++;
-        results.push({ action_id: action.id, keyword_id: keywordId, status, amazon_status: amazon.status, error: amazon.message || amazon.error });
+        if (status === 'failed') stats.failed++;
+        else stats.retrying++;
+        results.push({ action_id: action.id, keyword_id: keywordId, status, amazon_status: amazon.status, error: amazon.message || amazon.error || amazon.errors?.[0]?.message });
         continue;
       }
 
@@ -247,7 +248,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      policy: { execute_only_due_actions: true, due_tolerance_minutes: 5, overdue_limit_hours: 12, centralized_amazon_gateway: true },
+      policy: { execute_only_due_actions: true, due_tolerance_minutes: 5, overdue_limit_hours: 12, centralized_amazon_gateway: true, multi_status_item_validation: true },
       actions_found: actions.length,
       stats,
       results,
