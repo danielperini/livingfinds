@@ -31,7 +31,7 @@ const hoursSince = (value: unknown) => {
   return Number.isFinite(timestamp) ? (Date.now() - timestamp) / 3600000 : Number.POSITIVE_INFINITY;
 };
 const remoteId = (value: unknown) => /^\d+$/.test(String(value || '')) ? String(value) : '';
-const campaignIdOf = (campaign: any) => String(campaign?.campaign_id || campaign?.amazon_campaign_id || '');
+const campaignIdOf = (campaign: any) => String(campaign?.amazon_campaign_id || campaign?.campaign_id || '');
 const campaignState = (campaign: any) => normalizeState(campaign?.amazon_status || campaign?.state || campaign?.status);
 const isAutoCampaign = (campaign: any) => {
   const targeting = String(campaign?.targeting_type || '').toUpperCase();
@@ -222,7 +222,7 @@ Deno.serve(async (request) => {
         );
         if (!productCampaigns.length) continue;
 
-        const activeCampaigns = productCampaigns.filter((campaign: any) => ['enabled', 'active', 'incomplete'].includes(campaignState(campaign)));
+        const activeCampaigns = productCampaigns.filter((campaign: any) => ['enabled', 'active'].includes(campaignState(campaign)));
         const protectedDiscoveryId = (() => {
           const autoCandidates = activeCampaigns.filter(isAutoCampaign);
           const candidates = autoCandidates.length ? autoCandidates : activeCampaigns;
@@ -278,9 +278,10 @@ Deno.serve(async (request) => {
                 if (!dryRun) {
                   const amazon = await invokeAds(base44, aid, '/sp/keywords', { keywords: [{ keywordId, bid: newBid }] }, 'application/vnd.spKeyword.v3+json');
                   const completed = amazon.ok === true || amazon.status === 207;
+                  const retryScheduled = !completed && Boolean(amazon.retryable || amazon.rate_limited || amazon.reschedule_async);
                   if (completed) {
                     await base44.asServiceRole.entities.Keyword.update(keyword.id, { bid: newBid, current_bid: newBid, last_bid_change_at: nowIso() }).catch(() => {});
-                  } else if (amazon.retryable || amazon.rate_limited || amazon.reschedule_async) {
+                  } else if (retryScheduled) {
                     await enqueueRetry(base44, {
                       accountId: aid, operation: 'keyword_bid_update', entityType: 'keyword', entityId: keywordId,
                       campaignId, keywordId, payload: { bid: newBid, bid_before: currentBid, reason: 'sku_profit_guard_v2' },
@@ -290,7 +291,7 @@ Deno.serve(async (request) => {
                   await recordExecution(base44, {
                     amazon_account_id: aid, rule_key: 'sku_profit_bid_reduction', entity_type: 'keyword', entity_id: keywordId,
                     keyword_id: keywordId, campaign_id: campaignId, asin, action_type: 'update_bid', value_before: currentBid,
-                    value_after: newBid, idempotency_key: idempotencyKey, status: completed ? 'completed' : 'scheduled',
+                    value_after: newBid, idempotency_key: idempotencyKey, status: completed ? 'completed' : retryScheduled ? 'scheduled' : 'failed',
                     executed_at: nowIso(), error_message: completed ? null : String(amazon.message || amazon.error || 'scheduled_retry').slice(0, 500),
                     amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id }).slice(0, 1000),
                     metrics_before: JSON.stringify({ pressure, target_acos: policy.target_acos, break_even_acos: policy.break_even_acos, campaign_metrics: metrics, assessment_date: assessment?.assessment_date }).slice(0, 2000),
@@ -315,15 +316,16 @@ Deno.serve(async (request) => {
                 const action = { type: 'pause_campaign', asin, sku, campaign_id: campaignId, pressure, spend_14d: roundMoney(spend), clicks_14d: clicks, preserved_campaign_id: protectedDiscoveryId };
                 if (!dryRun) {
                   const amazon = await invokeAds(base44, aid, '/sp/campaigns', { campaigns: [{ campaignId, state: 'PAUSED' }] }, 'application/vnd.spCampaign.v3+json');
-                  const completed = amazon.ok === true || amazon.status === 207 || amazon.status === 409;
+                  const completed = amazon.ok === true || amazon.status === 207;
+                  const conflicted = amazon.status === 409;
                   if (completed) {
                     await base44.asServiceRole.entities.Campaign.update(campaign.id, { state: 'paused', status: 'paused', amazon_status: 'paused', synced_at: nowIso(), last_activity_at: nowIso() }).catch(() => {});
                   }
                   await recordExecution(base44, {
                     amazon_account_id: aid, rule_key: 'sku_profit_campaign_pause', entity_type: 'campaign', entity_id: campaignId,
                     campaign_id: campaignId, asin, action_type: 'pause_campaign', idempotency_key: idempotencyKey,
-                    status: completed ? 'completed' : 'failed', executed_at: nowIso(),
-                    error_message: completed ? null : String(amazon.message || amazon.error || 'amazon_error').slice(0, 500),
+                    status: completed ? 'completed' : conflicted ? 'scheduled' : 'failed', executed_at: nowIso(),
+                    error_message: completed ? null : String(amazon.message || amazon.error || (conflicted ? 'amazon_conflict_requires_sync_confirmation' : 'amazon_error')).slice(0, 500),
                     amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id }).slice(0, 1000),
                     metrics_before: JSON.stringify({ pressure, metrics, policy, assessment_date: assessment?.assessment_date }).slice(0, 2000),
                   });
