@@ -8,13 +8,19 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
+      "name": "Scheduled bid and dayparting executor - every 10 minutes",
+      "function": "runScheduledBidAdjustments",
+      "cron": "*/10 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Request closed-day Amazon Ads reports - 00:01 BRT",
       "function": "ensureDailyReportsCurrent",
       "cron": "1 0 * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "SKU Profit Protection + Daily Order Cap - every 15 minutes",
+      "name": "SKU Profit Protection - every 15 minutes",
       "function": "enforceSkuProfitProtection",
       "cron": "*/15 * * * *",
       "payload": { "_service_role": true }
@@ -176,7 +182,19 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
-      "name": "SP-API Finance Events freshness self-heal - 05:50, 13:20 and 20:20 BRT",
+      "name": "Profit-aware daily dayparting - 08:35 BRT",
+      "function": "runDailyDayparting",
+      "cron": "35 8 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Profit-aware bidding strategy and Top of Search - 08:50 BRT",
+      "function": "applyBiddingStrategyByCampaign",
+      "cron": "50 8 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "SP-API Finance Events freshness self-heal - 05:50 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "50 5 * * *",
       "payload": { "_service_role": true }
