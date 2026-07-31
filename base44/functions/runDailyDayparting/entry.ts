@@ -1,386 +1,320 @@
-/**
- * runDailyDayparting v2 — Dayparting baseado em frequência de vendas por faixa horária
- *
- * Lógica de bid por horário:
- *   - Horário PICO (peak_high_profit):  bid base × (1 + roasIndex × 0.30) → máx +130%
- *   - Horário BOM (peak_conversion):    bid base × (1 + roasIndex × 0.20) → máx +100%
- *   - Horário EFICIENTE:                mantém bid base
- *   - Horário BAIXA (deficit/ineficiente): bid fixo R$0,25 (piso absoluto)
- *
- * As janelas calculadas ficam no campo `data_used` da OptimizationDecision para
- * serem lidas pelo applyDaypartingSchedule.
- */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  availableInventory,
+  classifyProfitPressure,
+  economicsAreActionable,
+  normalizeState,
+  numberValue,
+  resolveOperatingAcos,
+  roundMoney,
+} from '../../shared/profitGuardPolicy.ts';
 
-// Piso e tetos de bid por dayparting
-const BID_FLOOR = 0.25;           // piso absoluto para horários de baixa
-const PEAK_MAX_INCREASE = 1.30;   // +130% máximo nos horários de alta demanda
-const GOOD_MAX_INCREASE = 1.00;   // +100% máximo nos horários de boa conversão
+const LOOKBACK_DAYS = 30;
+const MIN_DAYS_WITH_DATA = 14;
+const MIN_TOTAL_CLICKS = 30;
+const MIN_TOTAL_ORDERS_FOR_BOOST = 2;
+const MIN_HOURLY_CLICKS = 8;
+const MAX_INCREASE_PCT = 20;
+const MAX_DECREASE_PCT = 15;
+const AUTO_APPLY_CONFIDENCE = 90;
+const COOLDOWN_HOURS = 23;
+
+const campaignIdOf = (campaign: any) => String(campaign?.amazon_campaign_id || campaign?.campaign_id || '');
+const campaignState = (campaign: any) => normalizeState(campaign?.amazon_status || campaign?.state || campaign?.status);
+const hoursSince = (value: unknown) => {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const timestamp = new Date(String(value)).getTime();
+  return Number.isFinite(timestamp) ? (Date.now() - timestamp) / 3600000 : Number.POSITIVE_INFINITY;
+};
+
+function latestAssessments(rows: any[]): Map<string, any> {
+  const map = new Map<string, any>();
+  for (const row of rows) {
+    if (!row.asin || ['failed', 'stale', 'reconciliation_pending'].includes(normalizeState(row.data_status))) continue;
+    const current = map.get(String(row.asin));
+    const rowTime = new Date(row.assessment_date || row.updated_at || row.created_at || 0).getTime();
+    const currentTime = new Date(current?.assessment_date || current?.updated_at || current?.created_at || 0).getTime();
+    if (!current || rowTime >= currentTime) map.set(String(row.asin), row);
+  }
+  return map;
+}
+
+function confidenceScore(params: { days: number; clicks: number; orders: number; activeHours: number; actionableHours: number }): number {
+  const dayScore = Math.min(1, params.days / 30);
+  const clickScore = Math.min(1, params.clicks / 100);
+  const orderScore = Math.min(1, params.orders / 10);
+  const hourScore = params.activeHours > 0 ? Math.min(1, params.actionableHours / params.activeHours) : 0;
+  return Math.round((dayScore * 0.30 + clickScore * 0.30 + orderScore * 0.30 + hourScore * 0.10) * 100);
+}
 
 Deno.serve(async (req) => {
-  const startTime = Date.now();
-  const now = new Date().toISOString();
-
+  const startedAt = new Date().toISOString();
   try {
     const base44 = createClientFromRequest(req);
-    await base44.auth.isAuthenticated().catch(() => false);
-
     const body = await req.json().catch(() => ({}));
-
-    // ── 1. Resolver conta ─────────────────────────────────────────────────
-    let account = null;
-    if (body.amazon_account_id) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
-      account = accs[0] || null;
-    } else {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
-      account = accs[0] || null;
+    if (!body._service_role) {
+      const authenticated = await base44.auth.isAuthenticated().catch(() => false);
+      if (!authenticated) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
-    if (!account) return Response.json({ ok: false, skipped: true, reason: 'Nenhuma conta Amazon conectada.' });
 
+    const accountRows = body.amazon_account_id
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1);
+    const account = accountRows[0];
+    if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
     const aid = account.id;
-    const sym = account.currency_symbol || 'R$';
 
-    // ── 2. Verificar AutopilotConfig ──────────────────────────────────────
-    const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
-    const cfg = configs[0] || {};
-    // Dayparting obsessivo: só para se explicitamente desabilitado
-    if (cfg.enabled === false && cfg.dayparting_enabled === false) {
-      return Response.json({ ok: true, skipped: true, reason: 'Dayparting desabilitado na configuração.' });
+    const [configRows, settingsRows, campaigns, products, economics, assessments, hourlyRows, keywords, decisions] = await Promise.all([
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
+      base44.asServiceRole.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 10000).catch(() => []),
+      base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid, decision_type: 'dayparting_rule' }, '-created_at', 2000).catch(() => []),
+    ]);
+    const config = configRows[0] || {};
+    if (config.dayparting_enabled === false) return Response.json({ ok: true, skipped: true, reason: 'Dayparting desabilitado' });
+    const settings = settingsRows[0] || {};
+    const accountTargetAcos = numberValue(settings.target_acos, 15);
+    const minBid = numberValue(config.min_bid, numberValue(settings.min_bid, 0.20));
+    const maxBid = numberValue(config.max_bid, numberValue(settings.max_bid, 5.00));
+    const cutoff = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
+
+    const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin), p]));
+    const economicsByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [String(e.asin), e]));
+    const assessmentByAsin = latestAssessments(assessments);
+    const hourlyByCampaign = new Map<string, any[]>();
+    for (const row of hourlyRows) {
+      if (!row.campaign_id || String(row.date || '') < cutoff || normalizeState(row.data_maturity) === 'provisional') continue;
+      const id = String(row.campaign_id);
+      const list = hourlyByCampaign.get(id) || [];
+      list.push(row);
+      hourlyByCampaign.set(id, list);
+    }
+    const bidsByCampaign = new Map<string, number[]>();
+    for (const keyword of keywords) {
+      if (!['enabled', 'active'].includes(normalizeState(keyword.state || keyword.status))) continue;
+      const id = String(keyword.campaign_id || '');
+      const bid = numberValue(keyword.current_bid || keyword.bid, 0);
+      if (!id || bid <= 0) continue;
+      const list = bidsByCampaign.get(id) || [];
+      list.push(bid);
+      bidsByCampaign.set(id, list);
     }
 
-    const autonomyLevel = 3; // sempre nível máximo — execução automática
-    const MIN_BID = cfg.min_bid || BID_FLOOR;
-
-    // ── 3. Buscar campanhas ativas com tempo suficiente ───────────────────
-    const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: aid, status: 'enabled' }, '-spend', 200
-    );
-    // Obsessivo: campanhas com ≥14 dias (antes eram 30)
-    const eligible = allCampaigns.filter(c => {
-      const startDate = c.start_date || c.created_at;
-      if (!startDate) return true; // sem data de início = incluir
-      return (Date.now() - new Date(startDate).getTime()) / 86400000 >= 14;
-    });
-
-    if (eligible.length === 0) {
-      return Response.json({ ok: true, skipped: true, reason: `Nenhuma campanha elegível (≥30 dias). Total ativas: ${allCampaigns.length}.` });
-    }
-
-    // Cooldown obsessivo: só evita reprocessar campanhas nas últimas 23h (reaplica diariamente)
-    const oneDayAgo = new Date(Date.now() - 23 * 3600000).toISOString();
-    const recentRules = await base44.asServiceRole.entities.DaypartingRule.filter(
-      { amazon_account_id: aid }, '-created_at', 200
-    );
-    const recentCampaignIds = new Set(
-      recentRules
-        .filter(r => r.created_at && r.created_at > oneDayAgo && r.status === 'active')
-        .map(r => r.campaign_id)
+    const candidates = campaigns.filter((campaign: any) =>
+      campaignState(campaign) === 'enabled' &&
+      campaign.archived !== true &&
+      campaign.ads_protected !== true &&
+      campaignIdOf(campaign) &&
+      hoursSince(campaign.start_date || campaign.created_at) >= 14 * 24
     );
 
-    // ── 5. Evitar duplicata de decisão hoje ───────────────────────────────
-    const today = now.slice(0, 10);
-    const existingDecs = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { amazon_account_id: aid, decision_type: 'dayparting_rule' }, '-created_at', 100
-    );
-    const existingToday = new Set(
-      existingDecs
-        .filter(d => (d.created_at || '').slice(0, 10) === today && ['pending', 'approved', 'executing'].includes(d.status))
-        .map(d => d.campaign_id)
-    );
+    const results: any[] = [];
+    const stats = { analyzed: 0, decisions_created: 0, auto_applied: 0, pending: 0, skipped: 0, errors: 0 };
 
-    // ── 6. Pré-carregar HourlyMetrics em batch ────────────────────────────
-    const thirtyDaysAgoDate = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    let allHourlyMetrics = [];
-    try {
-      allHourlyMetrics = await base44.asServiceRole.entities.HourlyMetric.filter(
-        { amazon_account_id: aid, date: { $gte: thirtyDaysAgoDate } },
-        '-date', 2000
+    for (const campaign of candidates) {
+      const campaignId = campaignIdOf(campaign);
+      const recentDecision = decisions.find((decision: any) =>
+        String(decision.campaign_id || decision.entity_id || '') === campaignId &&
+        ['pending', 'approved', 'executing', 'executed'].includes(String(decision.status || '')) &&
+        hoursSince(decision.created_at) < COOLDOWN_HOURS
       );
-    } catch (e) {
-      return Response.json({ ok: false, error: `Falha ao carregar dados horários: ${e.message}` }, { status: 500 });
-    }
-
-    // Indexar por campaign_id
-    const hourlyByCampaign: Record<string, any[]> = {};
-    for (const m of allHourlyMetrics) {
-      if (!m.campaign_id) continue;
-      if (!hourlyByCampaign[m.campaign_id]) hourlyByCampaign[m.campaign_id] = [];
-      hourlyByCampaign[m.campaign_id].push(m);
-    }
-
-    // ── 7. Carregar keywords para obter bid atual por campanha ────────────
-    const keywords = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: aid, state: 'enabled' }, null, 500
-    );
-    // Bid médio por campaign_id
-    const bidByCampaign: Record<string, number> = {};
-    for (const kw of keywords) {
-      const cid = kw.campaign_id;
-      if (!cid) continue;
-      const bid = kw.current_bid || kw.bid || 0.50;
-      if (!bidByCampaign[cid]) bidByCampaign[cid] = bid;
-      else bidByCampaign[cid] = (bidByCampaign[cid] + bid) / 2;
-    }
-
-    const stats = { analyzed: 0, auto_applied: 0, pending_review: 0, skipped_cooldown: 0, skipped_no_data: 0, errors: 0 };
-    const autoApplied = [];
-    const pendingReview = [];
-    const errors = [];
-
-    // ── 8. Analisar e aplicar por campanha ───────────────────────────────
-    const campaignsToProcess = eligible.slice(0, 100); // obsessivo: processa até 100 campanhas
-    for (const campaign of campaignsToProcess) {
-      const cid = campaign.campaign_id;
-
-      if (recentCampaignIds.has(cid) || existingToday.has(cid)) {
-        stats.skipped_cooldown++;
+      if (recentDecision) {
+        stats.skipped++;
         continue;
       }
-
       stats.analyzed++;
-
       try {
-        const hourlyMetrics = hourlyByCampaign[cid] || [];
-        if (hourlyMetrics.length === 0) { stats.skipped_no_data++; continue; }
-
-        const daysWithData = new Set(hourlyMetrics.filter(h => h.impressions > 0).map(h => h.date)).size;
-        // Obsessivo: mínimo de 7 dias com dados (antes eram 14)
-        if (daysWithData < 7) { stats.skipped_no_data++; continue; }
-
-        // ── Métricas globais ────────────────────────────────────────────
-        const totalClicks = hourlyMetrics.reduce((s, h) => s + (h.clicks || 0), 0);
-        const totalSales  = hourlyMetrics.reduce((s, h) => s + (h.sales || 0), 0);
-        const totalSpend  = hourlyMetrics.reduce((s, h) => s + (h.spend || 0), 0);
-        const totalOrders = hourlyMetrics.reduce((s, h) => s + (h.orders || 0), 0);
-
-        // Obsessivo: limiar reduzido para incluir mais campanhas
-        if (totalClicks < 20 || totalOrders < 1) { stats.skipped_no_data++; continue; }
-
-        const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
-        const avgAcos = totalSales > 0 ? (totalSpend / totalSales) * 100 : 100;
-        const baseBid = bidByCampaign[cid] || campaign.daily_budget ? Math.max(MIN_BID, bidByCampaign[cid] || 0.50) : 0.50;
-
-        // ── Construir matriz horária (agregado por hora do dia, 0–23) ───
-        // Ignora dia da semana — analisa padrão horário geral
-        const hourMatrix: Record<number, any> = {};
-        for (let h = 0; h < 24; h++) {
-          hourMatrix[h] = { hour: h, clicks: 0, spend: 0, sales: 0, orders: 0, impressions: 0, days: 0 };
+        const asin = String(campaign.asin || '');
+        const product = productByAsin.get(asin);
+        const econ = economicsByAsin.get(asin);
+        const assessment = assessmentByAsin.get(asin);
+        if (!product || availableInventory(product) <= 0 || !economicsAreActionable(econ, assessment)) {
+          stats.skipped++;
+          continue;
         }
-        const dateSet = new Set<string>();
-        for (const m of hourlyMetrics) {
-          const h = m.hour;
-          if (h == null || h < 0 || h > 23) continue;
-          hourMatrix[h].clicks     += m.clicks     || 0;
-          hourMatrix[h].spend      += m.spend      || 0;
-          hourMatrix[h].sales      += m.sales      || 0;
-          hourMatrix[h].orders     += m.orders     || 0;
-          hourMatrix[h].impressions+= m.impressions|| 0;
-          if (m.date) dateSet.add(`${m.date}-${h}`);
-        }
-        // Contar dias distintos com dados por hora
-        for (let h = 0; h < 24; h++) {
-          hourMatrix[h].days = [...dateSet].filter(k => k.endsWith(`-${h}`)).length;
-        }
-
-        // ── Classificar cada hora com bid recomendado ───────────────────
-        const classifiedHours = Object.values(hourMatrix).map((d: any) => {
-          const roas = d.spend > 0 ? d.sales / d.spend : 0;
-          const acos = d.sales > 0 ? (d.spend / d.sales) * 100 : (d.clicks > 0 ? 999 : 0);
-          const cvr  = d.clicks > 0 ? d.orders / d.clicks : 0;
-          const roasIndex = avgRoas > 0 ? roas / avgRoas : 0;
-          // Frequência de vendas por hora: vendas totais nesta hora / dias com dados
-          const salesFreq = d.days > 0 ? d.sales / d.days : 0;
-          const avgSalesFreq = totalSales / (daysWithData * 24) || 0;
-          const salesFreqIndex = avgSalesFreq > 0 ? salesFreq / avgSalesFreq : 0;
-
-          let classification = 'insufficient_data';
-          let recommendedBid = baseBid; // padrão: manter bid atual
-
-          if (d.clicks >= 8 && d.orders >= 1) {
-            if (roasIndex >= 1.3 && salesFreqIndex >= 1.2) {
-              // PICO: alta demanda + alta frequência de vendas → +100% a +130%
-              const increaseMultiplier = Math.min(PEAK_MAX_INCREASE, 1.0 + (roasIndex - 1) * 0.5 + (salesFreqIndex - 1) * 0.3);
-              recommendedBid = Math.round(baseBid * (1 + increaseMultiplier) * 100) / 100;
-              classification = 'peak_high_profit';
-            } else if (roasIndex >= 1.1 && salesFreqIndex >= 1.0) {
-              // BOA conversão: até +100%
-              const increaseMultiplier = Math.min(GOOD_MAX_INCREASE, 0.5 + (roasIndex - 1) * 0.4);
-              recommendedBid = Math.round(baseBid * (1 + increaseMultiplier) * 100) / 100;
-              classification = 'peak_conversion';
-            } else if (roasIndex >= 0.85) {
-              // EFICIENTE: mantém bid
-              classification = 'efficient';
-              recommendedBid = baseBid;
-            } else {
-              // BAIXA eficiência com gasto: reduzir para o piso
-              recommendedBid = MIN_BID;
-              classification = 'low_efficiency';
-            }
-          } else if (d.clicks >= 5 && d.orders === 0 && d.spend > 0) {
-            // DÉFICIT: gasto sem retorno → piso absoluto
-            recommendedBid = MIN_BID;
-            classification = 'deficit';
-          } else if (d.clicks > 0) {
-            classification = 'discovery';
-            recommendedBid = baseBid; // sem dados suficientes — manter
-          }
-
-          return {
-            ...d,
-            roas, acos, cvr, roasIndex, salesFreqIndex, salesFreq,
-            classification, recommendedBid,
-            bidChange: recommendedBid - baseBid,
-            bidChangePct: baseBid > 0 ? ((recommendedBid - baseBid) / baseBid * 100) : 0,
-          };
-        });
-
-        // ── Filtrar janelas de ação ──────────────────────────────────────
-        const peakWindows   = classifiedHours.filter(h => ['peak_high_profit', 'peak_conversion'].includes(h.classification));
-        const deficitWindows= classifiedHours.filter(h => ['deficit', 'low_efficiency'].includes(h.classification) && h.clicks >= 5);
-
-        if (peakWindows.length === 0 && deficitWindows.length === 0) {
-          stats.skipped_no_data++;
+        const rows = hourlyByCampaign.get(campaignId) || [];
+        const days = new Set(rows.filter((row: any) => numberValue(row.impressions) > 0).map((row: any) => row.date)).size;
+        const totalClicks = rows.reduce((sum: number, row: any) => sum + numberValue(row.clicks), 0);
+        const totalOrders = rows.reduce((sum: number, row: any) => sum + numberValue(row.orders), 0);
+        const totalSpend = rows.reduce((sum: number, row: any) => sum + numberValue(row.spend), 0);
+        const totalSales = rows.reduce((sum: number, row: any) => sum + numberValue(row.sales), 0);
+        if (days < MIN_DAYS_WITH_DATA || totalClicks < MIN_TOTAL_CLICKS) {
+          stats.skipped++;
           continue;
         }
 
-        // ── Calcular confidence_score ────────────────────────────────────
-        const daysRunning = campaign.start_date
-          ? Math.floor((Date.now() - new Date(campaign.start_date).getTime()) / 86400000) : 30;
+        const policy = resolveOperatingAcos(econ, accountTargetAcos);
+        const pressure = classifyProfitPressure(assessment, econ);
+        const avgAcos = totalSales > 0 ? totalSpend / totalSales * 100 : null;
+        const avgRoas = totalSpend > 0 ? totalSales / totalSpend : 0;
+        const bidList = bidsByCampaign.get(campaignId) || [];
+        const baseBid = bidList.length ? bidList.reduce((a, b) => a + b, 0) / bidList.length : numberValue(campaign.default_bid, 0.50);
+        const maxProfitableCpa = numberValue(assessment?.maximum_profitable_cpa, 0) || numberValue(econ?.profit_before_ads, 0);
 
-        const activeHours   = classifiedHours.filter(h => h.clicks > 0).length;
-        const highConfHours = classifiedHours.filter(h => ['peak_high_profit', 'peak_conversion'].includes(h.classification)).length;
-        const coveredDays   = daysWithData;
+        const matrix: Record<number, any> = {};
+        for (let hour = 0; hour < 24; hour++) matrix[hour] = { hour, clicks: 0, orders: 0, spend: 0, sales: 0, impressions: 0, days: new Set<string>() };
+        for (const row of rows) {
+          const hour = Number(row.hour);
+          if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
+          matrix[hour].clicks += numberValue(row.clicks);
+          matrix[hour].orders += numberValue(row.orders);
+          matrix[hour].spend += numberValue(row.spend);
+          matrix[hour].sales += numberValue(row.sales);
+          matrix[hour].impressions += numberValue(row.impressions);
+          if (row.date) matrix[hour].days.add(String(row.date));
+        }
 
-        const sampleScore   = Math.min(1.0, Math.log10(Math.max(totalClicks, 1) + 1) / Math.log10(501));
-        const maturityScore = Math.min(1.0, daysRunning / 90);
-        const coverageScore = Math.min(1.0, coveredDays / 30);
-        const confRatio     = activeHours > 0 ? highConfHours / activeHours : 0;
+        const schedule: any[] = [];
+        for (const slot of Object.values(matrix) as any[]) {
+          const slotAcos = slot.sales > 0 ? slot.spend / slot.sales * 100 : null;
+          const slotRoas = slot.spend > 0 ? slot.sales / slot.spend : 0;
+          const slotCvr = slot.clicks > 0 ? slot.orders / slot.clicks : 0;
+          let classification = 'efficient';
+          let adjustmentPct = 0;
 
-        const confidenceScore = Math.round((
-          sampleScore   * 0.35 +
-          maturityScore * 0.25 +
-          coverageScore * 0.25 +
-          confRatio     * 0.15
-        ) * 100);
+          const canBoost = pressure === 'healthy' && totalOrders >= MIN_TOTAL_ORDERS_FOR_BOOST &&
+            slot.clicks >= MIN_HOURLY_CLICKS && slot.orders >= 1 && slotAcos !== null && slotAcos <= policy.target_acos;
+          if (canBoost) {
+            const veryStrong = slot.orders >= 2 && slotAcos <= policy.target_acos * 0.70;
+            classification = veryStrong ? 'peak_high_profit' : 'peak_conversion';
+            adjustmentPct = veryStrong ? MAX_INCREASE_PCT : 10;
+          } else {
+            const noSaleThreshold = Math.max(5, maxProfitableCpa > 0 ? maxProfitableCpa / 4 : 5);
+            const noSaleWaste = slot.clicks >= 10 && slot.orders === 0 && slot.spend >= noSaleThreshold;
+            const inefficient = slot.clicks >= MIN_HOURLY_CLICKS && slot.orders > 0 && slotAcos !== null && slotAcos > policy.target_acos;
+            if (noSaleWaste) {
+              classification = 'deficit';
+              adjustmentPct = -MAX_DECREASE_PCT;
+            } else if (inefficient || ['critical', 'defensive'].includes(pressure)) {
+              classification = 'low_efficiency';
+              adjustmentPct = -10;
+            }
+          }
+          if (adjustmentPct === 0) continue;
+          const recommendedBid = roundMoney(Math.min(maxBid, Math.max(minBid, baseBid * (1 + adjustmentPct / 100))));
+          schedule.push({
+            hour: slot.hour,
+            classification,
+            baseBid: roundMoney(baseBid),
+            recommendedBid,
+            bidChangePct: adjustmentPct,
+            clicks: slot.clicks,
+            orders: slot.orders,
+            spend: roundMoney(slot.spend),
+            sales: roundMoney(slot.sales),
+            acos: slotAcos === null ? null : roundMoney(slotAcos),
+            roas: roundMoney(slotRoas),
+            cvr: roundMoney(slotCvr * 100),
+            sampleDays: slot.days.size,
+          });
+        }
+        if (!schedule.length) {
+          stats.skipped++;
+          continue;
+        }
 
-        // ── Construir payload de janelas para o applyDaypartingSchedule ──
-        // Formato: { hour: N, recommendedBid, classification, bidChangePct }[]
-        const daypartingSchedule = classifiedHours
-          .filter(h => h.classification !== 'insufficient_data' && h.classification !== 'discovery')
-          .map(h => ({
-            hour: h.hour,
-            classification: h.classification,
-            baseBid: Number(baseBid.toFixed(2)),
-            recommendedBid: Number(h.recommendedBid.toFixed(2)),
-            bidChangePct: Number(h.bidChangePct.toFixed(1)),
-            clicks: h.clicks,
-            orders: h.orders,
-            roas: Number((h.roas || 0).toFixed(2)),
-            roasIndex: Number((h.roasIndex || 0).toFixed(2)),
-            salesFreq: Number((h.salesFreq || 0).toFixed(4)),
-          }));
-
-        // Sumário para o rationale
-        const peakSummary    = peakWindows.slice(0, 4).map(h => `${h.hour}h (+${h.bidChangePct.toFixed(0)}%, ROAS ${h.roas.toFixed(1)}x)`).join(', ');
-        const deficitSummary = deficitWindows.slice(0, 4).map(h => `${h.hour}h (R$0,25, sem retorno)`).join(', ');
-        const estSavings     = deficitWindows.reduce((s, h) => s + (h.spend / Math.max(daysWithData, 1)) * 0.6, 0);
-        const estRoasGain    = peakWindows.length * 2.5; // estimativa conservadora
-
-        // Obsessivo: aplica automaticamente com confiança >= 60 (antes era 90)
-        const autoApplyNow = confidenceScore >= 60 && autonomyLevel >= 2;
-
-        const decisionPayload = {
+        const activeHours = Object.values(matrix).filter((slot: any) => slot.clicks > 0).length;
+        const confidence = confidenceScore({ days, clicks: totalClicks, orders: totalOrders, activeHours, actionableHours: schedule.length });
+        const autoApply = confidence >= AUTO_APPLY_CONFIDENCE;
+        const now = new Date().toISOString();
+        const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
           amazon_account_id: aid,
           decision_type: 'dayparting_rule',
           entity_type: 'campaign',
-          entity_id: cid,
-          campaign_id: cid,
-          asin: campaign.asin,
+          entity_id: campaignId,
+          campaign_id: campaignId,
+          asin,
           action: 'apply_dayparting',
-          rationale: [
-            `Dayparting por frequência de vendas — Campanha "${campaign.name || campaign.campaign_name}".`,
-            `\nAnálise: ${daysRunning} dias de dados, ${totalClicks} cliques, ${totalOrders} pedidos, ROAS médio ${avgRoas.toFixed(2)}x.`,
-            `\nHorários de pico (bid aumentado): ${peakSummary || 'nenhum identificado'}.`,
-            `\nHorários de baixa (bid → R$0,25): ${deficitSummary || 'nenhum identificado'}.`,
-            `\nLógica: bid base R$${baseBid.toFixed(2)} × índice ROAS × frequência de vendas → faixa +100% a +130% no pico, R$0,25 na baixa.`,
-            `\nConfiança: ${confidenceScore}% | ${autoApplyNow ? 'Execução automática.' : 'Aguarda aprovação.'}`,
-            `\nEconomia estimada: ${sym}${estSavings.toFixed(2)}/dia nos horários de baixa. Ganho de ROAS estimado: +${estRoasGain.toFixed(1)}%.`,
-          ].join(''),
+          rationale: `Dayparting econômico: ${schedule.filter((slot) => slot.bidChangePct > 0).length} picos até +${MAX_INCREASE_PCT}% e ${schedule.filter((slot) => slot.bidChangePct < 0).length} reduções até -${MAX_DECREASE_PCT}%. ACoS seguro ${policy.target_acos}%, break-even ${policy.break_even_acos ?? 'indisponível'}%.`,
           data_used: JSON.stringify({
-            base_bid: baseBid,
-            bid_floor: MIN_BID,
-            days_with_data: daysWithData,
-            days_running: daysRunning,
+            base_bid: roundMoney(baseBid),
+            bid_floor: minBid,
+            bid_ceiling: maxBid,
+            days_with_data: days,
             total_clicks: totalClicks,
             total_orders: totalOrders,
-            total_spend: Number(totalSpend.toFixed(2)),
-            avg_roas: Number(avgRoas.toFixed(2)),
-            avg_acos: Number(avgAcos.toFixed(1)),
-            peak_windows_count: peakWindows.length,
-            deficit_windows_count: deficitWindows.length,
-            confidence_score: confidenceScore,
-            dayparting_schedule: daypartingSchedule,  // ← LIDO pelo applyDaypartingSchedule
+            total_spend: roundMoney(totalSpend),
+            total_sales: roundMoney(totalSales),
+            avg_roas: roundMoney(avgRoas),
+            avg_acos: avgAcos === null ? null : roundMoney(avgAcos),
+            pressure,
+            operating_target_acos: policy.target_acos,
+            break_even_acos: policy.break_even_acos,
+            dayparting_schedule: schedule,
           }),
-          confidence: confidenceScore,
-          risk: confidenceScore >= 90 ? 'low' : 'medium',
-          requires_approval: !autoApplyNow,
-          status: autoApplyNow ? 'approved' : 'pending',
+          confidence,
+          risk: autoApply ? 'low' : 'medium',
+          requires_approval: !autoApply,
+          status: autoApply ? 'approved' : 'pending',
           reversible: true,
           country_code: account.country_code || 'BR',
           currency_code: account.currency_code || 'BRL',
-          currency_symbol: sym,
-          objective: 'maintenance',
-          expected_impact: `Pico: +${peakWindows.length} janelas bid ×${(1 + PEAK_MAX_INCREASE).toFixed(1)}x máx. Baixa: ${deficitWindows.length} janelas → R$0,25.`,
-          evaluation_due_at: new Date(Date.now() + 14 * 86400000).toISOString(),
+          currency_symbol: account.currency_symbol || 'R$',
+          objective: pressure === 'healthy' ? 'maintenance' : 'profit_recovery',
+          expected_impact: `Ajustes temporários com restauração em uma hora; limite +${MAX_INCREASE_PCT}%/-${MAX_DECREASE_PCT}%.`,
+          evaluation_due_at: new Date(Date.now() + 7 * 86400000).toISOString(),
           source_function: 'runDailyDayparting',
           created_at: now,
-        };
+        });
+        stats.decisions_created++;
 
-        const created = await base44.asServiceRole.entities.OptimizationDecision.create(decisionPayload);
-
-        if (autoApplyNow) {
-          const applyRes = await base44.asServiceRole.functions.invoke('applyDaypartingSchedule', {
-            opportunity_id: created.id,
+        let applyResult: any = null;
+        if (autoApply) {
+          const response = await base44.asServiceRole.functions.invoke('applyDaypartingSchedule', {
+            opportunity_id: decision.id,
             approve: true,
             auto_apply: true,
-          }).catch(e => ({ data: { ok: false, error: e.message } }));
+            _service_role: true,
+          }).catch((error: any) => ({ data: { ok: false, error: error.message } }));
+          applyResult = response?.data || response || {};
+          if (applyResult.ok) stats.auto_applied++;
+          else stats.errors++;
+        } else stats.pending++;
 
-          const ok = applyRes?.data?.ok;
-          if (ok) {
-            stats.auto_applied++;
-            autoApplied.push({ campaign_id: cid, campaign_name: campaign.name || campaign.campaign_name, confidence: confidenceScore, peak_windows: peakWindows.length, deficit_windows: deficitWindows.length, base_bid: baseBid });
-          } else {
-            stats.pending_review++;
-            pendingReview.push({ campaign_id: cid, confidence: confidenceScore, reason: `apply_failed: ${applyRes?.data?.error}` });
-          }
-        } else {
-          stats.pending_review++;
-          pendingReview.push({ campaign_id: cid, campaign_name: campaign.name || campaign.campaign_name, confidence: confidenceScore, peak_windows: peakWindows.length, deficit_windows: deficitWindows.length, base_bid: baseBid });
-        }
-
-      } catch (err) {
+        results.push({
+          campaign_id: campaignId,
+          asin,
+          campaign_name: campaign.name || campaign.campaign_name,
+          confidence,
+          auto_applied: autoApply && applyResult?.ok === true,
+          pressure,
+          target_acos: policy.target_acos,
+          break_even_acos: policy.break_even_acos,
+          peak_windows: schedule.filter((slot) => slot.bidChangePct > 0).length,
+          defensive_windows: schedule.filter((slot) => slot.bidChangePct < 0).length,
+          decision_id: decision.id,
+          apply_error: autoApply && !applyResult?.ok ? applyResult?.error : null,
+        });
+      } catch (error: any) {
         stats.errors++;
-        errors.push({ campaign_id: cid, error: err.message });
+        results.push({ campaign_id: campaignId, status: 'error', error: error.message });
       }
     }
 
     return Response.json({
-      ok: true,
+      ok: stats.errors === 0,
+      policy: {
+        lookback_days: LOOKBACK_DAYS,
+        minimum_days: MIN_DAYS_WITH_DATA,
+        minimum_clicks: MIN_TOTAL_CLICKS,
+        minimum_orders_for_boost: MIN_TOTAL_ORDERS_FOR_BOOST,
+        max_increase_pct: MAX_INCREASE_PCT,
+        max_decrease_pct: MAX_DECREASE_PCT,
+        auto_apply_confidence: AUTO_APPLY_CONFIDENCE,
+        product_economics_required: true,
+      },
+      eligible_campaigns: candidates.length,
       stats,
-      auto_applied: autoApplied,
-      pending_review: pendingReview,
-      errors,
-      autonomy_level: autonomyLevel,
-      confidence_threshold: 90,
-      eligible_campaigns: eligible.length,
-      bid_floor: MIN_BID,
-      peak_max_increase_pct: PEAK_MAX_INCREASE * 100,
-      good_max_increase_pct: GOOD_MAX_INCREASE * 100,
-      duration_ms: Date.now() - startTime,
+      results,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
     });
-
-  } catch (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  } catch (error: any) {
+    return Response.json({ ok: false, error: error?.message || 'Falha no dayparting diário' }, { status: 500 });
   }
 });
