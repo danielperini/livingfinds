@@ -120,7 +120,7 @@ Deno.serve(async (req) => {
       const campaignId = campaignIdOf(campaign);
       const recentDecision = decisions.find((decision: any) =>
         String(decision.campaign_id || decision.entity_id || '') === campaignId &&
-        ['pending', 'approved', 'executing', 'executed'].includes(String(decision.status || '')) &&
+        ['proposed', 'pending_approval', 'approved', 'executing', 'executed'].includes(String(decision.status || '')) &&
         hoursSince(decision.created_at) < COOLDOWN_HOURS
       );
       if (recentDecision) {
@@ -250,13 +250,10 @@ Deno.serve(async (req) => {
           confidence,
           risk: autoApply ? 'low' : 'medium',
           requires_approval: !autoApply,
-          status: autoApply ? 'approved' : 'pending',
-          reversible: true,
+          status: autoApply ? 'approved' : 'pending_approval',
           country_code: account.country_code || 'BR',
           currency_code: account.currency_code || 'BRL',
           currency_symbol: account.currency_symbol || 'R$',
-          objective: pressure === 'healthy' ? 'maintenance' : 'profit_recovery',
-          expected_impact: `Ajustes temporários com restauração em uma hora; limite +${MAX_INCREASE_PCT}%/-${MAX_DECREASE_PCT}%.`,
           evaluation_due_at: new Date(Date.now() + 7 * 86400000).toISOString(),
           source_function: 'runDailyDayparting',
           created_at: now,
