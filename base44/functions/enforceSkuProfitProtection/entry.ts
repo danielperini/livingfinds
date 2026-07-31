@@ -1,174 +1,415 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  availableInventory,
+  bidAfterProfitGuard,
+  classifyProfitPressure,
+  economicsAreActionable,
+  isProtectedWinner,
+  normalizeSku,
+  normalizeState,
+  numberValue,
+  resolveOperatingAcos,
+  resolveSafeMaxCpc,
+  roundMoney,
+} from '../../shared/profitGuardPolicy.ts';
 
-// Não há lista fixa de pausa por SKU: prejuízo precisa ser atribuído a uma
-// keyword/campanha e receber redução de bid antes de qualquer pausa.
-const PAUSE_SKUS = new Set<string>();
-// FBA-0008P voltou a apresentar lucro pós-Ads positivo. Ele sai da pausa rígida,
-// volta a entregar e opera com bid conservador enquanto a margem se recupera.
-const RECOVERY_SKUS = new Set(['FBA-0008P']);
-const BID_REDUCTIONS: Record<string, number> = { 'FBA-0088A': 0.15, 'FBA-0008P': 0.10 };
-const DAILY_ORDER_CAPS: Record<string, number> = { 'FBA-0087B': 1 };
-const MIN_BID = 0.20;
+const RULE_VERSION = 2;
+const LOOKBACK_DAYS = 14;
+const BID_COOLDOWN_HOURS = 24;
+const PAUSE_AFTER_REDUCTION_HOURS = 72;
+const REACTIVATION_COOLDOWN_HOURS = 72;
+const MAX_ACTIONS_PER_ACCOUNT = 80;
 
-const norm = (v: unknown) => String(v || '').trim().toUpperCase();
+const nowIso = () => new Date().toISOString();
 const todayBrt = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date());
+const cutoffDate = (days: number) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+const hoursSince = (value: unknown) => {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const timestamp = new Date(String(value)).getTime();
+  return Number.isFinite(timestamp) ? (Date.now() - timestamp) / 3600000 : Number.POSITIVE_INFINITY;
+};
+const remoteId = (value: unknown) => /^\d+$/.test(String(value || '')) ? String(value) : '';
+const campaignIdOf = (campaign: any) => String(campaign?.campaign_id || campaign?.amazon_campaign_id || '');
+const campaignState = (campaign: any) => normalizeState(campaign?.amazon_status || campaign?.state || campaign?.status);
+const isAutoCampaign = (campaign: any) => {
+  const targeting = String(campaign?.targeting_type || '').toUpperCase();
+  const name = String(campaign?.name || campaign?.campaign_name || '').toUpperCase();
+  return targeting.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
+};
 
-async function tokenFor(account: any) {
-  const refreshToken = Deno.env.get('ADS_REFRESH_TOKEN') || account.ads_refresh_token;
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token', refresh_token: refreshToken || '',
-      client_id: Deno.env.get('ADS_CLIENT_ID') || '', client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
-    }),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) throw new Error(data.error_description || data.error || `Token HTTP ${response.status}`);
-  return data.access_token as string;
+function unwrap(response: any): any {
+  return response?.data || response || {};
 }
 
-function baseUrl(account: any) {
-  const region = norm(account.region || Deno.env.get('ADS_REGION') || 'NA');
-  if (region.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (region.includes('FE')) return 'https://advertising-api-fe.amazon.com';
-  return 'https://advertising-api.amazon.com';
+function latestByProduct(rows: any[]): Map<string, any> {
+  const index = new Map<string, any>();
+  for (const row of rows) {
+    if (['failed', 'stale', 'reconciliation_pending'].includes(normalizeState(row?.data_status))) continue;
+    for (const key of [row?.asin, normalizeSku(row?.sku)].filter(Boolean)) {
+      const existing = index.get(String(key));
+      const rowTime = new Date(row?.assessment_date || row?.updated_at || row?.created_at || 0).getTime();
+      const existingTime = new Date(existing?.assessment_date || existing?.updated_at || existing?.created_at || 0).getTime();
+      if (!existing || rowTime >= existingTime) index.set(String(key), row);
+    }
+  }
+  return index;
 }
 
-async function adsPut(account: any, token: string, path: string, body: any, contentType: string) {
-  const response = await fetch(`${baseUrl(account)}${path}`, {
+function metricsByCampaign(rows: any[]): Map<string, any> {
+  const map = new Map<string, any>();
+  for (const row of rows) {
+    const id = String(row?.campaign_id || '');
+    if (!id) continue;
+    const current = map.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, last_sale_at: null };
+    current.spend += numberValue(row.spend);
+    current.sales += numberValue(row.sales);
+    current.orders += numberValue(row.orders);
+    current.clicks += numberValue(row.clicks);
+    current.impressions += numberValue(row.impressions);
+    if (numberValue(row.orders) > 0 && row.date && (!current.last_sale_at || row.date > current.last_sale_at)) {
+      current.last_sale_at = `${row.date}T23:59:59-03:00`;
+    }
+    map.set(id, current);
+  }
+  return map;
+}
+
+async function invokeAds(base44: any, accountId: string, path: string, payload: any, contentType: string) {
+  const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+    amazon_account_id: accountId,
+    _service_role: true,
     method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID') || '',
-      'Amazon-Advertising-API-Scope': String(account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || ''),
-      'Content-Type': contentType, Accept: contentType,
-    },
-    body: JSON.stringify(body),
+    path,
+    payload,
+    content_type: contentType,
+    accept: contentType,
+    max_attempts: 3,
   });
-  const data = await response.json().catch(() => ({}));
-  const errors = data?.campaigns?.error || data?.keywords?.error || data?.errors || [];
-  if (!response.ok || (Array.isArray(errors) && errors.length)) throw new Error(`Amazon HTTP ${response.status}: ${JSON.stringify(errors).slice(0, 400)}`);
-  return data;
+  return unwrap(response);
+}
+
+async function enqueueRetry(base44: any, params: {
+  accountId: string;
+  operation: string;
+  entityType: 'campaign' | 'keyword';
+  entityId: string;
+  campaignId?: string;
+  keywordId?: string;
+  payload: any;
+  idempotencyKey: string;
+  retryAfterSeconds?: number;
+}) {
+  const existing = await base44.asServiceRole.entities.AmazonActionQueue.filter({
+    amazon_account_id: params.accountId,
+    idempotency_key: params.idempotencyKey,
+  }, null, 1).catch(() => []);
+  if (existing.length) return existing[0];
+  const scheduledAt = new Date(Date.now() + Math.max(60, params.retryAfterSeconds || 300) * 1000).toISOString();
+  return base44.asServiceRole.entities.AmazonActionQueue.create({
+    amazon_account_id: params.accountId,
+    operation: params.operation,
+    entity_type: params.entityType,
+    entity_id: params.entityId,
+    campaign_id: params.campaignId || null,
+    keyword_id: params.keywordId || null,
+    payload: params.payload,
+    idempotency_key: params.idempotencyKey,
+    priority: 'high',
+    status: 'pending',
+    scheduled_at: scheduledAt,
+    attempt_count: 0,
+    max_attempts: 3,
+    source: 'enforceSkuProfitProtection',
+  }).catch(() => null);
+}
+
+async function recordExecution(base44: any, data: any) {
+  const existing = await base44.asServiceRole.entities.RuleExecution.filter({
+    amazon_account_id: data.amazon_account_id,
+    idempotency_key: data.idempotency_key,
+  }, null, 1).catch(() => []);
+  if (existing.length) return existing[0];
+  return base44.asServiceRole.entities.RuleExecution.create({
+    rule_version: RULE_VERSION,
+    rollback_available: true,
+    ...data,
+  }).catch(() => null);
 }
 
 Deno.serve(async (request) => {
+  const startedAt = nowIso();
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
-    if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
-
-    const day = todayBrt();
-    const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id })
-      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
-    const allResults: any[] = [];
-
-    for (const account of accounts) {
-      const [products, campaigns, keywords, metrics, priorEvents] = await Promise.all([
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, null, 500).catch(() => []),
-        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, null, 1000).catch(() => []),
-        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: account.id }, null, 3000).catch(() => []),
-        base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: account.id, date: day }, null, 3000).catch(() => []),
-        base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: account.id }, '-created_date', 1000).catch(() => []),
-      ]);
-      const token = body.dry_run ? '' : await tokenFor(account);
-      const productBySku = new Map(products.map((p: any) => [norm(p.sku), p]));
-      const skuForCampaign = (campaign: any) => {
-        if (campaign.sku) return norm(campaign.sku);
-        const product = products.find((p: any) => p.asin && campaign.asin && norm(p.asin) === norm(campaign.asin));
-        return norm(product?.sku);
-      };
-      const campaignOrders = new Map<string, number>();
-      for (const metric of metrics) {
-        const id = String(metric.campaign_id || '');
-        campaignOrders.set(id, (campaignOrders.get(id) || 0) + Number(metric.orders || metric.purchases || 0));
-      }
-      const actions: any[] = [];
-
-      for (const campaign of campaigns) {
-        if (campaign.archived || norm(campaign.state) === 'ARCHIVED') continue;
-        const campaignId = String(campaign.campaign_id || campaign.amazon_campaign_id || '');
-        const sku = skuForCampaign(campaign);
-        if (!campaignId || !sku) continue;
-        const state = norm(campaign.amazon_status || campaign.state || campaign.status);
-        let desired: 'PAUSED' | 'ENABLED' | null = null;
-        let reason = '';
-
-        if (PAUSE_SKUS.has(sku)) {
-          desired = 'PAUSED';
-          reason = 'PROFIT_GUARD: prejuízo pós-Ads ou gasto sem vendas; pausa até correção econômica';
-        } else if (RECOVERY_SKUS.has(sku) && state === 'PAUSED') {
-          desired = 'ENABLED';
-          reason = `PROFIT_RECOVERY: ${sku} returned to positive post-Ads profit; conservative reactivation`;
-        } else if (DAILY_ORDER_CAPS[sku]) {
-          const orders = campaignOrders.get(campaignId) || 0;
-          const cappedToday = priorEvents.some((event: any) => event.rule_key === 'sku_daily_order_cap' && event.entity_id === campaignId && String(event.executed_at || event.created_date || '').slice(0, 10) === day && event.status === 'executed');
-          if (orders >= DAILY_ORDER_CAPS[sku]) {
-            desired = 'PAUSED';
-            reason = `DAILY_ORDER_CAP: ${sku} atingiu ${orders} pedido(s) hoje; limite ${DAILY_ORDER_CAPS[sku]}`;
-          } else if (state === 'PAUSED' && !cappedToday) {
-            desired = 'ENABLED';
-            reason = `DAILY_ORDER_CAP_RESET: ${sku} liberado para o primeiro pedido de ${day}`;
-          }
-        }
-        if (!desired || state === desired) continue;
-
-        if (!body.dry_run) {
-          await adsPut(account, token, '/sp/campaigns', { campaigns: [{ campaignId, state: desired }] }, 'application/vnd.spCampaign.v3+json');
-          await base44.asServiceRole.entities.Campaign.update(campaign.id, {
-            state: desired.toLowerCase(), status: desired.toLowerCase(), amazon_status: desired.toLowerCase(),
-            synced_at: new Date().toISOString(), last_activity_at: new Date().toISOString(),
-          });
-          await base44.asServiceRole.entities.RuleExecution.create({
-            amazon_account_id: account.id,
-            rule_key: DAILY_ORDER_CAPS[sku] ? 'sku_daily_order_cap' : RECOVERY_SKUS.has(sku) ? 'sku_profit_recovery' : 'sku_profit_hard_pause',
-            rule_version: 1, entity_type: 'campaign', entity_id: campaignId, campaign_id: campaignId,
-            asin: campaign.asin || productBySku.get(sku)?.asin || null, action_type: desired === 'PAUSED' ? 'pause_campaign' : 'enable_campaign',
-            status: 'executed', reason, executed_at: new Date().toISOString(),
-            idempotency_key: `sku_guard|${account.id}|${sku}|${campaignId}|${desired}|${day}`,
-          }).catch(() => {});
-        }
-        actions.push({ sku, campaign_id: campaignId, action: desired, reason });
-      }
-
-      for (const [sku, reduction] of Object.entries(BID_REDUCTIONS)) {
-        const product = productBySku.get(sku);
-        const campaignIds = new Set(campaigns.filter((c: any) => skuForCampaign(c) === sku).map((c: any) => String(c.campaign_id || c.amazon_campaign_id || '')));
-        for (const keyword of keywords) {
-          const campaignId = String(keyword.campaign_id || '');
-          if (!campaignIds.has(campaignId)) continue;
-          const keywordId = String(keyword.amazon_keyword_id || keyword.keyword_id || '');
-          const oldBid = Number(keyword.bid || keyword.current_bid || 0);
-          // A Amazon aceita somente o ID remoto numérico. Registros legados "kw_*"
-          // são IDs locais e nunca devem ser enviados à Ads API.
-          if (!/^\d+$/.test(keywordId) || oldBid <= 0) continue;
-          const already = priorEvents.some((event: any) => event.idempotency_key === `sku_guard_bid|${account.id}|${sku}|${keywordId}|${day}`);
-          if (already) continue;
-          const newBid = Math.max(MIN_BID, Math.round(oldBid * (1 - reduction) * 100) / 100);
-          if (newBid >= oldBid) continue;
-          if (!body.dry_run) {
-            await adsPut(account, token, '/sp/keywords', { keywords: [{ keywordId, bid: newBid }] }, 'application/vnd.spKeyword.v3+json');
-            await base44.asServiceRole.entities.Keyword.update(keyword.id, { bid: newBid, current_bid: newBid, last_bid_change_at: new Date().toISOString() });
-            await base44.asServiceRole.entities.RuleExecution.create({
-              amazon_account_id: account.id, rule_key: 'sku_low_margin_bid_reduction', rule_version: 1,
-              entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId, campaign_id: campaignId,
-              asin: product?.asin || keyword.asin || null, action_type: 'update_bid', value_before: oldBid, value_after: newBid,
-              status: 'executed', reason: `${sku}: margem pós-Ads estreita; redução conservadora de ${Math.round(reduction * 100)}%`,
-              executed_at: new Date().toISOString(), idempotency_key: `sku_guard_bid|${account.id}|${sku}|${keywordId}|${day}`,
-            }).catch(() => {});
-          }
-          actions.push({ sku, keyword_id: keywordId, action: 'BID_DOWN', old_bid: oldBid, new_bid: newBid });
-        }
-      }
-
-      allResults.push({ account_id: account.id, date: day, actions });
+    if (!authenticated && !body._service_role) {
+      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
 
-    return Response.json({ ok: true, dry_run: Boolean(body.dry_run), policy: { pause_skus: [...PAUSE_SKUS], recovery_skus: [...RECOVERY_SKUS], bid_reductions: BID_REDUCTIONS, daily_order_caps: DAILY_ORDER_CAPS }, results: allResults });
-  } catch (error) {
+    const accounts = body.amazon_account_id
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
+    const dryRun = body.dry_run === true;
+    const day = todayBrt();
+    const results: any[] = [];
+
+    for (const account of accounts) {
+      const aid = account.id;
+      const cutoff = cutoffDate(LOOKBACK_DAYS);
+      const [products, economics, assessments, campaigns, keywords, metricsRows, settingsRows, priorExecutions] = await Promise.all([
+        base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+        base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+        base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
+        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
+        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
+        base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
+        base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+        base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-executed_at', 5000).catch(() => []),
+      ]);
+
+      const settings = settingsRows[0] || {};
+      const minBid = numberValue(settings.min_bid, 0.20);
+      const maxBid = numberValue(settings.max_bid, 5.00);
+      const accountTargetAcos = numberValue(settings.target_acos, 15);
+      const economicsByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [String(e.asin), e]));
+      const economicsBySku = new Map(economics.filter((e: any) => e.sku).map((e: any) => [normalizeSku(e.sku), e]));
+      const latestAssessment = latestByProduct(assessments);
+      const campaignMetrics = metricsByCampaign(metricsRows.filter((row: any) => String(row.date || '') >= cutoff));
+      const campaignsByAsin = new Map<string, any[]>();
+      for (const campaign of campaigns) {
+        if (!campaign.asin) continue;
+        const list = campaignsByAsin.get(String(campaign.asin)) || [];
+        list.push(campaign);
+        campaignsByAsin.set(String(campaign.asin), list);
+      }
+      const keywordsByCampaign = new Map<string, any[]>();
+      for (const keyword of keywords) {
+        const id = String(keyword.campaign_id || '');
+        if (!id) continue;
+        const list = keywordsByCampaign.get(id) || [];
+        list.push(keyword);
+        keywordsByCampaign.set(id, list);
+      }
+
+      const actions: any[] = [];
+      const skipped: any[] = [];
+      let budget = MAX_ACTIONS_PER_ACCOUNT;
+
+      for (const product of products) {
+        if (budget <= 0) break;
+        const asin = String(product.asin || '');
+        const sku = normalizeSku(product.sku);
+        if (!asin && !sku) continue;
+        const econ = economicsByAsin.get(asin) || economicsBySku.get(sku);
+        const assessment = latestAssessment.get(asin) || latestAssessment.get(sku);
+        const inventory = availableInventory(product);
+
+        if (inventory === 0) {
+          skipped.push({ asin, sku, reason: 'stock_zero_delegated_to_autoStockCampaignGuard' });
+          continue;
+        }
+        if (!economicsAreActionable(econ, assessment)) {
+          skipped.push({ asin, sku, reason: 'economics_not_actionable' });
+          continue;
+        }
+
+        const policy = resolveOperatingAcos(econ, accountTargetAcos);
+        const pressure = classifyProfitPressure(assessment, econ);
+        const productCampaigns = (campaignsByAsin.get(asin) || []).filter((campaign: any) =>
+          !campaign.archived && campaignState(campaign) !== 'archived'
+        );
+        if (!productCampaigns.length) continue;
+
+        const activeCampaigns = productCampaigns.filter((campaign: any) => ['enabled', 'active', 'incomplete'].includes(campaignState(campaign)));
+        const protectedDiscoveryId = (() => {
+          const autoCandidates = activeCampaigns.filter(isAutoCampaign);
+          const candidates = autoCandidates.length ? autoCandidates : activeCampaigns;
+          const ranked = candidates
+            .map((campaign: any) => ({ campaign, metrics: campaignMetrics.get(campaignIdOf(campaign)) || {} }))
+            .sort((a: any, b: any) => numberValue(b.metrics.orders) - numberValue(a.metrics.orders) || numberValue(b.metrics.sales) - numberValue(a.metrics.sales));
+          return ranked[0]?.campaign ? campaignIdOf(ranked[0].campaign) : '';
+        })();
+
+        if (['watch', 'defensive', 'critical'].includes(pressure)) {
+          for (const campaign of activeCampaigns) {
+            if (budget <= 0) break;
+            const campaignId = campaignIdOf(campaign);
+            if (!campaignId) continue;
+            const metrics = campaignMetrics.get(campaignId) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, last_sale_at: null };
+            const winner = isProtectedWinner({
+              orders: numberValue(metrics.orders), sales: numberValue(metrics.sales), spend: numberValue(metrics.spend),
+              targetAcos: policy.target_acos, lastSaleAt: metrics.last_sale_at,
+              protectedFlag: campaign.ads_protected === true || campaign.protected_high_performance === true,
+            });
+            if (winner.protected) {
+              skipped.push({ asin, sku, campaign_id: campaignId, reason: winner.reason });
+              continue;
+            }
+
+            const clicks = numberValue(metrics.clicks);
+            const spend = numberValue(metrics.spend);
+            const orders = numberValue(metrics.orders);
+            const maxProfitableCpa = numberValue(assessment?.maximum_profitable_cpa, 0) || numberValue(econ?.profit_before_ads, 0);
+            const evidenceSpend = Math.max(6, maxProfitableCpa > 0 ? maxProfitableCpa * 0.50 : 6);
+            const observedCvr = clicks > 0 ? orders / clicks : 0;
+            const observedAov = orders > 0 ? numberValue(metrics.sales) / orders : numberValue(econ?.current_price, 0);
+            const safeMaxCpc = resolveSafeMaxCpc({ economics: econ, observedCvr, observedAov, operatingAcos: policy.target_acos });
+
+            if ((clicks >= 10 || spend >= evidenceSpend) && budget > 0) {
+              for (const keyword of (keywordsByCampaign.get(campaignId) || [])) {
+                if (budget <= 0) break;
+                if (!['enabled', 'active'].includes(normalizeState(keyword.state || keyword.status))) continue;
+                const keywordId = remoteId(keyword.amazon_keyword_id || keyword.keyword_id);
+                const currentBid = numberValue(keyword.current_bid || keyword.bid, 0);
+                if (!keywordId || currentBid <= 0) continue;
+                const idempotencyKey = `sku_profit_bid_v2|${aid}|${keywordId}|${day}`;
+                if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
+                if (hoursSince(keyword.last_bid_change_at) < BID_COOLDOWN_HOURS) continue;
+                const newBid = bidAfterProfitGuard({
+                  currentBid, minBid, maxBid,
+                  pressure: pressure as 'watch' | 'defensive' | 'critical',
+                  safeMaxCpc,
+                });
+                if (newBid >= currentBid) continue;
+
+                const action = { type: 'update_bid', asin, sku, campaign_id: campaignId, keyword_id: keywordId, old_bid: currentBid, new_bid: newBid, pressure, target_acos: policy.target_acos, break_even_acos: policy.break_even_acos };
+                if (!dryRun) {
+                  const amazon = await invokeAds(base44, aid, '/sp/keywords', { keywords: [{ keywordId, bid: newBid }] }, 'application/vnd.spKeyword.v3+json');
+                  const completed = amazon.ok === true || amazon.status === 207;
+                  if (completed) {
+                    await base44.asServiceRole.entities.Keyword.update(keyword.id, { bid: newBid, current_bid: newBid, last_bid_change_at: nowIso() }).catch(() => {});
+                  } else if (amazon.retryable || amazon.rate_limited || amazon.reschedule_async) {
+                    await enqueueRetry(base44, {
+                      accountId: aid, operation: 'keyword_bid_update', entityType: 'keyword', entityId: keywordId,
+                      campaignId, keywordId, payload: { bid: newBid, bid_before: currentBid, reason: 'sku_profit_guard_v2' },
+                      idempotencyKey: `retry|${idempotencyKey}`, retryAfterSeconds: amazon.retry_after_seconds,
+                    });
+                  }
+                  await recordExecution(base44, {
+                    amazon_account_id: aid, rule_key: 'sku_profit_bid_reduction', entity_type: 'keyword', entity_id: keywordId,
+                    keyword_id: keywordId, campaign_id: campaignId, asin, action_type: 'update_bid', value_before: currentBid,
+                    value_after: newBid, idempotency_key: idempotencyKey, status: completed ? 'completed' : 'scheduled',
+                    executed_at: nowIso(), error_message: completed ? null : String(amazon.message || amazon.error || 'scheduled_retry').slice(0, 500),
+                    amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id }).slice(0, 1000),
+                    metrics_before: JSON.stringify({ pressure, target_acos: policy.target_acos, break_even_acos: policy.break_even_acos, campaign_metrics: metrics, assessment_date: assessment?.assessment_date }).slice(0, 2000),
+                  });
+                }
+                actions.push(action);
+                budget--;
+              }
+            }
+
+            const previousReduction = priorExecutions
+              .filter((event: any) => event.rule_key === 'sku_profit_bid_reduction' && event.campaign_id === campaignId && event.status === 'completed')
+              .sort((a: any, b: any) => new Date(b.executed_at || 0).getTime() - new Date(a.executed_at || 0).getTime())[0];
+            const canPause = pressure === 'critical' && orders === 0 && clicks >= 20 &&
+              spend >= Math.max(12, maxProfitableCpa > 0 ? maxProfitableCpa : 12) &&
+              campaignId !== protectedDiscoveryId && activeCampaigns.length > 1 &&
+              previousReduction && hoursSince(previousReduction.executed_at) >= PAUSE_AFTER_REDUCTION_HOURS;
+
+            if (canPause && budget > 0) {
+              const idempotencyKey = `sku_profit_pause_v2|${aid}|${campaignId}|${day}`;
+              if (!priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) {
+                const action = { type: 'pause_campaign', asin, sku, campaign_id: campaignId, pressure, spend_14d: roundMoney(spend), clicks_14d: clicks, preserved_campaign_id: protectedDiscoveryId };
+                if (!dryRun) {
+                  const amazon = await invokeAds(base44, aid, '/sp/campaigns', { campaigns: [{ campaignId, state: 'PAUSED' }] }, 'application/vnd.spCampaign.v3+json');
+                  const completed = amazon.ok === true || amazon.status === 207 || amazon.status === 409;
+                  if (completed) {
+                    await base44.asServiceRole.entities.Campaign.update(campaign.id, { state: 'paused', status: 'paused', amazon_status: 'paused', synced_at: nowIso(), last_activity_at: nowIso() }).catch(() => {});
+                  }
+                  await recordExecution(base44, {
+                    amazon_account_id: aid, rule_key: 'sku_profit_campaign_pause', entity_type: 'campaign', entity_id: campaignId,
+                    campaign_id: campaignId, asin, action_type: 'pause_campaign', idempotency_key: idempotencyKey,
+                    status: completed ? 'completed' : 'failed', executed_at: nowIso(),
+                    error_message: completed ? null : String(amazon.message || amazon.error || 'amazon_error').slice(0, 500),
+                    amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id }).slice(0, 1000),
+                    metrics_before: JSON.stringify({ pressure, metrics, policy, assessment_date: assessment?.assessment_date }).slice(0, 2000),
+                  });
+                }
+                actions.push(action);
+                budget--;
+              }
+            }
+          }
+        }
+
+        const assessmentConfidence = numberValue(assessment?.confidence, 0);
+        const assessmentConfident = assessmentConfidence >= 0.8 || assessmentConfidence >= 80;
+        if (pressure === 'healthy' && assessmentConfident) {
+          for (const campaign of productCampaigns.filter((item: any) => campaignState(item) === 'paused')) {
+            if (budget <= 0) break;
+            const campaignId = campaignIdOf(campaign);
+            const priorPause = priorExecutions
+              .filter((event: any) => event.rule_key === 'sku_profit_campaign_pause' && event.campaign_id === campaignId && event.status === 'completed')
+              .sort((a: any, b: any) => new Date(b.executed_at || 0).getTime() - new Date(a.executed_at || 0).getTime())[0];
+            if (!priorPause || hoursSince(priorPause.executed_at) < REACTIVATION_COOLDOWN_HOURS) continue;
+            const idempotencyKey = `sku_profit_reactivate_v2|${aid}|${campaignId}|${day}`;
+            if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
+            const action = { type: 'reactivate_campaign', asin, sku, campaign_id: campaignId, reason: 'latest_economic_assessment_healthy' };
+            if (!dryRun) {
+              const amazon = await invokeAds(base44, aid, '/sp/campaigns', { campaigns: [{ campaignId, state: 'ENABLED' }] }, 'application/vnd.spCampaign.v3+json');
+              const completed = amazon.ok === true || amazon.status === 207;
+              if (completed) {
+                await base44.asServiceRole.entities.Campaign.update(campaign.id, { state: 'enabled', status: 'enabled', amazon_status: 'enabled', synced_at: nowIso(), last_activity_at: nowIso() }).catch(() => {});
+              }
+              await recordExecution(base44, {
+                amazon_account_id: aid, rule_key: 'sku_profit_campaign_reactivation', entity_type: 'campaign', entity_id: campaignId,
+                campaign_id: campaignId, asin, action_type: 'enable_campaign', idempotency_key: idempotencyKey,
+                status: completed ? 'completed' : 'failed', executed_at: nowIso(),
+                error_message: completed ? null : String(amazon.message || amazon.error || 'blocked_or_failed').slice(0, 500),
+                amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id }).slice(0, 1000),
+                metrics_before: JSON.stringify({ pressure, policy, assessment_date: assessment?.assessment_date }).slice(0, 2000),
+              });
+            }
+            actions.push(action);
+            budget--;
+          }
+        }
+      }
+
+      const summary = {
+        products_evaluated: products.length,
+        actions: actions.length,
+        bid_reductions: actions.filter((action) => action.type === 'update_bid').length,
+        pauses: actions.filter((action) => action.type === 'pause_campaign').length,
+        reactivations: actions.filter((action) => action.type === 'reactivate_campaign').length,
+        skipped: skipped.length,
+        hardcoded_sku_rules: 0,
+        dry_run: dryRun,
+      };
+      if (!dryRun) {
+        await base44.asServiceRole.entities.SyncExecutionLog.create({
+          amazon_account_id: aid,
+          operation: 'sku_profit_protection_v2',
+          trigger_type: body._service_role ? 'scheduler' : 'manual',
+          status: 'success',
+          execution_date: day,
+          started_at: startedAt,
+          completed_at: nowIso(),
+          records_processed: actions.length,
+          result_summary: JSON.stringify(summary),
+        }).catch(() => {});
+      }
+      results.push({ amazon_account_id: aid, date: day, summary, actions, skipped: skipped.slice(0, 100) });
+    }
+
+    return Response.json({
+      ok: true,
+      policy_version: RULE_VERSION,
+      dry_run: dryRun,
+      policy: {
+        hardcoded_skus: false,
+        account_economics_required: true,
+        bid_reduction_before_pause: true,
+        preserve_discovery_campaign: true,
+        winner_protection: true,
+        max_bid_reduction_per_cycle_pct: 20,
+      },
+      results,
+    });
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Falha na proteção econômica por SKU' }, { status: 500 });
   }
 });
