@@ -84,18 +84,12 @@ function decideStrategy(params: {
   const headroom = Math.max(0, (targetAcos - acos) / Math.max(targetAcos, 1));
   const proposedBoost = Math.min(MAX_TOP_OF_SEARCH_BOOST, Math.max(5, Math.round(5 + headroom * 15)));
   const exceptional = orders >= 5 && acos <= targetAcos * 0.70 && numberValue(assessment?.profit_after_ads, 0) > 0;
-  if (exceptional) {
-    return {
-      strategy: 'up_and_down',
-      tosBoost: Math.min(10, proposedBoost),
-      reason: `Vencedora comprovada: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo. Up & Down limitado e Top of Search até 10%.`,
-      acos,
-    };
-  }
   return {
     strategy: 'down_only',
     tosBoost: proposedBoost,
-    reason: `Campanha rentável: ${orders} pedidos, ACoS ${roundMoney(acos)}% abaixo da meta segura ${targetAcos}%. Down Only com Top of Search ${proposedBoost}%.`,
+    reason: exceptional
+      ? `Vencedora comprovada: ${orders} pedidos, ACoS ${roundMoney(acos)}% e lucro pós-Ads positivo. Down Only preservado para impedir aumentos dinâmicos acima de 20%; Top of Search ${proposedBoost}%.`
+      : `Campanha rentável: ${orders} pedidos, ACoS ${roundMoney(acos)}% abaixo da meta segura ${targetAcos}%. Down Only com Top of Search ${proposedBoost}%.`,
     acos,
   };
 }
@@ -212,9 +206,9 @@ Deno.serve(async (req) => {
         payload: { campaigns: [{ campaignId, dynamicBidding: { strategy: STRATEGY_MAP[decision.strategy] } }] },
       }).catch((error: any) => ({ ok: false, error: error.message })));
 
-      if (!(strategyResponse.ok === true || strategyResponse.status === 207)) {
+      if (strategyResponse.ok !== true) {
         errors++;
-        results.push({ ...preview, status: 'strategy_error', amazon_status: strategyResponse.status, error: strategyResponse.message || strategyResponse.error });
+        results.push({ ...preview, status: 'strategy_error', amazon_status: strategyResponse.status, error: strategyResponse.message || strategyResponse.error || strategyResponse.errors?.[0]?.message });
         continue;
       }
 
@@ -233,9 +227,9 @@ Deno.serve(async (req) => {
         },
       }).catch((error: any) => ({ ok: false, error: error.message })));
 
-      if (!(placementResponse.ok === true || placementResponse.status === 207)) {
+      if (placementResponse.ok !== true) {
         errors++;
-        results.push({ ...preview, status: 'placement_error', amazon_status: placementResponse.status, error: placementResponse.message || placementResponse.error });
+        results.push({ ...preview, status: 'placement_error', amazon_status: placementResponse.status, error: placementResponse.message || placementResponse.error || placementResponse.errors?.[0]?.message });
         continue;
       }
 
@@ -270,7 +264,7 @@ Deno.serve(async (req) => {
       dry_run: dryRun,
       policy: {
         max_top_of_search_boost_pct: MAX_TOP_OF_SEARCH_BOOST,
-        up_and_down_only_for_exceptional_winners: true,
+        automatic_up_and_down_disabled: true,
         product_economics_required: true,
         lookback_days: LOOKBACK_DAYS,
       },
