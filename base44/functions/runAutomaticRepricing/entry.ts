@@ -32,6 +32,7 @@ import {
 import {
   resolveSellerId,
   selectSpApiSamples,
+  sellerIdFromAdsProfiles,
   sellerIdFromParticipations,
 } from "../../shared/spApiIdentity.ts";
 import { competitorMetricScope } from "../../shared/competitorDataPolicy.ts";
@@ -227,15 +228,59 @@ async function ensureSellerIdentity(
     `${spBase(account.region)}/sellers/v1/marketplaceParticipations`,
     accessToken,
   );
-  const discovered = result.ok === true
+  let discovered = result.ok === true
     ? sellerIdFromParticipations(amazonPayload(result))
     : "";
+  let source = discovered ? "SP-API marketplaceParticipations" : "";
+  let adsDiscoveryError = "";
+  if (!discovered) {
+    const tokenResponse = await base44.asServiceRole.functions.invoke(
+      "amazonAdsTokenManager",
+      { amazon_account_id: account.id, _service_role: true },
+    ).catch((error: any) => ({
+      data: { ok: false, error: error?.message || String(error) },
+    }));
+    const tokenData = unwrap(tokenResponse);
+    const adsClientId = secrets.get("ADS_CLIENT_ID") ||
+      secrets.get("AMAZON_ADS_CLIENT_ID") || "";
+    if (tokenData?.ok === true && tokenData?.access_token && adsClientId) {
+      const profilesResponse: any = await fetch(
+        "https://advertising-api.amazon.com/v2/profiles",
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            "Amazon-Advertising-API-ClientId": adsClientId,
+            "Content-Type": "application/json",
+          },
+          signal: AbortSignal.timeout(20000),
+        },
+      ).catch((error: any) => ({
+        ok: false,
+        status: 0,
+        json: async () => ({}),
+        error: error?.message || String(error),
+      }));
+      const profiles = await profilesResponse.json().catch(() => []);
+      if (profilesResponse.ok) {
+        discovered = sellerIdFromAdsProfiles(profiles, account.ads_profile_id);
+        if (discovered) source = "Amazon Ads profile accountInfo.id";
+      } else {
+        adsDiscoveryError = profilesResponse.error ||
+          `Amazon Ads profiles HTTP ${profilesResponse.status}`;
+      }
+    } else {
+      adsDiscoveryError = tokenData?.error ||
+        (!adsClientId ? "ADS_CLIENT_ID ausente" : "Token Amazon Ads ausente");
+    }
+  }
   if (!discovered) {
     return {
       account,
       sellerId: "",
       source: null,
-      discoveryError: amazonError(result),
+      discoveryError: result.ok === true
+        ? `A Sellers API respondeu HTTP 200, mas não forneceu Seller ID. Fallback Ads indisponível: ${adsDiscoveryError || "perfil seller não encontrado"}.`
+        : amazonError(result),
     };
   }
   const persisted = await base44.asServiceRole.entities.AmazonAccount.update(
@@ -245,7 +290,7 @@ async function ensureSellerIdentity(
   return {
     account: { ...account, seller_id: discovered },
     sellerId: discovered,
-    source: "SP-API marketplaceParticipations",
+    source,
     discovered: true,
     persisted,
   };

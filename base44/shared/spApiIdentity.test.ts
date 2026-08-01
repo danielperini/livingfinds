@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   resolveSellerId,
   selectSpApiSamples,
+  sellerIdFromAdsProfiles,
   sellerIdFromParticipations,
 } from "./spApiIdentity.ts";
 
@@ -13,6 +14,14 @@ Deno.test("resolve Seller ID canônico e aliases sem aceitar espaços", () => {
 
 Deno.test("extrai Seller ID da resposta oficial de participações", () => {
   assertEquals(sellerIdFromParticipations({ payload: [{ seller: { sellerId: "A123" } }] }), "A123");
+});
+
+Deno.test("extrai Seller ID do accountInfo do perfil Ads preferido", () => {
+  const profiles = [
+    { profileId: "111", accountInfo: { id: "VENDOR", type: "vendor" } },
+    { profileId: "222", accountInfo: { id: "A2SELLERID", type: "seller" } },
+  ];
+  assertEquals(sellerIdFromAdsProfiles(profiles, "222"), "A2SELLERID");
 });
 
 Deno.test("Listings usa SKU mesmo sem ASIN e diagnóstico identifica cobertura", () => {

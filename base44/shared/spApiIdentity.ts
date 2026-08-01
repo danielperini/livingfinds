@@ -48,3 +48,36 @@ export function sellerIdFromParticipations(payload: any): string {
   }
   return cleanIdentifier(root?.seller?.sellerId || root?.sellerId);
 }
+
+export function sellerIdFromAdsProfiles(
+  payload: any,
+  preferredProfileId?: unknown,
+): string {
+  const profiles = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.profiles)
+    ? payload.profiles
+    : [];
+  const preferred = cleanIdentifier(preferredProfileId);
+  const ordered = preferred
+    ? [
+      ...profiles.filter((profile: any) =>
+        cleanIdentifier(profile?.profileId) === preferred
+      ),
+      ...profiles.filter((profile: any) =>
+        cleanIdentifier(profile?.profileId) !== preferred
+      ),
+    ]
+    : profiles;
+  for (const profile of ordered) {
+    const type = cleanIdentifier(
+      profile?.accountInfo?.type || profile?.type,
+    ).toLowerCase();
+    if (type && type !== "seller") continue;
+    const sellerId = cleanIdentifier(
+      profile?.accountInfo?.id || profile?.accountInfo?.sellerId,
+    );
+    if (sellerId) return sellerId;
+  }
+  return "";
+}
