@@ -1751,7 +1751,7 @@ async function evaluateAccount(
     const marketplaceId = account.marketplace_id ||
       secrets.get("AMAZON_MARKETPLACE_ID") || "";
     const manual = options.manual_apply === true;
-    const runtimeExecutionAllowed = manual ||
+    const runtimeExecutionAllowed = manual || options.explicit_execution === true ||
       automaticExecutionRuntimeEnabled();
     const canQueue = decision.suggestedPrice &&
       confirmedPrice > 0 &&
@@ -1766,7 +1766,7 @@ async function evaluateAccount(
       validation.complete && listing.buyable && stock > 0 &&
       options.recommendation_only !== true &&
       runtimeExecutionAllowed &&
-      (manual ||
+      (manual || options.explicit_execution === true ||
         (settings.enabled !== false &&
           settings.repricing_rollout_mode === "guarded" &&
           settings.automation_mode === "automatic" && executionEnabled)) &&
@@ -2749,8 +2749,10 @@ Deno.serve(async (req) => {
       const account = sellerIdentityResult.account;
       const options = {
         ...body,
-        full: operation === "full_evaluation",
+        full: ["full_evaluation", "execute_planned"].includes(operation),
         manual_apply: operation === "apply_suggested",
+        explicit_execution: operation === "execute_planned" &&
+          body.confirm_execute_planned === true,
         product_id: body.product_id,
         changed_by: user?.email || user?.id || "scheduler",
       };
@@ -2783,8 +2785,17 @@ Deno.serve(async (req) => {
               await processQueueForAccount(base44, account, accessToken, options),
             );
           } else if (
-            ["evaluate", "full_evaluation", "apply_suggested"].includes(operation)
+            ["evaluate", "full_evaluation", "apply_suggested", "execute_planned"].includes(operation)
           ) {
+            if (
+              operation === "execute_planned" &&
+              body.confirm_execute_planned !== true
+            ) {
+              return Response.json({
+                ok: false,
+                error: "Confirmação explícita obrigatória para executar preços planejados.",
+              }, { status: 400 });
+            }
             if (operation === "apply_suggested" && !body.product_id) {
               return Response.json({
                 ok: false,
