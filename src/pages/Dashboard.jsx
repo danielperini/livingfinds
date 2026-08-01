@@ -36,6 +36,18 @@ function getYesterday() {
   return date.toISOString().slice(0, 10);
 }
 
+function brazilToday() {
+  return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+}
+
+function nextMondayBrt() {
+  const nowBrt = new Date(Date.now() - 3 * 3600000);
+  const date = new Date(`${nowBrt.toISOString().slice(0, 10)}T12:00:00Z`);
+  const daysAhead = ((8 - date.getUTCDay()) % 7) || 7;
+  date.setUTCDate(date.getUTCDate() + daysAhead);
+  return date.toISOString().slice(0, 10);
+}
+
 function getClosedReportingPeriod(period, anchor) {
   // anchor = último dia com dados reais (lastAvailableAdsDate) — evita zeros por latência Amazon
   const end = anchor || getYesterday();
@@ -626,6 +638,13 @@ export default function Dashboard() {
     }
     return s;
   }, [allMetrics, lastAvailableAdsDate]);
+  const expectedClosedAdsDate = getYesterday();
+  const pacingIsCurrent = lastAvailableAdsDate === expectedClosedAdsDate;
+  const storedRecalculationDate = budgetCfg?.next_weekly_recalculation
+    ? String(budgetCfg.next_weekly_recalculation).slice(0, 10)
+    : null;
+  const recalculationOverdue = Boolean(storedRecalculationDate && storedRecalculationDate < brazilToday());
+  const effectiveNextRecalculation = recalculationOverdue ? nextMondayBrt() : storedRecalculationDate;
 
   // Média diária do período selecionado — divide pelos dias CALENDÁRIO do período, não pelos dias com dados
   const periodDays = activePeriod === 'yesterday' ? 1 : Number(activePeriod);
@@ -1209,8 +1228,8 @@ export default function Dashboard() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
           <KpiCard label="Limite diário geral" value={officialDailyLimit > 0 ? fmtBRL(officialDailyLimit) : '—'} tone="cyan" />
-          <KpiCard label={`Gasto D-1 (${lastAvailableAdsDate || getYesterday()})`} value={fmtBRL(spendYesterday)}
-            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite` : `${allMetrics.filter(m => m.date === (lastAvailableAdsDate || getYesterday())).length} registros`}
+          <KpiCard label={`Gasto fechado (${lastAvailableAdsDate || expectedClosedAdsDate})`} value={fmtBRL(spendYesterday)}
+            sub={officialDailyLimit > 0 ? `${Math.round(spendYesterday / officialDailyLimit * 100)}% do limite · ${pacingIsCurrent ? 'D-1 atualizado' : 'aguardando relatório D-1'}` : `${allMetrics.filter(m => m.date === (lastAvailableAdsDate || expectedClosedAdsDate)).length} registros`}
             tone={officialDailyLimit > 0 && spendYesterday > officialDailyLimit ? 'bad' : 'default'} />
           <KpiCard label="Média diária" value={fmtBRL(avgDailySpend)} sub={`Período: ${periodLabel}`} />
           <KpiCard label="Campanhas ativas" value={active_count} sub={`${paused_count} pausadas`} />
@@ -1218,7 +1237,7 @@ export default function Dashboard() {
         {(officialDailyLimit > 0 && spendYesterday > 0) ? (
           <div>
             <div className="flex justify-between text-[10px] text-slate-500 mb-1">
-              <span>Pacing D-1 ({lastAvailableAdsDate || getYesterday()}): {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)}</span>
+              <span>Pacing fechado ({lastAvailableAdsDate || expectedClosedAdsDate}): {fmtBRL(spendYesterday)} / {fmtBRL(officialDailyLimit)} {pacingIsCurrent ? '· D-1 atualizado' : '· relatório D-1 pendente'}</span>
               <span className={`font-semibold ${spendYesterday > officialDailyLimit ? 'text-red-400' : 'text-emerald-400'}`}>
                 {Math.round(spendYesterday / officialDailyLimit * 100)}%
               </span>
@@ -1229,9 +1248,9 @@ export default function Dashboard() {
             </div>
           </div>
         ) : null}
-        {budgetCfg?.next_weekly_recalculation ? (
-          <p className="text-[10px] text-slate-600 mt-2">
-            Próximo recálculo: {new Date(String(budgetCfg.next_weekly_recalculation)).toLocaleDateString('pt-BR')}
+        {effectiveNextRecalculation ? (
+          <p className={`text-[10px] mt-2 ${recalculationOverdue ? 'text-amber-400' : 'text-slate-600'}`}>
+            {recalculationOverdue ? `Recálculo vencido em ${fmtDateBRFull(storedRecalculationDate)} · próxima janela válida: ${fmtDateBRFull(effectiveNextRecalculation)}` : `Próximo recálculo: ${fmtDateBRFull(effectiveNextRecalculation)}`}
           </p>
         ) : null}
       </div>
