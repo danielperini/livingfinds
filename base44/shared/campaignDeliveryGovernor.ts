@@ -73,6 +73,16 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
     return { code: 'MOTOR_MONITORING_LEARNING', action: 'monitor', reason: 'Campanha ainda está na janela inicial de aprendizado de 72 horas.', confidence: 70 };
   }
 
+  const economicsAvailable = input.maximumProfitableSpend > 0 || Boolean(input.breakEvenAcos && input.breakEvenAcos > 0);
+  if (!economicsAvailable) {
+    return {
+      code: 'MOTOR_MONITORING_ECONOMICS_MISSING',
+      action: 'monitor',
+      reason: 'Economia do produto não está validada; o motor não aumenta bid, pausa ou substitui com base em suposição.',
+      confidence: 25,
+    };
+  }
+
   if (input.impressions <= 0 && input.clicks <= 0 && input.spend <= 0) {
     if (input.isManualExact && input.ageHours <= ZERO_IMPRESSION_MAX_HOURS) {
       return { code: 'ZERO_IMPRESSION_BID_BOOTSTRAP', action: 'bootstrap_bid', reason: 'Sem impressão: testar até duas recuperações controladas de bid, respeitando o teto econômico.', confidence: 95 };
@@ -94,7 +104,7 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
   }
 
   if (input.clicks > 0 && input.orders <= 0 && input.sales <= 0) {
-    const economicLimit = input.maximumProfitableSpend > 0 ? input.maximumProfitableSpend : Number.POSITIVE_INFINITY;
+    const economicLimit = input.maximumProfitableSpend;
     if (input.clicks >= MIN_CLICKS_NO_SALE || input.spend >= economicLimit) {
       return {
         code: input.isManualExact ? 'CLICKS_NO_SALE_REPLACE_TERM' : 'CLICKS_NO_SALE_PAUSE',
@@ -131,11 +141,15 @@ export type HourlyProfitInput = {
 };
 
 export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause' | 'enable' | 'hold'; code: string; reason: string } {
+  const economicsAvailable = input.maximumProfitableSpend > 0 || Boolean(input.breakEvenAcos && input.breakEvenAcos > 0);
+  if (!economicsAvailable) {
+    return { action: 'hold', code: 'HOUR_ECONOMICS_MISSING', reason: 'Economia não validada; não alterar estado por horário.' };
+  }
   if (input.sampleDays < MIN_HOURLY_SAMPLE_DAYS || input.clicks < MIN_HOURLY_CLICKS) {
     return { action: 'hold', code: 'HOUR_SAMPLE_INSUFFICIENT', reason: 'Amostra horária insuficiente; manter estado atual.' };
   }
   if (input.sales <= 0) {
-    const limit = input.maximumProfitableSpend > 0 ? Math.max(2, input.maximumProfitableSpend * 0.35) : 5;
+    const limit = Math.max(2, input.maximumProfitableSpend * 0.35);
     if (input.orders <= 0 && input.spend >= limit) {
       return { action: 'pause', code: 'UNPROFITABLE_HOUR_NO_SALES', reason: `Horário consome ${input.spend.toFixed(2)} sem venda; pausar até a próxima janela.` };
     }
@@ -152,9 +166,14 @@ export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause'
 }
 
 export function structuralLoss(economics: any, minBid: number): { blocked: boolean; reason: string } {
-  const profitBeforeAds = n(economics?.profit_before_ads ?? economics?.contribution_margin_amount, 0);
-  const breakEvenAcos = n(economics?.break_even_acos ?? economics?.contribution_margin_percent, 0);
-  const safeMaxCpc = n(economics?.safe_max_cpc, 0);
+  if (!economics) return { blocked: false, reason: '' };
+  const status = norm(economics.economics_status);
+  const confidence = n(economics.final_economic_confidence, 0);
+  if (status !== 'complete' && confidence < 80) return { blocked: false, reason: '' };
+
+  const profitBeforeAds = n(economics.profit_before_ads ?? economics.contribution_margin_amount, 0);
+  const breakEvenAcos = n(economics.break_even_acos ?? economics.contribution_margin_percent, 0);
+  const safeMaxCpc = n(economics.safe_max_cpc, 0);
   if (profitBeforeAds <= 0) return { blocked: true, reason: 'Produto tem margem de contribuição nula ou negativa antes dos anúncios.' };
   if (breakEvenAcos > 0 && breakEvenAcos <= 3) return { blocked: true, reason: `Break-even ACoS de ${breakEvenAcos.toFixed(2)}% é estruturalmente inviável para publicidade contínua.` };
   if (safeMaxCpc > 0 && safeMaxCpc < minBid) return { blocked: true, reason: `CPC seguro ${safeMaxCpc.toFixed(2)} é inferior ao bid mínimo ${minBid.toFixed(2)}.` };
