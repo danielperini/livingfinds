@@ -5,6 +5,8 @@ import {
   Bot,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   RefreshCw,
   Search,
@@ -80,6 +82,7 @@ export default function Repricing() {
   const [checkingConnection, setCheckingConnection] = useState(false);
   const [syncingSkus, setSyncingSkus] = useState(false);
   const [skuSyncResult, setSkuSyncResult] = useState(null);
+  const [skuSort, setSkuSort] = useState({ key: 'status', direction: 'asc' });
   const [connection, setConnection] = useState(null);
   const [importingCosts, setImportingCosts] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -165,7 +168,18 @@ export default function Repricing() {
       });
       const result = response?.data || response;
       if (!result?.ok) throw new Error(result?.error || 'Falha ao sincronizar SKUs pela FBA Inventory API.');
-      setSkuSyncResult(result);
+      const namesResponse = await base44.functions.invoke('enrichProductNames', {
+        amazon_account_id: accountId,
+        force_all: true,
+      });
+      const names = namesResponse?.data || namesResponse;
+      const listingsResponse = await base44.functions.invoke('syncListingEnhancementData', {
+        amazon_account_id: accountId,
+        limit: 500,
+        basic_only: true,
+      });
+      const listings = listingsResponse?.data || listingsResponse;
+      setSkuSyncResult({ ...result, names, listings });
       await load();
     } catch (syncError) {
       setError(syncError?.message || 'Falha ao atualizar a lista completa de SKUs.');
@@ -256,6 +270,12 @@ export default function Repricing() {
 
   const allSkuRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
+    const activeRank = product => product.status === 'active' && product.listing_buyable === true && Number(product.available_quantity || 0) > 0 ? 0 : 1;
+    const valueFor = (product, key) => {
+      if (key === 'status') return activeRank(product);
+      if (key === 'available_quantity' || key === 'total_quantity' || key === 'price') return Number(product[key] || 0);
+      return String(product[key] || '').toLocaleLowerCase('pt-BR');
+    };
     return [...products]
       .filter(product => product.sku)
       .filter(product => !needle || [
@@ -264,8 +284,29 @@ export default function Repricing() {
         product.display_name,
         product.product_name,
       ].some(value => String(value || '').toLowerCase().includes(needle)))
-      .sort((left, right) => normalizeSku(left.sku).localeCompare(normalizeSku(right.sku)));
-  }, [products, search]);
+      .sort((left, right) => {
+        const priority = activeRank(left) - activeRank(right);
+        if (priority !== 0) return priority;
+        const leftValue = valueFor(left, skuSort.key);
+        const rightValue = valueFor(right, skuSort.key);
+        const comparison = typeof leftValue === 'number'
+          ? leftValue - rightValue
+          : leftValue.localeCompare(rightValue, 'pt-BR');
+        return (skuSort.direction === 'asc' ? comparison : -comparison) || normalizeSku(left.sku).localeCompare(normalizeSku(right.sku));
+      });
+  }, [products, search, skuSort]);
+
+  const changeSkuSort = key => setSkuSort(current => ({
+    key,
+    direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+  }));
+
+  const skuColumns = [
+    ['sku', 'SKU'], ['asin', 'ASIN'], ['display_name', 'Produto'],
+    ['status', 'Status Amazon'], ['available_quantity', 'Estoque disponível'],
+    ['total_quantity', 'Estoque total'], ['price', 'Preço Amazon'],
+    ['listing_checked_at', 'Última confirmação'],
+  ];
 
   return (
     <div className="min-h-full p-4 md:p-6 space-y-5">
@@ -279,7 +320,7 @@ export default function Repricing() {
 
       {importResult && <section className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" /><div><h2 className="text-sm font-bold text-emerald-400">Custos importados e motor acionado</h2><p className="mt-1 text-xs text-slate-400">{importResult.processed || 0} linhas lidas · {importResult.created || 0} criadas · {importResult.updated || 0} atualizadas · {importResult.active_updated || 0} ativas verificadas pela Amazon · {importResult.inactive_updated || 0} inativas/sem estoque mantidas sem repricing · {importResult.unmatched || 0} SKUs não encontrados · {importResult.errors || 0} erros.</p><p className="mt-1 text-[10px] text-slate-500">O motor foi acionado somente após a importação válida; toda publicação continua sujeita à margem, confiança, teto móvel e confirmação da Amazon.</p>{importResult.amazon_status_warning && <p className="mt-2 text-xs text-amber-400">Status Amazon não confirmado: {importResult.amazon_status_warning} Os custos foram preservados e o repricing ficou bloqueado.</p>}{importResult.decision_engine?.ok === false && <p className="mt-2 text-xs text-amber-400">Custos salvos, mas o motor reportou: {importResult.decision_engine.error || 'falha não detalhada'}.</p>}{(importResult.processed || 0) === 0 && <p className="mt-2 text-xs font-semibold text-amber-400">Nenhuma linha válida foi extraída. Confira os detalhes da importação antes de considerar o processo concluído.</p>}{Array.isArray(importResult.error_details) && importResult.error_details.length > 0 && <details className="mt-3 text-xs text-amber-300"><summary className="cursor-pointer font-semibold">Exibir erros por SKU</summary><ul className="mt-2 space-y-1">{importResult.error_details.slice(0, 20).map((item, index) => <li key={`${item.sku || 'linha'}-${index}`}><span className="font-mono">{item.sku || 'SKU ausente'}</span>: {item.error}</li>)}</ul>{importResult.error_details.length > 20 && <p className="mt-2 text-slate-500">Mais {importResult.error_details.length - 20} erro(s) não exibidos.</p>}</details>}</div></div></section>}
 
-      {skuSyncResult && <section className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 text-xs text-slate-300"><span className="font-semibold text-violet-300">Lista de SKUs atualizada pela Amazon.</span> {skuSyncResult.inventory_asins || 0} itens recebidos · {skuSyncResult.created || 0} criados · {skuSyncResult.updated || 0} atualizados · {skuSyncResult.marked_absent || 0} ausentes marcados sem estoque · {skuSyncResult.mapping_conflicts || 0} conflitos.</section>}
+      {skuSyncResult && <section className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-4 text-xs text-slate-300"><span className="font-semibold text-violet-300">Lista de SKUs atualizada pela Amazon.</span> {skuSyncResult.inventory_asins || 0} itens recebidos · {skuSyncResult.created || 0} criados · {skuSyncResult.updated || 0} atualizados · {skuSyncResult.names?.enriched || 0} títulos completados · {skuSyncResult.listings?.synced || 0} listings/preços confirmados · {skuSyncResult.marked_absent || 0} ausentes marcados sem estoque · {skuSyncResult.mapping_conflicts || 0} conflitos.</section>}
 
       {connection && <section className={`rounded-xl border p-4 ${connection.connected ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'}`}><div className="flex items-start gap-3">{connection.connected ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" /> : <Tag className="mt-0.5 h-5 w-5 text-red-400" />}<div className="min-w-0"><h2 className={`text-sm font-bold ${connection.connected ? 'text-emerald-400' : 'text-red-400'}`}>{connection.connected ? 'Repricing conectado à Amazon SP-API' : 'Conexão SP-API incompleta'}</h2><p className="mt-1 text-xs text-slate-400">{connection.message || (connection.connected ? 'OAuth, Listings Items e Product Pricing foram validados sem alterar preços.' : 'Confira os detalhes abaixo.')}</p>{connection.checks && <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">{Object.entries(connection.checks).map(([name, check]) => <div key={name} className="rounded-lg border border-surface-3 bg-surface-1/60 p-2"><p className="text-[10px] font-semibold uppercase text-slate-500">{name}</p><p className={`mt-1 text-[10px] ${check.ok ? 'text-emerald-400' : check.skipped ? 'text-amber-400' : 'text-red-400'}`}>{check.message}</p></div>)}</div>}</div></div></section>}
 
@@ -334,7 +375,7 @@ export default function Repricing() {
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-slate-200">Todos os SKUs da conta</h2><p className="mt-1 text-[10px] text-slate-500">Catálogo e estoque canônicos da FBA Inventory API. Esta lista não representa alterações de preço.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{allSkuRows.length} de {products.filter(product => product.sku).length} SKUs</span></div>
-        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'ASIN', 'Produto', 'Status', 'Estoque disponível', 'Estoque total', 'Preço cadastrado', 'Última sincronização'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{allSkuRows.map(product => { const active = product.status === 'active' && Number(product.available_quantity || 0) > 0; return <tr key={product.id || `${product.sku}-${product.asin}`} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{product.sku}</td><td className="whitespace-nowrap px-4 py-3 font-mono text-slate-400">{product.asin || '—'}</td><td className="min-w-[260px] max-w-[420px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{product.display_name || product.product_name || 'Título pendente'}</p></td><td className="whitespace-nowrap px-4 py-3"><span className={`rounded-full border px-2 py-1 text-[10px] ${active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'border-amber-500/20 bg-amber-500/10 text-amber-400'}`}>{active ? 'Ativo' : product.inventory_status === 'out_of_stock' ? 'Sem estoque' : product.status || 'Pendente'}</span></td><td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-200">{Number(product.available_quantity || 0).toLocaleString('pt-BR')}</td><td className="whitespace-nowrap px-4 py-3 text-right text-slate-400">{Number(product.total_quantity ?? product.fba_inventory ?? 0).toLocaleString('pt-BR')}</td><td className="whitespace-nowrap px-4 py-3 text-right text-slate-300">{money(product.price)}</td><td className="whitespace-nowrap px-4 py-3 text-slate-500">{product.last_catalog_sync_at ? new Date(product.last_catalog_sync_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'Nunca'}</td></tr>;})}</tbody></table>{!allSkuRows.length && <p className="p-8 text-center text-xs text-slate-500">Nenhum SKU carregado. Use “Atualizar todos os SKUs”.</p>}</div>
+        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{skuColumns.map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3"><button type="button" onClick={() => changeSkuSort(key)} className="inline-flex items-center gap-1 hover:text-cyan">{label}{skuSort.key === key ? skuSort.direction === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" /> : <span className="text-slate-700">↕</span>}</button></th>)}</tr></thead><tbody>{allSkuRows.map(product => { const active = product.status === 'active' && product.listing_buyable === true && Number(product.available_quantity || 0) > 0; return <tr key={product.id || `${product.sku}-${product.asin}`} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{product.sku}</td><td className="whitespace-nowrap px-4 py-3 font-mono text-slate-400">{product.asin || '—'}</td><td className="min-w-[260px] max-w-[420px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{product.display_name || product.product_name || 'Título pendente'}</p></td><td className="whitespace-nowrap px-4 py-3"><span className={`rounded-full border px-2 py-1 text-[10px] ${active ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'border-amber-500/20 bg-amber-500/10 text-amber-400'}`}>{active ? 'Ativo e comprável' : product.inventory_status === 'out_of_stock' ? 'Sem estoque' : product.listing_status === 'not_found' ? 'Listing não encontrado' : 'Não comprável'}</span></td><td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-200">{Number(product.available_quantity || 0).toLocaleString('pt-BR')}</td><td className="whitespace-nowrap px-4 py-3 text-right text-slate-400">{Number(product.total_quantity ?? product.fba_inventory ?? 0).toLocaleString('pt-BR')}</td><td className="whitespace-nowrap px-4 py-3 text-right text-slate-300">{money(product.price)}</td><td className="whitespace-nowrap px-4 py-3 text-slate-500">{product.listing_checked_at ? new Date(product.listing_checked_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'Nunca'}</td></tr>;})}</tbody></table>{!allSkuRows.length && <p className="p-8 text-center text-xs text-slate-500">Nenhum SKU carregado. Use “Atualizar todos os SKUs”.</p>}</div>
       </section>
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">

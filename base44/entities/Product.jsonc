@@ -71,6 +71,15 @@
     "price": {
       "type": "number"
     },
+    "price_source": { "type": "string", "description": "Origem canônica do preço atual exibido." },
+    "listing_status": {
+      "type": "string",
+      "enum": ["active", "inactive", "not_found", "error", "unknown"],
+      "default": "unknown"
+    },
+    "listing_buyable": { "type": "boolean", "default": false },
+    "listing_checked_at": { "type": "string", "format": "date-time" },
+    "listing_issues_count": { "type": "number", "default": 0 },
     "first_available_date": {
       "type": "string",
       "format": "date"

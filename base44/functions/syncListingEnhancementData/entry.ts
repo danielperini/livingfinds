@@ -84,7 +84,7 @@ Deno.serve(async (req) => {
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const body = await req.json().catch(() => ({}));
-    const { amazon_account_id, asin, sku: skuParam, limit = 10 } = body;
+    const { amazon_account_id, asin, sku: skuParam, limit = 10, basic_only = false } = body;
 
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id obrigatório' }, { status: 400 });
 
@@ -130,6 +130,11 @@ Deno.serve(async (req) => {
         const listing = await fetchListingItem(accessToken, sellerId, sku, marketplaceId);
 
         if (!listing) {
+          await base44.asServiceRole.entities.Product.update(product.id, {
+            listing_status: 'not_found',
+            listing_buyable: false,
+            listing_checked_at: now,
+          }).catch(() => {});
           results.push({ asin: product.asin, sku, status: 'not_found' });
           continue;
         }
@@ -147,7 +152,7 @@ Deno.serve(async (req) => {
         let editableFields: string[] = [];
         let requiredFields: string[] = [];
 
-        if (productType) {
+        if (productType && basic_only !== true) {
           const ptDef = await fetchProductTypeDefinition(accessToken, productType, marketplaceId).catch(() => null);
           if (ptDef) {
             const extracted = extractEditableFields(ptDef);
@@ -180,6 +185,26 @@ Deno.serve(async (req) => {
         ] : [];
 
         const priceVal = offers?.[0]?.price?.listingPrice?.amount || 0;
+        const listingStates = (Array.isArray(summaries.status)
+          ? summaries.status
+          : [summaries.status])
+          .map((value: any) => String(value || '').toUpperCase())
+          .filter(Boolean);
+        const blockingIssues = issues.filter((issue: any) =>
+          String(issue?.severity || '').toUpperCase() === 'ERROR'
+        );
+        const listingBuyable = listingStates.includes('BUYABLE') && blockingIssues.length === 0;
+
+        await base44.asServiceRole.entities.Product.update(product.id, {
+          ...(title ? { product_name: title, display_name: title } : {}),
+          ...(priceVal > 0 ? { price: priceVal, price_source: 'sp_api_listings_items' } : {}),
+          listing_status: listingBuyable ? 'active' : 'inactive',
+          listing_buyable: listingBuyable,
+          listing_checked_at: now,
+          listing_issues_count: issues.length,
+          catalog_sync_status: 'success',
+          catalog_sync_error: null,
+        });
 
         // Persistir snapshot
         const existingSnaps = await base44.asServiceRole.entities.ListingSnapshot.filter({ amazon_account_id, asin: product.asin }, '-created_at', 1).catch(() => []);
