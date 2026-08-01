@@ -31,21 +31,26 @@ async function getSpAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-async function fetchListingItem(accessToken: string, sellerId: string, sku: string, marketplaceId: string): Promise<any> {
+function spApiBase(region: string): string {
+  const normalized = String(region || 'NA').toUpperCase();
+  if (normalized.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
+  if (normalized.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
+  return 'https://sellingpartnerapi-na.amazon.com';
+}
+
+async function fetchListingItem(base44: any, account: any, accessToken: string, sellerId: string, sku: string, marketplaceId: string): Promise<any> {
   const encodedSku = encodeURIComponent(sku);
-  const url = `https://sellingpartnerapi-na.amazon.com/listings/2021-08-01/items/${sellerId}/${encodedSku}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes,issues,offers,fulfillmentAvailability`;
-  const res = await fetch(url, {
-    headers: {
-      'x-amz-access-token': accessToken,
-      'Content-Type': 'application/json',
-    },
+  const endpoint = `${spApiBase(account.region)}/listings/2021-08-01/items/${sellerId}/${encodedSku}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes,issues,offers,fulfillmentAvailability`;
+  const response = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
+    amazon_account_id: account.id, api_family: 'SP_API_LISTINGS', operation: 'getListingsItem',
+    endpoint, method: 'GET',
+    headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
+    queue_type: 'READ', max_attempts: 5, _service_role: true,
   });
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`fetchListingItem ${sku}: ${res.status} ${err}`);
-  }
-  return res.json();
+  const result = response?.data || response || {};
+  if (result.status === 404 || result.status_code === 404) return null;
+  if (!result.ok) throw new Error(result.errors?.[0]?.message || result.error || `Falha ao consultar listing ${sku}`);
+  return result.payload?.payload || result.payload || result;
 }
 
 async function fetchProductTypeDefinition(accessToken: string, productType: string, marketplaceId: string): Promise<any> {
@@ -127,7 +132,7 @@ Deno.serve(async (req) => {
       if (!sku) { results.push({ asin: product.asin, status: 'skipped', reason: 'no_sku' }); continue; }
 
       try {
-        const listing = await fetchListingItem(accessToken, sellerId, sku, marketplaceId);
+        const listing = await fetchListingItem(base44, account, accessToken, sellerId, sku, marketplaceId);
 
         if (!listing) {
           await base44.asServiceRole.entities.Product.update(product.id, {
