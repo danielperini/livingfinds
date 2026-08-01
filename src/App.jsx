@@ -26,6 +26,7 @@ import InventorySales from '@/pages/InventorySales';
 import Logs from '@/pages/Logs';
 import Settings from '@/pages/Settings';
 import Products from '@/pages/ProductsScheduled';
+import Repricing from '@/pages/Repricing';
 import Report from '@/pages/Report';
 import Diagnostico from '@/pages/Diagnostico';
 import BidLogs from '@/pages/BidLogs';
@@ -134,6 +135,7 @@ const AuthenticatedApp = () => {
           <Route path="/autopilot" element={<AdsAutopilot />} />
           <Route path="/inventory" element={<InventorySales />} />
           <Route path="/products" element={<Products />} />
+          <Route path="/repricing" element={<Repricing />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/bid-logs" element={<BidLogs />} />
           <Route path="/metrics" element={<MetricsDashboard />} />

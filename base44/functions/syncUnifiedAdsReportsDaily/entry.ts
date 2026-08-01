@@ -6,14 +6,14 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-function getAdsBaseUrl(region) {
+function getAdsBaseUrl(region?: string) {
   const r = (region || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
   if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
   return 'https://advertising-api.amazon.com';
 }
 
-async function getAdsToken(refreshToken, clientId, clientSecret) {
+async function getAdsToken(refreshToken: string, clientId: string, clientSecret: string) {
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -24,7 +24,7 @@ async function getAdsToken(refreshToken, clientId, clientSecret) {
   return data.access_token;
 }
 
-async function pollReport(baseUrl, token, clientId, profileId, reportId, maxWaitMs = 600000) {
+async function pollReport(baseUrl: string, token: string, clientId: string, profileId: string, reportId: string, maxWaitMs = 600000) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     await new Promise(r => setTimeout(r, 15000));
@@ -43,7 +43,7 @@ async function pollReport(baseUrl, token, clientId, profileId, reportId, maxWait
   throw new Error('Report polling timeout after 10 minutes');
 }
 
-async function downloadReport(url) {
+async function downloadReport(url: string) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   const buffer = await res.arrayBuffer();
@@ -61,6 +61,17 @@ async function downloadReport(url) {
   }
   const text = new TextDecoder().decode(chunks.reduce((a, b) => { const c = new Uint8Array(a.length + b.length); c.set(a); c.set(b, a.length); return c; }, new Uint8Array(0)));
   return JSON.parse(text);
+}
+
+function naturalKey(row: any) {
+  return [
+    row.amazon_account_id,
+    row.date,
+    row.campaign_id,
+    row.ad_group_id,
+    row.advertised_product_id,
+    row.advertised_sku,
+  ].map((value) => String(value || '').trim()).join('|');
 }
 
 Deno.serve(async (req) => {
@@ -195,17 +206,50 @@ Deno.serve(async (req) => {
       synced_at: now,
     }));
 
-    // Bulk save in batches of 100
-    let saved = 0;
-    for (let i = 0; i < toSave.length; i += 100) {
-      const batch = toSave.slice(i, i + 100);
-      await base44.asServiceRole.entities.UnifiedAdsMetricsDaily.bulkCreate(batch).catch(() => {});
-      saved += batch.length;
+    // Upsert por chave natural. Relatórios de atribuição são reprocessados e
+    // revisados; bulkCreate incondicional duplicava gasto, pedidos e vendas.
+    const existingRows = await base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter(
+      { amazon_account_id: account.id }, '-date', 30000,
+    ).catch(() => []);
+    const existingByKey = new Map<string, any>();
+    for (const row of existingRows) {
+      if (String(row.date || '') < startDate || String(row.date || '') > endDate) continue;
+      const key = naturalKey(row);
+      const current = existingByKey.get(key);
+      const rowTime = new Date(row.synced_at || row.updated_at || row.created_at || 0).getTime();
+      const currentTime = new Date(current?.synced_at || current?.updated_at || current?.created_at || 0).getTime();
+      if (!current || rowTime >= currentTime) existingByKey.set(key, row);
     }
 
-    return Response.json({ ok: true, report_id: reportId, records_total: records.length, records_saved: saved, period: `${startDate} → ${endDate}` });
+    const incomingByKey = new Map<string, any>();
+    for (const row of toSave) incomingByKey.set(naturalKey(row), row);
+    const uniqueToSave = Array.from(incomingByKey.values());
+    const creates: any[] = [];
+    const updates: any[] = [];
+    for (const row of uniqueToSave) {
+      const existing = existingByKey.get(naturalKey(row));
+      if (existing?.id) updates.push({ id: existing.id, ...row });
+      else creates.push(row);
+    }
+    for (let i = 0; i < creates.length; i += 100) {
+      await base44.asServiceRole.entities.UnifiedAdsMetricsDaily.bulkCreate(creates.slice(i, i + 100));
+    }
+    for (let i = 0; i < updates.length; i += 100) {
+      await base44.asServiceRole.entities.UnifiedAdsMetricsDaily.bulkUpdate(updates.slice(i, i + 100));
+    }
 
-  } catch (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+    return Response.json({
+      ok: true,
+      report_id: reportId,
+      records_total: records.length,
+      records_unique: uniqueToSave.length,
+      records_created: creates.length,
+      records_updated: updates.length,
+      records_saved: creates.length + updates.length,
+      period: `${startDate} → ${endDate}`,
+    });
+
+  } catch (error: any) {
+    return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
 });

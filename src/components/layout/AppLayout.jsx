@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Megaphone, Package, Settings, Menu, ChevronLeft, ChevronRight,
-  ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock, Users } from
+  LayoutDashboard, Megaphone, Settings, Menu, ChevronLeft, ChevronRight,
+  ShoppingBag, Book, Terminal, BarChart2, Sparkles, Factory, Clock, Users, Tag } from
 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import ModeBadge from '@/components/ui/ModeBadge';
@@ -12,6 +12,7 @@ const navItems = [
 { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
 { path: '/analytics', icon: BarChart2, label: 'Analytics' },
 { path: '/products', icon: ShoppingBag, label: 'Produtos' },
+{ path: '/repricing', icon: Tag, label: 'Repricing' },
 { path: '/products/listing-enhancement', icon: Sparkles, label: 'Aprimoramento de Listings', sub: true },
 { path: '/ads', icon: Megaphone, label: 'Campanhas' },
 { path: '/campaign-factory', icon: Factory, label: 'Campaign Factory' },

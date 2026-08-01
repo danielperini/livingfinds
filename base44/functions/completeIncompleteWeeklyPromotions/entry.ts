@@ -36,14 +36,21 @@ function firstId(result: any, group: string, field: string) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user || user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
-
     const body = await req.json().catch(() => ({}));
-    const accountId = body.amazon_account_id;
+    if (!body._service_role) {
+      const user = await base44.auth.me();
+      if (!user || user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
+    }
+    let accountId = body.amazon_account_id;
+    if (!accountId) {
+      const connected = await base44.asServiceRole.entities.AmazonAccount.filter(
+        { status: 'connected' }, '-updated_at', 1,
+      ).catch(() => []);
+      accountId = connected[0]?.id || null;
+    }
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
 
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, undefined, 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' }, { status: 404 });
 
@@ -75,12 +82,13 @@ Deno.serve(async (req) => {
       amazon_account_id: accountId,
     }, '-created_at', 500);
 
+    const maxPromotions = Math.max(1, Math.min(20, Number(body.max_promotions || 5)));
     const toRepair = incomplete.filter((p: any) =>
       ['repair_required', 'failed_retryable', 'campaign_creating', 'campaign_created',
        'ad_group_created', 'product_ad_created', 'keyword_created', 'enabling',
        'manual_active', 'negative_creating'].includes(p.promotion_status)
       && (p.retry_count || 0) < 5
-    );
+    ).slice(0, maxPromotions);
 
     const stats = { repaired: 0, negatives_created: 0, failed: 0, skipped: 0 };
 

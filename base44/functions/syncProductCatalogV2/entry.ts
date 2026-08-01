@@ -5,10 +5,6 @@ const num = (v:any) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const stockState = (qty:number) => qty > 5 ? 'in_stock' : qty > 0 ? 'low_stock' : 'out_of_stock';
 const normSku = (value:any) => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
 
-const COSTS:Record<string,[number,number]> = {
-'FBA-0100':[240,2],'SKU-002314V':[45,2],'FBA-0087C':[41,2],'SKU-002314A':[45,2],'FBA-0008V':[40,2],'FBA-0008P':[40,2],'FBA-0076B':[40,2],'FBA-0076A':[40,2],'FBA-0087':[40.95,0],'FBA-0087B':[40.95,2],'FBA-0010A':[52,48],'FBA-0072B':[44.1,2],'FBA-0083':[80,2],'V5-WDPF-0AV5':[50.4,2],'70-FCMB-TFYO':[83,1.5],'1T-4NZZ-5S38':[22.9,2],'RZ-3VOK-GD4I':[22.9,2],'FBA-0047B':[28,2],'1T-TZDB-HJSA':[19.99,2],'FBA-0072':[51.4,2],'8O-M2FX-4T4P':[22.9,2],'RI-7PWG-L37T':[21.9,2],'FBA-0088A':[23,2],'07-UMIB-CCP5':[19.99,2],'FBA-0045':[90,2],'FBA-0070':[50.4,2],'FBA-0010B':[57.55,2],'FBA-0073':[50.4,2],'FBA-0065PRCI':[20,1.5],'FBA-0080':[22,2],'FBA-0026P':[255,2],'FBA0017':[11,2],'FBA-0032':[47,2],'FBA-0074':[50.4,2],'FBA-0077A':[39.9,2],'FBA-0065AZ':[20,1.5],'FBA-0071':[52.5,2],'FBA-0077B':[44.1,2],'FBA-0077C':[47.25,2],'FBA-0065PR':[20,1.5],'FBA-0099A':[61,1.5],'FBA-0099':[68,1.5],'LIXEIRA17LITROS':[58,2],'CARRINHOESTOQUEE':[160,1.5],'FBA-0065RO':[20,1.5],'FBA-0065PRAC':[20,1.5],'FBA-0062VAR-001':[40,1.5],'FBA-0054':[58,2],'FBA-0065PRBE':[26,1.5],'FBA-0040A':[27,2],'54-I8UF-L01T':[13.5,2],'FBA-0030C':[76,1.5],'FBA-0062VAR-003':[40,1.5],'FBA-0062VAR-002':[40,1.5],'FBA-0024B':[38.5,1.5],'FBA-0057':[35,1.5],'FBA-0058':[59,1.5],'FBA-0056':[51.4,2],'FBA-0055':[72,2],'FBA-0047':[28,2],'FBA-0040':[25,1.5],'67-X650-F3O4':[55,2],'FBA-0030A':[62,4],'FBA-0034':[72,2],'FBA-0027':[233,2],'FBA-0020':[18,2],'FBA-0026':[255,2],'FBA-0018':[11,2],'FBA-0014':[12.5,2],'XK-MFCD-NNN9':[19,2],'FBA-0010':[54.6,2]
-};
-
 async function token() {
   if (tokenCache?.expiresAt > Date.now()) return tokenCache.value;
   const refresh = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN');
@@ -30,29 +26,6 @@ function apiBase(region:any) {
   if (r.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
   if (r.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
   return 'https://sellingpartnerapi-na.amazon.com';
-}
-
-function costPatch(sku:any, product:any = null) {
-  const known = COSTS[normSku(sku)];
-  if (known) {
-    const [productCost, extraCost] = known;
-    return {
-      product_cost: productCost,
-      extra_cost: extraCost,
-      cost_source: 'historical_import',
-      cost_confirmation_required: product?.cost_confirmed === true ? false : true,
-      cost_confirmed: product?.cost_confirmed === true,
-      keyword_confidence_threshold: 0.95,
-      auto_campaign_eligible: product?.cost_confirmed === true,
-    };
-  }
-  return {
-    cost_confirmation_required: true,
-    cost_confirmed: false,
-    cost_source: 'unknown',
-    keyword_confidence_threshold: 0.95,
-    auto_campaign_eligible: false,
-  };
 }
 
 Deno.serve(async (req) => {
@@ -98,7 +71,7 @@ Deno.serve(async (req) => {
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: body.amazon_account_id }, '-created_date', 5000);
     const byAsin = new Map(products.map((p:any) => [String(p.asin || '').toUpperCase(), p]));
     const bySku = new Map(products.filter((p:any) => p.sku).map((p:any) => [normSku(p.sku), p]));
-    let created = 0, updated = 0, corrected = 0, costsLoaded = 0, pendingCostConfirmation = 0;
+    let created = 0, updated = 0, corrected = 0, pendingCostConfirmation = 0;
     const now = new Date().toISOString();
 
     for (const item of items) {
@@ -121,13 +94,12 @@ Deno.serve(async (req) => {
         inventory_status: stockState(qty),
         status: qty > 0 ? 'active' : (existing?.status || 'inactive'),
         catalog_sync_status: 'success', synced_at: now, last_catalog_sync_at: now,
-        ...costPatch(sku, existing),
       };
-      if (COSTS[normSku(sku)]) costsLoaded++;
-      if (patch.cost_confirmation_required) pendingCostConfirmation++;
+      if (!existing?.cost_confirmed) pendingCostConfirmation++;
 
       if (existing) {
         if (existing.inventory_status === 'out_of_stock' && qty > 0) corrected++;
+        // Nunca altera custos ou confirmações informados pelo usuário.
         await base44.asServiceRole.entities.Product.update(existing.id, patch);
         updated++;
       } else {
@@ -140,6 +112,11 @@ Deno.serve(async (req) => {
           campaign_status: 'none',
           should_activate_campaign: false,
           first_available_date: now.slice(0, 10),
+          cost_confirmation_required: true,
+          cost_confirmed: false,
+          cost_source: 'unknown',
+          keyword_confidence_threshold: 0.95,
+          auto_campaign_eligible: false,
         });
         byAsin.set(asin, createdProduct);
         if (sku) bySku.set(normSku(sku), createdProduct);
@@ -152,7 +129,7 @@ Deno.serve(async (req) => {
       amazon_account_id: body.amazon_account_id,
       operation: 'sync_product_catalog_v2', status: 'success', trigger_type: body.trigger_type || 'manual',
       started_at: startedAt, completed_at: completedAt, records_processed: created + updated,
-      result_summary: JSON.stringify({ pages, inventory_asins: items.length, created, updated, corrected, costs_loaded: costsLoaded, pending_cost_confirmation: pendingCostConfirmation }).slice(0, 4000),
+      result_summary: JSON.stringify({ pages, inventory_asins: items.length, created, updated, corrected, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation }).slice(0, 4000),
     }).catch(() => {});
 
     // Sinalizar dado fresco de SP-API para todas as páginas
@@ -161,8 +138,8 @@ Deno.serve(async (req) => {
       last_sync_at: completedAt,
     }).catch(() => {});
 
-    return Response.json({ ok: true, pages, inventory_asins: items.length, created, updated, corrected_from_out_of_stock: corrected, costs_loaded: costsLoaded, pending_cost_confirmation: pendingCostConfirmation });
-  } catch (error) {
+    return Response.json({ ok: true, pages, inventory_asins: items.length, created, updated, corrected_from_out_of_stock: corrected, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation });
+  } catch (error:any) {
     return Response.json({ ok: false, error: error?.message || 'Erro de sincronização' }, { status: 500 });
   }
 });

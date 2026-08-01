@@ -79,6 +79,7 @@ Deno.serve(async (req) => {
       end_date,
       report_name = null,
       source_function = 'requestAmazonAdsReportV3',
+      force_new = false,
     } = body;
 
     if (!amazon_account_id || !start_date || !end_date) {
@@ -86,7 +87,7 @@ Deno.serve(async (req) => {
     }
 
     // Carregar conta
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, null, 1);
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id }, undefined, 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta não encontrada' }, { status: 404 });
 
@@ -128,7 +129,7 @@ Deno.serve(async (req) => {
       return j.created_at && j.created_at > threeHoursAgo;
     });
 
-    if (reusable) {
+    if (reusable && !force_new) {
       console.log(`[requestReportV3] Reutilizando job ${reusable.id} status=${reusable.status} report_id=${reusable.report_id}`);
 
       // Se pending há mais de 3h, marcar como stale

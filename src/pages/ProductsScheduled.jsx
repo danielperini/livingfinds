@@ -10,10 +10,10 @@ import Products from '@/pages/Products';
 import {
   CheckCircle2,
   Clock,
-  RefreshCw,
 } from 'lucide-react';
 import KickoffControlPanel from '@/components/products/KickoffControlPanel';
 import ProductEconomicsPanel from '@/components/economics/ProductEconomicsPanel';
+import RepricingSettingsPanel from '@/components/economics/RepricingSettingsPanel';
 
 
 function getSaoPauloParts(now = new Date()) {
@@ -227,8 +227,6 @@ export default function ProductsScheduled() {
   const [refreshKey, setRefreshKey] =
     useState(0);
 
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState(null);
   const [activeTab, setActiveTab] = useState('products');
 
   const [queueByAsin, setQueueByAsin] =
@@ -452,30 +450,6 @@ export default function ProductsScheduled() {
       readQueue,
       refreshCampaignLinks,
     ]);
-
-  const manualSync = useCallback(async () => {
-    if (!account?.id || syncing) return;
-    setSyncing(true);
-    setSyncMsg(null);
-    try {
-      const res = await base44.functions.invoke('syncProductsAdsWindow', {
-        amazon_account_id: account.id,
-        force: true,
-      });
-      if (res?.data?.ok) {
-        setSyncMsg({ type: 'success', text: `✓ Sincronizado: ${res.data.products_synced || 0} produtos · ${res.data.campaigns_synced || 0} campanhas` });
-        setRefreshKey((k) => k + 1);
-        await readStatus();
-      } else {
-        setSyncMsg({ type: 'error', text: res?.data?.error || 'Falha ao sincronizar.' });
-      }
-    } catch (e) {
-      setSyncMsg({ type: 'error', text: e.message });
-    } finally {
-      setSyncing(false);
-      setTimeout(() => setSyncMsg(null), 10000);
-    }
-  }, [account?.id, syncing, readStatus]);
 
   const cancelKickoff = useCallback(async (queueItem) => {
     if (!queueItem?.id) return;
@@ -1208,6 +1182,7 @@ export default function ProductsScheduled() {
         {[
           { key: 'products', label: '📦 Produtos & Ads' },
           { key: 'economics', label: '💰 Banco Econômico' },
+          { key: 'repricing', label: '⚙️ Configurações de Repricing' },
         ].map(tab => (
           <button
             key={tab.key}
@@ -1230,6 +1205,12 @@ export default function ProductsScheduled() {
       {activeTab === 'economics' && account?.id && (
         <div className="px-6 pb-6">
           <ProductEconomicsPanel accountId={account.id} />
+        </div>
+      )}
+
+      {activeTab === 'repricing' && account?.id && (
+        <div className="px-6 pb-6">
+          <RepricingSettingsPanel accountId={account.id} account={account} />
         </div>
       )}
     </div>

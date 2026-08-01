@@ -27,6 +27,32 @@
       "type": "number",
       "default": 0
     },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_attribution_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "source_paths": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "units_sold": {
       "type": "number",
       "default": 0

@@ -54,6 +54,29 @@
       "type": "number",
       "default": 0
     },
+    "promoted_orders": {
+      "type": "number",
+      "default": 0,
+      "description": "Pedidos do mesmo ASIN anunciado; base econômica preferencial."
+    },
+    "promoted_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "attribution_scope": {
+      "type": "string",
+      "enum": ["same_sku", "total_only"],
+      "default": "total_only",
+      "description": "same_sku somente quando o relatório separa promoted e halo."
+    },
     "units": {
       "type": "number",
       "default": 0

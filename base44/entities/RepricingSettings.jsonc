@@ -1,0 +1,83 @@
+{
+  "name": "RepricingSettings",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "default_minimum_margin_pct": {
+      "type": "number",
+      "default": 15,
+      "minimum": 15
+    },
+    "default_target_margin_pct": {
+      "type": "number",
+      "default": 20,
+      "minimum": 15
+    },
+    "normal_max_change_pct": {
+      "type": "number",
+      "default": 3
+    },
+    "daily_max_change_pct": {
+      "type": "number",
+      "default": 10
+    },
+    "minimum_effective_change_pct": {
+      "type": "number",
+      "default": 1
+    },
+    "cooldown_hours": {
+      "type": "number",
+      "default": 6
+    },
+    "learning_window_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "minimum_confidence": {
+      "type": "number",
+      "default": 75,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "automation_mode": {
+      "type": "string",
+      "enum": [
+        "recommendation_only",
+        "automatic"
+      ],
+      "default": "recommendation_only"
+    },
+    "max_changes_per_cycle": {
+      "type": "number",
+      "default": 20
+    },
+    "competition_max_age_minutes": {
+      "type": "number",
+      "default": 30
+    },
+    "fees_max_age_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "updated_by": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

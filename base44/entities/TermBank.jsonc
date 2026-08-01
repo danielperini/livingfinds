@@ -46,6 +46,7 @@
       "type": "string",
       "enum": [
         "search_term_auto",
+        "search_term_report",
         "manual_kickoff",
         "user_input",
         "cross_asin",
@@ -126,6 +127,42 @@
     "orders": {
       "type": "number",
       "default": 0
+    },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_attribution_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "source_campaign_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_ad_group_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "last_evidence_date": {
+      "type": "string",
+      "format": "date"
     },
     "acos": {
       "type": "number",

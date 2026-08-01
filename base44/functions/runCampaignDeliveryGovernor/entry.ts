@@ -14,6 +14,8 @@ import {
   roundMoney,
 } from '../../shared/profitGuardPolicy.ts';
 import { isProductCampaignPauseLocked } from '../../shared/productCampaignPauseGuard.ts';
+import { detectSequentialDeterioration, estimateMatureClicks } from '../../shared/decisionStatistics.ts';
+import { classifyAttributionMaturity } from '../../shared/attributionMaturity.ts';
 
 const LOOKBACK_DAYS = 30;
 const METRICS_FRESH_HOURS = 48;
@@ -207,21 +209,74 @@ function aggregateMetrics(rows: any[], campaign: any, fallbackFresh: boolean) {
     (!rows.length && fallbackFresh)
   );
   result.source = rows.length ? 'CampaignMetricsDaily' : fallbackFresh ? 'fresh_campaign_snapshot' : 'missing';
+  result.attributionConfidence = 'unknown';
+  result.sameSkuOrders = null;
+  result.sameSkuSales = null;
+  result.haloOrders = null;
+  result.haloSales = null;
   return result;
+}
+
+function unifiedMetricKey(row: any): string {
+  return [row.date, row.campaign_id, row.ad_group_id, row.advertised_product_id, row.advertised_sku].map((value) => String(value || '')).join('|');
+}
+
+function dedupeUnifiedMetrics(rows: any[]): any[] {
+  const byKey = new Map<string, any>();
+  for (const row of rows) {
+    const key = unifiedMetricKey(row);
+    const current = byKey.get(key);
+    const rowTime = new Date(row.synced_at || row.updated_at || row.created_at || 0).getTime();
+    const currentTime = new Date(current?.synced_at || current?.updated_at || current?.created_at || 0).getTime();
+    if (!current || rowTime >= currentTime) byKey.set(key, row);
+  }
+  return Array.from(byKey.values());
+}
+
+function aggregateUnifiedMetrics(rows: any[]) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+  const result: any = {
+    impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0, newest: 0,
+    sameSkuOrders: 0, sameSkuSales: 0, haloOrders: 0, haloSales: 0,
+    metricsFresh: false, source: 'UnifiedAdsMetricsDaily', attributionConfidence: 'complete',
+  };
+  for (const row of dedupeUnifiedMetrics(rows)) {
+    result.impressions += numberValue(row.impressions, 0);
+    result.clicks += numberValue(row.clicks, 0);
+    result.orders += numberValue(row.promoted_purchases, 0);
+    result.sales += numberValue(row.promoted_sales, 0);
+    result.sameSkuOrders += numberValue(row.promoted_purchases, 0);
+    result.sameSkuSales += numberValue(row.promoted_sales, 0);
+    result.haloOrders += numberValue(row.halo_purchases, 0);
+    result.haloSales += numberValue(row.halo_sales, 0);
+    result.spend += numberValue(row.cost, 0);
+    result.newest = Math.max(result.newest, metricTimestamp(row));
+    if (classifyAttributionMaturity(String(row.date || ''), today) !== 'mature') result.attributionConfidence = 'partial';
+  }
+  result.metricsFresh = Boolean(result.newest && Date.now() - result.newest <= METRICS_FRESH_HOURS * 3600000);
+  return result;
+}
+
+function normalizedConversionRate(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = numberValue(value, 0);
+    if (parsed > 0) return Math.min(1, parsed > 1 ? parsed / 100 : parsed);
+  }
+  return 0.05;
 }
 
 function currentHourMetrics(rows: any[], hour: number) {
   const result: any = { sampleDays: new Set<string>(), impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
   for (const row of rows) {
-    if (Number(row.hour) !== hour || normalizeState(row.data_maturity) === 'provisional') continue;
+    if (Number(row.hour) !== hour || normalizeState(row.data_maturity) !== 'mature' || row.attribution_scope !== 'same_sku') continue;
     result.impressions += numberValue(row.impressions, 0);
     result.clicks += numberValue(row.clicks, 0);
-    result.orders += numberValue(row.orders, 0);
-    result.sales += numberValue(row.sales, 0);
+    result.orders += numberValue(row.promoted_orders, 0);
+    result.sales += numberValue(row.promoted_sales, 0);
     result.spend += numberValue(row.spend, 0);
     if (row.date) result.sampleDays.add(String(row.date));
   }
-  return { ...result, sampleDays: result.sampleDays.size };
+  return { ...result, sampleDays: result.sampleDays.size, attributionConfidence: result.sampleDays.size > 0 ? 'complete' : 'unknown' };
 }
 
 function manualExact(campaign: any, campaignKeywords: any[]) {
@@ -461,12 +516,13 @@ Deno.serve(async (req) => {
       const aid = account.id;
       summary.accounts++;
       try {
-        const [campaigns, products, economics, assessments, metrics, hourly, keywords, productAds, adGroups, termBank, suggestions, settingsRows, priorDecisions] = await Promise.all([
+        const [campaigns, products, economics, assessments, metrics, unifiedMetrics, hourly, keywords, productAds, adGroups, termBank, suggestions, settingsRows, priorDecisions] = await Promise.all([
           list(base44.asServiceRole.entities.Campaign, { amazon_account_id: aid }, '-updated_at', 5000),
           list(base44.asServiceRole.entities.Product, { amazon_account_id: aid }, '-updated_at', 3000),
           list(base44.asServiceRole.entities.ProductEconomics, { amazon_account_id: aid }, '-updated_at', 3000),
           list(base44.asServiceRole.entities.DailyProductAdsAssessment, { amazon_account_id: aid }, '-assessment_date', 3000),
           list(base44.asServiceRole.entities.CampaignMetricsDaily, { amazon_account_id: aid }, '-date', 30000),
+          list(base44.asServiceRole.entities.UnifiedAdsMetricsDaily, { amazon_account_id: aid }, '-date', 30000),
           list(base44.asServiceRole.entities.HourlyMetric, { amazon_account_id: aid }, '-date', 40000),
           list(base44.asServiceRole.entities.Keyword, { amazon_account_id: aid }, '-updated_at', 15000),
           list(base44.asServiceRole.entities.ProductAd, { amazon_account_id: aid }, '-synced_at', 10000),
@@ -474,7 +530,7 @@ Deno.serve(async (req) => {
           list(base44.asServiceRole.entities.TermBank, { amazon_account_id: aid }, '-updated_at', 10000),
           list(base44.asServiceRole.entities.KeywordSuggestion, { amazon_account_id: aid }, '-updated_at', 10000),
           list(base44.asServiceRole.entities.PerformanceSettings, { amazon_account_id: aid }, '-updated_at', 1),
-          list(base44.asServiceRole.entities.OptimizationDecision, { amazon_account_id: aid, source_function: SOURCE }, '-created_at', 10000),
+          list(base44.asServiceRole.entities.OptimizationDecision, { amazon_account_id: aid }, '-created_at', 10000),
         ]);
         const settings = settingsRows[0] || {};
         const minBid = Math.max(0.10, numberValue(settings.min_bid, 0.20));
@@ -497,6 +553,16 @@ Deno.serve(async (req) => {
           metricsByCampaign.set(id, rows);
         }
         const accountMetricsFresh = Boolean(newestAccountMetric && Date.now() - newestAccountMetric <= METRICS_FRESH_HOURS * 3600000);
+
+        const unifiedByCampaign = new Map<string, any[]>();
+        for (const row of unifiedMetrics) {
+          if (String(row.date || '') < cutoff) continue;
+          const id = String(row.campaign_id || '');
+          if (!id) continue;
+          const rows = unifiedByCampaign.get(id) || [];
+          rows.push(row);
+          unifiedByCampaign.set(id, rows);
+        }
 
         const hourlyByCampaign = new Map<string, any[]>();
         for (const row of hourly) {
@@ -618,18 +684,36 @@ Deno.serve(async (req) => {
           }
 
           const campaignSyncFresh = ageHours(campaign.last_api_sync_at || campaign.last_sync_at || campaign.synced_at) <= METRICS_FRESH_HOURS;
-          const agg = aggregateMetrics(
-            metricsByCampaign.get(campaignId) || [],
-            campaign,
-            accountMetricsFresh && campaignSyncFresh,
-          );
+          const campaignUnifiedRows = unifiedByCampaign.get(campaignId) || [];
+          const campaignLegacyRows = metricsByCampaign.get(campaignId) || [];
+          const decisionRows = campaignUnifiedRows.length ? dedupeUnifiedMetrics(campaignUnifiedRows) : campaignLegacyRows;
+          const agg = campaignUnifiedRows.length
+            ? aggregateUnifiedMetrics(campaignUnifiedRows)
+            : aggregateMetrics(campaignLegacyRows, campaign, accountMetricsFresh && campaignSyncFresh);
           const policy = resolveOperatingAcos(econ, accountTargetAcos);
           const maximumProfitableSpend = numberValue(
             assessment?.maximum_profitable_cpa ?? econ?.maximum_profitable_ad_spend ?? econ?.profit_before_ads,
             0,
           );
+          const campaignAgeHours = ageHours(campaign.start_date || campaign.created_at || campaign.created_date);
+          const maturity = estimateMatureClicks(decisionRows);
+          const deterioration = detectSequentialDeterioration(decisionRows.map((row: any) => ({
+            date: row.date,
+            clicks: row.clicks,
+            orders: campaignUnifiedRows.length ? row.promoted_purchases : row.orders ?? row.purchases,
+            spend: row.cost ?? row.spend,
+          })));
+          const priorReduction = priorDecisions.some((row: any) =>
+            String(row.campaign_id || row.entity_id || '') === campaignId &&
+            ageHours(row.created_at || row.executed_at) <= 30 * 24 &&
+            (numberValue(row.change_pct, 0) < 0 || ['reduce_soft', 'reduce_strong'].includes(String(row.intervention_state || '')) || /reduce|decrease|profit_guard/i.test(String(row.action || row.rule_key || '')))
+          );
+          const conversionRate = normalizedConversionRate(assessment?.cvr, product?.conversion_rate_30d, econ?.conversion_rate);
+          const safeCpc = numberValue(assessment?.safe_max_cpc ?? econ?.safe_max_cpc, 0);
+          const currentCpc = agg.clicks > 0 ? agg.spend / agg.clicks : numberValue(campaign.current_bid ?? campaign.default_bid, 0);
+          const persistentLowRelevance = agg.impressions >= 500 && agg.clicks / Math.max(1, agg.impressions) <= 0.001;
           const delivery = classifyDelivery({
-            ageHours: ageHours(campaign.start_date || campaign.created_at || campaign.created_date),
+            ageHours: campaignAgeHours,
             metricsFresh: agg.metricsFresh,
             impressions: agg.impressions,
             clicks: agg.clicks,
@@ -641,6 +725,16 @@ Deno.serve(async (req) => {
             maximumProfitableSpend,
             breakEvenAcos: resolveBreakEvenAcos(econ),
             targetAcos: policy.target_acos || null,
+            matureClicks: maturity.mature_clicks,
+            conversionRate,
+            fallbackConversionRate: 0.05,
+            currentCpc,
+            safeCpc,
+            priorReduction,
+            persistentLowRelevance,
+            attributionConfidence: agg.attributionConfidence,
+            deteriorationLevel: deterioration.level,
+            isNewProduct: numberValue(product?.days_since_launch, campaignAgeHours / 24) < 30,
           });
 
           const hourData = currentHourMetrics(hourlyByCampaign.get(campaignId) || [], currentHour);
@@ -653,6 +747,7 @@ Deno.serve(async (req) => {
             maximumProfitableSpend,
             breakEvenAcos: resolveBreakEvenAcos(econ),
             targetAcos: policy.target_acos || null,
+            attributionConfidence: hourData.attributionConfidence,
           });
           const pausedByHour = String(campaign.delivery_block_reason || '').includes(`${SOURCE}|PROFIT_DAYPART_PAUSE`);
 
@@ -738,6 +833,36 @@ Deno.serve(async (req) => {
             if (delivery.action === 'profit_guard') {
               const campaignAcos = agg.sales > 0 ? agg.spend / agg.sales * 100 : null;
               const productNegative = numberValue(econ?.profit_after_ads_14d ?? econ?.profit_after_ads, 0) < 0;
+              const evidence: any = delivery.evidence || {};
+              await recordDecision(base44, {
+                amazon_account_id: aid, campaign_id: campaignId, entity_id: campaignId, asin, sku,
+                decision_type: 'bid_adjustment', action: delivery.code.startsWith('NO_CONVERSION_') ? 'request_evidence_based_bid_reduction' : 'request_profit_guard',
+                rationale: `${delivery.reason} Consequência esperada: limitar a velocidade de perda sem descartar aprendizado ainda válido.`,
+                rule_key: delivery.code, confidence: delivery.confidence, risk: 'low', status: 'executed',
+                metric_window: `last_${LOOKBACK_DAYS}_days`,
+                expected_impact_pct: evidence.recommended_reduction_pct ? -Math.round(evidence.recommended_reduction_pct * 100) : null,
+                intervention_state: evidence.level || 'profit_guard',
+                posterior_cvr: evidence.posterior_cvr ?? null,
+                posterior_cvr_low_95: evidence.posterior_cvr_low_95 ?? null,
+                posterior_cvr_high_95: evidence.posterior_cvr_high_95 ?? null,
+                probability_below_sustainable: evidence.probability_below_sustainable ?? null,
+                raw_clicks: evidence.raw_clicks ?? agg.clicks,
+                mature_clicks: evidence.mature_clicks ?? maturity.mature_clicks,
+                maturity_ratio: maturity.maturity_ratio,
+                same_sku_orders: agg.sameSkuOrders,
+                same_sku_sales: agg.sameSkuSales,
+                halo_orders: agg.haloOrders,
+                halo_sales: agg.haloSales,
+                attribution_confidence: agg.attributionConfidence,
+                maximum_profitable_cpa: maximumProfitableSpend,
+                safe_cpc: safeCpc,
+                current_cpc: currentCpc,
+                deterioration_level: deterioration.level,
+                prior_reduction: priorReduction,
+                next_review_days: delivery.code.startsWith('NO_CONVERSION_') ? 3 : 1,
+                data_used: JSON.stringify({ aggregate: agg, maturity, deterioration, evidence }).slice(0, 4000),
+                idempotency_key: `${SOURCE}|profit_guard|${aid}|${campaignId}|${delivery.code}|${new Date().toISOString().slice(0, 10)}`,
+              });
               if (state === 'enabled' && productNegative && campaignAcos !== null && policy.break_even_acos && campaignAcos >= policy.break_even_acos) {
                 await changeCampaignState(base44, aid, campaign, 'PAUSED', delivery.code, `${delivery.reason} Produto está com lucro pós-Ads negativo; campanha pausada até nova avaliação econômica.`);
                 summary.paused++;
@@ -787,11 +912,11 @@ Deno.serve(async (req) => {
       zero_impression: 'máximo de duas recuperações controladas; depois substituição',
       zero_activity_without_report_row: 'usa apenas frescor global do relatório e snapshot persistido da campanha; não cria métricas fictícias',
       impressions_without_click: 'nunca aumentar bid; substituir após amostra mínima',
-      clicks_without_sale: 'pausar ou substituir ao atingir limite econômico',
+      clicks_without_sale: 'redução escalonada por posterior bayesiano, maturidade e teto econômico; pausa somente após redução anterior e atribuição completa',
       no_stock_or_inactive: 'pausa imediata e reversível',
       product_not_found: 'pausa preventiva; arquivo somente após segunda confirmação em 72h',
       structural_loss: 'todos os Ads pausados',
-      profitable_products: 'Ads mantidos somente em campanhas e horários sem perda comprovada',
+      profitable_products: 'dayparting usa apenas janela madura de 14 dias e pedidos same-SKU; halo permanece evidência separada',
       ai_role: 'somente revisão de casos ambíguos; ações operacionais são determinísticas',
     };
     summary.current_brt_hour = currentHour;

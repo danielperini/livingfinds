@@ -42,11 +42,25 @@
     "search_term": {
       "type": "string"
     },
+    "normalized_search_term": {
+      "type": "string"
+    },
     "advertised_asin": {
       "type": "string"
     },
     "advertised_sku": {
       "type": "string"
+    },
+    "sku_resolution_status": {
+      "type": "string",
+      "enum": [
+        "resolved_report",
+        "resolved_product_ad",
+        "resolved_campaign",
+        "resolved_name",
+        "ambiguous",
+        "missing"
+      ]
     },
     "impressions": {
       "type": "number",
@@ -115,6 +129,47 @@
     "sales_30d": {
       "type": "number",
       "default": 0
+    },
+    "total_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_attribution_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "attribution_window_days": {
+      "type": "number",
+      "default": 0
+    },
+    "attribution_source": {
+      "type": "string"
+    },
+    "report_job_id": {
+      "type": "string"
+    },
+    "report_id": {
+      "type": "string"
     },
     "acos_7d": {
       "type": "number",

@@ -1,5 +1,5 @@
 /**
- * enforceManualCampaignMinTerms — v3 (CANONICAL)
+ * enforceManualCampaignMinTerms — v4 (EVIDENCE-BASED)
  *
  * REGRA ABSOLUTA: 1 campanha manual = 1 ASIN = 1 keyword EXACT
  *
@@ -7,36 +7,29 @@
  * NUNCA adiciona múltiplas keywords em uma campanha existente via POST /sp/keywords.
  *
  * Regras:
- * 1. Cada ASIN deve ter no mínimo 10 campanhas MANUAL EXACT ativas.
- * 2. Campanhas com 0 impressões após 72h → pausar a campanha inteira (não substituir keywords).
- * 3. Budget por nova campanha: max(9.00, sourceBudget / keywords_count), mínimo R$9,00.
- * 4. Bid padrão: R$0,50 — nunca herdar da campanha antiga multi-keyword.
+ * 1. No máximo 2 posições iniciais por ASIN, preenchidas somente por termos com pedido atribuído.
+ * 2. Não pausa nem repõe campanha sem impressão: o governador canônico trata entrega após 15 dias.
+ * 3. Nunca cria campanha a partir de sugestão sem conversão apenas para cumprir uma cota.
+ * 4. Bid limitado pelo CPC econômico validado; sem teto econômico, não cria.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { economicsAreActionable, numberValue } from '../../shared/profitGuardPolicy.ts';
 
-const MIN_TERMS_PER_ASIN = 10;
-const ZERO_IMPRESSION_PAUSE_HOURS = 72;
-const DEFAULT_BID = 0.50;
+const EVIDENCED_EXACT_SLOTS_PER_ASIN = 2;
 const MIN_BID = 0.35;
 const MAX_BID = 3.00;
 const MIN_BUDGET = 9.00;
-const MAX_CAMPAIGNS_PER_RUN = 20; // limitar criações por execução
+const MAX_CAMPAIGNS_PER_RUN = 10;
 
-function hoursAgo(dateStr: string): number {
-  if (!dateStr) return 0;
-  return (Date.now() - new Date(dateStr).getTime()) / 3600000;
-}
-
-function calcBidFromGoals(settings: any, product: any): number {
-  const targetAcos = settings?.target_acos || 0;
+function calcEvidenceBid(settings: any, economics: any, assessment: any, term: any): number | null {
   const maxBid = settings?.max_bid || MAX_BID;
   const minBid = settings?.min_bid || MIN_BID;
-  const price = product?.price || 0;
-  if (targetAcos > 0 && price > 0) {
-    const bid = price * (targetAcos / 100) * 0.10;
-    return Math.min(maxBid, Math.max(minBid, Math.round(bid * 100) / 100));
-  }
-  return DEFAULT_BID;
+  const safeCpc = numberValue(assessment?.safe_max_cpc ?? economics?.safe_max_cpc, 0);
+  if (safeCpc <= 0 || safeCpc < minBid) return null;
+  const observedCpc = numberValue(term?.cpc, 0);
+  const recommendedCpc = numberValue(term?.recommended_bid ?? term?.maximum_profitable_cpc, 0);
+  const evidenceBid = recommendedCpc > 0 ? recommendedCpc : observedCpc > 0 ? observedCpc * 0.90 : safeCpc * 0.80;
+  return Math.min(maxBid, safeCpc, Math.max(minBid, Math.round(evidenceBid * 100) / 100));
 }
 
 function normTerm(value: string): string {
@@ -56,15 +49,6 @@ function termBankScore(st: any): number {
     - (st.acos_14d || st.acos || 0) * 2;
 }
 
-/** Score de uma sugestão Amazon */
-function suggestionScore(s: any): number {
-  const conf = s.ai_confidence != null ? (s.ai_confidence <= 1 ? s.ai_confidence : s.ai_confidence / 100) : 0;
-  return conf * 200
-    + (s.amazon_relevance_score || 0) * 100
-    + (s.amazon_suggested_bid || 0) * 20
-    + (s.ai_rank ? Math.max(0, 20 - s.ai_rank) * 10 : 0);
-}
-
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 Deno.serve(async (req) => {
@@ -77,8 +61,6 @@ Deno.serve(async (req) => {
       const user = await base44.auth.me();
       if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
-
-    const now = new Date().toISOString();
 
     // Resolver conta
     let account: any = null;
@@ -95,9 +77,9 @@ Deno.serve(async (req) => {
     const stats = {
       asins_checked: 0,
       campaigns_created: 0,
-      campaigns_paused: 0,
       terms_from_termbank: 0,
-      terms_from_suggestions: 0,
+      blocked_without_economics: 0,
+      blocked_without_conversion_evidence: 0,
       hard_guard_blocks: 0,
       errors: [] as string[],
     };
@@ -122,26 +104,33 @@ Deno.serve(async (req) => {
 
     // Carregar metas de performance
     const perfSettings = await base44.asServiceRole.entities.PerformanceSettings.filter(
-      { amazon_account_id: aid }, null, 1
+      { amazon_account_id: aid }, undefined, 1
     ).then((r: any[]) => r[0] || null).catch(() => null);
 
     // Carregar produtos para calcular bid
     const allProducts = await base44.asServiceRole.entities.Product.filter(
-      { amazon_account_id: aid }, null, 500
+      { amazon_account_id: aid }, undefined, 500
     ).catch(() => []);
     const productByAsin = new Map<string, any>(allProducts.map((p: any) => [p.asin, p]));
 
-    // Carregar TermBank e Sugestões
+    const [allEconomics, allAssessments] = await Promise.all([
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
+      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
+    ]);
+    const economicsByAsin = new Map<string, any>(allEconomics.filter((row: any) => row.asin).map((row: any) => [String(row.asin), row]));
+    const assessmentByAsin = new Map<string, any>();
+    for (const row of allAssessments) {
+      if (row.asin && !assessmentByAsin.has(String(row.asin))) assessmentByAsin.set(String(row.asin), row);
+    }
+
+    // Somente termos observados no relatório de search terms.
     const allTermBank = await base44.asServiceRole.entities.SearchTerm.filter(
       { amazon_account_id: aid }, '-orders_14d', 2000
-    );
-    const allSuggestions = await base44.asServiceRole.entities.KeywordSuggestion.filter(
-      { amazon_account_id: aid }, null, 2000
     );
 
     // Carregar keywords ativas do banco para deduplicação cross-ASIN
     const allKeywords = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: aid }, null, 5000
+      { amazon_account_id: aid }, undefined, 5000
     ).catch(() => []);
 
     // Índice de keywords ativas por ASIN (normalized_term)
@@ -155,121 +144,57 @@ Deno.serve(async (req) => {
       activeTermsByAsin.get(kw.asin)!.add(normTerm(kw.keyword_text || kw.keyword || ''));
     }
 
-    // Métricas recentes para identificar campanhas sem impressões
-    const metricsRecent = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-      { amazon_account_id: aid }, '-date', 500
-    ).catch(() => []);
-
-    const cutoff3d = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
-    const campaignMetricsMap = new Map<string, { impressions: number }>();
-    for (const m of metricsRecent) {
-      if (!m.date || m.date < cutoff3d) continue;
-      const cid = m.campaign_id;
-      if (!cid) continue;
-      const ex = campaignMetricsMap.get(cid) || { impressions: 0 };
-      ex.impressions += m.impressions || 0;
-      campaignMetricsMap.set(cid, ex);
-    }
-
     let totalCreated = 0;
 
     // ── 2. Por ASIN: verificar campanhas ativas e fazer enforcement ──────────
     for (const [asin, camps] of byAsin.entries()) {
       stats.asins_checked++;
       const product = productByAsin.get(asin) || null;
+      const economics = economicsByAsin.get(asin) || null;
+      const assessment = assessmentByAsin.get(asin) || null;
 
       // Pular se produto sem estoque
       if (!product || product.inventory_status === 'out_of_stock' || Number(product.fba_inventory ?? 0) <= 0) continue;
+      if (!economicsAreActionable(economics, assessment)) {
+        stats.blocked_without_economics++;
+        continue;
+      }
 
       const activeCampCount = camps.filter((c: any) => {
         const st = (c.state || c.status || '').toLowerCase();
         return st === 'enabled';
       }).length;
 
-      const deficit = MIN_TERMS_PER_ASIN - activeCampCount;
+      const deficit = EVIDENCED_EXACT_SLOTS_PER_ASIN - activeCampCount;
       const activeTerms = activeTermsByAsin.get(asin) || new Set<string>();
 
-      // ── 2a. HARD GUARD: pausar campanhas com >= 72h sem impressões ────────
-      // (pausar a campanha inteira — não adicionar substitutos na mesma campanha)
-      for (const camp of camps) {
-        const st = (camp.state || camp.status || '').toLowerCase();
-        if (st !== 'enabled') continue;
-
-        const ageHours = hoursAgo(camp.created_at || camp.created_date || now);
-        const cid = camp.campaign_id || camp.amazon_campaign_id;
-        const metrics = campaignMetricsMap.get(cid) || { impressions: 0 };
-
-        if (metrics.impressions === 0 && ageHours >= ZERO_IMPRESSION_PAUSE_HOURS) {
-          // Pausar via createManualCampaignV2 chamando o pauseCampaign
-          await base44.asServiceRole.functions.invoke('pauseCampaign', {
-            amazon_account_id: aid,
-            campaign_id: cid,
-            reason: `enforceMinTerms: ${Math.round(ageHours)}h sem impressões (limite: ${ZERO_IMPRESSION_PAUSE_HOURS}h)`,
-            _service_role: true,
-          }).catch(() => {});
-
-          await base44.asServiceRole.entities.Campaign.update(camp.id, {
-            state: 'paused',
-            status: 'paused',
-          }).catch(() => {});
-
-          await base44.asServiceRole.entities.OptimizationDecision.create({
-            amazon_account_id: aid,
-            decision_type: 'pause',
-            entity_type: 'campaign',
-            campaign_id: cid,
-            asin,
-            action: `Campanha pausada após ${Math.round(ageHours)}h sem impressões`,
-            rationale: `CANONICAL: Campanha ${cid} sem impressões após ${Math.round(ageHours)}h. Regra: pausar campanha inteira, nunca adicionar keywords substitutos na mesma campanha.`,
-            status: 'executed',
-            risk: 'medium',
-            requires_approval: false,
-            confidence: 90,
-            source_function: 'enforceManualCampaignMinTerms',
-            executed_at: now,
-            created_at: now,
-          }).catch(() => {});
-
-          stats.campaigns_paused++;
-          await sleep(1000);
-        }
-      }
-
-      // ── 2b. Criar novas campanhas para cobrir o déficit ───────────────────
+      // Criar somente quando há conversão observada; sem evidência, não preencher cota.
       if (deficit <= 0) continue;
 
-      // Coletar termos candidatos — TermBank primeiro, depois sugestões Amazon
+      // Search terms com ao menos um pedido atribuído; sugestões sem venda não entram.
       const termBankCandidates = allTermBank
         .filter((st: any) => st.asin === asin
           && !activeTerms.has(normTerm(st.search_term || st.keyword_text || ''))
           && (st.search_term || st.keyword_text || '').trim().length >= 3
+          && numberValue(st.orders_14d ?? st.orders_30d, 0) >= 1
+          && st.promoted_to_manual !== true
+          && !['irrelevant', 'WASTING', 'IRRELEVANT'].includes(String(st.relevance_status || st.classification || ''))
         )
         .sort((a: any, b: any) => termBankScore(b) - termBankScore(a))
         .slice(0, deficit);
 
-      let fillerTerms: { keyword: string; bid: number; source: string }[] = termBankCandidates.map((st: any) => ({
-        keyword: (st.search_term || st.keyword_text || '').trim(),
-        bid: calcBidFromGoals(perfSettings, product),
-        source: 'termbank',
-      }));
-
-      if (fillerTerms.length < deficit) {
-        const needed = deficit - fillerTerms.length;
-        const usedTexts = new Set<string>([...activeTerms, ...fillerTerms.map(f => normTerm(f.keyword))]);
-        const suggCandidates = allSuggestions
-          .filter((s: any) => s.asin === asin
-            && !['archived_by_policy', 'superseded', 'created'].includes(s.status || '')
-            && !usedTexts.has(normTerm(s.keyword || ''))
-            && (s.keyword || '').trim().length >= 3
-          )
-          .sort((a: any, b: any) => suggestionScore(b) - suggestionScore(a))
-          .slice(0, needed);
-
-        fillerTerms = fillerTerms.concat(suggCandidates.map((s: any) => ({
-          keyword: (s.keyword || '').trim(),
-          bid: calcBidFromGoals(perfSettings, product),
-          source: 'suggestion',
-        })));
+      const fillerTerms: { keyword: string; bid: number; source: string; evidence: any }[] = termBankCandidates
+        .map((st: any) => ({
+          keyword: (st.search_term || st.keyword_text || '').trim(),
+          bid: calcEvidenceBid(perfSettings, economics, assessment, st),
+          source: 'search_term_conversion',
+          evidence: st,
+        }))
+        .filter((term: any) => term.bid != null)
+        .map((term: any) => ({ ...term, bid: Number(term.bid) }));
+      if (!fillerTerms.length) {
+        stats.blocked_without_conversion_evidence++;
+        continue;
       }
 
       // Deduplicar por normalized term
@@ -312,12 +237,45 @@ Deno.serve(async (req) => {
 
         const resData = createRes?.data || createRes || {};
 
-        if (resData?.ok || resData?.already_exists || resData?.blocked_duplicate) {
+        if (resData?.ok) {
           stats.campaigns_created++;
-          if (t.source === 'termbank') stats.terms_from_termbank++;
-          else stats.terms_from_suggestions++;
+          stats.terms_from_termbank++;
           totalCreated++;
           // Atualizar índice local para evitar duplicatas no mesmo run
+          if (!activeTermsByAsin.has(asin)) activeTermsByAsin.set(asin, new Set());
+          activeTermsByAsin.get(asin)!.add(termNorm);
+          const sourceRow = t.evidence;
+          if (sourceRow?.id) {
+            await base44.asServiceRole.entities.SearchTerm.update(sourceRow.id, {
+              promoted_to_manual: true,
+              promoted_at: new Date().toISOString(),
+              decision_status: 'executed',
+              last_action: 'promoted_to_manual_exact',
+              last_action_at: new Date().toISOString(),
+            }).catch(() => {});
+          }
+          await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: aid,
+            decision_type: 'keyword_add',
+            entity_type: 'campaign',
+            asin,
+            action: 'promote_converting_search_term_to_manual_exact',
+            rationale: `Ação: promover “${t.keyword}” após pedido atribuído. Consequência esperada: isolar aprendizado com bid limitado ao CPC seguro; reavaliar em 14 dias.`,
+            rule_key: 'EVIDENCED_SEARCH_TERM_PROMOTION',
+            data_used: JSON.stringify({ orders_14d: sourceRow?.orders_14d, sales_14d: sourceRow?.sales_14d, spend: sourceRow?.spend, observed_cpc: sourceRow?.cpc, safe_cpc: assessment?.safe_max_cpc ?? economics?.safe_max_cpc }),
+            current_cpc: numberValue(sourceRow?.cpc, 0),
+            safe_cpc: numberValue(assessment?.safe_max_cpc ?? economics?.safe_max_cpc, 0),
+            proposed_value: t.bid,
+            next_review_days: 14,
+            confidence: 85,
+            risk: 'low',
+            requires_approval: false,
+            status: 'executed',
+            source_function: 'enforceManualCampaignMinTerms',
+            created_at: new Date().toISOString(),
+          }).catch(() => {});
+        } else if (resData?.already_exists || resData?.blocked_duplicate) {
+          stats.hard_guard_blocks++;
           if (!activeTermsByAsin.has(asin)) activeTermsByAsin.set(asin, new Set());
           activeTermsByAsin.get(asin)!.add(termNorm);
         } else if (resData?.error) {
@@ -330,22 +288,22 @@ Deno.serve(async (req) => {
 
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
-      operation: 'enforce_manual_campaign_min_terms_v3',
+      operation: 'enforce_manual_campaign_terms_v4_evidence_based',
       trigger_type: body._service_role ? 'automatic' : 'manual',
       status: stats.errors.length > 0 ? 'warning' : 'success',
       started_at: new Date(startedAt).toISOString(),
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt,
-      records_processed: stats.campaigns_created + stats.campaigns_paused,
+      records_processed: stats.campaigns_created,
       result_summary: JSON.stringify({
         asins_checked: stats.asins_checked,
         campaigns_created: stats.campaigns_created,
-        campaigns_paused: stats.campaigns_paused,
         hard_guard_blocks: stats.hard_guard_blocks,
         terms_from_termbank: stats.terms_from_termbank,
-        terms_from_suggestions: stats.terms_from_suggestions,
+        blocked_without_economics: stats.blocked_without_economics,
+        blocked_without_conversion_evidence: stats.blocked_without_conversion_evidence,
         errors_count: stats.errors.length,
-        rule: '1_campaign_1_keyword_canonical',
+        rule: 'evidence_first_2_slots_max_no_suggestion_autofill',
       }),
       error_message: stats.errors.length > 0 ? stats.errors.slice(0, 3).join('; ') : null,
     }).catch(() => {});
@@ -354,7 +312,7 @@ Deno.serve(async (req) => {
       ok: true,
       duration_ms: Date.now() - startedAt,
       stats,
-      rule: '1_campanha_1_keyword_EXACT — nunca POST /sp/keywords com múltiplos termos',
+      rule: '1 campanha = 1 keyword EXACT; promoção somente com pedido observado e CPC seguro',
     });
 
   } catch (error: any) {

@@ -789,7 +789,7 @@ Deno.serve(async (req) => {
 
     if (!settings) {
       try {
-        const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1);
+        const apList = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, undefined, 1);
         if (apList.length > 0) {
           const cfg = apList[0];
           const _cfgTargetAcos = Number(cfg.target_acos ?? FB.TARGET_ACOS);
@@ -898,7 +898,7 @@ Deno.serve(async (req) => {
     const authorizedEligibleAsins = new Set<string>();
     const authorizedIneligibleAsins = new Set<string>();
     {
-      const scopedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 500).catch(() => []);
+      const scopedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []);
       for (const sp of scopedProducts) {
         if (!sp.asin) continue;
         const scope = sp.ads_scope_status || 'not_authorized';
@@ -915,9 +915,9 @@ Deno.serve(async (req) => {
     const todayBRT = brtNow.toISOString().slice(0, 10);
 
     const [hourlySalesRaw, daypartDecisionsRaw] = await Promise.all([
-      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 500).catch(() => []),
+      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, undefined, 500).catch(() => []),
       base44.asServiceRole.entities.DaypartingDecision.filter(
-        { amazon_account_id: aid, cycle_date: todayBRT }, null, 500
+        { amazon_account_id: aid, cycle_date: todayBRT }, undefined, 500
       ).catch(() => []),
     ]);
 
@@ -955,19 +955,32 @@ Deno.serve(async (req) => {
            termBankRaw, profitLearnings, recentExecs, productEconomicsRaw, targetingMetricsRaw,
            unifiedAdsMetricsRaw
     ] = await Promise.all([
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
-      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 300).catch(() => []),
-      base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 500).catch(() => []),
-      base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid, status: 'active' }, '-score', 200).catch(() => []),
-      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
-      base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 500).catch(() => []),
-      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 200).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 15000),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 5000),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 3000),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
+      base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 10000).catch(() => []),
+      base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid, status: 'active' }, '-score', 10000).catch(() => []),
+      base44.asServiceRole.entities.ProductProfitabilityLearning.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
+      base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 10000).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
       base44.asServiceRole.entities.TargetingMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
-      base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
+      base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
     ]);
-    const latestMetricsDate = [...metricsRaw, ...targetingMetricsRaw, ...unifiedAdsMetricsRaw]
+    // Relatórios de atribuição são revisados para a mesma chave natural. Bases
+    // antigas podem conter duplicatas de sincronizações anteriores; usar apenas
+    // a versão mais recente evita dobrar spend, pedidos e CVR same-SKU.
+    const unifiedByNaturalKey = new Map<string, any>();
+    for (const row of unifiedAdsMetricsRaw) {
+      const key = [row.date, row.campaign_id, row.ad_group_id, row.advertised_product_id, row.advertised_sku]
+        .map((value) => String(value || '').trim()).join('|');
+      const current = unifiedByNaturalKey.get(key);
+      const rowTime = new Date(row.synced_at || row.updated_at || row.created_at || 0).getTime();
+      const currentTime = new Date(current?.synced_at || current?.updated_at || current?.created_at || 0).getTime();
+      if (!current || rowTime >= currentTime) unifiedByNaturalKey.set(key, row);
+    }
+    const unifiedAdsMetrics = Array.from(unifiedByNaturalKey.values());
+    const latestMetricsDate = [...metricsRaw, ...targetingMetricsRaw, ...unifiedAdsMetrics]
       .map((row: any) => String(row.date || ''))
       .filter(Boolean)
       .sort()
@@ -1010,7 +1023,7 @@ Deno.serve(async (req) => {
     // A CVR do SKU deve vir do produto promovido. Unidades orgânicas da SP-API
     // não são denominador de conversão publicitária.
     const sameSkuByProductKey = new Map<string, { clicks: number; orders: number; sales: number }>();
-    for (const row of unifiedAdsMetricsRaw) {
+    for (const row of unifiedAdsMetrics) {
       if (!row.date || row.date < cutoff30d) continue;
       const keys = [row.advertised_product_id, row.advertised_sku].filter(Boolean).map(String);
       if (keys.length === 0 || (row.promoted_purchases == null && row.promoted_sales == null)) continue;
@@ -1549,7 +1562,7 @@ Deno.serve(async (req) => {
     const lifecycleManagedKwIds = new Set<string>();
     try {
       const lifecycles = await base44.asServiceRole.entities.ManualCampaignBidLifecycle.filter(
-        { amazon_account_id: aid }, null, 1000
+        { amazon_account_id: aid }, undefined, 1000
       ).catch(() => []);
       for (const lc of lifecycles) {
         const protectedStatuses = ['launch_0_48h', 'emergency_reduction', 'waiting_48h_review', 'pending_confirmation'];
@@ -1841,15 +1854,17 @@ Deno.serve(async (req) => {
         continue;
       }
 
+      const campaignDailyBudget = Number(campForKw?.daily_budget || 0);
+      const safeStockCovDays = stockCovDays ?? 0;
       const visSc = calcVisibilityScore({
         impressions_14d: kw_impressions,
         impressions_30d: wm?.d30?.impressions ?? kw_impressions,
         trend_3_vs_14: wm?.trend_3_vs_14 ?? 0,
         cvr: kw_cvr,
-        stock_days: stockCovDays,
+        stock_days: safeStockCovDays,
         is_active: stockQty > 0,
-        budget_consumed_pct: campForKw?.daily_budget > 0
-          ? Math.min(1, (wm?.d3?.spend ?? 0) / (campForKw.daily_budget * 3)) : 0.5,
+        budget_consumed_pct: campaignDailyBudget > 0
+          ? Math.min(1, (wm?.d3?.spend ?? 0) / (campaignDailyBudget * 3)) : 0.5,
       });
 
       const opp = calcOpportunityScore({
@@ -1859,7 +1874,7 @@ Deno.serve(async (req) => {
         acos_14d: kw_acos,
         target_acos: effectiveTargetAcos,
         profit_protection_mode: asinMeta?.profit_protection?.mode || 'normal',
-        stock_days: stockCovDays,
+        stock_days: safeStockCovDays,
         economic_confidence: econStatus.economic_confidence,
         impression_share: kw_impressions > 0 ? Math.min(1, kw_impressions / 20000) : 0,
         cpc: kw_cpc,

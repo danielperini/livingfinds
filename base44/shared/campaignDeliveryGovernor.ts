@@ -1,9 +1,11 @@
+import { assessNoConversionEvidence } from './bidDecisionEvidence.ts';
+import type { AttributionConfidence, DeteriorationLevel } from './decisionStatistics.ts';
+
 export const DELIVERY_LEARNING_HOURS = 72;
 export const ZERO_IMPRESSION_MAX_HOURS = 15 * 24;
 export const MIN_IMPRESSIONS_NO_CLICK = 100;
-export const MIN_CLICKS_NO_SALE = 10;
-export const MIN_HOURLY_CLICKS = 6;
-export const MIN_HOURLY_SAMPLE_DAYS = 7;
+export const MIN_HOURLY_CLICKS = 10;
+export const MIN_HOURLY_SAMPLE_DAYS = 14;
 
 const n = (value: unknown, fallback = 0): number => {
   const parsed = Number(value);
@@ -56,6 +58,16 @@ export type DeliveryInput = {
   maximumProfitableSpend: number;
   breakEvenAcos: number | null;
   targetAcos: number | null;
+  matureClicks?: number | null;
+  conversionRate?: number | null;
+  fallbackConversionRate?: number | null;
+  currentCpc?: number | null;
+  safeCpc?: number | null;
+  priorReduction?: boolean;
+  persistentLowRelevance?: boolean;
+  attributionConfidence?: AttributionConfidence;
+  deteriorationLevel?: DeteriorationLevel;
+  isNewProduct?: boolean;
 };
 
 export type DeliveryDecision = {
@@ -63,6 +75,7 @@ export type DeliveryDecision = {
   action: 'monitor' | 'bootstrap_bid' | 'replace_term' | 'pause' | 'profit_guard';
   reason: string;
   confidence: number;
+  evidence?: Record<string, unknown>;
 };
 
 export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
@@ -94,6 +107,9 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
   }
 
   if (input.impressions > 0 && input.clicks <= 0) {
+    if (input.ageHours < ZERO_IMPRESSION_MAX_HOURS) {
+      return { code: 'MOTOR_MONITORING_LOW_CTR_MATURITY', action: 'monitor', reason: 'A campanha ainda não completou 14 dias; relevância baixa será observada sem substituição prematura.', confidence: 70 };
+    }
     if (input.impressions >= MIN_IMPRESSIONS_NO_CLICK && input.isManualExact) {
       return { code: 'IMPRESSIONS_NO_CLICK_REPLACE_TERM', action: 'replace_term', reason: 'Há entrega, mas a keyword não gera clique; aumentar bid elevaria exposição sem corrigir relevância.', confidence: 95 };
     }
@@ -104,16 +120,49 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
   }
 
   if (input.clicks > 0 && input.orders <= 0 && input.sales <= 0) {
-    const economicLimit = input.maximumProfitableSpend;
-    if (input.clicks >= MIN_CLICKS_NO_SALE || input.spend >= economicLimit) {
+    const evidence = assessNoConversionEvidence({
+      clicks: input.clicks,
+      matureClicks: input.matureClicks,
+      spend: input.spend,
+      conversionRate: input.conversionRate,
+      fallbackConversionRate: input.fallbackConversionRate,
+      maximumAcquisitionSpend: input.maximumProfitableSpend,
+      currentCpc: input.currentCpc,
+      safeCpc: input.safeCpc,
+      priorReduction: input.priorReduction,
+      persistentLowRelevance: input.persistentLowRelevance,
+      attributionConfidence: input.attributionConfidence,
+      ageDays: input.ageHours / 24,
+      isNewProduct: input.isNewProduct,
+      deteriorationLevel: input.deteriorationLevel,
+    });
+    if (evidence.level === 'pause_candidate') {
       return {
         code: input.isManualExact ? 'CLICKS_NO_SALE_REPLACE_TERM' : 'CLICKS_NO_SALE_PAUSE',
         action: input.isManualExact ? 'replace_term' : 'pause',
-        reason: `Cliques sem venda excederam o limite seguro (${input.clicks} cliques; gasto ${input.spend.toFixed(2)}).`,
-        confidence: 97,
+        reason: `Perda persistente confirmada após redução anterior, janela madura e evidência probabilística (P=${Math.round((evidence.probability_below_sustainable || 0) * 100)}%).`,
+        confidence: 96,
+        evidence,
       };
     }
-    return { code: 'MOTOR_MONITORING_NO_SALE_SAMPLE', action: 'monitor', reason: 'Campanha tem cliques sem venda, mas ainda não atingiu o limite econômico ou mínimo de amostra.', confidence: 65 };
+    if (evidence.level === 'reduce_soft' || evidence.level === 'reduce_strong') {
+      return {
+        code: evidence.level === 'reduce_strong' ? 'NO_CONVERSION_REDUCE_STRONG' : 'NO_CONVERSION_REDUCE_SOFT',
+        action: 'profit_guard',
+        reason: `Evidência ${evidence.level === 'reduce_strong' ? 'forte' : 'inicial'} de desperdício: reduzir bid ${Math.round(evidence.recommended_reduction_pct * 100)}% e reavaliar antes de pausar.`,
+        confidence: evidence.level === 'reduce_strong' ? 88 : 75,
+        evidence,
+      };
+    }
+    return {
+      code: evidence.internal_state === 'hold_for_attribution' ? 'MOTOR_HOLD_FOR_ATTRIBUTION' : 'MOTOR_MONITORING_NO_SALE_SAMPLE',
+      action: 'monitor',
+      reason: evidence.internal_state === 'hold_for_attribution'
+        ? 'Conversões ainda podem entrar na janela de atribuição; nenhuma redução ou pausa será executada.'
+        : 'A evidência probabilística e econômica ainda não é suficiente para reduzir ou pausar.',
+      confidence: 65,
+      evidence,
+    };
   }
 
   if (input.sales > 0) {
@@ -138,6 +187,7 @@ export type HourlyProfitInput = {
   maximumProfitableSpend: number;
   breakEvenAcos: number | null;
   targetAcos: number | null;
+  attributionConfidence?: AttributionConfidence;
 };
 
 export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause' | 'enable' | 'hold'; code: string; reason: string } {
@@ -145,11 +195,14 @@ export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause'
   if (!economicsAvailable) {
     return { action: 'hold', code: 'HOUR_ECONOMICS_MISSING', reason: 'Economia não validada; não alterar estado por horário.' };
   }
+  if (input.attributionConfidence !== 'complete') {
+    return { action: 'hold', code: 'HOUR_ATTRIBUTION_OPEN', reason: 'Janela de atribuição horária ainda aberta ou sem separação same-SKU; manter estado.' };
+  }
   if (input.sampleDays < MIN_HOURLY_SAMPLE_DAYS || input.clicks < MIN_HOURLY_CLICKS) {
     return { action: 'hold', code: 'HOUR_SAMPLE_INSUFFICIENT', reason: 'Amostra horária insuficiente; manter estado atual.' };
   }
   if (input.sales <= 0) {
-    const limit = Math.max(2, input.maximumProfitableSpend * 0.35);
+    const limit = input.maximumProfitableSpend;
     if (input.orders <= 0 && input.spend >= limit) {
       return { action: 'pause', code: 'UNPROFITABLE_HOUR_NO_SALES', reason: `Horário consome ${input.spend.toFixed(2)} sem venda; pausar até a próxima janela.` };
     }
@@ -159,7 +212,7 @@ export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause'
   if (input.breakEvenAcos && acos >= input.breakEvenAcos) {
     return { action: 'pause', code: 'UNPROFITABLE_HOUR_BREAK_EVEN', reason: `ACoS horário ${acos.toFixed(2)}% acima do break-even ${input.breakEvenAcos.toFixed(2)}%.` };
   }
-  if (input.targetAcos && acos <= input.targetAcos && input.orders > 0) {
+  if (input.targetAcos && acos <= input.targetAcos && input.orders >= 2) {
     return { action: 'enable', code: 'PROFITABLE_HOUR', reason: `Horário comprovadamente rentável, ACoS ${acos.toFixed(2)}%.` };
   }
   return { action: 'hold', code: 'HOUR_WATCH', reason: 'Horário intermediário; manter bid defensivo e monitorar.' };

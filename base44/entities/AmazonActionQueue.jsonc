@@ -18,7 +18,8 @@
         "target",
         "budget",
         "bid",
-        "negative"
+        "negative",
+        "product_price"
       ]
     },
     "entity_id": {
@@ -32,6 +33,59 @@
     },
     "payload": {
       "type": "object"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "seller_id": {
+      "type": "string"
+    },
+    "old_price": {
+      "type": "number"
+    },
+    "new_price": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "expected_margin": {
+      "type": "number"
+    },
+    "expected_unit_profit": {
+      "type": "number"
+    },
+    "expected_daily_profit": {
+      "type": "number"
+    },
+    "next_retry_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_request": {
+      "type": "object"
+    },
+    "amazon_response": {
+      "type": "object"
+    },
+    "submission_id": {
+      "type": "string"
+    },
+    "history_id": {
+      "type": "string"
+    },
+    "confirmed_price": {
+      "type": "number"
+    },
+    "confirmation_checked_at": {
+      "type": "string",
+      "format": "date-time"
     },
     "idempotency_key": {
       "type": "string"
@@ -53,6 +107,10 @@
         "pending",
         "approved",
         "running",
+        "submitted",
+        "processing",
+        "confirmed",
+        "blocked",
         "completed",
         "failed",
         "skipped",

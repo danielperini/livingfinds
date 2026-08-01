@@ -5,6 +5,12 @@
  * Marca job como processed.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { waitUntil } from 'base44:runtime';
+import {
+  canonicalMatchType,
+  normalizeSearchTerm,
+  resolveSameSkuAttribution,
+} from '../../shared/searchTermHarvestPolicy.ts';
 
 async function decompress(buf: ArrayBuffer): Promise<any[]> {
   const ds = new DecompressionStream('gzip');
@@ -27,6 +33,16 @@ async function decompress(buf: ArrayBuffer): Promise<any[]> {
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
+const ASIN_RE = /\b(B0[A-Z0-9]{8})\b/i;
+
+function campaignTypeOf(campaign: any): string {
+  const targeting = String(campaign?.targeting_type || '').toUpperCase();
+  const name = String(campaign?.name || campaign?.campaign_name || '').toUpperCase();
+  return targeting.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name)
+    ? 'AUTO'
+    : 'MANUAL';
+}
+
 async function bulkUpsertBatched(entity: any, records: any[], batchSize = 100) {
   for (let i = 0; i < records.length; i += batchSize) {
     await entity.bulkCreate(records.slice(i, i + batchSize));
@@ -47,6 +63,37 @@ async function upsertByNaturalKey(entity: any, records: any[], batchSize = 20) {
   return upserted;
 }
 
+async function upsertDailySearchTerms(base44: any, accountId: string, records: any[]) {
+  const existing: any[] = [];
+  for (let skip = 0; skip < 20000; skip += 5000) {
+    const page = await base44.asServiceRole.entities.SearchTerm.filter(
+      { amazon_account_id: accountId }, '-date', 5000, skip,
+    ).catch(() => []);
+    existing.push(...page);
+    if (page.length < 5000) break;
+  }
+  const byKey = new Map(existing.filter((row: any) => row.unique_key).map((row: any) => [row.unique_key, row]));
+  const creates: any[] = [];
+  const updates: any[] = [];
+  for (const record of records) {
+    const current: any = byKey.get(record.unique_key);
+    if (current?.id) updates.push({
+      id: current.id,
+      ...record,
+      classification: current.promoted_to_manual === true ? 'PROMOTED_EXACT' : record.classification,
+      evaluation_count: Number(current.evaluation_count || 0) + 1,
+    });
+    else creates.push({ ...record, first_seen_at: record.synced_at });
+  }
+  for (let index = 0; index < creates.length; index += 100) {
+    await base44.asServiceRole.entities.SearchTerm.bulkCreate(creates.slice(index, index + 100));
+  }
+  for (let index = 0; index < updates.length; index += 100) {
+    await base44.asServiceRole.entities.SearchTerm.bulkUpdate(updates.slice(index, index + 100));
+  }
+  return { created: creates.length, updated: updates.length, total: records.length };
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
@@ -63,7 +110,7 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
 
     // Carregar job
-    const jobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter({ id: job_id }, null, 1);
+    const jobs = await base44.asServiceRole.entities.AmazonAdsReportJob.filter({ id: job_id }, undefined, 1);
     const job = jobs[0];
     if (!job) return Response.json({ ok: false, error: 'Job não encontrado' }, { status: 404 });
 
@@ -128,7 +175,7 @@ Deno.serve(async (req) => {
     const firstRow = rows[0] || {};
     const isTargetingReport = 'targetingId' in firstRow || 'targetingExpression' in firstRow;
     const isKeywordsReport = 'keywordId' in firstRow && !isTargetingReport;
-    const isSearchTermReport = 'searchTerm' in firstRow;
+    const isSearchTermReport = job.report_type_id === 'spSearchTerm' || 'searchTerm' in firstRow;
     const groupBy = Array.isArray(job.group_by) ? job.group_by : [];
     const isPlacementReport = groupBy.includes('campaignPlacement');
     const isCanonicalCampaignReport = job.report_type_id === 'spCampaigns' &&
@@ -140,6 +187,138 @@ Deno.serve(async (req) => {
       : job.report_type_id === 'spPurchasedProduct' ? 'purchased_product'
       : job.report_type_id === 'spSearchTermImpressionShare' ? 'impression_share'
       : null;
+
+    let searchTermRecords: any[] = [];
+
+    // Nem toda conta devolve ASIN/SKU no relatório de termos. O vínculo é
+    // resolvido pelo ProductAd/ad group e pela campanha canônica. Ambiguidade é
+    // persistida explicitamente e impede promoção automática.
+    if (isSearchTermReport) {
+      const [campaigns, productAds] = await Promise.all([
+        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []),
+        base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []),
+      ]);
+      const campaignById = new Map<string, any>();
+      for (const campaign of campaigns) {
+        for (const id of [campaign.id, campaign.campaign_id, campaign.amazon_campaign_id].filter(Boolean)) {
+          campaignById.set(String(id), campaign);
+        }
+      }
+      const adsByAdGroup = new Map<string, any[]>();
+      const adsByCampaign = new Map<string, any[]>();
+      for (const ad of productAds) {
+        if (String(ad.state || ad.status || '').toLowerCase() === 'archived') continue;
+        const adGroupId = String(ad.ad_group_id || '');
+        const campaignId = String(ad.campaign_id || '');
+        if (adGroupId) adsByAdGroup.set(adGroupId, [...(adsByAdGroup.get(adGroupId) || []), ad]);
+        if (campaignId) adsByCampaign.set(campaignId, [...(adsByCampaign.get(campaignId) || []), ad]);
+      }
+
+      const resolveAdvertisedProduct = (row: any) => {
+        const reportAsin = String(row.advertisedAsin || '').trim().toUpperCase();
+        if (reportAsin) return { asin: reportAsin, sku: String(row.advertisedSku || ''), status: 'resolved_report' };
+
+        const campaignId = String(row.campaignId || '');
+        const adGroupId = String(row.adGroupId || '');
+        const adCandidates = adsByAdGroup.get(adGroupId) || adsByCampaign.get(campaignId) || [];
+        const distinctAsins = [...new Set(adCandidates.map((ad: any) => String(ad.asin || '').toUpperCase()).filter(Boolean))];
+        if (distinctAsins.length === 1) {
+          const ad = adCandidates.find((candidate: any) => String(candidate.asin || '').toUpperCase() === distinctAsins[0]) || {};
+          return { asin: distinctAsins[0], sku: String(ad.sku || ''), status: 'resolved_product_ad' };
+        }
+        if (distinctAsins.length > 1) return { asin: '', sku: '', status: 'ambiguous' };
+
+        const campaign = campaignById.get(campaignId);
+        if (campaign?.asin) return { asin: String(campaign.asin).toUpperCase(), sku: String(campaign.sku || ''), status: 'resolved_campaign' };
+
+        const match = `${row.adGroupName || ''} ${row.campaignName || ''}`.match(ASIN_RE);
+        return match
+          ? { asin: match[1].toUpperCase(), sku: '', status: 'resolved_name' }
+          : { asin: '', sku: '', status: 'missing' };
+      };
+
+      searchTermRecords = rows.map((row: any) => {
+        const date = String(row.date || endDate || '');
+        const campaignId = String(row.campaignId || '');
+        const adGroupId = String(row.adGroupId || '');
+        const keywordId = String(row.keywordId || '');
+        const term = String(row.searchTerm || '').trim();
+        const normalizedTerm = normalizeSearchTerm(term);
+        const campaign = campaignById.get(campaignId);
+        const campaignType = campaignTypeOf(campaign);
+        const rawMatchType = String(row.matchType || row.keywordType || '').toLowerCase();
+        const product = resolveAdvertisedProduct(row);
+        const attribution = resolveSameSkuAttribution(row);
+        const impressions = Number(row.impressions || 0);
+        const clicks = Number(row.clicks || 0);
+        const spend = Number(row.cost || row.spend || 0);
+        const sourceIdentity = keywordId || rawMatchType || 'auto';
+
+        return {
+          amazon_account_id: accountId,
+          date,
+          campaign_id: campaignId,
+          campaign_name: row.campaignName || campaign?.name || campaign?.campaign_name || '',
+          ad_group_id: adGroupId,
+          ad_group_name: row.adGroupName || '',
+          keyword_id: keywordId,
+          keyword_text: row.keyword || row.keywordText || '',
+          keyword_type: row.keywordType || '',
+          match_type: canonicalMatchType(rawMatchType, campaignType),
+          search_term: term,
+          normalized_search_term: normalizedTerm,
+          advertised_asin: product.asin,
+          advertised_sku: product.sku,
+          sku_resolution_status: product.status,
+          impressions,
+          clicks,
+          ctr: impressions > 0 ? clicks / impressions * 100 : 0,
+          cpc: clicks > 0 ? spend / clicks : 0,
+          spend,
+          orders_1d: Number(row.purchases1d || 0),
+          orders_7d: Number(row.purchases7d || 0),
+          orders_14d: Number(row.purchases14d || 0),
+          orders_30d: Number(row.purchases30d || 0),
+          units_1d: Number(row.unitsSoldClicks1d || 0),
+          units_7d: Number(row.unitsSoldClicks7d || 0),
+          units_14d: Number(row.unitsSoldClicks14d || 0),
+          units_30d: Number(row.unitsSoldClicks30d || 0),
+          sales_1d: Number(row.sales1d || 0),
+          sales_7d: Number(row.sales7d || 0),
+          sales_14d: Number(row.sales14d || 0),
+          sales_30d: Number(row.sales30d || 0),
+          total_orders: attribution.totalOrders,
+          total_sales: attribution.totalSales,
+          same_sku_orders: attribution.sameSkuOrders,
+          same_sku_sales: attribution.sameSkuSales,
+          halo_orders: attribution.haloOrders,
+          halo_sales: attribution.haloSales,
+          same_sku_attribution_verified: attribution.verified,
+          attribution_window_days: attribution.windowDays,
+          attribution_source: attribution.source,
+          acos_7d: Number(row.sales7d || 0) > 0 ? spend / Number(row.sales7d) * 100 : 0,
+          acos_14d: Number(row.sales14d || 0) > 0 ? spend / Number(row.sales14d) * 100 : 0,
+          roas_7d: spend > 0 ? Number(row.sales7d || 0) / spend : 0,
+          roas_14d: spend > 0 ? Number(row.sales14d || 0) / spend : 0,
+          conversion_rate: clicks > 0 ? attribution.totalOrders / clicks * 100 : 0,
+          source_campaign_type: campaignType,
+          source_target_type: rawMatchType || (campaignType === 'AUTO' ? 'auto' : 'unknown'),
+          source_target_id: keywordId,
+          report_job_id: job.id,
+          report_id: String(job.report_id || ''),
+          performance_window: `${job.start_date || date}|${job.end_date || date}`,
+          unique_key: [accountId, campaignId, adGroupId, sourceIdentity, normalizedTerm, date].join('|'),
+          synced_at: now,
+          last_seen_at: `${date}T23:59:59-03:00`,
+          last_evaluated_at: now,
+          evaluation_count: 1,
+          classification: attribution.sameSkuOrders > 0 ? 'FIRST_SALE' : 'NEW',
+        };
+      }).filter((row: any) => row.campaign_id && row.search_term && row.date);
+
+      const persisted = await upsertDailySearchTerms(base44, accountId, searchTermRecords);
+      console.log(`[downloadProcess] SearchTerm: ${persisted.created} criados + ${persisted.updated} atualizados; mesmo-SKU explícito=${searchTermRecords.filter((row: any) => row.same_sku_attribution_verified).length}`);
+    }
 
     // Relatórios auxiliares ficam em uma dimensão própria. Eles nunca podem
     // apagar ou substituir CampaignMetricsDaily, cuja fonte canônica é spCampaigns/campaign.
@@ -364,7 +543,7 @@ Deno.serve(async (req) => {
 
     // ── Keyword (spTargeting) — upsert por keyword_id ──
     if (keywordEntries.length > 0) {
-      const existingKeywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []);
+      const existingKeywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []);
       const kwById = new Map((existingKeywords as any[]).map(k => [String(k.keyword_id), k]));
 
       // Agregar por keyword_id (soma 30d)
@@ -413,7 +592,7 @@ Deno.serve(async (req) => {
     }
 
     const existingCamps = isCanonicalCampaignReport
-      ? await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 5000).catch(() => [])
+      ? await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => [])
       : [];
     const campMap = new Map((existingCamps as any[]).map(c => [c.campaign_id, c]));
     const campUpdates = isCanonicalCampaignReport ? Array.from(campAgg.entries())
@@ -443,7 +622,7 @@ Deno.serve(async (req) => {
     await base44.asServiceRole.entities.AmazonAdsReportJob.update(job_id, {
       status: 'processed',
       processed_at: now,
-      records_processed: metricsRecords.length + keywordEntries.length,
+      records_processed: metricsRecords.length + keywordEntries.length + searchTermRecords.length,
       updated_at: now,
     }).catch(() => {});
 
@@ -464,7 +643,7 @@ Deno.serve(async (req) => {
       execution_date: now.slice(0, 10),
       started_at: now,
       completed_at: now,
-      records_processed: metricsRecords.length,
+      records_processed: metricsRecords.length + searchTermRecords.length,
       duration_ms: Date.now() - t0,
     }).catch(() => {});
 
@@ -474,7 +653,7 @@ Deno.serve(async (req) => {
       try {
         // Carregar target_acos
         const perfList = await base44.asServiceRole.entities.PerformanceSettings
-          .filter({ amazon_account_id: accountId }, null, 1).catch(() => []);
+          .filter({ amazon_account_id: accountId }, undefined, 1).catch(() => []);
         const targetAcos = Number((perfList as any[])[0]?.target_acos || 15);
 
         // Agregar por day_of_week + hour (via data, sem hora — mapear por dia da semana)
@@ -540,7 +719,7 @@ Deno.serve(async (req) => {
 
         // Upsert
         const existing: any[] = await base44.asServiceRole.entities.HourlySalesPattern
-          .filter({ amazon_account_id: accountId }, null, 200).catch(() => []);
+          .filter({ amazon_account_id: accountId }, undefined, 200).catch(() => []);
         const existingMap = new Map(existing.map((e: any) => [`${e.day_of_week}|${e.hour}`, e]));
         for (const p of patterns) {
           const k = `${p.day_of_week}|${p.hour}`;
@@ -554,7 +733,7 @@ Deno.serve(async (req) => {
 
         // Disparo de dayparting se slot atual for ELITE/STRONG e dayparting habilitado
         const autopilotList = await base44.asServiceRole.entities.AutopilotConfig
-          .filter({ amazon_account_id: accountId }, null, 1).catch(() => []);
+          .filter({ amazon_account_id: accountId }, undefined, 1).catch(() => []);
         const daypartingEnabled = (autopilotList as any[])[0]?.dayparting_enabled !== false;
         if (daypartingEnabled) {
           const brtNow = new Date(Date.now() - 3 * 3600000);
@@ -594,11 +773,24 @@ Deno.serve(async (req) => {
       }).catch((e: any) => console.warn('[downloadProcess] Motor de decisão (não crítico):', e.message));
     }
 
+    // A promoção começa assim que a Amazon entrega o relatório. Se as colunas
+    // de mesmo SKU ou o vínculo ASIN/SKU faltarem, o motor apenas registra o
+    // termo e não cria campanha.
+    if (isSearchTermReport && searchTermRecords.length > 0) {
+      waitUntil(base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+        amazon_account_id: accountId,
+        trigger_type: 'search_term_report_processed',
+        max_promotions: 25,
+        _service_role: true,
+      }).catch((error: any) => console.warn('[downloadProcess] Colheita imediata:', error?.message || error)));
+    }
+
     return Response.json({
       ok: true,
       job_id,
       report_type_id: job.report_type_id,
       records: metricsRecords.length,
+      search_terms_upserted: searchTermRecords.length,
       campaigns_updated: campUpdates.length,
       duration_ms: Date.now() - t0,
       message: 'Relatório pronto e processado.',

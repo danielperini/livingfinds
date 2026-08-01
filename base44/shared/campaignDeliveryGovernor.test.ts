@@ -29,7 +29,7 @@ Deno.test('não age quando economia não está validada', () => {
 
 Deno.test('zero impressão permite apenas bootstrap controlado', () => {
   const result = classifyDelivery({
-    ageHours: 8 * 24,
+    ageHours: 15 * 24,
     metricsFresh: true,
     impressions: 0,
     clicks: 0,
@@ -48,7 +48,7 @@ Deno.test('zero impressão permite apenas bootstrap controlado', () => {
 
 Deno.test('impressões sem clique substituem termo e nunca aumentam bid', () => {
   const result = classifyDelivery({
-    ageHours: 8 * 24,
+    ageHours: 15 * 24,
     metricsFresh: true,
     impressions: 150,
     clicks: 0,
@@ -65,20 +65,27 @@ Deno.test('impressões sem clique substituem termo e nunca aumentam bid', () => 
   equal(result.code, 'IMPRESSIONS_NO_CLICK_REPLACE_TERM', 'código');
 });
 
-Deno.test('cliques sem venda substituem termo ao atingir limite econômico', () => {
+Deno.test('cliques sem venda só substituem após redução e evidência madura', () => {
   const result = classifyDelivery({
-    ageHours: 8 * 24,
+    ageHours: 20 * 24,
     metricsFresh: true,
     impressions: 300,
-    clicks: 7,
+    clicks: 45,
     orders: 0,
     sales: 0,
-    spend: 12,
+    spend: 18,
     isManualExact: true,
     isAuto: false,
     maximumProfitableSpend: 10,
     breakEvenAcos: 25,
     targetAcos: 15,
+    matureClicks: 45,
+    conversionRate: 0.10,
+    safeCpc: 0.30,
+    currentCpc: 0.40,
+    priorReduction: true,
+    persistentLowRelevance: true,
+    attributionConfidence: 'complete',
   });
   equal(result.action, 'replace_term', 'ação');
   equal(result.code, 'CLICKS_NO_SALE_REPLACE_TERM', 'código');
@@ -100,23 +107,24 @@ Deno.test('margem negativa validada pausa todos os ads', () => {
   equal(result.blocked, true, 'bloqueio');
 });
 
-Deno.test('horário sem venda e acima do limite é pausado', () => {
+Deno.test('horário sem venda e acima do limite é pausado com atribuição completa', () => {
   const result = classifyCurrentHour({
-    sampleDays: 10,
+    sampleDays: 14,
     clicks: 12,
     orders: 0,
     sales: 0,
-    spend: 8,
+    spend: 10,
     maximumProfitableSpend: 10,
     breakEvenAcos: 25,
     targetAcos: 15,
+    attributionConfidence: 'complete',
   });
   equal(result.action, 'pause', 'ação');
 });
 
 Deno.test('horário rentável reativa apenas campanha pausada pelo governador', () => {
   const result = classifyCurrentHour({
-    sampleDays: 10,
+    sampleDays: 14,
     clicks: 12,
     orders: 2,
     sales: 200,
@@ -124,6 +132,46 @@ Deno.test('horário rentável reativa apenas campanha pausada pelo governador', 
     maximumProfitableSpend: 30,
     breakEvenAcos: 25,
     targetAcos: 15,
+    attributionConfidence: 'complete',
   });
   equal(result.action, 'enable', 'ação');
+});
+
+Deno.test('dez cliques não são sentença fixa de pausa', () => {
+  const result = classifyDelivery({
+    ageHours: 20 * 24,
+    metricsFresh: true,
+    impressions: 500,
+    clicks: 10,
+    orders: 0,
+    sales: 0,
+    spend: 4,
+    isManualExact: false,
+    isAuto: true,
+    maximumProfitableSpend: 20,
+    breakEvenAcos: 25,
+    targetAcos: 15,
+    matureClicks: 10,
+    conversionRate: 0.05,
+    safeCpc: 0.50,
+    currentCpc: 0.40,
+    attributionConfidence: 'complete',
+  });
+  equal(result.action, 'monitor', 'ação');
+});
+
+Deno.test('atribuição aberta bloqueia decisão horária', () => {
+  const result = classifyCurrentHour({
+    sampleDays: 20,
+    clicks: 30,
+    orders: 0,
+    sales: 0,
+    spend: 20,
+    maximumProfitableSpend: 10,
+    breakEvenAcos: 25,
+    targetAcos: 15,
+    attributionConfidence: 'partial',
+  });
+  equal(result.action, 'hold', 'ação');
+  equal(result.code, 'HOUR_ATTRIBUTION_OPEN', 'código');
 });

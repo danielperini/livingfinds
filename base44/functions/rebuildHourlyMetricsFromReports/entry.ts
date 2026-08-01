@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { classifyAttributionMaturity } from '../../shared/attributionMaturity.ts';
 
 const n = (value: any) => Number(value || 0);
 const r2 = (value: any) => Math.round((n(value) + Number.EPSILON) * 100) / 100;
@@ -24,7 +25,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
     const lookbackDays = Math.max(1, Math.min(Number(body.lookback_days || (body.full ? 30 : 3)), 30));
     const cutoff = daysAgo(lookbackDays);
@@ -35,7 +36,7 @@ Deno.serve(async (request) => {
       const [unifiedRaw, snapshotsRaw, campaigns, productAds, existingHourly] = await Promise.all([
         base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: aid }, '-date', 10000).catch(() => []),
         base44.asServiceRole.entities.IntradaySpendSnapshot.filter({ amazon_account_id: aid }, '-observed_at', 10000).catch(() => []),
-        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 3000).catch(() => []),
+        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
         base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: aid }, '-synced_at', 5000).catch(() => []),
         base44.asServiceRole.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 10000).catch(() => []),
       ]);
@@ -64,12 +65,19 @@ Deno.serve(async (request) => {
           hour: n(row.hour),
           day_of_week: new Date(`${String(row.date).slice(0, 10)}T12:00:00-03:00`).getDay(),
           impressions: 0, clicks: 0, spend: 0, sales: 0, orders: 0,
+          promoted_orders: 0, promoted_sales: 0, halo_orders: 0, halo_sales: 0,
+          attribution_scope: 'total_only',
         };
         current.impressions += n(row.impressions);
         current.clicks += n(row.clicks);
         current.spend += n(row.spend);
         current.sales += n(row.sales);
         current.orders += n(row.orders);
+        current.promoted_orders += n(row.promoted_orders);
+        current.promoted_sales += n(row.promoted_sales);
+        current.halo_orders += n(row.halo_orders);
+        current.halo_sales += n(row.halo_sales);
+        if (row.attribution_scope === 'same_sku') current.attribution_scope = 'same_sku';
         aggregated.set(key, current);
       };
 
@@ -85,6 +93,11 @@ Deno.serve(async (request) => {
           spend: row.cost,
           sales: row.sales,
           orders: row.purchases,
+          promoted_orders: row.promoted_purchases,
+          promoted_sales: row.promoted_sales,
+          halo_orders: row.halo_purchases,
+          halo_sales: row.halo_sales,
+          attribution_scope: 'same_sku',
         });
       }
 
@@ -144,13 +157,18 @@ Deno.serve(async (request) => {
           spend,
           sales,
           orders,
+          promoted_orders: n(row.promoted_orders),
+          promoted_sales: r2(row.promoted_sales),
+          halo_orders: n(row.halo_orders),
+          halo_sales: r2(row.halo_sales),
+          attribution_scope: row.attribution_scope,
           units: orders,
           ctr: impressions > 0 ? r2(clicks / impressions * 100) : 0,
           cpc: clicks > 0 ? r2(spend / clicks) : 0,
           acos: sales > 0 ? r2(spend / sales * 100) : 0,
           roas: spend > 0 ? r2(sales / spend) : 0,
           conversion_rate: clicks > 0 ? r2(orders / clicks * 100) : 0,
-          data_maturity: row.date < brtDate() ? 'mature' : 'provisional',
+          data_maturity: classifyAttributionMaturity(row.date, brtDate()),
           sample_size: orders >= 3 || clicks >= 20 ? 'adequate' : clicks >= 5 ? 'low' : 'insufficient',
           classification: orders > 0 && sales > spend ? 'peak_conversion'
             : clicks >= 5 && orders === 0 ? 'low_efficiency'

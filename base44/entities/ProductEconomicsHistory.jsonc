@@ -68,6 +68,87 @@
     "source": {
       "type": "string"
     },
+    "history_type": {
+      "type": "string",
+      "enum": [
+        "cost_change",
+        "economic_evaluation",
+        "price_recommendation",
+        "price_submission",
+        "price_confirmed",
+        "price_failed"
+      ]
+    },
+    "action_queue_id": {
+      "type": "string"
+    },
+    "minimum_profitable_price": {
+      "type": "number"
+    },
+    "target_margin_price": {
+      "type": "number"
+    },
+    "unit_profit_before": {
+      "type": "number"
+    },
+    "unit_profit_after": {
+      "type": "number"
+    },
+    "expected_daily_profit": {
+      "type": "number"
+    },
+    "sales_before": {
+      "type": "number"
+    },
+    "sales_after": {
+      "type": "number"
+    },
+    "units_before": {
+      "type": "number"
+    },
+    "units_after": {
+      "type": "number"
+    },
+    "conversion_before": {
+      "type": "number"
+    },
+    "conversion_after": {
+      "type": "number"
+    },
+    "ads_cost_before": {
+      "type": "number"
+    },
+    "ads_cost_after": {
+      "type": "number"
+    },
+    "stock_before": {
+      "type": "number"
+    },
+    "stock_after": {
+      "type": "number"
+    },
+    "featured_offer_before": {
+      "type": "number"
+    },
+    "featured_offer_after": {
+      "type": "number"
+    },
+    "decision_reason": {
+      "type": "string"
+    },
+    "decision_evidence": {
+      "type": "object"
+    },
+    "amazon_response": {
+      "type": "object"
+    },
+    "status": {
+      "type": "string"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "reason": {
       "type": "string"
     },

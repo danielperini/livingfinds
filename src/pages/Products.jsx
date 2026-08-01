@@ -10,7 +10,7 @@ import HighAdherenceAlert from '@/components/products/HighAdherenceAlert';
 import CampaignDivergenceBadge from '@/components/products/CampaignDivergenceBadge';
 import ProductRow, {
   offerStatus, productHasCampaign, isCampaignActiveFn, campaignIdOf,
-  isConfirmedOutOfStock, stockFreshness, formatBRL,
+  isConfirmedOutOfStock, stockFreshness,
 } from '@/components/products/ProductRow';
 
 const PAGE_SIZE = 20;
@@ -44,6 +44,8 @@ function applySort(items, sortBy, colSort) {
       switch (colSort.column) {
         case 'stock':
           return dir * (Number(a.fba_inventory || 0) - Number(b.fba_inventory || 0));
+        case 'unit_cost':
+          return dir * (Number(a._economics?.unit_cost ?? a.product_cost ?? 0) - Number(b._economics?.unit_cost ?? b.product_cost ?? 0));
         case 'ads_status':
           return dir * (campaignSortScore(a) - campaignSortScore(b));
         case 'sales':
@@ -117,7 +119,6 @@ function KpiCard({ label, value, detail, tone = 'default' }) {
 // Sortable column header
 function SortTh({ label, colKey, colSort, onSort, className = '' }) {
   const active = colSort?.column === colKey;
-  const asc = active && colSort?.direction === 'asc';
   const desc = active && colSort?.direction === 'desc';
   return (
     <th
@@ -217,6 +218,11 @@ export default function Products({ externalRefreshTrigger }) {
       );
       const allProducts = allResults.flat();
 
+      const allEconomics = await Promise.all(
+        accs.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => []))
+      ).then(results => results.flat());
+      const economicsByAccountSku = new Map(allEconomics.map(item => [`${item.amazon_account_id}:${String(item.sku || '').trim().toUpperCase()}`, item]));
+
       // Detectar divergências: campanhas paused no DB mas amazon_status=enabled
       const allCampaigns = await Promise.all(
         accs.map(acc => base44.entities.Campaign.filter({ amazon_account_id: acc.id }, null, 500).catch(() => []))
@@ -237,6 +243,7 @@ export default function Products({ externalRefreshTrigger }) {
       const enriched = allProducts.map(p => ({
         ...p,
         _divergent_count: divergentByAsin[p.asin] || 0,
+        _economics: economicsByAccountSku.get(`${p.amazon_account_id}:${String(p.sku || '').trim().toUpperCase()}`) || null,
       }));
 
       setProducts(enriched);
@@ -260,10 +267,15 @@ export default function Products({ externalRefreshTrigger }) {
 
   const reloadProducts = useCallback(async () => {
     if (!accounts.length) { await load(); return; }
-    const allResults = await Promise.all(
-      accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))
-    );
-    setProducts(allResults.flat());
+    const [allResults, allEconomics] = await Promise.all([
+      Promise.all(accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))),
+      Promise.all(accounts.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => []))),
+    ]);
+    const economicsByAccountSku = new Map(allEconomics.flat().map(item => [`${item.amazon_account_id}:${String(item.sku || '').trim().toUpperCase()}`, item]));
+    setProducts(allResults.flat().map(product => ({
+      ...product,
+      _economics: economicsByAccountSku.get(`${product.amazon_account_id}:${String(product.sku || '').trim().toUpperCase()}`) || null,
+    })));
   }, [accounts, load]);
 
   const loadStuckQueue = useCallback(async (accountId) => {
@@ -285,7 +297,7 @@ export default function Products({ externalRefreshTrigger }) {
 
   useEffect(() => {
     load().then(res => { if (res?.currentAccount?.id) loadStuckQueue(res.currentAccount.id); });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const prevExternalTrigger = useRef(externalRefreshTrigger);
   useEffect(() => {
@@ -719,6 +731,7 @@ export default function Products({ externalRefreshTrigger }) {
                     </button>
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Produto</th>
+                  <SortTh label="Custo/un." colKey="unit_cost" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Estoque" colKey="stock" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Status Ads" colKey="ads_status" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Vendas 30d" colKey="sales" colSort={colSort} onSort={handleColSort} />

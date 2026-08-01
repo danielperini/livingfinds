@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   AlertCircle, Check, CheckSquare, ChevronDown, ChevronRight, ExternalLink,
   Loader2, Megaphone, Package, Pause, Pencil, Play, ShoppingBag, Square,
-  Tag, X, XCircle, Zap, Wifi, WifiOff,
+  X, XCircle, Zap, Wifi, WifiOff,
 } from 'lucide-react';
 import MarketPriceCell from '@/components/products/MarketPriceCell';
 
@@ -472,6 +472,14 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
             <CampaignDropdown product={product} />
           </div>
         </div>
+      </td>
+      <td className="px-4 py-3 text-xs">
+        {product?._economics?.costs_confirmed_by_user || product?.cost_confirmed ? (
+          <div>
+            <p className="font-semibold text-slate-300">{formatBRL(product?._economics?.unit_cost ?? product?.product_cost ?? 0)}</p>
+            <p className="text-[9px] text-slate-600">confirmado pelo usuário</p>
+          </div>
+        ) : <span className="text-amber-400">Pendente</span>}
       </td>
       <td className="px-4 py-3"><OfferStatusBadge product={product} /></td>
       <td className="px-4 py-3"><CampaignStatusCell product={product} /></td>

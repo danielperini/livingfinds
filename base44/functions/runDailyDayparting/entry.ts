@@ -58,7 +58,7 @@ Deno.serve(async (req) => {
     }
 
     const accountRows = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1);
     const account = accountRows[0];
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
@@ -68,11 +68,11 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 2000).catch(() => []),
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
       base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
       base44.asServiceRole.entities.HourlyMetric.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
-      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 10000).catch(() => []),
+      base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, undefined, 10000).catch(() => []),
       base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid, decision_type: 'dayparting_rule' }, '-created_at', 2000).catch(() => []),
     ]);
     const config = configRows[0] || {};
@@ -88,7 +88,7 @@ Deno.serve(async (req) => {
     const assessmentByAsin = latestAssessments(assessments);
     const hourlyByCampaign = new Map<string, any[]>();
     for (const row of hourlyRows) {
-      if (!row.campaign_id || String(row.date || '') < cutoff || normalizeState(row.data_maturity) === 'provisional') continue;
+      if (!row.campaign_id || String(row.date || '') < cutoff || normalizeState(row.data_maturity) !== 'mature' || row.attribution_scope !== 'same_sku') continue;
       const id = String(row.campaign_id);
       const list = hourlyByCampaign.get(id) || [];
       list.push(row);
@@ -140,9 +140,9 @@ Deno.serve(async (req) => {
         const rows = hourlyByCampaign.get(campaignId) || [];
         const days = new Set(rows.filter((row: any) => numberValue(row.impressions) > 0).map((row: any) => row.date)).size;
         const totalClicks = rows.reduce((sum: number, row: any) => sum + numberValue(row.clicks), 0);
-        const totalOrders = rows.reduce((sum: number, row: any) => sum + numberValue(row.orders), 0);
+        const totalOrders = rows.reduce((sum: number, row: any) => sum + numberValue(row.promoted_orders), 0);
         const totalSpend = rows.reduce((sum: number, row: any) => sum + numberValue(row.spend), 0);
-        const totalSales = rows.reduce((sum: number, row: any) => sum + numberValue(row.sales), 0);
+        const totalSales = rows.reduce((sum: number, row: any) => sum + numberValue(row.promoted_sales), 0);
         if (days < MIN_DAYS_WITH_DATA || totalClicks < MIN_TOTAL_CLICKS) {
           stats.skipped++;
           continue;
@@ -162,9 +162,9 @@ Deno.serve(async (req) => {
           const hour = Number(row.hour);
           if (!Number.isInteger(hour) || hour < 0 || hour > 23) continue;
           matrix[hour].clicks += numberValue(row.clicks);
-          matrix[hour].orders += numberValue(row.orders);
+          matrix[hour].orders += numberValue(row.promoted_orders);
           matrix[hour].spend += numberValue(row.spend);
-          matrix[hour].sales += numberValue(row.sales);
+          matrix[hour].sales += numberValue(row.promoted_sales);
           matrix[hour].impressions += numberValue(row.impressions);
           if (row.date) matrix[hour].days.add(String(row.date));
         }

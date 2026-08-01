@@ -231,6 +231,188 @@
       "type": "number",
       "default": 0
     },
+    "costs_confirmed_by_user": {
+      "type": "boolean",
+      "default": false,
+      "description": "Confirma que os custos unitários foram informados ou validados pelo usuário; sincronizações Amazon nunca alteram estes valores."
+    },
+    "amazon_fixed_fee": {
+      "type": "number"
+    },
+    "fba_fee": {
+      "type": "number"
+    },
+    "estimated_return_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "estimated_ads_cost_per_order": {
+      "type": "number"
+    },
+    "ads_cost_source": {
+      "type": "string"
+    },
+    "ads_cost_verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fees_verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "minimum_margin_pct": {
+      "type": "number",
+      "default": 15,
+      "minimum": 15
+    },
+    "target_margin_pct": {
+      "type": "number",
+      "default": 20,
+      "minimum": 15
+    },
+    "manual_min_price": {
+      "type": "number"
+    },
+    "manual_max_price": {
+      "type": "number"
+    },
+    "repricing_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "repricing_requested": {
+      "type": "boolean",
+      "default": false,
+      "description": "Preferência persistente do usuário. A execução só é habilitada quando todos os dados econômicos reais estiverem completos."
+    },
+    "repricing_status": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "recommendation",
+        "eligible",
+        "pending",
+        "submitted",
+        "confirmed",
+        "blocked",
+        "failed"
+      ],
+      "default": "disabled"
+    },
+    "repricing_block_reason": {
+      "type": "string"
+    },
+    "minimum_profitable_price": {
+      "type": "number"
+    },
+    "target_margin_price": {
+      "type": "number"
+    },
+    "suggested_price": {
+      "type": "number"
+    },
+    "last_observed_amazon_price": {
+      "type": "number"
+    },
+    "current_margin_pct": {
+      "type": "number"
+    },
+    "projected_margin_pct": {
+      "type": "number"
+    },
+    "projected_unit_profit": {
+      "type": "number"
+    },
+    "expected_daily_units": {
+      "type": "number"
+    },
+    "expected_daily_profit": {
+      "type": "number"
+    },
+    "economic_data_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "economic_data_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_by": {
+      "type": "string"
+    },
+    "product_type": {
+      "type": "string"
+    },
+    "currency_code": {
+      "type": "string"
+    },
+    "seller_fulfillment_type": {
+      "type": "string"
+    },
+    "featured_offer_price": {
+      "type": "number"
+    },
+    "featured_offer_expected_price": {
+      "type": "number"
+    },
+    "competitor_median_price": {
+      "type": "number"
+    },
+    "competitor_offer_count": {
+      "type": "number",
+      "default": 0
+    },
+    "competitor_offers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "competition_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "competition_source": {
+      "type": "string"
+    },
+    "elasticity": {
+      "type": "number"
+    },
+    "elasticity_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "elasticity_observations": {
+      "type": "number",
+      "default": 0
+    },
+    "last_repricing_decision_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_price_change_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_price_confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "decision_reason": {
+      "type": "string"
+    },
+    "decision_evidence": {
+      "type": "object"
+    },
+    "economic_conflict": {
+      "type": "boolean",
+      "default": false
+    },
     "import_batch_id": {
       "type": "string"
     },

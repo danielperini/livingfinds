@@ -8,6 +8,24 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
+      "name": "Fresh same-SKU search-term report - every 3 hours",
+      "function": "refreshSameSkuSearchTermReports",
+      "cron": "22 */3 * * *",
+      "payload": { "_service_role": true, "force_new": true, "trigger_type": "scheduler_intraday" }
+    },
+    {
+      "name": "Immediate same-SKU term harvest self-heal - every 20 minutes",
+      "function": "runImmediateSameSkuSearchTermHarvest",
+      "cron": "4,24,44 * * * *",
+      "payload": { "_service_role": true, "max_promotions": 25, "lookback_days": 15, "trigger_type": "scheduler_self_heal" }
+    },
+    {
+      "name": "Repair incomplete search-term promotions - every 30 minutes",
+      "function": "completeIncompleteWeeklyPromotions",
+      "cron": "11,41 * * * *",
+      "payload": { "_service_role": true, "max_promotions": 5 }
+    },
+    {
       "name": "Scheduled bid and dayparting executor - every 10 minutes",
       "function": "runScheduledBidAdjustments",
       "cron": "*/10 * * * *",
@@ -228,6 +246,30 @@
       "function": "runIntraDayPacingCycle",
       "cron": "0 6,13,19,22 * * *",
       "payload": { "_service_role": true, "checkpoint": true, "source_function": "scheduler_full_checkpoint" }
+    },
+    {
+      "name": "Repricing monitor - every 15 minutes",
+      "function": "runAutomaticRepricing",
+      "cron": "7,22,37,52 * * * *",
+      "payload": { "_service_role": true, "operation": "evaluate", "max_products": 50 }
+    },
+    {
+      "name": "Repricing price queue - every 5 minutes",
+      "function": "runAutomaticRepricing",
+      "cron": "*/5 * * * *",
+      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20 }
+    },
+    {
+      "name": "Repricing full economics - every 6 hours",
+      "function": "runAutomaticRepricing",
+      "cron": "13 */6 * * *",
+      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200 }
+    },
+    {
+      "name": "Repricing daily reconciliation - 04:43 BRT",
+      "function": "runAutomaticRepricing",
+      "cron": "43 4 * * *",
+      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100 }
     },
     {
       "name": "Final daily reports reconciliation - 23:45 BRT",
