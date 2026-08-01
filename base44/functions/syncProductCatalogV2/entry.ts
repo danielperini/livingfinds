@@ -1,9 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { normalizeSku } from '../../shared/repricingPolicy.ts';
 
 let tokenCache:any = null;
 const num = (v:any) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const stockState = (qty:number) => qty > 5 ? 'in_stock' : qty > 0 ? 'low_stock' : 'out_of_stock';
-const normSku = (value:any) => String(value || '').trim().toUpperCase().replace(/\s+/g, '');
+const normSku = normalizeSku;
 
 async function token() {
   if (tokenCache?.expiresAt > Date.now()) return tokenCache.value;
@@ -14,6 +15,7 @@ async function token() {
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refresh, client_id: client, client_secret: secret }),
+    signal: AbortSignal.timeout(15000),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.access_token) throw new Error(data.error_description || data.error || 'Falha no token SP-API');
@@ -69,36 +71,54 @@ Deno.serve(async (req) => {
     } while (nextToken);
 
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: body.amazon_account_id }, '-created_date', 5000);
-    const byAsin = new Map(products.map((p:any) => [String(p.asin || '').toUpperCase(), p]));
-    const bySku = new Map(products.filter((p:any) => p.sku).map((p:any) => [normSku(p.sku), p]));
-    let created = 0, updated = 0, corrected = 0, pendingCostConfirmation = 0;
+    const byAsin = new Map<string, any[]>();
+    const bySku = new Map<string, any[]>();
+    for (const product of products) {
+      const asinKey = String(product.asin || '').trim().toUpperCase();
+      const skuKey = normSku(product.sku);
+      if (asinKey) byAsin.set(asinKey, [...(byAsin.get(asinKey) || []), product]);
+      if (skuKey) bySku.set(skuKey, [...(bySku.get(skuKey) || []), product]);
+    }
+    let created = 0, updated = 0, corrected = 0, pendingCostConfirmation = 0, mappingConflicts = 0, markedAbsent = 0;
     const now = new Date().toISOString();
+    const seenProductIds = new Set<string>();
 
     for (const item of items) {
       if (!item?.asin) continue;
       const asin = String(item.asin).trim().toUpperCase();
       const sku = item.sellerSku || null;
+      const skuKey = normSku(sku);
       const details = item.inventoryDetails || {};
       const available = num(details.fulfillableQuantity);
       const total = num(item.totalQuantity);
-      const qty = Math.max(available, total);
-      const existing:any = byAsin.get(asin) || bySku.get(normSku(sku));
+      const skuMatches = skuKey ? bySku.get(skuKey) || [] : [];
+      const asinMatches = byAsin.get(asin) || [];
+      if (skuMatches.length > 1) {
+        mappingConflicts++;
+        continue;
+      }
+      // SKU do seller é a identidade canônica. ASIN só é fallback quando a
+      // Amazon não retorna sellerSku e existe um único produto para o ASIN.
+      const existing:any = skuMatches[0] || (!skuKey && asinMatches.length === 1 ? asinMatches[0] : null);
+      if (existing?.id) seenProductIds.add(existing.id);
       const patch:any = {
         amazon_account_id: body.amazon_account_id,
         asin, sku: sku || existing?.sku || null,
-        fba_inventory: qty,
+        previous_inventory_status: existing?.inventory_status || null,
+        previous_fba_inventory: num(existing?.fba_inventory),
+        fba_inventory: total,
         available_quantity: available,
         total_quantity: total,
         reserved_inventory: num(details?.reservedQuantity?.totalReservedQuantity),
         inbound_inventory: num(details.inboundWorkingQuantity) + num(details.inboundShippedQuantity) + num(details.inboundReceivingQuantity),
-        inventory_status: stockState(qty),
-        status: qty > 0 ? 'active' : (existing?.status || 'inactive'),
+        inventory_status: stockState(available),
+        status: available > 0 ? 'active' : 'inactive',
         catalog_sync_status: 'success', synced_at: now, last_catalog_sync_at: now,
       };
       if (!existing?.cost_confirmed) pendingCostConfirmation++;
 
       if (existing) {
-        if (existing.inventory_status === 'out_of_stock' && qty > 0) corrected++;
+        if (existing.inventory_status === 'out_of_stock' && available > 0) corrected++;
         // Nunca altera custos ou confirmações informados pelo usuário.
         await base44.asServiceRole.entities.Product.update(existing.id, patch);
         updated++;
@@ -118,10 +138,29 @@ Deno.serve(async (req) => {
           keyword_confidence_threshold: 0.95,
           auto_campaign_eligible: false,
         });
-        byAsin.set(asin, createdProduct);
-        if (sku) bySku.set(normSku(sku), createdProduct);
+        byAsin.set(asin, [...(byAsin.get(asin) || []), createdProduct]);
+        if (skuKey) bySku.set(skuKey, [...(bySku.get(skuKey) || []), createdProduct]);
+        if (createdProduct?.id) seenProductIds.add(createdProduct.id);
         created++;
       }
+    }
+
+    for (const product of products) {
+      if (!product?.id || product.status === 'archived' || seenProductIds.has(product.id)) continue;
+      await base44.asServiceRole.entities.Product.update(product.id, {
+        previous_inventory_status: product.inventory_status || null,
+        previous_fba_inventory: num(product.fba_inventory),
+        fba_inventory: 0,
+        available_quantity: 0,
+        total_quantity: 0,
+        inventory_status: 'out_of_stock',
+        status: 'inactive',
+        catalog_sync_status: 'not_found',
+        catalog_sync_error: 'SKU ausente na resposta completa da FBA Inventory API.',
+        synced_at: now,
+        last_catalog_sync_at: now,
+      }).catch(() => {});
+      markedAbsent++;
     }
 
     const completedAt = new Date().toISOString();
@@ -129,7 +168,7 @@ Deno.serve(async (req) => {
       amazon_account_id: body.amazon_account_id,
       operation: 'sync_product_catalog_v2', status: 'success', trigger_type: body.trigger_type || 'manual',
       started_at: startedAt, completed_at: completedAt, records_processed: created + updated,
-      result_summary: JSON.stringify({ pages, inventory_asins: items.length, created, updated, corrected, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation }).slice(0, 4000),
+      result_summary: JSON.stringify({ pages, inventory_asins: items.length, created, updated, corrected, marked_absent: markedAbsent, mapping_conflicts: mappingConflicts, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation }).slice(0, 4000),
     }).catch(() => {});
 
     // Sinalizar dado fresco de SP-API para todas as páginas
@@ -138,7 +177,7 @@ Deno.serve(async (req) => {
       last_sync_at: completedAt,
     }).catch(() => {});
 
-    return Response.json({ ok: true, pages, inventory_asins: items.length, created, updated, corrected_from_out_of_stock: corrected, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation });
+    return Response.json({ ok: true, pages, inventory_asins: items.length, created, updated, marked_absent: markedAbsent, mapping_conflicts: mappingConflicts, corrected_from_out_of_stock: corrected, costs_preserved: true, pending_cost_confirmation: pendingCostConfirmation });
   } catch (error:any) {
     return Response.json({ ok: false, error: error?.message || 'Erro de sincronização' }, { status: 500 });
   }

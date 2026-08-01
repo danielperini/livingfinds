@@ -45,6 +45,7 @@ export type RepricingDecisionInput = {
   currentPrice: number;
   featuredOfferPrice?: number | null;
   featuredOfferExpectedPrice?: number | null;
+  referenceAveragePrice?: number | null;
   competitorOffers?: CompetitorOffer[];
   competitionFresh: boolean;
   sellerFulfillmentType?: string | null;
@@ -306,10 +307,12 @@ export function equivalentCompetitorOffers(
     ? sameCondition.filter((offer) =>
       String(offer.fulfillmentType || "").toUpperCase() === requestedFulfillment
     )
-    : [];
-  const deliveryEquivalent =
-    (sameFulfillment.length ? sameFulfillment : sameCondition)
-      .filter((offer) => offer.deliveryEquivalent !== false);
+    : sameCondition;
+  // Falha fechada: uma oferta MFN nunca vira referência para nosso SKU FBA
+  // (ou vice-versa) apenas porque não houve oferta do mesmo fulfillment.
+  const deliveryEquivalent = sameFulfillment.filter((offer) =>
+    offer.deliveryEquivalent !== false
+  );
   const center = median(
     deliveryEquivalent.map((offer) => Number(offer.totalPrice)),
   );
@@ -382,6 +385,20 @@ export function decideRepricing(input: RepricingDecisionInput) {
       confidence: 0,
     };
   }
+  if (!finite(input.stock) || Number(input.stock) <= 0) {
+    return {
+      blocked: true,
+      blockReasons: ["Produto sem estoque vendável confirmado."],
+      suggestedPrice: null,
+      candidates: [] as PriceCandidate[],
+      minimumProfitablePrice: validation.minimumProfitablePrice,
+      targetMarginPrice: validation.targetMarginPrice,
+      currentEconomics: current,
+      decisionReason: "Produto sem estoque; preço atual preservado.",
+      emergencyMarginRecovery: false,
+      confidence: 0,
+    };
+  }
 
   const minimumAllowed = Math.max(
     validation.minimumProfitablePrice,
@@ -423,6 +440,7 @@ export function decideRepricing(input: RepricingDecisionInput) {
     add(input.featuredOfferExpectedPrice, "featured_offer_expected_price");
     add(input.featuredOfferPrice, "featured_offer_price");
     add(competitorMedian, "equivalent_competitor_median");
+    add(input.referenceAveragePrice, "amazon_reference_price_average");
   }
 
   const lowStock = input.stock > 0 &&

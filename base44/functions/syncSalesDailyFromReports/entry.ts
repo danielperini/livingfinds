@@ -27,6 +27,18 @@ Deno.serve(async (req) => {
       return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
 
+    // BLOQUEIO DE INTEGRIDADE: vendas atribuídas da Ads API não são faturamento
+    // real da SP-API. Esta rotina legada apagava dados reais antes de gravar proxies.
+    // Mantida apenas como adaptador auditável para não quebrar orquestradores antigos.
+    return Response.json({
+      ok: true,
+      skipped: true,
+      blocked_by: 'SALES_DAILY_REAL_REVENUE_ONLY',
+      records_saved: 0,
+      message: 'Rotina legada desativada: AdsReportRaw não pode escrever nem apagar SalesDaily. Use syncProductSalesMetrics ou syncFinanceEventsFromSpApi.',
+    });
+
+    /* legacy implementation intentionally unreachable; preserved temporarily for audit
     // Resolver conta
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
       { status: 'connected' }, '-updated_date', 1
@@ -165,6 +177,7 @@ Deno.serve(async (req) => {
       message: `${saved} registros SalesDaily atualizados a partir dos relatórios baixados`,
     });
 
+    */
   } catch (error: any) {
     console.error('[syncSalesDailyFromReports]', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });

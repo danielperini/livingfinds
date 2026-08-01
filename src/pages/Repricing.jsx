@@ -13,12 +13,30 @@ import {
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
-const money = value => Number.isFinite(Number(value))
+const finiteNumber = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+
+const money = value => finiteNumber(value)
   ? Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
   : '—';
 
-const brazilDay = (value = Date.now()) =>
-  new Date(new Date(value).getTime() - 3 * 3600000).toISOString().slice(0, 10);
+const brazilDay = (value = Date.now()) => {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const normalizeSku = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '-').replace(/-{2,}/g, '-');
+
+const isOperationalConfirmation = item => item.history_type === 'price_confirmed'
+  && item.status === 'confirmed'
+  && finiteNumber(item.price_before) && Number(item.price_before) > 0
+  && finiteNumber(item.price_after) && Number(item.price_after) > 0
+  && Math.abs(Number(item.price_after) - Number(item.price_before)) >= 0.01
+  && item.amazon_response != null;
 
 const time = value => value
   ? new Date(value).toLocaleTimeString('pt-BR', {
@@ -66,6 +84,7 @@ export default function Repricing() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [source, setSource] = useState('all');
+  const [showAudit, setShowAudit] = useState(false);
   const costFileRef = useRef(null);
 
   useEffect(() => {
@@ -96,7 +115,7 @@ export default function Repricing() {
     try {
       const [historyRows, productRows] = await Promise.all([
         base44.entities.ProductEconomicsHistory.filter(
-          { amazon_account_id: accountId, history_type: 'price_confirmed' },
+          { amazon_account_id: accountId },
           '-changed_at',
           2000,
         ),
@@ -143,6 +162,7 @@ export default function Repricing() {
       const response = await base44.functions.invoke('importProductEconomics', {
         amazon_account_id: accountId,
         file_url: upload.file_url,
+        original_file_name: file.name,
         enable_repricing_for_active: true,
         run_decision_engine: true,
         refresh_amazon_status: true,
@@ -163,7 +183,7 @@ export default function Repricing() {
     const map = new Map();
     for (const product of products) {
       if (product.id) map.set(`id:${product.id}`, product);
-      if (product.sku) map.set(`sku:${String(product.sku).trim().toUpperCase()}`, product);
+      if (product.sku) map.set(`sku:${normalizeSku(product.sku)}`, product);
       if (product.asin) map.set(`asin:${String(product.asin).trim().toUpperCase()}`, product);
     }
     return map;
@@ -173,17 +193,16 @@ export default function Repricing() {
     const seen = new Set();
     return history
     .filter(item => brazilDay(item.changed_at) === selectedDate)
-    .filter(item => Number(item.price_before) > 0 && Number(item.price_after) > 0)
-    .filter(item => Math.abs(Number(item.price_after) - Number(item.price_before)) >= 0.01)
+    .filter(isOperationalConfirmation)
     .filter(item => {
-      const key = String(item.normalized_sku || item.sku || item.asin || item.product_id || item.id).trim().toUpperCase();
+      const key = normalizeSku(item.normalized_sku || item.sku || item.asin || item.product_id || item.id);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     })
     .map(item => {
       const product = productIndex.get(`id:${item.product_id}`) ||
-        productIndex.get(`sku:${String(item.sku || '').trim().toUpperCase()}`) ||
+        productIndex.get(`sku:${normalizeSku(item.sku)}`) ||
         productIndex.get(`asin:${String(item.asin || '').trim().toUpperCase()}`) || {};
       return {
         ...item,
@@ -201,6 +220,10 @@ export default function Repricing() {
     });
   }, [history, productIndex, search, selectedDate, source]);
 
+  const auditRows = useMemo(() => history
+    .filter(item => brazilDay(item.changed_at) === selectedDate)
+    .filter(item => !isOperationalConfirmation(item)), [history, selectedDate]);
+
   const summary = useMemo(() => ({
     total: rows.length,
     increases: rows.filter(row => Number(row.percent) > 0).length,
@@ -215,10 +238,10 @@ export default function Repricing() {
           <div className="flex items-center gap-2"><Tag className="h-5 w-5 text-cyan" /><h1 className="text-xl font-bold text-white">Repricing</h1></div>
           <p className="mt-1 text-xs text-slate-500">Preços alterados e confirmados na Amazon. O painel não exibe recomendações ainda não publicadas.</p>
         </div>
-        <div className="flex flex-wrap gap-2"><input ref={costFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={importCostSpreadsheet} className="hidden" /><button onClick={() => costFileRef.current?.click()} disabled={importingCosts || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 disabled:opacity-50">{importingCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{importingCosts ? 'Importando e recalculando...' : 'Importar custos e executar motor'}</button><button onClick={checkAmazonConnection} disabled={checkingConnection || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-2 text-xs font-semibold text-cyan disabled:opacity-50">{checkingConnection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}Testar conexão Amazon</button><button onClick={load} disabled={loading || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-surface-3 px-3 py-2 text-xs text-slate-300 hover:bg-surface-2 disabled:opacity-50">{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Atualizar painel</button></div>
+      <div className="flex flex-wrap gap-2"><input ref={costFileRef} type="file" accept=".xlsx,.xls,.csv" onChange={importCostSpreadsheet} className="hidden" /><button onClick={() => costFileRef.current?.click()} disabled={importingCosts || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-400 disabled:opacity-50">{importingCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{importingCosts ? 'Importando dados...' : 'Importar planilha econômica'}</button><button onClick={checkAmazonConnection} disabled={checkingConnection || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan/30 bg-cyan/10 px-3 py-2 text-xs font-semibold text-cyan disabled:opacity-50">{checkingConnection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bot className="h-3.5 w-3.5" />}Testar conexão Amazon</button><button onClick={load} disabled={loading || !accountId} className="inline-flex items-center justify-center gap-2 rounded-lg border border-surface-3 px-3 py-2 text-xs text-slate-300 hover:bg-surface-2 disabled:opacity-50">{loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}Atualizar painel</button></div>
       </div>
 
-      {importResult && <section className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" /><div><h2 className="text-sm font-bold text-emerald-400">Custos importados e motor acionado</h2><p className="mt-1 text-xs text-slate-400">{importResult.active_updated || 0} ativos verificados pela Amazon · {importResult.inactive_updated || 0} inativos/sem estoque mantidos sem repricing · {importResult.unmatched || 0} SKUs não encontrados · {importResult.errors || 0} erros.</p><p className="mt-1 text-[10px] text-slate-500">Status e estoque foram atualizados pela FBA Inventory API. Listings Items confirma depois se cada oferta está ativa e comprável. Os custos também atualizaram os limites econômicos usados pelo motor de Ads.</p></div></div></section>}
+      {importResult && <section className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4"><div className="flex items-start gap-3"><CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" /><div><h2 className="text-sm font-bold text-emerald-400">Custos importados e motor acionado</h2><p className="mt-1 text-xs text-slate-400">{importResult.processed || 0} linhas lidas · {importResult.created || 0} criadas · {importResult.updated || 0} atualizadas · {importResult.active_updated || 0} ativas verificadas pela Amazon · {importResult.inactive_updated || 0} inativas/sem estoque mantidas sem repricing · {importResult.unmatched || 0} SKUs não encontrados · {importResult.errors || 0} erros.</p><p className="mt-1 text-[10px] text-slate-500">O motor foi acionado somente após a importação válida; toda publicação continua sujeita à margem, confiança, teto móvel e confirmação da Amazon.</p>{importResult.amazon_status_warning && <p className="mt-2 text-xs text-amber-400">Status Amazon não confirmado: {importResult.amazon_status_warning} Os custos foram preservados e o repricing ficou bloqueado.</p>}{importResult.decision_engine?.ok === false && <p className="mt-2 text-xs text-amber-400">Custos salvos, mas o motor reportou: {importResult.decision_engine.error || 'falha não detalhada'}.</p>}{(importResult.processed || 0) === 0 && <p className="mt-2 text-xs font-semibold text-amber-400">Nenhuma linha válida foi extraída. Confira os detalhes da importação antes de considerar o processo concluído.</p>}{Array.isArray(importResult.error_details) && importResult.error_details.length > 0 && <details className="mt-3 text-xs text-amber-300"><summary className="cursor-pointer font-semibold">Exibir erros por SKU</summary><ul className="mt-2 space-y-1">{importResult.error_details.slice(0, 20).map((item, index) => <li key={`${item.sku || 'linha'}-${index}`}><span className="font-mono">{item.sku || 'SKU ausente'}</span>: {item.error}</li>)}</ul>{importResult.error_details.length > 20 && <p className="mt-2 text-slate-500">Mais {importResult.error_details.length - 20} erro(s) não exibidos.</p>}</details>}</div></div></section>}
 
       {connection && <section className={`rounded-xl border p-4 ${connection.connected ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-red-500/20 bg-red-500/5'}`}><div className="flex items-start gap-3">{connection.connected ? <CheckCircle2 className="mt-0.5 h-5 w-5 text-emerald-400" /> : <Tag className="mt-0.5 h-5 w-5 text-red-400" />}<div className="min-w-0"><h2 className={`text-sm font-bold ${connection.connected ? 'text-emerald-400' : 'text-red-400'}`}>{connection.connected ? 'Repricing conectado à Amazon SP-API' : 'Conexão SP-API incompleta'}</h2><p className="mt-1 text-xs text-slate-400">{connection.message || (connection.connected ? 'OAuth, Listings Items e Product Pricing foram validados sem alterar preços.' : 'Confira os detalhes abaixo.')}</p>{connection.checks && <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">{Object.entries(connection.checks).map(([name, check]) => <div key={name} className="rounded-lg border border-surface-3 bg-surface-1/60 p-2"><p className="text-[10px] font-semibold uppercase text-slate-500">{name}</p><p className={`mt-1 text-[10px] ${check.ok ? 'text-emerald-400' : check.skipped ? 'text-amber-400' : 'text-red-400'}`}>{check.message}</p></div>)}</div>}</div></div></section>}
 
@@ -269,6 +292,14 @@ export default function Repricing() {
             {!rows.length && !error && <div className="py-16 text-center"><Tag className="mx-auto h-7 w-7 text-slate-700" /><p className="mt-3 text-sm text-slate-400">Nenhum preço confirmado nesta data.</p><p className="mt-1 text-xs text-slate-600">Recomendações e ações pendentes não são contabilizadas como alteração.</p></div>}
           </div>
         )}
+      </section>
+
+      <section className="rounded-xl border border-surface-2 bg-surface-1">
+        <button type="button" onClick={() => setShowAudit(value => !value)} className="flex w-full items-center justify-between p-4 text-left">
+          <span><span className="text-sm font-semibold text-slate-300">Auditoria de registros não operacionais</span><span className="ml-2 text-xs text-amber-400">{auditRows.length}</span><span className="mt-1 block text-[10px] text-slate-500">Pendências, falhas, bloqueios, recomendações e legados inconsistentes continuam localizáveis, mas não contam como preço alterado.</span></span>
+          <span className="text-xs text-cyan">{showAudit ? 'Ocultar' : 'Exibir'}</span>
+        </button>
+        {showAudit && <div className="overflow-x-auto border-t border-surface-2"><table className="w-full text-xs"><thead><tr className="bg-surface-2/40 text-left text-[10px] uppercase text-slate-500">{['Horário', 'SKU', 'Tipo', 'Status', 'Antes', 'Depois', 'Motivo'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead><tbody>{auditRows.map(item => <tr key={item.id} className="border-t border-surface-2/50"><td className="px-4 py-3 text-slate-500">{time(item.changed_at)}</td><td className="px-4 py-3 font-mono text-cyan">{item.sku || '—'}</td><td className="px-4 py-3 text-slate-400">{item.history_type || 'legado'}</td><td className="px-4 py-3 text-amber-400">{item.status || 'inconsistente'}</td><td className="px-4 py-3 text-slate-500">{money(item.price_before)}</td><td className="px-4 py-3 text-slate-500">{money(item.price_after)}</td><td className="max-w-[420px] px-4 py-3 text-slate-500">{item.reason || item.decision_reason || 'Sem motivo registrado.'}</td></tr>)}</tbody></table>{!auditRows.length && <p className="p-4 text-xs text-slate-500">Nenhum registro não operacional nesta data.</p>}</div>}
       </section>
     </div>
   );

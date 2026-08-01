@@ -133,6 +133,16 @@
       ],
       "default": "system"
     },
+    "lifecycle_stage": {
+      "type": "string",
+      "enum": ["proposal", "shadow", "canary", "deterministic", "rejected"],
+      "default": "proposal"
+    },
+    "shadow_started_at": { "type": "string", "format": "date-time" },
+    "shadow_samples": { "type": "number", "default": 0 },
+    "shadow_profit_delta_pct": { "type": "number" },
+    "shadow_acos_delta_pp": { "type": "number" },
+    "central_goal_snapshot": { "type": "object" },
     "created_by": {
       "type": "string"
     }

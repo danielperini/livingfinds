@@ -188,12 +188,21 @@ export type HourlyProfitInput = {
   breakEvenAcos: number | null;
   targetAcos: number | null;
   attributionConfidence?: AttributionConfidence;
+  minimumPresenceHour?: boolean;
+  minimumPresenceDailySpend?: number;
+  minimumPresenceDailyCap?: number;
 };
 
 export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause' | 'enable' | 'hold'; code: string; reason: string } {
   const economicsAvailable = input.maximumProfitableSpend > 0 || Boolean(input.breakEvenAcos && input.breakEvenAcos > 0);
   if (!economicsAvailable) {
     return { action: 'hold', code: 'HOUR_ECONOMICS_MISSING', reason: 'Economia não validada; não alterar estado por horário.' };
+  }
+  if (input.minimumPresenceHour) {
+    if (input.minimumPresenceDailyCap && Number(input.minimumPresenceDailySpend || 0) >= input.minimumPresenceDailyCap) {
+      return { action: 'pause', code: 'MINIMUM_PRESENCE_CAP_REACHED', reason: `Teto diário econômico de R$${input.minimumPresenceDailyCap.toFixed(2)} atingido.` };
+    }
+    return { action: 'enable', code: 'MINIMUM_PRESENCE_SAFE_WINDOW', reason: 'Janela mínima de duas horas escolhida por eficiência histórica e limitada pelo teto econômico do SKU.' };
   }
   if (input.attributionConfidence !== 'complete') {
     return { action: 'hold', code: 'HOUR_ATTRIBUTION_OPEN', reason: 'Janela de atribuição horária ainda aberta ou sem separação same-SKU; manter estado.' };

@@ -14,6 +14,8 @@
  * 6. Libera lock
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
+import { evaluateAiRuleCandidate } from '../../shared/aiRuleLifecyclePolicy.ts';
 
 // ── Configuração central do modelo ──────────────────────────────────────────
 // ALTERAR APENAS AQUI para trocar o modelo de revisão semanal.
@@ -433,10 +435,11 @@ Deno.serve(async (req) => {
 
   try {
     // Auth e conta
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    if (!body._service_role) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     let account = null;
     if (body.amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
@@ -478,7 +481,7 @@ Deno.serve(async (req) => {
     });
 
     // ── Coleta de dataset ──────────────────────────────────────────────────
-    const [keywords, campaigns, products, metrics90d, searchTerms, existingRules, recentExecutions] = await Promise.all([
+    const [keywords, campaigns, products, metrics90d, searchTerms, existingRules, recentExecutions, performanceRows] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 200),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
@@ -486,6 +489,7 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid }, '-orders_14d', 300),
       base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' }),
       base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 200),
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
     ]);
 
     const metrics30d = metrics90d.filter(m => m.date >= daysAgo(30));
@@ -518,6 +522,17 @@ Deno.serve(async (req) => {
     const agg7d = aggregateMetrics(metrics7d);
     const agg30d = aggregateMetrics(metrics30d);
     const agg90d = aggregateMetrics(metrics90d);
+    const performance = performanceRows[0] || {};
+    const acos7d = agg7d.sales > 0 ? agg7d.spend / agg7d.sales * 100 : null;
+    const centralGoals = evaluateCentralGoals({
+      targetAcos: performance.target_acos, maximumAcos: performance.max_acos,
+      targetRoas: performance.target_roas, targetTacos: performance.target_tacos,
+      maximumCpc: performance.max_cpc, dailyBudget: performance.daily_budget_limit,
+      acos: acos7d, roas: agg7d.spend > 0 ? agg7d.sales / agg7d.spend : null,
+      tacos: performance.current_tacos_7d, cpc: agg7d.clicks > 0 ? agg7d.spend / agg7d.clicks : null,
+      spend: agg7d.spend / 7, profitPositive: performance.profit_positive_7d !== false,
+      dataComplete: metrics7d.length >= 7,
+    });
 
     const totalActiveBudget = campaigns
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
@@ -525,7 +540,7 @@ Deno.serve(async (req) => {
 
     const dataset = {
       account: { marketplace: account.marketplace_id, country: account.country_code, currency: account.currency_code },
-      aggregates: { last_7d: agg7d, last_30d: agg30d, last_90d: agg90d },
+      aggregates: { last_7d: agg7d, last_30d: agg30d, last_90d: agg90d }, central_goals: centralGoals,
       total_active_budget: totalActiveBudget,
       active_campaigns: campaigns.filter(c => c.state === 'enabled' || c.status === 'enabled').length,
       keywords_sample: sanitizedKeywords.slice(0, 200),
@@ -654,8 +669,10 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         period_days: 30,
       }).catch(() => {});
 
-      if (!bt.passed) {
-        rejectedRules.push({ rule_key: rule.rule_key, reasons: bt.rejection_reasons, risk_level: bt.risk_level });
+      const holdout = await backtestProposedRule(base44, rule, aid, sanitizedKeywords, metrics7d);
+      const lifecycle = evaluateAiRuleCandidate({ action: rule.action?.type, confidence: rule.confidence, backtestPassed: bt.passed, holdoutPassed: holdout.passed, centralMode: centralGoals.mode, expectedProfitChangePct: Number(rule.expected_result?.profit_change_percent || claudeResponse.expected_impact?.profit_change_percent || 0), hasRollback: Boolean(rule.rollback_condition) });
+      if (!lifecycle.eligible) {
+        rejectedRules.push({ rule_key: rule.rule_key, reasons: [...bt.rejection_reasons, ...holdout.rejection_reasons, ...lifecycle.reasons], risk_level: bt.risk_level });
         continue;
       }
 
@@ -664,6 +681,9 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
 
     // Validar e processar atualizações de regras existentes
     for (const update of rulesToUpdate) {
+      rejectedRules.push({ rule_key: update.rule_key || '(sem chave)', reasons: ['ACTIVE_RULE_UPDATE_REQUIRES_NEW_SHADOW_VERSION'] });
+      continue;
+      /* legacy in-place update intentionally unreachable
       if (!update.rule_key) { rejectedRules.push({ rule_key: '(sem chave)', reasons: ['rule_key ausente na atualização'] }); continue; }
       // Encontrar regra existente
       const found = existingRules.find(r => r.rule_key === update.rule_key);
@@ -685,6 +705,7 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         continue;
       }
       approvedUpdates.push({ existing_id: found.id, ...update });
+      */
     }
 
     // ── Publicar nova versão de regras ────────────────────────────────────
@@ -716,7 +737,10 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
           source_metrics: rule.source_metrics,
           rollback_condition: rule.rollback_condition,
           expires_at: rule.expires_at,
-          status: 'active',
+          status: 'validating',
+          lifecycle_stage: 'shadow',
+          shadow_started_at: new Date().toISOString(),
+          central_goal_snapshot: centralGoals,
           is_protected: false,
           version: nextVersion,
           review_id: reviewId,
@@ -740,18 +764,10 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
       }
 
       // Regras a desativar
-      const disabledKeys = (claudeResponse.rules_to_disable || []).map(r => r.rule_key || r);
-      for (const rk of disabledKeys) {
-        const found = await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, rule_key: rk, status: 'active' });
-        if (found[0]) await base44.asServiceRole.entities.DecisionRule.update(found[0].id, { status: 'suspended', effective_until: new Date().toISOString() });
-      }
+      const disabledKeys: string[] = [];
 
       // Versionar versões ativas anteriores
-      if (versions[0]) {
-        await base44.asServiceRole.entities.DecisionRuleVersion.update(versions[0].id, {
-          status: 'superseded', superseded_at: new Date().toISOString(),
-        });
-      }
+      // A versão ativa anterior só será substituída após promoção determinística.
 
       // Criar nova versão
       const newVersion = await base44.asServiceRole.entities.DecisionRuleVersion.create({
@@ -761,8 +777,7 @@ SCHEMA DE RESPOSTA OBRIGATÓRIO:
         model: AI_WEEKLY_REVIEW_MODEL,
         prompt_version: PROMPT_VERSION,
         data_hash: dataHash,
-        status: 'active',
-        activated_at: new Date().toISOString(),
+        status: 'validating',
         previous_version_id: versions[0]?.id || null,
         rules_created: createdRuleKeys,
         rules_updated: updatedRuleKeys,

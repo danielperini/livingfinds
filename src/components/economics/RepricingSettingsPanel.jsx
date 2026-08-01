@@ -5,13 +5,16 @@ import { AlertCircle, CheckCircle, Clock3, Loader2, RefreshCw, Save, ShieldAlert
 const DEFAULTS = {
   default_minimum_margin_pct: 15, default_target_margin_pct: 20, normal_max_change_pct: 3,
   daily_max_change_pct: 10, minimum_effective_change_pct: 1, cooldown_hours: 6,
-  learning_window_hours: 72, minimum_confidence: 75, automation_mode: 'recommendation_only',
+  learning_window_hours: 72, minimum_confidence: 75, minimum_automatic_confidence: 90,
+  repricing_rollout_mode: 'guarded', maximum_price_change_amount_24h: 2,
+  minimum_price_change_amount: 0.05, price_change_window_hours: 24,
+  automation_mode: 'recommendation_only',
   max_changes_per_cycle: 20, competition_max_age_minutes: 30, fees_max_age_hours: 24, enabled: true,
 };
 const dateTime = value => value ? new Date(value).toLocaleString('pt-BR') : 'Ainda não executado';
 
-function NumberField({ label, field, form, setForm, suffix, min, max, hint }) {
-  return <div><label className="block text-xs text-slate-400 mb-1">{label}</label><div className="relative"><input type="number" min={min} max={max} step="1" value={form[field]} onChange={event => setForm(current => ({ ...current, [field]: Number(event.target.value) }))} className="w-full px-3 py-2 pr-12 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200" />{suffix && <span className="absolute right-3 top-2 text-xs text-slate-600">{suffix}</span>}</div>{hint && <p className="text-[10px] text-slate-600 mt-1">{hint}</p>}</div>;
+function NumberField({ label, field, form, setForm, suffix, min, max, hint, step = 1 }) {
+  return <div><label className="block text-xs text-slate-400 mb-1">{label}</label><div className="relative"><input type="number" min={min} max={max} step={step} value={form[field]} onChange={event => setForm(current => ({ ...current, [field]: Number(event.target.value) }))} className="w-full px-3 py-2 pr-12 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200" />{suffix && <span className="absolute right-3 top-2 text-xs text-slate-600">{suffix}</span>}</div>{hint && <p className="text-[10px] text-slate-600 mt-1">{hint}</p>}</div>;
 }
 
 export default function RepricingSettingsPanel({ accountId, account }) {
@@ -94,6 +97,10 @@ export default function RepricingSettingsPanel({ accountId, account }) {
         <NumberField label="Intervalo mínimo" field="cooldown_hours" form={form} setForm={setForm} suffix="h" min={6} />
         <NumberField label="Janela de aprendizado" field="learning_window_hours" form={form} setForm={setForm} suffix="h" min={72} />
         <NumberField label="Confiança mínima" field="minimum_confidence" form={form} setForm={setForm} suffix="%" min={0} max={100} />
+        <NumberField label="Teto absoluto/24h" field="maximum_price_change_amount_24h" form={form} setForm={setForm} suffix="R$" min={0.01} max={2} step={0.05} hint="Máximo rígido: R$ 2,00 por SKU" />
+        <NumberField label="Mudança mínima" field="minimum_price_change_amount" form={form} setForm={setForm} suffix="R$" min={0.05} step={0.05} />
+        <NumberField label="Confiança automática" field="minimum_automatic_confidence" form={form} setForm={setForm} suffix="%" min={90} max={100} hint="IA isolada não autoriza" />
+        <NumberField label="Janela móvel" field="price_change_window_hours" form={form} setForm={setForm} suffix="h" min={24} max={24} />
         <NumberField label="Máximo por ciclo" field="max_changes_per_cycle" form={form} setForm={setForm} min={1} max={100} />
         <NumberField label="Validade da concorrência" field="competition_max_age_minutes" form={form} setForm={setForm} suffix="min" min={5} />
         <NumberField label="Validade das tarifas" field="fees_max_age_hours" form={form} setForm={setForm} suffix="h" min={1} />

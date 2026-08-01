@@ -6,8 +6,8 @@
  *   impression share, proteção de margem, distribuição de orçamento, expansão de
  *   vencedores e redução de desperdício.
  *
- *   Dados econômicos funcionam como: limite · proteção · fator de intensidade ·
- *   prioridade · indicador de risco — NÃO como bloqueio absoluto ao crescimento.
+ *   Dados econômicos completos funcionam como limite e proteção. Ausência,
+ *   desatualização ou conflito bloqueiam qualquer crescimento de Ads do SKU.
  *
  * NOVIDADES v6 vs v5:
  *   - Estados de oportunidade: low_visibility / emerging_opportunity /
@@ -15,7 +15,7 @@
  *     visibility_constrained / conversion_constrained / insufficient_data / no_opportunity
  *   - visibility_score (0–1) e visibility_opportunity_score
  *   - growth_tolerance_factor (1.05 padrão): permite teste até 5% além do limite
- *   - Custo parcial não bloqueia — permite aumento conservador (≤5%)
+ *   - Custo parcial bloqueia crescimento até confirmação econômica completa
  *   - Cenários A–E de crescimento com intensidade graduada
  *   - simulate_growth: projeta CPA/ACoS esperado antes de aplicar
  *   - last_growth_action_at / growth_cooldown_until / growth_evaluation_due_at
@@ -36,7 +36,10 @@ import {
   estimateMatureClicks,
 } from '../../shared/decisionStatistics.ts';
 import { estimateCpcAuctionState } from '../../shared/auctionStateEstimator.ts';
-import { classifySkuEconomicState } from '../../shared/economicDecisionState.ts';
+import {
+  classifySkuEconomicState,
+  classifyUnifiedEconomicStatus,
+} from '../../shared/economicDecisionState.ts';
 import { resolveGoalPolicy } from '../../shared/goalPolicyResolver.ts';
 import { classifyExecutionPolicy } from '../../shared/decisionExecutionPolicy.ts';
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
@@ -482,48 +485,8 @@ function calcProfitAfterAds(params: {
 }
 
 // ── Classificar status econômico ──────────────────────────────────────────────
-function classifyEconomicStatus(econ: any | null): {
-  status: 'complete' | 'partial' | 'missing_cost' | 'missing_price' | 'negative_margin' | 'unknown';
-  economic_data_incomplete: boolean;
-  block_expansion: boolean; // v6: apenas bloqueia em negativo confirmado
-  allow_conservative_growth: boolean; // v6: custo parcial pode crescer com limite
-  economic_confidence: 'complete' | 'partial' | 'none';
-  block_reason: string;
-} {
-  if (!econ) return {
-    status: 'missing_cost', economic_data_incomplete: true, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'none',
-    block_reason: 'economic_data_incomplete: custo não cadastrado — crescimento conservador permitido',
-  };
-  if (!econ.unit_cost || Number(econ.unit_cost) <= 0) return {
-    status: 'missing_cost', economic_data_incomplete: true, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'none',
-    block_reason: 'unit_cost ausente — teste conservador ≤5% permitido',
-  };
-  if (!econ.current_price || Number(econ.current_price) <= 0) return {
-    status: 'missing_price', economic_data_incomplete: true, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'partial',
-    block_reason: 'preço ausente — crescimento conservador permitido',
-  };
-  const margin = Number(econ.contribution_margin_amount || 0);
-  if (margin < 0) return {
-    status: 'negative_margin', economic_data_incomplete: false, block_expansion: true,
-    allow_conservative_growth: false, economic_confidence: 'complete',
-    block_reason: `Margem negativa confirmada R$${margin.toFixed(2)} — crescimento bloqueado`,
-  };
-  if (margin === 0) return {
-    status: 'partial', economic_data_incomplete: false, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'partial',
-    block_reason: 'Margem zero — somente crescimento conservador',
-  };
-  if (!econ.amazon_fee_amount && !econ.amazon_fee_percent) return {
-    status: 'partial', economic_data_incomplete: false, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'partial', block_reason: '',
-  };
-  return {
-    status: 'complete', economic_data_incomplete: false, block_expansion: false,
-    allow_conservative_growth: true, economic_confidence: 'complete', block_reason: '',
-  };
+function classifyEconomicStatus(econ: any | null) {
+  return classifyUnifiedEconomicStatus(econ);
 }
 
 // ── Classificar proteção de lucro ─────────────────────────────────────────────
@@ -1807,9 +1770,9 @@ Deno.serve(async (req) => {
         }
       }
 
-      if (econStatus.block_expansion) {
+      if (econStatus.block_expansion && econStatus.economic_data_incomplete) {
         stats.skipped_margin++;
-        skipped.push({ entity_id: entityId, reason: 'negative_margin_confirmed', asin: resolvedAsin, block_reason: econStatus.block_reason });
+        skipped.push({ entity_id: entityId, reason: 'economic_data_incomplete', asin: resolvedAsin, block_reason: econStatus.block_reason });
         continue;
       }
 
@@ -1885,12 +1848,15 @@ Deno.serve(async (req) => {
         && auctionState.predicted_cpc_next_window > effectiveSafeMaxCpc;
       if (
         attributionConfidence !== 'complete'
+        || econStatus.block_expansion === true
         || asinMeta?.block_growth === true
         || predictedCpcUnsafe
       ) {
         opp.can_grow = false;
         opp.block_reason = attributionConfidence !== 'complete'
           ? 'attribution_promoted_vs_halo_unknown'
+          : econStatus.block_expansion === true
+            ? econStatus.block_reason
           : asinMeta?.block_growth === true
             ? `sku_economic_state_${asinMeta?.economic_state || 'defensive'}`
             : 'predicted_cpc_above_safe_limit';

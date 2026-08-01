@@ -311,6 +311,17 @@
     "suggested_price": {
       "type": "number"
     },
+    "ideal_suggested_price": { "type": "number" },
+    "decision_confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+    "confidence_components": { "type": "object" },
+    "missing_data": { "type": "array", "items": { "type": "string" } },
+    "confidence_reason": { "type": "string" },
+    "guarded_decision_status": {
+      "type": "string",
+      "enum": ["automatic_guarded", "recommendation_only", "insufficient_confidence", "limit_exhausted", "no_change"]
+    },
+    "price_change_used_24h": { "type": "number", "minimum": 0 },
+    "remaining_price_change_24h": { "type": "number", "minimum": 0 },
     "last_observed_amazon_price": {
       "type": "number"
     },
@@ -375,6 +386,31 @@
     "competition_source": {
       "type": "string"
     },
+    "competitor_reference_prices": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Preços de referência agregados retornados pela Product Pricing API; não representam vendas de sellers."
+    },
+    "competitor_reference_price_average": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Média aritmética dos preços de referência válidos retornados pela Product Pricing API."
+    },
+    "competitor_sales_estimate": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Estimativa opcional de força comercial do ASIN. Nunca é venda factual de um seller concorrente."
+    },
+    "competitor_sales_estimate_confidence": {
+      "type": "string",
+      "enum": ["low", "medium"],
+      "description": "Estimativas de concorrência nunca podem receber confiança alta."
+    },
+    "competitor_sales_estimate_source": {
+      "type": "string",
+      "enum": ["inferred"],
+      "description": "Proveniência obrigatória para qualquer estimativa comercial concorrente."
+    },
     "elasticity": {
       "type": "number"
     },
@@ -422,6 +458,12 @@
     "imported_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "analytics_import_source_file": { "type": "string" },
+    "analytics_import_snapshot_date": { "type": "string", "format": "date" },
+    "analytics_import_metrics": {
+      "type": "object",
+      "description": "Snapshot auditável informado pelo usuário; não substitui métricas canônicas SP-API/Ads."
     },
     "effective_from": {
       "type": "string",

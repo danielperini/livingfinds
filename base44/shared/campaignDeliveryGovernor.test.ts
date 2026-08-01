@@ -175,3 +175,21 @@ Deno.test('atribuição aberta bloqueia decisão horária', () => {
   equal(result.action, 'hold', 'ação');
   equal(result.code, 'HOUR_ATTRIBUTION_OPEN', 'código');
 });
+
+Deno.test('janela mínima reativa com economia válida e respeita teto diário', () => {
+  const enabledWindow = classifyCurrentHour({
+    sampleDays: 0, clicks: 0, orders: 0, sales: 0, spend: 0,
+    maximumProfitableSpend: 20, breakEvenAcos: 25, targetAcos: 15,
+    attributionConfidence: 'partial', minimumPresenceHour: true,
+    minimumPresenceDailySpend: 1, minimumPresenceDailyCap: 2.8,
+  });
+  equal(enabledWindow.action, 'enable', 'janela mínima');
+  const capped = classifyCurrentHour({
+    sampleDays: 0, clicks: 0, orders: 0, sales: 0, spend: 0,
+    maximumProfitableSpend: 20, breakEvenAcos: 25, targetAcos: 15,
+    attributionConfidence: 'partial', minimumPresenceHour: true,
+    minimumPresenceDailySpend: 2.8, minimumPresenceDailyCap: 2.8,
+  });
+  equal(capped.action, 'pause', 'teto diário');
+  equal(capped.code, 'MINIMUM_PRESENCE_CAP_REACHED', 'código do teto');
+});

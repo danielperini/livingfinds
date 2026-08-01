@@ -15,6 +15,11 @@
       "type": "string",
       "format": "date"
     },
+    "aggregation_level": {
+      "type": "string",
+      "enum": ["account_total", "product"],
+      "description": "Granularidade explícita. Leitores nunca podem somar account_total e product no mesmo dia."
+    },
     "units_ordered": {
       "type": "number",
       "default": 0

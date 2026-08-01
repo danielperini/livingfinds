@@ -7,6 +7,8 @@
  *   budget excede R$65, vendas caem além da tolerância.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
+import { canPromoteValidatingRule } from '../../shared/aiRuleLifecyclePolicy.ts';
 
 const MAX_TOTAL_DAILY_BUDGET = 65;
 const ROLLBACK_ACOS_THRESHOLD = 50;     // ACoS > 50% → rollback
@@ -20,10 +22,11 @@ Deno.serve(async (req) => {
   const base44 = createClientFromRequest(req);
 
   try {
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    if (!body._service_role) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     let account = null;
     if (body.amazon_account_id) {
       const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id });
@@ -38,20 +41,50 @@ Deno.serve(async (req) => {
 
     // Carregar regras ativas com execuções recentes
     const activeRules = await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' });
+    const validatingRules = await base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'validating' });
     const recentExecs = await base44.asServiceRole.entities.RuleExecution.filter(
       { amazon_account_id: aid }, '-created_date', 500
     );
     const metrics14d = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
       { amazon_account_id: aid }, '-date', 300
     );
+    const assessments14d = await base44.asServiceRole.entities.DailyProductAdsAssessment.filter(
+      { amazon_account_id: aid }, '-assessment_date', 1000
+    ).catch(() => []);
 
     const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 200);
+    const performance = (await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []))[0] || {};
     const totalActiveBudget = campaigns
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
       .reduce((s, c) => s + (c.daily_budget || 0), 0);
 
     const rolledBack = [];
     const monitored = [];
+    const promoted = [];
+
+    // Shadow determinístico: compara os 7 dias posteriores à proposta com os 7
+    // anteriores. A IA não participa desta promoção.
+    const sumWindow = (rows: any[]) => rows.reduce((acc: any, m: any) => ({ spend: acc.spend + Number(m.spend || 0), sales: acc.sales + Number(m.sales || 0), clicks: acc.clicks + Number(m.clicks || 0) }), { spend: 0, sales: 0, clicks: 0 });
+    for (const rule of validatingRules) {
+      const started = new Date(rule.shadow_started_at || rule.created_date || now);
+      const ageDays = (Date.now() - started.getTime()) / 86400000;
+      const startDate = started.toISOString().slice(0, 10);
+      const beforeDate = new Date(started.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+      const after = sumWindow(metrics14d.filter((m: any) => m.date >= startDate));
+      const before = sumWindow(metrics14d.filter((m: any) => m.date >= beforeDate && m.date < startDate));
+      const afterAcos = after.sales > 0 ? after.spend / after.sales * 100 : null;
+      const beforeAcos = before.sales > 0 ? before.spend / before.sales * 100 : null;
+      const realProfitAfter = assessments14d.filter((row: any) => String(row.assessment_date || '') >= startDate && Number.isFinite(Number(row.profit_after_ads))).reduce((sum: number, row: any) => sum + Number(row.profit_after_ads), 0);
+      const realProfitBefore = assessments14d.filter((row: any) => String(row.assessment_date || '') >= beforeDate && String(row.assessment_date || '') < startDate && Number.isFinite(Number(row.profit_after_ads))).reduce((sum: number, row: any) => sum + Number(row.profit_after_ads), 0);
+      const profitBefore = realProfitBefore;
+      const measuredProfitAfter = realProfitAfter;
+      const profitDeltaPct = Math.abs(profitBefore) > 0 ? (measuredProfitAfter - profitBefore) / Math.abs(profitBefore) * 100 : 0;
+      const acosDeltaPp = afterAcos !== null && beforeAcos !== null ? afterAcos - beforeAcos : 0;
+      const goals = evaluateCentralGoals({ targetAcos: performance.target_acos, maximumAcos: performance.max_acos, targetRoas: performance.target_roas, targetTacos: performance.target_tacos, maximumCpc: performance.max_cpc, dailyBudget: performance.daily_budget_limit, acos: afterAcos, roas: after.spend > 0 ? after.sales / after.spend : null, tacos: performance.current_tacos_7d, cpc: after.clicks > 0 ? after.spend / after.clicks : null, spend: after.spend / Math.max(1, ageDays), profitPositive: measuredProfitAfter >= 0, dataComplete: after.clicks > 0 && assessments14d.length > 0 });
+      const promotion = canPromoteValidatingRule({ ageDays, shadowSamples: after.clicks, shadowProfitDeltaPct: profitDeltaPct, shadowAcosDeltaPp: acosDeltaPp, centralMode: goals.mode, action: rule.action?.type || '' });
+      await base44.asServiceRole.entities.DecisionRule.update(rule.id, { shadow_samples: after.clicks, shadow_profit_delta_pct: profitDeltaPct, shadow_acos_delta_pp: acosDeltaPp, central_goal_snapshot: goals, ...(promotion.eligible ? { status: 'active', lifecycle_stage: 'deterministic', effective_from: now } : {}) });
+      if (promotion.eligible) promoted.push({ rule_key: rule.rule_key, profit_delta_pct: profitDeltaPct, acos_delta_pp: acosDeltaPp });
+    }
 
     // ── Guardrail global: budget total excede R$65 ──────────────────────
     if (totalActiveBudget > MAX_TOTAL_DAILY_BUDGET) {
@@ -163,9 +196,11 @@ Deno.serve(async (req) => {
       ok: true,
       rules_monitored: monitored.length,
       rules_rolled_back: rolledBack.length,
+      rules_promoted_to_deterministic: promoted.length,
       total_active_budget: Math.round(totalActiveBudget * 100) / 100,
       budget_within_limits: totalActiveBudget <= MAX_TOTAL_DAILY_BUDGET,
       rolled_back: rolledBack,
+      promoted,
     });
 
   } catch (error) {

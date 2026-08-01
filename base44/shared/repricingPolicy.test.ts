@@ -59,6 +59,23 @@ Deno.test("bloqueia custo unitario zero em vez de criar piso artificial", () => 
   }
 });
 
+Deno.test("bloqueia custo unitario negativo", () => {
+  const result = validateRepricingEconomics({ ...economics, unitProductCost: -1 });
+  if (result.complete || result.minimumProfitablePrice !== null) {
+    throw new Error("custo negativo jamais pode liberar repricing");
+  }
+});
+
+Deno.test("bloqueia custo vazio ou texto invalido", () => {
+  for (const invalid of ["", "abc"] as unknown[]) {
+    const result = validateRepricingEconomics({
+      ...economics,
+      unitProductCost: invalid as number,
+    });
+    if (result.complete) throw new Error(`custo invalido foi aceito: ${invalid}`);
+  }
+});
+
 Deno.test("bloqueia preco atual zero sem calcular percentual ou sugestao", () => {
   const decision = decideRepricing({
     economics,
@@ -79,6 +96,102 @@ Deno.test("bloqueia preco atual zero sem calcular percentual ou sugestao", () =>
   });
   if (!decision.blocked || decision.suggestedPrice !== null) {
     throw new Error("preco atual zero deveria bloquear integralmente");
+  }
+});
+
+Deno.test("bloqueia preco sugerido zero ou abaixo do piso", () => {
+  const zero = economicsAtPrice(0, economics);
+  const belowFloor = economicsAtPrice(109.99, economics);
+  if (zero !== null) throw new Error("preco zero deveria ser invalido");
+  if (!belowFloor || belowFloor.marginPct >= 15) {
+    throw new Error("cenario abaixo do piso nao foi reproduzido");
+  }
+});
+
+Deno.test("bloqueia piso rentavel ausente quando tarifas faltam", () => {
+  const result = validateRepricingEconomics({
+    ...economics,
+    fbaFee: null,
+    feesConfirmed: false,
+  });
+  if (result.complete || result.minimumProfitablePrice !== null) {
+    throw new Error("piso ausente deveria bloquear");
+  }
+});
+
+Deno.test("margem projetada abaixo de 15 por cento nunca e candidata", () => {
+  const decision = decideRepricing({
+    economics,
+    currentPrice: 130,
+    featuredOfferPrice: 100,
+    featuredOfferExpectedPrice: 100,
+    competitorOffers: [{ totalPrice: 100, condition: "New", fulfillmentType: "AFN", available: true }],
+    competitionFresh: true,
+    sellerFulfillmentType: "AFN",
+    dailyUnits: 1,
+    sessions: 30,
+    conversionRate: 0.03,
+    stock: 20,
+    dataConfidence: 1,
+    guardrails: { normalMaxChangePct: 30, dailyMaxChangePct: 30, minimumEffectiveChangePct: 1, cooldownHours: 6, minimumConfidence: 0.75 },
+  });
+  if (decision.candidates.some((candidate) => candidate.marginPct < 15)) {
+    throw new Error("candidato abaixo da margem minima foi aceito");
+  }
+});
+
+Deno.test("bloqueia produto sem estoque para reducao de preco", () => {
+  const decision = decideRepricing({
+    economics,
+    currentPrice: 130,
+    featuredOfferExpectedPrice: 120,
+    competitionFresh: true,
+    dailyUnits: 0,
+    sessions: 30,
+    conversionRate: 0,
+    stock: 0,
+    dataConfidence: 1,
+    guardrails: { normalMaxChangePct: 10, dailyMaxChangePct: 10, minimumEffectiveChangePct: 1, cooldownHours: 6, minimumConfidence: 0.75 },
+  });
+  if (!decision.blocked || decision.suggestedPrice !== null) {
+    throw new Error("produto sem estoque deveria preservar integralmente o preço");
+  }
+});
+
+Deno.test("bloqueia tarifas ausentes e Ads sem historico confiavel", () => {
+  const missingFees = validateRepricingEconomics({ ...economics, feesConfirmed: false });
+  const missingAds = validateRepricingEconomics({ ...economics, adsCostConfirmed: false });
+  if (missingFees.complete || missingAds.complete) {
+    throw new Error("economia incompleta foi aceita");
+  }
+});
+
+Deno.test("concorrencia desatualizada nao autoriza automacao", () => {
+  const decision = decideRepricing({
+    economics,
+    currentPrice: 130,
+    competitionFresh: false,
+    dailyUnits: 2,
+    sessions: 50,
+    conversionRate: 0.04,
+    stock: 20,
+    dataConfidence: 1,
+    guardrails: { normalMaxChangePct: 3, dailyMaxChangePct: 10, minimumEffectiveChangePct: 1, cooldownHours: 6, minimumConfidence: 0.75 },
+  });
+  if (decision.automaticEligible || !decision.blockReasons.some((reason) => reason.includes("concorr"))) {
+    throw new Error("concorrencia desatualizada deveria bloquear automacao");
+  }
+});
+
+Deno.test("nao compara MFN com FBA quando nao existe oferta equivalente", () => {
+  const offers = equivalentCompetitorOffers([{ totalPrice: 80, condition: "New", fulfillmentType: "MFN", available: true }], "AFN");
+  if (offers.length) throw new Error("oferta MFN foi usada como referencia para FBA");
+});
+
+Deno.test("tentativa manual abaixo do piso permanece bloqueada", () => {
+  const result = validateRepricingEconomics({ ...economics, manualMaxPrice: 100 });
+  if (result.complete || !result.reasons.some((reason) => reason.includes("máximo manual"))) {
+    throw new Error("limite manual inseguro foi aceito");
   }
 });
 

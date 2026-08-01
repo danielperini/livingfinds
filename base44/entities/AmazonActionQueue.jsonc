@@ -37,6 +37,9 @@
     "sku": {
       "type": "string"
     },
+    "normalized_sku": {
+      "type": "string"
+    },
     "asin": {
       "type": "string"
     },

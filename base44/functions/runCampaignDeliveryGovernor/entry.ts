@@ -5,6 +5,8 @@ import {
   productGate,
   structuralLoss,
 } from '../../shared/campaignDeliveryGovernor.ts';
+import { chooseMinimumPresenceHours, minimumPresenceGate } from '../../shared/minimumSkuAdsPresence.ts';
+import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
 import {
   economicsAreActionable,
   normalizeState,
@@ -711,6 +713,21 @@ Deno.serve(async (req) => {
           const conversionRate = normalizedConversionRate(assessment?.cvr, product?.conversion_rate_30d, econ?.conversion_rate);
           const safeCpc = numberValue(assessment?.safe_max_cpc ?? econ?.safe_max_cpc, 0);
           const currentCpc = agg.clicks > 0 ? agg.spend / agg.clicks : numberValue(campaign.current_bid ?? campaign.default_bid, 0);
+          const centralGoals = evaluateCentralGoals({
+            targetAcos: settings.target_acos,
+            maximumAcos: settings.max_acos,
+            targetRoas: settings.target_roas,
+            targetTacos: settings.target_tacos,
+            maximumCpc: settings.max_cpc,
+            dailyBudget: settings.daily_budget_limit,
+            acos: agg.sales > 0 ? agg.spend / agg.sales * 100 : null,
+            roas: agg.spend > 0 ? agg.sales / agg.spend : null,
+            tacos: assessment?.tacos,
+            cpc: currentCpc,
+            spend: agg.spend,
+            profitPositive: numberValue(assessment?.profit_after_ads ?? econ?.profit_before_ads, 0) > 0,
+            dataComplete: agg.metricsFresh && economicsAreActionable(econ, assessment),
+          });
           const persistentLowRelevance = agg.impressions >= 500 && agg.clicks / Math.max(1, agg.impressions) <= 0.001;
           const delivery = classifyDelivery({
             ageHours: campaignAgeHours,
@@ -738,7 +755,21 @@ Deno.serve(async (req) => {
           });
 
           const hourData = currentHourMetrics(hourlyByCampaign.get(campaignId) || [], currentHour);
-          const hourDecision = classifyCurrentHour({
+          const presenceHours = chooseMinimumPresenceHours(hourlyByCampaign.get(campaignId) || [], 2);
+          const todayBrt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+          const todaySkuSpend = (hourlyByCampaign.get(campaignId) || [])
+            .filter((row: any) => String(row.date || '') === todayBrt)
+            .reduce((sum: number, row: any) => sum + numberValue(row.cost ?? row.spend, 0), 0);
+          const presence = minimumPresenceGate({
+            stock: product?.fba_inventory ?? product?.available_quantity ?? 0,
+            buyable: product?.listing_buyable !== false,
+            economicsComplete: economicsAreActionable(econ, assessment),
+            profitBeforeAds: econ?.profit_before_ads ?? econ?.contribution_margin_amount,
+            safeMaxCpc: assessment?.safe_max_cpc ?? econ?.safe_max_cpc,
+            minimumBid: minBid,
+            configuredDailyCap: settings?.minimum_sku_ads_daily_cap,
+          });
+          let hourDecision = classifyCurrentHour({
             sampleDays: hourData.sampleDays,
             clicks: hourData.clicks,
             orders: hourData.orders,
@@ -748,7 +779,13 @@ Deno.serve(async (req) => {
             breakEvenAcos: resolveBreakEvenAcos(econ),
             targetAcos: policy.target_acos || null,
             attributionConfidence: hourData.attributionConfidence,
+            minimumPresenceHour: presence.eligible && presenceHours.includes(currentHour),
+            minimumPresenceDailySpend: todaySkuSpend,
+            minimumPresenceDailyCap: presence.dailyCap,
           });
+          if (hourDecision.action === 'enable' && hourDecision.code !== 'MINIMUM_PRESENCE_SAFE_WINDOW' && !centralGoals.permissions.reactivateForGrowth) {
+            hourDecision = { action: 'hold', code: `CENTRAL_GOALS_${centralGoals.mode}`, reason: 'Reativação de crescimento bloqueada pela política central de metas.' };
+          }
           const pausedByHour = String(campaign.delivery_block_reason || '').includes(`${SOURCE}|PROFIT_DAYPART_PAUSE`);
 
           try {
@@ -781,6 +818,11 @@ Deno.serve(async (req) => {
             }
 
             if (delivery.action === 'replace_term' && isManualExact) {
+              if (!centralGoals.permissions.createCampaign) {
+                await updateMonitoring(base44, campaign, `CENTRAL_GOALS_${centralGoals.mode}`, 'Substituição que cria nova campanha bloqueada até as metas voltarem à faixa lucrativa.', 12);
+                summary.monitored++;
+                continue;
+              }
               const oldKeyword = campaignKeywords.find((keyword: any) => enabled(keyword.state || keyword.status) && upper(keyword.match_type) === 'EXACT');
               const oldTerm = String(oldKeyword?.keyword_text || oldKeyword?.keyword || '').trim();
               const excluded = new Set(exactTermsByAsin.get(asin) || []);

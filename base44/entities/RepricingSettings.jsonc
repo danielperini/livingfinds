@@ -27,6 +27,33 @@
       "type": "number",
       "default": 1
     },
+    "repricing_rollout_mode": {
+      "type": "string",
+      "enum": ["guarded", "recommendation_only", "manual"],
+      "default": "guarded"
+    },
+    "maximum_price_change_amount_24h": {
+      "type": "number",
+      "minimum": 0,
+      "default": 2
+    },
+    "minimum_price_change_amount": {
+      "type": "number",
+      "minimum": 0.01,
+      "default": 0.05
+    },
+    "minimum_automatic_confidence": {
+      "type": "number",
+      "minimum": 90,
+      "maximum": 100,
+      "default": 90
+    },
+    "price_change_window_hours": {
+      "type": "number",
+      "minimum": 24,
+      "maximum": 24,
+      "default": 24
+    },
     "cooldown_hours": {
       "type": "number",
       "default": 6

@@ -319,6 +319,7 @@ Deno.serve(async (req) => {
       const ticketMedio = agg.orders > 0 ? r2(grossRev / agg.orders) : 0;
 
       const financeData = {
+        aggregation_level: 'account_total',
         gross_revenue: grossRev,
         net_revenue: netRev,
         amazon_fees: totalFees,

@@ -22,6 +22,7 @@ import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
+import { canonicalAccountSalesByDate } from '../../base44/shared/salesDailyIntegrity.ts';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
 
@@ -438,17 +439,7 @@ export default function Dashboard() {
 
   const salesDailyByDate = useMemo(() => {
     const map = {};
-    for (const s of salesDaily) {
-      if (!s.date) continue;
-      if (!map[s.date]) map[s.date] = { revenue: 0, units: 0, source: 'ads_report' };
-      // Priorizar gross_revenue (Finance Events reais) sobre ordered_product_sales (estimado)
-      const rev = s.finance_sync_status === 'synced' && (s.gross_revenue || 0) > 0
-        ? s.gross_revenue
-        : (s.ordered_product_sales || 0);
-      map[s.date].revenue += rev;
-      map[s.date].units += s.units_ordered || 0;
-      if (s.finance_sync_status === 'synced') map[s.date].source = 'finance_events';
-    }
+    for (const [date, value] of canonicalAccountSalesByDate(salesDaily)) map[date] = value;
     return map;
   }, [salesDaily]);
 
@@ -529,23 +520,17 @@ export default function Dashboard() {
 
   const spExtraByDate = useMemo(() => {
     const map = {};
-    for (const s of salesDaily) {
-      if (!s.date) continue;
-      if (!map[s.date]) map[s.date] = { units: 0, orders_real: 0 };
-      map[s.date].units += s.units_ordered || 0;
-      // SalesDaily não tem pedidos separados — usar unidades como proxy
-      map[s.date].orders_real += s.units_ordered || 0;
-    }
+    for (const [date, value] of Object.entries(salesDailyByDate)) map[date] = { units: value.units, orders_real: value.orders };
     return map;
-  }, [salesDaily]);
+  }, [salesDailyByDate]);
 
   // ─── Cartões extras: unidades, pedidos reais, maior/menor dia, receita/unidade ──
   const extraKpis = useMemo(() => {
     let totalUnits = 0, totalRealOrders = 0;
-    for (const s of salesDaily) {
-      if (!s.date || s.date < startDate || s.date > endDate) continue;
-      totalUnits += s.units_ordered || 0;
-      totalRealOrders += s.units_ordered || 0;
+    for (const [date, value] of Object.entries(salesDailyByDate)) {
+      if (date < startDate || date > endDate) continue;
+      totalUnits += value.units;
+      totalRealOrders += value.orders;
     }
     const revenue = realSalesKpis.revenue;
     const revenuePerUnit = totalUnits > 0 ? revenue / totalUnits : null;
@@ -559,7 +544,7 @@ export default function Dashboard() {
       if (!worstDay || rev < worstDay.revenue) worstDay = { date: iso, revenue: rev, units: entry.units };
     }
     return { totalUnits, totalRealOrders, revenuePerUnit, bestDay, worstDay };
-  }, [salesDaily, salesDailyByDate, adsExtraByDate, startDate, endDate, realSalesKpis.revenue]);
+  }, [salesDailyByDate, adsExtraByDate, startDate, endDate, realSalesKpis.revenue]);
 
   const consolidatedChart = useMemo(() => {
     const byDate = {};

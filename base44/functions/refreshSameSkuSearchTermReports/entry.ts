@@ -7,32 +7,23 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 const BASE_COLUMNS = [
   'date', 'campaignId', 'campaignName', 'adGroupId', 'adGroupName',
-  'keywordId', 'keyword', 'keywordType', 'matchType', 'searchTerm',
+  'keywordId', 'keyword', 'matchType', 'searchTerm',
   'impressions', 'clicks', 'cost',
 ];
 
 const REPORT_VARIANTS = [
   {
-    attribution_profile: 'seller_7d_same_sku',
-    columns: [...BASE_COLUMNS,
-      'purchases7d', 'purchasesSameSku7d',
-      'sales7d', 'attributedSalesSameSku7d',
-      'unitsSoldClicks7d', 'unitsSoldSameSku7d',
-      'acosClicks7d', 'roasClicks7d'],
-  },
-  {
-    attribution_profile: 'vendor_14d_same_sku',
-    columns: [...BASE_COLUMNS,
-      'purchases14d', 'purchasesSameSku14d',
-      'sales14d', 'attributedSalesSameSku14d',
-      'unitsSoldClicks14d', 'unitsSoldSameSku14d',
-      'acosClicks14d', 'roasClicks14d'],
-  },
-  {
     attribution_profile: 'total_only_fallback_no_auto_promotion',
     columns: [...BASE_COLUMNS,
-      'purchases7d', 'sales7d', 'unitsSoldClicks7d', 'acosClicks7d', 'roasClicks7d'],
+      'purchases7d', 'purchases14d', 'purchases30d',
+      'sales7d', 'sales14d', 'sales30d',
+      'acosClicks14d', 'roasClicks14d'],
   },
+];
+
+const UNSUPPORTED_SAME_SKU_PROFILES = [
+  'seller_7d_same_sku',
+  'vendor_14d_same_sku',
 ];
 
 function brazilDate(): string {
@@ -83,6 +74,16 @@ Deno.serve(async (request) => {
       const startDate = dateOffset(today, -(lookbackDays - 1));
       const attempts: any[] = [];
       let accepted: any = null;
+
+      for (const attributionProfile of UNSUPPORTED_SAME_SKU_PROFILES) {
+        attempts.push({
+          attribution_profile: attributionProfile,
+          ok: false,
+          skipped: true,
+          error: 'unsupported_columns_for_spSearchTerm',
+          detail: 'A Amazon rejeita métricas promoted/same-SKU neste report type; nenhuma requisição inválida foi enviada.',
+        });
+      }
 
       for (const variant of REPORT_VARIANTS) {
         const response = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
@@ -152,6 +153,7 @@ Deno.serve(async (request) => {
       ok: reports.every((report) => Boolean(report.job_id || report.report_id)),
       accounts_processed: reports.length,
       reports,
+      safety: 'Atribuição total não é presumida como same-SKU; promoção automática permanece bloqueada sem evidência explícita.',
       freshness_expectation: 'Amazon normalmente atualiza métricas em 3–6 horas; polling local a cada 10 minutos.',
       duration_ms: Date.now() - startedAt,
     });

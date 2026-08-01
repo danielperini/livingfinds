@@ -337,9 +337,13 @@ Deno.serve(async (req) => {
     // Outros erros
     if (!postRes.ok) {
       const errData = await postRes.json().catch(() => ({}));
+      const amazonDetail = errData?.details || errData?.detail || errData?.errors?.[0]?.message || errData?.code || postRes.statusText;
       return Response.json({
         ok: false,
-        error: `HTTP ${postRes.status}: ${errData?.message || postRes.statusText}`,
+        error: `HTTP ${postRes.status}: ${errData?.message || amazonDetail}`,
+        amazon_code: errData?.code || errData?.errors?.[0]?.code || null,
+        amazon_detail: typeof amazonDetail === 'string' ? amazonDetail : JSON.stringify(amazonDetail),
+        request_id: requestId || null,
         http_status: postRes.status,
       });
     }

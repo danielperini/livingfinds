@@ -2,6 +2,18 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
+      "name": "Weekly AI deterministic rule review - Sunday 03:00 BRT",
+      "function": "runWeeklyClaudeRuleReview",
+      "cron": "0 3 * * 0",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Daily deterministic rule outcome monitor - 03:30 BRT",
+      "function": "monitorRulePerformance",
+      "cron": "30 3 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Amazon Ads Reports Poll + Daily AI - every 10 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/10 * * * *",

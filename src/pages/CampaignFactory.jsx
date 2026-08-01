@@ -265,13 +265,25 @@ export default function CampaignFactory() {
       // The learning pipeline writes with service-role permissions. This authenticated
       // snapshot refreshes it and returns the same rows without hiding valid data from
       // the dashboard because of entity-level read rules.
-      const snapshotResponse = await base44.functions.invoke('getCampaignFactorySnapshot', {
-        amazon_account_id: acc.id,
-        refresh: true,
-      }).catch(() => null);
-      const snapshot = snapshotResponse?.data;
-      setRefreshHealth(snapshot?.refresh || (snapshotResponse ? null : {
-        snapshot: { ok: false, error: 'Snapshot do Factory indisponível.' },
+      let snapshotResponse = null;
+      let snapshotError = null;
+      try {
+        // Abrir a página é somente leitura. Atualizações do Factory não devem ser
+        // disparadas implicitamente por refresh, troca de aba ou montagem duplicada.
+        snapshotResponse = await base44.functions.invoke('getCampaignFactorySnapshot', {
+          amazon_account_id: acc.id,
+          refresh: false,
+        });
+      } catch (error) {
+        snapshotError = error?.response?.data?.error || error?.message || String(error);
+      }
+      const snapshot = snapshotResponse?.data || snapshotResponse || null;
+      setRefreshHealth(snapshot?.refresh || (snapshot?.ok ? null : {
+        snapshot: {
+          ok: false,
+          fallback: true,
+          error: snapshot?.error || snapshotError || 'Função de snapshot não respondeu; usando leitura direta preservada.',
+        },
       }));
 
       const [fallbackBank, fallbackPlans, termData, sugData, prodData, kwData, stData] = await Promise.all([
@@ -484,8 +496,8 @@ export default function CampaignFactory() {
       </div>
 
       {refreshHealth && Object.values(refreshHealth).some(result => result?.ok === false) && (
-        <div className="mx-6 mt-3 px-3 py-2 rounded-lg border border-red-500/25 bg-red-500/10 text-[11px] text-red-300">
-          Atualização parcial do Campaign Factory: {Object.entries(refreshHealth)
+        <div className={`mx-6 mt-3 px-3 py-2 rounded-lg border text-[11px] ${Object.values(refreshHealth).every(result => result?.fallback) ? 'border-amber-500/25 bg-amber-500/10 text-amber-300' : 'border-red-500/25 bg-red-500/10 text-red-300'}`}>
+          {Object.values(refreshHealth).every(result => result?.fallback) ? 'Campaign Factory em leitura direta: ' : 'Atualização parcial do Campaign Factory: '}{Object.entries(refreshHealth)
             .filter(([, result]) => result?.ok === false)
             .map(([stage, result]) => `${stage}: ${result?.error || result?.reason || 'falha sem detalhe'}`)
             .join(' · ')}

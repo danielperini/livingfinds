@@ -19,6 +19,27 @@ import {
   resolveMargins,
   validateRepricingEconomics,
 } from "../../shared/repricingPolicy.ts";
+import {
+  AUTOMATIC_REPRICING_RUNTIME_FLAG,
+  actionBlocksAutomaticDay,
+  actionMatchesSku,
+  dayKeyInTimeZone,
+  isAutomaticRepricingRuntimeEnabled,
+  isConcurrentPriceAction,
+  listingExecutionBlockReasons,
+  pricesMatch,
+} from "../../shared/repricingSafety.ts";
+import {
+  resolveSellerId,
+  selectSpApiSamples,
+  sellerIdFromParticipations,
+} from "../../shared/spApiIdentity.ts";
+import { competitorMetricScope } from "../../shared/competitorDataPolicy.ts";
+import {
+  applyGuardedPriceChange,
+  deterministicPriceConfidence,
+  priceChangeUsedInWindow,
+} from "../../shared/guardedPriceChangePolicy.ts";
 
 const DEFAULTS = {
   default_minimum_margin_pct: 15,
@@ -26,6 +47,11 @@ const DEFAULTS = {
   normal_max_change_pct: 3,
   daily_max_change_pct: 10,
   minimum_effective_change_pct: 1,
+  repricing_rollout_mode: "guarded",
+  maximum_price_change_amount_24h: 2,
+  minimum_price_change_amount: 0.05,
+  minimum_automatic_confidence: 90,
+  price_change_window_hours: 24,
   cooldown_hours: 6,
   learning_window_hours: 72,
   minimum_confidence: 75,
@@ -49,6 +75,14 @@ const numberValue = (value: unknown, fallback = 0) =>
   finite(value) ? Number(value) : fallback;
 const roundMoney = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+const averagePositive = (values: unknown[]) => {
+  const valid = values.map(Number).filter((value) =>
+    Number.isFinite(value) && value > 0
+  );
+  return valid.length
+    ? roundMoney(valid.reduce((sum, value) => sum + value, 0) / valid.length)
+    : null;
+};
 const hoursSince = (value: unknown) => {
   if (!value) return Number.POSITIVE_INFINITY;
   const time = new Date(String(value)).getTime();
@@ -57,6 +91,17 @@ const hoursSince = (value: unknown) => {
     : Number.POSITIVE_INFINITY;
 };
 const unwrap = (value: any) => value?.data || value || {};
+const automaticExecutionRuntimeEnabled = () =>
+  isAutomaticRepricingRuntimeEnabled(
+    secrets.get(AUTOMATIC_REPRICING_RUNTIME_FLAG),
+  );
+
+function sellerIdentity(account: any) {
+  return resolveSellerId(account, {
+    AMAZON_SELLER_ID: secrets.get("AMAZON_SELLER_ID"),
+    SP_SELLER_ID: secrets.get("SP_SELLER_ID"),
+  });
+}
 
 function spBase(region: unknown) {
   const normalized = String(region || "NA").toUpperCase();
@@ -163,6 +208,49 @@ function amazonError(result: any) {
   ).slice(0, 1000);
 }
 
+async function ensureSellerIdentity(
+  base44: any,
+  account: any,
+  accessToken: string,
+) {
+  const configured = sellerIdentity(account);
+  if (configured.sellerId) {
+    return {
+      account: { ...account, seller_id: configured.sellerId },
+      ...configured,
+    };
+  }
+  const result = await amazonCall(
+    base44,
+    account.id,
+    "repricing_get_marketplace_participations",
+    `${spBase(account.region)}/sellers/v1/marketplaceParticipations`,
+    accessToken,
+  );
+  const discovered = result.ok === true
+    ? sellerIdFromParticipations(amazonPayload(result))
+    : "";
+  if (!discovered) {
+    return {
+      account,
+      sellerId: "",
+      source: null,
+      discoveryError: amazonError(result),
+    };
+  }
+  const persisted = await base44.asServiceRole.entities.AmazonAccount.update(
+    account.id,
+    { seller_id: discovered },
+  ).then(() => true).catch(() => false);
+  return {
+    account: { ...account, seller_id: discovered },
+    sellerId: discovered,
+    source: "SP-API marketplaceParticipations",
+    discovered: true,
+    persisted,
+  };
+}
+
 function listingPrice(listing: any): number | null {
   const candidates = [
     listing?.offers?.[0]?.price?.listingPrice?.amount,
@@ -236,7 +324,7 @@ async function fetchListing(
   sku: string,
 ) {
   const endpoint = spBase(account.region);
-  const sellerId = account.seller_id || secrets.get("AMAZON_SELLER_ID") || "";
+  const sellerId = sellerIdentity(account).sellerId;
   const marketplaceId = account.marketplace_id ||
     secrets.get("AMAZON_MARKETPLACE_ID") || "";
   if (!sellerId) {
@@ -331,7 +419,15 @@ function parseCompetitiveBody(body: any) {
       });
     }
   }
-  return { offers, featuredOfferPrice };
+  const referencePrices = (body?.referencePrices || []).map((reference: any) => ({
+    name: reference?.name || reference?.type || "reference",
+    amount: numberValue(
+      reference?.price?.amount ?? reference?.amount ?? reference?.value,
+      0,
+    ),
+    currencyCode: reference?.price?.currencyCode || reference?.currencyCode || null,
+  })).filter((reference: any) => reference.amount > 0);
+  return { offers: offers.slice(0, 20), featuredOfferPrice, referencePrices };
 }
 
 function parseFoepBody(body: any) {
@@ -431,6 +527,10 @@ async function fetchPricingBatches(
         featuredOfferPrice: foepParsed.featured ||
           competitiveParsed.featuredOfferPrice,
         featuredOfferExpectedPrice: foepParsed.expected,
+        referencePrices: competitiveParsed.referencePrices,
+        referenceAveragePrice: averagePositive(
+          competitiveParsed.referencePrices.map((reference: any) => reference.amount),
+        ),
         checkedAt: nowIso(),
         errors: [amazonError(competitive), amazonError(foep)].filter((
           message,
@@ -654,9 +754,12 @@ function policyInputs(economics: any, adsCost: any, settings: any) {
     costsConfirmed: economics.costs_confirmed_by_user === true,
     feesConfirmed: Boolean(
       economics.fees_verified_at &&
-        String(economics.fees_source || "").startsWith("sp_api"),
+        String(economics.fees_source || "").startsWith("sp_api") &&
+        hoursSince(economics.fees_verified_at) <=
+          numberValue(settings.fees_max_age_hours, 24),
     ),
-    adsCostConfirmed: finite(adsCost.value) && adsCost.source !== "missing",
+    adsCostConfirmed: finite(adsCost.value) && adsCost.source !== "missing" &&
+      Boolean(adsCost.verifiedAt) && hoursSince(adsCost.verifiedAt) <= 24 * 30,
     minimumMarginPct: margins.minimumMarginPct,
     targetMarginPct: margins.targetMarginPct,
     manualMinPrice: economics.manual_min_price,
@@ -691,13 +794,13 @@ async function cancelPendingPriceActions(
   reason: string,
 ) {
   const actions = await base44.asServiceRole.entities.AmazonActionQueue.filter(
-    { amazon_account_id: accountId, entity_type: "product_price", sku },
+    { amazon_account_id: accountId, entity_type: "product_price" },
     "-created_at",
-    100,
+    500,
   ).catch(() => []);
   for (
     const action of actions.filter((item: any) =>
-      ["pending", "submitted", "processing"].includes(String(item.status || ""))
+      actionMatchesSku(item, sku) && isConcurrentPriceAction(item)
     )
   ) {
     await base44.asServiceRole.entities.AmazonActionQueue.update(action.id, {
@@ -721,12 +824,13 @@ async function queuePriceAction(base44: any, params: any) {
   ) {
     return { created: false, action: null, blocked: true };
   }
-  const day = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
-  const baseKey = `repricing:${params.sellerId}:${params.marketplaceId}:${
-    normalizeSku(params.product?.sku)
-  }:${day}`;
-  const sameSkuActions = await base44.asServiceRole.entities.AmazonActionQueue
-    .filter(
+  const day = dayKeyInTimeZone()!;
+  const normalizedSku = normalizeSku(params.product?.sku);
+  const baseKey = `repricing:${params.accountId}:${params.marketplaceId}:${
+    normalizedSku
+  }:${newPrice.toFixed(2)}`;
+  const [exactSkuActions, normalizedSkuActions] = await Promise.all([
+    base44.asServiceRole.entities.AmazonActionQueue.filter(
       {
         amazon_account_id: params.accountId,
         entity_type: "product_price",
@@ -734,25 +838,56 @@ async function queuePriceAction(base44: any, params: any) {
       },
       "-created_at",
       50,
-    ).catch(() => []);
-  const concurrent = sameSkuActions.find((action: any) =>
-    ["pending", "submitted", "processing"].includes(
-      String(action.status || ""),
-    )
-  );
-  if (concurrent) return { created: false, action: concurrent };
-  const automaticAlreadyHandledToday = !params.manual && sameSkuActions.find(
-    (action: any) =>
-      (String(action.idempotency_key || "").endsWith(`:${day}`) ||
-        (action.created_at &&
-          new Date(new Date(action.created_at).getTime() - 3 * 3600000)
-              .toISOString().slice(0, 10) === day)) &&
-      ["pending", "submitted", "processing", "confirmed"].includes(
-        String(action.status || ""),
+    ).catch(() => []),
+    base44.asServiceRole.entities.AmazonActionQueue.filter(
+      {
+        amazon_account_id: params.accountId,
+        entity_type: "product_price",
+        normalized_sku: normalizedSku,
+      },
+      "-created_at",
+      50,
+    ).catch(() => []),
+  ]);
+  const sameSkuActions = [...new Map(
+    [...exactSkuActions, ...normalizedSkuActions]
+      .filter((action: any) => actionMatchesSku(action, normalizedSku))
+      .map((action: any) => [action.id, action]),
+  ).values()];
+  if (!params.manual) {
+    const finalGuard = applyGuardedPriceChange({
+      currentPrice: oldPrice,
+      proposedPrice: newPrice,
+      decisionConfidence: numberValue(params.evidence?.decision_confidence),
+      priceChangeUsed24h: priceChangeUsedInWindow({
+        actions: sameSkuActions,
+        history: params.productHistory || [],
+        windowHours: numberValue(params.settings?.price_change_window_hours, 24),
+      }),
+      maximumPriceChangeAmount24h: numberValue(
+        params.settings?.maximum_price_change_amount_24h,
+        2,
       ),
+      minimumPriceChangeAmount: numberValue(
+        params.settings?.minimum_price_change_amount,
+        0.05,
+      ),
+      minimumAutomaticConfidence: numberValue(
+        params.settings?.minimum_automatic_confidence,
+        90,
+      ),
+    });
+    if (!finalGuard.automaticAllowed || !pricesMatch(finalGuard.guardedPrice, newPrice)) {
+      return { created: false, action: null, blocked: true, guard: finalGuard };
+    }
+  }
+  const concurrent = sameSkuActions.find(isConcurrentPriceAction);
+  if (concurrent) return { created: false, action: concurrent };
+  const alreadyHandledToday = sameSkuActions.find(
+    (action: any) => actionBlocksAutomaticDay(action, day),
   );
-  if (automaticAlreadyHandledToday) {
-    return { created: false, action: automaticAlreadyHandledToday };
+  if (alreadyHandledToday) {
+    return { created: false, action: alreadyHandledToday };
   }
   const existing = await base44.asServiceRole.entities.AmazonActionQueue.filter(
     {
@@ -808,6 +943,7 @@ async function queuePriceAction(base44: any, params: any) {
     entity_type: "product_price",
     entity_id: params.product.id,
     sku: params.product.sku,
+    normalized_sku: normalizedSku,
     asin: params.product.asin,
     marketplace_id: params.marketplaceId,
     seller_id: params.sellerId,
@@ -861,7 +997,7 @@ async function evaluateAccount(
     0,
     10,
   );
-  const [products, economicsRows, salesRows, adsRows, historyRows] =
+  const [products, economicsRows, salesRows, adsRows, historyRows, actionRows] =
     await Promise.all([
       base44.asServiceRole.entities.Product.filter(
         { amazon_account_id: account.id },
@@ -886,6 +1022,11 @@ async function evaluateAccount(
       base44.asServiceRole.entities.ProductEconomicsHistory.filter(
         { amazon_account_id: account.id },
         "-changed_at",
+        5000,
+      ).catch(() => []),
+      base44.asServiceRole.entities.AmazonActionQueue.filter(
+        { amazon_account_id: account.id, entity_type: "product_price" },
+        "-created_at",
         5000,
       ).catch(() => []),
     ]);
@@ -985,6 +1126,23 @@ async function evaluateAccount(
       });
       continue;
     }
+    const inventoryFresh = product.catalog_sync_status === "success" &&
+      hoursSince(product.last_catalog_sync_at) <= 2;
+    if (!inventoryFresh) {
+      const reason =
+        "Repricing bloqueado: estoque FBA ausente, inconsistente ou desatualizado.";
+      await cancelPendingPriceActions(base44, account.id, product.sku, reason);
+      await base44.asServiceRole.entities.ProductEconomics.update(
+        economics.id,
+        {
+          repricing_status: "blocked",
+          repricing_block_reason: reason,
+          updated_at: nowIso(),
+        },
+      ).catch(() => {});
+      results.push({ sku: product.sku, status: "blocked", reason });
+      continue;
+    }
 
     const listingResult = listingBySku.get(key);
     if (!listingResult?.ok) {
@@ -1011,16 +1169,18 @@ async function evaluateAccount(
     if (product.status !== "active") {
       requirements.push("Repricing bloqueado: produto inativo.");
     }
-    if (!listing.offerActive) {
+    const listingBlockReasons = listingExecutionBlockReasons(listing);
+    if (listingBlockReasons.includes("oferta_inativa")) {
       requirements.push("Repricing bloqueado: oferta inativa na Amazon.");
     }
-    if (!listing.buyable) {
-      requirements.push(
-        "Repricing bloqueado: listing não comprável ou com issue de erro.",
-      );
+    if (listingBlockReasons.includes("listing_nao_compravel")) {
+      requirements.push("Repricing bloqueado: listing não comprável ou com issue de erro.");
     }
-    if (!listing.productType) {
+    if (listingBlockReasons.includes("product_type_ausente")) {
       requirements.push("Repricing bloqueado: Product Type ausente.");
+    }
+    if (listingBlockReasons.includes("fulfillment_nao_confirmado_como_fba")) {
+      requirements.push("Repricing bloqueado: fulfillment da oferta não foi confirmado como FBA/AFN.");
     }
     if (!currentPrice) {
       requirements.push(
@@ -1050,8 +1210,7 @@ async function evaluateAccount(
       featuredOfferExpectedPrice: economics.featured_offer_expected_price,
       checkedAt: economics.competition_checked_at,
     };
-    const sellerId = account.seller_id ||
-      secrets.get("AMAZON_SELLER_ID") || "";
+    const sellerId = sellerIdentity(account).sellerId;
     const competitorOffers = (pricing.offers || []).filter((offer: any) =>
       !sellerId || !offer.sellerId ||
       String(offer.sellerId) !== String(sellerId)
@@ -1208,6 +1367,7 @@ async function evaluateAccount(
       currentPrice: confirmedPrice,
       featuredOfferPrice: pricing.featuredOfferPrice,
       featuredOfferExpectedPrice: pricing.featuredOfferExpectedPrice,
+      referenceAveragePrice: pricing.referenceAveragePrice,
       competitorOffers,
       competitionFresh,
       sellerFulfillmentType: listing.sellerFulfillmentType,
@@ -1229,16 +1389,101 @@ async function evaluateAccount(
           1,
         ),
         cooldownHours: numberValue(settings.cooldown_hours, 6),
-        minimumConfidence: numberValue(settings.minimum_confidence, 75) / 100,
+        minimumConfidence: numberValue(
+          settings.minimum_automatic_confidence,
+          90,
+        ) / 100,
       },
     });
+    const inventoryFresh = Boolean(
+      stock > 0 && product.last_catalog_sync_at &&
+        hoursSince(product.last_catalog_sync_at) <= 2,
+    );
+    const salesAndConversionSufficient = numberValue(sales.sessions) >= 20 &&
+      numberValue(sales.units) > 0 && conversionRate > 0;
+    const adsMetricsMatured = Boolean(
+      ads?.latest?.data_status === "complete" &&
+        (ads.latest.metrics_matured === true ||
+          ads.latest.attribution_confidence === "complete" ||
+          hoursSince(ads.latest.assessment_date) >= 48),
+    );
+    const priceHistorySufficient = productHistory.filter((row: any) =>
+      row.history_type === "price_confirmed" &&
+      row.decision_evidence?.observation_completed === true
+    ).length >= 2;
+    const confidenceAudit = deterministicPriceConfidence({
+      economicsComplete: validation.complete,
+      priceAndFeesFresh: Boolean(
+        confirmedPrice > 0 && listing.buyable &&
+          mergedEconomics.fees_verified_at &&
+          hoursSince(mergedEconomics.fees_verified_at) <=
+            numberValue(settings.fees_max_age_hours, 24),
+      ),
+      inventoryFresh,
+      equivalentCompetitionValid: competitionFresh && competitorOffers.length > 0,
+      salesAndConversionSufficient,
+      adsMetricsMatured,
+      priceHistorySufficient,
+    });
+    const skuActions = actionRows.filter((action: any) =>
+      actionMatchesSku(action, key)
+    );
+    const priceChangeUsed24h = priceChangeUsedInWindow({
+      actions: skuActions,
+      history: productHistory,
+      windowHours: numberValue(settings.price_change_window_hours, 24),
+    });
+    const guardedChange = applyGuardedPriceChange({
+      currentPrice: confirmedPrice,
+      proposedPrice: numberValue(decision.suggestedPrice, confirmedPrice),
+      decisionConfidence: confidenceAudit.score,
+      priceChangeUsed24h,
+      maximumPriceChangeAmount24h: numberValue(
+        settings.maximum_price_change_amount_24h,
+        2,
+      ),
+      minimumPriceChangeAmount: numberValue(
+        settings.minimum_price_change_amount,
+        0.05,
+      ),
+      minimumAutomaticConfidence: numberValue(
+        settings.minimum_automatic_confidence,
+        90,
+      ),
+    });
+    const idealSuggestedPrice = decision.suggestedPrice;
+    decision.confidence = confidenceAudit.score / 100;
+    if (guardedChange.automaticAllowed) {
+      decision.suggestedPrice = guardedChange.guardedPrice;
+      decision.projectedEconomics = economicsAtPrice(
+        guardedChange.guardedPrice,
+        policy,
+      );
+    } else if (guardedChange.status === "recommendation_only") {
+      decision.blockReasons.push(
+        "Confiança entre 75% e 89,99%: somente recomendação, sem alteração automática.",
+      );
+    } else if (guardedChange.status === "insufficient_confidence") {
+      decision.blockReasons.push(
+        "Confiança inferior a 75%: alteração bloqueada até existirem dados suficientes.",
+      );
+    } else if (guardedChange.status === "limit_exhausted") {
+      decision.blockReasons.push(
+        "Limite absoluto de alteração de preço em 24 horas esgotado ou abaixo de R$ 0,05.",
+      );
+    }
     const economicConflict = Boolean(
       decision.currentEconomics && decision.currentEconomics.marginPct < 15,
     );
     const requestedEnabled = economics.repricing_requested === true ||
       economics.repricing_enabled === true;
     const executionEnabled = requestedEnabled && validation.complete;
-    const status = !executionEnabled
+    const status = guardedChange.status === "recommendation_only"
+      ? "recommendation"
+      : guardedChange.status === "insufficient_confidence" ||
+          guardedChange.status === "limit_exhausted"
+      ? "blocked"
+      : !executionEnabled
       ? decision.blocked ? "blocked" : "recommendation"
       : decision.blockReasons?.length
       ? "blocked"
@@ -1253,6 +1498,20 @@ async function evaluateAccount(
     ).join(" ");
     const evidence = {
       source: "amazon_sp_api_and_persisted_real_metrics",
+      metric_scope: competitorMetricScope(),
+      decision_confidence: confidenceAudit.score,
+      confidence_components: confidenceAudit.components,
+      missing_data: confidenceAudit.missingData,
+      confidence_reason: confidenceAudit.reason,
+      decision_status: guardedChange.status,
+      ideal_suggested_price: idealSuggestedPrice,
+      guarded_suggested_price: decision.suggestedPrice,
+      price_change_used_24h: guardedChange.priceChangeUsed24h,
+      remaining_price_change_24h: guardedChange.remainingPriceChange24h,
+      maximum_price_change_amount_24h: numberValue(
+        settings.maximum_price_change_amount_24h,
+        2,
+      ),
       current_price_source: "Listings Items API 2021-08-01",
       competition_source: "Product Pricing API 2022-05-01",
       fees_source: mergedEconomics.fees_source,
@@ -1261,6 +1520,8 @@ async function evaluateAccount(
       featured_offer_price: pricing.featuredOfferPrice,
       featured_offer_expected_price: pricing.featuredOfferExpectedPrice,
       competitor_offers: competitorOffers.length,
+      competitor_reference_prices: pricing.referencePrices || [],
+      competitor_reference_price_average: pricing.referenceAveragePrice || null,
       stock,
       sales_30d: numberValue(sales.sales),
       units_30d: numberValue(sales.units),
@@ -1302,6 +1563,14 @@ async function evaluateAccount(
       minimum_profitable_price: decision.minimumProfitablePrice,
       target_margin_price: decision.targetMarginPrice,
       suggested_price: decision.suggestedPrice,
+      ideal_suggested_price: idealSuggestedPrice,
+      decision_confidence: confidenceAudit.score,
+      confidence_components: confidenceAudit.components,
+      missing_data: confidenceAudit.missingData,
+      confidence_reason: confidenceAudit.reason,
+      guarded_decision_status: guardedChange.status,
+      price_change_used_24h: guardedChange.priceChangeUsed24h,
+      remaining_price_change_24h: guardedChange.remainingPriceChange24h,
       current_margin_pct: decision.currentEconomics?.marginPct,
       projected_margin_pct: decision.projectedEconomics?.marginPct,
       projected_unit_profit: decision.projectedEconomics?.unitProfit,
@@ -1327,6 +1596,8 @@ async function evaluateAccount(
       competitor_median_price: decision.competitorMedian,
       competitor_offer_count: decision.equivalentOfferCount || 0,
       competitor_offers: competitorOffers,
+      competitor_reference_prices: pricing.referencePrices || [],
+      competitor_reference_price_average: pricing.referenceAveragePrice || null,
       competition_checked_at: pricing.ok
         ? pricing.checkedAt
         : economics.competition_checked_at,
@@ -1435,19 +1706,24 @@ async function evaluateAccount(
     const marketplaceId = account.marketplace_id ||
       secrets.get("AMAZON_MARKETPLACE_ID") || "";
     const manual = options.manual_apply === true;
+    const runtimeExecutionAllowed = manual ||
+      automaticExecutionRuntimeEnabled();
     const canQueue = decision.suggestedPrice &&
       confirmedPrice > 0 &&
       Number(decision.suggestedPrice) > 0 &&
       Number(decision.minimumProfitablePrice) > 0 &&
       Number(decision.suggestedPrice) + 0.001 >=
         Number(decision.minimumProfitablePrice) &&
-      Math.abs(decision.suggestedPrice - confirmedPrice) >= 0.01 &&
+      Math.abs(decision.suggestedPrice - confirmedPrice) >=
+        numberValue(settings.minimum_price_change_amount, 0.05) &&
       decision.automaticEligible === true &&
       (decision.blockReasons || []).length === 0 &&
       validation.complete && listing.buyable && stock > 0 &&
       options.recommendation_only !== true &&
+      runtimeExecutionAllowed &&
       (manual ||
         (settings.enabled !== false &&
+          settings.repricing_rollout_mode === "guarded" &&
           settings.automation_mode === "automatic" && executionEnabled)) &&
       queued < numberValue(settings.max_changes_per_cycle, 20);
     let queuedForProcessing = false;
@@ -1471,6 +1747,8 @@ async function evaluateAccount(
         stock,
         pricing,
         evidence,
+        productHistory,
+        settings,
         manual,
         changedBy: options.changed_by || "scheduler",
       });
@@ -1686,7 +1964,7 @@ async function processQueueForAccount(
       5000,
     ).catch(() => []),
   ]);
-  const due = allActions
+  const dueCandidates = allActions
     .filter((action: any) =>
       ["pending", "submitted", "processing"].includes(
         String(action.status || ""),
@@ -1696,7 +1974,51 @@ async function processQueueForAccount(
       !action.next_retry_at ||
       new Date(action.next_retry_at).getTime() <= Date.now()
     )
-    .slice(0, Math.max(1, Math.min(numberValue(options.max_actions, 20), 100)));
+    .sort((a: any, b: any) =>
+      new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+    );
+  const groupedDue = new Map<string, any[]>();
+  for (const action of dueCandidates) {
+    const key = normalizeSku(action.normalized_sku || action.sku);
+    if (!key) continue;
+    const group = groupedDue.get(key) || [];
+    group.push(action);
+    groupedDue.set(key, group);
+  }
+  const due: any[] = [];
+  const duplicateResults: any[] = [];
+  for (const group of groupedDue.values()) {
+    const inFlight = group.filter((action: any) =>
+      ["submitted", "processing"].includes(String(action.status || ""))
+    );
+    const keep = new Set(
+      (inFlight.length ? inFlight : group.slice(0, 1)).map((action: any) =>
+        action.id
+      ),
+    );
+    for (const action of group) {
+      if (keep.has(action.id)) {
+        due.push(action);
+        continue;
+      }
+      await base44.asServiceRole.entities.AmazonActionQueue.update(action.id, {
+        status: "cancelled",
+        last_error:
+          "Ação duplicada do mesmo SKU; preservada somente a ação canônica para reconciliação.",
+        completed_at: nowIso(),
+        updated_at: nowIso(),
+      }).catch(() => {});
+      duplicateResults.push({
+        action_id: action.id,
+        sku: action.sku,
+        status: "cancelled",
+        duplicate: true,
+      });
+    }
+  }
+  due.splice(
+    Math.max(1, Math.min(numberValue(options.max_actions, 20), 100)),
+  );
   const productBySku = new Map<string, any>(
     products.map((product: any) => [normalizeSku(product.sku), product]),
   );
@@ -1705,9 +2027,9 @@ async function processQueueForAccount(
     const key = normalizeSku(economics.sku);
     if (key && !economicsBySku.has(key)) economicsBySku.set(key, economics);
   }
-  const results: any[] = [];
+  const results: any[] = [...duplicateResults];
   for (const action of due) {
-    const key = normalizeSku(action.sku);
+    const key = normalizeSku(action.normalized_sku || action.sku);
     const product = productBySku.get(key);
     const economics = economicsBySku.get(key);
     const stock = numberValue(
@@ -1772,6 +2094,35 @@ async function processQueueForAccount(
           listing.currentPrice,
           listingResult.listing,
         ),
+      );
+      continue;
+    }
+    const inventoryFresh = product.catalog_sync_status === "success" &&
+      hoursSince(product.last_catalog_sync_at) <= 2;
+    if (
+      product.status !== "active" || !inventoryFresh ||
+      listingExecutionBlockReasons(listing).length > 0
+    ) {
+      results.push(
+        await failOrRetry(base44, action, {
+          status: 422,
+          errors: [{
+            message:
+              "Produto inativo, estoque FBA desatualizado ou fulfillment não confirmado como AFN.",
+          }],
+        }, true),
+      );
+      continue;
+    }
+    if (!pricesMatch(listing.currentPrice, action.old_price)) {
+      results.push(
+        await failOrRetry(base44, action, {
+          status: 409,
+          errors: [{
+            message:
+              `Preço atual da Amazon divergiu da base da ação (${listing.currentPrice} vs ${action.old_price}); publicação cancelada para preservar o preço confirmado.`,
+          }],
+        }, true),
       );
       continue;
     }
@@ -1852,6 +2203,27 @@ async function processQueueForAccount(
           }],
         }, true),
       );
+      continue;
+    }
+    if (
+      action.payload?.manual_apply !== true &&
+      !automaticExecutionRuntimeEnabled()
+    ) {
+      const nextRetryAt = new Date(Date.now() + 60 * 60000).toISOString();
+      await base44.asServiceRole.entities.AmazonActionQueue.update(action.id, {
+        status: "pending",
+        last_error:
+          `Execução automática suspensa: ative ${AUTOMATIC_REPRICING_RUNTIME_FLAG} somente após o rollout controlado.`,
+        next_retry_at: nextRetryAt,
+        updated_at: nowIso(),
+      }).catch(() => {});
+      results.push({
+        action_id: action.id,
+        sku: action.sku,
+        status: "pending",
+        runtime_kill_switch: true,
+        next_retry_at: nextRetryAt,
+      });
       continue;
     }
     const payload = {
@@ -2008,6 +2380,19 @@ async function saveSettings(
     throw new Error("A alteração mínima efetiva deve ser de pelo menos 1%.");
   }
   if (
+    numberValue(settings.maximum_price_change_amount_24h) <= 0 ||
+    numberValue(settings.maximum_price_change_amount_24h) > 2
+  ) throw new Error("O limite absoluto em 24 horas não pode superar R$ 2,00.");
+  if (numberValue(settings.minimum_price_change_amount) < 0.05) {
+    throw new Error("A alteração mínima de preço não pode ser inferior a R$ 0,05.");
+  }
+  if (numberValue(settings.minimum_automatic_confidence) < 90) {
+    throw new Error("A confiança automática mínima não pode ser inferior a 90%.");
+  }
+  if (numberValue(settings.price_change_window_hours) !== 24) {
+    throw new Error("A janela móvel de preço deve ser de 24 horas.");
+  }
+  if (
     numberValue(settings.normal_max_change_pct) < 1 ||
     numberValue(settings.normal_max_change_pct) > 3
   ) {
@@ -2053,6 +2438,23 @@ async function saveSettings(
       settings.minimum_effective_change_pct,
       1,
     ),
+    repricing_rollout_mode: ["guarded", "recommendation_only", "manual"]
+        .includes(String(settings.repricing_rollout_mode))
+      ? settings.repricing_rollout_mode
+      : "guarded",
+    maximum_price_change_amount_24h: Math.min(
+      2,
+      numberValue(settings.maximum_price_change_amount_24h, 2),
+    ),
+    minimum_price_change_amount: Math.max(
+      0.05,
+      numberValue(settings.minimum_price_change_amount, 0.05),
+    ),
+    minimum_automatic_confidence: Math.max(
+      90,
+      Math.min(100, numberValue(settings.minimum_automatic_confidence, 90)),
+    ),
+    price_change_window_hours: 24,
     cooldown_hours: numberValue(settings.cooldown_hours, 6),
     learning_window_hours: numberValue(settings.learning_window_hours, 72),
     minimum_confidence: Math.max(
@@ -2094,15 +2496,38 @@ async function checkConnectionForAccount(
   base44: any,
   account: any,
   accessToken: string,
+  identityResult?: any,
 ) {
-  const sellerId = account.seller_id || secrets.get("AMAZON_SELLER_ID") || "";
+  const identity = sellerIdentity(account);
+  const sellerId = identity.sellerId;
   const marketplaceId = account.marketplace_id ||
     secrets.get("AMAZON_MARKETPLACE_ID") || "";
+  const products = await base44.asServiceRole.entities.Product.filter(
+    { amazon_account_id: account.id },
+    "-updated_date",
+    100,
+  ).catch(() => []);
+  const economics = await base44.asServiceRole.entities.ProductEconomics.filter(
+    { amazon_account_id: account.id },
+    "-updated_at",
+    100,
+  ).catch(() => []);
+  const productSamples = selectSpApiSamples(products);
+  const economicSamples = selectSpApiSamples(economics);
+  const samples = {
+    listing: productSamples.listing || economicSamples.listing,
+    asin: productSamples.asin || economicSamples.asin,
+    pricing: productSamples.pricing || economicSamples.pricing,
+  };
   const checks: any = {
     oauth: { ok: true, message: "OAuth SP-API validado." },
     seller: {
       ok: Boolean(sellerId),
-      message: sellerId ? "Seller ID configurado." : "Seller ID ausente.",
+      message: sellerId
+        ? `Seller ID validado (${identityResult?.source || identity.source}).`
+        : `Seller ID ausente e não identificado pela autorização SP-API${
+          identityResult?.discoveryError ? `: ${identityResult.discoveryError}` : "."
+        }`,
     },
     marketplace: {
       ok: Boolean(marketplaceId),
@@ -2110,24 +2535,42 @@ async function checkConnectionForAccount(
         ? "Marketplace ID configurado."
         : "Marketplace ID ausente.",
     },
-    listings: { ok: false, skipped: true, message: "Sem SKU para testar." },
-    pricing: { ok: false, skipped: true, message: "Sem SKU/ASIN para testar." },
+    listings: {
+      ok: false,
+      skipped: true,
+      sku: samples.listing?.sku || null,
+      message: samples.listing
+        ? "SKU encontrado; teste bloqueado pela configuração da conta."
+        : `Nenhum SKU encontrado em ${products.length} produto(s) e ${economics.length} registro(s) econômicos.`,
+    },
+    pricing: {
+      ok: false,
+      skipped: true,
+      sku: samples.pricing?.sku || null,
+      asin: samples.pricing?.asin || samples.asin?.asin || null,
+      message: samples.pricing
+        ? "SKU e ASIN encontrados; teste bloqueado pela configuração da conta."
+        : "Nenhum registro com SKU e ASIN encontrado entre catálogo e economia do produto.",
+    },
   };
   if (!sellerId || !marketplaceId) {
-    return { account_id: account.id, connected: false, checks };
+    return {
+      account_id: account.id,
+      connected: false,
+      product_count: products.length,
+      economics_count: economics.length,
+      checks,
+    };
   }
 
-  const products = await base44.asServiceRole.entities.Product.filter(
-    { amazon_account_id: account.id },
-    "-updated_date",
-    100,
-  ).catch(() => []);
-  const sample = products.find((product: any) => product?.sku && product?.asin);
+  const sample = samples.pricing;
   if (!sample) {
     return {
       account_id: account.id,
       connected: true,
       limited: true,
+      product_count: products.length,
+      economics_count: economics.length,
       message: "OAuth e conta válidos; nenhum produto com SKU e ASIN para testar os endpoints.",
       checks,
     };
@@ -2159,10 +2602,46 @@ async function checkConnectionForAccount(
   return {
     account_id: account.id,
     connected: checks.listings.ok && checks.pricing.ok,
+    product_count: products.length,
+    economics_count: economics.length,
     checked_at: nowIso(),
     sample: { sku: sample.sku, asin: sample.asin },
     checks,
   };
+}
+
+async function acquireRepricingLock(
+  base44: any,
+  accountId: string,
+  ownerId: string,
+) {
+  const response = await base44.asServiceRole.functions.invoke(
+    "acquireAmazonSchedulerLock",
+    {
+      amazon_account_id: accountId,
+      lock_key: "automatic_repricing_engine",
+      owner_id: ownerId,
+      ttl_ms: 55 * 60 * 1000,
+      _service_role: true,
+    },
+  ).catch((error: any) => ({
+    data: { ok: false, acquired: false, error: error?.message || String(error) },
+  }));
+  return unwrap(response);
+}
+
+async function releaseRepricingLock(
+  base44: any,
+  accountId: string,
+  ownerId: string,
+) {
+  await base44.asServiceRole.functions.invoke("acquireAmazonSchedulerLock", {
+    amazon_account_id: accountId,
+    lock_key: "automatic_repricing_engine",
+    owner_id: ownerId,
+    action: "release",
+    _service_role: true,
+  }).catch(() => {});
 }
 
 Deno.serve(async (req) => {
@@ -2216,7 +2695,13 @@ Deno.serve(async (req) => {
     }
     const accessToken = await getSpAccessToken();
     const results: any[] = [];
-    for (const account of accounts) {
+    for (const storedAccount of accounts) {
+      const sellerIdentityResult = await ensureSellerIdentity(
+        base44,
+        storedAccount,
+        accessToken,
+      );
+      const account = sellerIdentityResult.account;
       const options = {
         ...body,
         full: operation === "full_evaluation",
@@ -2224,31 +2709,55 @@ Deno.serve(async (req) => {
         product_id: body.product_id,
         changed_by: user?.email || user?.id || "scheduler",
       };
-      if (["process_queue", "reconcile"].includes(operation)) {
+      if (operation === "connection_check") {
         results.push(
-          await processQueueForAccount(base44, account, accessToken, options),
-        );
-      } else if (operation === "connection_check") {
-        results.push(
-          await checkConnectionForAccount(base44, account, accessToken),
-        );
-      } else if (
-        ["evaluate", "full_evaluation", "apply_suggested"].includes(operation)
-      ) {
-        if (operation === "apply_suggested" && !body.product_id) {
-          return Response.json({
-            ok: false,
-            error: "product_id obrigatório para aplicar preço sugerido.",
-          }, { status: 400 });
-        }
-        results.push(
-          await evaluateAccount(base44, account, accessToken, options),
+          await checkConnectionForAccount(
+            base44,
+            account,
+            accessToken,
+            sellerIdentityResult,
+          ),
         );
       } else {
-        return Response.json({
-          ok: false,
-          error: `Operação de repricing desconhecida: ${operation}`,
-        }, { status: 400 });
+        const ownerId = crypto.randomUUID();
+        const lock = await acquireRepricingLock(base44, account.id, ownerId);
+        if (lock.acquired !== true) {
+          results.push({
+            account_id: account.id,
+            locked: true,
+            lock_owner_id: lock.owner_id || null,
+            lock_expires_at: lock.expires_at || null,
+            error: lock.error ||
+              "Outro ciclo de repricing já está em execução para esta conta.",
+          });
+          continue;
+        }
+        try {
+          if (["process_queue", "reconcile"].includes(operation)) {
+            results.push(
+              await processQueueForAccount(base44, account, accessToken, options),
+            );
+          } else if (
+            ["evaluate", "full_evaluation", "apply_suggested"].includes(operation)
+          ) {
+            if (operation === "apply_suggested" && !body.product_id) {
+              return Response.json({
+                ok: false,
+                error: "product_id obrigatório para aplicar preço sugerido.",
+              }, { status: 400 });
+            }
+            results.push(
+              await evaluateAccount(base44, account, accessToken, options),
+            );
+          } else {
+            return Response.json({
+              ok: false,
+              error: `Operação de repricing desconhecida: ${operation}`,
+            }, { status: 400 });
+          }
+        } finally {
+          await releaseRepricingLock(base44, account.id, ownerId);
+        }
       }
     }
     const completedAt = nowIso();
@@ -2273,7 +2782,7 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
     return Response.json({
-      ok: true,
+      ok: results.every((result) => result.locked !== true),
       operation,
       started_at: startedAt,
       completed_at: completedAt,

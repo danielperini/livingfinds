@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
+import { canonicalAccountSalesByDate } from '../../../base44/shared/salesDailyIntegrity.ts';
 
 const RANGE_DAYS = 90;
 const REFRESH_MS = 10 * 60 * 1000;
@@ -183,13 +184,9 @@ export default function LivePerformanceChart() {
     }
 
     // Preserva a mesma soma do gráfico anterior, inclusive registros por ASIN.
-    for (const item of state.data.sales || []) {
-      if (!item.date || item.date < since || item.date > today) continue;
-      const row = ensure(item.date);
-      const revenue = item.finance_sync_status === 'synced' && Number(item.gross_revenue || 0) > 0
-        ? Number(item.gross_revenue || 0)
-        : Number(item.ordered_product_sales || 0);
-      row.faturamentoReal = Number(row.faturamentoReal || 0) + revenue;
+    for (const [date, value] of canonicalAccountSalesByDate(state.data.sales || [])) {
+      if (date < since || date > today) continue;
+      ensure(date).faturamentoReal = value.revenue;
     }
 
     // Os motores atuais persistem ações em duas entidades. Somamos somente

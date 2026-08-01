@@ -196,6 +196,7 @@ Deno.serve(async (request) => {
         asin,
         sku,
         date,
+        aggregation_level: 'product',
         units_ordered: 0,
         ordered_product_sales: 0,
         orders: 0,
@@ -231,6 +232,7 @@ Deno.serve(async (request) => {
     const accountRecords = [...totals.entries()].map(([date, total]) => ({
       amazon_account_id: accountId,
       date,
+      aggregation_level: 'account_total',
       units_ordered: total.units,
       ordered_product_sales: Number(total.revenue.toFixed(2)),
       orders: total.orders,

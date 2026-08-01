@@ -24,6 +24,7 @@ import {
   isFactoryEconomicallyHealthy,
   normalizeFactoryKeyword,
 } from '../../shared/campaignFactorySignals.ts';
+import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
 
 // ── Config defaults (configuráveis via PerformanceSettings) ──────────────
 const DEFAULT_MIN_ORDERS_PROVEN       = 2;
@@ -348,6 +349,15 @@ Deno.serve(async (req) => {
       min_orders_strong: Number(perf.min_orders_strong  || DEFAULT_MIN_ORDERS_STRONG),
       min_intent_proven: Number(perf.min_intent_proven  || DEFAULT_MIN_INTENT_PROVEN),
     };
+    const accountReality = evaluateCentralGoals({
+      targetAcos: goal.target_acos, maximumAcos: goal.max_acos,
+      targetRoas: perf.target_roas, targetTacos: perf.target_tacos,
+      maximumCpc: perf.max_cpc, dailyBudget: goal.daily_budget_limit,
+      acos: perf.current_acos_7d, roas: perf.current_roas_7d, tacos: perf.current_tacos_7d,
+      cpc: perf.current_cpc_7d, spend: perf.current_spend_d1,
+      profitPositive: perf.profit_positive_7d !== false,
+      dataComplete: perf.data_complete_7d !== false,
+    });
 
     // Break-even por ASIN
     const breakEvenMap = new Map<string, number>();
@@ -625,7 +635,9 @@ Deno.serve(async (req) => {
     const candidates   = toReclassify.filter((e: any) => ['CANDIDATE', 'VALIDATING'].includes(e.lifecycle_status) && e.amazon_recommended && e.intent_score >= 85);
 
     // Limite de criações por dia (PRD §77)
-    const planTargets = [...winners, ...candidates].slice(0, DEFAULT_MAX_NEW_PER_DAY);
+    const planTargets = accountReality.permissions.createCampaign
+      ? [...winners, ...candidates].slice(0, DEFAULT_MAX_NEW_PER_DAY)
+      : [];
 
     // Deduplicar contra keywords/campanhas e planos reais. O keyword_hash do
     // próprio banco identifica a fonte e não significa que a campanha existe.

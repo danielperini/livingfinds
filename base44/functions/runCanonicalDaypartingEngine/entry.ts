@@ -1,6 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 import { runCanonicalNativeDaypartSync } from '../../shared/canonicalNativeDaypartSync.ts';
 import { readConfirmedTodaySpend, resolveDailyCap } from '../../shared/portfolioBudgetMath.ts';
+import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
 
 /**
  * Motor canônico de dayparting híbrido.
@@ -406,6 +407,21 @@ Deno.serve(async (request) => {
       }
 
       const cm = campaignMetrics(campaign);
+      const centralGoals = evaluateCentralGoals({
+        targetAcos: perf.target_acos || cfg.target_acos,
+        maximumAcos: perf.max_acos || cfg.maximum_acos,
+        targetRoas: perf.target_roas || cfg.target_roas,
+        targetTacos: perf.target_tacos || cfg.target_tacos,
+        maximumCpc: perf.max_cpc || cfg.maximum_cpc,
+        dailyBudget: dailyCap,
+        acos: cm.acos,
+        roas: cm.spend > 0 ? cm.sales / cm.spend : null,
+        tacos: null,
+        cpc: cm.clicks > 0 ? cm.spend / cm.clicks : null,
+        spend: confirmedSpend,
+        profitPositive: true,
+        dataComplete: cm.spend > 0 || cm.impressions > 0,
+      });
       const strategicManual = type === 'MANUAL' && cm.orders >= minManualOrders && cm.sales > 0 && cm.acos !== null && cm.acos <= targetAcos;
       if (type === 'MANUAL' && !strategicManual) {
         skipped++;
@@ -444,6 +460,7 @@ Deno.serve(async (request) => {
       const nativeGuardReasons: string[] = [];
       if (pacing === 'overpacing') nativeGuardReasons.push('overpacing');
       if (economicRisk) nativeGuardReasons.push('profit_protection');
+      if (!centralGoals.permissions.topOfSearch) nativeGuardReasons.push(`central_goals_${centralGoals.mode.toLowerCase()}`);
       if (maxEnabledAdjustment > maxIncreasePct + 0.001) nativeGuardReasons.push(`rule_${maxEnabledAdjustment}%_above_cap_${maxIncreasePct}%`);
       if (safeMaxCpc > 0 && maxProjectedBid > safeMaxCpc + 0.001) nativeGuardReasons.push('safe_max_cpc');
 

@@ -29,6 +29,7 @@
  *   Alto risco (aprovação): aumento >10%, redução >25% acumulado, pausa de campanha, alteração estrutural
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { isTrustedRealSales, salesScope } from '../../shared/salesDailyIntegrity.ts';
 
 function nowIso() { return new Date().toISOString(); }
 function todayBRT() { return new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10); }
@@ -265,7 +266,7 @@ Deno.serve(async (req) => {
     // Vendas reais por ASIN no dia (SP-API → SalesDaily)
     const realSalesByAsin = new Map<string, { revenue: number; units: number }>();
     for (const s of salesDailyRaw) {
-      if (!s.asin || s.date !== assessmentDate) continue;
+      if (!isTrustedRealSales(s) || salesScope(s) !== 'product' || !s.asin || s.date !== assessmentDate) continue;
       if (!realSalesByAsin.has(s.asin)) realSalesByAsin.set(s.asin, { revenue: 0, units: 0 });
       const e = realSalesByAsin.get(s.asin)!;
       e.revenue += s.ordered_product_sales || 0;

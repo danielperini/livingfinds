@@ -20,6 +20,7 @@ import {
   calculateObservedWindowDays,
   calculateRealTacos,
 } from '../../shared/decisionMetrics.ts';
+import { canonicalAccountSalesByDate, isTrustedRealSales, salesScope } from '../../shared/salesDailyIntegrity.ts';
 
 const FALLBACK_TARGET_ACOS = 10;
 const FALLBACK_MAX_ACOS = 15;
@@ -225,26 +226,27 @@ Deno.serve(async (req) => {
     const salesByAsin = new Map<string, { revenue: number; units: number; orders: number; dates: Set<string> }>();
     const realKpis14d = { revenue: 0, units: 0, orders: 0 };
     for (const s of salesDailyRaw) {
-      if (!s.asin || !s.date || s.date < since30) continue;
+      if (!isTrustedRealSales(s) || salesScope(s) !== 'product' || !s.asin || !s.date || s.date < since30) continue;
       if (!salesByAsin.has(s.asin)) salesByAsin.set(s.asin, { revenue: 0, units: 0, orders: 0, dates: new Set() });
       const e = salesByAsin.get(s.asin)!;
       e.revenue += s.ordered_product_sales || 0;
       e.units += s.units_ordered || 0;
-      if ((s.units_ordered || 0) > 0) e.orders++;
+      e.orders += s.orders || 0;
       if (s.date) e.dates.add(s.date);
       if (s.date >= since14) {
         realKpis14d.revenue += s.ordered_product_sales || 0;
         realKpis14d.units += s.units_ordered || 0;
-        if ((s.units_ordered || 0) > 0) realKpis14d.orders++;
+        realKpis14d.orders += s.orders || 0;
       }
     }
 
     // KPIs reais agregados de toda a conta (SP-API)
     const realKpis30d = { revenue: 0, units: 0, orders: 0 };
-    for (const v of salesByAsin.values()) {
-      realKpis30d.revenue += v.revenue;
-      realKpis30d.units += v.units;
-      realKpis30d.orders += v.orders;
+    for (const [date, value] of canonicalAccountSalesByDate(salesDailyRaw)) {
+      if (date < since30) continue;
+      realKpis30d.revenue += value.revenue;
+      realKpis30d.units += value.units;
+      realKpis30d.orders += value.orders;
     }
 
     // TACoS real da conta (30d)
