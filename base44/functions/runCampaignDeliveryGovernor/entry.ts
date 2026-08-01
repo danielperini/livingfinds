@@ -99,7 +99,7 @@ async function updateMonitoring(base44: any, campaign: any, code: string, reason
     delivery_block_reason: `${SOURCE}|${code}|${reason}`.slice(0, 1000),
     last_serving_check_at: now,
     next_delivery_review_at: new Date(Date.now() + nextHours * 3600000).toISOString(),
-    requires_attention: code.includes('REVIEW') || code.includes('REPLACE') || code.includes('STALE'),
+    requires_attention: code.includes('REVIEW') || code.includes('REPLACE') || code.includes('STALE') || code.includes('MISSING'),
   }).catch(() => {});
 }
 
@@ -119,22 +119,24 @@ async function changeCampaignState(base44: any, accountId: string, campaign: any
   }, 'application/vnd.spCampaign.v3+json');
 
   const now = new Date().toISOString();
-  const localState = state.toLowerCase();
-  await base44.asServiceRole.entities.Campaign.update(campaign.id, {
-    state: localState,
-    status: localState,
-    amazon_status: localState,
+  const patch: any = {
+    state: state.toLowerCase(),
+    status: state.toLowerCase(),
+    amazon_status: state.toLowerCase(),
     is_operational: state === 'ENABLED',
-    archived: state === 'ARCHIVED',
-    archived_at: state === 'ARCHIVED' ? now : campaign.archived_at || null,
-    archive_reason: state === 'ARCHIVED' ? reason : campaign.archive_reason || null,
     delivery_status: code.toLowerCase(),
     delivery_block_reason: `${SOURCE}|${code}|${reason}`.slice(0, 1000),
     last_serving_check_at: now,
     next_delivery_review_at: new Date(Date.now() + (state === 'ENABLED' ? 24 : 1) * 3600000).toISOString(),
     requires_attention: state !== 'ENABLED',
     synced_at: now,
-  });
+  };
+  if (state === 'ARCHIVED') {
+    patch.archived = true;
+    patch.archived_at = now;
+    patch.archive_reason = reason;
+  }
+  await base44.asServiceRole.entities.Campaign.update(campaign.id, patch);
 
   const decision = await recordDecision(base44, {
     amazon_account_id: accountId,
@@ -178,18 +180,33 @@ function economicsFor(product: any, economics: any[]) {
   ) || null;
 }
 
-function aggregateMetrics(rows: any[]) {
-  const result: any = { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0, newest: null };
+function metricTimestamp(row: any): number {
+  const timestamp = new Date(`${row?.date || '1970-01-01'}T23:59:59Z`).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function aggregateMetrics(rows: any[], campaign: any, fallbackFresh: boolean) {
+  const result: any = { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0, newest: 0 };
   for (const row of rows) {
     result.impressions += numberValue(row.impressions, 0);
     result.clicks += numberValue(row.clicks, 0);
     result.orders += numberValue(row.orders ?? row.purchases, 0);
     result.sales += numberValue(row.sales ?? row.attributed_sales, 0);
     result.spend += numberValue(row.spend ?? row.cost, 0);
-    const timestamp = new Date(`${row.date || '1970-01-01'}T23:59:59Z`).getTime();
-    if (!result.newest || timestamp > result.newest) result.newest = timestamp;
+    result.newest = Math.max(result.newest, metricTimestamp(row));
   }
-  result.metricsFresh = Boolean(result.newest && Date.now() - result.newest <= METRICS_FRESH_HOURS * 3600000);
+  if (!rows.length && fallbackFresh) {
+    result.impressions = numberValue(campaign.impressions, 0);
+    result.clicks = numberValue(campaign.clicks, 0);
+    result.orders = numberValue(campaign.orders, 0);
+    result.sales = numberValue(campaign.sales, 0);
+    result.spend = numberValue(campaign.spend ?? campaign.current_spend, 0);
+  }
+  result.metricsFresh = Boolean(
+    (result.newest && Date.now() - result.newest <= METRICS_FRESH_HOURS * 3600000) ||
+    (!rows.length && fallbackFresh)
+  );
+  result.source = rows.length ? 'CampaignMetricsDaily' : fallbackFresh ? 'fresh_campaign_snapshot' : 'missing';
   return result;
 }
 
@@ -255,16 +272,20 @@ async function createExactReplacement(params: {
   const sku = String(product.sku || '').trim();
   const term = String(candidate.term).trim();
   const termNorm = norm(term);
-  const duplicateKeyword = keywords.find((row: any) => upper(row.asin) === asin && norm(row.keyword_text || row.keyword) === termNorm && upper(row.match_type) === 'EXACT' && enabled(row.state || row.status));
+  const duplicateKeyword = keywords.find((row: any) =>
+    upper(row.asin) === asin && norm(row.keyword_text || row.keyword) === termNorm &&
+    upper(row.match_type) === 'EXACT' && enabled(row.state || row.status)
+  );
   if (duplicateKeyword) return { ok: true, already_exists: true, campaign_id: String(duplicateKeyword.campaign_id), term };
 
   const minBid = Math.max(0.10, numberValue(settings.min_bid, 0.20));
   const maxBid = Math.max(minBid, numberValue(settings.max_bid, 5));
   const safeCpc = numberValue(economics?.safe_max_cpc, 0);
-  if (safeCpc > 0 && safeCpc < minBid) throw new Error(`CPC seguro ${safeCpc} inferior ao bid mínimo ${minBid}; substituição bloqueada.`);
+  if (safeCpc <= 0) throw new Error('CPC seguro ausente; substituição bloqueada até atualizar a economia real do produto.');
+  if (safeCpc < minBid) throw new Error(`CPC seguro ${safeCpc} inferior ao bid mínimo ${minBid}; substituição bloqueada.`);
   const currentBid = numberValue(oldKeyword?.current_bid ?? oldKeyword?.bid, minBid);
   const suggested = numberValue(candidate.suggestedLow, 0);
-  const bid = roundMoney(Math.max(minBid, Math.min(maxBid, safeCpc > 0 ? safeCpc : maxBid, suggested > 0 ? suggested : currentBid)));
+  const bid = roundMoney(Math.max(minBid, Math.min(maxBid, safeCpc, suggested > 0 ? suggested : currentBid)));
   const budget = Math.max(1, numberValue(settings.minimum_campaign_budget, 5));
   const clean = term.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 45);
   const name = `SP | MANUAL | EXACT | ${asin} | ${clean}`.slice(0, 128);
@@ -355,7 +376,7 @@ async function createExactReplacement(params: {
     default_bid: bid,
     group_type: 'exact',
     primary_asin: asin,
-    primary_sku: sku || null,
+    ...(sku ? { primary_sku: sku } : {}),
     created_by_app: true,
   });
   await base44.asServiceRole.entities.ProductAd.create({
@@ -364,7 +385,7 @@ async function createExactReplacement(params: {
     campaign_id: String(campaignId),
     ad_group_id: String(adGroupId),
     asin,
-    sku: sku || null,
+    ...(sku ? { sku } : {}),
     state: 'enabled',
     status: 'enabled',
     synced_at: now,
@@ -464,15 +485,19 @@ Deno.serve(async (req) => {
           if (asin && !assessmentByAsin.has(asin)) assessmentByAsin.set(asin, row);
         }
 
+        let newestAccountMetric = 0;
         const metricsByCampaign = new Map<string, any[]>();
         for (const row of metrics) {
           if (String(row.date || '') < cutoff) continue;
+          newestAccountMetric = Math.max(newestAccountMetric, metricTimestamp(row));
           const id = String(row.campaign_id || row.amazon_campaign_id || '');
           if (!id) continue;
           const rows = metricsByCampaign.get(id) || [];
           rows.push(row);
           metricsByCampaign.set(id, rows);
         }
+        const accountMetricsFresh = Boolean(newestAccountMetric && Date.now() - newestAccountMetric <= METRICS_FRESH_HOURS * 3600000);
+
         const hourlyByCampaign = new Map<string, any[]>();
         for (const row of hourly) {
           if (String(row.date || '') < cutoff) continue;
@@ -493,7 +518,7 @@ Deno.serve(async (req) => {
         const exactTermsByAsin = new Map<string, Set<string>>();
         for (const keyword of keywords) {
           const asin = upper(keyword.asin);
-          if (!asin || upper(keyword.match_type) !== 'EXACT') continue;
+          if (!asin || upper(keyword.match_type) !== 'EXACT' || !enabled(keyword.state || keyword.status)) continue;
           const set = exactTermsByAsin.get(asin) || new Set<string>();
           set.add(norm(keyword.keyword_text || keyword.keyword));
           exactTermsByAsin.set(asin, set);
@@ -570,6 +595,12 @@ Deno.serve(async (req) => {
             continue;
           }
 
+          if (!economicsAreActionable(econ, assessment)) {
+            await updateMonitoring(base44, campaign, 'MOTOR_MONITORING_ECONOMICS_MISSING', 'Economia real do produto está incompleta ou desatualizada; nenhuma ação financeira será executada.', 3);
+            summary.monitored++;
+            continue;
+          }
+
           const loss = structuralLoss(econ, minBid);
           if (loss.blocked) {
             try {
@@ -586,7 +617,12 @@ Deno.serve(async (req) => {
             continue;
           }
 
-          const agg = aggregateMetrics(metricsByCampaign.get(campaignId) || []);
+          const campaignSyncFresh = ageHours(campaign.last_api_sync_at || campaign.last_sync_at || campaign.synced_at) <= METRICS_FRESH_HOURS;
+          const agg = aggregateMetrics(
+            metricsByCampaign.get(campaignId) || [],
+            campaign,
+            accountMetricsFresh && campaignSyncFresh,
+          );
           const policy = resolveOperatingAcos(econ, accountTargetAcos);
           const maximumProfitableSpend = numberValue(
             assessment?.maximum_profitable_cpa ?? econ?.maximum_profitable_ad_spend ?? econ?.profit_before_ads,
@@ -749,6 +785,7 @@ Deno.serve(async (req) => {
     summary.ok = summary.errors.length === 0;
     summary.policy = {
       zero_impression: 'máximo de duas recuperações controladas; depois substituição',
+      zero_activity_without_report_row: 'usa apenas frescor global do relatório e snapshot persistido da campanha; não cria métricas fictícias',
       impressions_without_click: 'nunca aumentar bid; substituir após amostra mínima',
       clicks_without_sale: 'pausar ou substituir ao atingir limite econômico',
       no_stock_or_inactive: 'pausa imediata e reversível',
