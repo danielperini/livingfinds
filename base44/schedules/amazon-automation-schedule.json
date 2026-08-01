@@ -26,6 +26,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Campaign delivery and profit governor - every 15 minutes",
+      "function": "runCampaignDeliveryGovernor",
+      "cron": "12,27,42,57 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 3 hours",
       "function": "runManualZeroDeliveryBootstrap",
       "cron": "8 */3 * * *",
