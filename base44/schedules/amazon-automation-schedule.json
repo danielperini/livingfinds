@@ -26,6 +26,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "SKU profit and ACoS repricing - every 3 hours",
+      "function": "runSkuRepricingEngine",
+      "cron": "35 */3 * * *",
+      "payload": { "_service_role": true, "max_skus": 20, "max_changes": 5, "trigger_type": "scheduler_sku_repricing" }
+    },
+    {
       "name": "Campaign delivery and profit governor - every 15 minutes",
       "function": "runCampaignDeliveryGovernor",
       "cron": "12,27,42,57 * * * *",
