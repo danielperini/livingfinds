@@ -1395,7 +1395,7 @@ async function evaluateAccount(
         ) / 100,
       },
     });
-    const inventoryFresh = Boolean(
+    const inventoryConfidenceFresh = Boolean(
       stock > 0 && product.last_catalog_sync_at &&
         hoursSince(product.last_catalog_sync_at) <= 2,
     );
@@ -1419,7 +1419,7 @@ async function evaluateAccount(
           hoursSince(mergedEconomics.fees_verified_at) <=
             numberValue(settings.fees_max_age_hours, 24),
       ),
-      inventoryFresh,
+      inventoryFresh: inventoryConfidenceFresh,
       equivalentCompetitionValid: competitionFresh && competitorOffers.length > 0,
       salesAndConversionSufficient,
       adsMetricsMatured,

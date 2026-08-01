@@ -88,6 +88,11 @@ jobs:
               exit 1
             fi
             curl -sf http://localhost:8000/health && echo ' — deploy OK'
+            echo '--- verificando funções críticas carregadas ---'
+            functions_json="$(curl -fsS http://localhost:8000/functions)"
+            echo "$functions_json" | grep -q 'runAutomaticRepricing'
+            echo "$functions_json" | grep -q 'importProductEconomics'
+            echo 'FUNCTION_REGISTRY=runAutomaticRepricing,importProductEconomics — OK'
 
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
             echo '--- autocorreção diária dos relatórios ---'
