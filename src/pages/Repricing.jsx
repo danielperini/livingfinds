@@ -85,6 +85,7 @@ export default function Repricing() {
   const [executingPrices, setExecutingPrices] = useState(false);
   const [priceExecutionResult, setPriceExecutionResult] = useState(null);
   const [skuSort, setSkuSort] = useState({ key: 'status', direction: 'asc' });
+  const [historySort, setHistorySort] = useState({ key: 'changed_at', direction: 'desc' });
   const [connection, setConnection] = useState(null);
   const [importingCosts, setImportingCosts] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -286,10 +287,26 @@ export default function Repricing() {
       const product = productIndex.get(`id:${item.product_id}`) ||
         productIndex.get(`sku:${normalizeSku(item.sku)}`) ||
         productIndex.get(`asin:${String(item.asin || '').trim().toUpperCase()}`) || {};
+      const evidence = item.decision_evidence || {};
+      const minimumProfitablePrice = finiteNumber(item.minimum_profitable_price)
+        ? Number(item.minimum_profitable_price)
+        : null;
+      const calculatedRecommendation = finiteNumber(evidence.guarded_suggested_price)
+        ? Number(evidence.guarded_suggested_price)
+        : finiteNumber(evidence.ideal_suggested_price)
+          ? Number(evidence.ideal_suggested_price)
+          : Number(item.price_after);
+      const recommendedPrice = minimumProfitablePrice == null
+        ? calculatedRecommendation
+        : Math.max(calculatedRecommendation, minimumProfitablePrice);
       return {
         ...item,
         title: product.display_name || product.product_name || product.title || 'Título não disponível no cadastro',
         percent: percentChange(item.price_before, item.price_after),
+        current_amazon_price: finiteNumber(product.price) ? Number(product.price) : Number(item.price_after),
+        recommended_price: recommendedPrice,
+        minimum_profitable_price: minimumProfitablePrice,
+        recommendation_no_loss: minimumProfitablePrice != null && recommendedPrice >= minimumProfitablePrice,
       };
     })
     .filter(item => source === 'all' || (source === 'automatic'
@@ -299,8 +316,39 @@ export default function Repricing() {
       const needle = search.trim().toLowerCase();
       if (!needle) return true;
       return [item.sku, item.asin, item.title].some(value => String(value || '').toLowerCase().includes(needle));
+    })
+    .sort((left, right) => {
+      const numericKeys = new Set(['price_before', 'price_after', 'current_amazon_price', 'recommended_price', 'percent']);
+      let leftValue;
+      let rightValue;
+      if (historySort.key === 'changed_at') {
+        leftValue = new Date(left.changed_at).getTime();
+        rightValue = new Date(right.changed_at).getTime();
+      } else if (numericKeys.has(historySort.key)) {
+        leftValue = Number(left[historySort.key] || 0);
+        rightValue = Number(right[historySort.key] || 0);
+      } else {
+        leftValue = String(left[historySort.key] || '').toLocaleLowerCase('pt-BR');
+        rightValue = String(right[historySort.key] || '').toLocaleLowerCase('pt-BR');
+      }
+      const comparison = typeof leftValue === 'number'
+        ? leftValue - rightValue
+        : leftValue.localeCompare(rightValue, 'pt-BR');
+      return historySort.direction === 'asc' ? comparison : -comparison;
     });
-  }, [history, productIndex, search, selectedDate, source]);
+  }, [history, historySort, productIndex, search, selectedDate, source]);
+
+  const changeHistorySort = key => setHistorySort(current => ({
+    key,
+    direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc',
+  }));
+
+  const historyColumns = [
+    ['changed_at', 'Horário'], ['sku', 'SKU'], ['asin', 'ASIN'], ['title', 'Título'],
+    ['price_before', 'Valor anterior'], ['price_after', 'Valor alterado'],
+    ['current_amazon_price', 'Preço atual Amazon'], ['recommended_price', 'Preço recomendado IA'],
+    ['percent', 'Alteração'], ['source', 'Origem'], ['status', 'Confirmação'],
+  ];
 
   const auditRows = useMemo(() => history
     .filter(item => brazilDay(item.changed_at) === selectedDate)
@@ -395,7 +443,7 @@ export default function Repricing() {
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead><tr className="border-b border-surface-2 bg-surface-2/40 text-left text-[10px] uppercase tracking-wider text-slate-500">
-                {['Horário', 'SKU', 'ASIN', 'Título', 'Valor anterior', 'Valor alterado', 'Alteração', 'Origem', 'Confirmação'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}
+                {historyColumns.map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3"><button type="button" onClick={() => changeHistorySort(key)} className="inline-flex items-center gap-1 hover:text-cyan">{label}{historySort.key === key ? historySort.direction === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" /> : <span className="text-slate-700">↕</span>}</button></th>)}
               </tr></thead>
               <tbody>{rows.map(row => {
                 const positive = Number(row.percent) > 0;
@@ -407,6 +455,8 @@ export default function Repricing() {
                   <td className="min-w-[260px] max-w-[420px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td>
                   <td className="whitespace-nowrap px-4 py-3 text-slate-400">{money(row.price_before)}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-semibold text-white">{money(row.price_after)}</td>
+                  <td className="whitespace-nowrap px-4 py-3"><p className="font-semibold text-cyan">{money(row.current_amazon_price)}</p><p className="mt-1 text-[9px] text-slate-600">Listings Items API</p></td>
+                  <td className="min-w-[190px] whitespace-nowrap px-4 py-3"><p className="font-semibold text-violet-300">{money(row.recommended_price)}</p><p className={`mt-1 text-[9px] ${row.recommendation_no_loss ? 'text-emerald-400' : 'text-amber-400'}`}>{row.recommendation_no_loss ? `Sem prejuízo · piso ${money(row.minimum_profitable_price)}` : 'Proteção econômica aplicada'}</p><p className="mt-1 text-[9px] text-slate-600">Offers · Featured Offer · FOEP · referência</p></td>
                   <td className={`whitespace-nowrap px-4 py-3 font-bold ${positive ? 'text-emerald-400' : negative ? 'text-red-400' : 'text-slate-500'}`}>
                     <span className="inline-flex items-center gap-1">{positive ? <ArrowUpRight className="h-3.5 w-3.5" /> : negative ? <ArrowDownRight className="h-3.5 w-3.5" /> : null}{row.percent == null ? '—' : `${row.percent > 0 ? '+' : ''}${row.percent.toFixed(2)}%`}</span>
                   </td>
