@@ -33,7 +33,17 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          test -n "${{ secrets.VPS_HOST }}"
+          for attempt in 1 2 3 4 5; do
+            if ssh-keyscan -T 10 -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null; then
+              break
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "Não foi possível obter a chave pública da VPS após 5 tentativas."
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Empacotar e enviar para a VPS
         env:
