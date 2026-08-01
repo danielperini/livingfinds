@@ -59,6 +59,30 @@ Deno.test("bloqueia custo unitario zero em vez de criar piso artificial", () => 
   }
 });
 
+Deno.test("sugere redução segura quando preço supera concorrência e Ads converte abaixo de 3%", () => {
+  const result = decideRepricing({
+    economics,
+    currentPrice: 130,
+    competitorOffers: [{ totalPrice: 120, condition: "New", fulfillmentType: "AFN", available: true }],
+    competitionFresh: true,
+    sellerFulfillmentType: "AFN",
+    dailyUnits: 1,
+    sessions: 100,
+    conversionRate: 0.03,
+    adsClicks: 100,
+    adsOrders: 2,
+    adsConversionRate: 0.02,
+    stock: 50,
+    dataConfidence: 1,
+    guardrails: {
+      normalMaxChangePct: 3, dailyMaxChangePct: 10, minimumEffectiveChangePct: 1,
+      cooldownHours: 6, minimumConfidence: 0.96,
+    },
+  });
+  if (!(Number(result.suggestedPrice) < 130)) throw new Error("deveria sugerir redução");
+  if ((result.projectedEconomics?.marginPct || 0) < 15) throw new Error("redução rompeu margem mínima");
+});
+
 Deno.test("bloqueia custo unitario negativo", () => {
   const result = validateRepricingEconomics({ ...economics, unitProductCost: -1 });
   if (result.complete || result.minimumProfitablePrice !== null) {

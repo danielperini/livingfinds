@@ -83,6 +83,7 @@ export default function Repricing() {
   const [syncingSkus, setSyncingSkus] = useState(false);
   const [skuSyncResult, setSkuSyncResult] = useState(null);
   const [executingPrices, setExecutingPrices] = useState(false);
+  const [studyingPrices, setStudyingPrices] = useState(false);
   const [priceExecutionResult, setPriceExecutionResult] = useState(null);
   const [skuSort, setSkuSort] = useState({ key: 'status', direction: 'asc' });
   const [historySort, setHistorySort] = useState({ key: 'changed_at', direction: 'desc' });
@@ -234,6 +235,27 @@ export default function Repricing() {
     }
   };
 
+  const refreshPriceStudy = async () => {
+    if (!accountId) return;
+    setStudyingPrices(true);
+    setError('');
+    try {
+      const response = await base44.functions.invoke('runAutomaticRepricing', {
+        operation: 'full_evaluation',
+        amazon_account_id: accountId,
+        max_products: 100,
+        recommendation_only: true,
+      });
+      const result = response?.data || response;
+      if (!result?.ok) throw new Error(result?.error || 'Falha ao atualizar o estudo de preços.');
+      await load();
+    } catch (studyError) {
+      setError(studyError?.message || 'Falha ao atualizar o estudo de preços.');
+    } finally {
+      setStudyingPrices(false);
+    }
+  };
+
   const importCostSpreadsheet = async event => {
     const file = event.target.files?.[0];
     if (!file || !accountId) return;
@@ -354,6 +376,42 @@ export default function Repricing() {
     .filter(item => brazilDay(item.changed_at) === selectedDate)
     .filter(item => !isOperationalConfirmation(item)), [history, selectedDate]);
 
+  const recommendationRows = useMemo(() => {
+    const seen = new Set();
+    return history
+      .filter(item => item.history_type === 'price_recommendation')
+      .sort((left, right) => new Date(right.changed_at).getTime() - new Date(left.changed_at).getTime())
+      .filter(item => {
+        const key = normalizeSku(item.normalized_sku || item.sku || item.asin);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(item => {
+        const product = productIndex.get(`id:${item.product_id}`) || productIndex.get(`sku:${normalizeSku(item.sku)}`) || {};
+        const evidence = item.decision_evidence || {};
+        const exactAverage = evidence.competitor_offer_price_average || evidence.competitor_reference_price_average;
+        const similarAverage = evidence.similar_competitor_price_average;
+        const competitorAverage = finiteNumber(exactAverage) && finiteNumber(similarAverage)
+          ? (Number(exactAverage) + Number(similarAverage)) / 2
+          : finiteNumber(exactAverage) ? Number(exactAverage) : finiteNumber(similarAverage) ? Number(similarAverage) : null;
+        const clicks = Number(evidence.ads_clicks_30d || 0);
+        const orders = Number(evidence.ads_orders_30d || 0);
+        return {
+          ...item,
+          title: product.display_name || product.product_name || 'Título não disponível',
+          current_price: Number(evidence.current_price || item.price_before || product.price || 0),
+          recommended_price: Number(evidence.guarded_suggested_price || evidence.ideal_suggested_price || item.price_after || 0),
+          competitor_average: competitorAverage,
+          exact_competitor_average: finiteNumber(exactAverage) ? Number(exactAverage) : null,
+          similar_competitor_average: finiteNumber(similarAverage) ? Number(similarAverage) : null,
+          similar_count: Number(evidence.similar_competitor_product_count || 0),
+          ads_sales_per_click: clicks > 0 ? orders / clicks : null,
+          confidence: Number(evidence.decision_confidence || 0),
+        };
+      });
+  }, [history, productIndex]);
+
   const summary = useMemo(() => ({
     total: rows.length,
     increases: rows.filter(row => Number(row.percent) > 0).length,
@@ -468,6 +526,11 @@ export default function Repricing() {
             {!rows.length && !error && <div className="py-16 text-center"><Tag className="mx-auto h-7 w-7 text-slate-700" /><p className="mt-3 text-sm text-slate-400">Nenhum preço confirmado nesta data.</p><p className="mt-1 text-xs text-slate-600">Recomendações e ações pendentes não são contabilizadas como alteração.</p></div>}
           </div>
         )}
+      </section>
+
+      <section className="rounded-xl border border-violet-500/20 bg-surface-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN + similares Amazon com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p></div><div className="flex items-center gap-2"><button type="button" onClick={refreshPriceStudy} disabled={studyingPrices || !accountId} className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 disabled:opacity-50">{studyingPrices ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{studyingPrices ? 'Pesquisando Amazon...' : 'Atualizar estudo de preços'}</button><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div></div>
+        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média similares ≥90%', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count} produto(s) · inferido</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">Execute “Executar preços planejados” para atualizar o estudo e gerar recomendações auditáveis.</p>}</div>
       </section>
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">

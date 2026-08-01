@@ -44,9 +44,9 @@
     },
     "minimum_automatic_confidence": {
       "type": "number",
-      "minimum": 90,
+      "minimum": 96,
       "maximum": 100,
-      "default": 90
+      "default": 96
     },
     "price_change_window_hours": {
       "type": "number",

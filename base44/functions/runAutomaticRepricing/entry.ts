@@ -51,7 +51,7 @@ const DEFAULTS = {
   repricing_rollout_mode: "guarded",
   maximum_price_change_amount_24h: 2,
   minimum_price_change_amount: 0.05,
-  minimum_automatic_confidence: 90,
+  minimum_automatic_confidence: 96,
   price_change_window_hours: 24,
   cooldown_hours: 6,
   learning_window_hours: 72,
@@ -91,6 +91,20 @@ const hoursSince = (value: unknown) => {
     ? (Date.now() - time) / 3600000
     : Number.POSITIVE_INFINITY;
 };
+
+const comparableTokens = (value: unknown) => new Set(
+  String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/)
+    .filter((token) => token.length > 2),
+);
+
+function titleSimilarity(left: unknown, right: unknown) {
+  const a = comparableTokens(left);
+  const b = comparableTokens(right);
+  if (!a.size || !b.size) return 0;
+  const intersection = [...a].filter((token) => b.has(token)).length;
+  return intersection / Math.max(a.size, b.size);
+}
 const unwrap = (value: any) => value?.data || value || {};
 const automaticExecutionRuntimeEnabled = () =>
   isAutomaticRepricingRuntimeEnabled(
@@ -917,10 +931,10 @@ async function queuePriceAction(base44: any, params: any) {
         params.settings?.minimum_price_change_amount,
         0.05,
       ),
-      minimumAutomaticConfidence: numberValue(
+      minimumAutomaticConfidence: Math.max(96, numberValue(
         params.settings?.minimum_automatic_confidence,
-        90,
-      ),
+        96,
+      )),
     });
     if (!finalGuard.automaticAllowed || !pricesMatch(finalGuard.guardedPrice, newPrice)) {
       return { created: false, action: null, blocked: true, guard: finalGuard };
@@ -1260,6 +1274,19 @@ async function evaluateAccount(
       !sellerId || !offer.sellerId ||
       String(offer.sellerId) !== String(sellerId)
     );
+    const cachedSimilar = economics.decision_evidence || {};
+    const similarCompetition = hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
+      ? {
+        average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
+        count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
+        matches: cachedSimilar.similar_competitor_products || [],
+        checkedAt: cachedSimilar.similar_competition_checked_at,
+        source: "persisted_amazon_catalog_inference",
+      }
+      : await fetchSimilarCompetition(base44, account, accessToken, product).catch((error: any) => ({
+        average: null, count: 0, matches: [], checkedAt: nowIso(),
+        source: "amazon_catalog_inferred_error", error: error?.message || String(error),
+      }));
     const competitionFresh = pricing.ok === true ||
       (economics.competition_checked_at &&
         hoursSince(economics.competition_checked_at) * 60 <=
@@ -1413,12 +1440,19 @@ async function evaluateAccount(
       featuredOfferPrice: pricing.featuredOfferPrice,
       featuredOfferExpectedPrice: pricing.featuredOfferExpectedPrice,
       referenceAveragePrice: pricing.referenceAveragePrice,
+      similarReferenceAveragePrice: similarCompetition.average,
+      similarReferenceCount: similarCompetition.count,
       competitorOffers,
       competitionFresh,
       sellerFulfillmentType: listing.sellerFulfillmentType,
       dailyUnits,
       sessions: numberValue(sales.sessions),
       conversionRate,
+      adsClicks: numberValue(ads?.clicks),
+      adsOrders: numberValue(ads?.orders),
+      adsConversionRate: numberValue(ads?.clicks) > 0
+        ? numberValue(ads?.orders) / numberValue(ads?.clicks)
+        : null,
       stock,
       daysOfSupply: product.days_of_supply,
       elasticity: elasticity.elasticity,
@@ -1434,10 +1468,10 @@ async function evaluateAccount(
           1,
         ),
         cooldownHours: numberValue(settings.cooldown_hours, 6),
-        minimumConfidence: numberValue(
+        minimumConfidence: Math.max(96, numberValue(
           settings.minimum_automatic_confidence,
-          90,
-        ) / 100,
+          96,
+        )) / 100,
       },
     });
     const inventoryConfidenceFresh = Boolean(
@@ -1491,10 +1525,10 @@ async function evaluateAccount(
         settings.minimum_price_change_amount,
         0.05,
       ),
-      minimumAutomaticConfidence: numberValue(
+      minimumAutomaticConfidence: Math.max(96, numberValue(
         settings.minimum_automatic_confidence,
-        90,
-      ),
+        96,
+      )),
     });
     const idealSuggestedPrice = decision.suggestedPrice;
     decision.confidence = confidenceAudit.score / 100;
@@ -1506,7 +1540,7 @@ async function evaluateAccount(
       );
     } else if (guardedChange.status === "recommendation_only") {
       decision.blockReasons.push(
-        "Confiança entre 75% e 89,99%: somente recomendação, sem alteração automática.",
+        "Confiança entre 75% e 95,99%: somente recomendação, sem alteração automática.",
       );
     } else if (guardedChange.status === "insufficient_confidence") {
       decision.blockReasons.push(
@@ -1565,8 +1599,17 @@ async function evaluateAccount(
       featured_offer_price: pricing.featuredOfferPrice,
       featured_offer_expected_price: pricing.featuredOfferExpectedPrice,
       competitor_offers: competitorOffers.length,
+      competitor_offer_price_average: averagePositive(
+        competitorOffers.map((offer: any) => offer.totalPrice),
+      ),
       competitor_reference_prices: pricing.referencePrices || [],
       competitor_reference_price_average: pricing.referenceAveragePrice || null,
+      similar_competitor_price_average: similarCompetition.average || null,
+      similar_competitor_product_count: similarCompetition.count || 0,
+      similar_competitor_products: similarCompetition.matches || [],
+      similar_competition_checked_at: similarCompetition.checkedAt,
+      similar_competition_source: similarCompetition.source,
+      similar_competition_threshold: 0.90,
       stock,
       sales_30d: numberValue(sales.sales),
       units_30d: numberValue(sales.units),
@@ -2431,8 +2474,8 @@ async function saveSettings(
   if (numberValue(settings.minimum_price_change_amount) < 0.05) {
     throw new Error("A alteração mínima de preço não pode ser inferior a R$ 0,05.");
   }
-  if (numberValue(settings.minimum_automatic_confidence) < 90) {
-    throw new Error("A confiança automática mínima não pode ser inferior a 90%.");
+  if (numberValue(settings.minimum_automatic_confidence) < 96) {
+    throw new Error("A confiança automática mínima não pode ser inferior a 96%.");
   }
   if (numberValue(settings.price_change_window_hours) !== 24) {
     throw new Error("A janela móvel de preço deve ser de 24 horas.");
@@ -2496,8 +2539,8 @@ async function saveSettings(
       numberValue(settings.minimum_price_change_amount, 0.05),
     ),
     minimum_automatic_confidence: Math.max(
-      90,
-      Math.min(100, numberValue(settings.minimum_automatic_confidence, 90)),
+      96,
+      Math.min(100, numberValue(settings.minimum_automatic_confidence, 96)),
     ),
     price_change_window_hours: 24,
     cooldown_hours: numberValue(settings.cooldown_hours, 6),
@@ -2652,6 +2695,63 @@ async function checkConnectionForAccount(
     checked_at: nowIso(),
     sample: { sku: sample.sku, asin: sample.asin },
     checks,
+  };
+}
+
+async function fetchSimilarCompetition(
+  base44: any,
+  account: any,
+  accessToken: string,
+  product: any,
+) {
+  const title = product.display_name || product.product_name || product.title || "";
+  const tokens = [...comparableTokens(title)].slice(0, 8);
+  if (!product.asin || tokens.length < 2) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
+  const marketplaceId = account.marketplace_id || secrets.get("AMAZON_MARKETPLACE_ID") || "";
+  const query = new URLSearchParams({
+    marketplaceIds: marketplaceId,
+    keywords: tokens.join(" "),
+    includedData: "summaries",
+    pageSize: "20",
+  });
+  const catalog = await amazonCall(
+    base44, account.id, "repricing_catalog_similar_search",
+    `${spBase(account.region)}/catalog/2022-04-01/items?${query}`,
+    accessToken,
+  );
+  if (!catalog.ok) return { average: null, count: 0, matches: [], checkedAt: nowIso(), error: amazonError(catalog) };
+  const items = amazonPayload(catalog)?.items || [];
+  const matches = items.map((item: any) => {
+    const summary = (item.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || item.summaries?.[0] || {};
+    const matchedTitle = summary.itemName || summary.itemTitle || "";
+    return { asin: item.asin, title: matchedTitle, similarity: titleSimilarity(title, matchedTitle) };
+  }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90)
+    .sort((a: any, b: any) => b.similarity - a.similarity).slice(0, 5);
+  if (!matches.length) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
+  const pricingRequest = { requests: matches.map((match: any) => ({
+    asin: match.asin, marketplaceId,
+    includedData: ["featuredBuyingOptions", "lowestPricedOffers", "referencePrices"],
+    lowestPricedOffersInputs: [{ itemCondition: "New", offerType: "Consumer" }],
+    method: "GET", uri: "/products/pricing/2022-05-01/items/competitiveSummary",
+  })) };
+  const pricing = await amazonCall(
+    base44, account.id, "repricing_pricing_similar_competitors",
+    `${spBase(account.region)}/batches/products/pricing/2022-05-01/items/competitiveSummary`,
+    accessToken, "POST", pricingRequest,
+  );
+  const responses = amazonPayload(pricing)?.responses || [];
+  const pricedMatches = matches.map((match: any, index: number) => {
+    const parsed = parseCompetitiveBody(responses[index]?.body || {});
+    const price = averagePositive(parsed.offers.map((offer: any) => offer.totalPrice)) ||
+      averagePositive(parsed.referencePrices.map((reference: any) => reference.amount));
+    return { ...match, averagePrice: price };
+  }).filter((match: any) => finite(match.averagePrice) && match.averagePrice > 0);
+  return {
+    average: averagePositive(pricedMatches.map((match: any) => match.averagePrice)),
+    count: pricedMatches.length,
+    matches: pricedMatches,
+    checkedAt: nowIso(),
+    source: "amazon_catalog_and_product_pricing_inferred",
   };
 }
 

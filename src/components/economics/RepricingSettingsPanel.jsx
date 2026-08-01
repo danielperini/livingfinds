@@ -5,7 +5,7 @@ import { AlertCircle, CheckCircle, Clock3, Loader2, RefreshCw, Save, ShieldAlert
 const DEFAULTS = {
   default_minimum_margin_pct: 15, default_target_margin_pct: 20, normal_max_change_pct: 3,
   daily_max_change_pct: 10, minimum_effective_change_pct: 1, cooldown_hours: 6,
-  learning_window_hours: 72, minimum_confidence: 75, minimum_automatic_confidence: 90,
+  learning_window_hours: 72, minimum_confidence: 75, minimum_automatic_confidence: 96,
   repricing_rollout_mode: 'guarded', maximum_price_change_amount_24h: 2,
   minimum_price_change_amount: 0.05, price_change_window_hours: 24,
   automation_mode: 'recommendation_only',
@@ -35,7 +35,7 @@ export default function RepricingSettingsPanel({ accountId, account }) {
         base44.entities.ProductEconomics.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: accountId }, '-completed_at', 100).catch(() => []),
       ]);
-      setForm({ ...DEFAULTS, ...(settings?.[0] || {}) });
+      setForm({ ...DEFAULTS, ...(settings?.[0] || {}), minimum_automatic_confidence: Math.max(96, Number(settings?.[0]?.minimum_automatic_confidence || 96)) });
       setStatus({ queue, economics, logs: logs.filter(item => String(item.operation || '').startsWith('runAutomaticRepricing')) });
     } catch (loadError) {
       setMessage({ type: 'error', text: loadError?.message || 'Falha ao carregar configurações.' });
@@ -99,7 +99,7 @@ export default function RepricingSettingsPanel({ accountId, account }) {
         <NumberField label="Confiança mínima" field="minimum_confidence" form={form} setForm={setForm} suffix="%" min={0} max={100} />
         <NumberField label="Teto absoluto/24h" field="maximum_price_change_amount_24h" form={form} setForm={setForm} suffix="R$" min={0.01} max={2} step={0.05} hint="Máximo rígido: R$ 2,00 por SKU" />
         <NumberField label="Mudança mínima" field="minimum_price_change_amount" form={form} setForm={setForm} suffix="R$" min={0.05} step={0.05} />
-        <NumberField label="Confiança automática" field="minimum_automatic_confidence" form={form} setForm={setForm} suffix="%" min={90} max={100} hint="IA isolada não autoriza" />
+        <NumberField label="Confiança automática" field="minimum_automatic_confidence" form={form} setForm={setForm} suffix="%" min={96} max={100} hint="Automação exige mais de 95%; IA isolada não autoriza" />
         <NumberField label="Janela móvel" field="price_change_window_hours" form={form} setForm={setForm} suffix="h" min={24} max={24} />
         <NumberField label="Máximo por ciclo" field="max_changes_per_cycle" form={form} setForm={setForm} min={1} max={100} />
         <NumberField label="Validade da concorrência" field="competition_max_age_minutes" form={form} setForm={setForm} suffix="min" min={5} />

@@ -46,12 +46,17 @@ export type RepricingDecisionInput = {
   featuredOfferPrice?: number | null;
   featuredOfferExpectedPrice?: number | null;
   referenceAveragePrice?: number | null;
+  similarReferenceAveragePrice?: number | null;
+  similarReferenceCount?: number;
   competitorOffers?: CompetitorOffer[];
   competitionFresh: boolean;
   sellerFulfillmentType?: string | null;
   dailyUnits: number;
   sessions: number;
   conversionRate: number;
+  adsClicks?: number;
+  adsOrders?: number;
+  adsConversionRate?: number | null;
   stock: number;
   daysOfSupply?: number | null;
   elasticity?: number | null;
@@ -441,6 +446,7 @@ export function decideRepricing(input: RepricingDecisionInput) {
     add(input.featuredOfferPrice, "featured_offer_price");
     add(competitorMedian, "equivalent_competitor_median");
     add(input.referenceAveragePrice, "amazon_reference_price_average");
+    add(input.similarReferenceAveragePrice, "similar_products_90pct_average");
   }
 
   const lowStock = input.stock > 0 &&
@@ -452,6 +458,10 @@ export function decideRepricing(input: RepricingDecisionInput) {
     Number(input.elasticityConfidence || 0) >=
       input.guardrails.minimumConfidence;
   const currentDailyUnits = Math.max(0, Number(input.dailyUnits || 0));
+  const adsClicks = Math.max(0, Number(input.adsClicks || 0));
+  const adsConversionRate = finite(input.adsConversionRate)
+    ? Number(input.adsConversionRate)
+    : adsClicks > 0 ? Number(input.adsOrders || 0) / adsClicks : null;
   const candidates: PriceCandidate[] = [];
 
   for (const [price, sources] of raw.entries()) {
@@ -528,6 +538,21 @@ export function decideRepricing(input: RepricingDecisionInput) {
       decisionReason =
         "Preço selecionado pelo maior lucro diário esperado com elasticidade observada.";
     }
+  } else if (
+    adsClicks >= 20 && finite(adsConversionRate) && adsConversionRate < 0.03 &&
+    input.competitionFresh &&
+    finite(competitorMedian ?? input.similarReferenceAveragePrice) &&
+    input.currentPrice > Number(competitorMedian ?? input.similarReferenceAveragePrice) * 1.03
+  ) {
+    const marketReference = Number(competitorMedian ?? input.similarReferenceAveragePrice);
+    selected = candidates
+      .filter((candidate) => candidate.price < input.currentPrice && candidate.price >= Math.min(marketReference, input.currentPrice))
+      .sort((a, b) => a.price - b.price)[0] || candidates
+      .filter((candidate) => candidate.price < input.currentPrice)
+      .sort((a, b) => b.price - a.price)[0] || currentCandidate;
+    decisionReason = selected && selected.price < input.currentPrice
+      ? "Redução protegida: conversão Ads por clique abaixo de 3% e preço acima da concorrência, sem cruzar 15% de margem líquida."
+      : decisionReason;
   } else if (lowStock && current.marginPct >= validation.minimumMarginPct) {
     selected = candidates
       .filter((candidate) =>
