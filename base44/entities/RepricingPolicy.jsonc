@@ -1,0 +1,36 @@
+{
+  "name": "RepricingPolicy",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "sku": { "type": "string", "description": "Quando vazio, a política vale para toda a conta. Quando preenchido, substitui somente o SKU exato." },
+    "asin": { "type": "string", "description": "ASIN-filho esperado para auditoria; nunca substitui o vínculo por SKU." },
+    "enabled": { "type": "boolean", "default": true },
+    "auto_execute": { "type": "boolean", "default": true },
+    "strategy": {
+      "type": "string",
+      "enum": ["profit_balanced", "featured_offer", "inventory_velocity", "defensive"],
+      "default": "profit_balanced"
+    },
+    "minimum_confidence": { "type": "number", "minimum": 0.5, "maximum": 1, "default": 0.9 },
+    "minimum_profit_amount": { "type": "number", "default": 5 },
+    "minimum_profit_percent": { "type": "number", "minimum": 0, "maximum": 80, "default": 8 },
+    "minimum_price": { "type": "number" },
+    "maximum_price": { "type": "number" },
+    "floor_buffer_percent": { "type": "number", "minimum": 0, "maximum": 20, "default": 1 },
+    "target_acos": { "type": "number", "minimum": 1, "maximum": 100, "default": 15 },
+    "undercut_amount": { "type": "number", "minimum": 0.01, "default": 0.01 },
+    "max_decrease_percent_per_cycle": { "type": "number", "minimum": 0.1, "maximum": 20, "default": 3 },
+    "max_increase_percent_per_cycle": { "type": "number", "minimum": 0.1, "maximum": 30, "default": 5 },
+    "max_daily_change_percent": { "type": "number", "minimum": 0.5, "maximum": 50, "default": 8 },
+    "max_reprices_per_day": { "type": "number", "minimum": 1, "maximum": 24, "default": 4 },
+    "cooldown_hours": { "type": "number", "minimum": 1, "maximum": 72, "default": 6 },
+    "low_stock_days": { "type": "number", "minimum": 1, "default": 14 },
+    "excess_stock_days": { "type": "number", "minimum": 15, "default": 90 },
+    "require_validation_preview": { "type": "boolean", "default": true },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id"]
+}
