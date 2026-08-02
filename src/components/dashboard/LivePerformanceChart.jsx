@@ -119,6 +119,7 @@ export default function LivePerformanceChart() {
       const response = await base44.functions.invoke('syncYesterdayClosedData', {
         amazon_account_id: accountId,
         force: true,
+        history_backfill_days: RANGE_DAYS,
         trigger_type: 'live_performance_chart',
       });
       const result = response?.data || response || {};
@@ -149,20 +150,25 @@ export default function LivePerformanceChart() {
     const byDate = new Map();
     const ensure = (date) => {
       if (!byDate.has(date)) byDate.set(date, {
-        isoDate: date, date: fmtDate(date), gasto: 0, vendasAds: 0,
-        faturamentoReal: undefined, impressoes: 0, cliques: 0, alteracoes: 0,
-        sourceLabel: date === today ? 'API intradiária' : 'Relatório diário',
+        isoDate: date, date: fmtDate(date), gasto: null, vendasAds: null,
+        faturamentoReal: null, impressoes: null, cliques: null, alteracoes: 0,
+        hasAds: false, hasSp: false, sourceLabel: 'Sem dados confirmados',
       });
       return byDate.get(date);
     };
 
+    // O eixo sempre representa os 90 dias prometidos. Ausência de resposta da
+    // Amazon permanece null (lacuna visual), nunca é convertida em faturamento zero.
+    for (let date = since; date <= today; date = offsetFrom(date, 1)) ensure(date);
+
     const daily = dedupeMetrics(state.data.daily).filter((item) => item.date >= since && item.date <= today);
     for (const item of daily) {
       const row = ensure(item.date);
-      row.gasto += Number(item.spend || 0);
-      row.vendasAds += Number(item.sales || 0);
-      row.impressoes += Number(item.impressions || 0);
-      row.cliques += Number(item.clicks || 0);
+      row.gasto = Number(row.gasto || 0) + Number(item.spend || 0);
+      row.vendasAds = Number(row.vendasAds || 0) + Number(item.sales || 0);
+      row.impressoes = Number(row.impressoes || 0) + Number(item.impressions || 0);
+      row.cliques = Number(row.cliques || 0) + Number(item.clicks || 0);
+      row.hasAds = true;
       row.sourceLabel = 'Relatório Amazon Ads';
     }
 
@@ -175,10 +181,11 @@ export default function LivePerformanceChart() {
         if (hourlyKeys.has(key)) continue;
         hourlyKeys.add(key);
         const row = ensure(today);
-        row.gasto += Number(item.cost || item.spend || 0);
-        row.vendasAds += Number(item.sales || 0);
-        row.impressoes += Number(item.impressions || 0);
-        row.cliques += Number(item.clicks || 0);
+        row.gasto = Number(row.gasto || 0) + Number(item.cost || item.spend || 0);
+        row.vendasAds = Number(row.vendasAds || 0) + Number(item.sales || 0);
+        row.impressoes = Number(row.impressoes || 0) + Number(item.impressions || 0);
+        row.cliques = Number(row.cliques || 0) + Number(item.clicks || 0);
+        row.hasAds = true;
         row.sourceLabel = 'API Ads intradiária';
       }
     }
@@ -186,7 +193,10 @@ export default function LivePerformanceChart() {
     // Preserva a mesma soma do gráfico anterior, inclusive registros por ASIN.
     for (const [date, value] of canonicalAccountSalesByDate(state.data.sales || [])) {
       if (date < since || date > today) continue;
-      ensure(date).faturamentoReal = value.revenue;
+      const row = ensure(date);
+      row.faturamentoReal = value.revenue;
+      row.hasSp = true;
+      row.sourceLabel = row.hasAds ? `${row.sourceLabel} + SP‑API` : 'SP‑API';
     }
 
     // Os motores atuais persistem ações em duas entidades. Somamos somente
@@ -226,6 +236,12 @@ export default function LivePerformanceChart() {
     const lastAiDate = aiDates.at(-1) || null;
     const adsStart = offsetFrom(lastAdsDate, -6);
     const spStart = offsetFrom(lastSpDate, -6);
+    const closedDates = chartData.filter((row) => row.isoDate < today);
+    const coverage = {
+      closedDays: closedDates.length,
+      adsDays: closedDates.filter((row) => row.hasAds).length,
+      spDays: closedDates.filter((row) => row.hasSp).length,
+    };
 
     const totals = chartData.reduce((acc, row) => {
       if (lastAdsDate && row.isoDate >= adsStart && row.isoDate <= lastAdsDate) {
@@ -237,13 +253,13 @@ export default function LivePerformanceChart() {
       return acc;
     }, { gasto: 0, vendas: 0, real: 0, alteracoes: 0 });
 
-    return { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today };
+    return { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today, coverage };
   }, [state.data]);
 
   if (state.loading) return <div className="bg-surface-1 border border-surface-2 rounded-xl h-72 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>;
   if (!derived) return <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 text-xs text-red-300 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{state.error || 'Dados indisponíveis.'}</div>;
 
-  const { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today } = derived;
+  const { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today, coverage } = derived;
   const adsCurrent = lastAdsDate === brazilDate(-1);
   const spCurrent = lastSpDate && lastSpDate >= brazilDate(-2);
   const aiCurrent = lastAiDate && lastAiDate >= brazilDate(-1);
@@ -272,6 +288,12 @@ export default function LivePerformanceChart() {
         <span className="text-amber-400">Alterações IA: <strong>{totals.alteracoes}</strong></span>
       </div>
 
+      {(coverage.adsDays < coverage.closedDays || coverage.spDays < coverage.closedDays) ? (
+        <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300">
+          Cobertura dos {coverage.closedDays} dias fechados: Ads {coverage.adsDays}/{coverage.closedDays} · SP‑API {coverage.spDays}/{coverage.closedDays}. Dias ausentes aparecem como lacunas e o backfill foi solicitado; nunca são contabilizados como zero.
+        </div>
+      ) : null}
+
       <ResponsiveContainer width="100%" height={250}>
         <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <defs><linearGradient id="liveSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient><linearGradient id="liveSales" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient></defs>
@@ -284,9 +306,9 @@ export default function LivePerformanceChart() {
           <Bar yAxisId="volume" dataKey="impressoes" name="Impressões" fill="#8B5CF6" opacity={0.28} />
           <Bar yAxisId="volume" dataKey="cliques" name="Cliques" fill="#38BDF8" opacity={0.65} />
           <Bar yAxisId="actions" dataKey="alteracoes" name="Alterações IA" fill="#F59E0B" opacity={0.75} />
-          <Area yAxisId="brl" type="monotone" dataKey="vendasAds" name="Vendas Ads" stroke="#10B981" fill="url(#liveSales)" strokeWidth={2} dot={false} connectNulls />
-          <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto Ads" stroke="#3B82F6" fill="url(#liveSpend)" strokeWidth={2} dot={false} connectNulls />
-          <Line yAxisId="brl" type="monotone" dataKey="faturamentoReal" name="Faturamento real" stroke="#FB923C" strokeWidth={2.2} dot={false} connectNulls />
+          <Area yAxisId="brl" type="monotone" dataKey="vendasAds" name="Vendas Ads" stroke="#10B981" fill="url(#liveSales)" strokeWidth={2} dot={false} connectNulls={false} />
+          <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto Ads" stroke="#3B82F6" fill="url(#liveSpend)" strokeWidth={2} dot={false} connectNulls={false} />
+          <Line yAxisId="brl" type="monotone" dataKey="faturamentoReal" name="Faturamento real" stroke="#FB923C" strokeWidth={2.2} dot={false} connectNulls={false} />
         </ComposedChart>
       </ResponsiveContainer>
       <p className="text-[9px] text-slate-600 mt-2">Totais de cada fonte são calculados pelos sete dias encerrados na última data disponível dessa própria fonte; a API intradiária não substitui o relatório fechado.</p>

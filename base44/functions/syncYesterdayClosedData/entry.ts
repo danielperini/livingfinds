@@ -89,10 +89,21 @@ Deno.serve(async (request) => {
       source_function: 'syncYesterdayClosedData',
     });
 
+    // Backfill explícito do histórico do gráfico. O relatório de pedidos confirma
+    // inclusive dias sem vendas e não remove snapshots válidos em caso de falha.
+    const requestedBackfillDays = Math.max(0, Math.min(90, Number(body.history_backfill_days || 0)));
+    const spHistory = requestedBackfillDays > 0
+      ? await invokeSafe(base44, 'syncProductSalesMetrics', {
+        ...basePayload,
+        lookback_days: requestedBackfillDays,
+        source_function: 'syncYesterdayClosedData_history_backfill',
+      })
+      : null;
+
     const completedAt = new Date().toISOString();
     const reportPending = adsMetrics.data?.pending === true
       || ['requested', 'pending', 'processing', 'pending_unknown', 'rate_limited'].includes(String(adsMetrics.data?.status || ''));
-    const steps = [adsStates, catalog, adsMetrics, spReports, spFinance];
+    const steps = [adsStates, catalog, adsMetrics, spReports, spFinance, spHistory].filter(Boolean);
     const hardFailures = steps.filter((step) => !step.ok && step.data?.rate_limited !== true);
 
     await base44.asServiceRole.entities.AmazonAccount.update(accountId, {
@@ -131,6 +142,8 @@ Deno.serve(async (request) => {
       ],
       sp_api_requested: true,
       sp_finance_reconciled: spFinance.ok,
+      sp_history_backfill_days: requestedBackfillDays,
+      sp_history_backfill_ok: spHistory?.ok ?? null,
       steps,
       duration_ms: Date.now() - startedMs,
       message: reportPending

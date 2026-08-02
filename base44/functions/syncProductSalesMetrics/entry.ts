@@ -90,7 +90,7 @@ Deno.serve(async (request) => {
     const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
     const baseUrl = spApiBase(account.region);
     const token = await getSpApiToken();
-    const lookbackDays = Math.max(1, Math.min(60, Number(body.lookback_days || 7)));
+    const lookbackDays = Math.max(1, Math.min(90, Number(body.lookback_days || 7)));
     const endDate = brtDate(1);
     const startDate = brtDate(lookbackDays);
 
