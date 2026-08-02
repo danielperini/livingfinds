@@ -81,6 +81,14 @@ const finite = (value: unknown): value is number =>
   Number.isFinite(Number(value));
 const roundMoney = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** Primeiro preço comercial terminado em ,90 que não fica abaixo do piso. */
+export function commercialPrice90AtOrAbove(value: number): number {
+  if (!finite(value) || Number(value) <= 0) return 0;
+  const whole = Math.floor(Number(value));
+  const candidate = whole + 0.90;
+  return roundMoney(candidate + 0.000001 >= Number(value) ? candidate : whole + 1.90);
+}
 const round4 = (value: number) =>
   Math.round((value + Number.EPSILON) * 10000) / 10000;
 const clamp = (value: number, min: number, max: number) =>

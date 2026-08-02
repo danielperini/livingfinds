@@ -263,7 +263,13 @@
       "name": "Daily Amazon API price study - 09:10 BRT",
       "function": "runAutomaticRepricing",
       "cron": "10 9 * * *",
-      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200, "recommendation_only": true, "trigger_type": "scheduled_daily_price_study" }
+      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200, "recommendation_only": false, "emergency_margin_recovery": true, "trigger_type": "scheduled_daily_price_study" }
+    },
+    {
+      "name": "Active SKU emergency margin recovery - hourly",
+      "function": "runAutomaticRepricing",
+      "cron": "37 * * * *",
+      "payload": { "_service_role": true, "operation": "evaluate", "max_products": 200, "recommendation_only": true, "emergency_margin_recovery": true, "trigger_type": "scheduled_hourly_margin_recovery" }
     },
     {
       "name": "Repricing price queue - every 5 minutes",

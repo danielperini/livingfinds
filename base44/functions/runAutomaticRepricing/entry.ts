@@ -13,6 +13,7 @@ import { createClientFromRequest } from "npm:@base44/sdk@0.8.40";
 import { secrets } from "base44:runtime";
 import {
   decideRepricing,
+  commercialPrice90AtOrAbove,
   economicsAtPrice,
   estimateObservedElasticity,
   normalizeSku,
@@ -953,6 +954,10 @@ async function queuePriceAction(base44: any, params: any) {
       .map((action: any) => [action.id, action]),
   ).values()];
   if (!params.manual) {
+    if (params.decision?.emergencyMarginRecovery === true) {
+      // Recuperação de margem não pode ser diluída pelo limite normal de R$2/dia.
+      // A fila ainda revalida listing, custos, tarifas, Ads e margem antes do PUT.
+    } else {
     const finalGuard = applyGuardedPriceChange({
       currentPrice: oldPrice,
       proposedPrice: newPrice,
@@ -975,8 +980,10 @@ async function queuePriceAction(base44: any, params: any) {
         96,
       )),
     });
-    if (!finalGuard.automaticAllowed || !pricesMatch(finalGuard.guardedPrice, newPrice)) {
+    if (!finalGuard.automaticAllowed ||
+      !pricesMatch(commercialPrice90AtOrAbove(finalGuard.guardedPrice), newPrice)) {
       return { created: false, action: null, blocked: true, guard: finalGuard };
+    }
     }
   }
   const concurrent = sameSkuActions.find(isConcurrentPriceAction);
@@ -1055,6 +1062,7 @@ async function queuePriceAction(base44: any, params: any) {
       product_type: params.productType,
       currency: params.currency,
       manual_apply: params.manual === true,
+      emergency_margin_recovery: params.decision.emergencyMarginRecovery === true,
       minimum_profitable_price: params.decision.minimumProfitablePrice,
       target_margin_price: params.decision.targetMarginPrice,
       evidence: params.evidence,
@@ -1576,12 +1584,27 @@ async function evaluateAccount(
     });
     const idealSuggestedPrice = decision.suggestedPrice;
     decision.confidence = confidenceAudit.score / 100;
-    if (guardedChange.automaticAllowed) {
-      decision.suggestedPrice = guardedChange.guardedPrice;
-      decision.projectedEconomics = economicsAtPrice(
-        guardedChange.guardedPrice,
-        policy,
+    if (decision.emergencyMarginRecovery && validation.complete) {
+      const emergencyPrice = commercialPrice90AtOrAbove(
+        Math.max(Number(decision.minimumProfitablePrice), Number(decision.suggestedPrice || 0)),
       );
+      const emergencyEconomics = economicsAtPrice(emergencyPrice, policy);
+      const manualMaximum = numberValue(policy.manualMaxPrice, Number.POSITIVE_INFINITY);
+      if (emergencyEconomics && emergencyEconomics.marginPct >= 15 && emergencyPrice <= manualMaximum) {
+        decision.suggestedPrice = emergencyPrice;
+        decision.projectedEconomics = emergencyEconomics;
+        decision.blockReasons = (decision.blockReasons || []).filter((reason: string) =>
+          !/confian|cooldown|altera[cç][aã]o inferior|limite absoluto/i.test(reason)
+        );
+        decision.automaticEligible = true;
+        decision.decisionReason =
+          "Recuperação automática imediata: preço ativo abaixo de 15% de margem líquida, elevado ao primeiro valor terminado em ,90 que preserva o piso econômico.";
+      }
+    } else if (guardedChange.automaticAllowed) {
+      const commercialPrice = commercialPrice90AtOrAbove(guardedChange.guardedPrice);
+      const commercialEconomics = economicsAtPrice(commercialPrice, policy);
+      decision.suggestedPrice = commercialPrice;
+      decision.projectedEconomics = commercialEconomics;
     } else if (guardedChange.status === "recommendation_only") {
       decision.blockReasons.push(
         "Confiança entre 75% e 95,99%: somente recomendação, sem alteração automática.",
@@ -1841,8 +1864,10 @@ async function evaluateAccount(
     const marketplaceId = account.marketplace_id ||
       secrets.get("AMAZON_MARKETPLACE_ID") || "";
     const manual = options.manual_apply === true;
+    const emergencyExecutionAllowed = decision.emergencyMarginRecovery === true &&
+      options.emergency_margin_recovery === true;
     const runtimeExecutionAllowed = manual || options.explicit_execution === true ||
-      automaticExecutionRuntimeEnabled();
+      automaticExecutionRuntimeEnabled() || emergencyExecutionAllowed;
     const canQueue = decision.suggestedPrice &&
       confirmedPrice > 0 &&
       Number(decision.suggestedPrice) > 0 &&
@@ -1854,9 +1879,9 @@ async function evaluateAccount(
       decision.automaticEligible === true &&
       (decision.blockReasons || []).length === 0 &&
       validation.complete && listing.buyable && stock > 0 &&
-      options.recommendation_only !== true &&
+      (options.recommendation_only !== true || emergencyExecutionAllowed) &&
       runtimeExecutionAllowed &&
-      (manual || options.explicit_execution === true ||
+      (manual || options.explicit_execution === true || emergencyExecutionAllowed ||
         (settings.enabled !== false &&
           settings.repricing_rollout_mode === "guarded" &&
           settings.automation_mode === "automatic" && executionEnabled)) &&
@@ -2313,6 +2338,10 @@ async function processQueueForAccount(
       !validation.complete || !requestedEconomics ||
       requestedEconomics.marginPct < 15 ||
       numberValue(action.new_price) <= 0 ||
+      !pricesMatch(
+        numberValue(action.new_price),
+        commercialPrice90AtOrAbove(numberValue(action.new_price)),
+      ) ||
       numberValue(validation.minimumProfitablePrice) <= 0 ||
       numberValue(action.new_price) + 0.001 <
         numberValue(validation.minimumProfitablePrice)
@@ -2322,7 +2351,8 @@ async function processQueueForAccount(
           status: 422,
           errors: [{
             message: `Guardrail econômico bloqueou a publicação: ${
-              validation.reasons.join(" ") || "margem inferior a 15%"
+              validation.reasons.join(" ") ||
+                "margem inferior a 15% ou preço fora do padrão comercial ,90"
             }`,
           }],
         }, true),
@@ -2342,6 +2372,7 @@ async function processQueueForAccount(
     }
     if (
       action.payload?.manual_apply !== true &&
+      action.payload?.emergency_margin_recovery !== true &&
       !automaticExecutionRuntimeEnabled()
     ) {
       const nextRetryAt = new Date(Date.now() + 60 * 60000).toISOString();

@@ -1,4 +1,5 @@
 import {
+  commercialPrice90AtOrAbove,
   decideRepricing,
   economicsAtPrice,
   equivalentCompetitorOffers,
@@ -6,6 +7,15 @@ import {
   priceForNetMargin,
   validateRepricingEconomics,
 } from "./repricingPolicy.ts";
+
+Deno.test("arredonda sempre para cima no formato comercial terminado em ,90", () => {
+  const cases = [[75, 75.90], [75.89, 75.90], [75.90, 75.90], [75.91, 76.90], [110, 110.90]];
+  for (const [input, expected] of cases) {
+    const actual = commercialPrice90AtOrAbove(input);
+    if (actual !== expected) throw new Error(`${input} deveria resultar em ${expected}, recebeu ${actual}`);
+    if (actual + 0.0001 < input) throw new Error("arredondamento reduziu o piso econômico");
+  }
+});
 
 const economics = {
   unitProductCost: 50,
