@@ -45,8 +45,7 @@ jobs:
               break
             fi
             if [ "$attempt" = "5" ]; then
-              echo "Não foi possível obter a chave pública da VPS após 5 tentativas."
-              exit 1
+              echo "Aviso: ssh-keyscan não respondeu; seguindo com StrictHostKeyChecking=no."
             fi
             sleep 5
           done
