@@ -266,9 +266,9 @@
       "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200, "recommendation_only": false, "emergency_margin_recovery": true, "trigger_type": "scheduled_daily_price_study" }
     },
     {
-      "name": "Active SKU emergency margin recovery - hourly",
+      "name": "Active SKU competitor study and margin recovery - hourly at :29",
       "function": "runAutomaticRepricing",
-      "cron": "37 * * * *",
+      "cron": "29 * * * *",
       "payload": { "_service_role": true, "operation": "evaluate", "max_products": 200, "recommendation_only": true, "emergency_margin_recovery": true, "trigger_type": "scheduled_hourly_margin_recovery" }
     },
     {
