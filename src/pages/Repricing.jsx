@@ -84,8 +84,6 @@ export default function Repricing() {
   const [syncingSkus, setSyncingSkus] = useState(false);
   const [skuSyncResult, setSkuSyncResult] = useState(null);
   const [executingPrices, setExecutingPrices] = useState(false);
-  const [studyingPrices, setStudyingPrices] = useState(false);
-  const [priceStudyResult, setPriceStudyResult] = useState(null);
   const [priceExecutionResult, setPriceExecutionResult] = useState(null);
   const [skuSort, setSkuSort] = useState({ key: 'status', direction: 'asc' });
   const [historySort, setHistorySort] = useState({ key: 'changed_at', direction: 'desc' });
@@ -236,31 +234,6 @@ export default function Repricing() {
       setError(executionError?.message || 'Falha ao executar os preços planejados.');
     } finally {
       setExecutingPrices(false);
-    }
-  };
-
-  const refreshPriceStudy = async () => {
-    if (!accountId) return;
-    setStudyingPrices(true);
-    setPriceStudyResult(null);
-    setError('');
-    try {
-      const response = await base44.functions.invoke('runAutomaticRepricing', {
-        operation: 'full_evaluation',
-        amazon_account_id: accountId,
-        max_products: 100,
-        recommendation_only: true,
-      });
-      const result = response?.data || response;
-      if (!result?.ok) throw new Error(result?.error || 'Falha ao atualizar o estudo de preços.');
-      const evaluation = result.results?.[0] || {};
-      if (evaluation.locked || evaluation.error) throw new Error(evaluation.error || 'Outro estudo de preços já está em execução.');
-      setPriceStudyResult(evaluation);
-      await load();
-    } catch (studyError) {
-      setError(studyError?.message || 'Falha ao atualizar o estudo de preços.');
-    } finally {
-      setStudyingPrices(false);
     }
   };
 
@@ -549,8 +522,8 @@ export default function Repricing() {
       </section>
 
       <section className="rounded-xl border border-violet-500/20 bg-surface-1">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN + similares Amazon com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p>{priceStudyResult ? <p className="mt-1 text-[10px] text-emerald-400">Estudo concluído pela API: {Number(priceStudyResult.evaluated || 0)} avaliados · {Number(priceStudyResult.queued || 0)} ações elegíveis. Manter preço e bloqueios também permanecem auditáveis.</p> : null}</div><div className="flex items-center gap-2"><button type="button" onClick={refreshPriceStudy} disabled={studyingPrices || !accountId} className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 disabled:opacity-50">{studyingPrices ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{studyingPrices ? 'Pesquisando Amazon...' : 'Atualizar estudo de preços'}</button><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div></div>
-        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média similares ≥90%', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count} produto(s) · inferido</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">Clique em “Atualizar estudo de preços”. A tabela será preenchida com avaliações API auditáveis, inclusive decisões de manter preço; produtos sem custos confirmados permanecem protegidos.</p>}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN + similares Amazon com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p><p className="mt-1 text-[10px] text-emerald-400">Estudo atualizado automaticamente uma vez ao dia, às 09:10 (horário de São Paulo), pelas APIs Amazon e pelo motor de decisão.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div>
+        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média similares ≥90%', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count} produto(s) · inferido</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">O primeiro estudo diário preencherá esta tabela automaticamente. Produtos sem custos confirmados permanecem protegidos e não recebem preço automático.</p>}</div>
       </section>
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">

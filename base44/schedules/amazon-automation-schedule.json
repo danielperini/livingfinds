@@ -254,22 +254,16 @@
       "payload": { "_service_role": true, "checkpoint": true, "source_function": "scheduler_full_checkpoint" }
     },
     {
-      "name": "Repricing monitor - every 15 minutes",
+      "name": "Daily Amazon API price study - 09:10 BRT",
       "function": "runAutomaticRepricing",
-      "cron": "7,22,37,52 * * * *",
-      "payload": { "_service_role": true, "operation": "evaluate", "max_products": 50 }
+      "cron": "10 9 * * *",
+      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200, "recommendation_only": true, "trigger_type": "scheduled_daily_price_study" }
     },
     {
       "name": "Repricing price queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
       "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20 }
-    },
-    {
-      "name": "Repricing full economics - every 6 hours",
-      "function": "runAutomaticRepricing",
-      "cron": "13 */6 * * *",
-      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200 }
     },
     {
       "name": "Repricing daily reconciliation - 04:43 BRT",
