@@ -70,13 +70,16 @@ export default function TermBankPageV2() {
         base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-spend', 500).catch(() => []),
       ]);
 
-      // Índice de métricas reais por texto do termo (Keyword + SearchTerm)
-      const realMetrics = new Map();
-      const addMetric = (text, m) => {
-        const key = (text || '').toLowerCase().trim();
+      // Métricas por termo + ASIN anunciado. SearchTerm é a fonte primária;
+      // Keyword entra apenas como fallback para não somar duas granularidades.
+      const searchTermMetrics = new Map();
+      const keywordMetrics = new Map();
+      const metricKey = (text, asin) => `${(text || '').toLowerCase().trim()}|${String(asin || '').toUpperCase()}`;
+      const addMetric = (map, text, asin, m) => {
+        const key = metricKey(text, asin);
         if (!key) return;
-        if (!realMetrics.has(key)) realMetrics.set(key, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0, bids: [] });
-        const e = realMetrics.get(key);
+        if (!map.has(key)) map.set(key, { spend: 0, sales: 0, clicks: 0, orders: 0, impressions: 0, bids: [] });
+        const e = map.get(key);
         e.spend += m.spend || 0;
         e.sales += m.sales || 0;
         e.clicks += m.clicks || 0;
@@ -84,8 +87,19 @@ export default function TermBankPageV2() {
         e.impressions += m.impressions || 0;
         if (m.bid > 0) e.bids.push(m.bid);
       };
-      for (const kw of kws) addMetric(kw.keyword_text, kw);
-      for (const st of sts) addMetric(st.search_term || st.query, st);
+      for (const kw of kws) addMetric(keywordMetrics, kw.keyword_text || kw.keyword, kw.asin, kw);
+      const seenSearchTermRows = new Set();
+      for (const st of sts) {
+        const identity = [st.campaign_id, st.ad_group_id, st.normalized_search_term || st.search_term,
+          st.advertised_asin, st.date, st.report_id].join('|');
+        if (seenSearchTermRows.has(identity)) continue;
+        seenSearchTermRows.add(identity);
+        addMetric(searchTermMetrics, st.search_term || st.query, st.advertised_asin, {
+          ...st,
+          orders: st.orders_14d ?? st.orders_7d ?? st.orders_30d ?? st.orders,
+          sales: st.sales_14d ?? st.sales_7d ?? st.sales_30d ?? st.sales,
+        });
+      }
 
       // Mostrar todos os produtos ativos (independente de estoque) para que sugestões funcionem
       const activeProducts = p.filter((prod) => prod.status !== 'archived' && prod.status !== 'inactive');
@@ -95,8 +109,8 @@ export default function TermBankPageV2() {
         .filter((term) => !isTermIncomplete(term.term) && term.asin && activeAsins.has(term.asin))
         .map((term) => {
           // Enriquecer com métricas reais do Keyword/SearchTerm
-          const key = (term.term || '').toLowerCase().trim();
-          const real = realMetrics.get(key);
+          const key = metricKey(term.term, term.asin);
+          const real = searchTermMetrics.get(key) || keywordMetrics.get(key);
           if (!real) return term;
           const spend = real.spend;
           const sales = real.sales;
@@ -105,15 +119,17 @@ export default function TermBankPageV2() {
           const avgBid = real.bids.length ? real.bids.reduce((a, b) => a + b, 0) / real.bids.length : (term.suggested_bid || 0);
           return {
             ...term,
-            spend: spend > 0 ? spend : term.spend,
-            sales: sales > 0 ? sales : term.sales,
-            orders: real.orders > 0 ? real.orders : term.orders,
-            clicks: real.clicks > 0 ? real.clicks : term.clicks,
-            impressions: real.impressions > 0 ? real.impressions : term.impressions,
-            acos: spend > 0 ? acos : term.acos,
-            roas: spend > 0 ? roas : term.roas,
+            spend,
+            sales,
+            orders: real.orders,
+            clicks: real.clicks,
+            impressions: real.impressions,
+            acos,
+            roas,
             suggested_bid: avgBid > 0 ? avgBid : term.suggested_bid,
             _has_real_data: spend > 0 || real.clicks > 0,
+            _promotion_blocked: (spend > 0 && real.orders <= 0) || (sales > 0 && acos > 15),
+            _promotion_blocked_reason: spend > 0 && real.orders <= 0 ? '0 pedidos com gasto' : sales > 0 && acos > 15 ? 'ACoS acima do máximo' : null,
           };
         })
         .sort((a, b) => toConf100(b.confidence) - toConf100(a.confidence));
@@ -401,14 +417,14 @@ export default function TermBankPageV2() {
                         ) : (
                           <button
                             onClick={() => handleScheduleCampaign(t)}
-                            disabled={schedulingId === t.id}
-                            title="Criar campanha EXACT com bid R$ 0,50"
+                            disabled={schedulingId === t.id || t._promotion_blocked}
+                            title={t._promotion_blocked ? `Bloqueado: ${t._promotion_blocked_reason}` : 'Criar campanha EXACT com bid protegido'}
                             className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded-lg border border-cyan/30 bg-cyan/10 text-cyan hover:bg-cyan/20 disabled:opacity-50 transition-colors whitespace-nowrap"
                           >
                             {schedulingId === t.id
                               ? <Loader2 className="w-3 h-3 animate-spin" />
                               : <Megaphone className="w-3 h-3" />}
-                            Criar campanha
+                            {t._promotion_blocked ? 'Bloqueado' : 'Criar campanha'}
                           </button>
                         )}
                       </td>

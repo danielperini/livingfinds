@@ -7,6 +7,10 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
+const n = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
+const norm = (value: unknown) => String(value || '').normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
 function saoPauloNow() {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
@@ -48,6 +52,57 @@ Deno.serve(async (request) => {
 
     const db = base44.asServiceRole;
     const kw = String(keyword).trim();
+
+    // Guardrail autoritativo: a UI nunca consegue liberar campanha para termo
+    // deficitário, atribuição ambígua ou métrica replicada entre ASINs.
+    const [termRows, settingsRows] = await Promise.all([
+      db.entities.SearchTerm.filter({ amazon_account_id }, '-date', 10000).catch(() => []),
+      db.entities.PerformanceSettings.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
+    ]);
+    const sameText = termRows.filter((row: any) =>
+      norm(row.normalized_search_term || row.search_term) === norm(kw)
+    );
+    const resolvedRows = sameText.filter((row: any) =>
+      String(row.advertised_asin || '').toUpperCase() === String(asin).toUpperCase()
+    );
+    const distinctAsins = new Set(sameText.map((row: any) => String(row.advertised_asin || '').toUpperCase()).filter(Boolean));
+    const signaturesByAsin = new Map<string, Set<string>>();
+    for (const row of sameText) {
+      const rowAsin = String(row.advertised_asin || '').toUpperCase();
+      if (!rowAsin) continue;
+      const signature = [n(row.clicks), n(row.impressions), n(row.orders_14d ?? row.orders_7d ?? row.orders_30d),
+        n(row.sales_14d ?? row.sales_7d ?? row.sales_30d), n(row.spend)].join('|');
+      const signatures = signaturesByAsin.get(rowAsin) || new Set<string>();
+      signatures.add(signature); signaturesByAsin.set(rowAsin, signatures);
+    }
+    const asinSignatures = signaturesByAsin.get(String(asin).toUpperCase()) || new Set<string>();
+    const replicatedAcrossAsins = [...signaturesByAsin.entries()].some(([otherAsin, signatures]) =>
+      otherAsin !== String(asin).toUpperCase() && [...asinSignatures].some((signature) => signatures.has(signature))
+    );
+    const attributionConflict = !resolvedRows.length ||
+      resolvedRows.some((row: any) => ['ambiguous', 'missing'].includes(String(row.sku_resolution_status || ''))) ||
+      (distinctAsins.size > 1 && replicatedAcrossAsins);
+    const uniqueRows = [...new Map(resolvedRows.map((row: any) => [[row.campaign_id, row.ad_group_id,
+      norm(row.normalized_search_term || row.search_term), row.advertised_asin, row.date, row.report_id].join('|'), row])).values()];
+    const performance = uniqueRows.reduce((acc: any, row: any) => ({
+      clicks: acc.clicks + n(row.clicks), spend: acc.spend + n(row.spend),
+      orders: acc.orders + n(row.orders_14d ?? row.orders_7d ?? row.orders_30d),
+      sales: acc.sales + n(row.sales_14d ?? row.sales_7d ?? row.sales_30d),
+    }), { clicks: 0, spend: 0, orders: 0, sales: 0 });
+    const maxAcos = Math.max(1, n(settingsRows[0]?.max_acos || settingsRows[0]?.target_acos || 15));
+    const acos = performance.sales > 0 ? performance.spend / performance.sales * 100 : null;
+    const promotionBlockedReason = attributionConflict
+      ? 'attribution_conflict'
+      : performance.spend > 0 && performance.orders <= 0
+      ? 'zero_orders_with_spend'
+      : acos !== null && acos > maxAcos
+      ? 'acos_above_maximum'
+      : null;
+    if (promotionBlockedReason) {
+      return Response.json({ ok: false, promotion_blocked: true, error:
+        `Criação bloqueada: ${promotionBlockedReason}. O termo permanecerá sob proteção granular de bid/negativa.`,
+        reason: promotionBlockedReason, asin, keyword: kw, metrics: { ...performance, acos, max_acos: maxAcos } }, { status: 409 });
+    }
 
     // Verificar se já existe campanha para este ASIN + keyword
     const campaignName = `SP | MANUAL | EXACT | ${asin} | ${kw.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40)}`.slice(0, 128);
