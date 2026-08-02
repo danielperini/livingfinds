@@ -254,6 +254,12 @@
       "payload": { "_service_role": true, "checkpoint": true, "source_function": "scheduler_full_checkpoint" }
     },
     {
+      "name": "Daily Amazon product title enrichment - 08:55 BRT",
+      "function": "enrichProductNames",
+      "cron": "55 8 * * *",
+      "payload": { "_service_role": true, "force_all": true, "trigger_type": "scheduled_daily_title_enrichment" }
+    },
+    {
       "name": "Daily Amazon API price study - 09:10 BRT",
       "function": "runAutomaticRepricing",
       "cron": "10 9 * * *",

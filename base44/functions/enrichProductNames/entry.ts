@@ -33,6 +33,23 @@ function getSpEndpoint(region) {
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
+function normalized(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, '-');
+}
+
+function isPlaceholderName(value, product) {
+  const raw = String(value || '').trim();
+  if (!raw) return true;
+  const key = normalized(raw);
+  return key === normalized(product?.sku) || key === normalized(product?.asin) ||
+    ['TÍTULO-PENDENTE', 'TITULO-PENDENTE', 'NOME-PENDENTE', 'SEM-TÍTULO', 'SEM-TITULO'].includes(key);
+}
+
+function existingValidName(product) {
+  return [product?.display_name, product?.product_name]
+    .find((value) => !isPlaceholderName(value, product)) || null;
+}
+
 async function fetchSellerId(spBase, token) {
   try {
     const res = await fetch(`${spBase}/sellers/v1/marketplaceParticipations`, {
@@ -100,10 +117,9 @@ async function fetchByListingsSku(spBase, token, sellerId, sku, marketplaceId) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    const user = body._service_role ? null : await base44.auth.me().catch(() => null);
+    if (!body._service_role && !user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     let amazonAccountId = body.amazon_account_id;
     const forceAll = body.force_all === true;
     const singleAsin = body.asin || null;
@@ -115,7 +131,9 @@ Deno.serve(async (req) => {
       account = await base44.asServiceRole.entities.AmazonAccount.get(amazonAccountId).catch(() => null);
     }
     if (!account) {
-      const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id });
+      const accounts = user?.id
+        ? await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id })
+        : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
       account = accounts[0] || (await base44.asServiceRole.entities.AmazonAccount.list())[0] || null;
     }
     if (!account) return Response.json({ ok: false, message: 'Nenhuma conta encontrada' });
@@ -161,10 +179,13 @@ Deno.serve(async (req) => {
     if (singleAsin) {
       targets = allProducts.filter(p => p.asin === singleAsin);
     } else if (forceAll) {
-      targets = allProducts.filter(p => !p.display_name?.trim());
+      targets = allProducts.filter(p =>
+        isPlaceholderName(p.display_name, p) || isPlaceholderName(p.product_name, p)
+      );
     } else {
       targets = allProducts.filter(p =>
-        !p.product_name?.trim() ||
+        isPlaceholderName(p.display_name, p) ||
+        isPlaceholderName(p.product_name, p) ||
         p.catalog_sync_status === 'error' ||
         p.catalog_sync_status === 'pending' ||
         p.catalog_sync_status === 'not_found'
@@ -187,8 +208,14 @@ Deno.serve(async (req) => {
     const results = [];
 
     for (const p of targets) {
-      if (p.display_name?.trim()) {
-        updates.push({ id: p.id, catalog_sync_status: 'success' });
+      const validExistingName = existingValidName(p);
+      if (validExistingName) {
+        updates.push({
+          id: p.id,
+          display_name: validExistingName,
+          product_name: validExistingName,
+          catalog_sync_status: 'success',
+        });
         enriched++;
         continue;
       }
@@ -210,6 +237,7 @@ Deno.serve(async (req) => {
         updates.push({
           id: p.id,
           product_name: found.name,
+          display_name: found.name,
           ...(found.image ? { product_image_url: found.image } : {}),
           ...(found.brand ? { brand: found.brand } : {}),
           catalog_sync_status: 'success',
