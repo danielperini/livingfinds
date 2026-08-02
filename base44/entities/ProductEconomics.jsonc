@@ -396,6 +396,19 @@
       "minimum": 0,
       "description": "Média aritmética dos preços de referência válidos retornados pela Product Pricing API."
     },
+    "scrapingbee_competitor_price_average": { "type": "number", "minimum": 0 },
+    "scrapingbee_competitor_price_minimum": { "type": "number", "minimum": 0 },
+    "scrapingbee_competitor_price_maximum": { "type": "number", "minimum": 0 },
+    "scrapingbee_competitor_count": { "type": "number", "minimum": 0, "default": 0 },
+    "scrapingbee_competition_checked_at": { "type": "string", "format": "date-time" },
+    "scrapingbee_competition_source": { "type": "string" },
+    "scrapingbee_sales_estimate_average": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Média de volume comercial inferido dos similares; não representa vendas factuais de concorrentes."
+    },
+    "scrapingbee_sales_estimate_confidence": { "type": "string", "enum": ["low", "medium"] },
+    "scrapingbee_sales_estimate_source": { "type": "string", "enum": ["inferred"] },
     "competitor_sales_estimate": {
       "type": "number",
       "minimum": 0,

@@ -1439,6 +1439,9 @@ async function evaluateAccount(
       (economics.competition_checked_at &&
         hoursSince(economics.competition_checked_at) * 60 <=
           numberValue(settings.competition_max_age_minutes, 30));
+    const scrapingBeeCompetitionFresh = similarCompetition.count > 0 &&
+      hoursSince(similarCompetition.checkedAt) <= 24;
+    const marketCompetitionFresh = competitionFresh || scrapingBeeCompetitionFresh;
     const currency = account.currency_code ||
       CURRENCY_BY_MARKETPLACE[account.marketplace_id] || "BRL";
     let feesPatch: any = {};
@@ -1576,7 +1579,7 @@ async function evaluateAccount(
     const dataConfidence = [
       confirmedPrice ? 1 : 0,
       validation.complete ? 1 : 0,
-      competitionFresh ? 1 : 0,
+      marketCompetitionFresh ? (competitionFresh ? 1 : 0.75) : 0,
       listing.buyable ? 1 : 0,
       numberValue(sales.sessions) > 0 || numberValue(sales.units) > 0
         ? 0.9
@@ -1591,7 +1594,7 @@ async function evaluateAccount(
       similarReferenceAveragePrice: similarCompetition.average,
       similarReferenceCount: similarCompetition.count,
       competitorOffers,
-      competitionFresh,
+      competitionFresh: marketCompetitionFresh,
       sellerFulfillmentType: listing.sellerFulfillmentType,
       dailyUnits,
       sessions: numberValue(sales.sessions),
@@ -1763,6 +1766,10 @@ async function evaluateAccount(
       ),
       current_price_source: "Listings Items API 2021-08-01",
       competition_source: "Product Pricing API 2022-05-01",
+      market_competition_fresh: marketCompetitionFresh,
+      sp_api_competition_fresh: competitionFresh,
+      scrapingbee_competition_fresh: scrapingBeeCompetitionFresh,
+      scrapingbee_metric_weight: scrapingBeeCompetitionFresh ? 0.75 : 0,
       fees_source: mergedEconomics.fees_source,
       ads_cost_source: adsCost.source,
       current_price: confirmedPrice,
@@ -1774,6 +1781,23 @@ async function evaluateAccount(
       ),
       competitor_reference_prices: pricing.referencePrices || [],
       competitor_reference_price_average: pricing.referenceAveragePrice || null,
+      scrapingbee_competitor_price_average: similarCompetition.average || null,
+      scrapingbee_competitor_price_minimum: similarCompetition.minimum || null,
+      scrapingbee_competitor_price_maximum: similarCompetition.maximum || null,
+      scrapingbee_competitor_count: similarCompetition.count || 0,
+      scrapingbee_competition_checked_at: similarCompetition.checkedAt,
+      scrapingbee_competition_source: similarCompetition.source,
+      scrapingbee_sales_estimate_average: averagePositive(
+        (similarCompetition.matches || []).map((match: any) =>
+          match.competitor_sales_estimate
+        ),
+      ),
+      scrapingbee_sales_estimate_confidence: similarCompetition.count > 0
+        ? "low"
+        : null,
+      scrapingbee_sales_estimate_source: similarCompetition.count > 0
+        ? "inferred"
+        : null,
       similar_competitor_price_average: similarCompetition.average || null,
       similar_competitor_price_minimum: similarCompetition.minimum || null,
       similar_competitor_price_maximum: similarCompetition.maximum || null,
@@ -1921,10 +1945,30 @@ async function evaluateAccount(
       offer_active: listing.offerActive,
       listing_suppressed: listing.suppressed,
       price: confirmedPrice,
-      market_price_median: decision.competitorMedian,
-      market_price_offer_count: decision.equivalentOfferCount || 0,
-      market_price_source: "sp_api_product_pricing_2022_05_01",
-      market_price_last_checked_at: pricing.checkedAt || nowIso(),
+      market_price_average: similarCompetition.average ||
+        pricing.referenceAveragePrice || decision.competitorMedian,
+      market_price_minimum: similarCompetition.minimum || null,
+      market_price_maximum: similarCompetition.maximum || null,
+      market_price_median: decision.competitorMedian || similarCompetition.average,
+      market_price_offer_count: (decision.equivalentOfferCount || 0) +
+        (similarCompetition.count || 0),
+      market_price_currency: currency,
+      market_price_source: similarCompetition.count > 0
+        ? "sp_api_product_pricing_2022_05_01+scrapingbee_amazon_search"
+        : "sp_api_product_pricing_2022_05_01",
+      market_price_provider: similarCompetition.count > 0
+        ? "Amazon SP-API + ScrapingBee"
+        : "Amazon SP-API",
+      market_price_marketplace: account.marketplace_id,
+      market_price_status: similarCompetition.error
+        ? "failed"
+        : similarCompetition.count > 0 || decision.equivalentOfferCount > 0
+        ? "success"
+        : "no_offers",
+      market_price_error: similarCompetition.error || null,
+      market_price_last_checked_at: similarCompetition.checkedAt ||
+        pricing.checkedAt || nowIso(),
+      market_price_updated_by: "runAutomaticRepricing",
     }).catch(() => {});
 
     // Uma auditoria por ciclo/minuto: o ciclo horário e o estudo completo
