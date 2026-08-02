@@ -14,7 +14,7 @@ import {
   zeroSalesCircuitBreaker,
 } from '../../shared/profitGuardPolicy.ts';
 
-const RULE_VERSION = 4;
+const RULE_VERSION = 5;
 const LOOKBACK_DAYS = 14;
 const BID_COOLDOWN_HOURS = 24;
 const PAUSE_AFTER_REDUCTION_HOURS = 72;
@@ -429,7 +429,11 @@ Deno.serve(async (request) => {
           ? Math.max(30, Math.min(50, numberValue(settings.max_bid_decrease_pct, 25) + 10))
           : Math.max(20, Math.min(40, numberValue(settings.max_bid_decrease_pct, 25)));
         const severeTermLoss = metric.todaySpend >= Math.max(15, spendThreshold * 2) && metric.todayClicks >= 8;
-        if (severeTermLoss) {
+        const priorTermBidReduction = priorExecutions
+          .filter((event: any) => event.entity_id === keywordId && event.action_type === 'update_bid' && event.status === 'completed')
+          .sort((a: any, b: any) => new Date(b.executed_at || 0).getTime() - new Date(a.executed_at || 0).getTime())[0];
+        const canPauseTermAfterBid = severeTermLoss && priorTermBidReduction && hoursSince(priorTermBidReduction.executed_at) >= 6;
+        if (canPauseTermAfterBid) {
           const idempotencyKey = `intraday_keyword_pause_v1|${aid}|${keywordId}|${day}`;
           if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
           const action = { type: 'pause_keyword', keyword_id: keywordId, campaign_id: metric.campaignId,
@@ -610,18 +614,6 @@ Deno.serve(async (request) => {
             const previousReduction = priorExecutions
               .filter((event: any) => event.rule_key === 'sku_profit_bid_reduction' && event.campaign_id === campaignId && event.status === 'completed')
               .sort((a: any, b: any) => new Date(b.executed_at || 0).getTime() - new Date(a.executed_at || 0).getTime())[0];
-            const standardLossConfirmed =
-              (orders === 0 || (campaignAcos !== null && policy.break_even_acos !== null && campaignAcos >= policy.break_even_acos)) &&
-              clicks >= 20 &&
-              spend >= Math.max(12, maxProfitableCpa > 0 ? maxProfitableCpa : 12) &&
-              campaignId !== protectedDiscoveryId &&
-              activeCampaigns.length > 1 &&
-              previousReduction &&
-              hoursSince(previousReduction.executed_at) >= PAUSE_AFTER_REDUCTION_HOURS;
-            const structuralLossConfirmed =
-              structuralLoss &&
-              clicks >= 5 &&
-              spend >= Math.max(5, maxProfitableCpa > 0 ? maxProfitableCpa : 5);
             // Circuit breaker para campanha única/de descoberta: não permite
             // acumular gasto indefinido sem qualquer pedido. O teto de evidência
             // é metade do CPA lucrável, limitado a R$12 e nunca abaixo de R$5.
@@ -631,8 +623,16 @@ Deno.serve(async (request) => {
             });
             const zeroSalesSpendLimit = zeroSalesGuard.spendLimit;
             const zeroSalesCircuitOpen = zeroSalesGuard.triggered;
-            const canPause = pressure === 'critical' &&
-              (standardLossConfirmed || structuralLossConfirmed || zeroSalesCircuitOpen);
+            // Campanha inteira é o último recurso. Perdas normais são
+            // contidas no termo: primeiro bid, depois pausa do termo.
+            const extremeSpendFloor = Math.max(50, maxProfitableCpa > 0 ? maxProfitableCpa * 3 : 50);
+            const extremeAcos = campaignAcos !== null && policy.break_even_acos !== null
+              && campaignAcos >= Math.max(policy.break_even_acos * 2.5, 100);
+            const extremeLossConfirmed =
+              pressure === 'critical' && clicks >= 40 && spend >= extremeSpendFloor &&
+              (orders === 0 || extremeAcos) && previousReduction &&
+              hoursSince(previousReduction.executed_at) >= PAUSE_AFTER_REDUCTION_HOURS;
+            const canPause = Boolean(extremeLossConfirmed);
 
             if (canPause && budget > 0) {
               const idempotencyKey = `sku_profit_pause_v2|${aid}|${campaignId}|${day}`;
@@ -644,6 +644,7 @@ Deno.serve(async (request) => {
                   structural_loss: structuralLoss,
                   zero_sales_circuit_breaker: zeroSalesCircuitOpen,
                   zero_sales_spend_limit: roundMoney(zeroSalesSpendLimit),
+                  extreme_loss: true,
                   preserved_campaign_id: structuralLoss || zeroSalesCircuitOpen ? null : protectedDiscoveryId,
                 };
                 if (!dryRun) {
@@ -744,7 +745,10 @@ Deno.serve(async (request) => {
         account_economics_required: true,
         bid_reduction_before_pause: true,
         structural_loss_can_pause_immediately: true,
-        zero_sales_single_campaign_can_pause: true,
+        zero_sales_single_campaign_can_pause: false,
+        loss_escalation_order: ['reduce_term_bid', 'pause_term', 'pause_campaign_only_extreme_loss'],
+        extreme_campaign_pause_min_spend: 50,
+        extreme_campaign_pause_min_clicks: 40,
         zero_sales_minimum_clicks: 8,
         zero_sales_max_evidence_spend: 12,
         preserve_discovery_campaign_when_economically_viable: true,

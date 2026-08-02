@@ -61,6 +61,25 @@ Deno.serve(async (request) => {
       if (!decision) { results.push({ id, ok: false, error: 'Decisão não encontrada' }); continue; }
       if (decision.action !== 'pause_campaign') { results.push({ id, ok: false, skipped: true, reason: 'Não é pausa de campanha' }); continue; }
 
+      const reasonText = String(decision.rationale || decision.reason || decision.rule_key || '').toLowerCase();
+      const economicPause = /preju|loss|acos|roas|poor.performance|zero.sales|sem venda|gasto/.test(reasonText);
+      const extremeEvidence = decision.extreme_loss === true
+        || decision.metadata?.extreme_loss === true
+        || decision.metrics_before?.extreme_loss === true;
+      if (economicPause && !extremeEvidence) {
+        await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+          status: 'superseded',
+          queue_status: 'completed',
+          error_message: 'Pausa de campanha bloqueada: reduzir bid do termo e depois pausar o termo antes de escalar.',
+        }).catch(() => {});
+        results.push({
+          id, ok: true, skipped: true,
+          reason: 'economic_campaign_pause_blocked_optimize_terms_first',
+          escalation: ['reduce_term_bid', 'pause_term', 'pause_campaign_only_extreme_loss'],
+        });
+        continue;
+      }
+
       const campaign = await resolveCampaign(base44, decision);
       if (!campaign?.campaign_id) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {

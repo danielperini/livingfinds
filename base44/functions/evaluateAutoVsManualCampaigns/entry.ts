@@ -53,13 +53,13 @@ Deno.serve(async (req) => {
         );
 
         if (confidence >= 0.85) {
-          const pause = await base44.functions.invoke('pauseCampaign', {
-            amazon_account_id,
-            campaign_id: auto.campaign_id,
+          decisions.push({
             asin: productAsin,
-            sku: auto.sku || null,
+            campaign_id: auto.campaign_id,
+            action: 'kept_active_optimize_terms_first',
+            confidence,
+            escalation: ['reduce_term_bid', 'pause_term', 'pause_campaign_only_extreme_loss'],
           });
-          decisions.push({ asin: productAsin, campaign_id: auto.campaign_id, action: pause?.data?.ok ? 'paused' : 'pause_failed', confidence });
         } else {
           decisions.push({ asin: productAsin, campaign_id: auto.campaign_id, action: 'kept_active', confidence });
         }

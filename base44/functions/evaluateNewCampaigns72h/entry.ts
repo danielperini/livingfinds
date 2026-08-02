@@ -6,7 +6,7 @@
  * NUNCA substituir keyword interna.
  *
  * Para cada campanha com launch_phase='new' criada há >= 72h:
- *  - Se sem impressões após 72h → PAUSA A CAMPANHA INTEIRA (não substitui keyword)
+ *  - Se sem impressões após 72h → mantém ativa em observação (não há prejuízo)
  *  - Se gasto sem venda → reduz bid em 20%
  *  - Se ACoS > max_acos → reduz bid 15%
  *  - Se vendas OK → promove para launch_phase='active'
@@ -205,39 +205,15 @@ Deno.serve(async (req) => {
         }).catch(() => ({ ok: false, data: {} }));
         const keywords: any[] = kwRes?.data?.keywords || [];
 
-        // ── DECISÃO 1: Zero impressões após 72h → pausar CAMPANHA INTEIRA ──
-        // REGRA CANÔNICA: nunca substituir keyword internamente.
-        // Zero impressões = palavra irrelevante para o algoritmo Amazon.
-        // Ação: pausar toda a campanha. Se quiser testar novo termo: criar NOVA campanha.
+        // Zero impressões não gera prejuízo. A campanha permanece ativa;
+        // a proteção econômica atua primeiro no bid e depois no termo.
         if (impressions === 0 && clicks === 0 && spend < 0.50) {
-          const pausedOk = await pauseCampaignOnAmazon(token, account, campaignId).catch(() => false);
-
           await base44.asServiceRole.entities.Campaign.update(camp.id, {
-            state: 'paused',
-            status: 'paused',
-            launch_phase: 'paused_no_impressions',
+            launch_phase: 'under_review_no_impressions',
             last_review_at: new Date().toISOString(),
-            last_review_reason: `72h sem nenhuma impressão (${clicks} cliques, R$${spend.toFixed(2)} gasto). Campanha pausada. Para testar novo termo: criar NOVA campanha individual via kickoff.`,
+            last_review_reason: '72h sem impressões e sem prejuízo. Campanha mantida ativa.',
           }).catch(() => {});
-
-          // Registrar decisão de pausa para auditoria
-          await base44.asServiceRole.entities.OptimizationDecision.create({
-            amazon_account_id: aid,
-            decision_type: 'pause',
-            entity_type: 'campaign',
-            entity_id: campaignId,
-            campaign_id: campaignId,
-            asin,
-            action: 'pause_campaign',
-            rationale: `72h sem impressões: keyword sem relevância para o algoritmo Amazon. Campanha pausada. Não substituir keyword — criar nova campanha se necessário.`,
-            risk: 'low',
-            status: pausedOk ? 'executed' : 'failed',
-            requires_approval: false,
-            source_function: 'evaluateNewCampaigns72h_canonical',
-            created_at: new Date().toISOString(),
-          }).catch(() => {});
-
-          paused_campaigns++;
+          optimized++;
 
         // ── DECISÃO 2: Gasto sem venda → reduzir bid 20% ─────────────────
         } else if (spend > 0 && orders === 0 && spend > 5.0) {
