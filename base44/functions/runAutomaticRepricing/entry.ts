@@ -1184,6 +1184,9 @@ async function evaluateAccount(
     pricingTargets,
   );
   const results: any[] = [];
+  // IA apenas auxilia a formulação da pesquisa; no máximo 10 perfis por ciclo.
+  // Preço, margem, confiança e elegibilidade permanecem determinísticos/API.
+  const similarSearchAiBudget = { used: 0, max: 10 };
   let queued = 0;
 
   for (const product of eligible) {
@@ -1321,8 +1324,10 @@ async function evaluateAccount(
         matches: cachedSimilar.similar_competitor_products || [],
         checkedAt: cachedSimilar.similar_competition_checked_at,
         source: "persisted_amazon_catalog_inference",
+        aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
+        canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
       }
-      : await fetchSimilarCompetition(base44, account, accessToken, product).catch((error: any) => ({
+      : await fetchSimilarCompetition(base44, account, accessToken, product, similarSearchAiBudget).catch((error: any) => ({
         average: null, count: 0, matches: [], checkedAt: nowIso(),
         source: "amazon_catalog_inferred_error", error: error?.message || String(error),
       }));
@@ -1648,6 +1653,8 @@ async function evaluateAccount(
       similar_competitor_products: similarCompetition.matches || [],
       similar_competition_checked_at: similarCompetition.checkedAt,
       similar_competition_source: similarCompetition.source,
+      similar_competition_ai_assisted: similarCompetition.aiAssisted === true,
+      similar_competition_canonical_title: similarCompetition.canonicalSourceTitle || null,
       similar_competition_threshold: 0.90,
       similar_competition_algorithm_version: SIMILAR_COMPETITION_ALGORITHM_VERSION,
       stock,
@@ -2743,11 +2750,71 @@ async function fetchSimilarCompetition(
   account: any,
   accessToken: string,
   product: any,
+  aiBudget: { used: number; max: number },
 ) {
-  const title = product.display_name || product.product_name || product.title || "";
-  const tokens = [...comparableTokens(title)].slice(0, 8);
-  if (!product.asin || tokens.length < 2) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
+  const originalTitle = product.display_name || product.product_name || product.title || "";
+  let title = originalTitle;
   const marketplaceId = account.marketplace_id || secrets.get("AMAZON_MARKETPLACE_ID") || "";
+  const localTitleInvalid = !title || normalizeSku(title) === normalizeSku(product.sku) ||
+    /^t[ií]tulo pendente$/i.test(String(title).trim());
+
+  if (product.asin && (localTitleInvalid || comparableTokens(title).size < 2)) {
+    const sourceCatalog = await amazonCall(
+      base44, account.id, "repricing_catalog_source_product",
+      `${spBase(account.region)}/catalog/2022-04-01/items/${encodeURIComponent(product.asin)}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes`,
+      accessToken,
+    );
+    const sourcePayload = amazonPayload(sourceCatalog) || {};
+    const sourceSummary = (sourcePayload.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || sourcePayload.summaries?.[0] || {};
+    const canonicalTitle = sourceSummary.itemName || sourceSummary.itemTitle || sourcePayload.attributes?.item_name?.[0]?.value || "";
+    if (canonicalTitle) {
+      title = canonicalTitle;
+      await base44.asServiceRole.entities.Product.update(product.id, {
+        display_name: canonicalTitle,
+        product_name: canonicalTitle,
+        catalog_sync_status: "success",
+        last_catalog_sync_at: nowIso(),
+      }).catch(() => {});
+    }
+  }
+
+  let aiProfile: any = null;
+  if (aiBudget.used < aiBudget.max && (localTitleInvalid || comparableTokens(title).size < 4)) {
+    const gateResponse = await base44.asServiceRole.functions.invoke("aiGatekeeper", {
+      amazon_account_id: account.id,
+      analysis_type: "keyword_analysis",
+      entity_type: "product",
+      entity_id: product.asin || product.sku,
+      input_data: { title, asin: product.asin, purpose: "amazon_similar_product_search" },
+      priority_type: "strategy",
+      _service_role: true,
+    }).catch(() => null);
+    const gate = unwrap(gateResponse);
+    if (gate?.cached && gate.result) aiProfile = gate.result;
+    if (gate?.allowed === true) {
+      aiBudget.used += 1;
+      aiProfile = await base44.asServiceRole.integrations.Core.InvokeLLM({
+        prompt: `Extraia atributos para pesquisar na Amazon Brasil um produto equivalente. Não estime preço e não invente características.\nASIN: ${product.asin || "desconhecido"}\nTítulo canônico: ${title || "indisponível"}\nRetorne termos curtos que preservem tipo, modelo, cor e tamanho/variante.`,
+        response_json_schema: {
+          type: "object",
+          properties: {
+            product_type: { type: "string" },
+            model: { type: "string" },
+            color: { type: "string" },
+            size_variant: { type: "string" },
+            search_terms: { type: "array", items: { type: "string" } },
+            confidence: { type: "number" },
+          },
+          required: ["product_type", "search_terms", "confidence"],
+        },
+      }).catch(() => null);
+    }
+  }
+
+  const aiTerms = Array.isArray(aiProfile?.search_terms) ? aiProfile.search_terms : [];
+  const comparisonTitle = [title, aiProfile?.model, aiProfile?.color, aiProfile?.size_variant].filter(Boolean).join(" ");
+  const tokens = [...new Set([...aiTerms, ...comparableTokens(comparisonTitle)])].slice(0, 8);
+  if (!product.asin || tokens.length < 2) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
   const query = new URLSearchParams({
     marketplaceIds: marketplaceId,
     keywords: tokens.join(" "),
@@ -2765,7 +2832,7 @@ async function fetchSimilarCompetition(
     const summary = (item.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || item.summaries?.[0] || {};
     const matchedTitle = summary.itemName || summary.itemTitle || "";
     const similarity = titleSimilarity(title, matchedTitle);
-    const variant = comparableVariant(title, matchedTitle);
+    const variant = comparableVariant(comparisonTitle, matchedTitle);
     return {
       asin: item.asin,
       title: matchedTitle,
@@ -2800,7 +2867,11 @@ async function fetchSimilarCompetition(
     count: pricedMatches.length,
     matches: pricedMatches,
     checkedAt: nowIso(),
-    source: "amazon_catalog_and_product_pricing_inferred",
+    source: aiProfile
+      ? "amazon_catalog_product_pricing_ai_assisted_inferred"
+      : "amazon_catalog_and_product_pricing_inferred",
+    aiAssisted: Boolean(aiProfile),
+    canonicalSourceTitle: title,
   };
 }
 
