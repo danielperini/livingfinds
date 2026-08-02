@@ -13,6 +13,17 @@ const BASE_COLUMNS = [
 
 const REPORT_VARIANTS = [
   {
+    attribution_profile: 'seller_same_sku_verified',
+    columns: [...BASE_COLUMNS,
+      'purchases1d', 'purchases7d', 'purchases14d', 'purchases30d',
+      'purchasesSameSku1d', 'purchasesSameSku7d', 'purchasesSameSku14d', 'purchasesSameSku30d',
+      'purchasesOtherSku1d', 'purchasesOtherSku7d', 'purchasesOtherSku14d', 'purchasesOtherSku30d',
+      'sales1d', 'sales7d', 'sales14d', 'sales30d',
+      'attributedSalesSameSku1d', 'attributedSalesSameSku7d', 'attributedSalesSameSku14d', 'attributedSalesSameSku30d',
+      'salesOtherSku1d', 'salesOtherSku7d', 'salesOtherSku14d', 'salesOtherSku30d',
+      'acosClicks14d', 'roasClicks14d'],
+  },
+  {
     attribution_profile: 'total_only_fallback_no_auto_promotion',
     columns: [...BASE_COLUMNS,
       'purchases7d', 'purchases14d', 'purchases30d',
@@ -21,10 +32,7 @@ const REPORT_VARIANTS = [
   },
 ];
 
-const UNSUPPORTED_SAME_SKU_PROFILES = [
-  'seller_7d_same_sku',
-  'vendor_14d_same_sku',
-];
+const UNSUPPORTED_SAME_SKU_PROFILES: string[] = [];
 
 function brazilDate(): string {
   return new Intl.DateTimeFormat('en-CA', {
