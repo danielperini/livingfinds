@@ -132,17 +132,26 @@ export async function startScheduler(): Promise<void> {
   tick();
   // Estudos marcados podem popular dados assim que uma nova versão sobe,
   // sem aguardar a próxima janela cron. O motor interno mantém seu lock por conta.
-  setTimeout(() => {
-    for (const job of jobs.filter((item) => item.run_on_startup === true)) {
+  const runStartupJob = (job: Job, attempt = 1) => {
       const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
       const jobKey = `${job.function}|${accountScope}`;
-      if (runningJobs.has(jobKey)) continue;
+      if (runningJobs.has(jobKey)) {
+        if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+        else console.error(`[scheduler] startup '${job.name}' abandonado após ${attempt} tentativas por sobreposição`);
+        return;
+      }
       runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
-      console.log(`[scheduler] startup '${job.name}' -> ${job.function}`);
+      console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
       service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
-        .then((response) => console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status}`))
+        .then((response) => {
+          const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
+          console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status} locked=${locked}`);
+          if (locked && attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+        })
         .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
         .finally(() => runningJobs.delete(jobKey));
-    }
+  };
+  setTimeout(() => {
+    for (const job of jobs.filter((item) => item.run_on_startup === true)) runStartupJob(job);
   }, 1_000);
 }

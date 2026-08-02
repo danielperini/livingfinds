@@ -92,6 +92,20 @@ jobs:
             functions_json="\$(curl -fsS http://localhost:8000/functions)"
             echo "\$functions_json" | grep -q 'runAutomaticRepricing'
             echo "\$functions_json" | grep -q 'importProductEconomics'
+            echo '--- validando ScrapingBee real dentro do container ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const key = Deno.env.get("SCRAPINGBEE_API_KEY") || "";
+              if (!key) throw new Error("SCRAPINGBEE_API_KEY ausente no server/.env");
+              const params = new URLSearchParams({ query: "lixeira automatica sensor", domain: "com.br", pages: "1" });
+              const response = await fetch("https://app.scrapingbee.com/api/v1/amazon/search?" + params, {
+                headers: { Authorization: "Bearer " + key }, signal: AbortSignal.timeout(45000)
+              });
+              const payload = await response.json().catch(() => ({}));
+              const count = Array.isArray(payload.products) ? payload.products.length : 0;
+              console.log("SCRAPINGBEE_HTTP=" + response.status + "|PRODUCTS=" + count);
+              if (!response.ok) throw new Error("ScrapingBee HTTP " + response.status);
+              if (count < 1) throw new Error("ScrapingBee respondeu sem produtos para consulta de controle");
+            ' </dev/null
             echo 'FUNCTION_REGISTRY=runAutomaticRepricing,importProductEconomics — OK'
 
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
