@@ -26,6 +26,18 @@
       "payload": { "_service_role": true, "force_new": true, "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Daily active SKU AUTO campaign coverage - 06:25 BRT",
+      "function": "ensureActiveProductCampaignCoverage",
+      "cron": "25 6 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "max_products": 200, "lookback_days": 65, "max_promotions": 50, "run_harvest": true }
+    },
+    {
+      "name": "AUTO campaign repair queue - every 2 minutes in Amazon windows",
+      "function": "processAutoCampaignRepairQueueV2",
+      "cron": "*/2 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Immediate same-SKU term harvest self-heal - every 20 minutes",
       "function": "runImmediateSameSkuSearchTermHarvest",
       "cron": "4,24,44 * * * *",

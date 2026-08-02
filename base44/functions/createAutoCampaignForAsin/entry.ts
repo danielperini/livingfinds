@@ -150,10 +150,11 @@ async function reconcileCampaign(token, profileId, campaignName, asin) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    if (body._service_role !== true) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
     const { amazon_account_id, asin, sku, product_name } = body;
     if (!amazon_account_id || !asin) return Response.json({ error: 'amazon_account_id and asin required' }, { status: 400 });
 
@@ -167,15 +168,41 @@ Deno.serve(async (req) => {
     if (!profileId) return Response.json({ ok: false, error: 'ads_profile_id não configurado' });
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
-    const activeCampaign = existingCampaigns.find(c => c.archived !== true);
-    if (activeCampaign) {
-      return Response.json({ 
-        ok: true, 
-        campaign_id: activeCampaign.campaign_id,
-        campaign_name: activeCampaign.campaign_name,
-        daily_budget: activeCampaign.daily_budget,
+    const autoCampaign = existingCampaigns.find((c: any) => {
+      const targeting = String(c.targeting_type || '').toUpperCase();
+      const name = String(c.name || c.campaign_name || '').toUpperCase();
+      const state = String(c.state || c.status || '').toUpperCase();
+      return c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
+    });
+    if (autoCampaign) {
+      const state = String(autoCampaign.state || autoCampaign.status || '').toUpperCase();
+      if (state !== 'ENABLED') {
+        const enabled = await adsRequestWithDetails(
+          'PUT', '/sp/campaigns',
+          { campaigns: [{ campaignId: String(autoCampaign.campaign_id), state: 'ENABLED' }] },
+          refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+        );
+        if (![200, 201, 207].includes(enabled.status)) {
+          return Response.json({ ok: false, error: `Falha ao reativar AUTO ${autoCampaign.campaign_id}`, http_status: enabled.status });
+        }
+        await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
+          state: 'enabled', status: 'enabled', last_sync_at: new Date().toISOString(),
+        });
+      }
+      const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
+      for (const product of linkedProducts) {
+        await base44.asServiceRole.entities.Product.update(product.id, {
+          has_campaign: true, campaign_status: 'active', linked_campaign_id: autoCampaign.campaign_id,
+        }).catch(() => {});
+      }
+      return Response.json({
+        ok: true,
+        campaign_id: autoCampaign.campaign_id,
+        campaign_name: autoCampaign.name || autoCampaign.campaign_name,
+        daily_budget: autoCampaign.daily_budget,
         already_exists: true,
-        message: 'Campanha já existe para este ASIN'
+        reactivated: state !== 'ENABLED',
+        action_label: state === 'ENABLED' ? 'existing_enabled' : 'reactivated',
       });
     }
 

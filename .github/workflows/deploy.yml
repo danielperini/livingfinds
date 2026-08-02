@@ -126,6 +126,19 @@ jobs:
             ' </dev/null
             echo 'FUNCTION_REGISTRY=runAutomaticRepricing,importProductEconomics — OK'
 
+            echo '--- cobertura AUTO de todos os SKUs ativos + termos empiricos ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/ensureActiveProductCampaignCoverage", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, dry_run: false, max_products: 200, lookback_days: 65, max_promotions: 50, run_harvest: true, trigger_type: "deploy_active_campaign_recovery" })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("ACTIVE_CAMPAIGN_COVERAGE_HTTP=" + response.status + "|OK=" + data.ok + "|FAILED=" + (data.failed ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 12000));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "active campaign coverage failed");
+            ' </dev/null
+
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
             echo '--- autocorreção diária dos relatórios ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '

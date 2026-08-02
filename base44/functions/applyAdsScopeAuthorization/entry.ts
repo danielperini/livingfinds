@@ -39,6 +39,11 @@ const AUTHORIZED_SKUS: string[] = [
   'FBA-0088a',
   'FBA-0065PR',
   'FBA-0024b',
+  'W9-OL7U-LRW5',
+  'FBA-0087b',
+  'FBA-0010b',
+  'FBA-0071',
+  '70-FCMB-TFYO',
 ];
 
 // Mapeamento esperado SKU → ASIN (para detecção de conflito)
@@ -57,12 +62,11 @@ const SKU_ASIN_MAPPING: Record<string, string> = {
   'FBA-0088a':    'B0FRVMB7BW',
   'FBA-0065PR':   'B0FCYR3VBD',
   'FBA-0024b':    'B0F45JG27L',
-};
-
-// SKUs com estado inicial de elegibilidade específico (conforme spec)
-const INITIAL_ELIGIBILITY: Record<string, string> = {
-  'FBA-0008P':  'listing_suppressed',  // oferta suprimida
-  'FBA-0047b':  'out_of_stock',         // estoque zero confirmado
+  'W9-OL7U-LRW5': 'B0HBM8V2DP',
+  'FBA-0087b':    'B0GFQ5YT3H',
+  'FBA-0010b':    'B0FN4RCXY2',
+  'FBA-0071':     'B0FHX1HPMT',
+  '70-FCMB-TFYO': 'B0DSCM4DFT',
 };
 
 // Pausas que o sistema pode retomar (seção 9 da spec)
@@ -83,6 +87,24 @@ function normSku(s: string): string {
 }
 
 const AUTHORIZED_SET = new Set(AUTHORIZED_SKUS.map(normSku));
+
+// O catálogo sincronizado pela SP-API é a fonte de verdade. A lista acima
+// permanece somente como compatibilidade para itens sem telemetria completa.
+function isActiveCatalogProduct(product: any): boolean {
+  const sku = normSku(product?.sku || '');
+  const asin = String(product?.asin || '').trim();
+  const status = String(product?.status || product?.offer_status || '').toLowerCase();
+  const available = Number(product?.available_quantity ?? product?.fba_inventory ?? 0);
+  return !!sku && !!asin && available > 0
+    && !['inactive', 'archived', 'deleted', 'closed'].includes(status)
+    && product?.listing_suppressed !== true
+    && product?.offer_active !== false
+    && product?.listing_buyable !== false;
+}
+
+function isSkuAuthorized(product: any): boolean {
+  return AUTHORIZED_SET.has(normSku(product?.sku || '')) || isActiveCatalogProduct(product);
+}
 
 async function getAdsAccessToken(refreshToken: string): Promise<string> {
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
@@ -138,18 +160,6 @@ function calcEligibility(product: any, authorized: boolean): {
 } {
   if (!authorized) return { eligibility_status: 'not_authorized', ineligibility_reason: 'SKU fora da lista de escopo autorizado' };
 
-  const sku = normSku(product.sku || '');
-
-  // Estado inicial fixo para SKUs específicos (spec seção 5)
-  if (INITIAL_ELIGIBILITY[sku]) {
-    return {
-      eligibility_status: INITIAL_ELIGIBILITY[sku],
-      ineligibility_reason: sku === 'FBA-0008P'
-        ? 'Oferta suprimida — aguardando confirmação SP-API'
-        : 'Estoque zero confirmado — campanhas pausadas preventivamente',
-    };
-  }
-
   const available = Number(product.available_quantity ?? product.fba_inventory ?? 0);
   // Estoque inbound não conta (spec seção 11)
   if (available <= 0) return { eligibility_status: 'out_of_stock', ineligibility_reason: `Estoque disponível zero (available=${available})` };
@@ -167,11 +177,12 @@ function calcEligibility(product: any, authorized: boolean): {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-    if (user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
-
     const body = await req.json().catch(() => ({}));
+    if (body._service_role !== true) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+      if (user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
+    }
     const { amazon_account_id, dry_run = false } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id obrigatório' }, { status: 400 });
 
@@ -221,7 +232,7 @@ Deno.serve(async (req) => {
       const sku = normSku(product.sku || '');
       if (!sku) continue;
 
-      const isAuthorized = AUTHORIZED_SET.has(sku);
+      const isAuthorized = isSkuAuthorized(product);
       const expectedAsin = SKU_ASIN_MAPPING[sku];
 
       // Detecção de conflito de mapeamento
@@ -276,7 +287,7 @@ Deno.serve(async (req) => {
     // 5. Identificar campanhas de SKUs não autorizados (enabled → pausar)
     const notAuthorizedAsins = new Set(
       (products as any[])
-        .filter((p: any) => !AUTHORIZED_SET.has(normSku(p.sku || '')))
+        .filter((p: any) => !isSkuAuthorized(p))
         .map((p: any) => p.asin)
         .filter(Boolean)
     );
@@ -286,7 +297,7 @@ Deno.serve(async (req) => {
       (products as any[])
         .filter((p: any) => {
           const sku = normSku(p.sku || '');
-          if (!AUTHORIZED_SET.has(sku)) return false;
+          if (!isSkuAuthorized(p)) return false;
           const { eligibility_status } = calcEligibility(p, true);
           return ['out_of_stock', 'listing_suppressed', 'offer_inactive'].includes(eligibility_status);
         })
