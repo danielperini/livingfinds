@@ -7,11 +7,13 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
   Loader2,
   RefreshCw,
   Search,
   Tag,
   Upload,
+  X,
 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 
@@ -72,6 +74,17 @@ function Stat({ label, value, detail, tone = 'slate' }) {
   return <div className={`rounded-xl border p-4 ${tones[tone]}`}><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p><p className="mt-1 text-xl font-bold">{value}</p>{detail && <p className="mt-1 text-[10px] text-slate-500">{detail}</p>}</div>;
 }
 
+function CompetitorModal({ row, onClose }) {
+  if (!row) return null;
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+    <div className="max-h-[88vh] w-full max-w-5xl overflow-hidden rounded-xl border border-violet-500/30 bg-surface-1 shadow-2xl">
+      <div className="flex items-start justify-between gap-4 border-b border-surface-2 p-4"><div><h3 className="text-sm font-semibold text-violet-300">Concorrentes identificados — {row.sku}</h3><p className="mt-1 text-xs text-slate-400">{row.title}</p><p className="mt-1 text-[10px] text-slate-600">Até 10 genéricos equivalentes pesquisados pelo ScrapingBee · dados agregados e inferidos</p></div><button type="button" onClick={onClose} className="rounded-lg border border-surface-3 p-2 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button></div>
+      <div className="grid grid-cols-3 gap-3 border-b border-surface-2 p-4"><Stat label="Preço médio" value={money(row.similar_competitor_average)} tone="cyan" /><Stat label="Preço mínimo" value={money(row.similar_competitor_minimum)} tone="green" /><Stat label="Preço máximo" value={money(row.similar_competitor_maximum)} /></div>
+      <div className="max-h-[58vh] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 bg-surface-2 text-left text-[10px] uppercase text-slate-500"><tr>{['#', 'ASIN', 'Produto', 'Preço', 'Similaridade', 'Posição', 'Amazon'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{row.similar_products.map((item, index) => <tr key={`${item.asin}-${index}`} className="border-t border-surface-2/60"><td className="px-4 py-3 text-slate-600">{index + 1}</td><td className="whitespace-nowrap px-4 py-3 font-mono text-cyan">{item.asin}</td><td className="min-w-[320px] max-w-[520px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{item.title}</p><p className="mt-1 text-[9px] text-slate-600">{item.brand || 'Genérico'}{item.sponsored ? ' · patrocinado' : ''}</p></td><td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-200">{money(item.averagePrice)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{Math.round(Number(item.similarity || 0) * 100)}/100</td><td className="whitespace-nowrap px-4 py-3 text-slate-500">{item.organic_position || '—'}</td><td className="px-4 py-3"><a href={item.amazonUrl || `https://www.amazon.com.br/dp/${item.asin}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-cyan hover:underline">Abrir <ExternalLink className="h-3 w-3" /></a></td></tr>)}</tbody></table>{!row.similar_products.length && <p className="p-8 text-center text-xs text-slate-500">Nenhum concorrente equivalente válido nesta consulta.</p>}</div>
+    </div>
+  </div>;
+}
+
 export default function Repricing() {
   const [accounts, setAccounts] = useState([]);
   const [accountId, setAccountId] = useState('');
@@ -94,6 +107,7 @@ export default function Repricing() {
   const [search, setSearch] = useState('');
   const [source, setSource] = useState('all');
   const [showAudit, setShowAudit] = useState(false);
+  const [selectedCompetitors, setSelectedCompetitors] = useState(null);
   const costFileRef = useRef(null);
 
   useEffect(() => {
@@ -404,7 +418,10 @@ export default function Repricing() {
           competitor_average: competitorAverage,
           exact_competitor_average: finiteNumber(exactAverage) ? Number(exactAverage) : null,
           similar_competitor_average: finiteNumber(similarAverage) ? Number(similarAverage) : null,
+          similar_competitor_minimum: finiteNumber(evidence.similar_competitor_price_minimum) ? Number(evidence.similar_competitor_price_minimum) : similarProducts.length ? Math.min(...similarProducts.map(match => Number(match.averagePrice)).filter(value => Number.isFinite(value) && value > 0)) : null,
+          similar_competitor_maximum: finiteNumber(evidence.similar_competitor_price_maximum) ? Number(evidence.similar_competitor_price_maximum) : similarProducts.length ? Math.max(...similarProducts.map(match => Number(match.averagePrice)).filter(value => Number.isFinite(value) && value > 0)) : null,
           similar_count: Number(evidence.similar_competitor_product_count || 0),
+          similar_products: similarProducts,
           similar_sales_estimate_average: salesEstimates.length ? salesEstimates.reduce((sum, value) => sum + value, 0) / salesEstimates.length : null,
           similar_sales_estimate_count: salesEstimates.length,
           similar_price_difference: similarPriceDifference,
@@ -532,8 +549,8 @@ export default function Repricing() {
       </section>
 
       <section className="rounded-xl border border-violet-500/20 bg-surface-1">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN pela SP-API + similares Amazon pesquisados somente pelo ScrapingBee no back-end, com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p><p className="mt-1 text-[10px] text-emerald-400">Estudo atualizado automaticamente uma vez ao dia, às 09:10 (horário de São Paulo). Quantidade de concorrentes é sempre estimativa agregada/inferida, nunca venda confirmada por seller.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div>
-        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média até 10 similares ≥90%', 'Vendas/mês similares (estim.)', 'Atual vs similares', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count}/10 produto(s) · ScrapingBee</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.similar_sales_estimate_average == null ? '—' : <><p>≈ {Math.round(row.similar_sales_estimate_average).toLocaleString('pt-BR')}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_sales_estimate_count} sinal(is) · inferido</p></>}</td><td className={`whitespace-nowrap px-4 py-3 font-semibold ${row.similar_price_difference_pct > 0 ? 'text-amber-400' : row.similar_price_difference_pct < 0 ? 'text-emerald-400' : 'text-slate-500'}`}>{row.similar_price_difference_pct == null ? '—' : <><p>{row.similar_price_difference_pct > 0 ? '+' : ''}{row.similar_price_difference_pct.toFixed(2)}%</p><p className="mt-1 text-[9px] font-normal">{row.similar_price_difference > 0 ? '+' : ''}{money(row.similar_price_difference)}</p></>}</td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">O primeiro estudo diário preencherá esta tabela automaticamente. Produtos sem custos confirmados permanecem protegidos e não recebem preço automático.</p>}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Análise de preços da concorrência</h2><p className="mt-1 text-[10px] text-slate-500">Até 10 genéricos equivalentes por SKU, pesquisados somente pelo ScrapingBee no back-end e classificados por produto, modelo, cor e tamanho.</p><p className="mt-1 text-[10px] text-emerald-400">Estudo diário às 09:10. O preço recomendado continua protegido internamente por margem líquida ≥15% e confiança superior a 95%.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div>
+        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Concorrentes identificados', 'Preço médio', 'Preço mínimo', 'Preço máximo', 'Preço recomendado'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3"><button type="button" onClick={() => setSelectedCompetitors(row)} disabled={!row.similar_count} className="inline-flex items-center gap-1 rounded-lg border border-cyan/20 bg-cyan/5 px-3 py-1.5 font-semibold text-cyan enabled:hover:bg-cyan/10 disabled:cursor-not-allowed disabled:border-surface-3 disabled:text-slate-600">{row.similar_count} concorrente(s) <ExternalLink className="h-3 w-3" /></button></td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.similar_competitor_average)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.similar_competitor_minimum)}</td><td className="whitespace-nowrap px-4 py-3 text-amber-400">{money(row.similar_competitor_maximum)}</td><td className="whitespace-nowrap px-4 py-3"><p className="font-bold text-violet-300">{money(row.recommended_price)}</p><p className="mt-1 text-[9px] text-slate-600">margem e confiança validadas no motor</p></td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">O primeiro estudo diário preencherá esta tabela automaticamente. Produtos sem custos confirmados permanecem protegidos e não recebem preço automático.</p>}</div>
       </section>
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">
@@ -554,6 +571,7 @@ export default function Repricing() {
         </button>
         {showAudit && <div className="overflow-x-auto border-t border-surface-2"><table className="w-full text-xs"><thead><tr className="bg-surface-2/40 text-left text-[10px] uppercase text-slate-500">{['Horário', 'SKU', 'Tipo', 'Status', 'Antes', 'Depois', 'Motivo'].map(label => <th key={label} className="px-4 py-3">{label}</th>)}</tr></thead><tbody>{auditRows.map(item => <tr key={item.id} className="border-t border-surface-2/50"><td className="px-4 py-3 text-slate-500">{time(item.changed_at)}</td><td className="px-4 py-3 font-mono text-cyan">{item.sku || '—'}</td><td className="px-4 py-3 text-slate-400">{item.history_type || 'legado'}</td><td className="px-4 py-3 text-amber-400">{item.status || 'inconsistente'}</td><td className="px-4 py-3 text-slate-500">{money(item.price_before)}</td><td className="px-4 py-3 text-slate-500">{money(item.price_after)}</td><td className="max-w-[420px] px-4 py-3 text-slate-500">{item.reason || item.decision_reason || 'Sem motivo registrado.'}</td></tr>)}</tbody></table>{!auditRows.length && <p className="p-4 text-xs text-slate-500">Nenhum registro não operacional nesta data.</p>}</div>}
       </section>
+      <CompetitorModal row={selectedCompetitors} onClose={() => setSelectedCompetitors(null)} />
     </div>
   );
 }

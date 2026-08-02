@@ -107,6 +107,16 @@ function titleSimilarity(left: unknown, right: unknown) {
   return intersection / Math.max(a.size, b.size);
 }
 
+function genericProductSimilarity(left: unknown, right: unknown) {
+  const a = comparableTokens(left);
+  const b = comparableTokens(right);
+  if (!a.size || !b.size) return 0;
+  const shared = [...a].filter((token) => b.has(token)).length;
+  if (shared < 2) return 0;
+  const coverage = shared / Math.max(1, Math.min(a.size, b.size));
+  return Math.min(0.99, 0.82 + Math.min(0.12, shared * 0.05) + Math.min(0.05, coverage * 0.05));
+}
+
 function inferredMonthlySalesVolume(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -122,7 +132,7 @@ function inferredMonthlySalesVolume(value: unknown) {
   };
 }
 
-const SIMILAR_COMPETITION_ALGORITHM_VERSION = 3;
+const SIMILAR_COMPETITION_ALGORITHM_VERSION = 4;
 const COLOR_TOKENS = [
   "preto", "preta", "branco", "branca", "cinza", "vermelho", "vermelha",
   "azul", "verde", "rosa", "amarelo", "amarela", "bege", "marrom",
@@ -1343,10 +1353,12 @@ async function evaluateAccount(
     const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION && hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
       ? {
         average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
+        minimum: numberValue(cachedSimilar.similar_competitor_price_minimum, 0) || null,
+        maximum: numberValue(cachedSimilar.similar_competitor_price_maximum, 0) || null,
         count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
         matches: cachedSimilar.similar_competitor_products || [],
         checkedAt: cachedSimilar.similar_competition_checked_at,
-        source: "persisted_amazon_catalog_inference",
+        source: "persisted_scrapingbee_amazon_search_inferred",
         aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
         canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
       }
@@ -1687,6 +1699,8 @@ async function evaluateAccount(
       competitor_reference_prices: pricing.referencePrices || [],
       competitor_reference_price_average: pricing.referenceAveragePrice || null,
       similar_competitor_price_average: similarCompetition.average || null,
+      similar_competitor_price_minimum: similarCompetition.minimum || null,
+      similar_competitor_price_maximum: similarCompetition.maximum || null,
       similar_competitor_product_count: similarCompetition.count || 0,
       similar_competitor_products: similarCompetition.matches || [],
       similar_competition_checked_at: similarCompetition.checkedAt,
@@ -2852,7 +2866,7 @@ async function fetchSimilarCompetition(
   }
   const pricedMatches = (Array.isArray(payload?.products) ? payload.products : []).map((item: any) => {
     const matchedTitle = String(item.title || "");
-    const similarity = titleSimilarity(title, matchedTitle);
+    const similarity = genericProductSimilarity(title, matchedTitle);
     const variant = comparableVariant(title, matchedTitle);
     return {
       asin: item.asin || null,
@@ -2862,6 +2876,7 @@ async function fetchSimilarCompetition(
       matchedDimensions: variant.matched,
       variantCompatible: variant.ok,
       averagePrice: numberValue(item.price || item.highest_price, 0),
+      amazonUrl: item.asin ? `https://www.amazon.com.br/dp/${item.asin}` : null,
       ...(inferredMonthlySalesVolume(item.sales_volume) || {}),
       organic_position: finite(item.organic_position) ? Number(item.organic_position) : null,
       sponsored: item.is_sponsored === true,
@@ -2872,6 +2887,8 @@ async function fetchSimilarCompetition(
     .slice(0, 10);
   return {
     average: averagePositive(pricedMatches.map((match: any) => match.averagePrice)),
+    minimum: pricedMatches.length ? Math.min(...pricedMatches.map((match: any) => match.averagePrice)) : null,
+    maximum: pricedMatches.length ? Math.max(...pricedMatches.map((match: any) => match.averagePrice)) : null,
     count: pricedMatches.length,
     matches: pricedMatches,
     checkedAt: nowIso(),
