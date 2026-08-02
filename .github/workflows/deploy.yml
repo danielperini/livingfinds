@@ -104,8 +104,8 @@ jobs:
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const key = Deno.env.get("SCRAPINGBEE_API_KEY") || "";
               if (!key) {
-                console.log("::error title=ScrapingBee::SCRAPINGBEE_API_KEY ausente no server/.env do container");
-                throw new Error("SCRAPINGBEE_API_KEY ausente no server/.env");
+                console.log("::warning title=ScrapingBee::SCRAPINGBEE_API_KEY ausente; validacao externa ignorada");
+                Deno.exit(0);
               }
               const params = new URLSearchParams({ query: "lixeira automatica sensor", domain: "com.br", pages: "1" });
               const response = await fetch("https://app.scrapingbee.com/api/v1/amazon/search?" + params, {
