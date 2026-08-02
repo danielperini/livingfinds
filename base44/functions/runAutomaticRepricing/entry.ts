@@ -1204,7 +1204,11 @@ async function evaluateAccount(
     }
     if (options.product_id && product.id !== options.product_id) return false;
     const economics = latestEconomicsBySku.get(normalizeSku(product.sku));
-    return Boolean(economics?.costs_confirmed_by_user || options.product_id);
+    return Boolean(
+      economics &&
+        (economics.costs_confirmed_by_user || options.product_id ||
+          options.force_all_decisions === true),
+    );
   });
   // Uma mesma oferta pode aparecer mais de uma vez após importações legadas.
   // Avaliar uma única linha por SKU evita estudos e decisões conflitantes.
@@ -1273,7 +1277,8 @@ async function evaluateAccount(
     // O estudo de mercado é informativo e deve existir mesmo quando estoque,
     // Listings ou fulfillment ainda impedem a EXECUÇÃO do novo preço.
     const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
+    const similarCompetition = options.full !== true &&
+        cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
         numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
         Array.isArray(cachedSimilar.similar_competitor_products) &&
         cachedSimilar.similar_competitor_products.length > 0 &&
@@ -1741,6 +1746,13 @@ async function evaluateAccount(
       missing_data: confidenceAudit.missingData,
       confidence_reason: confidenceAudit.reason,
       decision_status: guardedChange.status,
+      decision_action: decision.suggestedPrice &&
+          Math.abs(Number(decision.suggestedPrice) - confirmedPrice) >= 0.01
+        ? Number(decision.suggestedPrice) > confirmedPrice
+          ? "increase_price"
+          : "decrease_price"
+        : "maintain_price",
+      forced_full_decision_audit: options.force_all_decisions === true,
       ideal_suggested_price: idealSuggestedPrice,
       guarded_suggested_price: decision.suggestedPrice,
       price_change_used_24h: guardedChange.priceChangeUsed24h,
@@ -1915,8 +1927,10 @@ async function evaluateAccount(
       market_price_last_checked_at: pricing.checkedAt || nowIso(),
     }).catch(() => {});
 
+    // Uma auditoria por ciclo/minuto: o ciclo horário e o estudo completo
+    // consecutivo devem registrar conclusões independentes, inclusive "manter".
     const decisionKey = `repricing_decision:${account.id}:${key}:${
-      nowIso().slice(0, 13)
+      nowIso().slice(0, 16)
     }`;
     if (!historyRows.some((row: any) => row.import_batch_id === decisionKey)) {
       await base44.asServiceRole.entities.ProductEconomicsHistory.create({
