@@ -7,7 +7,7 @@ import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { canonicalAccountSalesByDate } from '../../../base44/shared/salesDailyIntegrity.ts';
 
-const RANGE_DAYS = 90;
+const RANGE_DAYS = 30;
 const REFRESH_MS = 10 * 60 * 1000;
 
 function brazilDate(offsetDays = 0) {
@@ -157,7 +157,7 @@ export default function LivePerformanceChart() {
       return byDate.get(date);
     };
 
-    // O eixo sempre representa os 90 dias prometidos. Ausência de resposta da
+    // O eixo sempre representa os 30 dias prometidos. Ausência de resposta da
     // Amazon permanece null (lacuna visual), nunca é convertida em faturamento zero.
     for (let date = since; date <= today; date = offsetFrom(date, 1)) ensure(date);
 
@@ -260,7 +260,7 @@ export default function LivePerformanceChart() {
     if (!derived || !state.data?.accountId || historyBackfillRunning.current) return;
     if (derived.coverage.spDays >= derived.coverage.closedDays) return;
 
-    const storageKey = `livingfinds:sp-history-backfill:${state.data.accountId}`;
+    const storageKey = `livingfinds:sp-history-backfill:${RANGE_DAYS}:${state.data.accountId}`;
     const lastAttempt = Number(window.localStorage.getItem(storageKey) || 0);
     if (Date.now() - lastAttempt < 30 * 60 * 1000) return;
 
@@ -295,7 +295,7 @@ export default function LivePerformanceChart() {
   return (
     <section className="bg-surface-1 border border-surface-2 rounded-xl p-5" data-live-performance-chart="true">
       <div className="flex items-start justify-between gap-3 flex-wrap mb-2">
-        <div><h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2><p className="text-[10px] text-slate-500 mt-0.5">Histórico completo de 90 dias · relatório diário + API Ads intradiária + faturamento SP‑API · atualização automática a cada 10 minutos</p></div>
+        <div><h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2><p className="text-[10px] text-slate-500 mt-0.5">Histórico completo de 30 dias · relatório diário + API Ads intradiária + faturamento SP‑API · atualização automática a cada 10 minutos</p></div>
         <button onClick={refreshBackend} disabled={state.refreshing} className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-white border border-surface-3 rounded-lg px-2 py-1.5 disabled:opacity-50"><RefreshCw className={`w-3 h-3 ${state.refreshing ? 'animate-spin' : ''}`} />Atualizar agora</button>
       </div>
 
