@@ -178,7 +178,7 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const cutoff = cutoffDate(LOOKBACK_DAYS);
-      const [products, economics, assessments, campaigns, keywords, searchTerms, metricsRows, hourlyRows, settingsRows, priorExecutions] = await Promise.all([
+      const [products, economics, assessments, campaigns, keywords, searchTerms, metricsRows, hourlyRows, settingsRows, autopilotRows, priorExecutions] = await Promise.all([
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
@@ -188,10 +188,13 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
         base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: aid }, '-date', 20000).catch(() => []),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+        base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-executed_at', 5000).catch(() => []),
       ]);
 
-      const settings = settingsRows[0] || {};
+      // PerformanceSettings is the canonical UI goal source. AutopilotConfig
+      // fills only fields not yet present there, preserving the user's goals.
+      const settings = { ...(autopilotRows[0] || {}), ...(settingsRows[0] || {}) };
       let invalidZeroRevenueMarginsRepaired = 0;
       for (const economic of economics) {
         const imported = economic.analytics_import_metrics;
@@ -632,7 +635,14 @@ Deno.serve(async (request) => {
               pressure === 'critical' && clicks >= 40 && spend >= extremeSpendFloor &&
               (orders === 0 || extremeAcos) && previousReduction &&
               hoursSince(previousReduction.executed_at) >= PAUSE_AFTER_REDUCTION_HOURS;
-            const canPause = Boolean(extremeLossConfirmed);
+            // User policy: economic loss never pauses the whole campaign.
+            // Extreme evidence is retained for audit, but containment remains
+            // at keyword/target/search-term level so every eligible SKU keeps
+            // advertising with a proportional low bid.
+            const canPause = false;
+            if (extremeLossConfirmed) {
+              skipped.push({ asin, sku, campaign_id: campaignId, reason: 'extreme_loss_contained_at_term_level_campaign_kept_enabled' });
+            }
 
             if (canPause && budget > 0) {
               const idempotencyKey = `sku_profit_pause_v2|${aid}|${campaignId}|${day}`;

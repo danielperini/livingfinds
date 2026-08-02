@@ -3,6 +3,7 @@
  * Com reconciliação, idempotência, tratamento de HTTP 207 e parser tolerante.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { proportionalActivationBid } from '../../shared/activationBidPolicy.ts';
 
 const tokenCache = {};
 
@@ -167,6 +168,15 @@ Deno.serve(async (req) => {
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
     if (!profileId) return Response.json({ ok: false, error: 'ads_profile_id não configurado' });
 
+    const [performanceRows, earlyAutopilotRows, economicRows, assessmentRows] = await Promise.all([
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id, asin }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id, asin }, '-assessment_date', 1).catch(() => []),
+    ]);
+    const goalSettings = { ...(earlyAutopilotRows[0] || {}), ...(performanceRows[0] || {}) };
+    const initialBid = proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
+
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
     const autoCampaign = existingCampaigns.find((c: any) => {
       const targeting = String(c.targeting_type || '').toUpperCase();
@@ -189,6 +199,22 @@ Deno.serve(async (req) => {
           state: 'enabled', status: 'enabled', last_sync_at: new Date().toISOString(),
         });
       }
+      const existingGroups = await base44.asServiceRole.entities.AdGroup.filter({
+        amazon_account_id, campaign_id: String(autoCampaign.campaign_id),
+      }, null, 100).catch(() => []);
+      for (const group of existingGroups) {
+        const adGroupId = String(group.ad_group_id || '');
+        if (!adGroupId || Math.abs(Number(group.default_bid || group.bid || 0) - initialBid) < 0.01) continue;
+        const adjusted = await adsRequestWithDetails(
+          'PUT', '/sp/adGroups', { adGroups: [{ adGroupId, defaultBid: initialBid }] },
+          refreshToken, String(profileId), 'application/vnd.spAdGroup.v3+json'
+        );
+        if ([200, 201, 207].includes(adjusted.status)) {
+          await base44.asServiceRole.entities.AdGroup.update(group.id, {
+            default_bid: initialBid, bid: initialBid, synced_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      }
       const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
       for (const product of linkedProducts) {
         await base44.asServiceRole.entities.Product.update(product.id, {
@@ -203,6 +229,7 @@ Deno.serve(async (req) => {
         already_exists: true,
         reactivated: state !== 'ENABLED',
         action_label: state === 'ENABLED' ? 'existing_enabled' : 'reactivated',
+        proportional_bid: initialBid,
       });
     }
 
@@ -289,7 +316,7 @@ Deno.serve(async (req) => {
         adGroups: [{
           name: `AdGroup | ${asin}`,
           campaignId,
-          defaultBid: 0.50, // bid inicial padrão — ajustado automaticamente pelo smartBidFromCpc/calibrateBidsNoImpressions
+          defaultBid: initialBid,
           state: 'ENABLED',
         }],
       };
@@ -362,7 +389,7 @@ Deno.serve(async (req) => {
         ad_group_id: adGroupId,
         ad_group_name: `AdGroup | ${asin}`,
         name: `AdGroup | ${asin}`,
-        default_bid: 0.50,
+        default_bid: initialBid,
         state: 'enabled',
         status: 'enabled',
         synced_at: now,
@@ -409,7 +436,7 @@ Deno.serve(async (req) => {
       product_ad_id: productAdId || null,
       campaign_name: campaignName,
       daily_budget: campaignBudget,
-      initial_bid: 0.50,
+      initial_bid: initialBid,
       http_status: campaignResult.status,
       request_id: campaignResult.headers.requestId,
       ad_confirmed: !!adGroupId,

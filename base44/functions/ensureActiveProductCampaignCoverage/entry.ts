@@ -139,6 +139,7 @@ Deno.serve(async (req) => {
 
       let repair: any = null;
       let harvest: any = null;
+      let profitProtection: any = null;
       if (!dryRun) {
         repair = dataOf(await base44.asServiceRole.functions.invoke('repairIncompleteAutoCampaigns', {
           _service_role: true, amazon_account_id: accountId, asins: limitedEligible.map((p: any) => p.asin),
@@ -153,6 +154,13 @@ Deno.serve(async (req) => {
             trigger_type: 'active_campaign_coverage',
           }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         }
+        // Every coverage/recovery cycle must immediately reconnect campaign
+        // presence to the configured economic goals. This keeps campaigns
+        // enabled while controlling loss through keyword/term bids.
+        profitProtection = dataOf(await base44.asServiceRole.functions.invoke('enforceSkuProfitProtection', {
+          _service_role: true, amazon_account_id: accountId, dry_run: false,
+          trigger_type: 'active_campaign_coverage_goal_alignment',
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
       }
 
       accountResults.push({
@@ -163,7 +171,7 @@ Deno.serve(async (req) => {
         reactivated: rows.filter((r: any) => r.action === 'reactivated').length,
         already_enabled: rows.filter((r: any) => r.action === 'existing_enabled').length,
         failed: rows.filter((r: any) => r.ok === false).length,
-        rows, repair, harvest, catalog_sync: catalogSync,
+        rows, repair, harvest, profit_protection: profitProtection, catalog_sync: catalogSync,
       });
     }
 
