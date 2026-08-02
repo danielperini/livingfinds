@@ -78,12 +78,14 @@ export default function Repricing() {
   const [selectedDate, setSelectedDate] = useState(brazilDay());
   const [history, setHistory] = useState([]);
   const [products, setProducts] = useState([]);
+  const [economics, setEconomics] = useState([]);
   const [loading, setLoading] = useState(true);
   const [checkingConnection, setCheckingConnection] = useState(false);
   const [syncingSkus, setSyncingSkus] = useState(false);
   const [skuSyncResult, setSkuSyncResult] = useState(null);
   const [executingPrices, setExecutingPrices] = useState(false);
   const [studyingPrices, setStudyingPrices] = useState(false);
+  const [priceStudyResult, setPriceStudyResult] = useState(null);
   const [priceExecutionResult, setPriceExecutionResult] = useState(null);
   const [skuSort, setSkuSort] = useState({ key: 'status', direction: 'asc' });
   const [historySort, setHistorySort] = useState({ key: 'changed_at', direction: 'desc' });
@@ -122,16 +124,18 @@ export default function Repricing() {
     setLoading(true);
     setError('');
     try {
-      const [historyRows, productRows] = await Promise.all([
+      const [historyRows, productRows, economicsRows] = await Promise.all([
         base44.entities.ProductEconomicsHistory.filter(
           { amazon_account_id: accountId },
           '-changed_at',
           2000,
         ),
         base44.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 5000),
+        base44.entities.ProductEconomics.filter({ amazon_account_id: accountId }, '-updated_at', 5000),
       ]);
       setHistory(historyRows || []);
       setProducts(productRows || []);
+      setEconomics(economicsRows || []);
     } catch (loadError) {
       setError(loadError?.message || 'Não foi possível carregar o histórico confirmado de preços.');
     } finally {
@@ -238,6 +242,7 @@ export default function Repricing() {
   const refreshPriceStudy = async () => {
     if (!accountId) return;
     setStudyingPrices(true);
+    setPriceStudyResult(null);
     setError('');
     try {
       const response = await base44.functions.invoke('runAutomaticRepricing', {
@@ -248,6 +253,9 @@ export default function Repricing() {
       });
       const result = response?.data || response;
       if (!result?.ok) throw new Error(result?.error || 'Falha ao atualizar o estudo de preços.');
+      const evaluation = result.results?.[0] || {};
+      if (evaluation.locked || evaluation.error) throw new Error(evaluation.error || 'Outro estudo de preços já está em execução.');
+      setPriceStudyResult(evaluation);
       await load();
     } catch (studyError) {
       setError(studyError?.message || 'Falha ao atualizar o estudo de preços.');
@@ -378,8 +386,20 @@ export default function Repricing() {
 
   const recommendationRows = useMemo(() => {
     const seen = new Set();
-    return history
-      .filter(item => item.history_type === 'price_recommendation')
+    const historyCandidates = history.filter(item => ['price_recommendation', 'economic_evaluation'].includes(item.history_type));
+    const economicsCandidates = economics.map(item => ({
+      ...item,
+      id: `economics:${item.id}`,
+      history_type: 'economic_evaluation',
+      changed_at: item.last_repricing_decision_at || item.updated_at,
+      price_before: item.current_price,
+      price_after: item.suggested_price,
+      minimum_profitable_price: item.minimum_profitable_price,
+      decision_evidence: item.decision_evidence || {},
+      decision_reason: item.decision_reason || item.repricing_block_reason,
+      status: item.repricing_status,
+    })).filter(item => item.sku && (item.current_price > 0 || Object.keys(item.decision_evidence || {}).length > 0));
+    return [...historyCandidates, ...economicsCandidates]
       .sort((left, right) => new Date(right.changed_at).getTime() - new Date(left.changed_at).getTime())
       .filter(item => {
         const key = normalizeSku(item.normalized_sku || item.sku || item.asin);
@@ -388,7 +408,7 @@ export default function Repricing() {
         return true;
       })
       .map(item => {
-        const product = productIndex.get(`id:${item.product_id}`) || productIndex.get(`sku:${normalizeSku(item.sku)}`) || {};
+        const product = productIndex.get(`id:${item.product_id}`) || productIndex.get(`sku:${normalizeSku(item.sku)}`) || productIndex.get(`asin:${String(item.asin || '').trim().toUpperCase()}`) || {};
         const evidence = item.decision_evidence || {};
         const exactAverage = evidence.competitor_offer_price_average || evidence.competitor_reference_price_average;
         const similarAverage = evidence.similar_competitor_price_average;
@@ -399,18 +419,18 @@ export default function Repricing() {
         const orders = Number(evidence.ads_orders_30d || 0);
         return {
           ...item,
-          title: product.display_name || product.product_name || 'Título não disponível',
+          title: product.display_name || product.product_name || product.title || 'Título não disponível',
           current_price: Number(evidence.current_price || item.price_before || product.price || 0),
-          recommended_price: Number(evidence.guarded_suggested_price || evidence.ideal_suggested_price || item.price_after || 0),
+          recommended_price: Number(evidence.guarded_suggested_price || evidence.ideal_suggested_price || item.price_after || evidence.current_price || item.price_before || product.price || 0),
           competitor_average: competitorAverage,
           exact_competitor_average: finiteNumber(exactAverage) ? Number(exactAverage) : null,
           similar_competitor_average: finiteNumber(similarAverage) ? Number(similarAverage) : null,
           similar_count: Number(evidence.similar_competitor_product_count || 0),
           ads_sales_per_click: clicks > 0 ? orders / clicks : null,
-          confidence: Number(evidence.decision_confidence || 0),
+          confidence: Number(evidence.decision_confidence || item.confidence || 0),
         };
       });
-  }, [history, productIndex]);
+  }, [economics, history, productIndex]);
 
   const summary = useMemo(() => ({
     total: rows.length,
@@ -529,8 +549,8 @@ export default function Repricing() {
       </section>
 
       <section className="rounded-xl border border-violet-500/20 bg-surface-1">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN + similares Amazon com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p></div><div className="flex items-center gap-2"><button type="button" onClick={refreshPriceStudy} disabled={studyingPrices || !accountId} className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 disabled:opacity-50">{studyingPrices ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{studyingPrices ? 'Pesquisando Amazon...' : 'Atualizar estudo de preços'}</button><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div></div>
-        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média similares ≥90%', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count} produto(s) · inferido</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">Execute “Executar preços planejados” para atualizar o estudo e gerar recomendações auditáveis.</p>}</div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Recomendações para revisão manual</h2><p className="mt-1 text-[10px] text-slate-500">Mesmo ASIN + similares Amazon com ≥90% de correspondência. Automação somente com confiança ≥96/100 e margem líquida ≥15% incluindo Ads.</p>{priceStudyResult ? <p className="mt-1 text-[10px] text-emerald-400">Estudo concluído pela API: {Number(priceStudyResult.evaluated || 0)} avaliados · {Number(priceStudyResult.queued || 0)} ações elegíveis. Manter preço e bloqueios também permanecem auditáveis.</p> : null}</div><div className="flex items-center gap-2"><button type="button" onClick={refreshPriceStudy} disabled={studyingPrices || !accountId} className="inline-flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-300 disabled:opacity-50">{studyingPrices ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}{studyingPrices ? 'Pesquisando Amazon...' : 'Atualizar estudo de preços'}</button><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div></div>
+        <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{['SKU', 'Produto', 'Preço atual', 'Média concorrência', 'Média similares ≥90%', 'Vendas Ads / clique', 'Recomendado', 'Piso 15%', 'Confiança', 'Motivo'].map(label => <th key={label} className="whitespace-nowrap px-4 py-3">{label}</th>)}</tr></thead><tbody>{recommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[250px] max-w-[380px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.competitor_average)}</td><td className="whitespace-nowrap px-4 py-3"><p className="text-slate-300">{money(row.similar_competitor_average)}</p><p className="mt-1 text-[9px] text-slate-600">{row.similar_count} produto(s) · inferido</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{row.ads_sales_per_click == null ? '—' : `${(row.ads_sales_per_click * 100).toFixed(2)}%`}</td><td className="whitespace-nowrap px-4 py-3 font-bold text-violet-300">{money(row.recommended_price)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.minimum_profitable_price)}</td><td className={`whitespace-nowrap px-4 py-3 font-bold ${row.confidence >= 96 ? 'text-emerald-400' : row.confidence >= 75 ? 'text-amber-400' : 'text-red-400'}`}>{row.confidence}/100<p className="mt-1 text-[9px] font-normal">{row.confidence >= 96 ? 'Automação elegível' : 'Somente manual'}</p></td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-500">{row.decision_reason || row.reason || 'Sem justificativa registrada.'}</td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">Clique em “Atualizar estudo de preços”. A tabela será preenchida com avaliações API auditáveis, inclusive decisões de manter preço; produtos sem custos confirmados permanecem protegidos.</p>}</div>
       </section>
 
       <section className="rounded-xl border border-surface-2 bg-surface-1">
