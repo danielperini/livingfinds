@@ -187,7 +187,9 @@ Deno.serve(async (req) => {
       return c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
     });
     if (autoCampaign) {
-      const state = String(autoCampaign.state || autoCampaign.status || '').toUpperCase();
+      // amazon_status e a fonte que o painel usa primeiro. Se estiver PAUSED,
+      // nao podemos considerar o registro ativo apenas porque state ficou stale.
+      const state = String(autoCampaign.amazon_status || autoCampaign.state || autoCampaign.status || '').toUpperCase();
       if (state !== 'ENABLED') {
         const enabled = await adsRequestWithDetails(
           'PUT', '/sp/campaigns',
@@ -197,10 +199,12 @@ Deno.serve(async (req) => {
         if (![200, 201, 207].includes(enabled.status)) {
           return Response.json({ ok: false, error: `Falha ao reativar AUTO ${autoCampaign.campaign_id}`, http_status: enabled.status });
         }
-        await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
-          state: 'enabled', status: 'enabled', last_sync_at: new Date().toISOString(),
-        });
       }
+      await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
+        state: 'enabled', status: 'enabled', amazon_status: 'enabled',
+        is_operational: true, archived: false,
+        synced_at: new Date().toISOString(), last_sync_at: new Date().toISOString(),
+      });
       const existingGroups = await base44.asServiceRole.entities.AdGroup.filter({
         amazon_account_id, campaign_id: String(autoCampaign.campaign_id),
       }, null, 100).catch(() => []);
@@ -387,6 +391,9 @@ Deno.serve(async (req) => {
       targeting_type: 'AUTO',
       state: 'enabled',
       status: 'enabled',
+      amazon_status: 'enabled',
+      is_operational: true,
+      archived: false,
       daily_budget: campaignBudget,
       start_date: today,
       created_by_app: true,
