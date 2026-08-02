@@ -64,6 +64,7 @@ jobs:
           SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
           VPS_PATH: ${{ secrets.VPS_PATH }}
+          SCRAPINGBEE_API_KEY: ${{ secrets.SCRAPINGBEE_API_KEY }}
           RUN_POST_DEPLOY_AMAZON_AUTOMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.run_post_deploy_amazon_automation }}
         run: |
           ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
@@ -73,6 +74,13 @@ jobs:
             tar xzf /tmp/deploy.tar.gz -C "$VPS_PATH"
             test -f dist/index.html
             rm -f .dockerignore
+            if [ -n "${SCRAPINGBEE_API_KEY}" ]; then
+              umask 077
+              touch server/.env
+              sed -i '/^SCRAPINGBEE_API_KEY=/d' server/.env
+              printf '%s\n' 'SCRAPINGBEE_API_KEY=${SCRAPINGBEE_API_KEY}' >> server/.env
+              echo 'SCRAPINGBEE_API_KEY sincronizada do GitHub Actions Secret'
+            fi
             docker compose -f server/docker-compose.yml up -d --build app
             echo '--- aguardando backend ficar pronto ---'
             ready=0
