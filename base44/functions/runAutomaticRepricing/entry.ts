@@ -107,7 +107,22 @@ function titleSimilarity(left: unknown, right: unknown) {
   return intersection / Math.max(a.size, b.size);
 }
 
-const SIMILAR_COMPETITION_ALGORITHM_VERSION = 2;
+function inferredMonthlySalesVolume(value: unknown) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const match = raw.match(/([\d.,]+)\s*\+?/);
+  if (!match) return null;
+  const estimate = Number(match[1].replace(/\D/g, ""));
+  if (!Number.isFinite(estimate) || estimate <= 0) return null;
+  return {
+    competitor_sales_estimate: estimate,
+    competitor_sales_estimate_confidence: /bought|comprad|vendid/i.test(raw) ? "medium" : "low",
+    competitor_sales_estimate_source: "inferred",
+    sales_volume_raw: raw,
+  };
+}
+
+const SIMILAR_COMPETITION_ALGORITHM_VERSION = 3;
 const COLOR_TOKENS = [
   "preto", "preta", "branco", "branca", "cinza", "vermelho", "vermelha",
   "azul", "verde", "rosa", "amarelo", "amarela", "bege", "marrom",
@@ -2809,99 +2824,59 @@ async function fetchSimilarCompetition(
     }
   }
 
-  let aiProfile: any = null;
-  if (aiBudget.used < aiBudget.max && (localTitleInvalid || comparableTokens(title).size < 4)) {
-    const gateResponse = await base44.asServiceRole.functions.invoke("aiGatekeeper", {
-      amazon_account_id: account.id,
-      analysis_type: "keyword_analysis",
-      entity_type: "product",
-      entity_id: product.asin || product.sku,
-      input_data: { title, asin: product.asin, purpose: "amazon_similar_product_search" },
-      priority_type: "strategy",
-      _service_role: true,
-    }).catch(() => null);
-    const gate = unwrap(gateResponse);
-    if (gate?.cached && gate.result) aiProfile = gate.result;
-    if (gate?.allowed === true) {
-      aiBudget.used += 1;
-      aiProfile = await base44.asServiceRole.integrations.Core.InvokeLLM({
-        prompt: `Extraia atributos para pesquisar na Amazon Brasil um produto equivalente. Não estime preço e não invente características.\nASIN: ${product.asin || "desconhecido"}\nTítulo canônico: ${title || "indisponível"}\nRetorne termos curtos que preservem tipo, modelo, cor e tamanho/variante.`,
-        response_json_schema: {
-          type: "object",
-          properties: {
-            product_type: { type: "string" },
-            model: { type: "string" },
-            color: { type: "string" },
-            size_variant: { type: "string" },
-            search_terms: { type: "array", items: { type: "string" } },
-            confidence: { type: "number" },
-          },
-          required: ["product_type", "search_terms", "confidence"],
-        },
-      }).catch(() => null);
-    }
+  void aiBudget;
+  const tokens = [...comparableTokens(title)].slice(0, 10);
+  if (!product.asin || tokens.length < 2) {
+    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred" };
   }
-
-  const aiTerms = Array.isArray(aiProfile?.search_terms) ? aiProfile.search_terms : [];
-  const comparisonTitle = [title, aiProfile?.model, aiProfile?.color, aiProfile?.size_variant].filter(Boolean).join(" ");
-  const tokens = [...new Set([...aiTerms, ...comparableTokens(comparisonTitle)])].slice(0, 8);
-  if (!product.asin || tokens.length < 2) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
+  const scrapingBeeKey = secrets.get("SCRAPINGBEE_API_KEY");
+  if (!scrapingBeeKey) {
+    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: "SCRAPINGBEE_API_KEY_missing" };
+  }
   const query = new URLSearchParams({
-    marketplaceIds: marketplaceId,
-    keywords: tokens.join(" "),
-    includedData: "summaries,attributes",
-    pageSize: "20",
+    query: tokens.join(" "), domain: "com.br", language: "pt_BR",
+    currency: "BRL", pages: "1", sort_by: "featured",
   });
-  const catalog = await amazonCall(
-    base44, account.id, "repricing_catalog_similar_search",
-    `${spBase(account.region)}/catalog/2022-04-01/items?${query}`,
-    accessToken,
-  );
-  if (!catalog.ok) return { average: null, count: 0, matches: [], checkedAt: nowIso(), error: amazonError(catalog) };
-  const items = amazonPayload(catalog)?.items || [];
-  const matches = items.map((item: any) => {
-    const summary = (item.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || item.summaries?.[0] || {};
-    const matchedTitle = summary.itemName || summary.itemTitle || "";
+  let payload: any = {};
+  try {
+    const response = await fetch(`https://app.scrapingbee.com/api/v1/amazon/search?${query}`, {
+      headers: { Authorization: `Bearer ${scrapingBeeKey}` },
+      signal: AbortSignal.timeout(35000),
+    });
+    if (!response.ok) {
+      return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: `ScrapingBee_HTTP_${response.status}` };
+    }
+    payload = await response.json().catch(() => ({}));
+  } catch (error: any) {
+    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: String(error?.message || "ScrapingBee_unavailable").slice(0, 200) };
+  }
+  const pricedMatches = (Array.isArray(payload?.products) ? payload.products : []).map((item: any) => {
+    const matchedTitle = String(item.title || "");
     const similarity = titleSimilarity(title, matchedTitle);
-    const variant = comparableVariant(comparisonTitle, matchedTitle);
+    const variant = comparableVariant(title, matchedTitle);
     return {
-      asin: item.asin,
+      asin: item.asin || null,
       title: matchedTitle,
-      brand: summary.brand || null,
+      brand: item.manufacturer || null,
       similarity,
       matchedDimensions: variant.matched,
       variantCompatible: variant.ok,
+      averagePrice: numberValue(item.price || item.highest_price, 0),
+      ...(inferredMonthlySalesVolume(item.sales_volume) || {}),
+      organic_position: finite(item.organic_position) ? Number(item.organic_position) : null,
+      sponsored: item.is_sponsored === true,
+      data_source: "scrapingbee_amazon_search",
     };
-  }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90 && item.variantCompatible)
-    .sort((a: any, b: any) => b.similarity - a.similarity).slice(0, 10);
-  if (!matches.length) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
-  const pricingRequest = { requests: matches.map((match: any) => ({
-    asin: match.asin, marketplaceId,
-    includedData: ["featuredBuyingOptions", "lowestPricedOffers", "referencePrices"],
-    lowestPricedOffersInputs: [{ itemCondition: "New", offerType: "Consumer" }],
-    method: "GET", uri: "/products/pricing/2022-05-01/items/competitiveSummary",
-  })) };
-  const pricing = await amazonCall(
-    base44, account.id, "repricing_pricing_similar_competitors",
-    `${spBase(account.region)}/batches/products/pricing/2022-05-01/items/competitiveSummary`,
-    accessToken, "POST", pricingRequest,
-  );
-  const responses = amazonPayload(pricing)?.responses || [];
-  const pricedMatches = matches.map((match: any, index: number) => {
-    const parsed = parseCompetitiveBody(responses[index]?.body || {});
-    const price = averagePositive(parsed.offers.map((offer: any) => offer.totalPrice)) ||
-      averagePositive(parsed.referencePrices.map((reference: any) => reference.amount));
-    return { ...match, averagePrice: price };
-  }).filter((match: any) => finite(match.averagePrice) && match.averagePrice > 0);
+  }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90 && item.variantCompatible && item.averagePrice > 0)
+    .sort((a: any, b: any) => b.similarity - a.similarity || numberValue(a.organic_position, 999) - numberValue(b.organic_position, 999))
+    .slice(0, 10);
   return {
     average: averagePositive(pricedMatches.map((match: any) => match.averagePrice)),
     count: pricedMatches.length,
     matches: pricedMatches,
     checkedAt: nowIso(),
-    source: aiProfile
-      ? "amazon_catalog_product_pricing_ai_assisted_inferred"
-      : "amazon_catalog_and_product_pricing_inferred",
-    aiAssisted: Boolean(aiProfile),
+    source: "scrapingbee_amazon_search_inferred",
+    aiAssisted: false,
     canonicalSourceTitle: title,
   };
 }
