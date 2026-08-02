@@ -135,8 +135,10 @@ async function reconcileCampaign(token, profileId, campaignName, asin) {
       const data = await res.json();
       const campaigns = data?.campaigns || [];
       const found = campaigns.find(c =>
-        c.name === campaignName ||
-        (c.name?.includes('AUTO') && c.name?.includes(asin))
+        String(c.state || '').toUpperCase() !== 'ARCHIVED' && (
+          c.name === campaignName ||
+          (c.name?.includes('AUTO') && c.name?.includes(asin))
+        )
       );
       if (found?.campaignId) return String(found.campaignId);
       nextToken = data?.nextToken;
@@ -267,6 +269,25 @@ Deno.serve(async (req) => {
     
     let campaignResult;
     let campaignId = existingCampaignId;
+
+    // Reconcile encontra campanhas que existem na Amazon mesmo quando o banco
+    // local perdeu o vinculo. Nesse caminho tambem precisamos reativar a
+    // campanha; antes ela era apenas importada localmente e permanecia PAUSED.
+    if (campaignId) {
+      const enabled = await adsRequestWithDetails(
+        'PUT', '/sp/campaigns',
+        { campaigns: [{ campaignId: String(campaignId), state: 'ENABLED' }] },
+        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+      );
+      if (![200, 201, 207].includes(enabled.status)) {
+        return Response.json({
+          ok: false,
+          error: `Falha ao reativar AUTO reconciliada ${campaignId}`,
+          http_status: enabled.status,
+          request_id: enabled.headers?.requestId || '',
+        });
+      }
+    }
     
     if (!campaignId) {
       const campaignPayload = {
@@ -443,7 +464,7 @@ Deno.serve(async (req) => {
       product_ad_confirmed: !!productAdId,
       already_exists: !!existingCampaignId,
       currency_code: account.currency_code || 'BRL',
-      action_label: existingCampaignId ? 'pause_or_edit' : 'created',
+      action_label: existingCampaignId ? 'reactivated' : 'created',
     });
 
   } catch (error) {
