@@ -54,6 +54,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, campaign_id, asin, sku } = body;
+    const pauseAllRelated = body.pause_all_related === true && body.confirm_bulk_pause === true;
     const lockProductPaused = body.lock_product_paused === true;
 
     if (!amazon_account_id || (!campaign_id && !asin && !sku)) {
@@ -92,6 +93,9 @@ Deno.serve(async (req) => {
       if (c.archived || c.state === 'archived') return false;
       // Casar por campaign_id (ID Amazon) OU id interno Base44
       if (campaign_id && (String(c.campaign_id) === String(campaign_id) || String(c.id) === String(campaign_id))) return true;
+      // Never expand one campaign pause to every AUTO/MANUAL campaign for the
+      // SKU unless a user explicitly confirms the bulk operation.
+      if (campaign_id && !pauseAllRelated) return false;
       if (targetAsin && String(c.asin || '') === String(targetAsin)) return true;
       if (targetSku && String(c.sku || '') === String(targetSku)) return true;
       return false;

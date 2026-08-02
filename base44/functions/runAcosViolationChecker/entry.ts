@@ -271,13 +271,22 @@ Deno.serve(async (req) => {
         }
 
         if (shouldPause) {
-          campaignsToPause.push(cid);
-          pauseReasons.set(cid, pauseReason);
-          pausedList.push({ campaign_id: cid, name: camp.name || camp.campaign_name, type: isAuto ? 'AUTO' : 'MANUAL', acos: weekAcos, reason: pauseReason });
+          // Economic performance never pauses the whole campaign. Escalate to
+          // the canonical term engine, which reduces bids first and only then
+          // pauses the individual keyword/target that keeps wasting spend.
+          await base44.asServiceRole.functions.invoke('runDeterministicDecisionEngine', {
+            amazon_account_id: accountId,
+            campaign_id: cid,
+            force_batch: false,
+            source_function: 'runAcosViolationChecker_phase3_term_control',
+            _service_role: true,
+          }).catch(() => {});
+          pausedList.push({ campaign_id: cid, name: camp.name || camp.campaign_name, type: isAuto ? 'AUTO' : 'MANUAL', acos: weekAcos, reason: 'term_control_dispatched_campaign_kept_enabled' });
           await base44.asServiceRole.entities.CampaignAcosViolation.update(existing.id, {
-            phase: 'paused', status: 'paused',
-            paused_at: now,
-            pause_reason: pauseReason,
+            phase: 'term_control', status: 'active',
+            paused_at: null,
+            pause_reason: null,
+            notes: `${pauseReason} | Controle termo a termo acionado; campanha mantida ativa.`,
             phase2_acos: weekAcos,
             last_violation_at: now,
           }).catch(() => {});

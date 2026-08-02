@@ -78,6 +78,68 @@ async function reduceMostCostlyKeyword(base44: any, aid: string, asin: string, c
   return { reduced: executed, reason: executed ? 'bid_reduced' : 'bid_update_failed', keyword: worst.keyword };
 }
 
+async function pauseMostCostlyKeyword(base44: any, aid: string, asin: string, campaigns: any[], product: any, today: string) {
+  const candidates: any[] = [];
+  for (const campaign of campaigns) {
+    const campaignId = String(campaign.campaign_id || campaign.amazon_campaign_id || '');
+    if (!campaignId) continue;
+    const keywords = await base44.asServiceRole.entities.Keyword.filter(
+      { amazon_account_id: aid, campaign_id: campaignId }, null, 500
+    ).catch(() => []);
+    for (const keyword of keywords as any[]) {
+      const keywordId = String(keyword.amazon_keyword_id || keyword.keyword_id || '');
+      const state = String(keyword.state || keyword.status || '').toLowerCase();
+      const spend = Number(keyword.spend || 0);
+      const sales = Number(keyword.sales || 0);
+      const orders = Number(keyword.orders || 0);
+      if (!/^\d+$/.test(keywordId) || state !== 'enabled' || spend <= 0) continue;
+      const wasteScore = spend * (orders <= 0 || sales <= 0 ? 3 : Math.max(1, Number(keyword.acos || 0) / 100));
+      candidates.push({ campaignId, keyword, keywordId, spend, sales, orders, wasteScore });
+    }
+  }
+
+  const worst = candidates.sort((a, b) => b.wasteScore - a.wasteScore || b.spend - a.spend)[0];
+  if (!worst) return { paused: false, reason: 'no_enabled_keyword_cost_data' };
+  const idempotencyKey = `profit_guard_term_pause_${asin}_${worst.keywordId}_${today}`;
+  const existing = await base44.asServiceRole.entities.OptimizationDecision.filter(
+    { amazon_account_id: aid, idempotency_key: idempotencyKey }, null, 1
+  ).catch(() => []);
+  if (existing.length) return { paused: true, reason: 'already_paused', keyword: worst.keyword };
+
+  const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+    amazon_account_id: aid,
+    command: 'update_keyword',
+    payload: {
+      campaign_id: worst.campaignId,
+      ad_group_id: worst.keyword.ad_group_id,
+      keyword_id: worst.keywordId,
+      state: 'paused',
+    },
+    _service_role: true,
+  }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+  const data = response?.data || response || {};
+  const executed = data?.ok !== false;
+  if (executed) {
+    await base44.asServiceRole.entities.Keyword.update(worst.keyword.id, {
+      state: 'paused', status: 'paused', paused_at: nowIso(),
+      pause_reason: 'profit_guard_after_bid_reduction',
+    }).catch(() => {});
+  }
+  await base44.asServiceRole.entities.OptimizationDecision.create({
+    amazon_account_id: aid, decision_type: 'pause_keyword', entity_type: 'keyword', entity_id: worst.keywordId,
+    campaign_id: worst.campaignId, ad_group_id: worst.keyword.ad_group_id, keyword_id: worst.keywordId,
+    keyword_text: worst.keyword.keyword_text || worst.keyword.keyword, asin, sku: product?.sku || null,
+    action: 'pause_keyword',
+    rationale: 'Prejuizo persistiu por 48h apos reducao de bid. Pausado somente o termo de maior desperdicio; campanha mantida ativa.',
+    confidence: 90, risk: 'low', requires_approval: false, status: executed ? 'executed' : 'failed',
+    source_function: 'runProfitAfterAdsPauseGuard', idempotency_key: idempotencyKey,
+    execution_error: executed ? null : String(data?.error || 'Amazon Ads nao confirmou a pausa do termo'),
+    executed_at: executed ? nowIso() : null, created_at: nowIso(), updated_at: nowIso(),
+    data_used: JSON.stringify({ spend: worst.spend, sales: worst.sales, orders: worst.orders, campaign_kept_enabled: true }),
+  }).catch(() => {});
+  return { paused: executed, reason: executed ? 'term_paused_campaign_kept_enabled' : 'term_pause_failed', keyword: worst.keyword };
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
@@ -105,6 +167,7 @@ Deno.serve(async (req) => {
     const today = todayBRT();
     const results = {
       paused: [] as string[],
+      terms_paused: [] as string[],
       bid_reduced: [] as string[],
       resumed: [] as string[],
       still_negative: [] as string[],
@@ -255,32 +318,6 @@ Deno.serve(async (req) => {
                   _service_role: true,
                 }).catch(() => {});
               }
-
-              // Pausar keywords com bid > BID_FLOOR
-              const keywords = await base44.asServiceRole.entities.Keyword.filter(
-                { amazon_account_id: aid, campaign_id: c.campaign_id },
-                null,
-                500
-              ).catch(() => []);
-
-              for (const kw of keywords) {
-                const bid = kw.current_bid ?? kw.bid ?? 0;
-                const kwState = (kw.state || kw.status || '').toLowerCase();
-                if (bid > BID_FLOOR && kwState === 'enabled') {
-                  // Pausar keyword com bid acima do floor via Amazon Ads API
-                  await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
-                    amazon_account_id: aid,
-                    command: 'update_keyword',
-                    payload: {
-                      campaign_id: c.campaign_id,
-                      ad_group_id: kw.ad_group_id,
-                      keyword_id: kw.keyword_id,
-                      state: 'paused',
-                    },
-                    _service_role: true,
-                  }).catch(() => {});
-                }
-              }
             }
 
             // Limpar ads_paused_at do produto
@@ -298,8 +335,8 @@ Deno.serve(async (req) => {
               decision_type: 'reactivate',
               entity_type: 'product',
               asin,
-              action: `Retomada estratégica após 72h de pausa — keywords com bid ≤ R$${BID_FLOOR} mantidas ativas`,
-              rationale: `Profit_after_ads voltou para ${profitAfterPause?.toFixed(2) ?? 'N/A'} após pausa. Retomando com bid floor R$${BID_FLOOR}.`,
+              action: 'Retomada das campanhas legadas; controle econômico continua termo a termo',
+              rationale: `Profit_after_ads voltou para ${profitAfterPause?.toFixed(2) ?? 'N/A'}. Campanhas reativadas sem pausa indiscriminada de keywords.`,
               confidence: 75,
               risk: 'medium',
               requires_approval: false,
@@ -353,63 +390,13 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        // Verificar idempotência da pausa após a janela de revisão.
-        const pauseIdKey = `profit_guard_pause_${asin}_${today}`;
-        const existingPause = await base44.asServiceRole.entities.OptimizationDecision.filter(
-          { amazon_account_id: aid, idempotency_key: pauseIdKey },
-          null, 1
-        ).catch(() => []);
-
-        if (existingPause.length > 0) {
-          results.skipped.push(`${asin}:pause_already_recorded`);
-          continue;
+        // Persistindo o prejuízo, pausar somente o termo responsável.
+        const termAction = await pauseMostCostlyKeyword(base44, aid, asin, asinCampaigns, product, today);
+        if (termAction.paused) {
+          results.terms_paused.push(`${asin}:${termAction.keyword?.keyword_text || termAction.keyword?.keyword || 'keyword'}`);
+        } else {
+          results.skipped.push(`${asin}:term_pause_${termAction.reason}`);
         }
-
-        // Pausar todas as campanhas ativas do ASIN
-        let pausedCount = 0;
-        for (const c of asinCampaigns) {
-          const campaignState = (c.state || c.status || '').toLowerCase();
-          if (campaignState === 'enabled') {
-            await base44.asServiceRole.functions.invoke('pauseCampaign', {
-              amazon_account_id: aid,
-              campaign_id: c.campaign_id,
-              reason: `profit_guard:profit_after_ads_negative_${CONSECUTIVE_DAYS_THRESHOLD}d`,
-              _service_role: true,
-            }).catch(() => {});
-            pausedCount++;
-          }
-        }
-
-        // Salvar ads_paused_at no produto
-        if (product?.id) {
-          await base44.asServiceRole.entities.Product.update(product.id, {
-            ads_paused_at: nowIso(),
-            ads_pause_reason: `profit_guard:negative_${CONSECUTIVE_DAYS_THRESHOLD}d_consecutive`,
-            ads_resume_pending: true,
-          }).catch(() => {});
-        }
-
-        // Criar OptimizationDecision de pausa
-        const avgProfit = lastTwo.reduce((s, d) => s + d.profit, 0) / lastTwo.length;
-        await base44.asServiceRole.entities.OptimizationDecision.create({
-          amazon_account_id: aid,
-          decision_type: 'pause',
-          entity_type: 'product',
-          asin,
-          action: `Pausa preventiva de ${PAUSE_DURATION_HOURS}h — lucro pós-Ads negativo por ${CONSECUTIVE_DAYS_THRESHOLD} dias consecutivos`,
-          rationale: `Profit_after_ads médio nos últimos ${CONSECUTIVE_DAYS_THRESHOLD}d: R$${avgProfit.toFixed(2)}. Campanhas pausadas: ${pausedCount}. Retomada agendada para ${new Date(Date.now() + PAUSE_DURATION_HOURS * 3600000).toISOString()}.`,
-          confidence: 90,
-          risk: 'low',
-          requires_approval: false,
-          status: 'executed',
-          source_function: 'runProfitAfterAdsPauseGuard',
-          idempotency_key: pauseIdKey,
-          executed_at: nowIso(),
-          created_at: nowIso(),
-          updated_at: nowIso(),
-        }).catch(() => {});
-
-        results.paused.push(asin);
 
       } catch (e: any) {
         results.errors.push(`${asin}:${e?.message?.slice(0, 100)}`);
