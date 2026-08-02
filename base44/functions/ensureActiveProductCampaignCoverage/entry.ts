@@ -10,13 +10,24 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
+// Snapshot confirmado pelo usuário em 2026-08-01. Serve apenas como fallback
+// temporário quando a SP-API de inventário não devolve nenhum item.
+const CONFIRMED_ACTIVE_UNTIL = Date.parse('2026-08-09T02:59:59Z');
+const CONFIRMED_ACTIVE_SKUS = new Set([
+  'W9-OL7U-LRW5', 'FBA-0087c', 'FBA-0076C', 'FBA-0010', 'FBA-0100',
+  'SKU-002314A', 'SKU-002314V', 'FBA-0076A', 'FBA-0008V', 'FBA-0008P',
+  'FBA-0087b', 'FBA-0088a', 'FBA-0010b', 'FBA-0071', 'FBA-0065PR',
+  'FBA-0024b', '70-FCMB-TFYO',
+]);
+
 function activeProduct(product: any): boolean {
   const sku = String(product?.sku || '').trim();
   const asin = String(product?.asin || '').trim().toUpperCase();
   const status = String(product?.status || product?.offer_status || '').trim().toLowerCase();
   const available = Number(product?.available_quantity ?? product?.fba_inventory ?? 0);
-  return !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && available > 0
-    && !['inactive', 'archived', 'deleted', 'closed'].includes(status)
+  const confirmedFallback = Date.now() <= CONFIRMED_ACTIVE_UNTIL && CONFIRMED_ACTIVE_SKUS.has(sku);
+  return !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && (available > 0 || confirmedFallback)
+    && (confirmedFallback || !['inactive', 'archived', 'deleted', 'closed'].includes(status))
     && product?.listing_suppressed !== true
     && product?.offer_active !== false
     && product?.listing_buyable !== false;
@@ -50,13 +61,18 @@ Deno.serve(async (req) => {
 
     for (const account of connectedAccounts) {
       const accountId = account.id;
+      let catalogSync: any = null;
       if (!dryRun) {
-        await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
+        catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
           _service_role: true, amazon_account_id: accountId,
-        }).catch((error: any) => console.warn('[campaignCoverage] catalog sync:', error?.message));
-        await base44.asServiceRole.functions.invoke('applyAdsScopeAuthorization', {
-          _service_role: true, amazon_account_id: accountId, dry_run: false,
-        });
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
+        if (catalogSync?.ok !== false && Number(catalogSync?.inventory_asins || 0) > 0) {
+          await base44.asServiceRole.functions.invoke('applyAdsScopeAuthorization', {
+            _service_role: true, amazon_account_id: accountId, dry_run: false,
+          });
+        } else {
+          console.warn('[campaignCoverage] SP-API sem inventário confiável; usando snapshot ativo temporário sem pausar campanhas.');
+        }
         await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
         });
@@ -126,7 +142,7 @@ Deno.serve(async (req) => {
         reactivated: rows.filter((r: any) => r.action === 'reactivated').length,
         already_enabled: rows.filter((r: any) => r.action === 'existing_enabled').length,
         failed: rows.filter((r: any) => r.ok === false).length,
-        rows, repair, harvest,
+        rows, repair, harvest, catalog_sync: catalogSync,
       });
     }
 

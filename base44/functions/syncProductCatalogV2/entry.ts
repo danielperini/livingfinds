@@ -70,6 +70,12 @@ Deno.serve(async (req) => {
       if (pages >= 100 && nextToken) throw new Error('Limite de 100 páginas atingido');
     } while (nextToken);
 
+    // Uma resposta vazia não prova estoque zero. Evita transformar todo o
+    // catálogo em inativo quando a SP-API retorna payload incompleto.
+    if (items.length === 0) {
+      throw new Error('SP-API retornou inventário vazio; catálogo preservado sem marcar produtos como inativos.');
+    }
+
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: body.amazon_account_id }, '-created_date', 5000);
     const byAsin = new Map<string, any[]>();
     const bySku = new Map<string, any[]>();
