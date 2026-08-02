@@ -142,3 +142,21 @@ export function bidAfterProfitGuard(params: {
   const capped = params.safeMaxCpc && params.safeMaxCpc > 0 ? Math.min(reduced, params.safeMaxCpc) : reduced;
   return roundMoney(clamp(capped, params.minBid, params.maxBid));
 }
+
+export function zeroSalesCircuitBreaker(params: {
+  clicks: number;
+  spend: number;
+  orders: number;
+  sales: number;
+  maximumProfitableCpa?: number | null;
+}) {
+  const spendLimit = Math.max(5, Math.min(12,
+    numberValue(params.maximumProfitableCpa, 0) > 0
+      ? numberValue(params.maximumProfitableCpa) * 0.50
+      : 8));
+  return {
+    triggered: numberValue(params.orders) === 0 && numberValue(params.sales) === 0 &&
+      numberValue(params.clicks) >= 8 && numberValue(params.spend) >= spendLimit,
+    spendLimit: roundMoney(spendLimit),
+  };
+}

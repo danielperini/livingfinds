@@ -20,6 +20,16 @@ Deno.test("zero de vendas não apaga custo válido", () => {
   assertEquals(item.analytics_import_metrics.units_sold_total, 0);
 });
 
+Deno.test("receita zero com Ads preserva prejuízo absoluto e invalida percentual", () => {
+  const item = mapAnalyticsSpreadsheetRow({
+    "SKU Interno": "FBA-0010b", "Faturamento": 0, "Custo Ads": 29.90,
+    "Lucro Pós Ads": -29.90, "MPA (Margem Pós ADS)": -2990,
+  });
+  assertEquals(item.analytics_import_metrics.profit_after_ads, -29.90);
+  assertEquals(item.analytics_import_metrics.margin_after_ads_pct, null);
+  assertEquals(item.analytics_import_metrics.economic_status, "no_sales_with_spend");
+});
+
 Deno.test("aceita cabeçalhos equivalentes sem acentos", () => {
   const item = mapAnalyticsSpreadsheetRow({
     "Seller SKU": "FBA-0076C",

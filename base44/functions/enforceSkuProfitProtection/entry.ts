@@ -11,6 +11,7 @@ import {
   resolveOperatingAcos,
   resolveSafeMaxCpc,
   roundMoney,
+  zeroSalesCircuitBreaker,
 } from '../../shared/profitGuardPolicy.ts';
 
 const RULE_VERSION = 2;
@@ -322,7 +323,17 @@ Deno.serve(async (request) => {
               structuralLoss &&
               clicks >= 5 &&
               spend >= Math.max(5, maxProfitableCpa > 0 ? maxProfitableCpa : 5);
-            const canPause = pressure === 'critical' && (standardLossConfirmed || structuralLossConfirmed);
+            // Circuit breaker para campanha única/de descoberta: não permite
+            // acumular gasto indefinido sem qualquer pedido. O teto de evidência
+            // é metade do CPA lucrável, limitado a R$12 e nunca abaixo de R$5.
+            const zeroSalesGuard = zeroSalesCircuitBreaker({
+              orders, sales: numberValue(metrics.sales), clicks, spend,
+              maximumProfitableCpa: maxProfitableCpa,
+            });
+            const zeroSalesSpendLimit = zeroSalesGuard.spendLimit;
+            const zeroSalesCircuitOpen = zeroSalesGuard.triggered;
+            const canPause = pressure === 'critical' &&
+              (standardLossConfirmed || structuralLossConfirmed || zeroSalesCircuitOpen);
 
             if (canPause && budget > 0) {
               const idempotencyKey = `sku_profit_pause_v2|${aid}|${campaignId}|${day}`;
@@ -332,7 +343,9 @@ Deno.serve(async (request) => {
                   spend_14d: roundMoney(spend), clicks_14d: clicks,
                   campaign_acos: campaignAcos === null ? null : roundMoney(campaignAcos),
                   structural_loss: structuralLoss,
-                  preserved_campaign_id: structuralLoss ? null : protectedDiscoveryId,
+                  zero_sales_circuit_breaker: zeroSalesCircuitOpen,
+                  zero_sales_spend_limit: roundMoney(zeroSalesSpendLimit),
+                  preserved_campaign_id: structuralLoss || zeroSalesCircuitOpen ? null : protectedDiscoveryId,
                 };
                 if (!dryRun) {
                   const amazon = await invokeAds(base44, aid, '/sp/campaigns', { campaigns: [{ campaignId, state: 'PAUSED' }] }, 'application/vnd.spCampaign.v3+json');
@@ -347,7 +360,7 @@ Deno.serve(async (request) => {
                     status: completed ? 'completed' : conflicted ? 'scheduled' : 'failed', executed_at: nowIso(),
                     error_message: completed ? null : String(amazon.message || amazon.error || amazon.errors?.[0]?.message || (conflicted ? 'amazon_conflict_requires_sync_confirmation' : 'amazon_error')).slice(0, 500),
                     amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id, errors: amazon.errors }).slice(0, 2000),
-                    metrics_before: JSON.stringify({ pressure, metrics, policy, structural_loss: structuralLoss, assessment_date: assessment?.assessment_date }).slice(0, 2000),
+                    metrics_before: JSON.stringify({ pressure, metrics, policy, structural_loss: structuralLoss, zero_sales_circuit_breaker: zeroSalesCircuitOpen, zero_sales_spend_limit: zeroSalesSpendLimit, assessment_date: assessment?.assessment_date }).slice(0, 2000),
                   });
                 }
                 actions.push(action);
@@ -397,6 +410,7 @@ Deno.serve(async (request) => {
         bid_reductions: actions.filter((action) => action.type === 'update_bid').length,
         pauses: actions.filter((action) => action.type === 'pause_campaign').length,
         structural_pauses: actions.filter((action) => action.type === 'pause_campaign' && action.structural_loss).length,
+        zero_sales_circuit_breaker_pauses: actions.filter((action) => action.type === 'pause_campaign' && action.zero_sales_circuit_breaker).length,
         reactivations: actions.filter((action) => action.type === 'reactivate_campaign').length,
         skipped: skipped.length,
         hardcoded_sku_rules: 0,
@@ -427,6 +441,9 @@ Deno.serve(async (request) => {
         account_economics_required: true,
         bid_reduction_before_pause: true,
         structural_loss_can_pause_immediately: true,
+        zero_sales_single_campaign_can_pause: true,
+        zero_sales_minimum_clicks: 8,
+        zero_sales_max_evidence_spend: 12,
         preserve_discovery_campaign_when_economically_viable: true,
         winner_protection: true,
         max_bid_reduction_per_cycle_pct: 20,

@@ -26,6 +26,10 @@ function rowValue(row: any, ...aliases: string[]) {
 }
 
 export function mapAnalyticsSpreadsheetRow(row: any, fileName?: string) {
+  const revenue = rowValue(row, "Faturamento") ?? null;
+  const adsCost = rowValue(row, "Custo Ads") ?? null;
+  const marginAfterAds = rowValue(row, "MPA (Margem Pós ADS)", "MPA (Margem Pos ADS)") ?? null;
+  const noSalesWithSpend = Number(revenue || 0) <= 0 && Number(adsCost || 0) > 0;
   return {
     sku: rowValue(row, "SKU Interno", "SKU", "Seller SKU") ||
       rowValue(row, "SKU externo (opcional)", "SKU externo") || "",
@@ -39,12 +43,16 @@ export function mapAnalyticsSpreadsheetRow(row: any, fileName?: string) {
       average_selling_price: rowValue(row, "Preço", "Preco") ?? null,
       units_sold_total: rowValue(row, "Unidades Vendidas Totais") ?? null,
       amazon_units: rowValue(row, "Vendas Amazon") ?? null,
-      revenue: rowValue(row, "Faturamento") ?? null,
+      revenue,
       profit_before_ads: rowValue(row, "Lucro") ?? null,
       margin_before_ads_pct: rowValue(row, "Margem") ?? null,
-      ads_cost: rowValue(row, "Custo Ads") ?? null,
+      ads_cost: adsCost,
       profit_after_ads: rowValue(row, "Lucro Pós Ads", "Lucro Pos Ads") ?? null,
-      margin_after_ads_pct: rowValue(row, "MPA (Margem Pós ADS)", "MPA (Margem Pos ADS)") ?? null,
+      // Percentual sobre faturamento zero não existe matematicamente. Preserva
+      // o prejuízo absoluto, mas não grava -2990%, -72% ou outro denominador artificial.
+      margin_after_ads_pct: noSalesWithSpend ? null : marginAfterAds,
+      economic_status: noSalesWithSpend ? "no_sales_with_spend" : null,
+      margin_after_ads_not_calculable: noSalesWithSpend,
       scope: "user_supplied_analytics_snapshot",
       canonical_metrics: false,
     },
