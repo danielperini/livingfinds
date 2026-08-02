@@ -67,6 +67,7 @@ Deno.serve(async (req) => {
     for (const account of connectedAccounts) {
       const accountId = account.id;
       let catalogSync: any = null;
+      let offerSync: any = null;
       let stockGuard: any = null;
       if (!dryRun) {
         catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
@@ -79,6 +80,9 @@ Deno.serve(async (req) => {
         } else {
           console.warn('[campaignCoverage] SP-API sem inventário confiável; usando snapshot ativo temporário sem pausar campanhas.');
         }
+        offerSync = dataOf(await base44.asServiceRole.functions.invoke('syncAmazonOfferAvailability', {
+          _service_role: true, amazon_account_id: accountId,
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         stockGuard = dataOf(await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
           _service_role: true, amazon_account_id: accountId,
           low_stock_pause_threshold: 1,
@@ -180,7 +184,7 @@ Deno.serve(async (req) => {
         already_enabled: rows.filter((r: any) => r.action === 'existing_enabled').length,
         failed: rows.filter((r: any) => r.ok === false).length,
         rows, repair, harvest, profit_protection: profitProtection,
-        catalog_sync: catalogSync, stock_guard: stockGuard,
+        catalog_sync: catalogSync, offer_sync: offerSync, stock_guard: stockGuard,
       });
     }
 
