@@ -14,7 +14,7 @@ import {
   zeroSalesCircuitBreaker,
 } from '../../shared/profitGuardPolicy.ts';
 
-const RULE_VERSION = 2;
+const RULE_VERSION = 3;
 const LOOKBACK_DAYS = 14;
 const BID_COOLDOWN_HOURS = 24;
 const PAUSE_AFTER_REDUCTION_HOURS = 72;
@@ -24,6 +24,10 @@ const INTRADAY_MIN_SPEND = 5;
 const INTRADAY_MIN_CLICKS = 3;
 const INTRADAY_VELOCITY_MULTIPLIER = 2;
 const INTRADAY_SPEND_MULTIPLIER = 2.5;
+const TERM_ATTRIBUTION_LAG_DAYS = 3;
+const TERM_MIN_SPEND = 8;
+const TERM_MIN_CLICKS = 6;
+const MAX_TERM_ACTIONS_PER_ACCOUNT = 20;
 
 const nowIso = () => new Date().toISOString();
 const todayBrt = () => new Intl.DateTimeFormat('en-CA', {
@@ -84,11 +88,11 @@ function metricsByCampaign(rows: any[]): Map<string, any> {
   return map;
 }
 
-async function invokeAds(base44: any, accountId: string, path: string, payload: any, contentType: string) {
+async function invokeAds(base44: any, accountId: string, path: string, payload: any, contentType: string, method = 'PUT') {
   const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
     amazon_account_id: accountId,
     _service_role: true,
-    method: 'PUT',
+    method,
     path,
     payload,
     content_type: contentType,
@@ -166,12 +170,13 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const cutoff = cutoffDate(LOOKBACK_DAYS);
-      const [products, economics, assessments, campaigns, keywords, metricsRows, hourlyRows, settingsRows, priorExecutions] = await Promise.all([
+      const [products, economics, assessments, campaigns, keywords, searchTerms, metricsRows, hourlyRows, settingsRows, priorExecutions] = await Promise.all([
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
+        base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid }, '-date', 20000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
         base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: aid }, '-date', 20000).catch(() => []),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
@@ -226,6 +231,105 @@ Deno.serve(async (request) => {
       const skipped: any[] = [];
       let budget = MAX_ACTIONS_PER_ACCOUNT;
       const intradayAdjustedKeywordIds = new Set<string>();
+
+      // Search terms de AUTO nao possuem bid proprio. Com atribuicao madura,
+      // desperdicio vira somente NEGATIVE_EXACT; termos que converteram nunca
+      // sao negativados e recebem apenas reducao granular da keyword de origem.
+      const attributionCutoff = cutoffDate(TERM_ATTRIBUTION_LAG_DAYS);
+      const campaignById = new Map(campaigns.map((campaign: any) => [campaignIdOf(campaign), campaign]));
+      const termAggregates = new Map<string, any>();
+      const seenTermRows = new Set<string>();
+      for (const row of searchTerms) {
+        if (String(row.date || '') > attributionCutoff) continue;
+        const campaignId = String(row.campaign_id || '');
+        const adGroupId = String(row.ad_group_id || '');
+        const term = normalizeTarget(row.normalized_search_term || row.search_term);
+        if (!campaignId || !adGroupId || !term) continue;
+        const identity = String(row.id || [campaignId, adGroupId, term, row.date, row.spend, row.clicks, row.orders_14d].join('|'));
+        if (seenTermRows.has(identity)) continue;
+        seenTermRows.add(identity);
+        const key = `${campaignId}|${adGroupId}|${term}`;
+        const aggregate = termAggregates.get(key) || {
+          campaignId, adGroupId, term, spend: 0, clicks: 0, orders: 0, sales: 0,
+          dates: new Set<string>(), keywordId: '', maxProfitableCpc: 0,
+        };
+        aggregate.spend += numberValue(row.spend);
+        aggregate.clicks += numberValue(row.clicks);
+        aggregate.orders += numberValue(row.orders_14d ?? row.orders_7d ?? row.orders_30d ?? row.orders_1d);
+        aggregate.sales += numberValue(row.sales_14d ?? row.sales_7d ?? row.sales_30d ?? row.sales_1d);
+        if (row.date) aggregate.dates.add(String(row.date));
+        aggregate.keywordId ||= remoteId(row.keyword_id);
+        aggregate.maxProfitableCpc = Math.max(aggregate.maxProfitableCpc, numberValue(row.maximum_profitable_cpc));
+        termAggregates.set(key, aggregate);
+      }
+
+      let termActions = 0;
+      for (const metric of [...termAggregates.values()].sort((a: any, b: any) => b.spend - a.spend)) {
+        if (budget <= 0 || termActions >= MAX_TERM_ACTIONS_PER_ACCOUNT) break;
+        const campaign = campaignById.get(metric.campaignId);
+        if (!campaign || !['enabled', 'active'].includes(campaignState(campaign))) continue;
+        const actualAcos = metric.sales > 0 ? metric.spend / metric.sales * 100 : Number.POSITIVE_INFINITY;
+        const genericHighRisk = /\b(lixeira|ventilador(?: de teto)?|headset|fone|interruptor|moedor)\b/.test(metric.term);
+        const spendFloor = Math.max(TERM_MIN_SPEND, metric.maxProfitableCpc * 8) * (genericHighRisk ? 1.5 : 1);
+        const clicksFloor = genericHighRisk ? 10 : TERM_MIN_CLICKS;
+
+        if (isAutoCampaign(campaign) && metric.orders === 0 && metric.sales === 0 &&
+          metric.spend >= spendFloor && metric.clicks >= clicksFloor && metric.dates.size >= 2) {
+          const idempotencyKey = `auto_term_negative_exact_v1|${aid}|${metric.campaignId}|${metric.adGroupId}|${metric.term}|${day}`;
+          if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
+          const action = { type: 'negative_exact', campaign_id: metric.campaignId, ad_group_id: metric.adGroupId,
+            term: metric.term, spend: roundMoney(metric.spend), clicks: metric.clicks,
+            reason: 'mature_zero_sales_search_term' };
+          if (!dryRun) {
+            const amazon = await invokeAds(base44, aid, '/sp/negativeKeywords', { negativeKeywords: [{
+              campaignId: metric.campaignId, adGroupId: metric.adGroupId, keywordText: metric.term,
+              matchType: 'NEGATIVE_EXACT', state: 'ENABLED',
+            }] }, 'application/vnd.spNegativeKeyword.v3+json', 'POST');
+            await recordExecution(base44, {
+              amazon_account_id: aid, rule_key: 'auto_search_term_negative_exact', entity_type: 'search_term',
+              entity_id: `${metric.campaignId}|${metric.adGroupId}|${metric.term}`, campaign_id: metric.campaignId,
+              action_type: 'negative_exact', value_before: metric.spend, value_after: 0,
+              idempotency_key: idempotencyKey, status: amazon.ok === true ? 'completed' : 'failed', executed_at: nowIso(),
+              error_message: amazon.ok === true ? null : String(amazon.message || amazon.error || 'amazon_not_confirmed').slice(0, 500),
+              metrics_before: JSON.stringify(action).slice(0, 2000),
+            });
+          }
+          actions.push(action); budget--; termActions++;
+          continue;
+        }
+
+        if (metric.orders <= 0 || metric.sales <= 0 || actualAcos <= accountTargetAcos * 1.2) continue;
+        const keyword = keywords.find((item: any) => {
+          const keywordId = remoteId(item.amazon_keyword_id || item.keyword_id);
+          return String(item.campaign_id || '') === metric.campaignId &&
+            ['enabled', 'active'].includes(normalizeState(item.state || item.status)) &&
+            (keywordId === metric.keywordId || normalizeTarget(item.keyword_text || item.keyword) === metric.term);
+        });
+        if (!keyword) continue;
+        const keywordId = remoteId(keyword.amazon_keyword_id || keyword.keyword_id);
+        const currentBid = numberValue(keyword.current_bid || keyword.bid);
+        if (!keywordId || currentBid <= minBid || intradayAdjustedKeywordIds.has(keywordId)) continue;
+        const reductionPct = actualAcos > accountTargetAcos * 2 ? 25 : 15;
+        const newBid = roundMoney(Math.max(minBid, currentBid * (1 - reductionPct / 100)));
+        const idempotencyKey = `profitable_term_high_acos_bid_v1|${aid}|${keywordId}|${day}`;
+        if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
+        const action = { type: 'update_bid', keyword_id: keywordId, campaign_id: metric.campaignId,
+          term: metric.term, old_bid: currentBid, new_bid: newBid, acos: roundMoney(actualAcos),
+          orders: metric.orders, reason: 'converting_term_above_economic_acos' };
+        if (!dryRun) {
+          const amazon = await invokeAds(base44, aid, '/sp/keywords', { keywords: [{ keywordId, bid: newBid }] }, 'application/vnd.spKeyword.v3+json');
+          if (amazon.ok === true) await base44.asServiceRole.entities.Keyword.update(keyword.id, { bid: newBid, current_bid: newBid, last_bid_change_at: nowIso() }).catch(() => {});
+          await recordExecution(base44, {
+            amazon_account_id: aid, rule_key: 'converting_term_high_acos_bid_reduction', entity_type: 'keyword',
+            entity_id: keywordId, keyword_id: keywordId, campaign_id: metric.campaignId, action_type: 'update_bid',
+            value_before: currentBid, value_after: newBid, idempotency_key: idempotencyKey,
+            status: amazon.ok === true ? 'completed' : 'failed', executed_at: nowIso(),
+            error_message: amazon.ok === true ? null : String(amazon.message || amazon.error || 'amazon_not_confirmed').slice(0, 500),
+            metrics_before: JSON.stringify(action).slice(0, 2000),
+          });
+        }
+        intradayAdjustedKeywordIds.add(keywordId); actions.push(action); budget--; termActions++;
+      }
 
       // Circuito de perda intradiária por termo/targeting. Atua antes da regra
       // agregada de campanha e reduz apenas a keyword responsável pelo gasto.
