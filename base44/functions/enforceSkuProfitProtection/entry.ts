@@ -179,6 +179,26 @@ Deno.serve(async (request) => {
       ]);
 
       const settings = settingsRows[0] || {};
+      let invalidZeroRevenueMarginsRepaired = 0;
+      for (const economic of economics) {
+        const imported = economic.analytics_import_metrics;
+        if (!imported || numberValue(imported.revenue) > 0 || numberValue(imported.ads_cost) <= 0) continue;
+        if (imported.margin_after_ads_pct == null && imported.margin_after_ads_not_calculable === true) continue;
+        const repairedMetrics = {
+          ...imported,
+          margin_after_ads_pct: null,
+          economic_status: 'no_sales_with_spend',
+          margin_after_ads_not_calculable: true,
+        };
+        if (!dryRun) {
+          await base44.asServiceRole.entities.ProductEconomics.update(economic.id, {
+            analytics_import_metrics: repairedMetrics,
+            updated_at: nowIso(),
+          }).catch(() => {});
+        }
+        economic.analytics_import_metrics = repairedMetrics;
+        invalidZeroRevenueMarginsRepaired++;
+      }
       const minBid = numberValue(settings.min_bid, 0.20);
       const maxBid = numberValue(settings.max_bid, 5.00);
       const accountTargetAcos = numberValue(settings.target_acos, 15);
@@ -529,6 +549,7 @@ Deno.serve(async (request) => {
         zero_sales_circuit_breaker_pauses: actions.filter((action) => action.type === 'pause_campaign' && action.zero_sales_circuit_breaker).length,
         reactivations: actions.filter((action) => action.type === 'reactivate_campaign').length,
         skipped: skipped.length,
+        invalid_zero_revenue_margins_repaired: invalidZeroRevenueMarginsRepaired,
         hardcoded_sku_rules: 0,
         dry_run: dryRun,
       };
