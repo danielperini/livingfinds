@@ -9,6 +9,7 @@
  *   ao mesmo SKU pelo coletor canônico.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
 
 // Snapshot confirmado pelo usuário em 2026-08-01. Serve apenas como fallback
 // temporário quando a SP-API de inventário não devolve nenhum item.
@@ -29,10 +30,9 @@ function activeProduct(product: any): boolean {
   const sku = String(product?.sku || '').trim();
   const asin = String(product?.asin || '').trim().toUpperCase();
   const status = String(product?.status || product?.offer_status || '').trim().toLowerCase();
-  const available = Number(product?.available_quantity ?? product?.fba_inventory ?? 0);
-  const confirmedFallback = Date.now() <= CONFIRMED_ACTIVE_UNTIL && CONFIRMED_ACTIVE_PRODUCTS[sku] === asin;
-  return !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && (available > 0 || confirmedFallback)
-    && (confirmedFallback || !['inactive', 'archived', 'deleted', 'closed'].includes(status))
+  const available = availableAdsStock(product);
+  return stockAdsDecision(product) === 'activate' && !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && available > 1
+    && !['inactive', 'archived', 'deleted', 'closed'].includes(status)
     && product?.listing_suppressed !== true
     && product?.offer_active !== false
     && product?.listing_buyable !== false;
@@ -67,6 +67,7 @@ Deno.serve(async (req) => {
     for (const account of connectedAccounts) {
       const accountId = account.id;
       let catalogSync: any = null;
+      let stockGuard: any = null;
       if (!dryRun) {
         catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
           _service_role: true, amazon_account_id: accountId,
@@ -78,6 +79,10 @@ Deno.serve(async (req) => {
         } else {
           console.warn('[campaignCoverage] SP-API sem inventário confiável; usando snapshot ativo temporário sem pausar campanhas.');
         }
+        stockGuard = dataOf(await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
+          _service_role: true, amazon_account_id: accountId,
+          low_stock_pause_threshold: 1,
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
         });
@@ -86,10 +91,13 @@ Deno.serve(async (req) => {
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 2000);
       const reliableCatalog = catalogSync?.ok !== false && Number(catalogSync?.inventory_asins || 0) > 0;
       const eligible = products.filter(activeProduct);
-      if (!reliableCatalog && Date.now() <= CONFIRMED_ACTIVE_UNTIL) {
+      if (false && !reliableCatalog && Date.now() <= CONFIRMED_ACTIVE_UNTIL) {
         for (const [sku, asin] of Object.entries(CONFIRMED_ACTIVE_PRODUCTS)) {
           const existing = products.find((p: any) => String(p.sku || '').trim() === sku)
             || products.find((p: any) => String(p.asin || '').trim().toUpperCase() === asin);
+          const existingRawStock = existing?.available_quantity ?? existing?.fba_inventory;
+          const existingStockKnown = existingRawStock !== null && existingRawStock !== undefined && existingRawStock !== '';
+          if (!existingStockKnown || Number(existingRawStock) <= 1) continue;
           const index = eligible.findIndex((p: any) => String(p.sku || '').trim() === sku && String(p.asin || '').trim().toUpperCase() === asin);
           const confirmed = {
             ...(existing || {}), sku, asin, status: 'active',
@@ -171,7 +179,8 @@ Deno.serve(async (req) => {
         reactivated: rows.filter((r: any) => r.action === 'reactivated').length,
         already_enabled: rows.filter((r: any) => r.action === 'existing_enabled').length,
         failed: rows.filter((r: any) => r.ok === false).length,
-        rows, repair, harvest, profit_protection: profitProtection, catalog_sync: catalogSync,
+        rows, repair, harvest, profit_protection: profitProtection,
+        catalog_sync: catalogSync, stock_guard: stockGuard,
       });
     }
 

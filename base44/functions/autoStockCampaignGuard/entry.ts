@@ -10,6 +10,7 @@ import {
   manualPauseLockPatch,
   productOfferEligibility,
 } from '../../shared/productCampaignPauseGuard.ts';
+import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
 
 function adsBase(region) {
   const r = String(region || 'NA').toUpperCase();
@@ -88,13 +89,16 @@ async function sendCampaignStateChange(token, profileId, region, campaignId, tar
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
+    const body = await req.json().catch(() => ({}));
 
     // Suporta tanto chamada autenticada (automação) quanto service role
     let user = null;
     try { user = await base44.auth.me(); } catch {}
     const db = base44.asServiceRole;
 
-    const accounts = await db.entities.AmazonAccount.filter({ status: 'connected' });
+    const accounts = body.amazon_account_id
+      ? await db.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      : await db.entities.AmazonAccount.filter({ status: 'connected' });
     if (!accounts.length) return Response.json({ ok: true, message: 'Nenhuma conta conectada' });
 
     const results = [];
@@ -102,7 +106,7 @@ Deno.serve(async (req) => {
     for (const account of accounts) {
       const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
       const region = account.region || 'NA';
-      const accountLog = { account_id: account.id, paused: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, errors: [] };
+      const accountLog = { account_id: account.id, paused: 0, paused_one_unit: 0, paused_not_buyable: 0, activated: 0, synced: 0, unlocked: 0, errors: [] };
 
       let token = null;
       try {
@@ -136,10 +140,10 @@ Deno.serve(async (req) => {
       accountLog.synced = syncUpdates.length;
 
       // 3. Buscar produtos ativos com campanha
-      const products = await db.entities.Product.filter({ amazon_account_id: account.id, status: 'active' }, null, 500).catch(() => []);
+      const products = await db.entities.Product.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []);
 
       for (const product of products) {
-        const fba = Number(product.fba_inventory ?? 0);
+        const fba = availableAdsStock(product);
         const invStatus = String(product.inventory_status || '').toLowerCase();
         const campStatus = String(product.campaign_status || '').toLowerCase();
         const pauseReason = String(product.pause_reason || '');
@@ -219,41 +223,44 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const isOutOfStock = invStatus === 'out_of_stock' || fba === 0;
+        const isOneUnit = fba === 1;
+        const stockDecision = stockAdsDecision(product);
+        const isOutOfStock = invStatus === 'out_of_stock' || stockDecision === 'pause';
         const isPausedByStock = pauseReason === 'out_of_stock_confirmed' || pauseReason.includes('stock');
 
-        // Buscar estado real da campanha vinculada
-        let realState = campStatus; // fallback
-        if (amazonId) {
-          // Tentar pegar o amazon_campaign_id real da entidade Campaign
-          const campaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 1).catch(() => []);
-          const altCampaigns = campaigns.length ? campaigns : await db.entities.Campaign.filter({ amazon_account_id: account.id, amazon_campaign_id: amazonId }, null, 1).catch(() => []);
-          const linkedCampaign = altCampaigns[0];
-          if (linkedCampaign) {
-            const realAmazonId = linkedCampaign.amazon_campaign_id || linkedCampaign.campaign_id;
-            realState = amazonStates.get(String(realAmazonId)) || linkedCampaign.state || campStatus;
-          }
-        }
-
-        const isReallyActive = realState === 'enabled';
-        const isReallyPaused = realState === 'paused';
+        // Um SKU pode ter AUTO e MANUAL. A decisao de estoque deve considerar
+        // todas as campanhas vinculadas, nao apenas o campaign_id salvo no produto.
+        const linkedCampaigns = localCampaigns.filter(c => campaignMatchesProduct(c, product));
+        const linkedStates = linkedCampaigns.map(c => {
+          const id = c.amazon_campaign_id || c.campaign_id;
+          return String(amazonStates.get(String(id)) || c.state || c.status || '').toLowerCase();
+        });
+        const isReallyActive = linkedStates.includes('enabled') || (linkedStates.length === 0 && campStatus === 'enabled');
+        const isReallyPaused = linkedStates.length > 0
+          ? linkedStates.every(state => state === 'paused' || state === 'archived')
+          : campStatus === 'paused';
 
         // CASO A: sem estoque mas campanha ativa na Amazon → pausar
         // Respeitar ads_protected: só pausar se realmente sem estoque (fba=0)
         const linkedProtected = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 1)
           .then((r: any[]) => r[0]?.ads_protected === true).catch(() => false);
-        if (linkedProtected && fba > 0) continue; // protegida e tem estoque → pular
+        if (linkedProtected && fba > 1) continue;
         if (isOutOfStock && isReallyActive) {
           try {
-            const linkedCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 5).catch(() => []);
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
               if (!aid) continue;
               await sendCampaignStateChange(token, profileId, region, aid, 'PAUSED');
               await db.entities.Campaign.update(lc.id, { state: 'paused', status: 'paused', amazon_status: 'paused', is_operational: false });
             }
-            await db.entities.Product.update(product.id, { campaign_status: 'paused', pause_reason: 'out_of_stock_confirmed' });
+            const stockReason = isOneUnit ? 'low_stock_one_unit' : 'out_of_stock_confirmed';
+            await db.entities.Product.update(product.id, {
+              campaign_status: 'paused', pause_reason: stockReason,
+              ads_pause_reason: stockReason.toUpperCase(), ads_paused_at: new Date().toISOString(),
+              ads_resume_pending: true, should_activate_campaign: false,
+            });
             accountLog.paused++;
+            if (isOneUnit) accountLog.paused_one_unit++;
             console.log(`[guard] PAUSED asin=${product.asin} fba=${fba}`);
           } catch (e) {
             accountLog.errors.push({ asin: product.asin, step: 'pause', error: e.message });
@@ -261,9 +268,8 @@ Deno.serve(async (req) => {
         }
 
         // CASO B: tem estoque, pause_reason=stock, mas campanha pausada → reativar
-        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyPaused) {
+        if (offer.eligible && !isOutOfStock && fba > 1 && isPausedByStock && isReallyPaused) {
           try {
-            const linkedCampaigns = await db.entities.Campaign.filter({ amazon_account_id: account.id, campaign_id: amazonId }, null, 5).catch(() => []);
             for (const lc of linkedCampaigns) {
               const aid = lc.amazon_campaign_id || lc.campaign_id;
               if (!aid) continue;
@@ -279,7 +285,7 @@ Deno.serve(async (req) => {
         }
 
         // CASO C: tem estoque, pause_reason=stock, mas campanha já está ativa na Amazon → desbloquear registro local
-        if (offer.eligible && !isOutOfStock && fba > 0 && isPausedByStock && isReallyActive) {
+        if (offer.eligible && !isOutOfStock && fba > 1 && isPausedByStock && isReallyActive) {
           try {
             await db.entities.Product.update(product.id, { campaign_status: 'active', pause_reason: null });
             accountLog.unlocked++;
@@ -295,10 +301,11 @@ Deno.serve(async (req) => {
 
     const totals = results.reduce((acc, r) => ({
       paused: acc.paused + r.paused,
+      paused_one_unit: acc.paused_one_unit + r.paused_one_unit,
       activated: acc.activated + r.activated,
       synced: acc.synced + r.synced,
       unlocked: acc.unlocked + r.unlocked,
-    }), { paused: 0, activated: 0, synced: 0, unlocked: 0 });
+    }), { paused: 0, paused_one_unit: 0, activated: 0, synced: 0, unlocked: 0 });
 
     return Response.json({ ok: true, ...totals, accounts: results });
   } catch (error) {

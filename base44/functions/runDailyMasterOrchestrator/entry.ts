@@ -136,6 +136,12 @@ Deno.serve(async (req) => {
     if (!invDone || force) add('checkInventoryChangesAndKickoff', 'inventory_kickoff', {}, true);
     else skipped.push('inventory_kickoff');
 
+    // Politica canonica de estoque e cobertura: pausa todas as campanhas de SKU
+    // com 0/1 unidade e cria ou reativa uma AUTO para cada novo SKU com >=2.
+    add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
+      dry_run: false, max_products: 500, lookback_days: 65,
+    });
+
     // Sempre: motor de decisão + execução (idempotentes)
     add('runUnifiedDecisionEngine', 'decision_engine');
     add('executeApprovedDecisionQueue', 'execute_decisions');
