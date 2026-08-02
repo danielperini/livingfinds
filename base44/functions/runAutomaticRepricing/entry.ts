@@ -1206,6 +1206,21 @@ async function evaluateAccount(
     const economics = latestEconomicsBySku.get(normalizeSku(product.sku));
     return Boolean(economics?.costs_confirmed_by_user || options.product_id);
   });
+  // Uma mesma oferta pode aparecer mais de uma vez após importações legadas.
+  // Avaliar uma única linha por SKU evita estudos e decisões conflitantes.
+  const uniqueEligible = new Map<string, any>();
+  for (const product of eligible) {
+    const key = normalizeSku(product.sku);
+    const current = uniqueEligible.get(key);
+    const score = (row: any) =>
+      (row.status === "active" ? 100 : 0) +
+      (numberValue(row.available_quantity ?? row.fba_inventory, 0) > 0 ? 20 : 0) +
+      (row.catalog_sync_status === "success" ? 10 : 0) +
+      (row.display_name && normalizeSku(row.display_name) !== key ? 5 : 0) +
+      Math.min(4, comparableTokens(row.display_name || row.product_name || row.title || "").size);
+    if (!current || score(product) > score(current)) uniqueEligible.set(key, product);
+  }
+  eligible = [...uniqueEligible.values()];
   eligible = eligible
     .sort((a: any, b: any) => {
       const ae = latestEconomicsBySku.get(normalizeSku(a.sku));
@@ -1255,6 +1270,50 @@ async function evaluateAccount(
       });
       continue;
     }
+    // O estudo de mercado é informativo e deve existir mesmo quando estoque,
+    // Listings ou fulfillment ainda impedem a EXECUÇÃO do novo preço.
+    const cachedSimilar = economics.decision_evidence || {};
+    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
+        numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
+        Array.isArray(cachedSimilar.similar_competitor_products) &&
+        cachedSimilar.similar_competitor_products.length > 0 &&
+        hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
+      ? {
+        average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
+        minimum: numberValue(cachedSimilar.similar_competitor_price_minimum, 0) || null,
+        maximum: numberValue(cachedSimilar.similar_competitor_price_maximum, 0) || null,
+        count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
+        matches: cachedSimilar.similar_competitor_products || [],
+        checkedAt: cachedSimilar.similar_competition_checked_at,
+        source: "persisted_scrapingbee_amazon_search_inferred",
+        aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
+        canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
+        searchQueries: cachedSimilar.similar_competition_search_queries || [],
+        error: cachedSimilar.similar_competition_error || null,
+      }
+      : await fetchSimilarCompetition(base44, account, accessToken, product, similarSearchAiBudget).catch((error: any) => ({
+        average: null, minimum: null, maximum: null, count: 0, matches: [], checkedAt: nowIso(),
+        source: "scrapingbee_amazon_search_inferred_error", error: error?.message || String(error),
+      }));
+    await base44.asServiceRole.entities.ProductEconomics.update(economics.id, {
+      decision_evidence: {
+        ...cachedSimilar,
+        similar_competitor_price_average: similarCompetition.average,
+        similar_competitor_price_minimum: similarCompetition.minimum,
+        similar_competitor_price_maximum: similarCompetition.maximum,
+        similar_competitor_product_count: similarCompetition.count,
+        similar_competitor_products: similarCompetition.matches,
+        similar_competition_checked_at: similarCompetition.checkedAt,
+        similar_competition_source: similarCompetition.source,
+        similar_competition_search_queries: similarCompetition.searchQueries || [],
+        similar_competition_error: similarCompetition.error || null,
+        similar_competition_ai_assisted: similarCompetition.aiAssisted === true,
+        similar_competition_canonical_title: similarCompetition.canonicalSourceTitle || null,
+        similar_competition_threshold: 0.90,
+        similar_competition_algorithm_version: SIMILAR_COMPETITION_ALGORITHM_VERSION,
+      },
+      updated_at: nowIso(),
+    }).catch(() => {});
     const stock = numberValue(
       product.available_quantity ?? product.fba_inventory,
       0,
@@ -1371,27 +1430,6 @@ async function evaluateAccount(
       !sellerId || !offer.sellerId ||
       String(offer.sellerId) !== String(sellerId)
     );
-    const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
-        numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
-        Array.isArray(cachedSimilar.similar_competitor_products) &&
-        cachedSimilar.similar_competitor_products.length > 0 &&
-        hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
-      ? {
-        average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
-        minimum: numberValue(cachedSimilar.similar_competitor_price_minimum, 0) || null,
-        maximum: numberValue(cachedSimilar.similar_competitor_price_maximum, 0) || null,
-        count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
-        matches: cachedSimilar.similar_competitor_products || [],
-        checkedAt: cachedSimilar.similar_competition_checked_at,
-        source: "persisted_scrapingbee_amazon_search_inferred",
-        aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
-        canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
-      }
-      : await fetchSimilarCompetition(base44, account, accessToken, product, similarSearchAiBudget).catch((error: any) => ({
-        average: null, count: 0, matches: [], checkedAt: nowIso(),
-        source: "amazon_catalog_inferred_error", error: error?.message || String(error),
-      }));
     const competitionFresh = pricing.ok === true ||
       (economics.competition_checked_at &&
         hoursSince(economics.competition_checked_at) * 60 <=
@@ -2846,7 +2884,9 @@ async function fetchSimilarCompetition(
   const localTitleInvalid = !title || normalizeSku(title) === normalizeSku(product.sku) ||
     /^t[ií]tulo pendente$/i.test(String(title).trim());
 
-  if (product.asin && (localTitleInvalid || comparableTokens(title).size < 2)) {
+  // O título canônico do ASIN prevalece sobre textos importados. Isso também
+  // corrige contaminação de registros duplicados/parent antes de pesquisar.
+  if (product.asin) {
     const sourceCatalog = await amazonCall(
       base44, account.id, "repricing_catalog_source_product",
       `${spBase(account.region)}/catalog/2022-04-01/items/${encodeURIComponent(product.asin)}?marketplaceIds=${marketplaceId}&includedData=summaries,attributes`,
@@ -2855,7 +2895,7 @@ async function fetchSimilarCompetition(
     const sourcePayload = amazonPayload(sourceCatalog) || {};
     const sourceSummary = (sourcePayload.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || sourcePayload.summaries?.[0] || {};
     const canonicalTitle = sourceSummary.itemName || sourceSummary.itemTitle || sourcePayload.attributes?.item_name?.[0]?.value || "";
-    if (canonicalTitle) {
+    if (canonicalTitle && (localTitleInvalid || canonicalTitle !== title)) {
       title = canonicalTitle;
       await base44.asServiceRole.entities.Product.update(product.id, {
         display_name: canonicalTitle,
@@ -2879,8 +2919,7 @@ async function fetchSimilarCompetition(
   const queryErrors: string[] = [];
   for (const searchText of queries.slice(0, 2)) {
     const query = new URLSearchParams({
-      query: searchText, domain: "com.br", language: "pt_BR",
-      currency: "BRL", pages: "1", sort_by: "featured",
+      query: searchText, domain: "com.br", pages: "1", sort_by: "featured",
     });
     try {
       const response = await fetch(`https://app.scrapingbee.com/api/v1/amazon/search?${query}`, {

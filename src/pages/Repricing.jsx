@@ -423,6 +423,7 @@ export default function Repricing() {
           similar_count: Number(evidence.similar_competitor_product_count || 0),
           similar_products: similarProducts,
           similar_competition_error: evidence.similar_competition_error || null,
+          similar_competition_checked_at: evidence.similar_competition_checked_at || null,
           similar_competition_search_queries: evidence.similar_competition_search_queries || [],
           similar_sales_estimate_average: salesEstimates.length ? salesEstimates.reduce((sum, value) => sum + value, 0) / salesEstimates.length : null,
           similar_sales_estimate_count: salesEstimates.length,
