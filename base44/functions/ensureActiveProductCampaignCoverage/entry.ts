@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
           console.warn('[campaignCoverage] SP-API sem inventário confiável; usando snapshot ativo temporário sem pausar campanhas.');
         }
         offerSync = dataOf(await base44.asServiceRole.functions.invoke('syncAmazonOfferAvailability', {
-          _service_role: true, amazon_account_id: accountId,
+          _service_role: true, amazon_account_id: accountId, max_products: maxProducts,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         stockGuard = dataOf(await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
           _service_role: true, amazon_account_id: accountId,

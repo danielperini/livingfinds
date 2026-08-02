@@ -73,6 +73,7 @@ Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
+    const maxProducts = Math.min(Math.max(Number(body.max_products || 100), 1), 500);
     if (!body._service_role) {
       const user = await base44.auth.me().catch(() => null);
       if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
@@ -90,7 +91,7 @@ Deno.serve(async (request) => {
         results.push({ account_id: account.id, ok: false, error: 'seller_id não configurado' });
         continue;
       }
-      const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, null, 2000).catch(() => []);
+      const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', maxProducts).catch(() => []);
       const now = new Date().toISOString();
       let verified = 0, unavailable = 0, failed = 0;
       for (const product of products as any[]) {
