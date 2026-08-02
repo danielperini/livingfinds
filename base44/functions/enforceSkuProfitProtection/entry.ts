@@ -20,6 +20,10 @@ const BID_COOLDOWN_HOURS = 24;
 const PAUSE_AFTER_REDUCTION_HOURS = 72;
 const REACTIVATION_COOLDOWN_HOURS = 72;
 const MAX_ACTIONS_PER_ACCOUNT = 80;
+const INTRADAY_MIN_SPEND = 5;
+const INTRADAY_MIN_CLICKS = 3;
+const INTRADAY_VELOCITY_MULTIPLIER = 2;
+const INTRADAY_SPEND_MULTIPLIER = 2.5;
 
 const nowIso = () => new Date().toISOString();
 const todayBrt = () => new Intl.DateTimeFormat('en-CA', {
@@ -39,6 +43,9 @@ const isAutoCampaign = (campaign: any) => {
   const name = String(campaign?.name || campaign?.campaign_name || '').toUpperCase();
   return targeting.includes('AUTO') || /^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name);
 };
+const normalizeTarget = (value: unknown) => String(value || '').normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  .replace(/^(keyword|search term|targeting)\s+/, '');
 
 function unwrap(response: any): any {
   return response?.data || response || {};
@@ -159,13 +166,14 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const cutoff = cutoffDate(LOOKBACK_DAYS);
-      const [products, economics, assessments, campaigns, keywords, metricsRows, settingsRows, priorExecutions] = await Promise.all([
+      const [products, economics, assessments, campaigns, keywords, metricsRows, hourlyRows, settingsRows, priorExecutions] = await Promise.all([
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 2000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: aid }, '-assessment_date', 3000).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
+        base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: aid }, '-date', 20000).catch(() => []),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-executed_at', 5000).catch(() => []),
       ]);
@@ -197,6 +205,112 @@ Deno.serve(async (request) => {
       const actions: any[] = [];
       const skipped: any[] = [];
       let budget = MAX_ACTIONS_PER_ACCOUNT;
+      const intradayAdjustedKeywordIds = new Set<string>();
+
+      // Circuito de perda intradiária por termo/targeting. Atua antes da regra
+      // agregada de campanha e reduz apenas a keyword responsável pelo gasto.
+      const currentHour = Number(new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Sao_Paulo', hour: '2-digit', hourCycle: 'h23',
+      }).format(new Date()));
+      const hourlyByTarget = new Map<string, any>();
+      const uniqueHourlyRows = new Map<string, any>();
+      for (const row of hourlyRows) {
+        const identity = [row.campaign_id, row.ad_group_id, row.targeting, row.date, row.hour].join('|');
+        if (!uniqueHourlyRows.has(identity)) uniqueHourlyRows.set(identity, row);
+      }
+      for (const row of uniqueHourlyRows.values()) {
+        const campaignId = String(row.campaign_id || '');
+        const target = normalizeTarget(row.targeting);
+        if (!campaignId || !target) continue;
+        const key = `${campaignId}|${target}`;
+        const aggregate = hourlyByTarget.get(key) || {
+          campaignId, target, todaySpend: 0, todayClicks: 0, todayOrders: 0,
+          todaySales: 0, recentSpend: 0, historicalSpend: 0, historicalHours: new Set(),
+        };
+        const spend = numberValue(row.cost ?? row.spend);
+        const clicks = numberValue(row.clicks);
+        const orders = numberValue(row.purchases ?? row.orders);
+        const sales = numberValue(row.sales);
+        if (String(row.date || '') === day) {
+          aggregate.todaySpend += spend;
+          aggregate.todayClicks += clicks;
+          aggregate.todayOrders += orders;
+          aggregate.todaySales += sales;
+          if (numberValue(row.hour, -1) >= Math.max(0, currentHour - 1)) aggregate.recentSpend += spend;
+        } else if (String(row.date || '') >= cutoffDate(7)) {
+          aggregate.historicalSpend += spend;
+          aggregate.historicalHours.add(`${row.date}|${row.hour}`);
+        }
+        hourlyByTarget.set(key, aggregate);
+      }
+
+      for (const metric of hourlyByTarget.values()) {
+        if (budget <= 0 || metric.todayOrders > 0 || metric.todaySales > 0) continue;
+        const baselineHourly = metric.historicalSpend / Math.max(1, metric.historicalHours.size);
+        const spendThreshold = Math.max(INTRADAY_MIN_SPEND, baselineHourly * INTRADAY_SPEND_MULTIPLIER);
+        const velocityThreshold = Math.max(2, baselineHourly * INTRADAY_VELOCITY_MULTIPLIER);
+        const fastLoss = metric.todaySpend >= spendThreshold &&
+          (metric.recentSpend >= velocityThreshold || metric.todaySpend >= 12) &&
+          metric.todayClicks >= INTRADAY_MIN_CLICKS;
+        if (!fastLoss) continue;
+
+        const keyword = (keywordsByCampaign.get(metric.campaignId) || []).find((item: any) =>
+          ['enabled', 'active'].includes(normalizeState(item.state || item.status)) &&
+          normalizeTarget(item.keyword_text || item.keyword) === metric.target
+        );
+        if (!keyword) {
+          skipped.push({ campaign_id: metric.campaignId, targeting: metric.target, reason: 'intraday_target_without_editable_keyword' });
+          continue;
+        }
+        const keywordId = remoteId(keyword.amazon_keyword_id || keyword.keyword_id);
+        const currentBid = numberValue(keyword.current_bid || keyword.bid, 0);
+        if (!keywordId || currentBid <= 0) continue;
+        const decreasePct = Math.max(20, Math.min(40, numberValue(settings.max_bid_decrease_pct, 25)));
+        const newBid = roundMoney(Math.max(minBid, currentBid * (1 - decreasePct / 100)));
+        if (newBid >= currentBid) continue;
+        const twoHourBucket = Math.floor(currentHour / 2);
+        const idempotencyKey = `intraday_zero_sales_velocity_v1|${aid}|${keywordId}|${day}|${twoHourBucket}`;
+        if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
+
+        const action = {
+          type: 'update_bid', keyword_id: keywordId, campaign_id: metric.campaignId,
+          old_bid: currentBid, new_bid: newBid, reduction_pct: decreasePct,
+          today_spend: roundMoney(metric.todaySpend), recent_spend_velocity: roundMoney(metric.recentSpend),
+          baseline_hourly_spend: roundMoney(baselineHourly), clicks: metric.todayClicks,
+          reason: 'intraday_high_velocity_zero_sales',
+        };
+        if (!dryRun) {
+          const amazon = await invokeAds(base44, aid, '/sp/keywords', { keywords: [{ keywordId, bid: newBid }] }, 'application/vnd.spKeyword.v3+json');
+          const completed = amazon.ok === true;
+          const retryScheduled = !completed && Boolean(amazon.retryable || amazon.rate_limited || amazon.reschedule_async);
+          if (completed) {
+            await base44.asServiceRole.entities.Keyword.update(keyword.id, {
+              bid: newBid, current_bid: newBid, last_bid_change_at: nowIso(),
+            }).catch(() => {});
+          } else if (retryScheduled) {
+            await enqueueRetry(base44, {
+              accountId: aid, operation: 'keyword_bid_update', entityType: 'keyword', entityId: keywordId,
+              campaignId: metric.campaignId, keywordId,
+              payload: { bid: newBid, bid_before: currentBid, reason: 'intraday_high_velocity_zero_sales' },
+              idempotencyKey: `retry|${idempotencyKey}`, retryAfterSeconds: amazon.retry_after_seconds,
+            });
+          }
+          await recordExecution(base44, {
+            amazon_account_id: aid, rule_key: 'intraday_zero_sales_velocity_bid_reduction',
+            entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
+            campaign_id: metric.campaignId, action_type: 'update_bid', value_before: currentBid,
+            value_after: newBid, idempotency_key: idempotencyKey,
+            status: completed ? 'completed' : retryScheduled ? 'scheduled' : 'failed',
+            executed_at: nowIso(),
+            error_message: completed ? null : String(amazon.message || amazon.error || 'scheduled_retry').slice(0, 500),
+            amazon_response: JSON.stringify({ status: amazon.status, request_id: amazon.request_id, errors: amazon.errors }).slice(0, 2000),
+            metrics_before: JSON.stringify(action).slice(0, 2000),
+          });
+        }
+        intradayAdjustedKeywordIds.add(keywordId);
+        actions.push(action);
+        budget--;
+      }
 
       for (const product of products) {
         if (budget <= 0) break;
@@ -270,6 +384,7 @@ Deno.serve(async (request) => {
                 const keywordId = remoteId(keyword.amazon_keyword_id || keyword.keyword_id);
                 const currentBid = numberValue(keyword.current_bid || keyword.bid, 0);
                 if (!keywordId || currentBid <= 0) continue;
+                if (intradayAdjustedKeywordIds.has(keywordId)) continue;
                 const idempotencyKey = `sku_profit_bid_v2|${aid}|${keywordId}|${day}`;
                 if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
                 if (hoursSince(keyword.last_bid_change_at) < BID_COOLDOWN_HOURS) continue;
@@ -408,6 +523,7 @@ Deno.serve(async (request) => {
         products_evaluated: products.length,
         actions: actions.length,
         bid_reductions: actions.filter((action) => action.type === 'update_bid').length,
+        intraday_zero_sales_velocity_reductions: actions.filter((action) => action.reason === 'intraday_high_velocity_zero_sales').length,
         pauses: actions.filter((action) => action.type === 'pause_campaign').length,
         structural_pauses: actions.filter((action) => action.type === 'pause_campaign' && action.structural_loss).length,
         zero_sales_circuit_breaker_pauses: actions.filter((action) => action.type === 'pause_campaign' && action.zero_sales_circuit_breaker).length,
@@ -447,6 +563,9 @@ Deno.serve(async (request) => {
         preserve_discovery_campaign_when_economically_viable: true,
         winner_protection: true,
         max_bid_reduction_per_cycle_pct: 20,
+        intraday_zero_sales_max_bid_reduction_pct: 40,
+        intraday_minimum_spend: INTRADAY_MIN_SPEND,
+        intraday_minimum_clicks: INTRADAY_MIN_CLICKS,
       },
       results,
     });
