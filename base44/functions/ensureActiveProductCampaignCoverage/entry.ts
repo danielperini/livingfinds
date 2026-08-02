@@ -13,19 +13,24 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 // Snapshot confirmado pelo usuário em 2026-08-01. Serve apenas como fallback
 // temporário quando a SP-API de inventário não devolve nenhum item.
 const CONFIRMED_ACTIVE_UNTIL = Date.parse('2026-08-09T02:59:59Z');
-const CONFIRMED_ACTIVE_SKUS = new Set([
-  'W9-OL7U-LRW5', 'FBA-0087c', 'FBA-0076C', 'FBA-0010', 'FBA-0100',
-  'SKU-002314A', 'SKU-002314V', 'FBA-0076A', 'FBA-0008V', 'FBA-0008P',
-  'FBA-0087b', 'FBA-0088a', 'FBA-0010b', 'FBA-0071', 'FBA-0065PR',
-  'FBA-0024b', '70-FCMB-TFYO',
-]);
+const CONFIRMED_ACTIVE_PRODUCTS: Record<string, string> = {
+  'W9-OL7U-LRW5': 'B0HBM8V2DP', 'FBA-0087c': 'B0H59FPPKS',
+  'FBA-0076C': 'B0GHP612B8', 'FBA-0010': 'B0DJ3RGHK6',
+  'FBA-0100': 'B0GR6GXS1B', 'SKU-002314A': 'B0GNY7NYRN',
+  'SKU-002314V': 'B0GNW1Q6V3', 'FBA-0076A': 'B0GHP68123',
+  'FBA-0008V': 'B0GHP958MV', 'FBA-0008P': 'B0GHP9PPWN',
+  'FBA-0087b': 'B0GFQ5YT3H', 'FBA-0088a': 'B0FRVMB7BW',
+  'FBA-0010b': 'B0FN4RCXY2', 'FBA-0071': 'B0FHX1HPMT',
+  'FBA-0065PR': 'B0FCYR3VBD', 'FBA-0024b': 'B0F45JG27L',
+  '70-FCMB-TFYO': 'B0DSCM4DFT',
+};
 
 function activeProduct(product: any): boolean {
   const sku = String(product?.sku || '').trim();
   const asin = String(product?.asin || '').trim().toUpperCase();
   const status = String(product?.status || product?.offer_status || '').trim().toLowerCase();
   const available = Number(product?.available_quantity ?? product?.fba_inventory ?? 0);
-  const confirmedFallback = Date.now() <= CONFIRMED_ACTIVE_UNTIL && CONFIRMED_ACTIVE_SKUS.has(sku);
+  const confirmedFallback = Date.now() <= CONFIRMED_ACTIVE_UNTIL && CONFIRMED_ACTIVE_PRODUCTS[sku] === asin;
   return !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && (available > 0 || confirmedFallback)
     && (confirmedFallback || !['inactive', 'archived', 'deleted', 'closed'].includes(status))
     && product?.listing_suppressed !== true
@@ -79,11 +84,27 @@ Deno.serve(async (req) => {
       }
 
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_date', 2000);
-      const eligible = products.filter(activeProduct).slice(0, maxProducts);
+      const reliableCatalog = catalogSync?.ok !== false && Number(catalogSync?.inventory_asins || 0) > 0;
+      const eligible = products.filter(activeProduct);
+      if (!reliableCatalog && Date.now() <= CONFIRMED_ACTIVE_UNTIL) {
+        for (const [sku, asin] of Object.entries(CONFIRMED_ACTIVE_PRODUCTS)) {
+          const existing = products.find((p: any) => String(p.sku || '').trim() === sku)
+            || products.find((p: any) => String(p.asin || '').trim().toUpperCase() === asin);
+          const index = eligible.findIndex((p: any) => String(p.sku || '').trim() === sku && String(p.asin || '').trim().toUpperCase() === asin);
+          const confirmed = {
+            ...(existing || {}), sku, asin, status: 'active',
+            available_quantity: Math.max(Number(existing?.available_quantity || existing?.fba_inventory || 0), 1),
+            listing_suppressed: false, offer_active: true, listing_buyable: true,
+          };
+          if (index >= 0) eligible[index] = confirmed;
+          else eligible.push(confirmed);
+        }
+      }
+      const limitedEligible = eligible.slice(0, maxProducts);
       const seen = new Set<string>();
       const rows: any[] = [];
 
-      for (const product of eligible) {
+      for (const product of limitedEligible) {
         const sku = String(product.sku).trim();
         const asin = String(product.asin).trim().toUpperCase();
         const key = `${sku}|${asin}`;
@@ -120,7 +141,7 @@ Deno.serve(async (req) => {
       let harvest: any = null;
       if (!dryRun) {
         repair = dataOf(await base44.asServiceRole.functions.invoke('repairIncompleteAutoCampaigns', {
-          _service_role: true, amazon_account_id: accountId, asins: eligible.map((p: any) => p.asin),
+          _service_role: true, amazon_account_id: accountId, asins: limitedEligible.map((p: any) => p.asin),
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         await base44.asServiceRole.functions.invoke('refreshSameSkuSearchTermReports', {
           _service_role: true, amazon_account_id: accountId, force_new: true, trigger_type: 'active_campaign_coverage',
@@ -136,7 +157,7 @@ Deno.serve(async (req) => {
 
       accountResults.push({
         amazon_account_id: accountId,
-        active_products: eligible.length,
+        active_products: limitedEligible.length,
         processed: rows.length,
         created: rows.filter((r: any) => r.action === 'created').length,
         reactivated: rows.filter((r: any) => r.action === 'reactivated').length,
