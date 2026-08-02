@@ -10,7 +10,7 @@ import { makeFunctions } from './sdk/functions.ts';
 import { sql } from './db.ts';
 
 // deno-lint-ignore no-explicit-any
-type Job = { name: string; function: string; cron: string; payload?: Record<string, any> };
+type Job = { name: string; function: string; cron: string; payload?: Record<string, any>; run_on_startup?: boolean };
 
 function schedulesFile(): string {
   return Deno.env.get('SCHEDULES_FILE') ??
@@ -130,4 +130,19 @@ export async function startScheduler(): Promise<void> {
   // O matcher aceita somente cron de cinco campos e deduplica cada janela de minuto.
   setInterval(tick, 30_000);
   tick();
+  // Estudos marcados podem popular dados assim que uma nova versão sobe,
+  // sem aguardar a próxima janela cron. O motor interno mantém seu lock por conta.
+  setTimeout(() => {
+    for (const job of jobs.filter((item) => item.run_on_startup === true)) {
+      const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
+      const jobKey = `${job.function}|${accountScope}`;
+      if (runningJobs.has(jobKey)) continue;
+      runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
+      console.log(`[scheduler] startup '${job.name}' -> ${job.function}`);
+      service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
+        .then((response) => console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status}`))
+        .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
+        .finally(() => runningJobs.delete(jobKey));
+    }
+  }, 1_000);
 }

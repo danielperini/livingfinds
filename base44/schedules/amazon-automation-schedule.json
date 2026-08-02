@@ -269,6 +269,7 @@
       "name": "Active SKU competitor study and margin recovery - hourly at :36",
       "function": "runAutomaticRepricing",
       "cron": "36 * * * *",
+      "run_on_startup": true,
       "payload": { "_service_role": true, "operation": "evaluate", "max_products": 200, "recommendation_only": true, "emergency_margin_recovery": true, "force_all_decisions": true, "trigger_type": "scheduled_hourly_margin_recovery" }
     },
     {
