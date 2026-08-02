@@ -105,6 +105,45 @@ function titleSimilarity(left: unknown, right: unknown) {
   const intersection = [...a].filter((token) => b.has(token)).length;
   return intersection / Math.max(a.size, b.size);
 }
+
+const SIMILAR_COMPETITION_ALGORITHM_VERSION = 2;
+const COLOR_TOKENS = [
+  "preto", "preta", "branco", "branca", "cinza", "vermelho", "vermelha",
+  "azul", "verde", "rosa", "amarelo", "amarela", "bege", "marrom",
+  "prata", "dourado", "dourada", "transparente",
+];
+
+function productVariantSignature(value: unknown) {
+  const normalized = String(value || "").normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/,/g, ".").replace(/[^a-z0-9.]+/g, " ").trim();
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  const colors = COLOR_TOKENS.filter((color) => tokens.includes(color));
+  const models = tokens.filter((token) =>
+    token.length >= 3 && /[a-z]/.test(token) && /\d/.test(token) &&
+    !/^\d+(?:\.\d+)?(?:ml|cm|mm|kg|gb|w|v|l)$/.test(token)
+  );
+  const sizes = [...normalized.matchAll(
+    /\b\d+(?:\.\d+)?\s*(?:ml|litros?|l|cm|mm|metros?|m|kg|gramas?|g|polegadas?|pol|botoes?|vias?|pecas?|unidades?)\b/g,
+  )].map((match) => match[0].replace(/\s+/g, ""));
+  return { colors: [...new Set(colors)], models: [...new Set(models)], sizes: [...new Set(sizes)] };
+}
+
+function comparableVariant(sourceTitle: unknown, candidateTitle: unknown) {
+  const source = productVariantSignature(sourceTitle);
+  const candidate = productVariantSignature(candidateTitle);
+  const overlap = (left: string[], right: string[]) => left.some((value) => right.includes(value));
+  if (source.models.length && !overlap(source.models, candidate.models)) return { ok: false, matched: [] };
+  if (source.colors.length && !overlap(source.colors, candidate.colors)) return { ok: false, matched: [] };
+  if (source.sizes.length && !overlap(source.sizes, candidate.sizes)) return { ok: false, matched: [] };
+  const matched = [
+    source.models.length ? "mesmo_modelo" : null,
+    source.colors.length ? "mesma_cor" : null,
+    source.sizes.length ? "mesmo_tamanho_variante" : null,
+    !source.models.length && !source.colors.length && !source.sizes.length ? "mesmo_produto_generico" : null,
+  ].filter(Boolean);
+  return { ok: true, matched };
+}
 const unwrap = (value: any) => value?.data || value || {};
 const automaticExecutionRuntimeEnabled = () =>
   isAutomaticRepricingRuntimeEnabled(
@@ -1275,7 +1314,7 @@ async function evaluateAccount(
       String(offer.sellerId) !== String(sellerId)
     );
     const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
+    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION && hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
       ? {
         average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
         count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
@@ -1610,6 +1649,7 @@ async function evaluateAccount(
       similar_competition_checked_at: similarCompetition.checkedAt,
       similar_competition_source: similarCompetition.source,
       similar_competition_threshold: 0.90,
+      similar_competition_algorithm_version: SIMILAR_COMPETITION_ALGORITHM_VERSION,
       stock,
       sales_30d: numberValue(sales.sales),
       units_30d: numberValue(sales.units),
@@ -2711,7 +2751,7 @@ async function fetchSimilarCompetition(
   const query = new URLSearchParams({
     marketplaceIds: marketplaceId,
     keywords: tokens.join(" "),
-    includedData: "summaries",
+    includedData: "summaries,attributes",
     pageSize: "20",
   });
   const catalog = await amazonCall(
@@ -2724,9 +2764,18 @@ async function fetchSimilarCompetition(
   const matches = items.map((item: any) => {
     const summary = (item.summaries || []).find((entry: any) => !entry.marketplaceId || entry.marketplaceId === marketplaceId) || item.summaries?.[0] || {};
     const matchedTitle = summary.itemName || summary.itemTitle || "";
-    return { asin: item.asin, title: matchedTitle, similarity: titleSimilarity(title, matchedTitle) };
-  }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90)
-    .sort((a: any, b: any) => b.similarity - a.similarity).slice(0, 5);
+    const similarity = titleSimilarity(title, matchedTitle);
+    const variant = comparableVariant(title, matchedTitle);
+    return {
+      asin: item.asin,
+      title: matchedTitle,
+      brand: summary.brand || null,
+      similarity,
+      matchedDimensions: variant.matched,
+      variantCompatible: variant.ok,
+    };
+  }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90 && item.variantCompatible)
+    .sort((a: any, b: any) => b.similarity - a.similarity).slice(0, 10);
   if (!matches.length) return { average: null, count: 0, matches: [], checkedAt: nowIso() };
   const pricingRequest = { requests: matches.map((match: any) => ({
     asin: match.asin, marketplaceId,
