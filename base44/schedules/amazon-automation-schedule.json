@@ -50,9 +50,9 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "SKU Profit Protection - immediately after each intraday sync",
+      "name": "SKU Profit Protection - every 5 minutes",
       "function": "enforceSkuProfitProtection",
-      "cron": "5,20,35,50 * * * *",
+      "cron": "*/5 * * * *",
       "payload": { "_service_role": true }
     },
     {
