@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area, Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
@@ -86,6 +86,7 @@ function ChartTooltip({ active, payload, label }) {
 export default function LivePerformanceChart() {
   const [state, setState] = useState({ loading: true, refreshing: false, error: null, data: null, loadedAt: null });
   const [syncMessage, setSyncMessage] = useState(null);
+  const historyBackfillRunning = useRef(false);
 
   const load = useCallback(async ({ silent = false } = {}) => {
     setState((current) => ({ ...current, loading: silent ? current.loading : !current.data, refreshing: silent }));
@@ -119,7 +120,6 @@ export default function LivePerformanceChart() {
       const response = await base44.functions.invoke('syncYesterdayClosedData', {
         amazon_account_id: accountId,
         force: true,
-        history_backfill_days: RANGE_DAYS,
         trigger_type: 'live_performance_chart',
       });
       const result = response?.data || response || {};
@@ -256,6 +256,34 @@ export default function LivePerformanceChart() {
     return { chartData, lastAdsDate, lastSpDate, lastAiDate, totals, today, coverage };
   }, [state.data]);
 
+  useEffect(() => {
+    if (!derived || !state.data?.accountId || historyBackfillRunning.current) return;
+    if (derived.coverage.spDays >= derived.coverage.closedDays) return;
+
+    const storageKey = `livingfinds:sp-history-backfill:${state.data.accountId}`;
+    const lastAttempt = Number(window.localStorage.getItem(storageKey) || 0);
+    if (Date.now() - lastAttempt < 30 * 60 * 1000) return;
+
+    historyBackfillRunning.current = true;
+    window.localStorage.setItem(storageKey, String(Date.now()));
+    setSyncMessage(`Backfill SP‑API em andamento: ${derived.coverage.spDays}/${derived.coverage.closedDays} dias confirmados…`);
+
+    base44.functions.invoke('syncProductSalesMetrics', {
+      amazon_account_id: state.data.accountId,
+      lookback_days: RANGE_DAYS,
+      trigger_type: 'live_performance_chart_auto_backfill',
+    }).then(async (response) => {
+      const result = response?.data || response || {};
+      if (result.ok === false) throw new Error(result.error || 'A Amazon não concluiu o relatório histórico.');
+      setSyncMessage(`Backfill SP‑API concluído: ${result.days_processed || RANGE_DAYS} dias processados.`);
+      await load({ silent: true });
+    }).catch((error) => {
+      setSyncMessage(`Backfill SP‑API pendente: ${error?.message || 'a Amazon ainda está processando o relatório'}. Nova tentativa automática em 30 minutos.`);
+    }).finally(() => {
+      historyBackfillRunning.current = false;
+    });
+  }, [derived, load, state.data?.accountId]);
+
   if (state.loading) return <div className="bg-surface-1 border border-surface-2 rounded-xl h-72 flex items-center justify-center"><Loader2 className="w-5 h-5 text-cyan animate-spin" /></div>;
   if (!derived) return <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 text-xs text-red-300 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{state.error || 'Dados indisponíveis.'}</div>;
 
@@ -290,7 +318,7 @@ export default function LivePerformanceChart() {
 
       {(coverage.adsDays < coverage.closedDays || coverage.spDays < coverage.closedDays) ? (
         <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300">
-          Cobertura dos {coverage.closedDays} dias fechados: Ads {coverage.adsDays}/{coverage.closedDays} · SP‑API {coverage.spDays}/{coverage.closedDays}. Dias ausentes aparecem como lacunas e o backfill foi solicitado; nunca são contabilizados como zero.
+          Cobertura dos {coverage.closedDays} dias fechados: Ads {coverage.adsDays}/{coverage.closedDays} · SP‑API {coverage.spDays}/{coverage.closedDays}. Dias ausentes aparecem como lacunas, nunca como zero. O backfill SP‑API é iniciado automaticamente.
         </div>
       ) : null}
 
