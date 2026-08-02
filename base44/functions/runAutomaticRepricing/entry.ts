@@ -117,6 +117,28 @@ function genericProductSimilarity(left: unknown, right: unknown) {
   return Math.min(0.99, 0.82 + Math.min(0.12, shared * 0.05) + Math.min(0.05, coverage * 0.05));
 }
 
+const SIMILAR_QUERY_FAMILIES = [
+  "lixeira", "moedor", "headset", "interruptor", "fechadura", "abridor",
+  "microfone", "ventilador", "maçarico", "organizador", "fone",
+];
+const SIMILAR_QUERY_ATTRIBUTES = new Set([
+  "automatico", "automatica", "sensor", "eletrico", "eletrica", "wifi",
+  "touch", "usb", "portatil", "digital", "biometrica", "recarregavel",
+  "inteligente", "lapela", "gamer", "preto", "preta", "branco", "branca",
+  "cinza", "vermelho", "vermelha", "azul", "verde", "rosa",
+]);
+function similarSearchQueries(value: unknown) {
+  const tokens = [...comparableTokens(value)];
+  const family = SIMILAR_QUERY_FAMILIES.find((token) => tokens.includes(token)) || tokens[0];
+  const variantTokens = tokens.filter((token) =>
+    token !== family && (SIMILAR_QUERY_ATTRIBUTES.has(token) || /\d/.test(token))
+  );
+  const descriptive = tokens.filter((token) => token !== family && !variantTokens.includes(token));
+  const compact = [family, ...variantTokens.slice(0, 3), ...descriptive.slice(0, 1)].filter(Boolean).join(" ");
+  const broad = [family, ...descriptive.slice(0, 2)].filter(Boolean).join(" ");
+  return [...new Set([compact, broad].filter((query) => query.split(/\s+/).length >= 2))];
+}
+
 function inferredMonthlySalesVolume(value: unknown) {
   const raw = String(value || "").trim();
   if (!raw) return null;
@@ -132,7 +154,7 @@ function inferredMonthlySalesVolume(value: unknown) {
   };
 }
 
-const SIMILAR_COMPETITION_ALGORITHM_VERSION = 4;
+const SIMILAR_COMPETITION_ALGORITHM_VERSION = 5;
 const COLOR_TOKENS = [
   "preto", "preta", "branco", "branca", "cinza", "vermelho", "vermelha",
   "azul", "verde", "rosa", "amarelo", "amarela", "bege", "marrom",
@@ -159,9 +181,9 @@ function comparableVariant(sourceTitle: unknown, candidateTitle: unknown) {
   const source = productVariantSignature(sourceTitle);
   const candidate = productVariantSignature(candidateTitle);
   const overlap = (left: string[], right: string[]) => left.some((value) => right.includes(value));
-  if (source.models.length && !overlap(source.models, candidate.models)) return { ok: false, matched: [] };
-  if (source.colors.length && !overlap(source.colors, candidate.colors)) return { ok: false, matched: [] };
-  if (source.sizes.length && !overlap(source.sizes, candidate.sizes)) return { ok: false, matched: [] };
+  if (source.models.length && candidate.models.length && !overlap(source.models, candidate.models)) return { ok: false, matched: [] };
+  if (source.colors.length && candidate.colors.length && !overlap(source.colors, candidate.colors)) return { ok: false, matched: [] };
+  if (source.sizes.length && candidate.sizes.length && !overlap(source.sizes, candidate.sizes)) return { ok: false, matched: [] };
   const matched = [
     source.models.length ? "mesmo_modelo" : null,
     source.colors.length ? "mesma_cor" : null,
@@ -1350,7 +1372,11 @@ async function evaluateAccount(
       String(offer.sellerId) !== String(sellerId)
     );
     const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION && hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
+    const similarCompetition = cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
+        numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
+        Array.isArray(cachedSimilar.similar_competitor_products) &&
+        cachedSimilar.similar_competitor_products.length > 0 &&
+        hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
       ? {
         average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
         minimum: numberValue(cachedSimilar.similar_competitor_price_minimum, 0) || null,
@@ -1705,6 +1731,8 @@ async function evaluateAccount(
       similar_competitor_products: similarCompetition.matches || [],
       similar_competition_checked_at: similarCompetition.checkedAt,
       similar_competition_source: similarCompetition.source,
+      similar_competition_search_queries: similarCompetition.searchQueries || [],
+      similar_competition_error: similarCompetition.error || null,
       similar_competition_ai_assisted: similarCompetition.aiAssisted === true,
       similar_competition_canonical_title: similarCompetition.canonicalSourceTitle || null,
       similar_competition_threshold: 0.90,
@@ -2839,32 +2867,38 @@ async function fetchSimilarCompetition(
   }
 
   void aiBudget;
-  const tokens = [...comparableTokens(title)].slice(0, 10);
-  if (!product.asin || tokens.length < 2) {
+  const queries = similarSearchQueries(title);
+  if (!product.asin || !queries.length) {
     return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred" };
   }
   const scrapingBeeKey = secrets.get("SCRAPINGBEE_API_KEY");
   if (!scrapingBeeKey) {
     return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: "SCRAPINGBEE_API_KEY_missing" };
   }
-  const query = new URLSearchParams({
-    query: tokens.join(" "), domain: "com.br", language: "pt_BR",
-    currency: "BRL", pages: "1", sort_by: "featured",
-  });
-  let payload: any = {};
-  try {
-    const response = await fetch(`https://app.scrapingbee.com/api/v1/amazon/search?${query}`, {
-      headers: { Authorization: `Bearer ${scrapingBeeKey}` },
-      signal: AbortSignal.timeout(35000),
+  const searchProducts: any[] = [];
+  const queryErrors: string[] = [];
+  for (const searchText of queries.slice(0, 2)) {
+    const query = new URLSearchParams({
+      query: searchText, domain: "com.br", language: "pt_BR",
+      currency: "BRL", pages: "1", sort_by: "featured",
     });
-    if (!response.ok) {
-      return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: `ScrapingBee_HTTP_${response.status}` };
+    try {
+      const response = await fetch(`https://app.scrapingbee.com/api/v1/amazon/search?${query}`, {
+        headers: { Authorization: `Bearer ${scrapingBeeKey}` },
+        signal: AbortSignal.timeout(35000),
+      });
+      if (!response.ok) {
+        queryErrors.push(`${searchText}:HTTP_${response.status}`);
+        continue;
+      }
+      const payload = await response.json().catch(() => ({}));
+      if (Array.isArray(payload?.products)) searchProducts.push(...payload.products);
+    } catch (error: any) {
+      queryErrors.push(`${searchText}:${String(error?.message || "unavailable").slice(0, 80)}`);
     }
-    payload = await response.json().catch(() => ({}));
-  } catch (error: any) {
-    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: String(error?.message || "ScrapingBee_unavailable").slice(0, 200) };
   }
-  const pricedMatches = (Array.isArray(payload?.products) ? payload.products : []).map((item: any) => {
+  const uniqueProducts = [...new Map(searchProducts.filter((item: any) => item?.asin).map((item: any) => [item.asin, item])).values()];
+  const pricedMatches = uniqueProducts.map((item: any) => {
     const matchedTitle = String(item.title || "");
     const similarity = genericProductSimilarity(title, matchedTitle);
     const variant = comparableVariant(title, matchedTitle);
@@ -2895,6 +2929,8 @@ async function fetchSimilarCompetition(
     source: "scrapingbee_amazon_search_inferred",
     aiAssisted: false,
     canonicalSourceTitle: title,
+    searchQueries: queries.slice(0, 2),
+    error: !pricedMatches.length && queryErrors.length ? queryErrors.join(" | ").slice(0, 400) : null,
   };
 }
 
