@@ -153,12 +153,12 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   // Uma venda atribuída, economicamente saudável e semanticamente aderente já
   // constitui performance comprovada. Ela ainda não é um WINNER escalável, mas
   // deve aparecer no Factory e pode entrar no harvest controlado.
-  const confirmedSearchTermOrder = orders >= 1 && [
-    'AUTO_SEARCH_TERM',
-    'BROAD_SEARCH_TERM',
-    'PHRASE_SEARCH_TERM',
-    'HISTORICAL_WINNER',
-  ].includes(sourceType);
+  const confirmedSearchTermOrder = orders >= 1 && (
+    ['AUTO_SEARCH_TERM', 'BROAD_SEARCH_TERM', 'PHRASE_SEARCH_TERM', 'HISTORICAL_WINNER'].includes(sourceType)
+    || /AUTO|SEARCH.?TERM|TERMO/i.test(sourceType)
+  );
+  // Duas vendas observadas têm mais peso que uma estimativa semântica; com só
+  // uma venda, mantemos a exigência de intenção alta para evitar testes ruins.
   const provenScore = confirmedSearchTermOrder ? Math.max(intent, promo) : intent;
   const economicsPassed = sales > 0
     ? isFactoryEconomicallyHealthy(entry, Number(goal.max_acos || goal.target_acos))
@@ -166,7 +166,7 @@ function classifyLifecycle(entry: any, goal: any): { status: string; winnerTier:
   if (
     orders >= 1 &&
     economicsPassed &&
-    provenScore >= 72
+    (provenScore >= 72 || orders >= 2)
   ) {
     return { status: 'PROVEN', winnerTier: 'WINNER', bankSegment: 'PROFIT_BANK' };
   }
@@ -696,6 +696,32 @@ Deno.serve(async (req) => {
       plansCreated = plans.length;
     }
 
+    // As recomendações aprovadas pela evidência do Factory não ficam apenas
+    // como rótulo: cada MANUAL_EXACT nova é entregue à fila idempotente. A
+    // fila cria na janela operacional e confirma a estrutura na Amazon.
+    let ownAsinExactQueued = 0;
+    let ownAsinExactExecuted = 0;
+    if (!dry_run) {
+      for (const plan of plans) {
+        if (plan.campaign_type !== 'MANUAL_EXACT') continue;
+        try {
+          const response = await base44.asServiceRole.functions.invoke('scheduleManualCampaignFromTerm', {
+            amazon_account_id: accountId,
+            asin: plan.asin,
+            sku: plan.sku || null,
+            product_name: plan.product_name || plan.asin,
+            keyword: plan.keyword,
+            bid_initial: Math.min(1, Math.max(0.3, Number(plan.initial_bid || 0.5))),
+          });
+          const scheduled = response?.data || response || {};
+          if (scheduled.ok) {
+            ownAsinExactQueued += scheduled.queued ? 1 : 0;
+            ownAsinExactExecuted += scheduled.executed ? 1 : 0;
+          }
+        } catch (_) { /* a fila registra retry; não interromper o Factory */ }
+      }
+    }
+
     // Depois de persistir a classificacao, transferir apenas Strong Winners e
     // Harvest Ready para ASINs irmaos com estoque. A funcao cross-ASIN aplica
     // relevancia por titulo, cobertura EXACT e chave de idempotencia antes de
@@ -735,6 +761,7 @@ Deno.serve(async (req) => {
       bank_updated: dry_run ? toReclassify.filter((entry: any) => entry.id).length : bankUpdatedCount,
       plans_generated: plans.length,
       plans_created: plansCreated,
+      own_asin_exact: { queued: ownAsinExactQueued, executed: ownAsinExactExecuted },
       cross_asin: crossAsinResult ? {
         ok: crossAsinResult.ok !== false,
         transfers_created: crossAsinResult.transfers_created || 0,

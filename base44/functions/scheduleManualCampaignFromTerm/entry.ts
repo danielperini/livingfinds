@@ -43,7 +43,7 @@ Deno.serve(async (request) => {
     if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const body = await request.json().catch(() => ({}));
-    const { amazon_account_id, asin, keyword, product_name, sku, bid_initial } = body;
+    const { amazon_account_id, asin, keyword, product_name, sku, bid_initial, cross_asin_validated = false } = body;
     const bid = Number(bid_initial) >= 0.30 ? Math.round(Number(bid_initial) * 100) / 100 : 0.50;
 
     if (!amazon_account_id || !asin || !String(keyword || '').trim()) {
@@ -91,7 +91,10 @@ Deno.serve(async (request) => {
     }), { clicks: 0, spend: 0, orders: 0, sales: 0 });
     const maxAcos = Math.max(1, n(settingsRows[0]?.max_acos || settingsRows[0]?.target_acos || 15));
     const acos = performance.sales > 0 ? performance.spend / performance.sales * 100 : null;
-    const promotionBlockedReason = attributionConflict
+    // Cross-ASIN só pode dispensar a atribuição local quando não existe nenhum
+    // histórico no ASIN destino e a relevância já foi validada pelo motor.
+    const missingDestinationHistory = uniqueRows.length === 0;
+    const promotionBlockedReason = (attributionConflict && !(cross_asin_validated && missingDestinationHistory))
       ? 'attribution_conflict'
       : performance.spend > 0 && performance.orders <= 0
       ? 'zero_orders_with_spend'
@@ -132,6 +135,7 @@ Deno.serve(async (request) => {
       product_name: product_name || asin,
       mode: 'manual_only',
       keyword: kw,
+      cross_asin_validated: Boolean(cross_asin_validated && missingDestinationHistory),
       status: 'scheduled',
       queue_hour: slot.hour,
       queue_window: slot.window,

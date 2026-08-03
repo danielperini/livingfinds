@@ -458,6 +458,7 @@ Deno.serve(async (req) => {
         product_name: destProd?.display_name || destProd?.product_name || t.destination_asin,
         sku: destProd?.sku || null,
         bid_initial: t.initial_bid,
+        cross_asin_validated: true,
       }).catch(() => null);
       if (res?.ok !== false) queued++;
     }
