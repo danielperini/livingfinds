@@ -62,7 +62,7 @@ async function adsRequest(method, path, body, refreshToken, profileId, contentTy
   return { status: res.status, data };
 }
 
-const MAX_BID = 3.00;
+const MAX_BID = 1.00;
 const MIN_BOOST = 0.10;
 const BOOST_PCT = 0.20; // +20%
 

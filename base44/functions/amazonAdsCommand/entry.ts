@@ -12,6 +12,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
+import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
@@ -205,7 +206,12 @@ Deno.serve(async (request) => {
     const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID') || null;
     const maxAttempts = Math.max(1, Math.min(5, Number(body.max_attempts || 3) || 3));
 
-    let guardedPayload = enforceBidCeilingOnPayload(path, method, body.payload ?? null);
+    const winnerBid = await resolveWinnerKeywordCeilings(
+      base44, body.amazon_account_id, path, method, body.payload ?? null,
+    );
+    let guardedPayload = enforceBidCeilingOnPayload(
+      path, method, body.payload ?? null, winnerBid.ceilings,
+    );
     if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
       const enabling = guardedPayload.campaigns.filter((item: any) =>
         String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId
@@ -393,6 +399,7 @@ Deno.serve(async (request) => {
       request_id: result.request_id,
       errors: result.errors,
       multi_status_validated: result.status === 207,
+      winner_bid_exceptions: winnerBid.evidence,
       duration_ms: Date.now() - startedAt,
     });
   } catch (error: any) {

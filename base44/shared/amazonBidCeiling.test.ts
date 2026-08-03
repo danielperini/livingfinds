@@ -29,3 +29,10 @@ Deno.test("limita keywords, ad groups e targeting clauses", () => {
     1,
   );
 });
+
+Deno.test("permite R$1,50 apenas para keyword explicitamente validada", () => {
+  const payload = { keywords: [{ keywordId: "winner", bid: 2 }, { keywordId: "normal", bid: 2 }] };
+  const guarded = enforceBidCeilingOnPayload("/sp/keywords", "PUT", payload, { winner: 1.5 });
+  assertEquals(guarded.keywords[0].bid, 1.5);
+  assertEquals(guarded.keywords[1].bid, 1);
+});

@@ -24,7 +24,7 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const MAX_BID = 5.00;
+const MAX_BID = 1.00;
 const MIN_BID = 0.40;          // floor absoluto — nunca abaixo de R$0,40
 const MIN_DELTA = 0.10;        // só ajusta se diferença > R$0.10
 const MIN_CLICKS = 10;         // evidência estatística mínima

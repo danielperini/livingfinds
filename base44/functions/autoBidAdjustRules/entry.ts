@@ -173,7 +173,7 @@ Deno.serve(async (req) => {
               toReduce.push({ ...kw, new_bid: newBid, old_bid: currentBid, rule: 'overspend_reduce' });
             }
           } else if (noSpendCampaignIds.has(kw.campaign_id)) {
-            const newBid = Math.min(2.00, Math.round((currentBid + 0.10) * 100) / 100);
+            const newBid = Math.min(1.00, Math.round((currentBid + 0.10) * 100) / 100);
             if (newBid > currentBid) {
               toIncrease.push({ ...kw, new_bid: newBid, old_bid: currentBid, rule: 'no_spend_boost' });
             }

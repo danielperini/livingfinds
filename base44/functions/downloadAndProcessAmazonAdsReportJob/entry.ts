@@ -568,6 +568,7 @@ Deno.serve(async (req) => {
           ctr: agg.impressions > 0 ? agg.clicks / agg.impressions * 100 : 0,
           cpc: agg.clicks > 0 ? agg.spend / agg.clicks : 0,
           synced_at: now,
+          performance_confirmed_at: now,
         };
         const existing = kwById.get(kid);
         if (existing) kwUpdates.push({ id: existing.id, ...record });

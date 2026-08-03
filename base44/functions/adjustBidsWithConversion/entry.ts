@@ -12,6 +12,7 @@
  *  - Budget increase somente em winners com ACoS <= sustainable e budget limitado
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { AMAZON_WINNER_BID_CEILING_BRL } from '../../shared/amazonBidCeiling.ts';
 
 // ── Constantes ───────────────────────────────────────────────────────────
 const PIPELINE_VERSION   = 'goal-orchestrator-v2-profit-safe';
@@ -587,7 +588,8 @@ Deno.serve(async (req) => {
       // ── PRIORIDADE 3: Aumentar bid de winner com PROFIT-SAFE CHECK ──────
       if (accountMode === 'SCALE' || accountMode === 'MAINTAIN') {
         if (!isWinner) continue;
-        if (clicks < 10 || orders < 1 || bid >= goal.max_bid) continue;
+        if (acos <= 0 || acos > goal.target_acos) continue;
+        if (clicks < 10 || orders < 1 || bid >= AMAZON_WINNER_BID_CEILING_BRL) continue;
         if (profile?.rootCause === 'BUDGET_PROBLEM') continue; // budget primeiro
 
         const curCpc   = clicks > 0 ? spend / clicks : 0;
@@ -599,7 +601,7 @@ Deno.serve(async (req) => {
         const rawBoost  = Math.max(0.03, Math.min(0.20, headroomFraction));
         const rawBid    = bid * (1 + rawBoost);
 
-        const upResult = profitSafeBidUp(bid, rawBid, goal.max_bid, econCtx);
+        const upResult = profitSafeBidUp(bid, rawBid, AMAZON_WINNER_BID_CEILING_BRL, econCtx);
         if (!upResult.allowed) {
           blocked.push({ entity_id: kwId, entity_type: 'keyword',
             reason: upResult.block_reason, detail: kw.keyword_text,

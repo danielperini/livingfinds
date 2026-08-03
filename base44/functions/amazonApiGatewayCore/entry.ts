@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
+import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
 
 // parseAmazonApiResponse — inlinado (imports locais não funcionam em Deno serverless)
 async function parseAmazonApiResponse(response: Response): Promise<any> {
@@ -76,8 +77,11 @@ Deno.serve(async (request) => {
     if (url.protocol !== 'https:' || !ALLOWED_HOSTS.has(url.hostname)) {
       return Response.json({ ok: false, error: 'Host Amazon não permitido' }, { status: 403 });
     }
+    const winnerBid = url.hostname.startsWith('advertising-api') && body.amazon_account_id
+      ? await resolveWinnerKeywordCeilings(base44, body.amazon_account_id, url.pathname, method, rawPayload)
+      : { ceilings: {}, evidence: [] };
     const payload = url.hostname.startsWith('advertising-api')
-      ? enforceBidCeilingOnPayload(url.pathname, method, rawPayload)
+      ? enforceBidCeilingOnPayload(url.pathname, method, rawPayload, winnerBid.ceilings)
       : rawPayload;
 
     const operationName = String(body.operation || url.pathname);
@@ -139,13 +143,13 @@ Deno.serve(async (request) => {
       started_at: startedAt,
       completed_at: completedAt,
       records_processed: parsed?.ok ? 1 : 0,
-      result_summary: JSON.stringify({ status: parsed?.status, request_id: parsed?.request_id, rate_limit: parsed?.rate_limit, attempts: attemptsUsed, duration_ms: Date.now() - startedMs }),
+      result_summary: JSON.stringify({ status: parsed?.status, request_id: parsed?.request_id, rate_limit: parsed?.rate_limit, attempts: attemptsUsed, winner_bid_exceptions: winnerBid.evidence, duration_ms: Date.now() - startedMs }),
       error_message: parsed?.ok ? null : String(parsed?.errors?.[0]?.message || 'Falha Amazon').slice(0, 1000),
     }).catch(() => {});
 
     // Sempre retorna HTTP 200 para evitar que o SDK lance exceção por status não-2xx.
     // O status real da Amazon fica em parsed.status para que o chamador decida.
-    return Response.json({ ...parsed, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt });
+    return Response.json({ ...parsed, winner_bid_exceptions: winnerBid.evidence, attempts: attemptsUsed, started_at: startedAt, completed_at: completedAt });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro no gateway Amazon', attempts: attemptsUsed, started_at: startedAt, completed_at: new Date().toISOString() }, { status: 500 });
   }

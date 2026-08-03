@@ -17,7 +17,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
  */
 
 const MIN_COMPETITIVE_BID = 0.75;
-const MAX_BID = 2.50;
+const MAX_BID = 1.00;
 const MIN_IMPRESSIONS_FOR_CTR = 100;
 const CTR_THRESHOLD = 0.001; // 0.1%
 const INACTIVITY_DAYS = 7;

@@ -153,6 +153,11 @@
       "type": "string",
       "format": "date-time"
     },
+    "performance_confirmed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Última confirmação das métricas da keyword por relatório Amazon Ads; mudanças de bid não atualizam este campo."
+    },
     "best_hour_start": {
       "type": "integer",
       "minimum": 0,
