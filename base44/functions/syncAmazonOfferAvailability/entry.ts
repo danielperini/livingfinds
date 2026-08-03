@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { listingOfferStatus } from '../../shared/listingOfferStatus.ts';
 
 const MARKETPLACE_ID = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
 
@@ -41,10 +42,9 @@ async function fetchListing(base44: any, account: any, accessToken: string, endp
 
 function availability(listing: any) {
   const summaries = Array.isArray(listing?.summaries) ? listing.summaries : [];
-  const states = summaries.map((summary: any) => String(summary?.status || '').toUpperCase()).filter(Boolean);
-  const activeStates = new Set(['ACTIVE', 'BUYABLE', 'DISCOVERABLE']);
-  const offerActive = states.length === 0 || states.some((state: string) => activeStates.has(state));
+  const { states, statusKnown, offerActive } = listingOfferStatus(summaries);
   const issues = Array.isArray(listing?.issues) ? listing.issues : [];
+  const blockingIssues = issues.filter((issue: any) => String(issue?.severity || '').toUpperCase() === 'ERROR');
   const suppressed = issues.some((issue: any) => {
     const actions = Array.isArray(issue?.enforcementActions) ? issue.enforcementActions.join('|').toUpperCase() : '';
     return actions.includes('LISTING_SUPPRESSED') || actions.includes('SEARCH_SUPPRESSED');
@@ -60,9 +60,18 @@ function availability(listing: any) {
   }, 0);
   return {
     offer_active: offerActive,
+    listing_status_confirmed: statusKnown,
     listing_suppressed: suppressed,
-    listing_buyable: offerActive && !suppressed,
-    reason: suppressed ? 'Listing suprimido pela Amazon' : !offerActive ? `Oferta não ativa na Amazon (${states.join(',') || 'sem status'})` : '',
+    listing_buyable: offerActive && !suppressed && blockingIssues.length === 0,
+    reason: suppressed
+      ? 'Listing suprimido pela Amazon'
+      : !statusKnown
+      ? 'Status da oferta não retornado pela Amazon'
+      : !offerActive
+      ? `Oferta não ativa na Amazon (${states.join(',')})`
+      : blockingIssues.length
+      ? `Listing com ${blockingIssues.length} erro(s) bloqueante(s) na Amazon`
+      : '',
     fulfillment_channel: mfnRows.length ? 'MFN' : 'AFN',
     mfn_quantity: mfnRows.length ? mfnQuantity : null,
   };
@@ -74,6 +83,8 @@ Deno.serve(async (request) => {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     const maxProducts = Math.min(Math.max(Number(body.max_products || 100), 1), 500);
+    const requestedSkus = new Set((Array.isArray(body.skus) ? body.skus : [])
+      .map((value: any) => String(value || '').trim().toUpperCase()).filter(Boolean));
     if (!body._service_role) {
       const user = await base44.auth.me().catch(() => null);
       if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
@@ -91,20 +102,33 @@ Deno.serve(async (request) => {
         results.push({ account_id: account.id, ok: false, error: 'seller_id não configurado' });
         continue;
       }
-      const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', maxProducts).catch(() => []);
+      const productRows = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', requestedSkus.size ? 5000 : maxProducts).catch(() => []);
+      const products = requestedSkus.size
+        ? productRows.filter((product: any) => requestedSkus.has(String(product.sku || '').trim().toUpperCase())).slice(0, maxProducts)
+        : productRows;
       const now = new Date().toISOString();
       let verified = 0, unavailable = 0, failed = 0;
       for (const product of products as any[]) {
         if (!product.sku) continue;
         try {
           const listing = await fetchListing(base44, account, token, spBase(account.region), sellerId, product.sku, account.marketplace_id || MARKETPLACE_ID);
-          const signal: any = listing.notFound
-            ? { offer_active: false, listing_suppressed: false, listing_buyable: false, reason: 'SKU não encontrado na Amazon' }
+          const observed: any = listing.notFound
+            ? { offer_active: false, listing_suppressed: false, listing_buyable: false, listing_status_confirmed: true, reason: 'SKU não encontrado na Amazon' }
             : availability(listing.data);
+          // Resposta sem summary.status é inconclusiva: nunca substitui um estado válido anterior.
+          const signal: any = observed.listing_status_confirmed === false
+            ? {
+                ...observed,
+                offer_active: product.offer_active,
+                listing_suppressed: product.listing_suppressed,
+                listing_buyable: product.listing_buyable,
+              }
+            : observed;
           const effectiveQuantity = signal.fulfillment_channel === 'MFN'
             ? Number(signal.mfn_quantity || 0)
             : Number(product.available_quantity ?? product.fba_inventory ?? 0);
-          const eligibility = signal.listing_suppressed ? 'listing_suppressed'
+          const eligibility = observed.listing_status_confirmed === false ? (product.ads_eligibility_status || 'verification_pending')
+            : signal.listing_suppressed ? 'listing_suppressed'
             : !signal.offer_active ? 'offer_inactive'
             : !signal.listing_buyable ? 'not_buyable'
             : effectiveQuantity <= 0 ? 'out_of_stock'
@@ -121,6 +145,7 @@ Deno.serve(async (request) => {
             ads_eligibility_status: eligibility,
             ads_ineligibility_reason: signal.reason || (eligibility === 'out_of_stock' ? 'Estoque disponível zero' : ''),
             ads_last_eligibility_check_at: now,
+            listing_checked_at: now,
           });
           verified++;
           if (!signal.listing_buyable) unavailable++;

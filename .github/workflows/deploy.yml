@@ -99,6 +99,7 @@ jobs:
             functions_json="\$(curl -fsS http://localhost:8000/functions)"
             echo "\$functions_json" | grep -q 'runAutomaticRepricing'
             echo "\$functions_json" | grep -q 'importProductEconomics'
+            echo "\$functions_json" | grep -q 'enrollStockedProductsInRepricing'
             echo '--- validando ScrapingBee real dentro do container ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const key = Deno.env.get("SCRAPINGBEE_API_KEY") || "";
@@ -135,6 +136,31 @@ jobs:
               const data = await response.json().catch(() => ({}));
               console.log("ADS_PROFILE_IDENTITY_HTTP=" + response.status + "|OK=" + data.ok + "|SELLER=" + (data.expected_seller_id || "unknown") + "|PREVIOUS=" + (data.previous_profile_id || "none") + "|SELECTED=" + (data.selected_profile_id || "none") + "|CHANGED=" + (data.profile_changed ?? "unknown"));
               if (!response.ok || data.ok === false) throw new Error(data.error || "Perfil Amazon Ads nao corresponde ao merchant esperado");
+            ' </dev/null
+
+            echo '--- corrigir disponibilidade e inscrever SKUs estocados no repricing seguro ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const headers = { "content-type": "application/json", "x-api-token": token };
+              const skus = ["FBA-0008P", "FBA-0008V", "FBA-0076A", "FBA-0076C", "FBA-0087b", "FBA-0087c", "FBA-0100", "SKU-002314A", "SKU-002314V", "W9-OL7U-LRW5"];
+              const call = async (name, payload) => {
+                const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
+                  method: "POST", headers, body: JSON.stringify({ _service_role: true, ...payload })
+                });
+                const data = await response.json().catch(() => ({}));
+                console.log("REPRICING_" + name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 12000));
+                if (!response.ok || data.ok === false) throw new Error(data.error || (name + " failed"));
+                return data;
+              };
+              await call("syncAmazonOfferAvailability", { skus, max_products: skus.length });
+              const enrollment = await call("enrollStockedProductsInRepricing", { skus });
+              const enrolled = (enrollment.results || []).reduce((sum, row) => sum + Number(row.enrolled || 0), 0);
+              if (enrolled < skus.length) throw new Error("Nem todos os 10 SKUs estocados entraram na gestao: " + enrolled);
+              await call("runAutomaticRepricing", {
+                operation: "full_evaluation", recommendation_only: true,
+                force_all_decisions: true, max_products: 200,
+                changed_by: "deploy_stocked_sku_management"
+              });
             ' </dev/null
 
             echo '--- ativacao imediata de campanhas para SKUs com estoque confirmado ---'

@@ -42,6 +42,7 @@ import {
   deterministicPriceConfidence,
   priceChangeUsedInWindow,
 } from "../../shared/guardedPriceChangePolicy.ts";
+import { listingOfferStatus } from "../../shared/listingOfferStatus.ts";
 
 const DEFAULTS = {
   default_minimum_margin_pct: 15,
@@ -422,9 +423,7 @@ function listingPrice(listing: any): number | null {
 function listingSignals(listing: any) {
   const summaries = Array.isArray(listing?.summaries) ? listing.summaries : [];
   const summary = summaries[0] || {};
-  const states = summaries.flatMap((item: any) =>
-    Array.isArray(item?.status) ? item.status : [item?.status]
-  ).map((status: any) => String(status || "").toUpperCase()).filter(Boolean);
+  const { offerActive } = listingOfferStatus(summaries);
   const issues = Array.isArray(listing?.issues) ? listing.issues : [];
   const blockingIssues = issues.filter((issue: any) =>
     String(issue?.severity || "").toUpperCase() === "ERROR"
@@ -441,9 +440,6 @@ function listingSignals(listing: any) {
     return actions.includes("LISTING_SUPPRESSED") ||
       actions.includes("SEARCH_SUPPRESSED");
   });
-  const offerActive = states.some((state: string) =>
-    ["ACTIVE", "BUYABLE", "DISCOVERABLE"].includes(state)
-  );
   const productType = listing?.productTypes?.[0]?.productType ||
     listing?.productTypes?.[0]?.productTypeName ||
     summary?.productType ||
