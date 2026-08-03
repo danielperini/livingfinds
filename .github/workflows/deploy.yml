@@ -178,6 +178,19 @@ jobs:
               if (!response.ok || data.ok === false) throw new Error(data.error || "immediate campaign activation failed");
             ' </dev/null
 
+            echo '--- estrategia AUTO de baixo risco para produtos com vendas pequenas ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/enforceLowVolumeProductAdsStrategy", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_low_volume_profit_guard" })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("LOW_VOLUME_ADS_HTTP=" + response.status + "|OK=" + data.ok + "|PROCESSED=" + (data.processed ?? 0) + "|ENABLED=" + (data.campaigns_enabled ?? 0) + "|BUDGETS_REDUCED=" + (data.budgets_reduced ?? 0) + "|BIDS_REDUCED=" + (data.bids_reduced ?? 0) + "|DATA=" + JSON.stringify(data.results || []).slice(0, 16000));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "low volume ads strategy failed");
+            ' </dev/null
+
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
             echo '--- autocorreção diária dos relatórios ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '

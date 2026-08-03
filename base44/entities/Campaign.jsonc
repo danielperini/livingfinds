@@ -127,6 +127,22 @@
       "type": "number",
       "default": 0
     },
+    "motor_daily_spend_cap": {
+      "type": "number",
+      "description": "Teto diário econômico calculado pelo motor para a campanha."
+    },
+    "motor_daily_loss_limit": {
+      "type": "number",
+      "description": "Perda diária máxima implícita no plano econômico vigente."
+    },
+    "motor_daily_strategy": {
+      "type": "string",
+      "description": "Estratégia diária aplicada pelo motor de decisão."
+    },
+    "motor_daily_plan_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "pacing_pause_active": { "type": "boolean", "default": false },
     "pacing_pause_reason": { "type": "string" },
     "pacing_paused_at": { "type": "string", "format": "date-time" },

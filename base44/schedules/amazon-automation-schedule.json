@@ -32,6 +32,13 @@
       "payload": { "_service_role": true, "dry_run": false, "max_products": 200, "lookback_days": 65, "max_promotions": 50, "run_harvest": true }
     },
     {
+      "name": "Daily low-volume product AUTO profit guard - 06:32 BRT",
+      "function": "enforceLowVolumeProductAdsStrategy",
+      "cron": "32 6 * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "daily_low_volume_profit_guard" }
+    },
+    {
       "name": "AUTO campaign repair queue - every 2 minutes in Amazon windows",
       "function": "processAutoCampaignRepairQueueV2",
       "cron": "*/2 * * * *",
