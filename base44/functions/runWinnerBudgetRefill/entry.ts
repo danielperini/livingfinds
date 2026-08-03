@@ -7,7 +7,6 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
-const REFILL_PCT = 0.20;
 const MAX_REFILLS_PER_DAY = 2;
 const MAX_REFILLS_PER_RUN = 10;
 const MIN_REMAINING_ACCOUNT_BUDGET = 2;
@@ -87,7 +86,12 @@ Deno.serve(async (request) => {
       const performance = performanceRows[0] || {};
       const controller = controllerRows[0] || null;
       const targetAcos = number(performance.target_acos, 15);
-      const maxBudget = Math.max(5, number(performance.max_budget_per_campaign, 25));
+      // PerformanceSettings é a fonte canônica: o piso pode ser aplicado a
+      // qualquer campanha ativa, mas vencedoras só crescem pelo incremento
+      // explicitamente configurado — nunca pelo limite diário da conta.
+      const minimumCampaignBudget = Math.max(5, number(performance.minimum_campaign_budget, 15));
+      const budgetIncrement = Math.max(0.01, number(performance.campaign_budget_increment, 0.10));
+      const maxBudget = Math.max(minimumCampaignBudget, number(performance.maximum_campaign_budget ?? performance.max_budget_per_campaign, 100));
       const remaining = number(controller?.remaining_spend, 0);
       const metricsFresh = ['fresh', 'available', 'complete'].includes(String(controller?.intraday_metrics_status || '').toLowerCase());
       const historicalWinners = buildHistoricalWinners(historicalMetrics, brtDateOffset(HISTORICAL_WINNER_DAYS), today);
@@ -136,8 +140,9 @@ Deno.serve(async (request) => {
       const skipped: any[] = [];
       let remainingForRefills = remaining;
       for (const candidate of candidates) {
-        const increase = Math.min(candidate.budget * REFILL_PCT, remainingForRefills);
-        const newBudget = r2(Math.min(maxBudget, candidate.budget + increase));
+        const newBudget = r2(candidate.budget < minimumCampaignBudget
+          ? minimumCampaignBudget
+          : Math.min(maxBudget, candidate.budget + budgetIncrement));
         if (newBudget <= candidate.budget + 0.01) {
           skipped.push({ campaign_id: candidate.campaignId, reason: 'teto por campanha ou saldo insuficiente' });
           continue;
@@ -163,9 +168,9 @@ Deno.serve(async (request) => {
           amazon_account_id: accountId, decision_type: 'winner_budget_refill', entity_type: 'campaign', entity_id: candidate.campaignId,
           campaign_id: candidate.campaignId, asin: candidate.campaign.asin || null, action: 'increase_daily_budget',
           current_value: candidate.budget, proposed_value: newBudget, value_before: candidate.budget, value_after: newBudget,
-          rationale: candidate.intradayWinner
+          rationale: `${candidate.intradayWinner
             ? `Vencedora intradiária: ACoS ${r2(candidate.acos)}% ≤ meta ${targetAcos}%, orçamento ${r2(candidate.spend / candidate.budget * 100)}% consumido, venda R$ ${r2(candidate.sales)}.`
-            : `Vencedora histórica (${HISTORICAL_WINNER_DAYS}d): ACoS ${r2(candidate.historicalAcos)}% ≤ meta ${targetAcos}%, ${candidate.historical.orders} pedido(s), venda R$ ${r2(candidate.historical.sales)}; dia parcial sem conversão atribuída.`,
+            : `Vencedora histórica (${HISTORICAL_WINNER_DAYS}d): ACoS ${r2(candidate.historicalAcos)}% ≤ meta ${targetAcos}%, ${candidate.historical.orders} pedido(s), venda R$ ${r2(candidate.historical.sales)}; dia parcial sem conversão atribuída.`} Piso R$ ${minimumCampaignBudget}; incremento configurado R$ ${budgetIncrement}.`,
           risk: 'low', status: ok ? 'executed' : 'failed', queue_status: ok ? 'completed' : 'failed', idempotency_key: key,
           source_function: 'runWinnerBudgetRefill', executed_at: ok ? now : null, created_at: now, updated_at: now,
         }).catch(() => {});
@@ -180,7 +185,9 @@ Deno.serve(async (request) => {
           reason: `Reposição de vencedora (${candidate.evidence}); ACoS ${r2(candidate.intradayWinner ? candidate.acos : candidate.historicalAcos)}%.`, applied_at: now, source: 'runWinnerBudgetRefill', created_at: now,
         }).catch(() => {});
         applied.push({ campaign_id: candidate.campaignId, from: candidate.budget, to: newBudget, evidence: candidate.evidence, acos: r2(candidate.intradayWinner ? candidate.acos : candidate.historicalAcos), sales: candidate.intradayWinner ? candidate.sales : candidate.historical.sales });
-        remainingForRefills = r2(Math.max(0, remainingForRefills - (newBudget - candidate.budget)));
+        // O saldo global protege gasto real; não representa a soma de budgets
+        // nominais. Só reserva o incremento quando a Amazon o confirma.
+        remainingForRefills = r2(Math.max(0, remainingForRefills - Math.max(0, newBudget - candidate.budget)));
       }
       results.push({ account_id: accountId, ok: true, candidates: candidates.length, applied, skipped, remaining_account_budget: remainingForRefills });
     }
