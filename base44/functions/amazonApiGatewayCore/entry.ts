@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
 
 // parseAmazonApiResponse — inlinado (imports locais não funcionam em Deno serverless)
 async function parseAmazonApiResponse(response: Response): Promise<any> {
@@ -62,7 +63,7 @@ Deno.serve(async (request) => {
     const endpoint = String(body.endpoint || '');
     const method = String(body.method || 'GET').toUpperCase();
     const headers = body.headers || {};
-    const payload = body.payload ?? null;
+    const rawPayload = body.payload ?? null;
     const maxAttempts = Math.max(1, Math.min(Number(body.max_attempts || 5), 5));
 
     if (!endpoint) return Response.json({ ok: false, error: 'endpoint obrigatório' }, { status: 400 });
@@ -75,6 +76,9 @@ Deno.serve(async (request) => {
     if (url.protocol !== 'https:' || !ALLOWED_HOSTS.has(url.hostname)) {
       return Response.json({ ok: false, error: 'Host Amazon não permitido' }, { status: 403 });
     }
+    const payload = url.hostname.startsWith('advertising-api')
+      ? enforceBidCeilingOnPayload(url.pathname, method, rawPayload)
+      : rawPayload;
 
     const operationName = String(body.operation || url.pathname);
     if (body.amazon_account_id) {

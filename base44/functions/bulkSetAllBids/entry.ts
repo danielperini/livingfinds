@@ -95,6 +95,7 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
     let kwTotal = 0, kwOk = 0, kwFailed = 0;
     let agTotal = 0, agOk = 0, agFailed = 0;
+    let targetTotal = 0, targetOk = 0, targetFailed = 0;
     const errors = [];
 
     // ─────────────────────────────────────────────────────────────
@@ -166,6 +167,33 @@ Deno.serve(async (req) => {
       }
     } else {
       errors.push(`AdGroups list failed: ${JSON.stringify(agRes.data).slice(0, 200)}`);
+      agFailed++;
+    }
+
+    // Targets automáticos e por produto também possuem bid próprio.
+    const targetRes = await listAll('/sp/targets/list', 'targetingClauses', 'application/vnd.spTargetingClause.v3+json');
+    if (targetRes.ok) {
+      const targetList = targetRes.rows.filter(target => Number(target.bid) > targetBid);
+      targetTotal = targetList.length;
+      for (const batch of chunk(targetList, 100)) {
+        const payload = { targetingClauses: batch.map(target => ({ targetId: target.targetId, bid: targetBid })) };
+        const result = await adsCall('PUT', '/sp/targets', payload, 'application/vnd.spTargetingClause.v3+json');
+        if (result.ok) targetOk += batch.length;
+        else {
+          targetFailed += batch.length;
+          errors.push(`Target batch PUT failed: ${JSON.stringify(result.data).slice(0, 200)}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      for (const target of targetFailed === 0 ? targetList : []) {
+        await base44.asServiceRole.entities.ProductTarget.updateMany(
+          { amazon_account_id: amazonAccountId, target_id: String(target.targetId) },
+          { $set: { bid: targetBid, synced_at: now } },
+        ).catch(() => {});
+      }
+    } else {
+      targetFailed++;
+      errors.push(`Targets list failed: ${JSON.stringify(targetRes.data).slice(0, 200)}`);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -182,15 +210,16 @@ Deno.serve(async (req) => {
       source: 'USER',
       source_function: 'bulkSetAllBids',
       reason: `Teto preventivo: somente bids acima de R$${targetBid.toFixed(2)} foram reduzidos; bids menores foram preservados`,
-      status: kwFailed === 0 ? 'executed' : 'failed',
+      status: kwFailed + agFailed + targetFailed === 0 ? 'executed' : 'failed',
       changed_at: now,
     }).catch(() => {});
 
     return Response.json({
-      ok: kwFailed === 0,
+      ok: kwFailed + agFailed + targetFailed === 0,
       target_bid: targetBid,
       keywords: { total: kwTotal, ok: kwOk, failed: kwFailed },
       ad_groups: { total: agTotal, ok: agOk, failed: agFailed },
+      targets: { total: targetTotal, ok: targetOk, failed: targetFailed },
       errors: errors.length > 0 ? errors : undefined,
     });
 

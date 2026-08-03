@@ -297,6 +297,13 @@
       "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100 }
     },
     {
+      "name": "Amazon Ads absolute bid ceiling audit - every 30 minutes",
+      "function": "bulkSetAllBids",
+      "cron": "7,37 * * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "bid": 1 }
+    },
+    {
       "name": "Final daily reports reconciliation - 23:45 BRT",
       "function": "dailyReportReconciliation",
       "cron": "45 23 * * *",

@@ -323,7 +323,7 @@ jobs:
                 body: JSON.stringify({ _service_role: true, bid: 1 })
               });
               const data = await response.json().catch(() => ({}));
-              console.log("BID_CEILING_HTTP=" + response.status + "|OK=" + data.ok + "|KEYWORDS=" + JSON.stringify(data.keywords || {}) + "|AD_GROUPS=" + JSON.stringify(data.ad_groups || {}));
+              console.log("BID_CEILING_HTTP=" + response.status + "|OK=" + data.ok + "|KEYWORDS=" + JSON.stringify(data.keywords || {}) + "|AD_GROUPS=" + JSON.stringify(data.ad_groups || {}) + "|TARGETS=" + JSON.stringify(data.targets || {}));
               if (!response.ok || data.ok === false) throw new Error("Falha ao limitar bids: " + JSON.stringify(data).slice(0, 3000));
             ' </dev/null
 
