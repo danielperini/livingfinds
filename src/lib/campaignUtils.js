@@ -1,10 +1,20 @@
 /**
- * campaignUtils — Utilitários de carregamento e classificação de campanhas
+ * campaignUtils — Utilitários de carregamento, reconciliação e classificação
+ * de campanhas Amazon Ads.
+ *
+ * Regras centrais:
+ * - carregar todas as páginas da entidade Campaign;
+ * - não ocultar campanhas por flags locais durante reconciliação explícita;
+ * - deduplicar apenas representações locais do mesmo campaignId Amazon;
+ * - priorizar o estado operacional mais recentemente persistido pelo app
+ *   (`state`/`status`) antes de campos legados que podem ficar obsoletos;
+ * - nunca transformar ausência de estado em arquivamento.
  */
 
 import { base44 } from '@/api/base44Client';
 
 const PAGE_SIZE = 500;
+const MAX_PAGES = 200;
 
 function timestampOf(campaign = {}) {
   const values = [
@@ -12,6 +22,7 @@ function timestampOf(campaign = {}) {
     campaign.last_sync_at,
     campaign.synced_at,
     campaign.updated_at,
+    campaign.updated_date,
     campaign.created_at,
     campaign.created_date,
   ];
@@ -22,56 +33,107 @@ function timestampOf(campaign = {}) {
   return 0;
 }
 
+function campaignIdentity(campaign = {}) {
+  const amazonId = String(
+    campaign.campaign_id || campaign.amazon_campaign_id || ''
+  ).trim();
+  if (amazonId) return `amazon:${amazonId}`;
+
+  const localId = String(campaign.id || '').trim();
+  return localId ? `local:${localId}` : '';
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+function mergeCampaignRecords(current, candidate) {
+  const currentTs = timestampOf(current);
+  const candidateTs = timestampOf(candidate);
+  const newer = candidateTs >= currentTs ? candidate : current;
+  const older = newer === candidate ? current : candidate;
+
+  const merged = { ...older, ...newer };
+
+  // Estado e identificadores: usar o registro mais recente, mas preencher lacunas.
+  merged.state = firstDefined(newer.state, newer.status, older.state, older.status);
+  merged.status = firstDefined(newer.status, newer.state, older.status, older.state);
+  merged.amazon_status = firstDefined(
+    newer.amazon_status,
+    older.amazon_status,
+    newer.campaign_status,
+    older.campaign_status
+  );
+  merged.campaign_id = firstDefined(newer.campaign_id, older.campaign_id);
+  merged.amazon_campaign_id = firstDefined(
+    newer.amazon_campaign_id,
+    older.amazon_campaign_id,
+    merged.campaign_id
+  );
+
+  // Preservar métricas do registro mais rico. Sincronização de estado não deve
+  // zerar dados históricos válidos do Dashboard.
+  const metricFields = [
+    'spend', 'sales', 'acos', 'roas', 'clicks', 'impressions', 'orders',
+    'units', 'cpc', 'ctr', 'conversion_rate', 'daily_budget',
+  ];
+  for (const field of metricFields) {
+    const newerValue = Number(newer[field]);
+    const olderValue = Number(older[field]);
+    const newerValid = Number.isFinite(newerValue) && newerValue !== 0;
+    const olderValid = Number.isFinite(olderValue) && olderValue !== 0;
+    if (!newerValid && olderValid) merged[field] = older[field];
+  }
+
+  return merged;
+}
+
 export async function loadAllCampaigns(amazonAccountId, extraFilter = {}, options = {}) {
   const { includeExcluded = false } = options;
   const allCampaigns = [];
   let offset = 0;
+  let pageNumber = 0;
+  let previousPageSignature = '';
 
-  while (true) {
+  while (pageNumber < MAX_PAGES) {
     const page = await base44.entities.Campaign.filter(
       { amazon_account_id: amazonAccountId, ...extraFilter },
       '-created_date',
       PAGE_SIZE,
       offset
     );
+
+    if (!Array.isArray(page) || page.length === 0) break;
+
+    // Proteção contra backends que ignoram offset e retornam a mesma página.
+    const pageSignature = page
+      .map((campaign) => campaignIdentity(campaign))
+      .filter(Boolean)
+      .join('|');
+    if (pageNumber > 0 && pageSignature && pageSignature === previousPageSignature) break;
+
     allCampaigns.push(...page);
+    previousPageSignature = pageSignature;
+    pageNumber += 1;
+
     if (page.length < PAGE_SIZE) break;
     offset += PAGE_SIZE;
   }
 
   const byCampaignId = new Map();
   allCampaigns.forEach((campaign) => {
-    if (!includeExcluded && (campaign.api_missing === true || campaign.excluded_from_dashboard === true)) return;
-    const campaignId = String(campaign?.campaign_id || campaign?.amazon_campaign_id || campaign?.id || '').trim();
-    if (!campaignId) return;
-    const current = byCampaignId.get(campaignId);
-    if (!current) { byCampaignId.set(campaignId, campaign); return; }
-    // Preferir o registro mais recente para estado/orçamento, mas mesclar métricas do que tiver mais spend
-    const newerIsRecent = timestampOf(campaign) >= timestampOf(current);
-    const candidateSpend = campaign.spend || 0;
-    const currentSpend = current.spend || 0;
-    if (newerIsRecent) {
-      // Usar registro mais recente para estado/orçamento, mas herdar spend/sales/acos/roas do mais rico se o atual for zerado
-      const merged = { ...campaign };
-      if (candidateSpend === 0 && currentSpend > 0) {
-        merged.spend = current.spend;
-        merged.sales = current.sales;
-        merged.acos = current.acos;
-        merged.roas = current.roas;
-        merged.clicks = current.clicks || merged.clicks;
-        merged.impressions = current.impressions || merged.impressions;
-        merged.orders = current.orders || merged.orders;
-        merged.cpc = current.cpc || merged.cpc;
-        merged.ctr = current.ctr || merged.ctr;
-      }
-      byCampaignId.set(campaignId, merged);
-    } else if (candidateSpend > currentSpend) {
-      // Registro mais antigo mas com métricas melhores — mesclar métricas no registro atual
-      const merged = { ...current, spend: candidateSpend, sales: campaign.sales, acos: campaign.acos, roas: campaign.roas,
-        clicks: campaign.clicks || current.clicks, impressions: campaign.impressions || current.impressions,
-        orders: campaign.orders || current.orders, cpc: campaign.cpc || current.cpc, ctr: campaign.ctr || current.ctr };
-      byCampaignId.set(campaignId, merged);
-    }
+    if (!includeExcluded && (
+      campaign.api_missing === true || campaign.excluded_from_dashboard === true
+    )) return;
+
+    const identity = campaignIdentity(campaign);
+    if (!identity) return;
+
+    const current = byCampaignId.get(identity);
+    byCampaignId.set(
+      identity,
+      current ? mergeCampaignRecords(current, campaign) : campaign
+    );
   });
 
   return [...byCampaignId.values()];
@@ -82,15 +144,28 @@ function booleanTrue(value) {
   return ['true', '1', 'yes', 'sim'].includes(String(value ?? '').trim().toLowerCase());
 }
 
+export function normalizeState(rawState = '') {
+  const state = String(rawState ?? '').trim().toLowerCase();
+  if (['enabled', 'active', 'ativa', 'ativada', 'running', 'live', 'serving'].includes(state)) return 'enabled';
+  if (['paused', 'pausada', 'inactive', 'inativa', 'disabled'].includes(state)) return 'paused';
+  if (['archived', 'ended', 'deleted', 'encerrada', 'removed'].includes(state)) return 'archived';
+  if (['incomplete', 'draft', 'pending', 'pending_insertion', 'em inserção', 'em insercao', 'processing'].includes(state)) return 'incomplete';
+  return state;
+}
+
 export function campaignState(campaign = {}) {
+  // `state` e `status` são atualizados pelas ações e reconciliações atuais do
+  // app. `amazon_status` é mantido como fallback por compatibilidade, pois
+  // registros legados podem deixá-lo obsoleto após uma reativação.
   const candidates = [
-    campaign.amazon_status,
     campaign.state,
     campaign.status,
     campaign.campaign_status,
+    campaign.amazon_status,
     campaign.serving_status,
     campaign.original_state,
   ];
+
   for (const candidate of candidates) {
     const normalized = normalizeState(candidate);
     if (normalized) return normalized;
@@ -99,7 +174,14 @@ export function campaignState(campaign = {}) {
 }
 
 export function campaignIsArchived(campaign = {}) {
-  return booleanTrue(campaign.archived) || campaignState(campaign) === 'archived';
+  if (booleanTrue(campaign.archived)) return true;
+  return campaignState(campaign) === 'archived';
+}
+
+export function campaignIsVisibleOperational(campaign = {}) {
+  if (campaignIsArchived(campaign)) return false;
+  const state = campaignState(campaign);
+  return state === 'enabled' || state === 'paused' || state === 'incomplete';
 }
 
 export function classifyCampaigns(campaigns = []) {
@@ -119,7 +201,9 @@ export function classifyCampaigns(campaigns = []) {
     else other.push(campaign);
   });
 
-  const active = [...enabled, ...pending];
+  // Ativa significa efetivamente habilitada. Incompletas permanecem separadas
+  // para reparo/arquivamento e não inflam o total ativo.
+  const active = [...enabled];
   return {
     active,
     enabled,
@@ -127,14 +211,14 @@ export function classifyCampaigns(campaigns = []) {
     paused,
     archived,
     other,
-    total_current: active.length + paused.length,
-    active_count: active.length,
+    total_current: enabled.length + pending.length + paused.length,
+    active_count: enabled.length,
     enabled_count: enabled.length,
     pending_count: pending.length,
     paused_count: paused.length,
     archived_count: archived.length,
     other_count: other.length,
-    total_all: active.length + paused.length + archived.length + other.length,
+    total_all: enabled.length + pending.length + paused.length + archived.length + other.length,
   };
 }
 
@@ -142,15 +226,7 @@ export function getAutopilotEligible(campaigns = []) {
   return campaigns.filter((campaign) =>
     !campaignIsArchived(campaign) &&
     campaign.api_missing !== true &&
-    campaign.excluded_from_dashboard !== true
+    campaign.excluded_from_dashboard !== true &&
+    ['enabled', 'paused'].includes(campaignState(campaign))
   );
-}
-
-export function normalizeState(rawState = '') {
-  const state = String(rawState ?? '').trim().toLowerCase();
-  if (['enabled', 'active', 'ativa', 'ativada', 'running', 'live', 'serving'].includes(state)) return 'enabled';
-  if (['paused', 'pausada', 'inactive', 'inativa', 'disabled'].includes(state)) return 'paused';
-  if (['archived', 'ended', 'deleted', 'encerrada', 'removed'].includes(state)) return 'archived';
-  if (['incomplete', 'draft', 'pending', 'pending_insertion', 'em inserção', 'em insercao', 'processing'].includes(state)) return 'incomplete';
-  return state;
 }
