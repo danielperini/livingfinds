@@ -26,6 +26,8 @@ Deno.serve(async (req) => {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
     const { amazon_account_id, dry_run = false } = body;
+    const requestedAsins = new Set((Array.isArray(body.asins) ? body.asins : [])
+      .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
 
     // Resolver conta
     let account: any;
@@ -55,6 +57,7 @@ Deno.serve(async (req) => {
     for (const c of activeCampaigns) {
       const asin = extractAsin(c);
       if (!asin) continue;
+      if (requestedAsins.size > 0 && !requestedAsins.has(asin)) continue;
       if (!byAsin.has(asin)) byAsin.set(asin, []);
       byAsin.get(asin)!.push(c);
     }
@@ -197,6 +200,7 @@ Deno.serve(async (req) => {
       candidates: dry_run ? totalArchived : undefined,
       failed: totalFailed,
       asins_processed: [...byAsin.values()].filter(g => g.length > 1).length,
+      asin_scope_count: requestedAsins.size,
       details,
       duration_ms: Date.now() - t0,
     });

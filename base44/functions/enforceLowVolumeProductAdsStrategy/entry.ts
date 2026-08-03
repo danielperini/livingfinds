@@ -136,6 +136,7 @@ Deno.serve(async (req) => {
         }).catch(() => null);
         const dedupResponse = await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
+          asins: eligibleProducts.map((product: any) => upper(product.asin)),
         }).catch((error: any) => ({ data: { ok: false, failed: 1, error: error?.message || String(error) } }));
         const dedup = dedupResponse?.data || dedupResponse || {};
         if (dedup.ok === false || numberValue(dedup.failed) > 0) {
