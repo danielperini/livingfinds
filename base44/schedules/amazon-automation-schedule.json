@@ -111,6 +111,12 @@
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Winner intraday budget refill after metrics sync - every 15 minutes",
+      "function": "runWinnerBudgetRefill",
+      "cron": "8,23,38,53 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Motor v8 complete hourly pipeline",
       "function": "runMotorImediato",
       "cron": "25 * * * *",
