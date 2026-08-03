@@ -131,8 +131,18 @@ Deno.serve(async (req) => {
             product_name: product.product_name || product.title || product.name || '',
           }).catch(() => null);
         }
-        await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
+        await base44.asServiceRole.functions.invoke('syncAdsCampaignStatesV2', {
+          _service_role: true, amazon_account_id: accountId,
+        }).catch(() => null);
+        const dedupResponse = await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
+        }).catch((error: any) => ({ data: { ok: false, failed: 1, error: error?.message || String(error) } }));
+        const dedup = dedupResponse?.data || dedupResponse || {};
+        if (dedup.ok === false || numberValue(dedup.failed) > 0) {
+          throw new Error(`Reconciliação das AUTO duplicadas não confirmada: ${dedup.error || `${dedup.failed} falha(s)`}`);
+        }
+        await base44.asServiceRole.functions.invoke('syncAdsCampaignStatesV2', {
+          _service_role: true, amazon_account_id: accountId,
         }).catch(() => null);
       }
 

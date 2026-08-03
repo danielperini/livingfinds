@@ -1,7 +1,7 @@
 /**
  * deduplicateAutoCampaignsByAsin v2
  * Para cada ASIN com mais de 1 campanha AUTO não-arquivada:
- * - Mantém a com maior spend (desempate: created_at mais antiga)
+ * - Mantém a de maior lucro, vendas, pedidos e histórico; gasto nunca decide sozinho
  * - Arquiva as demais na Amazon via amazonAdsCommand (state: ARCHIVED)
  * - Arquiva as demais localmente (state/status/archived=true)
  * - Registra SyncExecutionLog com total arquivado
@@ -40,25 +40,9 @@ Deno.serve(async (req) => {
 
     const accountId = account.id;
 
-    // Obter token via token manager centralizado
-    let accessToken: string | null = null;
-    if (!dry_run) {
-      try {
-        const tokenRes = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
-          amazon_account_id: accountId,
-          _service_role: true,
-        });
-        const td = tokenRes?.data || tokenRes || {};
-        if (td.ok && td.access_token) accessToken = td.access_token;
-        else console.warn('[dedup] Token manager não retornou token válido:', td.message || td.error);
-      } catch (e: any) {
-        console.warn('[dedup] Falha ao obter token:', e.message);
-      }
-    }
-
     // Carregar todas as campanhas AUTO não-arquivadas
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: accountId, targeting_type: 'AUTO' }, null, 500
+      { amazon_account_id: accountId, targeting_type: 'AUTO' }, null, 3000
     ).catch(() => [] as any[]);
 
     const activeCampaigns = allCampaigns.filter((c: any) => {
@@ -82,10 +66,20 @@ Deno.serve(async (req) => {
     for (const [asin, group] of byAsin) {
       if (group.length <= 1) continue;
 
-      // Ordenar: maior spend primeiro, desempate por created_at mais antiga
+      // Proteger a campanha economicamente vencedora. Spend entra apenas no
+      // cálculo de lucro, nunca como critério positivo isolado.
       group.sort((a: any, b: any) => {
-        const spendDiff = Number(b.spend || b.current_spend || 0) - Number(a.spend || a.current_spend || 0);
-        if (spendDiff !== 0) return spendDiff;
+        const profit = (row: any) => Number(row.sales || 0) - Number(row.spend || row.current_spend || 0);
+        const protectedDiff = Number(b.protected_high_performance === true) - Number(a.protected_high_performance === true);
+        if (protectedDiff !== 0) return protectedDiff;
+        const profitDiff = profit(b) - profit(a);
+        if (profitDiff !== 0) return profitDiff;
+        const salesDiff = Number(b.sales || 0) - Number(a.sales || 0);
+        if (salesDiff !== 0) return salesDiff;
+        const ordersDiff = Number(b.orders || 0) - Number(a.orders || 0);
+        if (ordersDiff !== 0) return ordersDiff;
+        const historyDiff = Number(b.days_running || 0) - Number(a.days_running || 0);
+        if (historyDiff !== 0) return historyDiff;
         const dateA = new Date(a.created_at || a.created_date || 0).getTime();
         const dateB = new Date(b.created_at || b.created_date || 0).getTime();
         return dateA - dateB; // mais antiga primeiro
@@ -117,34 +111,59 @@ Deno.serve(async (req) => {
         const amazonId = dup.amazon_campaign_id || dup.campaign_id;
         if (amazonId && String(amazonId) !== 'undefined' && String(amazonId) !== 'null') {
           try {
-            await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+            const archiveResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
               _service_role: true,
               amazon_account_id: accountId,
+              operation: 'archiveConfirmedDuplicateAutoCampaign',
               path: '/sp/campaigns',
               method: 'PUT',
               content_type: 'application/vnd.spCampaign.v3+json',
-              payload: { campaigns: [{ campaignId: String(amazonId), state: 'ARCHIVED' }] },
+              accept: 'application/vnd.spCampaign.v3+json',
+              payload: {
+                campaigns: [{ campaignId: String(amazonId), state: 'ARCHIVED' }],
+                idempotencyKey: `dedup-auto|${accountId}|${amazonId}|ARCHIVED`,
+              },
             });
+            const archiveData = archiveResponse?.data || archiveResponse || {};
+            if (archiveData.ok !== true) throw new Error(archiveData.error || archiveData.message || 'Amazon não confirmou arquivamento');
+            await sleep(300);
+            const verifyResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+              _service_role: true,
+              amazon_account_id: accountId,
+              operation: 'confirmArchivedDuplicateAutoCampaign',
+              path: `/sp/campaigns/${amazonId}`,
+              method: 'GET',
+              content_type: 'application/vnd.spCampaign.v3+json',
+              accept: 'application/vnd.spCampaign.v3+json',
+              payload: null,
+            });
+            const verifyData = verifyResponse?.data || verifyResponse || {};
+            const remoteState = String(verifyData?.payload?.state || verifyData?.state || '').toUpperCase();
+            if (verifyData.ok !== true || remoteState !== 'ARCHIVED') {
+              throw new Error(`Estado remoto não confirmado como ARCHIVED: ${remoteState || 'desconhecido'}`);
+            }
             dupEntry.archived_on_amazon = true;
           } catch (e: any) {
             console.warn(`[dedup] Falha ao arquivar ${amazonId} na Amazon:`, e.message);
             totalFailed++;
           }
-          await sleep(300);
         }
 
-        // 2. Arquivar localmente
-        await base44.asServiceRole.entities.Campaign.update(dup.id, {
-          state: 'archived',
-          status: 'archived',
-          archive_reason: 'DUPLICATE_AUTO_CAMPAIGN_ARCHIVED',
-          archived: true,
-          archived_at: new Date().toISOString(),
-        }).catch(() => {});
-        dupEntry.archived_locally = true;
+        // 2. O app só muda depois da confirmação direta na Amazon.
+        if (dupEntry.archived_on_amazon) {
+          await base44.asServiceRole.entities.Campaign.update(dup.id, {
+            state: 'archived',
+            status: 'archived',
+            amazon_status: 'archived',
+            archive_reason: 'DUPLICATE_AUTO_CAMPAIGN_ARCHIVED_CONFIRMED',
+            archived: true,
+            archived_at: new Date().toISOString(),
+          }).catch(() => {});
+          dupEntry.archived_locally = true;
+          totalArchived++;
+        }
 
         details.push(dupEntry);
-        totalArchived++;
       }
     }
 
