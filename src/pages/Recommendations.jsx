@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Brain, CheckCircle, XCircle, Loader2, TrendingUp, TrendingDown,
-  RefreshCw, AlertCircle, Filter, ChevronDown, ChevronUp, Zap,
-  Eye, BarChart2, Target, AlertTriangle, Play
+  RefreshCw, AlertCircle, Filter, ChevronUp,
+  Eye, Target
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -251,6 +251,56 @@ function RunEnginePanel({ accountId, onDone }) {
   );
 }
 
+// Aciona a mesma rotina intradiária agendada. O backend só altera a Amazon
+// após validar venda, ACoS, consumo do orçamento, saldo global e confirmação.
+function WinnerBudgetRefillPanel({ accountId, onDone }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    if (!accountId || running) return;
+    setRunning(true);
+    setResult(null);
+    try {
+      const res = await base44.functions.invoke('runWinnerBudgetRefill', {
+        amazon_account_id: accountId,
+        dry_run: false,
+      });
+      const data = res?.data;
+      const accountResult = data?.results?.[0] || {};
+      const applied = accountResult?.applied || [];
+      const skipped = accountResult?.skipped || [];
+      const message = data?.ok === false
+        ? (data.error || 'A Amazon não confirmou a reposição de orçamento.')
+        : applied.length > 0
+          ? `${applied.length} campanha(s) vencedora(s) atualizada(s) e confirmada(s) pela Amazon.`
+          : accountResult?.reason || `Nenhuma campanha elegível agora (${skipped.length} protegida(s) por regra).`;
+      setResult({ ok: data?.ok !== false, message });
+      if (data?.ok !== false) onDone?.();
+    } catch (error) {
+      setResult({ ok: false, message: error?.response?.data?.error || error.message || 'Falha ao executar a reposição.' });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button onClick={run} disabled={running || !accountId}
+        title="Aumenta somente campanhas vencedoras confirmadas como elegíveis pela Amazon"
+        className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-60">
+        {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />}
+        {running ? 'Confirmando na Amazon...' : 'Repor orçamento vencedor agora'}
+      </button>
+      {result && (
+        <span className={`text-xs px-3 py-1.5 rounded-lg border ${result.ok ? 'text-emerald-400 border-emerald-400/20 bg-emerald-400/5' : 'text-red-400 border-red-400/20 bg-red-400/5'}`}>
+          {result.ok ? '✓' : '×'} {result.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Recommendations() {
   const [account, setAccount] = useState(null);
   const [decisions, setDecisions] = useState([]);
@@ -367,6 +417,7 @@ export default function Recommendations() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <RunEnginePanel accountId={account?.id} onDone={loadData} />
+          <WinnerBudgetRefillPanel accountId={account?.id} onDone={loadData} />
           {selectedIds.size > 0 && tab === 'pending' && (
             <>
               <span className="text-xs text-slate-500">{selectedIds.size} selecionadas</span>
