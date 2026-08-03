@@ -97,7 +97,6 @@ const TABS = [
   { key: 'overview',     label: 'Visão Geral',  icon: BarChart2 },
   { key: 'winners',      label: 'Winners',      icon: TrendingUp },
   { key: 'harvest',      label: 'Harvest Ready',icon: Zap },
-  { key: 'plans',        label: 'Planos',       icon: Factory },
   { key: 'ia_sug',       label: 'Sugestões IA', icon: Sparkles },
   { key: 'keyword_bank', label: 'Keyword Bank', icon: BookOpen },
   { key: 'investigator', label: 'Keyword Investigator', icon: Search },
@@ -533,7 +532,6 @@ export default function CampaignFactory() {
               <StatCard icon={Clock}       label="Validando"     value={stats.validating} color="text-amber-400" />
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard icon={Factory}     label="Planos propostos" value={stats.proposed}  color="text-violet-400" />
               <StatCard icon={Sparkles}    label="Amazon Sugestões" value={stats.amazon_sug}color="text-cyan" />
               <StatCard icon={XCircle}     label="Falharam"         value={stats.failed}    color="text-red-400" />
               <StatCard icon={BookOpen}    label="Term Bank"         value={terms.length}    color="text-slate-300" />
