@@ -75,7 +75,9 @@ Deno.serve(async (request) => {
 
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_at', 1).catch(() => []);
     const product = products[0] || {};
-    const stock = availableAdsStock(product);
+    // The caller may already have reconciled duplicate catalog rows and FBA/MFN
+    // inventory. Accept that verified value only on the internal service path.
+    const stock = Math.max(availableAdsStock(product), Number(body.verified_stock || 0));
     if (product.inventory_status === 'out_of_stock' || stock <= 0) {
       return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
     }
