@@ -783,6 +783,14 @@ Deno.serve(async (req) => {
         max_promotions: 25,
         _service_role: true,
       }).catch((error: any) => console.warn('[downloadProcess] Colheita imediata:', error?.message || error)));
+      // O mesmo relatório que atualiza gasto por termo dispara imediatamente
+      // a proteção de lucro; não espera o próximo cron de cinco minutos.
+      waitUntil(base44.asServiceRole.functions.invoke('enforceSkuProfitProtection', {
+        amazon_account_id: accountId,
+        trigger_type: 'search_term_report_processed_immediate_bid_guard',
+        dry_run: false,
+        _service_role: true,
+      }).catch((error: any) => console.warn('[downloadProcess] Proteção intradiária imediata:', error?.message || error)));
     }
 
     return Response.json({

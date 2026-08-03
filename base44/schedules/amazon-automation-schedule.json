@@ -20,9 +20,9 @@
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
-      "name": "Fresh same-SKU search-term report - every 3 hours",
+      "name": "Fresh same-SKU search-term report - hourly",
       "function": "refreshSameSkuSearchTermReports",
-      "cron": "22 */3 * * *",
+      "cron": "22 * * * *",
       "payload": { "_service_role": true, "force_new": true, "trigger_type": "scheduler_intraday" }
     },
     {
@@ -62,9 +62,9 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "SKU Profit Protection - every 5 minutes",
+      "name": "SKU Profit Protection - every 2 minutes",
       "function": "enforceSkuProfitProtection",
-      "cron": "*/5 * * * *",
+      "cron": "*/2 * * * *",
       "payload": { "_service_role": true }
     },
     {

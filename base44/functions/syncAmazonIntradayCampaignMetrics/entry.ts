@@ -370,6 +370,14 @@ async function persistStage(base44: any, account: any, job: any, clock: ReturnTy
     accountId: account.id, stage: 'persist', trigger, status: 'success', startedAt: clock.iso,
     records: snapshots.length, summary: { report_id: job.report_id, snapshots: snapshots.length, campaigns_updated: updates.length },
   });
+  // Assim que a Amazon confirma novo gasto intradiário, avaliar campanhas e
+  // keywords sem esperar o próximo ciclo do scheduler.
+  await base44.asServiceRole.functions.invoke('enforceSkuProfitProtection', {
+    amazon_account_id: account.id,
+    trigger_type: 'intraday_campaign_snapshot_persisted',
+    dry_run: false,
+    _service_role: true,
+  }).catch((error: any) => console.warn('[intraday] proteção de lucro:', error?.message || error));
   return { ok: true, stage: 'persist', status: 'persisted', report_id: job.report_id, records: snapshots.length, campaigns_updated: updates.length };
 }
 

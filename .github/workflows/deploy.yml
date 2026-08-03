@@ -299,6 +299,19 @@ jobs:
               if (!response.ok || data.ok === false) throw new Error("Falha ao limitar bids: " + JSON.stringify(data).slice(0, 3000));
             ' </dev/null
 
+            echo '--- motor intradiario: agir agora sobre gasto acelerado por termo ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/enforceSkuProfitProtection", {
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_immediate_intraday_bid_guard" })
+              });
+              const data = await response.json().catch(() => ({}));
+              const summaries = (data.results || []).map((row) => row.summary || {});
+              console.log("INTRADAY_BID_GUARD_HTTP=" + response.status + "|OK=" + data.ok + "|POLICY=" + data.policy_version + "|SUMMARIES=" + JSON.stringify(summaries));
+              if (!response.ok || data.ok === false) throw new Error("Falha no motor intradiario: " + JSON.stringify(data).slice(0, 3000));
+            ' </dev/null
+
             echo '--- garantia FINAL remota: 1 AUTO + 5 MANUAIS por SKU elegivel ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
