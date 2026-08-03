@@ -141,6 +141,7 @@ Deno.serve(async (req) => {
     add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
       dry_run: false, max_products: 500, lookback_days: 65,
     });
+    add('ensureSkuCampaignFloor', 'sku_campaign_floor', { manual_floor: 5 });
 
     // Sempre: motor de decisão + execução (idempotentes)
     add('runUnifiedDecisionEngine', 'decision_engine');
