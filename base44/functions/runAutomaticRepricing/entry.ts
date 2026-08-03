@@ -2854,8 +2854,11 @@ async function checkConnectionForAccount(
     "-updated_at",
     100,
   ).catch(() => []);
-  const productSamples = selectSpApiSamples(products);
-  const economicSamples = selectSpApiSamples(economics);
+  const productSamples = selectSpApiSamples(products, marketplaceId);
+  const economicSamples = selectSpApiSamples(economics, marketplaceId);
+  const uniqueBySku = (rows: any[]) => [...new Map(rows.filter((row) => row?.sku).map((row) => [normalizeSku(row.sku), row])).values()];
+  const listingCandidates = uniqueBySku([...(productSamples.listingCandidates || []), ...(economicSamples.listingCandidates || [])]);
+  const pricingCandidates = uniqueBySku([...(productSamples.pricingCandidates || []), ...(economicSamples.pricingCandidates || [])]);
   const samples = {
     listing: productSamples.listing || economicSamples.listing,
     asin: productSamples.asin || economicSamples.asin,
@@ -2905,29 +2908,59 @@ async function checkConnectionForAccount(
     };
   }
 
-  const sample = samples.pricing;
-  if (!sample) {
-    return {
-      account_id: account.id,
-      connected: true,
-      limited: true,
-      product_count: products.length,
-      economics_count: economics.length,
-      message: "OAuth e conta válidos; nenhum produto com SKU e ASIN para testar os endpoints.",
-      checks,
-    };
+  if (listingCandidates.length === 0) {
+    return { account_id: account.id, connected: true, degraded: true,
+      product_count: products.length, economics_count: economics.length,
+      message: "SP-API operacional; nenhum SKU ativo elegível foi encontrado para o teste.", checks };
   }
 
-  const listing = await fetchListing(base44, account, accessToken, sample.sku);
+  const listingAttempts: any[] = [];
+  let listing: any = null;
+  let listingSample: any = null;
+  for (const candidate of listingCandidates.slice(0, 20)) {
+    const attempt = await fetchListing(base44, account, accessToken, candidate.sku);
+    const status = Number(attempt.status || attempt.amazon?.status || (attempt.ok ? 200 : 0));
+    listingAttempts.push({ sku: candidate.sku, status, ok: attempt.ok === true });
+    if (attempt.ok) { listing = attempt; listingSample = candidate; break; }
+    const message = String(attempt.error || "").toLowerCase();
+    const notFound = status === 404 || /not found|does not exist|não existe|não encontrado/.test(message);
+    if (notFound) {
+      const staleProduct = products.find((product: any) => normalizeSku(product.sku) === normalizeSku(candidate.sku));
+      if (staleProduct?.id) {
+        await base44.asServiceRole.entities.Product.update(staleProduct.id, {
+          status: "inactive", listing_status: "not_found", offer_active: false,
+          listing_checked_at: nowIso(),
+        }).catch(() => {});
+      }
+    }
+    if (!notFound) { listing = attempt; listingSample = candidate; break; }
+  }
+  if (!listing) {
+    listing = { ok: false, status: 404, error: "Nenhum dos SKUs ativos candidatos existe neste seller/marketplace." };
+    listingSample = listingCandidates[0];
+  }
+  const listingNotFound = !listing.ok && Number(listing.status || listing.amazon?.status) === 404;
   checks.listings = {
-    ok: listing.ok === true,
+    ok: listing.ok === true, degraded: listingNotFound, retryable: false,
     status: listing.status || listing.amazon?.status || 200,
-    sku: sample.sku,
-    asin: sample.asin,
+    sku: listingSample?.sku || null, asin: listingSample?.asin || null,
+    attempted_skus: listingAttempts,
     message: listing.ok
-      ? "Listings Items API acessível."
+      ? `Listings Items API acessível com SKU ativo '${listingSample.sku}'.`
+      : listingNotFound
+      ? "Listings Items API autenticada; os SKUs candidatos não existem neste seller/marketplace e devem ser marcados como inativos."
       : listing.error || "Falha ao consultar Listings Items API.",
   };
+  const sample = pricingCandidates.find((candidate) =>
+    listing.ok && normalizeSku(candidate.sku) === normalizeSku(listingSample?.sku)
+  ) || pricingCandidates[0] || null;
+  if (!sample) {
+    checks.pricing = { ok: false, skipped: true, degraded: true,
+      message: "Pricing não testada: nenhum SKU ativo com ASIN confirmado." };
+    return { account_id: account.id, connected: listing.ok || listingNotFound, degraded: true,
+      message: "SP-API operacional com restrição temporária; selecione outro SKU ativo para validar Pricing.",
+      product_count: products.length, economics_count: economics.length, checked_at: nowIso(), checks };
+  }
   const pricingMap = await fetchPricingBatches(base44, account, accessToken, [{
     sku: sample.sku,
     asin: sample.asin,
@@ -2946,19 +2979,19 @@ async function checkConnectionForAccount(
       ? "Product Pricing API autenticada, mas a Amazon limitou temporariamente a quota. O motor usará dados confirmados em cache e tentará novamente no próximo ciclo; nenhuma alteração será feita com concorrência vencida."
       : pricing?.errors?.join(" ") || "Falha ao consultar Product Pricing API.",
   };
-  const connected = checks.listings.ok &&
+  const connected = (checks.listings.ok || checks.listings.degraded) &&
     (checks.pricing.ok || checks.pricing.degraded);
   return {
     account_id: account.id,
     connected,
-    degraded: connected && checks.pricing.degraded === true,
-    message: connected && checks.pricing.degraded === true
-      ? "SP-API conectada. A consulta de preços está temporariamente limitada pela quota da Amazon e será repetida automaticamente."
+    degraded: connected && (checks.pricing.degraded === true || checks.listings.degraded === true),
+    message: connected && (checks.pricing.degraded === true || checks.listings.degraded === true)
+      ? "SP-API operacional com restrição temporária. SKUs inexistentes serão ignorados e a quota de preços será tentada novamente automaticamente."
       : undefined,
     product_count: products.length,
     economics_count: economics.length,
     checked_at: nowIso(),
-    sample: { sku: sample.sku, asin: sample.asin },
+    sample: { sku: sample.sku, asin: sample.asin, listing_sku: listingSample?.sku || null },
     checks,
   };
 }

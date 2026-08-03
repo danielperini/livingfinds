@@ -21,16 +21,42 @@ export function resolveSellerId(
   return { sellerId: "", source: null };
 }
 
-export function selectSpApiSamples(products: any[]) {
-  const withSku = products.find((product) => cleanIdentifier(product?.sku));
-  const withAsin = products.find((product) => cleanIdentifier(product?.asin));
-  const pricing = products.find((product) =>
-    cleanIdentifier(product?.sku) && cleanIdentifier(product?.asin)
-  );
+function availableStock(product: any): number {
+  const values = [product?.available_quantity, product?.fulfillable_quantity, product?.stock, product?.quantity];
+  const value = values.find((candidate) => Number.isFinite(Number(candidate)));
+  return value === undefined ? -1 : Number(value);
+}
+
+function candidateEligible(product: any, marketplaceId = "") {
+  const state = cleanIdentifier(product?.state || product?.status || product?.listing_status).toLowerCase();
+  const productMarketplace = cleanIdentifier(product?.marketplace_id || product?.marketplaceId);
+  if (marketplaceId && productMarketplace && productMarketplace !== marketplaceId) return false;
+  if (product?.archived === true || product?.listing_suppressed === true || product?.api_missing === true) return false;
+  if (["archived", "deleted", "removed", "inactive", "inativo"].includes(state)) return false;
+  return true;
+}
+
+function candidateRank(product: any) {
+  const state = cleanIdentifier(product?.state || product?.status || product?.listing_status).toLowerCase();
+  const stock = availableStock(product);
+  return (stock > 0 ? 1000 : stock === 0 ? 0 : 100) +
+    (["active", "enabled", "buyable", "discoverable", "ativo"].includes(state) ? 200 : 0) +
+    (cleanIdentifier(product?.asin) ? 50 : 0) +
+    (product?.listing_eligible === true || product?.buyable === true ? 25 : 0);
+}
+
+export function selectSpApiSamples(products: any[], marketplaceId = "") {
+  const eligible = products.filter((product) => candidateEligible(product, marketplaceId));
+  const ranked = [...eligible].sort((a, b) => candidateRank(b) - candidateRank(a));
+  const listingCandidates = ranked.filter((product) => cleanIdentifier(product?.sku));
+  const asinCandidates = ranked.filter((product) => cleanIdentifier(product?.asin));
+  const pricingCandidates = ranked.filter((product) => cleanIdentifier(product?.sku) && cleanIdentifier(product?.asin));
   return {
-    listing: withSku || null,
-    asin: withAsin || null,
-    pricing: pricing || null,
+    listing: listingCandidates[0] || null,
+    asin: asinCandidates[0] || null,
+    pricing: pricingCandidates[0] || null,
+    listingCandidates,
+    pricingCandidates,
   };
 }
 
