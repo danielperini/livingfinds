@@ -25,7 +25,7 @@ function uniqueCampaigns(rows: any[]) {
 
 function titleSeeds(product: any): string[] {
   const title = norm(product.product_name || product.title || product.name || '')
-    .replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, ' '); 
+    .replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, ' ');
   const words = title.split(/\s+/).filter((word: string) => word.length > 2);
   const seeds = [title.slice(0, 40)];
   for (let size = 5; size >= 2; size--) {

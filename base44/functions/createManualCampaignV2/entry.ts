@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { availableAdsStock } from '../../shared/stockAdsPolicy.ts';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const norm = (value: string) => String(value || '').toLowerCase().trim().replace(/\s+/g, ' ');
@@ -74,7 +75,7 @@ Deno.serve(async (request) => {
 
     const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_at', 1).catch(() => []);
     const product = products[0] || {};
-    const stock = Number(product.fba_inventory ?? product.available_quantity ?? product.fulfillable_quantity ?? 0);
+    const stock = availableAdsStock(product);
     if (product.inventory_status === 'out_of_stock' || stock <= 0) {
       return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
     }
