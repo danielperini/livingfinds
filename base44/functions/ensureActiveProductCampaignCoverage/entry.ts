@@ -186,16 +186,20 @@ Deno.serve(async (req) => {
     }
 
     const failed = accountResults.reduce((sum, row) => sum + row.failed, 0);
+    const processed = accountResults.reduce((sum, row) => sum + Number(row.processed || 0), 0);
+    const noRequiredActions = body.require_actions === true && processed === 0;
     return Response.json({
-      ok: failed === 0,
+      ok: failed === 0 && !noRequiredActions,
       dry_run: dryRun,
       fast_mode: fastMode,
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       connected_accounts: connectedAccounts.length,
+      processed,
       failed,
+      ...(noRequiredActions ? { error: 'Nenhum SKU com estoque acima de 1 foi elegível para ativação imediata.' } : {}),
       accounts: accountResults,
-    }, { status: failed === 0 ? 200 : 207 });
+    }, { status: noRequiredActions ? 409 : failed === 0 ? 200 : 207 });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error), started_at: startedAt }, { status: 500 });
   }
