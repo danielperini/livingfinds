@@ -278,10 +278,10 @@ jobs:
             echo '--- garantia FINAL remota: 1 AUTO + 5 MANUAIS por SKU elegivel ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-              const response = await fetch("http://127.0.0.1:8000/functions/ensureSkuCampaignFloor", {
+              const response = await fetch("http://127.0.0.1:8000/functions/verifyRemoteSkuCampaignFloor", {
                 method: "POST",
                 headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, manual_floor: 5, trigger_type: "deploy_final_remote_campaign_floor" })
+                body: JSON.stringify({ _service_role: true, manual_floor: 5 })
               });
               const data = await response.json().catch(() => ({}));
               console.log("SKU_CAMPAIGN_FLOOR_HTTP=" + response.status + "|OK=" + data.ok + "|PRODUCTS=" + (data.products ?? 0) + "|COMPLIANT=" + (data.compliant ?? 0) + "|DEFICITS=" + (data.deficits_count ?? "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 20000));
