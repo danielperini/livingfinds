@@ -113,8 +113,8 @@ Deno.serve(async (req) => {
     // 2. Atualizar na Amazon API em batches de 100
     const kwBatches = chunk(kwList, 100);
     for (const batch of kwBatches) {
-      const payload = batch.map(kw => ({ keywordId: kw.keywordId, bid: targetBid }));
-      const r = await adsCall('PUT', '/v2/sp/keywords', payload);
+      const payload = { keywords: batch.map(kw => ({ keywordId: kw.keywordId, bid: targetBid })) };
+      const r = await adsCall('PUT', '/sp/keywords', payload, 'application/vnd.spKeyword.v3+json');
       if (r.ok) {
         kwOk += batch.length;
       } else {
@@ -146,8 +146,8 @@ Deno.serve(async (req) => {
 
       const agBatches = chunk(agList, 100);
       for (const batch of agBatches) {
-        const payload = batch.map(ag => ({ adGroupId: ag.adGroupId, defaultBid: targetBid }));
-        const r = await adsCall('PUT', '/v2/sp/adGroups', payload);
+        const payload = { adGroups: batch.map(ag => ({ adGroupId: ag.adGroupId, defaultBid: targetBid })) };
+        const r = await adsCall('PUT', '/sp/adGroups', payload, 'application/vnd.spAdGroup.v3+json');
         if (r.ok) {
           agOk += batch.length;
         } else {
