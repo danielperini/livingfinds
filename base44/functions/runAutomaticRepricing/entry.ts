@@ -310,6 +310,17 @@ function amazonError(result: any) {
   ).slice(0, 1000);
 }
 
+function isAmazonQuotaLimit(result: any) {
+  const status = Number(result?.status || result?.payload?.status || 0);
+  const errors = result?.errors || result?.payload?.errors || [];
+  const text = [
+    result?.error,
+    ...errors.flatMap((error: any) => [error?.code, error?.message]),
+  ].filter(Boolean).join(" ").toLowerCase();
+  return status === 429 ||
+    /quota|throttl|too\s*many\s*requests|rate\s*limit/.test(text);
+}
+
 async function ensureSellerIdentity(
   base44: any,
   account: any,
@@ -669,6 +680,10 @@ async function fetchPricingBatches(
       bySku.set(normalizeSku(target.sku), {
         ok: competitive.ok === true &&
           Number(competitiveResponse?.status?.statusCode || 200) < 400,
+        rateLimited: isAmazonQuotaLimit(competitive) ||
+          isAmazonQuotaLimit(foep) ||
+          Number(competitiveResponse?.status?.statusCode || 0) === 429 ||
+          Number(foepResponse?.status?.statusCode || 0) === 429,
         offers: competitiveParsed.offers,
         featuredOfferPrice: foepParsed.featured ||
           competitiveParsed.featuredOfferPrice,
@@ -2910,17 +2925,28 @@ async function checkConnectionForAccount(
     asin: sample.asin,
   }]);
   const pricing = pricingMap.get(normalizeSku(sample.sku));
+  const pricingRateLimited = pricing?.rateLimited === true;
   checks.pricing = {
     ok: pricing?.ok === true,
+    degraded: pricingRateLimited,
+    retryable: pricingRateLimited,
     sku: sample.sku,
     asin: sample.asin,
     message: pricing?.ok
       ? "Product Pricing API acessível."
+      : pricingRateLimited
+      ? "Product Pricing API autenticada, mas a Amazon limitou temporariamente a quota. O motor usará dados confirmados em cache e tentará novamente no próximo ciclo; nenhuma alteração será feita com concorrência vencida."
       : pricing?.errors?.join(" ") || "Falha ao consultar Product Pricing API.",
   };
+  const connected = checks.listings.ok &&
+    (checks.pricing.ok || checks.pricing.degraded);
   return {
     account_id: account.id,
-    connected: checks.listings.ok && checks.pricing.ok,
+    connected,
+    degraded: connected && checks.pricing.degraded === true,
+    message: connected && checks.pricing.degraded === true
+      ? "SP-API conectada. A consulta de preços está temporariamente limitada pela quota da Amazon e será repetida automaticamente."
+      : undefined,
     product_count: products.length,
     economics_count: economics.length,
     checked_at: nowIso(),
