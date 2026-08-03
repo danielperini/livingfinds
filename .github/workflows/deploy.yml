@@ -364,6 +364,17 @@ jobs:
               console.log("SKU_CAMPAIGN_RESTORE_HTTP=" + response.status + "|OK=" + data.ok + "|DEFICITS=" + (data.deficits_count ?? "unknown"));
               if (!response.ok || data.ok === false) throw new Error("Falha ao restaurar piso: " + JSON.stringify(data.deficits || []).slice(0, 5000));
             ' </dev/null
+            echo '--- reconciliar AUTO canonica apos restauracao do piso ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/enforceLowVolumeProductAdsStrategy", {
+                method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_final_auto_reconciliation" })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("FINAL_LOW_VOLUME_ADS_HTTP=" + response.status + "|OK=" + data.ok + "|PROCESSED=" + (data.processed ?? 0) + "|ENABLED=" + (data.campaigns_enabled ?? 0) + "|BUDGETS_REDUCED=" + (data.budgets_reduced ?? 0) + "|BIDS_REDUCED=" + (data.bids_reduced ?? 0));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "final low volume reconciliation failed");
+            ' </dev/null
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const response = await fetch("http://127.0.0.1:8000/functions/verifyRemoteSkuCampaignFloor", {
