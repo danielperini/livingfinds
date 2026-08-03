@@ -131,7 +131,27 @@ function AmazonAdsResults({ suggestions, asin }) {
   );
 }
 
-const normalizeKeyword = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const normalizeKeyword = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+const STOPWORDS = new Set(['de', 'do', 'da', 'dos', 'das', 'para', 'com', 'sem', 'por', 'uma', 'um', 'e', 'o', 'a']);
+const BLOCKED_BRANDS = /\b(oster|tramontina|onikuma|coibeu)\b/i;
+const IRRELEVANT_PATTERNS = /\b(taca|taça|secador|porta vinho|porta rolhas|abridor de lata|kit de vinho|presente)\b/i;
+
+function classifyProductRelevance(keyword, productTitle) {
+  const normalized = normalizeKeyword(keyword);
+  if (BLOCKED_BRANDS.test(normalized)) return { allowed: false, score: 0, label: 'Bloqueada', reason: 'Marca de terceiro' };
+  if (IRRELEVANT_PATTERNS.test(normalized)) return { allowed: false, score: 0, label: 'Bloqueada', reason: 'Produto/acessório incompatível' };
+
+  const titleTokens = normalizeKeyword(productTitle).split(' ').filter((token) => token.length >= 4 && !STOPWORDS.has(token));
+  const matches = titleTokens.filter((token) => normalized.includes(token));
+  const wineOpenerProduct = /\b(vinho|rolha)\b/i.test(productTitle) && /\b(abridor|saca|rolha|sacarolha|descorchador)\b/i.test(productTitle);
+  const openerAnchor = /\b(abridor|saca\s*rolha|sacarolha|sacarrolha|descorchador|rolha)\b/i.test(normalized);
+  if (wineOpenerProduct && !openerAnchor) return { allowed: false, score: 0, label: 'Bloqueada', reason: 'Busca genérica de vinho, sem intenção de abridor' };
+
+  const specificity = Math.min(18, normalized.split(' ').length * 3);
+  const score = Math.min(100, 38 + Math.min(48, matches.length * 16) + specificity + (openerAnchor ? 10 : 0));
+  if (matches.length === 0 && !openerAnchor) return { allowed: false, score: 0, label: 'Bloqueada', reason: 'Sem aderência ao título do produto' };
+  return { allowed: true, score, label: score >= 78 ? 'Prioridade alta' : score >= 60 ? 'Teste controlado' : 'Baixa prioridade', reason: matches.length ? `Aderência: ${matches.slice(0, 3).join(', ')}` : 'Sinônimo aderente' };
+}
 
 function sortValue(row, key) {
   const value = row[key];
@@ -170,15 +190,18 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
 
   const investigationRows = useMemo(() => {
     const byKeyword = new Map();
+    const productTitle = selectedProduct?.product_name || selectedProduct?.display_name || selectedProduct?.title || '';
     const add = (keywordText, source, baseScore = 40) => {
       const keywordValue = normalizeKeyword(keywordText);
       if (keywordValue.length < 3) return;
+      const relevance = classifyProductRelevance(keywordValue, productTitle);
+      if (!relevance.allowed) return;
       const existing = byKeyword.get(keywordValue) || {
         keyword: keywordValue, source: [], organic_score: 0, paid_impressions: 0,
-        paid_sales: 0, paid_orders: 0, paid_spend: 0, score: 0,
+        paid_sales: 0, paid_orders: 0, paid_spend: 0, score: 0, classification: relevance.label, reason: relevance.reason,
       };
       existing.source = [...new Set([...existing.source, source])];
-      existing.score = Math.max(existing.score, baseScore);
+      existing.score = Math.max(existing.score, Math.round((baseScore * 0.35) + (relevance.score * 0.65)));
       if (source === 'Orgânico inferido') existing.organic_score = Math.max(existing.organic_score, baseScore);
       byKeyword.set(keywordValue, existing);
     };
@@ -204,13 +227,15 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
       row.score = Math.min(100, Math.max(row.score, Math.round(
         45 + Math.min(30, row.paid_impressions / 100) + Math.min(20, row.paid_orders * 5) + Math.min(15, row.paid_sales / 50)
       )));
+      row.classification = row.paid_orders >= 2 ? 'Comprovada' : row.paid_orders >= 1 ? 'Validar exact' : row.classification;
+      row.reason = row.paid_orders >= 1 ? `${row.paid_orders} pedido(s) confirmado(s) na conta` : row.reason;
     });
 
     return [...byKeyword.values()]
       .map((row) => ({ ...row, contribution: row.paid_sales > 0 ? row.paid_sales / Math.max(1, [...byKeyword.values()].reduce((sum, item) => sum + item.paid_sales, 0)) * 100 : 0 }))
       .sort((a, b) => b.score - a.score)
       .slice(0, 200);
-  }, [amazonResult, scrapingResult, selectedAsin, terms]);
+  }, [amazonResult, scrapingResult, selectedAsin, selectedProduct, terms]);
 
   const sortedRows = useMemo(() => [...investigationRows].sort((a, b) => {
     const left = sortValue(a, sortKey); const right = sortValue(b, sortKey);
@@ -517,16 +542,16 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
               </div>
               <span className="rounded-full border border-violet-500/25 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-300">{sortedRows.length} classificadas</span>
             </div>
-            <p className="mt-2 text-[10px] text-slate-500">Impressões, vendas e contribuição são dados da sua conta Amazon Ads. Relevância orgânica e patrocínio do concorrente são inferências de resultados públicos, não vendas privadas do concorrente.</p>
+            <p className="mt-2 text-[10px] text-slate-500">Impressões, vendas e contribuição são dados da sua conta Amazon Ads. A tabela remove marcas de terceiros, acessórios incompatíveis e buscas genéricas; relevância orgânica continua sendo uma inferência pública.</p>
           </div>
           <div className="max-h-[540px] overflow-auto">
             <table className="w-full min-w-[860px] text-left text-xs">
               <thead className="sticky top-0 bg-surface-2 text-[10px] uppercase tracking-wide text-slate-500">
                 <tr>{[
-                  ['keyword', 'Keyword'], ['source', 'Fontes'], ['organic_score', 'Orgânico*'], ['paid_impressions', 'Impressões Ads'], ['paid_sales', 'Vendas Ads'], ['contribution', 'Contribuição'], ['score', 'Score'],
+                  ['keyword', 'Keyword'], ['classification', 'Classificação'], ['source', 'Fontes'], ['organic_score', 'Orgânico*'], ['paid_impressions', 'Impressões Ads'], ['paid_sales', 'Vendas Ads'], ['contribution', 'Contribuição'], ['score', 'Score'],
                 ].map(([key, label]) => <th key={key} className="whitespace-nowrap px-3 py-2 font-semibold"><button onClick={() => toggleSort(key)} className="hover:text-cyan">{label} {sortKey === key ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</button></th>)}</tr>
               </thead>
-              <tbody>{sortedRows.map((row) => <tr key={row.keyword} className="border-t border-surface-2/70 text-slate-300"><td className="px-3 py-2 font-medium text-white">{row.keyword}</td><td className="px-3 py-2 text-[10px] text-slate-400">{row.source.join(' · ')}</td><td className="px-3 py-2">{row.organic_score || '—'}</td><td className="px-3 py-2">{row.paid_impressions.toLocaleString('pt-BR')}</td><td className="px-3 py-2">R${row.paid_sales.toFixed(2)}</td><td className="px-3 py-2">{row.contribution.toFixed(1)}%</td><td className="px-3 py-2 font-semibold text-emerald-400">{row.score}</td></tr>)}</tbody>
+              <tbody>{sortedRows.map((row) => <tr key={row.keyword} className="border-t border-surface-2/70 text-slate-300"><td className="px-3 py-2 font-medium text-white">{row.keyword}<p className="mt-0.5 text-[9px] text-slate-500">{row.reason}</p></td><td className="px-3 py-2 text-[10px] text-cyan">{row.classification}</td><td className="px-3 py-2 text-[10px] text-slate-400">{row.source.join(' · ')}</td><td className="px-3 py-2">{row.organic_score || '—'}</td><td className="px-3 py-2">{row.paid_impressions.toLocaleString('pt-BR')}</td><td className="px-3 py-2">R${row.paid_sales.toFixed(2)}</td><td className="px-3 py-2">{row.contribution.toFixed(1)}%</td><td className="px-3 py-2 font-semibold text-emerald-400">{row.score}</td></tr>)}</tbody>
             </table>
           </div>
         </div>
