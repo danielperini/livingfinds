@@ -249,6 +249,7 @@ export default function CampaignFactory() {
   const [scheduledIds, setScheduledIds] = useState({});
   const [termMsg, setTermMsg]       = useState(null);
   const [refreshHealth, setRefreshHealth] = useState(null);
+  const [winnerSort, setWinnerSort] = useState({ key: 'promotion_score', direction: 'desc' });
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -406,7 +407,30 @@ export default function CampaignFactory() {
     return list;
   }, [bankEntries, search, lifecycleFilter, sourceFilter]);
 
-  const winners  = useMemo(() => bankEntries.filter(e => ['WINNER', 'PROVEN'].includes(e.lifecycle_status)).sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
+  const toggleWinnerSort = useCallback((key) => {
+    setWinnerSort(current => current.key === key
+      ? { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+      : { key, direction: key === 'keyword' || key === 'asin' || key === 'source_type' || key === 'status' ? 'asc' : 'desc' });
+  }, []);
+
+  const winners = useMemo(() => {
+    const valueFor = (entry) => {
+      if (winnerSort.key === 'status') return `${entry.winner_tier || ''} ${entry.lifecycle_status || ''}`;
+      return entry[winnerSort.key] ?? '';
+    };
+    return bankEntries
+      .filter(e => ['WINNER', 'PROVEN'].includes(e.lifecycle_status))
+      .slice()
+      .sort((a, b) => {
+        const av = valueFor(a);
+        const bv = valueFor(b);
+        const numeric = ['intent_score', 'promotion_score', 'orders', 'acos'].includes(winnerSort.key);
+        const result = numeric
+          ? Number(av || 0) - Number(bv || 0)
+          : String(av).localeCompare(String(bv), 'pt-BR', { sensitivity: 'base' });
+        return winnerSort.direction === 'asc' ? result : -result;
+      });
+  }, [bankEntries, winnerSort]);
   const harvests = useMemo(() => bankEntries.filter(e => e.harvest_candidate).sort((a,b) => b.promotion_score - a.promotion_score), [bankEntries]);
 
   const funnel = useMemo(() => {
@@ -593,9 +617,29 @@ export default function CampaignFactory() {
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-[#0D0F14] z-10">
                   <tr className="border-b border-surface-2">
-                    {['Keyword','ASIN','Fonte','Intent','Promo Score','Pedidos','ACoS','Status'].map(h => (
-                      <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                    ))}
+                    {[
+                      { label: 'Keyword', key: 'keyword' },
+                      { label: 'ASIN', key: 'asin' },
+                      { label: 'Fonte', key: 'source_type' },
+                      { label: 'Intent', key: 'intent_score' },
+                      { label: 'Promo Score', key: 'promotion_score' },
+                      { label: 'Pedidos', key: 'orders' },
+                      { label: 'ACoS', key: 'acos' },
+                      { label: 'Status', key: 'status' },
+                    ].map(({ label, key }) => {
+                      const selected = winnerSort.key === key;
+                      const SortArrow = selected && winnerSort.direction === 'asc' ? ChevronUp : ChevronDown;
+                      return (
+                        <th key={key} className="px-4 py-2.5 text-left whitespace-nowrap">
+                          <button type="button" onClick={() => toggleWinnerSort(key)}
+                            title={`Ordenar por ${label}`}
+                            className={`inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider transition-colors ${selected ? 'text-violet-300' : 'text-slate-500 hover:text-slate-300'}`}>
+                            {label}
+                            <SortArrow className={`w-3 h-3 ${selected ? '' : 'opacity-35'}`} />
+                          </button>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
