@@ -6,7 +6,6 @@ import {
   BookOpen, Megaphone, ChevronUp, ChevronDown
 } from 'lucide-react';
 import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
-import IASuggestionsTab from '@/components/factory/IASuggestionsTab';
 import KeywordBankSection from '@/components/factory/KeywordBankSection';
 import KeywordBankTab from '@/components/factory/KeywordBankTab';
 import KeywordInvestigatorTab from '@/components/factory/KeywordInvestigatorTab';
@@ -97,7 +96,6 @@ const TABS = [
   { key: 'overview',     label: 'Visão Geral',  icon: BarChart2 },
   { key: 'winners',      label: 'Winners',      icon: TrendingUp },
   { key: 'harvest',      label: 'Harvest Ready',icon: Zap },
-  { key: 'ia_sug',       label: 'Sugestões IA', icon: Sparkles },
   { key: 'keyword_bank', label: 'Keyword Bank', icon: BookOpen },
   { key: 'investigator', label: 'Keyword Investigator', icon: Search },
 ];
@@ -718,11 +716,6 @@ export default function CampaignFactory() {
             })}
           </div>
         )}
-
-
-
-        {/* ── SUGESTÕES IA ── */}
-        {tab === 'ia_sug' && <IASuggestionsTab account={account} />}
 
         {tab === 'investigator' && (
           <KeywordInvestigatorTab account={account} products={products} terms={terms} />
