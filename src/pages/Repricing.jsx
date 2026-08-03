@@ -35,6 +35,12 @@ const brazilDay = (value = Date.now()) => {
 
 const normalizeSku = value => String(value || '').trim().toUpperCase().replace(/\s+/g, '-').replace(/-{2,}/g, '-');
 
+// A análise concorrencial só é útil para ofertas que podem ser vendidas agora.
+// O histórico econômico continua preservado para auditoria, mas não é exibido
+// como recomendação operacional quando o SKU está inativo ou sem estoque FBA.
+const isActiveRepricingProduct = product => product?.status === 'active'
+  && Number(product.available_quantity ?? product.fba_inventory ?? 0) > 0;
+
 const isOperationalConfirmation = item => item.history_type === 'price_confirmed'
   && item.status === 'confirmed'
   && finiteNumber(item.price_before) && Number(item.price_before) > 0
@@ -413,6 +419,7 @@ export default function Repricing() {
           : null;
         return {
           ...item,
+          product,
           title: product.display_name || product.product_name || product.title || 'Título não disponível',
           current_price: currentPrice,
           recommended_price: Number(evidence.guarded_suggested_price || evidence.ideal_suggested_price || item.price_after || evidence.current_price || item.price_before || product.price || 0),
@@ -433,7 +440,8 @@ export default function Repricing() {
           ads_sales_per_click: clicks > 0 ? orders / clicks : null,
           confidence: Number(evidence.decision_confidence || item.confidence || 0),
         };
-      });
+      })
+      .filter(item => isActiveRepricingProduct(item.product));
   }, [economics, history, productIndex]);
 
   const recommendationColumns = [
@@ -576,7 +584,7 @@ export default function Repricing() {
       </section>
 
       <section className="rounded-xl border border-violet-500/20 bg-surface-1">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Análise de preços da concorrência</h2><p className="mt-1 text-[10px] text-slate-500">Até 10 genéricos equivalentes por SKU, pesquisados somente pelo ScrapingBee no back-end e classificados por produto, modelo, cor e tamanho.</p><p className="mt-1 text-[10px] text-emerald-400">Ciclo horário no minuto :36 e estudo diário completo às 02:37. O preço recomendado continua protegido internamente por margem líquida ≥15% e confiança superior a 95%.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs</span></div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-surface-2 p-4"><div><h2 className="text-sm font-semibold text-violet-300">Análise de preços da concorrência</h2><p className="mt-1 text-[10px] text-slate-500">Somente SKUs ativos, com estoque FBA disponível. Até 10 genéricos equivalentes por SKU, pesquisados somente pelo ScrapingBee no back-end e classificados por produto, modelo, cor e tamanho.</p><p className="mt-1 text-[10px] text-emerald-400">Ciclo horário no minuto :36 e estudo diário completo às 02:37. O preço recomendado continua protegido internamente por margem líquida ≥15% e confiança superior a 95%.</p></div><span className="rounded-full border border-violet-500/20 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-300">{recommendationRows.length} SKUs ativos</span></div>
         <div className="max-h-[520px] overflow-auto"><table className="w-full text-xs"><thead className="sticky top-0 z-10 bg-surface-2"><tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">{recommendationColumns.map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3"><button type="button" onClick={() => changeRecommendationSort(key)} className="inline-flex items-center gap-1 hover:text-cyan">{label}{recommendationSort.key === key ? recommendationSort.direction === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" /> : <span className="text-slate-700">↕</span>}</button></th>)}</tr></thead><tbody>{sortedRecommendationRows.map(row => <tr key={row.id} className="border-t border-surface-2/60 hover:bg-surface-2/30"><td className="whitespace-nowrap px-4 py-3 font-mono font-semibold text-cyan">{row.sku || '—'}</td><td className="min-w-[280px] max-w-[420px] px-4 py-3 text-slate-300"><p className="line-clamp-2">{row.title}</p></td><td className="whitespace-nowrap px-4 py-3 text-slate-300">{money(row.current_price)}</td><td className="whitespace-nowrap px-4 py-3"><button type="button" onClick={() => setSelectedCompetitors(row)} disabled={!row.similar_count} title={row.similar_competition_error || row.similar_competition_search_queries.join(' · ')} className="inline-flex items-center gap-1 rounded-lg border border-cyan/20 bg-cyan/5 px-3 py-1.5 font-semibold text-cyan enabled:hover:bg-cyan/10 disabled:cursor-not-allowed disabled:border-surface-3 disabled:text-slate-600">{row.similar_count ? `${row.similar_count} concorrente(s)` : row.similar_competition_error ? 'Falha na pesquisa' : row.similar_competition_checked_at ? '0 concorrentes encontrados' : 'Aguardando pesquisa'} <ExternalLink className="h-3 w-3" /></button></td><td className="whitespace-nowrap px-4 py-3 font-semibold text-cyan">{money(row.similar_competitor_average)}</td><td className="whitespace-nowrap px-4 py-3 text-emerald-400">{money(row.similar_competitor_minimum)}</td><td className="whitespace-nowrap px-4 py-3 text-amber-400">{money(row.similar_competitor_maximum)}</td><td className="whitespace-nowrap px-4 py-3"><p className="font-bold text-violet-300">{money(row.recommended_price)}</p><p className="mt-1 text-[9px] text-slate-600">margem e confiança validadas no motor</p></td></tr>)}</tbody></table>{!recommendationRows.length && <p className="p-8 text-center text-xs text-slate-500">O primeiro estudo diário preencherá esta tabela automaticamente. Produtos sem custos confirmados permanecem protegidos e não recebem preço automático.</p>}</div>
       </section>
 

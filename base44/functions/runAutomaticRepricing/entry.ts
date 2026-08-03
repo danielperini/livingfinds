@@ -1210,7 +1210,19 @@ async function evaluateAccount(
     }
   }
   let eligible = products.filter((product: any) => {
-    if (product.status === "archived" || !product.sku || !product.asin) {
+    const availableStock = numberValue(
+      product.available_quantity ?? product.fba_inventory,
+      0,
+    );
+    // Não consultar concorrentes, consumir ScrapingBee nem gerar preço para
+    // catálogo inativo/sem estoque. Registros e decisões anteriores ficam
+    // intactos para auditoria; somente a nova avaliação é bloqueada.
+    if (
+      product.status !== "active" ||
+      availableStock <= 0 ||
+      !product.sku ||
+      !product.asin
+    ) {
       return false;
     }
     if (options.product_id && product.id !== options.product_id) return false;
