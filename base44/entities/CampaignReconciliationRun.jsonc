@@ -1,0 +1,17 @@
+{
+  "name": "CampaignReconciliationRun",
+  "type": "object",
+  "properties": {
+    "run_id": { "type": "string" },
+    "mode": { "type": "string", "enum": ["dry_run", "sync", "execute_safe"] },
+    "status": { "type": "string", "enum": ["running", "completed", "partial", "failed"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "summary": { "type": "object" },
+    "campaigns": { "type": "array", "items": { "type": "object" } },
+    "actions_proposed": { "type": "array", "items": { "type": "object" } },
+    "actions_confirmed": { "type": "array", "items": { "type": "object" } },
+    "errors": { "type": "array", "items": { "type": "object" } }
+  },
+  "required": ["run_id", "mode", "status", "started_at"]
+}
