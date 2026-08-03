@@ -208,6 +208,11 @@ function tierCampaign(c: any, targetAcos: number, breakEvenAcos: number) {
   };
 }
 
+function isEnabledCampaign(c: any): boolean {
+  const state = String(c?.state || c?.status || '').trim().toUpperCase();
+  return state === 'ENABLED' || state === 'ACTIVE';
+}
+
 function selectStrategy(profiles: any[], metrics: any, mode: string, targetAcos: number): string {
   if (mode === 'SCALE')    return 'SCALE_WINNERS';
   if (mode === 'MAINTAIN') return 'MAINTAIN';
@@ -645,6 +650,9 @@ Deno.serve(async (req) => {
     for (const p of campaignProfiles) {
       const c   = p.campaign;
       const cId = String(c.campaign_id || c.id);
+      // Não escalar uma campanha pausada, arquivada ou ainda em inserção.
+      // A jornada de reativação/reparo trata esses estados em etapa própria.
+      if (!isEnabledCampaign(c)) continue;
       if (cooldownBudgetIds.has(cId)) continue;
       if (p.tier !== 'A' || !p.budgetExhausted) continue;
       const daily = Number(c.daily_budget || 0);

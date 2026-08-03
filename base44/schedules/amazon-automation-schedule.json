@@ -81,6 +81,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Profit-safe campaign bid and budget journey - every 15 minutes",
+      "function": "adjustBidsWithConversion",
+      "cron": "14,29,44,59 * * * *",
+      "payload": { "_service_role": true, "dry_run": false }
+    },
+    {
       "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 3 hours",
       "function": "runManualZeroDeliveryBootstrap",
       "cron": "8 */3 * * *",
