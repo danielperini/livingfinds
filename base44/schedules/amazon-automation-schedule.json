@@ -117,6 +117,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Campaign budget floor R$15 - hourly",
+      "function": "redistributeCampaignBudgets",
+      "cron": "10 * * * *",
+      "payload": { "_service_role": true, "mode": "fix_below_minimum" }
+    },
+    {
       "name": "Motor v8 complete hourly pipeline - staggered from bid executor",
       "function": "runMotorImediato",
       "cron": "31 * * * *",

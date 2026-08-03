@@ -23,16 +23,19 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
+    const serviceRun = body._service_role === true;
+    const user = serviceRun ? null : await base44.auth.me();
+    if (!serviceRun && !user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     const dryRun = body.dry_run === true;
     const mode = String(body.mode || 'fix_below_minimum');
     const db = base44.asServiceRole;
 
     // 1. Resolver conta
-    const accounts = await db.entities.AmazonAccount.filter({ user_id: user.id }, null, 1);
+    const accountFilter = body.amazon_account_id
+      ? { id: body.amazon_account_id }
+      : serviceRun ? { status: 'connected' } : { user_id: user.id };
+    const accounts = await db.entities.AmazonAccount.filter(accountFilter, '-updated_at', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
     const accountId = account.id;
@@ -121,8 +124,17 @@ Deno.serve(async (req) => {
           await sleep(SLEEP_MS);
         }
 
-        // Atualizar banco local sempre
-        await db.entities.Campaign.update(c.id, { daily_budget: AMAZON_MIN_BUDGET }).catch(() => {});
+        // Nunca refletir um orçamento como aplicado sem confirmação da Amazon.
+        if (!amazonOk) {
+          results.push({
+            campaign_id: c.campaign_id || c.amazon_campaign_id,
+            name: c.name || c.campaign_name,
+            old_budget: Number(c.daily_budget || 0), new_budget: AMAZON_MIN_BUDGET,
+            amazon_ok: false, status: 'unconfirmed',
+          });
+          continue;
+        }
+        await db.entities.Campaign.update(c.id, { daily_budget: AMAZON_MIN_BUDGET, budget: AMAZON_MIN_BUDGET, synced_at: new Date().toISOString() }).catch(() => {});
         adjusted++;
 
         results.push({
@@ -146,7 +158,7 @@ Deno.serve(async (req) => {
         result_summary: JSON.stringify({ adjusted, minimum: AMAZON_MIN_BUDGET, candidates: candidates.length }).slice(0, 2000),
       }).catch(() => {});
 
-      return Response.json({ ok: true, dry_run: false, mode, adjusted, campaigns_count: enabledCampaigns.length, results, duration_ms: Date.now() - t0 });
+      return Response.json({ ok: true, dry_run: false, mode, adjusted, unconfirmed: candidates.length - adjusted, campaigns_count: enabledCampaigns.length, results, duration_ms: Date.now() - t0 });
     }
 
     // ── MODE: proportional ───────────────────────────────────────────────────
