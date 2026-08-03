@@ -151,7 +151,11 @@ export async function startScheduler(): Promise<void> {
         .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
         .finally(() => runningJobs.delete(jobKey));
   };
-  setTimeout(() => {
-    for (const job of jobs.filter((item) => item.run_on_startup === true)) runStartupJob(job);
-  }, 1_000);
+  // Jobs de bootstrap costumam acessar as mesmas contas, campanhas e produtos.
+  // Dispará-los todos no mesmo segundo aumenta 429, contenção no banco e leituras
+  // de estado intermediário. Preservamos todos, mas em uma fila escalonada.
+  const startupJobs = jobs.filter((item) => item.run_on_startup === true);
+  startupJobs.forEach((job, index) => {
+    setTimeout(() => runStartupJob(job), 1_000 + index * 30_000);
+  });
 }
