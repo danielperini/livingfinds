@@ -29,13 +29,9 @@ const CONFIRMED_ACTIVE_PRODUCTS: Record<string, string> = {
 function activeProduct(product: any): boolean {
   const sku = String(product?.sku || '').trim();
   const asin = String(product?.asin || '').trim().toUpperCase();
-  const status = String(product?.status || product?.offer_status || '').trim().toLowerCase();
   const available = availableAdsStock(product);
   return stockAdsDecision(product) === 'activate' && !!sku && /^B0[A-Z0-9]{8}$/.test(asin) && available > 1
-    && !['inactive', 'archived', 'deleted', 'closed'].includes(status)
-    && product?.listing_suppressed !== true
-    && product?.offer_active !== false
-    && product?.listing_buyable !== false;
+    && product?.listing_suppressed !== true;
 }
 
 function dataOf(response: any): any {

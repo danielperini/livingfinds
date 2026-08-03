@@ -190,15 +190,22 @@ Deno.serve(async (req) => {
       // amazon_status e a fonte que o painel usa primeiro. Se estiver PAUSED,
       // nao podemos considerar o registro ativo apenas porque state ficou stale.
       const state = String(autoCampaign.amazon_status || autoCampaign.state || autoCampaign.status || '').toUpperCase();
-      if (state !== 'ENABLED') {
-        const enabled = await adsRequestWithDetails(
-          'PUT', '/sp/campaigns',
-          { campaigns: [{ campaignId: String(autoCampaign.campaign_id), state: 'ENABLED' }] },
-          refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
-        );
-        if (![200, 201, 207].includes(enabled.status)) {
-          return Response.json({ ok: false, error: `Falha ao reativar AUTO ${autoCampaign.campaign_id}`, http_status: enabled.status });
-        }
+      const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
+      if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
+      // Sempre reafirmar ENABLED na Amazon. Estado local nunca substitui a
+      // confirmacao remota e PUT ENABLED e idempotente.
+      const enabled = await adsRequestWithDetails(
+        'PUT', '/sp/campaigns',
+        { campaigns: [{ campaignId: String(effectiveCampaignId), state: 'ENABLED' }] },
+        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+      );
+      const enabledError = extractCampaignError(enabled.data);
+      if (![200, 201, 207].includes(enabled.status) || enabledError) {
+        return Response.json({
+          ok: false, error: `Falha ao reativar AUTO ${effectiveCampaignId}`,
+          http_status: enabled.status, amazon_error: enabledError,
+          request_id: enabled.headers?.requestId || '',
+        });
       }
       await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
         state: 'enabled', status: 'enabled', amazon_status: 'enabled',
@@ -206,7 +213,7 @@ Deno.serve(async (req) => {
         synced_at: new Date().toISOString(), last_sync_at: new Date().toISOString(),
       });
       const existingGroups = await base44.asServiceRole.entities.AdGroup.filter({
-        amazon_account_id, campaign_id: String(autoCampaign.campaign_id),
+        amazon_account_id, campaign_id: String(effectiveCampaignId),
       }, null, 100).catch(() => []);
       for (const group of existingGroups) {
         const adGroupId = String(group.ad_group_id || '');
@@ -224,17 +231,17 @@ Deno.serve(async (req) => {
       const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
       for (const product of linkedProducts) {
         await base44.asServiceRole.entities.Product.update(product.id, {
-          has_campaign: true, campaign_status: 'active', linked_campaign_id: autoCampaign.campaign_id,
+          has_campaign: true, campaign_status: 'active', linked_campaign_id: effectiveCampaignId,
         }).catch(() => {});
       }
       return Response.json({
         ok: true,
-        campaign_id: autoCampaign.campaign_id,
+        campaign_id: effectiveCampaignId,
         campaign_name: autoCampaign.name || autoCampaign.campaign_name,
         daily_budget: autoCampaign.daily_budget,
         already_exists: true,
-        reactivated: state !== 'ENABLED',
-        action_label: state === 'ENABLED' ? 'existing_enabled' : 'reactivated',
+        reactivated: true,
+        action_label: 'reactivated',
         proportional_bid: initialBid,
       });
     }
@@ -283,11 +290,13 @@ Deno.serve(async (req) => {
         { campaigns: [{ campaignId: String(campaignId), state: 'ENABLED' }] },
         refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
       );
-      if (![200, 201, 207].includes(enabled.status)) {
+      const enabledError = extractCampaignError(enabled.data);
+      if (![200, 201, 207].includes(enabled.status) || enabledError) {
         return Response.json({
           ok: false,
           error: `Falha ao reativar AUTO reconciliada ${campaignId}`,
           http_status: enabled.status,
+          amazon_error: enabledError,
           request_id: enabled.headers?.requestId || '',
         });
       }
