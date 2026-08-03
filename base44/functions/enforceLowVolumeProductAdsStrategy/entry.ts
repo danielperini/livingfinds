@@ -139,7 +139,8 @@ Deno.serve(async (req) => {
         }).catch((error: any) => ({ data: { ok: false, failed: 1, error: error?.message || String(error) } }));
         const dedup = dedupResponse?.data || dedupResponse || {};
         if (dedup.ok === false || numberValue(dedup.failed) > 0) {
-          throw new Error(`Reconciliação das AUTO duplicadas não confirmada: ${dedup.error || `${dedup.failed} falha(s)`}`);
+          const failedDetails = (dedup.details || []).filter((row: any) => row.error).slice(0, 3);
+          throw new Error(`Reconciliação das AUTO duplicadas não confirmada: ${dedup.error || `${dedup.failed} falha(s)`} ${JSON.stringify(failedDetails)}`);
         }
         await base44.asServiceRole.functions.invoke('syncAdsCampaignStatesV2', {
           _service_role: true, amazon_account_id: accountId,

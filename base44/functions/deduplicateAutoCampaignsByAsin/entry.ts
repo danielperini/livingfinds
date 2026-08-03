@@ -131,20 +131,27 @@ Deno.serve(async (req) => {
               _service_role: true,
               amazon_account_id: accountId,
               operation: 'confirmArchivedDuplicateAutoCampaign',
-              path: `/sp/campaigns/${amazonId}`,
-              method: 'GET',
+              path: '/sp/campaigns/list',
+              method: 'POST',
               content_type: 'application/vnd.spCampaign.v3+json',
               accept: 'application/vnd.spCampaign.v3+json',
-              payload: null,
+              payload: {
+                stateFilter: { include: ['ARCHIVED'] },
+                campaignIdFilter: { include: [String(amazonId)] },
+                maxResults: 10,
+              },
             });
             const verifyData = verifyResponse?.data || verifyResponse || {};
-            const remoteState = String(verifyData?.payload?.state || verifyData?.state || '').toUpperCase();
+            const confirmedCampaign = (verifyData?.payload?.campaigns || []).find((row: any) =>
+              String(row?.campaignId || '') === String(amazonId));
+            const remoteState = String(confirmedCampaign?.state || '').toUpperCase();
             if (verifyData.ok !== true || remoteState !== 'ARCHIVED') {
               throw new Error(`Estado remoto não confirmado como ARCHIVED: ${remoteState || 'desconhecido'}`);
             }
             dupEntry.archived_on_amazon = true;
           } catch (e: any) {
             console.warn(`[dedup] Falha ao arquivar ${amazonId} na Amazon:`, e.message);
+            dupEntry.error = String(e?.message || e).slice(0, 500);
             totalFailed++;
           }
         }
