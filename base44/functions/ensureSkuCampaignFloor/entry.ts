@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { availableAdsStock, stockAdsDecision } from '../../shared/stockAdsPolicy.ts';
+import { clearManualPauseLockPatch } from '../../shared/productCampaignPauseGuard.ts';
 
 const MANUAL_FLOOR = 5;
 const enabled = (c: any) => String(c.amazon_status || c.state || c.status || '').toUpperCase() === 'ENABLED';
@@ -100,6 +101,21 @@ Deno.serve(async (req) => {
         const asin = String(product.asin).trim().toUpperCase();
         if (seen.has(`${sku}|${asin}`)) continue;
         seen.add(`${sku}|${asin}`);
+
+        // O pedido de cobertura total autoriza Ads para este SKU elegivel.
+        // Limpar todas as linhas duplicadas do catalogo, pois uma unica linha
+        // stale com manual_block bloqueia o gateway para o ASIN inteiro.
+        const now = new Date().toISOString();
+        const sameProductRows = products.filter((p: any) =>
+          String(p.asin || '').trim().toUpperCase() === asin || String(p.sku || '').trim().toUpperCase() === sku.toUpperCase());
+        for (const row of sameProductRows) {
+          await base44.asServiceRole.entities.Product.update(row.id, {
+            ...clearManualPauseLockPatch(now, 'sku_campaign_floor_authorization'),
+            ads_scope_status: 'authorized', ads_authorized_by_user: true,
+            ads_authorized_at: now, ads_authorized_by: 'decision_engine',
+            should_activate_campaign: true,
+          }).catch(() => {});
+        }
 
         const autoResult = await base44.asServiceRole.functions.invoke('createAutoCampaignForAsin', {
           _service_role: true, amazon_account_id: aid, sku, asin,
