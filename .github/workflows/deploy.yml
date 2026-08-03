@@ -143,13 +143,15 @@ jobs:
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const headers = { "content-type": "application/json", "x-api-token": token };
               const skus = ["FBA-0008P", "FBA-0008V", "FBA-0076A", "FBA-0076C", "FBA-0087b", "FBA-0087c", "FBA-0100", "SKU-002314A", "SKU-002314V", "W9-OL7U-LRW5"];
-              const call = async (name, payload) => {
+              const call = async (name, payload, allowLocked = false) => {
                 const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
                   method: "POST", headers, body: JSON.stringify({ _service_role: true, ...payload })
                 });
                 const data = await response.json().catch(() => ({}));
                 console.log("REPRICING_" + name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 12000));
-                if (!response.ok || data.ok === false) throw new Error(data.error || (name + " failed"));
+                const onlyLocked = Array.isArray(data.results) && data.results.length > 0 && data.results.every((row) => row.locked === true);
+                if (!response.ok || (data.ok === false && !(allowLocked && onlyLocked))) throw new Error(data.error || (name + " failed"));
+                if (allowLocked && onlyLocked) console.log("REPRICING_EVALUATION_DEFERRED=existing_cycle_lock|SAFE=true");
                 return data;
               };
               await call("syncAmazonOfferAvailability", { skus, max_products: skus.length });
@@ -160,7 +162,7 @@ jobs:
                 operation: "full_evaluation", recommendation_only: true,
                 force_all_decisions: true, max_products: 200,
                 changed_by: "deploy_stocked_sku_management"
-              });
+              }, true);
             ' </dev/null
 
             echo '--- ativacao imediata de campanhas para SKUs com estoque confirmado ---'
