@@ -1,7 +1,7 @@
 /**
- * bulkSetAllBids — Define bid de R$0.60 em todas as keywords ativas/pausadas via Amazon Ads API.
- * Também atualiza o campo default_bid dos ad groups.
- * Payload: { amazon_account_id, bid? (default 0.60) }
+ * bulkSetAllBids — reduz somente bids acima do teto informado.
+ * Nunca aumenta um bid existente. Teto absoluto: R$1,00.
+ * Payload: { amazon_account_id, bid? (default 1.00), _service_role? }
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
@@ -53,6 +53,23 @@ async function adsCall(method, path, body, contentType = 'application/json') {
   return { ok: res.ok, status: res.status, data };
 }
 
+async function listAll(path, key, contentType) {
+  const rows = [];
+  let nextToken;
+  for (let page = 0; page < 100; page++) {
+    const response = await adsCall('POST', path, {
+      stateFilter: { include: ['ENABLED', 'PAUSED'] },
+      maxResults: 100,
+      ...(nextToken ? { nextToken } : {}),
+    }, contentType);
+    if (!response.ok) return { ok: false, status: response.status, data: response.data, rows };
+    rows.push(...(response.data?.[key] || (Array.isArray(response.data) ? response.data : [])));
+    nextToken = response.data?.nextToken;
+    if (!nextToken) return { ok: true, rows };
+  }
+  return { ok: false, status: 508, data: { error: 'Limite de paginação excedido' }, rows };
+}
+
 // chunk array into batches of N
 function chunk(arr, size) {
   const result = [];
@@ -63,14 +80,17 @@ function chunk(arr, size) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const body = await req.json().catch(() => ({}));
-    const amazonAccountId = body.amazon_account_id;
-    const targetBid = typeof body.bid === 'number' ? body.bid : 0.60;
+    const user = body._service_role === true ? { role: 'service' } : await base44.auth.me().catch(() => null);
+    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    let amazonAccountId = body.amazon_account_id;
+    const targetBid = Math.max(0.02, Math.min(1, typeof body.bid === 'number' ? body.bid : 1));
 
-    if (!amazonAccountId) return Response.json({ error: 'amazon_account_id required' }, { status: 400 });
+    if (!amazonAccountId) {
+      const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
+      amazonAccountId = accounts.find(account => account.ads_profile_id)?.id || accounts[0]?.id;
+    }
+    if (!amazonAccountId) return Response.json({ error: 'Nenhuma conta Amazon configurada' }, { status: 400 });
 
     const now = new Date().toISOString();
     let kwTotal = 0, kwOk = 0, kwFailed = 0;
@@ -80,16 +100,14 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────
     // 1. Buscar keywords SP ativas/pausadas da Amazon API
     // ─────────────────────────────────────────────────────────────
-    const kwRes = await adsCall('POST', '/sp/keywords/list',
-      { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 1000 },
-      'application/vnd.spKeyword.v3+json'
-    );
+    const kwRes = await listAll('/sp/keywords/list', 'keywords', 'application/vnd.spKeyword.v3+json');
 
     if (!kwRes.ok) {
       return Response.json({ ok: false, error: `Falha ao listar keywords: ${JSON.stringify(kwRes.data).slice(0, 300)}` }, { status: 500 });
     }
 
-    const kwList = kwRes.data?.keywords || (Array.isArray(kwRes.data) ? kwRes.data : []);
+    const allKeywords = kwRes.rows;
+    const kwList = allKeywords.filter(kw => Number(kw.bid) > targetBid);
     kwTotal = kwList.length;
 
     // 2. Atualizar na Amazon API em batches de 100
@@ -108,7 +126,7 @@ Deno.serve(async (req) => {
     }
 
     // 3. Atualizar banco local (keyword_id list)
-    const kwIds = kwList.map(kw => String(kw.keywordId));
+    const kwIds = kwFailed === 0 ? kwList.map(kw => String(kw.keywordId)) : [];
     for (const kwId of kwIds) {
       await base44.asServiceRole.entities.Keyword.updateMany(
         { amazon_account_id: amazonAccountId, keyword_id: kwId },
@@ -119,13 +137,11 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────
     // 4. Buscar ad groups e atualizar default_bid
     // ─────────────────────────────────────────────────────────────
-    const agRes = await adsCall('POST', '/sp/adGroups/list',
-      { stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 500 },
-      'application/vnd.spAdGroup.v3+json'
-    );
+    const agRes = await listAll('/sp/adGroups/list', 'adGroups', 'application/vnd.spAdGroup.v3+json');
 
     if (agRes.ok) {
-      const agList = agRes.data?.adGroups || (Array.isArray(agRes.data) ? agRes.data : []);
+      const allAdGroups = agRes.rows;
+      const agList = allAdGroups.filter(ag => Number(ag.defaultBid) > targetBid);
       agTotal = agList.length;
 
       const agBatches = chunk(agList, 100);
@@ -142,7 +158,7 @@ Deno.serve(async (req) => {
       }
 
       // Atualizar banco local ad groups
-      for (const ag of agList) {
+      for (const ag of agFailed === 0 ? agList : []) {
         await base44.asServiceRole.entities.AdGroup.updateMany(
           { amazon_account_id: amazonAccountId, ad_group_id: String(ag.adGroupId) },
           { $set: { default_bid: targetBid, synced_at: now } }
@@ -165,7 +181,7 @@ Deno.serve(async (req) => {
       new_value: String(targetBid),
       source: 'USER',
       source_function: 'bulkSetAllBids',
-      reason: `Bulk set: todos os bids para R$${targetBid.toFixed(2)} via interface`,
+      reason: `Teto preventivo: somente bids acima de R$${targetBid.toFixed(2)} foram reduzidos; bids menores foram preservados`,
       status: kwFailed === 0 ? 'executed' : 'failed',
       changed_at: now,
     }).catch(() => {});
