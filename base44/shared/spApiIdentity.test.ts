@@ -30,3 +30,15 @@ Deno.test("Listings usa SKU mesmo sem ASIN e diagnóstico identifica cobertura",
   assertEquals(samples.asin?.asin, "B0001");
   assertEquals(samples.pricing, null);
 });
+
+Deno.test("diagnostico prioriza SKU ativo com estoque e marketplace correto", () => {
+  const samples = selectSpApiSamples([
+    { sku: "ANTIGO", asin: "B000000001", archived: true, stock: 20 },
+    { sku: "SEM-ESTOQUE", asin: "B000000002", stock: 0, marketplace_id: "BR" },
+    { sku: "ATIVO", asin: "B000000003", stock: 4, status: "active", marketplace_id: "BR" },
+    { sku: "OUTRO-MKT", asin: "B000000004", stock: 10, marketplace_id: "US" },
+  ], "BR");
+  assertEquals(samples.listing?.sku, "ATIVO");
+  assertEquals(samples.pricing?.sku, "ATIVO");
+  assertEquals(samples.listingCandidates.map((item) => item.sku), ["ATIVO", "SEM-ESTOQUE"]);
+});
