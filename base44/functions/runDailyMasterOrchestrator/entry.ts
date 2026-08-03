@@ -141,7 +141,6 @@ Deno.serve(async (req) => {
     add('ensureActiveProductCampaignCoverage', 'stock_campaign_coverage', {
       dry_run: false, max_products: 500, lookback_days: 65,
     });
-    add('ensureSkuCampaignFloor', 'sku_campaign_floor', { manual_floor: 5 });
 
     // Sempre: motor de decisão + execução (idempotentes)
     add('runUnifiedDecisionEngine', 'decision_engine');
@@ -212,6 +211,10 @@ Deno.serve(async (req) => {
 
     // Sempre: criar campanhas MANUAL EXACT para winners do TermBank (1 campanha por termo)
     add('runTermBankToCampaigns', 'term_bank_to_campaigns', { max_per_run: 10, max_per_asin: 5 });
+
+    // Ultima acao de Ads: restaura e confirma remotamente o piso depois dos
+    // guardrails, motores de lucro e reparos que podem alterar estados.
+    add('ensureSkuCampaignFloor', 'sku_campaign_floor_final', { manual_floor: 5 });
 
     // 1x/dia: backup
     if (!backupDone || force) add('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);

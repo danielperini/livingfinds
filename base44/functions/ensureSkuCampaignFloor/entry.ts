@@ -47,6 +47,29 @@ function amazonErrors(result: any): any[] {
   return payload?.campaigns?.error || payload?.campaigns?.errors || payload?.errors || [];
 }
 
+async function remoteCampaigns(base44: any, aid: string, ids: string[]) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const rows: any[] = [];
+  for (let i = 0; i < unique.length; i += 100) {
+    const batch = unique.slice(i, i + 100);
+    const response = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+      _service_role: true, amazon_account_id: aid, operation: 'verifySkuCampaignFloorRemote',
+      method: 'POST', path: '/sp/campaigns/list',
+      payload: { campaignIdFilter: { include: batch }, stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, maxResults: 100 },
+      content_type: 'application/vnd.spCampaign.v3+json', accept: 'application/vnd.spCampaign.v3+json',
+    }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+    const data = response?.data || response || {};
+    if (data.ok !== true) throw new Error(data.error || data.errors?.[0]?.message || 'Falha ao confirmar campanhas na Amazon');
+    const payload = data.payload || data;
+    rows.push(...(Array.isArray(payload.campaigns) ? payload.campaigns : []));
+  }
+  return rows;
+}
+
+const remoteEnabled = (c: any) => String(c.state || '').toUpperCase() === 'ENABLED';
+const remoteManual = (c: any) => String(c.targetingType || c.targeting_type || '').toUpperCase() === 'MANUAL';
+const remoteAuto = (c: any) => String(c.targetingType || c.targeting_type || '').toUpperCase() === 'AUTO';
+
 Deno.serve(async (req) => {
   const startedAt = new Date().toISOString();
   try {
@@ -82,12 +105,28 @@ Deno.serve(async (req) => {
           _service_role: true, amazon_account_id: aid, sku, asin,
           product_name: product.product_name || product.title || product.name || '',
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
-        const auto = autoResult?.data || autoResult || {};
+        let auto = autoResult?.data || autoResult || {};
+        if (auto.campaign_id) {
+          const probe = (await remoteCampaigns(base44, aid, [String(auto.campaign_id)]))[0];
+          if (String(probe?.state || '').toUpperCase() === 'ARCHIVED') {
+            const stale = campaigns.find((c: any) => idOf(c) === String(auto.campaign_id));
+            if (stale) await base44.asServiceRole.entities.Campaign.update(stale.id, {
+              state: 'archived', status: 'archived', amazon_status: 'ARCHIVED', archived: true,
+              is_operational: false, requires_attention: true, synced_at: new Date().toISOString(),
+            }).catch(() => {});
+            const replacement = await base44.asServiceRole.functions.invoke('createAutoCampaignForAsin', {
+              _service_role: true, amazon_account_id: aid, sku, asin,
+              product_name: product.product_name || product.title || product.name || '',
+            }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+            auto = replacement?.data || replacement || {};
+          }
+        }
         const candidates = uniqueCampaigns(campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c) && belongsTo(c, sku, asin)));
-        const active = candidates.filter(enabled);
-        const paused = candidates.filter((c: any) => !enabled(c)).sort((a: any, b: any) =>
+        const ranked = [...candidates].sort((a: any, b: any) =>
           num(b.orders) - num(a.orders) || num(b.sales) - num(a.sales) || num(b.roas) - num(a.roas) || num(a.spend) - num(b.spend));
-        const selected = paused.slice(0, Math.max(0, floor - active.length));
+        // Reafirmar o piso diretamente na Amazon mesmo quando o banco local
+        // estiver stale. Estado local nunca conta como prova de ativacao.
+        const selected = ranked.slice(0, floor);
         const reactivated: string[] = [];
         const errors: any[] = [];
 
@@ -99,20 +138,25 @@ Deno.serve(async (req) => {
             payload: { campaigns: batch.map((c: any) => ({ campaignId: idOf(c), state: 'ENABLED' })) },
             content_type: 'application/vnd.spCampaign.v3+json', accept: 'application/vnd.spCampaign.v3+json',
           }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+          const responseData = response?.data || response || {};
           const batchErrors = amazonErrors(response);
+          if (responseData.ok !== true) {
+            errors.push(...batch.map((campaign: any) => ({ campaign_id: idOf(campaign), error: responseData.error || responseData.errors?.[0]?.message || `Amazon HTTP ${responseData.status || 'unknown'}` })));
+            continue;
+          }
           for (const campaign of batch) {
             const campaignId = idOf(campaign);
             const rejected = batchErrors.find((e: any) => String(e.campaignId || e.campaign_id || '') === campaignId);
             if (rejected) { errors.push({ campaign_id: campaignId, error: rejected.message || rejected.code }); continue; }
-            await base44.asServiceRole.entities.Campaign.update(campaign.id, {
-              state: 'enabled', status: 'enabled', amazon_status: 'ENABLED', is_operational: true,
-              requires_attention: false, synced_at: new Date().toISOString(),
-            });
             reactivated.push(campaignId);
           }
         }
 
-        let manualActive = active.length + reactivated.length;
+        let remoteRows = await remoteCampaigns(base44, aid, [auto.campaign_id, ...candidates.map(idOf)].filter(Boolean));
+        const autoRemote = remoteRows.find((c: any) => String(c.campaignId || '') === String(auto.campaign_id || ''));
+        const autoActive = Boolean(auto.ok !== false && autoRemote && remoteEnabled(autoRemote) && remoteAuto(autoRemote));
+        let enabledManualRows = remoteRows.filter((c: any) => remoteEnabled(c) && remoteManual(c));
+        let manualActive = new Set(enabledManualRows.map((c: any) => String(c.campaignId))).size;
         const created: any[] = [];
         if (manualActive < floor) {
           const searchTerms = await base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid, advertised_asin: asin }, '-date', 1000).catch(() => []);
@@ -136,13 +180,25 @@ Deno.serve(async (req) => {
             return { keyword, ok: data.ok === true, campaign_id: data.campaign_id || null, error: data.error || null };
           }));
           created.push(...creationResults);
-          manualActive += creationResults.filter((r: any) => r.ok && r.campaign_id).length;
+          remoteRows = await remoteCampaigns(base44, aid, [auto.campaign_id, ...candidates.map(idOf), ...creationResults.map((r: any) => r.campaign_id)].filter(Boolean));
+          enabledManualRows = remoteRows.filter((c: any) => remoteEnabled(c) && remoteManual(c));
+          manualActive = new Set(enabledManualRows.map((c: any) => String(c.campaignId))).size;
         }
-        results.push({ sku, asin, auto_active: auto.ok !== false, auto_campaign_id: auto.campaign_id || null,
+        for (const campaign of candidates) {
+          const confirmed = enabledManualRows.some((row: any) => String(row.campaignId) === idOf(campaign));
+          await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+            state: confirmed ? 'enabled' : 'paused', status: confirmed ? 'enabled' : 'paused',
+            amazon_status: confirmed ? 'ENABLED' : 'PAUSED', is_operational: confirmed,
+            requires_attention: !confirmed, synced_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
+        results.push({ sku, asin, auto_active: autoActive, auto_campaign_id: auto.campaign_id || null,
           manual_floor: floor, manual_active: manualActive, manual_existing: candidates.length,
           manual_reactivated: reactivated.length, reactivated_campaign_ids: reactivated,
           manual_created: created.filter((r: any) => r.ok).length, created,
-          deficit: Math.max(0, floor - manualActive), errors, auto_error: auto.error || null });
+          deficit: Math.max(0, floor - manualActive), errors,
+          remote_verified: true, auto_remote_state: autoRemote?.state || 'NOT_FOUND',
+          auto_error: auto.error || (!autoActive ? 'AUTO nao confirmada ENABLED na Amazon' : null) });
       }
     }
 

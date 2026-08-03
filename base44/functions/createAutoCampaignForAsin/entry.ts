@@ -184,7 +184,9 @@ Deno.serve(async (req) => {
       const targeting = String(c.targeting_type || '').toUpperCase();
       const name = String(c.name || c.campaign_name || '').toUpperCase();
       const state = String(c.state || c.status || '').toUpperCase();
-      return c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
+      return c.archived !== true && state !== 'ARCHIVED'
+        && !name.includes('MANUAL')
+        && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
     });
     if (autoCampaign) {
       // amazon_status e a fonte que o painel usa primeiro. Se estiver PAUSED,
