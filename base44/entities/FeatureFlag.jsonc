@@ -5,6 +5,8 @@
     "key": {
       "type": "string"
     },
+    "amazon_account_id": { "type": "string" },
+    "config": { "type": "object" },
     "enabled": {
       "type": "boolean",
       "default": false

@@ -24,6 +24,21 @@ Deno.serve(async (request) => {
       engine_version: 'unified-v4-repricing',
     };
 
+    // Snapshot econômico e estado canônico sempre são atualizados antes das
+    // decisões. Escritas na Amazon dependem da feature flag por conta e dos
+    // limites de rollout verificados dentro da função delegada.
+    const journeyResponse = await base44.asServiceRole.functions.invoke(
+      'runEconomicProductJourney',
+      {
+        amazon_account_id: body.amazon_account_id || null,
+        dry_run: body.dry_run === true,
+        execute: body.execute_product_journey === true,
+        max_actions: body.max_product_journey_actions,
+        _service_role: true,
+      },
+    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
+    const productJourney = journeyResponse?.data || journeyResponse || {};
+
     const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
       'reconcileManualBidCycleScope',
       {
@@ -116,12 +131,14 @@ Deno.serve(async (request) => {
 
     return Response.json({
       ok: data?.ok !== false && repricing?.ok !== false &&
+        productJourney?.ok !== false &&
         scopeAfter?.ok !== false && nativeRules?.ok !== false &&
         legacyQueue?.ok !== false,
       engine: 'unified',
       engine_version: 'unified-v4-repricing',
       delegated_to: 'runDeterministicDecisionEngine',
       repricing_delegated_to: 'runAutomaticRepricing',
+      product_journey: productJourney,
       amazon_account_id: body.amazon_account_id || null,
       manual_bid_scope_before: scopeBefore,
       manual_zero_delivery_bootstrap: bootstrap,

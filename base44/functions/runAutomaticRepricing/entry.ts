@@ -1281,9 +1281,6 @@ async function evaluateAccount(
     pricingTargets,
   );
   const results: any[] = [];
-  // IA apenas auxilia a formulação da pesquisa; no máximo 10 perfis por ciclo.
-  // Preço, margem, confiança e elegibilidade permanecem determinísticos/API.
-  const similarSearchAiBudget = { used: 0, max: 10 };
   let queued = 0;
 
   for (const product of eligible) {
@@ -1300,29 +1297,15 @@ async function evaluateAccount(
     // O estudo de mercado é informativo e deve existir mesmo quando estoque,
     // Listings ou fulfillment ainda impedem a EXECUÇÃO do novo preço.
     const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = options.full !== true &&
-        cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
-        numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
-        Array.isArray(cachedSimilar.similar_competitor_products) &&
-        cachedSimilar.similar_competitor_products.length > 0 &&
-        hoursSince(cachedSimilar.similar_competition_checked_at) <= 24
-      ? {
-        average: numberValue(cachedSimilar.similar_competitor_price_average, 0) || null,
-        minimum: numberValue(cachedSimilar.similar_competitor_price_minimum, 0) || null,
-        maximum: numberValue(cachedSimilar.similar_competitor_price_maximum, 0) || null,
-        count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
-        matches: cachedSimilar.similar_competitor_products || [],
-        checkedAt: cachedSimilar.similar_competition_checked_at,
-        source: "persisted_scrapingbee_amazon_search_inferred",
-        aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
-        canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
-        searchQueries: cachedSimilar.similar_competition_search_queries || [],
-        error: cachedSimilar.similar_competition_error || null,
-      }
-      : await fetchSimilarCompetition(base44, account, accessToken, product, similarSearchAiBudget).catch((error: any) => ({
-        average: null, minimum: null, maximum: null, count: 0, matches: [], checkedAt: nowIso(),
-        source: "scrapingbee_amazon_search_inferred_error", error: error?.message || String(error),
-      }));
+    // Concorrência usada na decisão vem exclusivamente da Product Pricing
+    // API. Scraping/HTML permanece fora do caminho econômico e nunca autoriza
+    // alteração de preço.
+    const similarCompetition = {
+      average: null, minimum: null, maximum: null, count: 0, matches: [],
+      checkedAt: nowIso(), source: "disabled_official_api_only",
+      aiAssisted: false, canonicalSourceTitle: null, searchQueries: [],
+      error: "public_page_scraping_disabled",
+    };
     await base44.asServiceRole.entities.ProductEconomics.update(economics.id, {
       decision_evidence: {
         ...cachedSimilar,
@@ -1462,9 +1445,7 @@ async function evaluateAccount(
       (economics.competition_checked_at &&
         hoursSince(economics.competition_checked_at) * 60 <=
           numberValue(settings.competition_max_age_minutes, 30));
-    const scrapingBeeCompetitionFresh = similarCompetition.count > 0 &&
-      hoursSince(similarCompetition.checkedAt) <= 24;
-    const marketCompetitionFresh = competitionFresh || scrapingBeeCompetitionFresh;
+    const marketCompetitionFresh = competitionFresh;
     const currency = account.currency_code ||
       CURRENCY_BY_MARKETPLACE[account.marketplace_id] || "BRL";
     let feesPatch: any = {};
@@ -1791,8 +1772,7 @@ async function evaluateAccount(
       competition_source: "Product Pricing API 2022-05-01",
       market_competition_fresh: marketCompetitionFresh,
       sp_api_competition_fresh: competitionFresh,
-      scrapingbee_competition_fresh: scrapingBeeCompetitionFresh,
-      scrapingbee_metric_weight: scrapingBeeCompetitionFresh ? 0.75 : 0,
+      public_page_scraping_enabled: false,
       fees_source: mergedEconomics.fees_source,
       ads_cost_source: adsCost.source,
       current_price: confirmedPrice,
@@ -1804,36 +1784,7 @@ async function evaluateAccount(
       ),
       competitor_reference_prices: pricing.referencePrices || [],
       competitor_reference_price_average: pricing.referenceAveragePrice || null,
-      scrapingbee_competitor_price_average: similarCompetition.average || null,
-      scrapingbee_competitor_price_minimum: similarCompetition.minimum || null,
-      scrapingbee_competitor_price_maximum: similarCompetition.maximum || null,
-      scrapingbee_competitor_count: similarCompetition.count || 0,
-      scrapingbee_competition_checked_at: similarCompetition.checkedAt,
-      scrapingbee_competition_source: similarCompetition.source,
-      scrapingbee_sales_estimate_average: averagePositive(
-        (similarCompetition.matches || []).map((match: any) =>
-          match.competitor_sales_estimate
-        ),
-      ),
-      scrapingbee_sales_estimate_confidence: similarCompetition.count > 0
-        ? "low"
-        : null,
-      scrapingbee_sales_estimate_source: similarCompetition.count > 0
-        ? "inferred"
-        : null,
-      similar_competitor_price_average: similarCompetition.average || null,
-      similar_competitor_price_minimum: similarCompetition.minimum || null,
-      similar_competitor_price_maximum: similarCompetition.maximum || null,
-      similar_competitor_product_count: similarCompetition.count || 0,
-      similar_competitor_products: similarCompetition.matches || [],
-      similar_competition_checked_at: similarCompetition.checkedAt,
-      similar_competition_source: similarCompetition.source,
-      similar_competition_search_queries: similarCompetition.searchQueries || [],
-      similar_competition_error: similarCompetition.error || null,
-      similar_competition_ai_assisted: similarCompetition.aiAssisted === true,
-      similar_competition_canonical_title: similarCompetition.canonicalSourceTitle || null,
-      similar_competition_threshold: 0.90,
-      similar_competition_algorithm_version: SIMILAR_COMPETITION_ALGORITHM_VERSION,
+      official_competition_only: true,
       stock,
       sales_30d: numberValue(sales.sales),
       units_30d: numberValue(sales.units),
@@ -1963,34 +1914,34 @@ async function evaluateAccount(
       economics.id,
       update,
     ).catch(() => {});
+    const competitorOfferPrices = competitorOffers
+      .map((offer: any) => numberValue(offer.totalPrice))
+      .filter((value: number) => value > 0);
     await base44.asServiceRole.entities.Product.update(product.id, {
       listing_buyable: listing.buyable,
       offer_active: listing.offerActive,
       listing_suppressed: listing.suppressed,
       price: confirmedPrice,
-      market_price_average: similarCompetition.average ||
-        pricing.referenceAveragePrice || decision.competitorMedian,
-      market_price_minimum: similarCompetition.minimum || null,
-      market_price_maximum: similarCompetition.maximum || null,
-      market_price_median: decision.competitorMedian || similarCompetition.average,
-      market_price_offer_count: (decision.equivalentOfferCount || 0) +
-        (similarCompetition.count || 0),
+      market_price_average: pricing.referenceAveragePrice || decision.competitorMedian,
+      market_price_minimum: competitorOfferPrices.length
+        ? Math.min(...competitorOfferPrices)
+        : null,
+      market_price_maximum: competitorOfferPrices.length
+        ? Math.max(...competitorOfferPrices)
+        : null,
+      market_price_median: decision.competitorMedian || pricing.referenceAveragePrice,
+      market_price_offer_count: decision.equivalentOfferCount || 0,
       market_price_currency: currency,
-      market_price_source: similarCompetition.count > 0
-        ? "sp_api_product_pricing_2022_05_01+scrapingbee_amazon_search"
-        : "sp_api_product_pricing_2022_05_01",
-      market_price_provider: similarCompetition.count > 0
-        ? "Amazon SP-API + ScrapingBee"
-        : "Amazon SP-API",
+      market_price_source: "sp_api_product_pricing_2022_05_01",
+      market_price_provider: "Amazon SP-API",
       market_price_marketplace: account.marketplace_id,
-      market_price_status: similarCompetition.error
+      market_price_status: pricing.ok !== true
         ? "failed"
-        : similarCompetition.count > 0 || decision.equivalentOfferCount > 0
+        : numberValue(decision.equivalentOfferCount) > 0
         ? "success"
         : "no_offers",
-      market_price_error: similarCompetition.error || null,
-      market_price_last_checked_at: similarCompetition.checkedAt ||
-        pricing.checkedAt || nowIso(),
+      market_price_error: pricing.ok ? null : pricing.errors?.join(" ") || "Product Pricing API unavailable",
+      market_price_last_checked_at: pricing.checkedAt || nowIso(),
       market_price_updated_by: "runAutomaticRepricing",
     }).catch(() => {});
 

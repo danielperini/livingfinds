@@ -15,6 +15,15 @@ export default async function(req: Request): Promise<Response> {
     const user = await base44.auth.me();
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+    return Response.json({
+      ok: false,
+      disabled: true,
+      error: 'Scraping de páginas Amazon desativado. Use TermBank e Amazon Ads Keyword Recommendations API.',
+      replacement_functions: ['syncAmazonKeywordSuggestionsByAsin', 'syncAmazonKeywordSuggestionsBatch'],
+    }, { status: 410 });
+
+    /* Código legado deliberadamente inacessível durante a migração. Mantido
+       temporariamente apenas para preservar histórico de implementação. */
     const body = await req.json().catch(() => ({}));
     const { keyword, asin, marketplace = 'BR' } = body as any;
 

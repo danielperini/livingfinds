@@ -5,6 +5,11 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "economic_snapshot_id": { "type": "string" },
+    "journey_state": { "type": "string" },
+    "cooldown_until": { "type": "string", "format": "date-time" },
     "asin": {
       "type": "string"
     },
@@ -103,6 +108,9 @@
     "negative_keyword_id": {
       "type": "string"
     },
+    "manual_confirmed_at": { "type": "string", "format": "date-time" },
+    "negative_confirmed_at": { "type": "string", "format": "date-time" },
+    "amazon_request_id": { "type": "string" },
     "promotion_status": {
       "type": "string",
       "enum": [
