@@ -767,7 +767,9 @@ Deno.serve(async (req) => {
             profitBeforeAds: econ?.profit_before_ads ?? econ?.contribution_margin_amount,
             safeMaxCpc: assessment?.safe_max_cpc ?? econ?.safe_max_cpc,
             minimumBid: minBid,
-            configuredDailyCap: settings?.minimum_sku_ads_daily_cap,
+            configuredDailyCap: numberValue(campaign?.motor_daily_spend_cap, 0) > 0
+              ? campaign.motor_daily_spend_cap
+              : settings?.minimum_sku_ads_daily_cap,
           });
           let hourDecision = classifyCurrentHour({
             sampleDays: hourData.sampleDays,

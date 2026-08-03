@@ -1,7 +1,9 @@
 import { clamp, numberValue, roundMoney } from './profitGuardPolicy.ts';
 
 export const LOW_VOLUME_MAX_DAILY_ORDERS = 1;
-export const LOW_VOLUME_AMAZON_MIN_BUDGET_BRL = 1;
+// Sponsored Products BR rejeita budgets abaixo do piso operacional observado.
+// O teto econômico menor continua sendo imposto pelo bid e pelo governador intradiário.
+export const LOW_VOLUME_AMAZON_MIN_BUDGET_BRL = 5;
 
 export function isPriorityLowVolumeProduct(product: any): boolean {
   const text = String(product?.product_name || product?.title || product?.name || '')
@@ -57,7 +59,7 @@ export function calculateLowVolumeDailyPlan(input: {
   const maximumDailyLoss = profitPerUnit > 0
     ? roundMoney(Math.max(0, dailyBudget - dailyOrders * profitPerUnit))
     : roundMoney(dailyBudget);
-  const cpcCandidates = [safeMaxCpc, targetCpc, dailyBudget / 4, 1].filter((value) => value > 0);
+  const cpcCandidates = [safeMaxCpc, targetCpc, calculatedSpendCap / 4, 1].filter((value) => value > 0);
   const targetBid = roundMoney(clamp(Math.min(...cpcCandidates), 0.02, 1));
   const acos = sales > 0 ? roundMoney(spend / sales * 100) : null;
 

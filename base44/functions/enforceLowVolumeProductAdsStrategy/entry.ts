@@ -56,6 +56,19 @@ function aggregate(rows: any[], campaignIds: Set<string>) {
   return result;
 }
 
+function selectCanonicalAuto(rows: any[]): any | null {
+  return [...rows].sort((a: any, b: any) => {
+    const aEnabled = enabled(a) ? 1 : 0;
+    const bEnabled = enabled(b) ? 1 : 0;
+    const aComplete = a.is_operational === true && normalizeState(a.reconciliation_status) !== 'review_required' ? 1 : 0;
+    const bComplete = b.is_operational === true && normalizeState(b.reconciliation_status) !== 'review_required' ? 1 : 0;
+    const aScore = numberValue(a.sales) * 100 + numberValue(a.orders) * 10 - numberValue(a.spend);
+    const bScore = numberValue(b.sales) * 100 + numberValue(b.orders) * 10 - numberValue(b.spend);
+    return bEnabled - aEnabled || bComplete - aComplete || bScore - aScore ||
+      new Date(b.synced_at || b.updated_at || 0).getTime() - new Date(a.synced_at || a.updated_at || 0).getTime();
+  })[0] || null;
+}
+
 async function record(base44: any, payload: any) {
   const existing = await base44.asServiceRole.entities.OptimizationDecision.filter({
     amazon_account_id: payload.amazon_account_id,
@@ -118,6 +131,9 @@ Deno.serve(async (req) => {
             product_name: product.product_name || product.title || product.name || '',
           }).catch(() => null);
         }
+        await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
+          _service_role: true, amazon_account_id: accountId, dry_run: false,
+        }).catch(() => null);
       }
 
       const [campaigns, adGroups] = await Promise.all([
@@ -127,8 +143,10 @@ Deno.serve(async (req) => {
       const recentMetrics = metrics.filter((row: any) => String(row?.date || '') >= cutoff);
 
       for (const product of eligibleProducts) {
-        const autos = campaigns.filter((campaign: any) => campaign.archived !== true && isAuto(campaign) && productMatchesCampaign(product, campaign));
-        const campaignIds = new Set(autos.map(campaignIdOf).filter(Boolean));
+        const allAutos = campaigns.filter((campaign: any) => campaign.archived !== true && isAuto(campaign) && productMatchesCampaign(product, campaign));
+        const canonical = selectCanonicalAuto(allAutos);
+        const autos = canonical ? [canonical] : [];
+        const campaignIds = new Set(allAutos.map(campaignIdOf).filter(Boolean));
         const performance = aggregate(recentMetrics, campaignIds);
         const priority = isPriorityLowVolumeProduct(product);
         const sampleDays = Math.max(14, performance.dates.size || 0);

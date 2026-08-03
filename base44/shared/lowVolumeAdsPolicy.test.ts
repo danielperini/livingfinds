@@ -13,7 +13,7 @@ const plan = calculateLowVolumeDailyPlan({
   accountCampaignShareCap: 5, currentBudget: 5,
 });
 assert.equal(plan.lowVolume, true);
-assert.equal(plan.dailyBudget, 1);
+assert.equal(plan.dailyBudget, 5);
 assert.equal(plan.targetBid, 0.25);
 assert.ok(plan.dailyBudget <= plan.dailySales);
 assert.equal(plan.strategy, 'AUTO_LOW_VOLUME_PROFIT_GUARD');
@@ -22,5 +22,6 @@ const learning = calculateLowVolumeDailyPlan({
   sales: 0, orders: 0, spend: 0, sampleDays: 14, targetAcos: 10,
   profitBeforeAdsPerUnit: 25, safeMaxCpc: 0.6, accountCampaignShareCap: 8, currentBudget: 5,
 });
-assert.equal(learning.dailyBudget, 1);
-assert.equal(learning.calculatedSpendCap, 1);
+assert.equal(learning.dailyBudget, 5);
+assert.equal(learning.calculatedSpendCap, 1.2);
+assert.equal(learning.targetBid, 0.3);
