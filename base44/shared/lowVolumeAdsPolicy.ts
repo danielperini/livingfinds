@@ -60,7 +60,8 @@ export function calculateLowVolumeDailyPlan(input: {
     ? roundMoney(Math.max(0, dailyBudget - dailyOrders * profitPerUnit))
     : roundMoney(dailyBudget);
   const acos = sales > 0 ? roundMoney(spend / sales * 100) : null;
-  const cpcCandidates = [safeMaxCpc, targetCpc, calculatedSpendCap / 4, 1].filter((value) => value > 0);
+  const learningBidCeiling = sales > 0 && orders > 0 ? 1 : 0.5;
+  const cpcCandidates = [safeMaxCpc, targetCpc, calculatedSpendCap / 4, learningBidCeiling].filter((value) => value > 0);
   const baseTargetBid = Math.min(...cpcCandidates);
   const acosAdjustment = acos && acos > targetAcos ? targetAcos / acos : 1;
   // R$0,25 é o piso confirmado nesta conta para defaultBid de Ad Group SP.
