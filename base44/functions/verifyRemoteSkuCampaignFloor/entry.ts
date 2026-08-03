@@ -37,7 +37,20 @@ Deno.serve(async (req) => {
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, '-updated_date', 2000);
       const eligible = products.filter((p: any) => availableAdsStock(p) > 1 && stockAdsDecision(p) === 'activate'
         && p.listing_suppressed !== true && String(p.sku || '').trim() && /^B0[A-Z0-9]{8}$/.test(String(p.asin || '').trim().toUpperCase()));
-      const remote = await listEnabled(base44, account.id);
+      let remote = await listEnabled(base44, account.id);
+      // A listagem da Amazon pode atrasar alguns segundos depois de PUT/POST.
+      // Repetir somente enquanto o conjunto ainda nao cobre todos os ASINs.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const missing = eligible.some((p: any) => {
+          const asin = String(p.asin || '').trim().toUpperCase();
+          const linked = remote.filter((c: any) => String(c.name || '').toUpperCase().includes(asin));
+          return linked.filter((c: any) => String(c.targetingType || '').toUpperCase() === 'AUTO').length < 1
+            || linked.filter((c: any) => String(c.targetingType || '').toUpperCase() === 'MANUAL').length < floor;
+        });
+        if (!missing) break;
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+        remote = await listEnabled(base44, account.id);
+      }
       const seen = new Set<string>();
       for (const product of eligible) {
         const sku = String(product.sku).trim();
