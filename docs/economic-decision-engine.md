@@ -78,6 +78,7 @@ Por padrão, a jornada calcula, persiste snapshots e atualiza estados, mas não 
   "config": {
     "max_actions_per_cycle": 5,
     "max_promotions_per_cycle": 5,
+    "minimum_manual_campaigns_per_sku": 5,
     "target_acos_safety_factor": 0.75,
     "low_volume_units_30d": 2,
     "low_volume_units_65d": 4
@@ -88,6 +89,10 @@ Por padrão, a jornada calcula, persiste snapshots e atualiza estados, mas não 
 4. Executar `runEconomicProductJourney` com `dry_run: true` e revisar estados/bloqueios.
 5. Executar com `execute: true`, começando com uma conta e até cinco ações.
 6. Conferir IDs e estados diretamente na Amazon antes de ampliar o limite.
+
+Ao ativar o rollout, `ensureSkuCampaignFloor` é executado antes do motor de bids. Para cada SKU economicamente elegível com mais de uma unidade vendável, ele exige confirmação remota de pelo menos uma campanha AUTO e do piso configurado de campanhas manuais. Campanhas manuais com venda e lucro pós-Ads positivo, ou ACoS abaixo do break-even real do ASIN, são incluídas além do piso mínimo e não são pausadas pelo mecanismo de cobertura. Pausas explícitas do usuário ou de política não são revertidas.
+
+Depois da cobertura, `runDeterministicDecisionEngine` diferencia produtos de maior e menor volume, limita crescimento ao CPC sustentável, protege winners e reduz bids específicos antes de considerar pausa. A existência da campanha não autoriza gasto ilimitado.
 
 ## Sobreposições auditadas
 

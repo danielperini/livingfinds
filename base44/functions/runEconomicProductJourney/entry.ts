@@ -131,18 +131,18 @@ Deno.serve(async (req) => {
           decision_journey_next_evaluation_at: nextEvaluation,
           decision_journey_transition: { from: previousState, to: next.state, reason: next.reason, snapshot_id: snapshot.id, source_function: 'runEconomicProductJourney', at: capturedAt },
         });
-        let delegated: any = null;
-        if (execute && actions < maxActions && next.state === 'READY_FOR_DISCOVERY') {
-          delegated = await base44.asServiceRole.functions.invoke('createAutoCampaignForAsin', {
-            _service_role: true, amazon_account_id: aid, sku, asin,
-            product_name: product.product_name || product.title || product.name || '',
-            economic_snapshot_id: snapshot.id, source_function: 'runEconomicProductJourney',
-          }).then((response: any) => response?.data || response || {}).catch((error: any) => ({ ok: false, error: error?.message }));
-          actions++;
-        }
         accountResults.push({ sku, asin, previous_state: previousState, state: next.state, reason: next.reason,
           economic_snapshot_id: snapshot.id, economics_actionable: snapshotCalculation.actionable,
-          max_sustainable_cpc: snapshotCalculation.max_sustainable_cpc, low_volume: lowVolume, delegated });
+          max_sustainable_cpc: snapshotCalculation.max_sustainable_cpc, low_volume: lowVolume });
+      }
+      let campaignFloor: any = { skipped: true, reason: 'rollout_disabled_or_dry_run' };
+      if (execute && maxActions > 0) {
+        campaignFloor = await base44.asServiceRole.functions.invoke('ensureSkuCampaignFloor', {
+          _service_role: true, amazon_account_id: aid,
+          manual_floor: Math.max(1, n(rollout.config?.minimum_manual_campaigns_per_sku ?? 5)),
+        }).then((response: any) => response?.data || response || {}).catch((error: any) => ({ ok: false, error: error?.message }));
+        actions += (campaignFloor.results || []).reduce((sum: number, row: any) =>
+          sum + n(row.manual_created) + n(row.manual_reactivated) + (row.auto_active ? 1 : 0), 0);
       }
       let harvest: any = { skipped: true, reason: execute ? 'action_limit_or_no_candidates' : 'rollout_disabled_or_dry_run' };
       if (execute && actions < maxActions) {
@@ -152,7 +152,8 @@ Deno.serve(async (req) => {
         }).then((response: any) => response?.data || response || {}).catch((error: any) => ({ ok: false, error: error?.message }));
       }
       output.push({ amazon_account_id: aid, rollout_enabled: rollout.enabled === true, execution_enabled: execute,
-        products: accountResults.length, actions_delegated: actions, results: accountResults, harvest });
+        products: accountResults.length, actions_delegated: actions, results: accountResults,
+        campaign_floor: campaignFloor, harvest });
     }
     return Response.json({ ok: true, engine: 'economic-product-journey-v1', started_at: startedAt, completed_at: new Date().toISOString(), accounts: output });
   } catch (error: any) {

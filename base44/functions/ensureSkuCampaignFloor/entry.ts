@@ -13,6 +13,12 @@ const archived = (c: any) => c.archived === true || String(c.amazon_status || c.
 const idOf = (c: any) => String(c.campaign_id || c.amazon_campaign_id || '').trim();
 const num = (v: any) => Number(v || 0);
 const norm = (v: any) => String(v || '').toLowerCase().trim().replace(/\s+/g, ' ');
+const campaignEconomicsReady = (economics: any) => economics?.costs_confirmed_by_user === true
+  && num(economics?.unit_cost) > 0 && num(economics?.current_price) > 0
+  && String(economics?.price_source || '').startsWith('sp_api')
+  && String(economics?.fees_source || '').startsWith('sp_api')
+  && num(economics?.contribution_margin_amount ?? economics?.profit_before_ads) > 0
+  && num(economics?.break_even_acos ?? economics?.contribution_margin_percent) > 0;
 
 function uniqueCampaigns(rows: any[]) {
   const seen = new Set<string>();
@@ -83,7 +89,7 @@ Deno.serve(async (req) => {
 
     const floor = Math.max(MANUAL_FLOOR, Number(body.manual_floor || MANUAL_FLOOR));
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
     const connected = accounts.filter((a: any) => a.ads_profile_id && (a.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN')));
     const results: any[] = [];
@@ -91,9 +97,15 @@ Deno.serve(async (req) => {
     for (const account of connected) {
       const aid = account.id;
       const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_date', 2000);
-      const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_date', 5000);
+      const [campaigns, economicsRows] = await Promise.all([
+        base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_date', 5000),
+        base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
+      ]);
+      const economicsByAsin = new Map(economicsRows.filter((row: any) => row.asin)
+        .map((row: any) => [String(row.asin).trim().toUpperCase(), row]));
       const eligible = products.filter((p: any) => availableAdsStock(p) > 1 && stockAdsDecision(p) === 'activate'
-        && p.listing_suppressed !== true && String(p.sku || '').trim() && /^B0[A-Z0-9]{8}$/.test(String(p.asin || '').trim().toUpperCase()));
+        && p.listing_suppressed !== true && String(p.sku || '').trim() && /^B0[A-Z0-9]{8}$/.test(String(p.asin || '').trim().toUpperCase())
+        && campaignEconomicsReady(economicsByAsin.get(String(p.asin || '').trim().toUpperCase())));
       const seen = new Set<string>();
 
       for (const product of eligible) {
@@ -146,7 +158,20 @@ Deno.serve(async (req) => {
         });
         // Reafirmar o piso diretamente na Amazon mesmo quando o banco local
         // estiver stale. Estado local nunca conta como prova de ativacao.
-        const selected = ranked.slice(0, floor);
+        const productEconomics: any = economicsByAsin.get(asin);
+        const breakEvenAcos = num(productEconomics?.break_even_acos) > 0
+          ? num(productEconomics.break_even_acos) * (num(productEconomics.break_even_acos) <= 1 ? 100 : 1)
+          : num(productEconomics?.contribution_margin_percent);
+        const profitableManuals = ranked.filter((campaign: any) => {
+          const orders = num(campaign.orders);
+          const sales = num(campaign.sales);
+          const spend = num(campaign.spend);
+          const acos = sales > 0 ? spend / sales * 100 : Number.POSITIVE_INFINITY;
+          const explicitManualPause = /USER_MANUAL|MANUAL_BLOCK|POLICY/i.test(String(campaign.last_pause_reason || campaign.archive_reason || ''));
+          return !explicitManualPause && orders > 0 && sales > 0 &&
+            (num(campaign.profit_after_ads) > 0 || (breakEvenAcos > 0 && acos < breakEvenAcos));
+        });
+        const selected = uniqueCampaigns([...profitableManuals, ...ranked.slice(0, floor)]);
         const reactivated: string[] = [];
         const errors: any[] = [];
 
@@ -214,6 +239,8 @@ Deno.serve(async (req) => {
         }
         results.push({ sku, asin, auto_active: autoActive, auto_campaign_id: auto.campaign_id || null,
           manual_floor: floor, manual_active: manualActive, manual_existing: candidates.length,
+          profitable_manuals_found: profitableManuals.length,
+          profitable_manuals_selected: profitableManuals.map(idOf),
           manual_reactivated: reactivated.length, reactivated_campaign_ids: reactivated,
           manual_created: created.filter((r: any) => r.ok).length, created,
           deficit: Math.max(0, floor - manualActive), errors,
