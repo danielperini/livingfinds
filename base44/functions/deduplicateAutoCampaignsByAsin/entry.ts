@@ -73,6 +73,11 @@ Deno.serve(async (req) => {
       // cálculo de lucro, nunca como critério positivo isolado.
       group.sort((a: any, b: any) => {
         const profit = (row: any) => Number(row.sales || 0) - Number(row.spend || row.current_spend || 0);
+        // Não trocar uma AUTO operacional por uma candidata pausada. Entre as
+        // operacionais, lucro/vendas/histórico continuam decidindo a vencedora.
+        const isEnabled = (row: any) => ['enabled', 'active'].includes(String(row.state || row.status || '').toLowerCase());
+        const enabledDiff = Number(isEnabled(b)) - Number(isEnabled(a));
+        if (enabledDiff !== 0) return enabledDiff;
         const protectedDiff = Number(b.protected_high_performance === true) - Number(a.protected_high_performance === true);
         if (protectedDiff !== 0) return protectedDiff;
         const profitDiff = profit(b) - profit(a);
