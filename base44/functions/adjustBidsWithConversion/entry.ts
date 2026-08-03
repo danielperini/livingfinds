@@ -15,8 +15,8 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { AMAZON_WINNER_BID_CEILING_BRL } from '../../shared/amazonBidCeiling.ts';
 
 // ── Constantes ───────────────────────────────────────────────────────────
-const PIPELINE_VERSION   = 'goal-orchestrator-v2-profit-safe';
-const RULE_VERSION       = '2.0';
+const PIPELINE_VERSION   = 'goal-orchestrator-v2.1-profit-safe';
+const RULE_VERSION       = '2.1';
 const MIN_BID            = 0.25;
 const MAX_INCREASE_PCT   = 0.20;   // PROFIT-SAFE hard cap +20% por ciclo
 const MAX_DECREASE_PCT   = 0.20;
@@ -173,6 +173,13 @@ function tierCampaign(c: any, targetAcos: number, breakEvenAcos: number) {
   const daily   = Number(c.daily_budget || 0);
   const acos    = sales > 0 ? (spend / sales) * 100 : (spend > 0 ? 999 : 0);
   const budRatio= daily > 0 ? spend / daily : 0;
+  // Amazon pode sinalizar "Orçamento excedido" antes da consolidação do
+  // spend local. O sinal nunca basta para escalar: ele apenas torna a
+  // campanha elegível para as proteções econômicas abaixo.
+  const budgetExhausted = c.is_budget_exhausted === true ||
+    c.budget_exhausted === true ||
+    String(c.budget_status || '').toLowerCase() === 'exhausted' ||
+    budRatio >= 0.90;
 
   let tier = 'D';
   if (acos > 0 && acos <= targetAcos * ECONOMIC_SAFETY_FACTOR && orders >= 1) tier = 'A'; // winner econômico
@@ -188,15 +195,15 @@ function tierCampaign(c: any, targetAcos: number, breakEvenAcos: number) {
   if (spend === 0 || clicks === 0)                   rootCause = 'VISIBILITY_PROBLEM';
   else if (curCpc > maxCpc && maxCpc > 0)            rootCause = 'CPC_PROBLEM';
   else if (curCpc <= maxCpc && acos > targetAcos && orders > 0) rootCause = 'CVR_PROBLEM';
-  else if (budRatio >= 0.90 && tier === 'A')         rootCause = 'BUDGET_PROBLEM';
+  else if (budgetExhausted && tier === 'A')          rootCause = 'BUDGET_PROBLEM';
   else if (orders === 0 && clicks >= 5)              rootCause = 'TRAFFIC_QUALITY';
   else if (clicks < 10)                              rootCause = 'VISIBILITY_PROBLEM';
 
   return {
-    acos, spend, sales, orders, clicks, budRatio, breakEvenAcos,
+    acos, spend, sales, orders, clicks, budRatio, budgetExhausted, breakEvenAcos,
     tier, rootCause,
     wasteCapacity: tier === 'D' ? spend : 0,
-    scaleCapacity: tier === 'A' && budRatio >= 0.85 ? daily * 0.2 : 0,
+    scaleCapacity: tier === 'A' && budgetExhausted ? daily * 0.2 : 0,
     sustainableCpcVal: maxCpc,
   };
 }
@@ -639,7 +646,7 @@ Deno.serve(async (req) => {
       const c   = p.campaign;
       const cId = String(c.campaign_id || c.id);
       if (cooldownBudgetIds.has(cId)) continue;
-      if (p.tier !== 'A' || p.budRatio < 0.90) continue;
+      if (p.tier !== 'A' || !p.budgetExhausted) continue;
       const daily = Number(c.daily_budget || 0);
       if (daily <= 0) continue;
 
@@ -660,7 +667,7 @@ Deno.serve(async (req) => {
         strategy_macro: strategy, action: 'budget_increase',
         entity_type: 'campaign', entity_id: cId, entity_name: c.name || c.campaign_name,
         asin: c.asin, campaign_id: cId,
-        current_config: { daily_budget: daily, budget_ratio: r2(p.budRatio) },
+        current_config: { daily_budget: daily, budget_ratio: r2(p.budRatio), budget_exhausted: p.budgetExhausted },
         proposed_config: { daily_budget: newBudget },
         expected_impact_pct: BUDGET_INCREASE_PCT * 100, confidence: 75, risk_level: 'low',
         cap_applied: rawBudget > newBudget,
@@ -669,7 +676,7 @@ Deno.serve(async (req) => {
         rule_version: RULE_VERSION,
         cooldown_until: hoursLater(COOLDOWN_BUDGET_H),
         next_review_at: hoursLater(COOLDOWN_BUDGET_H),
-        reason: `Winner (ACoS ${p.acos.toFixed(1)}% / sustentável ${campSustainable}%) com ${(p.budRatio*100).toFixed(0)}% budget → +${(BUDGET_INCREASE_PCT*100).toFixed(0)}% [cap +20%]`,
+        reason: `Winner (ACoS ${p.acos.toFixed(1)}% / sustentável ${campSustainable}%) com orçamento esgotado (${(p.budRatio*100).toFixed(0)}% medido) → +${(BUDGET_INCREASE_PCT*100).toFixed(0)}% [cap +20%]`,
         _camp: c,
       });
     }
