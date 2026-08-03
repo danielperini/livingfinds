@@ -192,7 +192,7 @@ Deno.serve(async (req) => {
           if (!enabled(campaign)) {
             const key = `${SOURCE}|enable|${accountId}|${campaignId}|${day}`;
             const amazon = dryRun ? { ok: true, dry_run: true } : await command(base44, accountId,
-              'enableLowVolumeAutoCampaign', '/sp/campaigns', { campaigns: [{ campaignId, state: 'ENABLED' }], idempotencyKey: key }, CONTENT_CAMPAIGN);
+              'enableLowVolumeAutoCampaign', '/sp/campaigns', { campaigns: [{ campaignId, state: 'ENABLED' }] }, CONTENT_CAMPAIGN);
             actions.push({ type: 'enable_campaign', ok: amazon.ok === true, amazon_status: amazon.status || null });
             if (!dryRun && amazon.ok === true) {
               await base44.asServiceRole.entities.Campaign.update(campaign.id, {
@@ -210,7 +210,7 @@ Deno.serve(async (req) => {
             const key = `${SOURCE}|budget|${accountId}|${campaignId}|${day}|${plan.dailyBudget}`;
             const amazon = dryRun ? { ok: true, dry_run: true } : await command(base44, accountId,
               'capLowVolumeDailyBudget', '/sp/campaigns', {
-                campaigns: [{ campaignId, budget: { budget: plan.dailyBudget, budgetType: 'DAILY' } }], idempotencyKey: key,
+                campaigns: [{ campaignId, budget: { budget: plan.dailyBudget, budgetType: 'DAILY' } }],
               }, CONTENT_CAMPAIGN);
             actions.push({ type: 'cap_daily_budget', from: currentBudget, to: plan.dailyBudget, ok: amazon.ok === true });
             if (!dryRun && amazon.ok === true) {
@@ -231,7 +231,7 @@ Deno.serve(async (req) => {
             const key = `${SOURCE}|adgroup_bid|${accountId}|${adGroupId}|${day}|${plan.targetBid}`;
             const amazon = dryRun ? { ok: true, dry_run: true } : await command(base44, accountId,
               'capLowVolumeAutoBid', '/sp/adGroups', {
-                adGroups: [{ adGroupId, defaultBid: plan.targetBid }], idempotencyKey: key,
+                adGroups: [{ adGroupId, defaultBid: plan.targetBid }],
               }, CONTENT_AD_GROUP);
             actions.push({ type: 'reduce_auto_bid', ad_group_id: adGroupId, from: currentBid, to: plan.targetBid, ok: amazon.ok === true });
             if (!dryRun && amazon.ok === true) {

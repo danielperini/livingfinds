@@ -2,8 +2,8 @@
  * deduplicateAutoCampaignsByAsin v2
  * Para cada ASIN com mais de 1 campanha AUTO não-arquivada:
  * - Mantém a de maior lucro, vendas, pedidos e histórico; gasto nunca decide sozinho
- * - Arquiva as demais na Amazon via amazonAdsCommand (state: ARCHIVED)
- * - Arquiva as demais localmente (state/status/archived=true)
+ * - Pausa as demais na Amazon (reversível; nunca exclui dados)
+ * - Atualiza localmente somente após confirmação remota
  * - Registra SyncExecutionLog com total arquivado
  * Aceita dry_run: true para retornar candidatos sem executar.
  */
@@ -117,29 +117,27 @@ Deno.serve(async (req) => {
             const archiveResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
               _service_role: true,
               amazon_account_id: accountId,
-              operation: 'archiveConfirmedDuplicateAutoCampaign',
+              operation: 'pauseConfirmedDuplicateAutoCampaign',
               path: '/sp/campaigns',
               method: 'PUT',
               content_type: 'application/vnd.spCampaign.v3+json',
               accept: 'application/vnd.spCampaign.v3+json',
-              payload: {
-                campaigns: [{ campaignId: String(amazonId), state: 'ARCHIVED' }],
-                idempotencyKey: `dedup-auto|${accountId}|${amazonId}|ARCHIVED`,
-              },
+              payload: { campaigns: [{ campaignId: String(amazonId), state: 'PAUSED' }] },
             });
             const archiveData = archiveResponse?.data || archiveResponse || {};
-            if (archiveData.ok !== true) throw new Error(archiveData.error || archiveData.message || 'Amazon não confirmou arquivamento');
+            if (archiveData.ok !== true) throw new Error(archiveData.error || archiveData.message ||
+              JSON.stringify(archiveData.errors || archiveData).slice(0, 500) || 'Amazon não confirmou pausa');
             await sleep(300);
             const verifyResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
               _service_role: true,
               amazon_account_id: accountId,
-              operation: 'confirmArchivedDuplicateAutoCampaign',
+              operation: 'confirmPausedDuplicateAutoCampaign',
               path: '/sp/campaigns/list',
               method: 'POST',
               content_type: 'application/vnd.spCampaign.v3+json',
               accept: 'application/vnd.spCampaign.v3+json',
               payload: {
-                stateFilter: { include: ['ARCHIVED'] },
+                stateFilter: { include: ['PAUSED'] },
                 campaignIdFilter: { include: [String(amazonId)] },
                 maxResults: 10,
               },
@@ -148,8 +146,8 @@ Deno.serve(async (req) => {
             const confirmedCampaign = (verifyData?.payload?.campaigns || []).find((row: any) =>
               String(row?.campaignId || '') === String(amazonId));
             const remoteState = String(confirmedCampaign?.state || '').toUpperCase();
-            if (verifyData.ok !== true || remoteState !== 'ARCHIVED') {
-              throw new Error(`Estado remoto não confirmado como ARCHIVED: ${remoteState || 'desconhecido'}`);
+            if (verifyData.ok !== true || remoteState !== 'PAUSED') {
+              throw new Error(`Estado remoto não confirmado como PAUSED: ${remoteState || 'desconhecido'}`);
             }
             dupEntry.archived_on_amazon = true;
           } catch (e: any) {
@@ -162,12 +160,14 @@ Deno.serve(async (req) => {
         // 2. O app só muda depois da confirmação direta na Amazon.
         if (dupEntry.archived_on_amazon) {
           await base44.asServiceRole.entities.Campaign.update(dup.id, {
-            state: 'archived',
-            status: 'archived',
-            amazon_status: 'archived',
-            archive_reason: 'DUPLICATE_AUTO_CAMPAIGN_ARCHIVED_CONFIRMED',
-            archived: true,
-            archived_at: new Date().toISOString(),
+            state: 'paused',
+            status: 'paused',
+            amazon_status: 'paused',
+            is_operational: false,
+            reconciliation_status: 'ok',
+            reconciliation_notes: 'DUPLICATE_AUTO_CAMPAIGN_PAUSED_CONFIRMED',
+            archived: false,
+            synced_at: new Date().toISOString(),
           }).catch(() => {});
           dupEntry.archived_locally = true;
           totalArchived++;
