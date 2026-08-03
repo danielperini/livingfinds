@@ -78,7 +78,8 @@ Deno.serve(async (request) => {
     // The caller may already have reconciled duplicate catalog rows and FBA/MFN
     // inventory. Accept that verified value only on the internal service path.
     const stock = Math.max(availableAdsStock(product), Number(body.verified_stock || 0));
-    if (product.inventory_status === 'out_of_stock' || stock <= 0) {
+    const inventoryVerifiedByCoverage = body.inventory_verified === true && Number(body.verified_stock || 0) > 1;
+    if (!inventoryVerifiedByCoverage && (product.inventory_status === 'out_of_stock' || stock <= 0)) {
       return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
     }
 

@@ -129,7 +129,7 @@ Deno.serve(async (req) => {
           const creationResults = await Promise.all(terms.map(async (keyword) => {
             const response = await base44.asServiceRole.functions.invoke('createManualCampaignV2', {
               _service_role: true, amazon_account_id: aid, asin, sku, keyword,
-              verified_stock: availableAdsStock(product),
+              inventory_verified: true, verified_stock: availableAdsStock(product),
               bid: Math.max(0.25, Number(product.minimum_ads_bid || 0.25)), budget: 5,
             }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
             const data = response?.data || response || {};
