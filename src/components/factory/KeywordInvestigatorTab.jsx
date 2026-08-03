@@ -496,7 +496,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
       {/* Resultados ScrapingBee */}
       {scrapingResult && !loadingScraping && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-3">
+           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs font-semibold text-white">{getAllScrapingKeywords().length} keywords únicas</span>
               <span className="text-[10px] text-slate-500">para "{scrapingResult.keyword}"</span>
@@ -513,6 +513,11 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
               {copiedAll ? 'Copiado!' : 'Copiar todas'}
             </button>
           </div>
+          {scrapingResult.warning && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {scrapingResult.warning} Tente um ASIN concorrente ou uma keyword mais específica.
+            </div>
+          )}
           {Object.keys(SECTION_CONFIG).map(key => (
             <ResultSection
               key={key}

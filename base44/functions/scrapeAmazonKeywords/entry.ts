@@ -44,8 +44,10 @@ export default async function(req: Request): Promise<Response> {
     });
 
     let suggestions: string[] = [];
+    const diagnostics: Array<{ source: string; http_status: number | null; detail?: string }> = [];
     try {
       const acResp = await fetch(`https://app.scrapingbee.com/api/v1/?${acParams.toString()}`);
+      diagnostics.push({ source: 'autocomplete', http_status: acResp.status, detail: acResp.ok ? undefined : (await acResp.text()).slice(0, 180) });
       if (acResp.ok) {
         const acText = await acResp.text();
         // Autocomplete retorna JSON array: ["query", ["sug1","sug2",...]]
@@ -54,7 +56,7 @@ export default async function(req: Request): Promise<Response> {
           suggestions = parsed[1].slice(0, 20);
         }
       }
-    } catch (_) { /* silencioso */ }
+    } catch (error: any) { diagnostics.push({ source: 'autocomplete', http_status: null, detail: error?.message || 'network_error' }); }
 
     // ── 2. SERP da Amazon para extrair keywords relacionadas ─────────────
     const serpUrl = `https://${domain}/s?k=${encodeURIComponent(keyword.trim())}`;
@@ -95,18 +97,22 @@ export default async function(req: Request): Promise<Response> {
     let people_also_buy: string[] = [];
     let raw_html_snippet = '';
 
-    const serpResp = await fetch(`https://app.scrapingbee.com/api/v1/?${serpParams.toString()}`);
-    if (serpResp.ok) {
-      const serpData = await serpResp.json().catch(async () => {
-        raw_html_snippet = (await serpResp.text()).slice(0, 500);
-        return {};
-      });
-
-      related = (serpData?.related_searches || []).filter((s: string) => s && s.trim().length > 2).slice(0, 20);
-      sponsored_keywords = (serpData?.sponsored_titles || []).filter((s: string) => s && s.trim().length > 2).slice(0, 10);
-      organic_titles = (serpData?.organic_titles || []).filter((s: string) => s && s.trim().length > 2).slice(0, 15);
-      people_also_buy = (serpData?.people_also_buy || []).filter((s: string) => s && s.trim().length > 2).slice(0, 10);
-    }
+    try {
+      const serpResp = await fetch(`https://app.scrapingbee.com/api/v1/?${serpParams.toString()}`);
+      if (!serpResp.ok) {
+        diagnostics.push({ source: 'amazon_search', http_status: serpResp.status, detail: (await serpResp.text()).slice(0, 180) });
+      } else {
+        diagnostics.push({ source: 'amazon_search', http_status: serpResp.status });
+        const serpData = await serpResp.json().catch(async () => {
+          raw_html_snippet = (await serpResp.text()).slice(0, 500);
+          return {};
+        });
+        related = (serpData?.related_searches || []).filter((s: string) => s && s.trim().length > 2).slice(0, 20);
+        sponsored_keywords = (serpData?.sponsored_titles || []).filter((s: string) => s && s.trim().length > 2).slice(0, 10);
+        organic_titles = (serpData?.organic_titles || []).filter((s: string) => s && s.trim().length > 2).slice(0, 15);
+        people_also_buy = (serpData?.people_also_buy || []).filter((s: string) => s && s.trim().length > 2).slice(0, 10);
+      }
+    } catch (error: any) { diagnostics.push({ source: 'amazon_search', http_status: null, detail: error?.message || 'network_error' }); }
 
     // ── 3. Se ASIN fornecido, buscar página do produto para keywords ──────
     let product_keywords: string[] = [];
@@ -127,6 +133,7 @@ export default async function(req: Request): Promise<Response> {
 
       try {
         const asinResp = await fetch(`https://app.scrapingbee.com/api/v1/?${asinParams.toString()}`);
+        diagnostics.push({ source: 'asin_page', http_status: asinResp.status, detail: asinResp.ok ? undefined : (await asinResp.clone().text()).slice(0, 180) });
         if (asinResp.ok) {
           const asinData = await asinResp.json().catch(() => ({}));
           const title = asinData?.title || '';
@@ -150,7 +157,18 @@ export default async function(req: Request): Promise<Response> {
             product_keywords.unshift(...categories.slice(0, 3));
           }
         }
-      } catch (_) { /* silencioso */ }
+      } catch (error: any) { diagnostics.push({ source: 'asin_page', http_status: null, detail: error?.message || 'network_error' }); }
+    }
+
+    const total = suggestions.length + related.length + sponsored_keywords.length + organic_titles.length + product_keywords.length;
+    const failedSources = diagnostics.filter((item) => item.http_status === null || (item.http_status || 0) >= 400);
+    if (total === 0 && failedSources.length > 0) {
+      const quota = failedSources.some((item) => item.http_status === 429 || /limit|quota|credit/i.test(item.detail || ''));
+      return Response.json({
+        ok: false,
+        error: quota ? 'ScrapingBee sem créditos ou temporariamente limitada; nenhuma keyword foi inventada.' : 'ScrapingBee não conseguiu consultar a Amazon nesta tentativa.',
+        diagnostics,
+      }, { status: quota ? 429 : 502 });
     }
 
     return Response.json({
@@ -164,7 +182,9 @@ export default async function(req: Request): Promise<Response> {
       organic_titles,
       people_also_buy,
       product_keywords,
-      total: suggestions.length + related.length + sponsored_keywords.length,
+      total,
+      diagnostics,
+      warning: total === 0 ? 'A Amazon respondeu, mas não forneceu termos extraíveis para esta consulta.' : null,
     });
 
   } catch (error: any) {
