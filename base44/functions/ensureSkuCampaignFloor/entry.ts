@@ -11,6 +11,28 @@ const manual = (c: any) => {
 const archived = (c: any) => c.archived === true || String(c.amazon_status || c.state || c.status || '').toUpperCase() === 'ARCHIVED';
 const idOf = (c: any) => String(c.campaign_id || c.amazon_campaign_id || '').trim();
 const num = (v: any) => Number(v || 0);
+const norm = (v: any) => String(v || '').toLowerCase().trim().replace(/\s+/g, ' ');
+
+function uniqueCampaigns(rows: any[]) {
+  const seen = new Set<string>();
+  return rows.filter((row: any) => {
+    const id = idOf(row);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function titleSeeds(product: any): string[] {
+  const title = norm(product.product_name || product.title || product.name || '')
+    .replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, ' '); 
+  const words = title.split(/\s+/).filter((word: string) => word.length > 2);
+  const seeds = [title.slice(0, 40)];
+  for (let size = 5; size >= 2; size--) {
+    for (let i = 0; i + size <= words.length; i++) seeds.push(words.slice(i, i + size).join(' ').slice(0, 40));
+  }
+  return [...new Set(seeds.map(norm).filter((term) => term.length >= 5))];
+}
 
 function belongsTo(c: any, sku: string, asin: string) {
   const cAsin = String(c.asin || '').trim().toUpperCase();
@@ -61,7 +83,7 @@ Deno.serve(async (req) => {
           product_name: product.product_name || product.title || product.name || '',
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
         const auto = autoResult?.data || autoResult || {};
-        const candidates = campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c) && belongsTo(c, sku, asin));
+        const candidates = uniqueCampaigns(campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c) && belongsTo(c, sku, asin)));
         const active = candidates.filter(enabled);
         const paused = candidates.filter((c: any) => !enabled(c)).sort((a: any, b: any) =>
           num(b.orders) - num(a.orders) || num(b.sales) - num(a.sales) || num(b.roas) - num(a.roas) || num(a.spend) - num(b.spend));
@@ -90,10 +112,35 @@ Deno.serve(async (req) => {
           }
         }
 
-        const manualActive = active.length + reactivated.length;
+        let manualActive = active.length + reactivated.length;
+        const created: any[] = [];
+        if (manualActive < floor) {
+          const searchTerms = await base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: aid, advertised_asin: asin }, '-date', 1000).catch(() => []);
+          const empirical = searchTerms
+            .filter((t: any) => num(t.same_sku_orders) > 0 || (t.same_sku_attribution_verified === true && num(t.total_orders) > 0))
+            .sort((a: any, b: any) => num(b.same_sku_orders) - num(a.same_sku_orders) || num(b.total_sales) - num(a.total_sales))
+            .map((t: any) => norm(t.search_term));
+          const used = new Set(candidates.map((c: any) => {
+            const name = String(c.name || c.campaign_name || '');
+            return norm(name.split('|').pop());
+          }));
+          const terms = [...new Set([...empirical, ...titleSeeds(product)])].filter((term) => term && !used.has(term))
+            .slice(0, floor - manualActive);
+          const creationResults = await Promise.all(terms.map(async (keyword) => {
+            const response = await base44.asServiceRole.functions.invoke('createManualCampaignV2', {
+              _service_role: true, amazon_account_id: aid, asin, sku, keyword,
+              bid: Math.max(0.25, Number(product.minimum_ads_bid || 0.25)), budget: 5,
+            }).catch((error: any) => ({ data: { ok: false, error: error?.message } }));
+            const data = response?.data || response || {};
+            return { keyword, ok: data.ok === true, campaign_id: data.campaign_id || null, error: data.error || null };
+          }));
+          created.push(...creationResults);
+          manualActive += creationResults.filter((r: any) => r.ok && r.campaign_id).length;
+        }
         results.push({ sku, asin, auto_active: auto.ok !== false, auto_campaign_id: auto.campaign_id || null,
           manual_floor: floor, manual_active: manualActive, manual_existing: candidates.length,
           manual_reactivated: reactivated.length, reactivated_campaign_ids: reactivated,
+          manual_created: created.filter((r: any) => r.ok).length, created,
           deficit: Math.max(0, floor - manualActive), errors, auto_error: auto.error || null });
       }
     }
