@@ -9,6 +9,7 @@ import AmazonSuggestionsTab from '@/components/termbank/AmazonSuggestionsTab';
 import IASuggestionsTab from '@/components/factory/IASuggestionsTab';
 import KeywordBankSection from '@/components/factory/KeywordBankSection';
 import KeywordBankTab from '@/components/factory/KeywordBankTab';
+import KeywordInvestigatorTab from '@/components/factory/KeywordInvestigatorTab';
 
 // ── Configs ──────────────────────────────────────────────────────────────
 const LIFECYCLE_CONFIG = {
@@ -99,6 +100,7 @@ const TABS = [
   { key: 'plans',        label: 'Planos',       icon: Factory },
   { key: 'ia_sug',       label: 'Sugestões IA', icon: Sparkles },
   { key: 'keyword_bank', label: 'Keyword Bank', icon: BookOpen },
+  { key: 'investigator', label: 'Keyword Investigator', icon: Search },
 ];
 
 // ── TermBank sub-tab ──────────────────────────────────────────────────────
@@ -333,7 +335,9 @@ export default function CampaignFactory() {
 
       const activeProducts = prodData.filter(p => p.status !== 'archived' && p.status !== 'inactive');
       setSuggestions(sugData.filter(s => s.status !== 'rejected' && s.deleted_by_user !== true && !isTermIncomplete(s.keyword) && s.asin && activeAsins.has(s.asin)));
-      setProducts(activeProducts);
+      // O investigador precisa permitir a escolha de qualquer produto cadastrado,
+      // inclusive os inativos, para recuperar histórico e reavaliar um ASIN.
+      setProducts(prodData);
     } finally {
       setLoading(false);
     }
@@ -721,6 +725,10 @@ export default function CampaignFactory() {
 
         {/* ── SUGESTÕES IA ── */}
         {tab === 'ia_sug' && <IASuggestionsTab account={account} />}
+
+        {tab === 'investigator' && (
+          <KeywordInvestigatorTab account={account} products={products} terms={terms} />
+        )}
 
         {/* ── KEYWORD BANK (seção hierárquica com 4 sub-tabs) ── */}
         {tab === 'keyword_bank' && (

@@ -9,7 +9,7 @@
  *   → Kill switch: se ScrapingBee retornar erro, desativa automaticamente.
  *   → Limite visual: aviso de consumo de créditos antes de executar.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Search, Loader2, Sparkles, TrendingUp, Tag, ShoppingCart,
@@ -131,7 +131,14 @@ function AmazonAdsResults({ suggestions, asin }) {
   );
 }
 
-export default function KeywordInvestigatorTab({ account, products }) {
+const normalizeKeyword = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function sortValue(row, key) {
+  const value = row[key];
+  return typeof value === 'number' ? value : String(value || '').toLocaleLowerCase('pt-BR');
+}
+
+export default function KeywordInvestigatorTab({ account, products = [], terms = [] }) {
   // ── Amazon Ads (fonte 1 — padrão) ──────────────────────────────────────
   const [selectedAsin, setSelectedAsin] = useState('');
   const [loadingAmazon, setLoadingAmazon] = useState(false);
@@ -148,6 +155,74 @@ export default function KeywordInvestigatorTab({ account, products }) {
   const [scrapingError, setScrapingError] = useState(null);
   const [copied, setCopied] = useState(null);
   const [copiedAll, setCopiedAll] = useState(false);
+  const [sortKey, setSortKey] = useState('score');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const selectedProduct = useMemo(
+    () => products.find((product) => product.asin === selectedAsin),
+    [products, selectedAsin],
+  );
+  const productOptions = useMemo(() => [...products].sort((a, b) =>
+    String(a.product_name || a.display_name || a.title || '').localeCompare(
+      String(b.product_name || b.display_name || b.title || ''), 'pt-BR'
+    )
+  ), [products]);
+
+  const investigationRows = useMemo(() => {
+    const byKeyword = new Map();
+    const add = (keywordText, source, baseScore = 40) => {
+      const keywordValue = normalizeKeyword(keywordText);
+      if (keywordValue.length < 3) return;
+      const existing = byKeyword.get(keywordValue) || {
+        keyword: keywordValue, source: [], organic_score: 0, paid_impressions: 0,
+        paid_sales: 0, paid_orders: 0, paid_spend: 0, score: 0,
+      };
+      existing.source = [...new Set([...existing.source, source])];
+      existing.score = Math.max(existing.score, baseScore);
+      if (source === 'Orgânico inferido') existing.organic_score = Math.max(existing.organic_score, baseScore);
+      byKeyword.set(keywordValue, existing);
+    };
+
+    if (scrapingResult) {
+      (scrapingResult.suggestions || []).forEach((item) => add(item, 'Autocomplete Amazon', 82));
+      (scrapingResult.related || []).forEach((item) => add(item, 'Busca relacionada', 76));
+      (scrapingResult.sponsored_keywords || []).forEach((item) => add(item, 'Patrocinado inferido', 68));
+      (scrapingResult.organic_titles || []).forEach((item) => add(item, 'Orgânico inferido', 62));
+      (scrapingResult.product_keywords || []).forEach((item) => add(item, 'Página do concorrente', 58));
+    }
+    (amazonResult?.suggestions || []).forEach((item) => add(item.keyword || item.keywordText || item, 'Sugestão Amazon Ads', 88));
+
+    terms.filter((term) => term.asin === selectedAsin).forEach((term) => {
+      const keywordValue = normalizeKeyword(term.term || term.keyword);
+      if (!keywordValue) return;
+      add(keywordValue, 'Dados Ads da conta', 55);
+      const row = byKeyword.get(keywordValue);
+      row.paid_impressions += Number(term.impressions || 0);
+      row.paid_sales += Number(term.sales || 0);
+      row.paid_orders += Number(term.orders || 0);
+      row.paid_spend += Number(term.spend || 0);
+      row.score = Math.min(100, Math.max(row.score, Math.round(
+        45 + Math.min(30, row.paid_impressions / 100) + Math.min(20, row.paid_orders * 5) + Math.min(15, row.paid_sales / 50)
+      )));
+    });
+
+    return [...byKeyword.values()]
+      .map((row) => ({ ...row, contribution: row.paid_sales > 0 ? row.paid_sales / Math.max(1, [...byKeyword.values()].reduce((sum, item) => sum + item.paid_sales, 0)) * 100 : 0 }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 200);
+  }, [amazonResult, scrapingResult, selectedAsin, terms]);
+
+  const sortedRows = useMemo(() => [...investigationRows].sort((a, b) => {
+    const left = sortValue(a, sortKey); const right = sortValue(b, sortKey);
+    if (left === right) return 0;
+    const result = left > right ? 1 : -1;
+    return sortDir === 'asc' ? result : -result;
+  }), [investigationRows, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (key === sortKey) setSortDir((direction) => direction === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
 
   // ── Amazon Ads handler ─────────────────────────────────────────────────
   const handleAmazonSearch = async () => {
@@ -180,13 +255,14 @@ export default function KeywordInvestigatorTab({ account, products }) {
 
   // ── ScrapingBee handler ────────────────────────────────────────────────
   const handleScrapingSearch = async () => {
-    if (!keyword.trim() || loadingScraping || scrapingKilled) return;
+    const derivedKeyword = keyword.trim() || String(selectedProduct?.product_name || selectedProduct?.display_name || selectedProduct?.title || '').trim();
+    if (!derivedKeyword || loadingScraping || scrapingKilled) return;
     setLoadingScraping(true);
     setScrapingError(null);
     setScrapingResult(null);
     try {
       const res = await base44.functions.invoke('scrapeAmazonKeywords', {
-        keyword: keyword.trim(),
+        keyword: derivedKeyword,
         asin: asinManual.trim() || undefined,
         marketplace: 'BR',
       });
@@ -257,7 +333,7 @@ export default function KeywordInvestigatorTab({ account, products }) {
                 className="w-full px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-xs text-slate-300 focus:outline-none"
               >
                 <option value="">— selecionar produto —</option>
-                {products.slice(0, 100).map(p => (
+                {productOptions.map(p => (
                   <option key={p.id} value={p.asin}>
                     {p.asin} · {(p.product_name || p.display_name || '').slice(0, 35)}
                   </option>
@@ -354,12 +430,12 @@ export default function KeywordInvestigatorTab({ account, products }) {
             </div>
             <div className="flex gap-3 flex-wrap">
               <div className="flex-1 min-w-[200px]">
-                <label className="text-[10px] text-slate-500 font-semibold uppercase mb-1 block">Keyword de Busca *</label>
+                <label className="text-[10px] text-slate-500 font-semibold uppercase mb-1 block">Keyword-base (opcional se escolher produto)</label>
                 <input
                   value={keyword}
                   onChange={e => setKeyword(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleScrapingSearch()}
-                  placeholder="ex: organizador de gaveta..."
+                  placeholder="ex: organizador de gaveta; se vazio, usa o título do produto"
                   className="w-full px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan/50"
                 />
               </div>
@@ -368,7 +444,7 @@ export default function KeywordInvestigatorTab({ account, products }) {
                 <input
                   value={asinManual}
                   onChange={e => setAsinManual(e.target.value.trim().toUpperCase())}
-                  placeholder="B0CX..."
+                  placeholder="ASIN do concorrente (B0...)"
                   className="w-full px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan/50 font-mono"
                   maxLength={12}
                 />
@@ -376,7 +452,7 @@ export default function KeywordInvestigatorTab({ account, products }) {
             </div>
             <button
               onClick={handleScrapingSearch}
-              disabled={loadingScraping || !keyword.trim()}
+              disabled={loadingScraping || (!keyword.trim() && !selectedProduct)}
               className="flex items-center gap-2 px-5 py-2 bg-violet-500/20 border border-violet-500/35 text-violet-300 hover:bg-violet-500/30 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
             >
               {loadingScraping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
@@ -428,6 +504,31 @@ export default function KeywordInvestigatorTab({ account, products }) {
               <p className="text-sm">Nenhuma keyword encontrada.</p>
             </div>
           )}
+        </div>
+      )}
+
+      {(amazonResult || scrapingResult) && (
+        <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1">
+          <div className="border-b border-surface-2 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-white">Tabela de investigação — até 200 keywords</h3>
+                <p className="mt-1 text-[10px] text-slate-500">Produto próprio: {selectedProduct?.product_name || selectedAsin || 'não selecionado'} · Concorrente: {asinManual || 'não informado'}</p>
+              </div>
+              <span className="rounded-full border border-violet-500/25 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-300">{sortedRows.length} classificadas</span>
+            </div>
+            <p className="mt-2 text-[10px] text-slate-500">Impressões, vendas e contribuição são dados da sua conta Amazon Ads. Relevância orgânica e patrocínio do concorrente são inferências de resultados públicos, não vendas privadas do concorrente.</p>
+          </div>
+          <div className="max-h-[540px] overflow-auto">
+            <table className="w-full min-w-[860px] text-left text-xs">
+              <thead className="sticky top-0 bg-surface-2 text-[10px] uppercase tracking-wide text-slate-500">
+                <tr>{[
+                  ['keyword', 'Keyword'], ['source', 'Fontes'], ['organic_score', 'Orgânico*'], ['paid_impressions', 'Impressões Ads'], ['paid_sales', 'Vendas Ads'], ['contribution', 'Contribuição'], ['score', 'Score'],
+                ].map(([key, label]) => <th key={key} className="whitespace-nowrap px-3 py-2 font-semibold"><button onClick={() => toggleSort(key)} className="hover:text-cyan">{label} {sortKey === key ? (sortDir === 'asc' ? '↑' : '↓') : '↕'}</button></th>)}</tr>
+              </thead>
+              <tbody>{sortedRows.map((row) => <tr key={row.keyword} className="border-t border-surface-2/70 text-slate-300"><td className="px-3 py-2 font-medium text-white">{row.keyword}</td><td className="px-3 py-2 text-[10px] text-slate-400">{row.source.join(' · ')}</td><td className="px-3 py-2">{row.organic_score || '—'}</td><td className="px-3 py-2">{row.paid_impressions.toLocaleString('pt-BR')}</td><td className="px-3 py-2">R${row.paid_sales.toFixed(2)}</td><td className="px-3 py-2">{row.contribution.toFixed(1)}%</td><td className="px-3 py-2 font-semibold text-emerald-400">{row.score}</td></tr>)}</tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
