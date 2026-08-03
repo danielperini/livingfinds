@@ -7,7 +7,7 @@ const enabled = (c: any) => String(c.amazon_status || c.state || c.status || '')
 const manual = (c: any) => {
   const type = String(c.targeting_type || '').toUpperCase();
   const name = String(c.name || c.campaign_name || '').toUpperCase();
-  return type === 'MANUAL' || name.includes('MANUAL');
+  return !name.includes('AUTO') && (type === 'MANUAL' || name.includes('MANUAL'));
 };
 const archived = (c: any) => c.archived === true || String(c.amazon_status || c.state || c.status || '').toUpperCase() === 'ARCHIVED';
 const idOf = (c: any) => String(c.campaign_id || c.amazon_campaign_id || '').trim();
@@ -138,8 +138,12 @@ Deno.serve(async (req) => {
           }
         }
         const candidates = uniqueCampaigns(campaigns.filter((c: any) => manual(c) && !archived(c) && idOf(c) && belongsTo(c, sku, asin)));
-        const ranked = [...candidates].sort((a: any, b: any) =>
-          num(b.orders) - num(a.orders) || num(b.sales) - num(a.sales) || num(b.roas) - num(a.roas) || num(a.spend) - num(b.spend));
+        const ranked = [...candidates].sort((a: any, b: any) => {
+          const canonicalA = String(a.name || a.campaign_name || '').toUpperCase().startsWith('SP | MANUAL') ? 1 : 0;
+          const canonicalB = String(b.name || b.campaign_name || '').toUpperCase().startsWith('SP | MANUAL') ? 1 : 0;
+          return canonicalB - canonicalA || num(b.orders) - num(a.orders) || num(b.sales) - num(a.sales)
+            || num(b.roas) - num(a.roas) || num(a.spend) - num(b.spend);
+        });
         // Reafirmar o piso diretamente na Amazon mesmo quando o banco local
         // estiver stale. Estado local nunca conta como prova de ativacao.
         const selected = ranked.slice(0, floor);
