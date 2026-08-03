@@ -49,6 +49,7 @@ Deno.serve(async (req) => {
     }
 
     const dryRun = body.dry_run !== false;
+    const fastMode = body.fast_mode === true;
     const maxProducts = Math.min(Math.max(Number(body.max_products || 200), 1), 500);
     const lookbackDays = Math.min(Math.max(Number(body.lookback_days || 65), 1), 65);
     const accounts = body.amazon_account_id
@@ -65,7 +66,7 @@ Deno.serve(async (req) => {
       let catalogSync: any = null;
       let offerSync: any = null;
       let stockGuard: any = null;
-      if (!dryRun) {
+      if (!dryRun && !fastMode) {
         catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
           _service_role: true, amazon_account_id: accountId,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
@@ -148,7 +149,7 @@ Deno.serve(async (req) => {
       let repair: any = null;
       let harvest: any = null;
       let profitProtection: any = null;
-      if (!dryRun) {
+      if (!dryRun && !fastMode) {
         repair = dataOf(await base44.asServiceRole.functions.invoke('repairIncompleteAutoCampaigns', {
           _service_role: true, amazon_account_id: accountId, asins: limitedEligible.map((p: any) => p.asin),
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
@@ -188,6 +189,7 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: failed === 0,
       dry_run: dryRun,
+      fast_mode: fastMode,
       started_at: startedAt,
       completed_at: new Date().toISOString(),
       connected_accounts: connectedAccounts.length,
