@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
 import {
-  Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
+  Search, Save, Loader2, CheckCircle, AlertCircle, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
-  Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, PlayCircle, DollarSign,
+  Settings, Package, History, Zap, Bot, Sparkles,
+  Pause, Trash2, Rocket, Wifi, WifiOff, Play, DollarSign,
   Archive } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -16,7 +16,6 @@ import KickoffModal from '@/components/products/KickoffModal';
 import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
 import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
-import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
 import ReactivateWithBudgetModal from '@/components/ads/ReactivateWithBudgetModal';
 
@@ -86,7 +85,7 @@ const STATE_FILTERS = [
 
 const PAGE_SIZE = 50;
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget, onQuickArchive }) {
+function CampaignColumn({ title, icon: Icon, color, campaigns, activeCount, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget, onQuickArchive }) {
   const [page, setPage] = useState(1);
   const [itemLoading, setItemLoading] = useState({});
 
@@ -137,7 +136,9 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, products, selecte
       <div className={`px-3 py-2 border-b border-surface-2 flex items-center gap-2`}>
         <Icon className={`w-3.5 h-3.5 ${color}`} />
         <span className={`text-xs font-bold uppercase tracking-wider ${color}`}>{title}</span>
-        <span className="ml-auto text-xs text-slate-600 font-mono">{campaigns.length}</span>
+        <span className="ml-auto text-xs text-emerald-400 font-mono" title="Campanhas ativas">
+          {activeCount} ativas
+        </span>
       </div>
       {/* Extra action row */}
       {extraAction &&
@@ -1062,7 +1063,12 @@ export default function AdsManagement() {
   });
 
   // Agrupar campanhas automáticas por ASIN: mostra a mais recente/ativa, com contagem
-  const rawAuto = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'AUTO')).
+  const filteredAutoCampaigns = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'AUTO'));
+  const filteredManualCampaigns = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'MANUAL'));
+  const activeAutoCount = filteredAutoCampaigns.filter((c) => campaignState(c) === 'enabled').length;
+  const activeManualCount = filteredManualCampaigns.filter((c) => campaignState(c) === 'enabled').length;
+
+  const rawAuto = filteredAutoCampaigns.
   filter((c) => stateFilterAuto === 'all' || campaignState(c) === stateFilterAuto);
 
   const autoByAsin = (() => {
@@ -1074,7 +1080,7 @@ export default function AdsManagement() {
     }
     return Array.from(map.values()).map((group) => {
       // Priorizar enabled, depois mais recente
-      const enabled = group.filter((c) => (c.state || c.status) === 'enabled');
+      const enabled = group.filter((c) => campaignState(c) === 'enabled');
       const representative = enabled.length > 0 ? enabled[0] : group[0];
       const resolvedAsin = getCampaignAsin(representative);
       // Só usar _asin_resolved como prefixo de display se for um ASIN Amazon real (começa com B0 e tem 10 chars)
@@ -1089,7 +1095,7 @@ export default function AdsManagement() {
   })();
 
   const autoCampaigns = autoByAsin;
-  const manualCampaigns = applySearch(campaigns.filter((c) => campaignTargetingType(c) === 'MANUAL')).
+  const manualCampaigns = filteredManualCampaigns.
   filter((c) => stateFilterManual === 'all' || campaignState(c) === stateFilterManual).
   sort((a, b) => {
     const stateOrder = (c) => { const s = campaignState(c); return s === 'enabled' ? 0 : s === 'paused' ? 1 : 2; };
@@ -1216,13 +1222,13 @@ export default function AdsManagement() {
             onClick={() => setColumnTab('auto')}
             className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'auto' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             
-            Automáticas ({autoCampaigns.length})
+            Automáticas ({activeAutoCount})
           </button>
           <button
             onClick={() => setColumnTab('manual')}
             className={`flex-1 py-2 text-[11px] font-semibold border-b-2 transition-colors ${columnTab === 'manual' ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
             
-            Manuais ({manualCampaigns.length})
+            Manuais ({activeManualCount})
           </button>
         </div>
 
@@ -1234,6 +1240,7 @@ export default function AdsManagement() {
             icon={Zap}
             color="text-amber-400"
             campaigns={autoCampaigns}
+            activeCount={activeAutoCount}
             products={products}
             selectedId={selectedCampaign?.id}
             onSelect={selectCampaign}
@@ -1296,6 +1303,7 @@ export default function AdsManagement() {
               icon={Sparkles}
               color="text-cyan"
               campaigns={manualCampaigns}
+              activeCount={activeManualCount}
               products={products}
               selectedId={selectedCampaign?.id}
               onSelect={selectCampaign}

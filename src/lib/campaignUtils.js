@@ -84,12 +84,13 @@ function booleanTrue(value) {
 
 export function campaignState(campaign = {}) {
   const candidates = [
-    campaign.amazon_status,
     campaign.state,
     campaign.status,
     campaign.campaign_status,
     campaign.serving_status,
     campaign.original_state,
+    // Legacy fallback only: freshly synchronized state/status win.
+    campaign.amazon_status,
   ];
   for (const candidate of candidates) {
     const normalized = normalizeState(candidate);
