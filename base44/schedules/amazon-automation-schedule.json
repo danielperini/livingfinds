@@ -213,6 +213,12 @@
       "payload": { "_service_role": true, "force": true }
     },
     {
+      "name": "Daily AUTO+MANUAL winner harvest, Factory and exact promotion - 07:05 BRT",
+      "function": "harvestConvertedSearchTerms",
+      "cron": "5 7 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "max_promotions": 25, "lookback_days": 65, "trigger_type": "scheduled_daily_unified_winner_harvest" }
+    },
+    {
       "name": "AUTO search-term harvest into Term Bank - 07:15 BRT",
       "function": "updateTermBankFromAutomaticCampaigns",
       "cron": "15 7 * * *",

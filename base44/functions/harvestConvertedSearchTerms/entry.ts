@@ -41,15 +41,21 @@ Deno.serve(async (request) => {
       _service_role: true,
     };
     const termBankResponse = await base44.asServiceRole.functions.invoke(
-      'updateTermBankFromAutomaticCampaigns',
-      payload,
+      'runImmediateSameSkuSearchTermHarvest',
+      {
+        ...payload,
+        dry_run: body.dry_run === true,
+        max_promotions: Math.max(1, Math.min(50, Number(body.max_promotions || 25))),
+        lookback_days: Math.max(1, Math.min(65, Number(body.lookback_days || 65))),
+        trigger_type: body.trigger_type || 'daily_unified_harvest',
+      },
     );
     const termBank = data(termBankResponse);
     if (termBank.ok === false) {
       return Response.json({
         ok: false,
         stage: 'term_bank',
-        error: termBank.error || termBank.reason || 'Falha ao importar termos AUTO',
+        error: termBank.error || termBank.reason || 'Falha ao importar termos AUTO/MANUAL',
         term_bank: termBank,
       }, { status: 500 });
     }
