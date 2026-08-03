@@ -202,9 +202,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    const deficits = results.filter((r: any) => !r.auto_active || r.deficit > 0 || r.errors.length > 0);
+    // Erros ao tentar reaproveitar campanhas antigas ficam como auditoria, mas
+    // nao invalidam o piso quando a consulta remota confirmou substitutas
+    // ENABLED suficientes para o SKU.
+    const deficits = results.filter((r: any) => !r.auto_active || r.deficit > 0);
+    const warnings = results.flatMap((r: any) => r.errors.map((error: any) => ({ sku: r.sku, asin: r.asin, ...error })));
     return Response.json({ ok: deficits.length === 0, manual_floor: floor, products: results.length,
-      compliant: results.length - deficits.length, deficits_count: deficits.length, deficits, results,
+      compliant: results.length - deficits.length, deficits_count: deficits.length, deficits,
+      warnings_count: warnings.length, warnings, results,
       started_at: startedAt, completed_at: new Date().toISOString() }, { status: deficits.length ? 207 : 200 });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error), started_at: startedAt }, { status: 500 });
