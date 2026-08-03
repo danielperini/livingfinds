@@ -30,6 +30,10 @@ const TERM_MIN_SPEND = 8;
 const TERM_MIN_CLICKS = 6;
 const MAX_TERM_ACTIONS_PER_ACCOUNT = 20;
 const INTRADAY_MAX_DATA_AGE_MINUTES = 90;
+// Resposta intradiÃ¡ria obrigatÃ³ria: primeiro baixar diretamente ao bid alvo.
+// Negativar ou pausar pode eliminar demanda que se estabilizaria com CPC seguro;
+// essas aÃ§Ãµes sÃ³ pertencem Ã s avaliaÃ§Ãµes de performance posteriores.
+const INTRADAY_NEGATIVE_OR_PAUSE_DISABLED = true;
 
 const nowIso = () => new Date().toISOString();
 const todayBrt = () => new Intl.DateTimeFormat('en-CA', {
@@ -287,7 +291,7 @@ Deno.serve(async (request) => {
         const spendFloor = Math.max(TERM_MIN_SPEND, metric.maxProfitableCpc * 8) * (genericHighRisk ? 0.65 : 1);
         const clicksFloor = genericHighRisk ? 4 : TERM_MIN_CLICKS;
 
-        if (isAutoCampaign(campaign) && metric.orders === 0 && metric.sales === 0 &&
+        if (!INTRADAY_NEGATIVE_OR_PAUSE_DISABLED && isAutoCampaign(campaign) && metric.orders === 0 && metric.sales === 0 &&
           metric.spend >= spendFloor && metric.clicks >= clicksFloor && metric.dates.size >= 2) {
           const idempotencyKey = `auto_term_negative_exact_v1|${aid}|${metric.campaignId}|${metric.adGroupId}|${metric.term}|${day}`;
           if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
@@ -505,7 +509,7 @@ Deno.serve(async (request) => {
             actions.push(action); budget--;
             continue;
           }
-          const canNegativeAutoTerm = isAutoCampaign(campaign) && metric.adGroupId &&
+          const canNegativeAutoTerm = !INTRADAY_NEGATIVE_OR_PAUSE_DISABLED && isAutoCampaign(campaign) && metric.adGroupId &&
             priorAdGroupReduction && hoursSince(priorAdGroupReduction.executed_at) >= 6 &&
             !isAmazonAutoTargetExpression(metric.target) &&
             metric.target.split(/\s+/).length >= 2 &&
@@ -541,7 +545,7 @@ Deno.serve(async (request) => {
         const priorTermBidReduction = priorExecutions
           .filter((event: any) => event.entity_id === keywordId && event.action_type === 'update_bid' && event.status === 'completed')
           .sort((a: any, b: any) => new Date(b.executed_at || 0).getTime() - new Date(a.executed_at || 0).getTime())[0];
-        const canPauseTermAfterBid = severeTermLoss && priorTermBidReduction && hoursSince(priorTermBidReduction.executed_at) >= 6;
+        const canPauseTermAfterBid = !INTRADAY_NEGATIVE_OR_PAUSE_DISABLED && severeTermLoss && priorTermBidReduction && hoursSince(priorTermBidReduction.executed_at) >= PAUSE_AFTER_REDUCTION_HOURS;
         if (canPauseTermAfterBid) {
           const idempotencyKey = `intraday_keyword_pause_v1|${aid}|${keywordId}|${day}`;
           if (priorExecutions.some((event: any) => event.idempotency_key === idempotencyKey)) continue;
