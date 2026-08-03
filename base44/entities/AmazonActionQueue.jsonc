@@ -28,9 +28,14 @@
     "campaign_id": {
       "type": "string"
     },
+    "profile_id": { "type": "string" },
+    "ad_group_id": { "type": "string" },
     "keyword_id": {
       "type": "string"
     },
+    "normalized_term": { "type": "string" },
+    "economic_snapshot_id": { "type": "string" },
+    "decision_id": { "type": "string" },
     "payload": {
       "type": "object"
     },
@@ -112,6 +117,9 @@
         "running",
         "submitted",
         "processing",
+        "waiting_retry",
+        "confirming",
+        "conflict_resolved",
         "confirmed",
         "blocked",
         "completed",
@@ -144,6 +152,9 @@
     "last_error": {
       "type": "string"
     },
+    "amazon_request_id": { "type": "string" },
+    "locked_at": { "type": "string", "format": "date-time" },
+    "locked_by": { "type": "string" },
     "result": {
       "type": "string"
     },

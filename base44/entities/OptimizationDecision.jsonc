@@ -5,6 +5,9 @@
     "amazon_account_id": { "type": "string" },
     "marketplace_id": { "type": "string" },
     "profile_id": { "type": "string" },
+    "economic_snapshot_id": { "type": "string" },
+    "journey_state": { "type": "string" },
+    "reason_codes": { "type": "array", "items": { "type": "string" } },
     "decision_type": {
       "type": "string",
       "description": "Tipo operacional aberto para suportar bid_change, bid_adjustment, budget, placement, campaign e demais decisões existentes."
