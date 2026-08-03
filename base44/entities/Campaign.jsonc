@@ -102,6 +102,13 @@
     "reconciliation_notes": {
       "type": "string"
     },
+    "reconciliation_class": {
+      "type": "string",
+      "enum": ["ATIVA_COMPLETA", "PAUSADA", "INCOMPLETA_REPARAVEL", "SEM_PRODUTO", "SEM_ESTOQUE", "DUPLICADA", "PROTEGIDA_ALTA_PERFORMANCE", "ARQUIVADA", "DIVERGENCIA_DE_ESTADO", "ERRO_RETRYABLE"]
+    },
+    "reconciliation_run_id": { "type": "string" },
+    "remote_confirmed_at": { "type": "string", "format": "date-time" },
+    "remote_profile_id": { "type": "string" },
     "metrics_status": {
       "type": "string",
       "enum": [

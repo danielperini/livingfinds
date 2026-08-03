@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { loadAllCampaigns, classifyCampaigns, campaignState } from '@/lib/campaignUtils';
 import {
-  Search, Save, Loader2, CheckCircle, AlertCircle, Megaphone, Brain,
+  Search, Save, Loader2, CheckCircle, AlertCircle, Brain,
   RefreshCw, TrendingUp, TrendingDown, X, Plus, ListFilter, Clock,
-  Settings, Package, History, Zap, Bot, Sparkles, ChevronDown, ChevronUp,
-  Pause, Trash2, Rocket, Wifi, WifiOff, Shield, Play, PlayCircle, DollarSign,
+  Settings, Package, History, Zap, Bot, Sparkles,
+  Pause, Trash2, Rocket, Wifi, WifiOff, Play, DollarSign,
   Archive } from
 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -16,9 +16,9 @@ import KickoffModal from '@/components/products/KickoffModal';
 import CreateCampaignWizard from '@/components/ads/CreateCampaignWizard';
 import CampaignHealthPanel from '@/components/ads/CampaignHealthPanel';
 import ManualCampaignProposalModal from '@/components/ads/ManualCampaignProposalModal';
-import ExportPerformanceButton from '@/components/ads/ExportPerformanceButton';
 import StaleInventoryWarningPanel from '@/components/ads/StaleInventoryWarningPanel';
 import ReactivateWithBudgetModal from '@/components/ads/ReactivateWithBudgetModal';
+import AmazonCampaignReconciliationPanel from '@/components/ads/AmazonCampaignReconciliationPanel';
 
 const NOW_MS = Date.now();
 const H24 = 24 * 60 * 60 * 1000;
@@ -690,7 +690,8 @@ export default function AdsManagement() {
 
       const operational = classifiedCampaigns.filter((c) => {
         const state = campaignState(c);
-        return state === 'enabled' || state === 'paused';
+        const structurallyIncomplete = c.reconciliation_class === 'INCOMPLETA_REPARAVEL' || c.status === 'incomplete';
+        return (state === 'enabled' || state === 'paused') && !structurallyIncomplete;
       });
 
       // Garantir que campanhas externas (não criadas pelo app) também sejam marcadas como elegíveis para IA
@@ -717,7 +718,9 @@ export default function AdsManagement() {
         }
         return Object.values(asinCount).some((n) => n > 1);
       })();
-      if (hasAutoDuplicates) {
+      // Reconciliação nunca executa faxina ao abrir a página. O usuário deve
+      // analisar o dry-run e acionar explicitamente "Executar ações seguras".
+      if (false && hasAutoDuplicates) {
         base44.functions.invoke('deduplicateAutoCampaignsByAsin', { amazon_account_id: acc.id }).catch(() => {});
         setTimeout(async () => {
           try {
@@ -742,7 +745,7 @@ export default function AdsManagement() {
         (c) => campaignState(c) === 'paused' &&
         /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || ''))
       );
-      if (hasCanonicalPaused) {
+      if (false && hasCanonicalPaused) {
         base44.functions.invoke('reactivatePausedWithStock', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
       }
 
@@ -752,7 +755,7 @@ export default function AdsManagement() {
         !/^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(String(c.name || c.campaign_name || '')) && (
         (c.keyword_count || 0) > 1 || /\+\d+\s*$/i.test(String(c.name || c.campaign_name || '')))
       );
-      if (hasPendingMigration) {
+      if (false && hasPendingMigration) {
         setMigrationInProgress(true);
         base44.functions.invoke('enforceCanonicalManualCampaigns', { amazon_account_id: acc.id, _service_role: true }).catch(() => {});
         // Re-fetch após 4s para refletir o novo estado (1 tentativa apenas)
@@ -1108,6 +1111,8 @@ export default function AdsManagement() {
 
       {/* ── Sidebar dupla coluna ──────────────────────────────────────────── */}
       <div className="w-[480px] flex-shrink-0 border-r border-surface-2 bg-[#0D0F14] flex flex-col">
+
+        <AmazonCampaignReconciliationPanel accountId={account?.id} onSynced={loadCampaigns} />
 
         {/* Header */}
         <div className="p-3 border-b border-surface-2">
