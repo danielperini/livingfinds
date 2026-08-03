@@ -274,7 +274,12 @@ Deno.serve(async (req) => {
         const conf = Number(kb.confidence_score || 0);
         const clicks = Number(kb.clicks || 0);
         const acos = Number(kb.acos || 0);
-        const isDonor = (conf >= 75 || clicks > 0) && (acos === 0 || acos <= maxAcos);
+        // Campaign Factory is the source of truth for expansion: terms already
+        // classified as Strong Winner or Harvest Ready are valid donors even
+        // before enough click volume accumulates on every sibling ASIN.
+        const isStrongWinner = String(kb.winner_tier || '').toUpperCase() === 'STRONG_WINNER';
+        const isHarvestReady = kb.harvest_candidate === true || String(kb.harvest_action || '').toUpperCase() === 'CREATE_EXACT';
+        const isDonor = (isStrongWinner || isHarvestReady || conf >= 75 || clicks > 0) && (acos === 0 || acos <= maxAcos);
         if (!isDonor) continue;
         const nkw = normalizeKeyword(kb.keyword);
         if (!nkw || nkw.length < 3) continue;
@@ -287,7 +292,8 @@ Deno.serve(async (req) => {
           cvr: Number(kb.cvr || 0),
           cpc: Number(kb.cpc || 0),
           confidence: conf,
-          source: 'KeywordBank',
+          winnerTier: isStrongWinner ? 'STRONG_WINNER' : (isHarvestReady ? 'HARVEST_READY' : 'NONE'),
+          source: isStrongWinner ? 'CampaignFactory:StrongWinner' : (isHarvestReady ? 'CampaignFactory:HarvestReady' : 'KeywordBank'),
         };
         if (!donorMap.has(nkw) || clicks > (donorMap.get(nkw).clicks || 0)) {
           donorMap.set(nkw, entry);
@@ -372,7 +378,7 @@ Deno.serve(async (req) => {
 
         // Calcular bid inicial: CPC da origem × 0,75 (desconto 25%), mínimo R$0,30
         const initialBid = donor.cpc > 0
-          ? Math.max(0.30, Math.round(donor.cpc * 0.75 * 100) / 100)
+          ? Math.min(1, Math.max(0.30, Math.round(donor.cpc * 0.75 * 100) / 100))
           : 0.50;
 
         transfersToCreate.push({
@@ -389,7 +395,7 @@ Deno.serve(async (req) => {
           source_acos: donor.acos,
           source_cvr: donor.cvr,
           source_cpc: donor.cpc,
-          source_winner_tier: donor.orders >= 1 ? 'WINNER' : 'NONE',
+          source_winner_tier: donor.winnerTier || (donor.orders >= 1 ? 'WINNER' : 'NONE'),
           initial_bid: initialBid,
           relevance_score: conversionScore,
           relevance_phase: 'HEURISTIC_ONLY',

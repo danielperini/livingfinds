@@ -696,6 +696,23 @@ Deno.serve(async (req) => {
       plansCreated = plans.length;
     }
 
+    // Depois de persistir a classificacao, transferir apenas Strong Winners e
+    // Harvest Ready para ASINs irmaos com estoque. A funcao cross-ASIN aplica
+    // relevancia por titulo, cobertura EXACT e chave de idempotencia antes de
+    // enfileirar qualquer campanha manual.
+    let crossAsinResult: any = null;
+    if (!dry_run) {
+      try {
+        const response = await base44.asServiceRole.functions.invoke('runCrossAsinTransfer', {
+          amazon_account_id: accountId,
+          force: false,
+        });
+        crossAsinResult = response?.data || response;
+      } catch (error: any) {
+        crossAsinResult = { ok: false, error: error?.message || String(error) };
+      }
+    }
+
     // ── Sumário de aprendizado ─────────────────────────────────────────
     const summary = {
       total_bank_entries: bankMap.size,
@@ -718,6 +735,13 @@ Deno.serve(async (req) => {
       bank_updated: dry_run ? toReclassify.filter((entry: any) => entry.id).length : bankUpdatedCount,
       plans_generated: plans.length,
       plans_created: plansCreated,
+      cross_asin: crossAsinResult ? {
+        ok: crossAsinResult.ok !== false,
+        transfers_created: crossAsinResult.transfers_created || 0,
+        transfers_queued: crossAsinResult.transfers_queued || 0,
+        groups_analyzed: crossAsinResult.groups_analyzed || 0,
+        error: crossAsinResult.error || null,
+      } : null,
       duplicates_blocked: dupes.length,
       summary,
       plans: dry_run ? plans.slice(0, 20) : plans.map(p => ({
