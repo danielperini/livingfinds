@@ -89,9 +89,18 @@ Deno.serve(async (request) => {
     const searchTerms = dailyClose || body.bootstrap === true
       ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', { ...common, lookback_days: 65, max_promotions: 25, queue_only: true })
       : { ok: true, skipped: true };
+    // Após consolidar o dia anterior, corta desperdício por termo antes de
+    // considerar qualquer pausa ampla. A função cria negativas EXATAS na
+    // origem; pausas de campanha permanecem deliberadamente desabilitadas.
+    const autoSearchTermGuard = dailyClose
+      ? await invoke(base44, 'runWeeklyWasteTermsCleanup', { ...common, mode: 'daily_guard', allow_campaign_pause: false })
+      : { ok: true, skipped: true };
+    const cpcGuard = dailyClose
+      ? await invoke(base44, 'smartBidFromCpc', { ...common })
+      : { ok: true, skipped: true };
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
-    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, manualStructureAudit, deterministic, economicBalancer, repricing, searchTerms, scopeAfter };
+    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, manualStructureAudit, deterministic, economicBalancer, repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',

@@ -77,11 +77,10 @@ async function adsRequest(method, path, body, token, profileId) {
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
-
     const now = new Date();
     const payload = await req.json().catch(() => ({}));
+    const user = await base44.auth.me().catch(() => null);
+    if (!payload._service_role && !user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
     const accounts = payload.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: payload.amazon_account_id })

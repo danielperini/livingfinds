@@ -46,10 +46,9 @@ function norm(t: string) { return String(t || '').toLowerCase().trim().replace(/
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
-    if (!user || user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
-
     const body = await req.json().catch(() => ({}));
+    const user = await base44.auth.me().catch(() => null);
+    if (!body._service_role && (!user || user.role !== 'admin')) return Response.json({ error: 'Admin only' }, { status: 403 });
     const accountId = body.amazon_account_id;
     if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' }, { status: 400 });
 
@@ -63,8 +62,11 @@ Deno.serve(async (req) => {
     // Thresholds da config (ou defaults seguros)
     const maxAcos = config.maximum_acos || 45;           // % — acima disso é prejudicial
     const minSpendForDecision = config.min_spend_for_decision || 5; // R$ mínimo para decidir
-    const WEEKS = 3;
-    const CUTOFF_DAYS = WEEKS * 7; // 21 dias
+    // A limpeza semanal continua disponível, mas o motor diário usa uma janela
+    // menor. Nunca usa as últimas 72h por causa da atribuição atrasada.
+    const dailyGuard = body.mode === 'daily_guard';
+    const CUTOFF_DAYS = dailyGuard ? 3 : 21;
+    const allowCampaignPause = body.allow_campaign_pause === true;
 
     const cutoffDate = new Date(Date.now() - CUTOFF_DAYS * 86400000).toISOString().slice(0, 10);
     // Janela de atribuição segura: não tomar decisão sobre dados recentes
@@ -137,12 +139,14 @@ Deno.serve(async (req) => {
       agg.sales += t.sales_14d || t.sales_30d || t.sales_7d || 0;
     }
 
-    // Filtrar: >= 21 dias de presença, gasta, zero conversões
+    // Prioridade é eliminar a consulta desperdiçadora, não desligar a
+    // campanha inteira. Para o guard diário, 3 dias consolidados OU uma
+    // amostra já cara (12 cliques/R$8) bastam para uma negativa EXATA.
     const wasteTerms = Array.from(termAgg.values()).filter(t => {
       const daysSinceFirst = (new Date(attributionCutoff).getTime() - new Date(t.first_seen).getTime()) / 86400000;
-      return daysSinceFirst >= CUTOFF_DAYS
-        && t.spend >= minSpendForDecision
-        && t.orders === 0;
+      const materiallyWasteful = t.clicks >= 12 || t.spend >= Math.max(8, minSpendForDecision * 1.5);
+      return t.orders === 0 && t.spend >= minSpendForDecision &&
+        (daysSinceFirst >= CUTOFF_DAYS || (dailyGuard && materiallyWasteful));
     });
 
     const stats = {
@@ -256,7 +260,9 @@ Deno.serve(async (req) => {
         reason = `ACoS ${acos.toFixed(0)}% > meta ${maxAcos}% por ${daySpan.toFixed(0)} dias`;
       }
 
-      if (shouldPause) {
+      // Pausar campanha é último recurso e precisa de autorização explícita
+      // do chamador. O fluxo normal já negativou os search terms ruins acima.
+      if (shouldPause && allowCampaignPause) {
         campaignsToPause.push({ camp, cid: String(cid), metrics, acos, reason, isAuto });
       } else {
         stats.campaigns_preserved++;
@@ -313,7 +319,7 @@ Deno.serve(async (req) => {
       stats,
       negative_actions: negativeActions.slice(0, 100),
       pause_actions: pauseActions,
-      config_used: { maxAcos, minSpendForDecision, cutoff_days: CUTOFF_DAYS },
+      config_used: { maxAcos, minSpendForDecision, cutoff_days: CUTOFF_DAYS, daily_guard: dailyGuard, campaign_pause_enabled: allowCampaignPause },
       ran_at: new Date().toISOString(),
     });
   } catch (err: any) {
