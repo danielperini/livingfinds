@@ -54,6 +54,9 @@ Deno.serve(async (request) => {
       : { ok: true, skipped: true };
 
     const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
+    const manualStructureAudit = dailyClose || body.bootstrap === true
+      ? await invoke(base44, 'enforceCanonicalManualCampaigns', { ...common, trigger_type: 'unified_daily_manual_structure_audit' })
+      : { ok: true, skipped: true };
 
     // Classification/audit happens before bids. Legacy engines may add non-bid
     // observations, but cannot execute or produce bid/budget decisions here.
@@ -88,7 +91,7 @@ Deno.serve(async (request) => {
       : { ok: true, skipped: true };
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
-    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, deterministic, economicBalancer, repricing, searchTerms, scopeAfter };
+    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, manualStructureAudit, deterministic, economicBalancer, repricing, searchTerms, scopeAfter };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',

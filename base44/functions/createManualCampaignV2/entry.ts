@@ -66,7 +66,12 @@ Deno.serve(async (request) => {
 
     const accountId = body.amazon_account_id;
     const asin = String(body.asin).trim().toUpperCase();
-    const keyword = String(body.keyword).trim();
+    const rawKeyword = String(body.keyword).trim();
+    // Callers must pass a search term, never a rendered campaign name. Repair
+    // legacy inputs so names cannot become "SP | MANUAL ... | SP | MANUAL".
+    const keyword = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(rawKeyword)
+      ? rawKeyword.split('|').slice(4).join('|').trim()
+      : rawKeyword;
     const bid = Math.max(0.25, Number(body.bid || 0.5));
     const budget = Math.max(5, Number(body.budget || 5));
     const now = new Date().toISOString();

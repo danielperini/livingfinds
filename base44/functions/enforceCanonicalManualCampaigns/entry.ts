@@ -133,6 +133,28 @@ async function archiveCampaignOnAmazon(base44: any, accountId: string, amazonCam
   }
 }
 
+/** Remove somente keywords excedentes. A campanha-raiz continua sendo a
+ * estrutura canônica do seu primeiro termo; nunca a arquivamos por dedupe. */
+async function archiveKeywordsOnAmazon(base44: any, accountId: string, keywordIds: string[]): Promise<boolean> {
+  const ids = [...new Set(keywordIds.map(String).filter(Boolean))];
+  if (!ids.length) return true;
+  try {
+    const result = await invoke(base44, 'amazonAdsCommand', {
+      amazon_account_id: accountId,
+      operation: 'archiveDuplicateCanonicalKeywords',
+      method: 'PUT',
+      path: '/sp/keywords',
+      payload: { keywords: ids.map((keywordId) => ({ keywordId, state: 'ARCHIVED' })) },
+      content_type: CT_KEYWORD,
+      accept: CT_KEYWORD,
+      _service_role: true,
+    });
+    return result?.ok !== false;
+  } catch {
+    return false;
+  }
+}
+
 // ── Verificar se já existe campanha canônica ──────────────────────────────────
 
 function findExistingCanonical(campaigns: any[], accountId: string, asin: string, keyword: string): any | null {
@@ -536,6 +558,35 @@ Deno.serve(async (request) => {
       const allAccountedFor = migrationGroup.created.length + migrationGroup.already_existed.length >= migrationGroup.total_to_migrate - migrationGroup.duplicates_blocked;
 
       if (allMigrated && allAccountedFor) {
+        // Preserve the root campaign.  Archive only duplicate/extra keywords
+        // after their canonical destination has been created or confirmed.
+        const extraIds = extraKws.map((kw: any) => String(kw.keyword_id || '')).filter(Boolean);
+        if (extraIds.length > 0) {
+          const extrasArchived = await archiveKeywordsOnAmazon(base44, accountId, extraIds);
+          if (extrasArchived) {
+            const extraIdSet = new Set(extraIds);
+            await Promise.all(exactKws
+              .filter((kw: any) => extraIdSet.has(String(kw.keyword_id || '')) && kw.id)
+              .map((kw: any) => base44.asServiceRole.entities.Keyword.update(kw.id, {
+                state: 'archived', status: 'archived', canonical_dedupe_archived_at: new Date().toISOString(),
+              }).catch(() => {})));
+            await base44.asServiceRole.entities.Campaign.update(campaign.id, {
+              keyword_count: 1,
+              canonical_structure_status: 'complete',
+              canonical_structure_checked_at: new Date().toISOString(),
+            }).catch(() => {});
+            report.campaigns_migrated.push({
+              source_campaign_id: cid, asin, root_keyword: kwText(rootKw), keywords_found: keywordsFound,
+              unique_terms: uniqueExtraKws.length, duplicates_blocked: migrationGroup.duplicates_blocked,
+              campaigns_created: migrationGroup.created.length, source_campaign_retained: true,
+              source_extra_keywords_archived: extraIds.length,
+            });
+          } else {
+            report.errors.push({ campaign_id: cid, step: 'archive_extra_keywords', reason: 'Amazon keyword archive failed' });
+          }
+          processed++;
+          continue;
+        }
         const archived = await archiveCampaignOnAmazon(base44, accountId, cid);
 
         if (archived) {
