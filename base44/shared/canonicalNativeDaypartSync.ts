@@ -7,6 +7,10 @@
 export const NATIVE_ENGINE_VERSION = 'canonical-native-daypart-v1';
 
 const DAY_NAMES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
+// Hipótese setorial: 15:00–18:59 BRT tende a ter menor intenção de compra.
+// Ela nunca é aplicada sozinha; precisa ser confirmada pelo histórico do SKU.
+const LOW_CONVERSION_WINDOW_START = 15;
+const LOW_CONVERSION_WINDOW_END = 19;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const r2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 const norm = (value: any) => String(value || '').trim().toLowerCase();
@@ -207,13 +211,22 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     }
 
     // Classificação por hora — elegibilidade (b): ≥ 20 cliques por faixa avaliada
+    const campaignCost = hourAgg.reduce((sum, agg) => sum + agg.cost, 0);
+    const campaignSales = hourAgg.reduce((sum, agg) => sum + agg.sales, 0);
+    const campaignRoas = campaignCost > 0 ? campaignSales / campaignCost : null;
+    const campaignWinner = Number(campaign.orders || 0) > 0 &&
+      Number(campaign.acos || 0) > 0 && Number(campaign.acos) <= targetAcos;
     const hourClass: string[] = [];
     for (let hour = 0; hour < 24; hour++) {
       const agg = hourAgg[hour];
       if (agg.clicks < minClicksPerBand) { hourClass.push('EFICIENTE'); continue; }
       const acos = agg.sales > 0 ? (agg.cost / agg.sales) * 100 : (agg.cost > 0 ? Infinity : null);
       const roas = agg.cost > 0 ? agg.sales / agg.cost : null;
-      if ((acos !== null && acos > maxAcos * 1.5) || (roas !== null && roas < targetRoas * 0.4)) hourClass.push('PISO');
+      const sectorWindowUnderperformance = hour >= LOW_CONVERSION_WINDOW_START && hour < LOW_CONVERSION_WINDOW_END &&
+        !campaignWinner && campaignRoas !== null && campaignRoas > 0 && roas !== null &&
+        roas < campaignRoas * 0.70 && (acos === null || acos > targetAcos);
+      if (sectorWindowUnderperformance) hourClass.push('PISO_SECTOR');
+      else if ((acos !== null && acos > maxAcos * 1.5) || (roas !== null && roas < targetRoas * 0.4)) hourClass.push('PISO');
       else if ((roas !== null && roas > targetRoas * 1.5) || (acos !== null && acos < targetAcos * 0.6)) hourClass.push('PICO');
       else hourClass.push('EFICIENTE');
     }
@@ -235,8 +248,10 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
     for (const band of actionable) {
       // Multiplicadores canônicos
       let adjValue = 0;
-      if (band.classification === 'PISO') {
-        const bid = Math.max(absMinBid, r2(baseBid * 0.25));
+      if (band.classification === 'PISO' || band.classification === 'PISO_SECTOR') {
+        // PISO_SETOR é uma defesa moderada: -25% no período 15h–19h,
+        // enquanto PISO confirmado por perda extrema mantém o corte forte.
+        const bid = Math.max(absMinBid, r2(baseBid * (band.classification === 'PISO_SECTOR' ? 0.75 : 0.25)));
         adjValue = Math.round(((bid / baseBid) - 1) * 100);
         if (adjValue >= 0) continue; // bid-base já está no piso técnico
       } else {
@@ -270,7 +285,7 @@ export async function runCanonicalNativeDaypartSync(base44: any, account: any, o
           adjustment_value: adjValue,
           bid_base_before: baseBid,
           bid_floor: absMinBid,
-          classification: band.classification === 'PISO' ? 'deficit' : 'peak_high_profit',
+          classification: ['PISO', 'PISO_SECTOR'].includes(band.classification) ? 'deficit' : 'peak_high_profit',
           avg_roas: band.roas,
           avg_acos: band.acos || 0,
           sample_clicks: band.hours.reduce((sum: number, h: number) => sum + hourAgg[h].clicks, 0),
