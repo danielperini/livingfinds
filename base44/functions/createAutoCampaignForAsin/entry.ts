@@ -189,9 +189,9 @@ Deno.serve(async (req) => {
         && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
     });
     if (autoCampaign) {
-      // amazon_status e a fonte que o painel usa primeiro. Se estiver PAUSED,
-      // nao podemos considerar o registro ativo apenas porque state ficou stale.
-      const state = String(autoCampaign.amazon_status || autoCampaign.state || autoCampaign.status || '').toUpperCase();
+      // O estado confirmado pela sincronização atual tem precedência. Um
+      // amazon_status legado nunca pode bloquear a cobertura AUTO do SKU.
+      const state = String(autoCampaign.state || autoCampaign.status || autoCampaign.amazon_status || '').toUpperCase();
       const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
       if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
       // Sempre reafirmar ENABLED na Amazon. Estado local nunca substitui a
