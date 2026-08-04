@@ -44,6 +44,7 @@ import {
 } from "../../shared/guardedPriceChangePolicy.ts";
 import { listingOfferStatus } from "../../shared/listingOfferStatus.ts";
 import { canonicalDecisionIdempotencyKey, canonicalEntityLockKey } from "../../shared/canonicalDecisionPolicy.ts";
+import { extractAmazonAsin, zyteExtract } from "../../shared/zyteApi.ts";
 
 const DEFAULTS = {
   default_minimum_margin_pct: 15,
@@ -143,22 +144,7 @@ function similarSearchQueries(value: unknown) {
   return [...new Set([compact, broad].filter((query) => query.split(/\s+/).length >= 2))];
 }
 
-function inferredMonthlySalesVolume(value: unknown) {
-  const raw = String(value || "").trim();
-  if (!raw) return null;
-  const match = raw.match(/([\d.,]+)\s*\+?/);
-  if (!match) return null;
-  const estimate = Number(match[1].replace(/\D/g, ""));
-  if (!Number.isFinite(estimate) || estimate <= 0) return null;
-  return {
-    competitor_sales_estimate: estimate,
-    competitor_sales_estimate_confidence: /bought|comprad|vendid/i.test(raw) ? "medium" : "low",
-    competitor_sales_estimate_source: "inferred",
-    sales_volume_raw: raw,
-  };
-}
-
-const SIMILAR_COMPETITION_ALGORITHM_VERSION = 5;
+const SIMILAR_COMPETITION_ALGORITHM_VERSION = 6;
 const COLOR_TOKENS = [
   "preto", "preta", "branco", "branca", "cinza", "vermelho", "vermelha",
   "azul", "verde", "rosa", "amarelo", "amarela", "bege", "marrom",
@@ -1251,7 +1237,7 @@ async function evaluateAccount(
       product.available_quantity ?? product.fba_inventory,
       0,
     );
-    // Não consultar concorrentes, consumir ScrapingBee nem gerar preço para
+    // Não consultar concorrentes, consumir Zyte nem gerar preço para
     // catálogo inativo/sem estoque. Registros e decisões anteriores ficam
     // intactos para auditoria; somente a nova avaliação é bloqueada.
     if (
@@ -1337,7 +1323,7 @@ async function evaluateAccount(
     // O estudo de mercado é informativo e deve existir mesmo quando estoque,
     // Listings ou fulfillment ainda impedem a EXECUÇÃO do novo preço.
     const cachedSimilar = economics.decision_evidence || {};
-    const similarCompetition = options.full !== true &&
+    const similarCompetition: any = options.full !== true &&
         cachedSimilar.similar_competition_algorithm_version === SIMILAR_COMPETITION_ALGORITHM_VERSION &&
         numberValue(cachedSimilar.similar_competitor_product_count, 0) > 0 &&
         Array.isArray(cachedSimilar.similar_competitor_products) &&
@@ -1350,7 +1336,7 @@ async function evaluateAccount(
         count: numberValue(cachedSimilar.similar_competitor_product_count, 0),
         matches: cachedSimilar.similar_competitor_products || [],
         checkedAt: cachedSimilar.similar_competition_checked_at,
-        source: "persisted_scrapingbee_amazon_search_inferred",
+        source: "persisted_zyte_amazon_product_list_inferred",
         aiAssisted: cachedSimilar.similar_competition_ai_assisted === true,
         canonicalSourceTitle: cachedSimilar.similar_competition_canonical_title || null,
         searchQueries: cachedSimilar.similar_competition_search_queries || [],
@@ -1358,7 +1344,7 @@ async function evaluateAccount(
       }
       : await fetchSimilarCompetition(base44, account, accessToken, product, similarSearchAiBudget).catch((error: any) => ({
         average: null, minimum: null, maximum: null, count: 0, matches: [], checkedAt: nowIso(),
-        source: "scrapingbee_amazon_search_inferred_error", error: error?.message || String(error),
+        source: "zyte_amazon_product_list_inferred_error", error: error?.message || String(error),
       }));
     await base44.asServiceRole.entities.ProductEconomics.update(economics.id, {
       decision_evidence: {
@@ -1499,9 +1485,9 @@ async function evaluateAccount(
       (economics.competition_checked_at &&
         hoursSince(economics.competition_checked_at) * 60 <=
           numberValue(settings.competition_max_age_minutes, 30));
-    const scrapingBeeCompetitionFresh = similarCompetition.count > 0 &&
+    const externalCompetitionFresh = similarCompetition.count > 0 &&
       hoursSince(similarCompetition.checkedAt) <= 24;
-    const marketCompetitionFresh = competitionFresh || scrapingBeeCompetitionFresh;
+    const marketCompetitionFresh = competitionFresh || externalCompetitionFresh;
     const currency = account.currency_code ||
       CURRENCY_BY_MARKETPLACE[account.marketplace_id] || "BRL";
     let feesPatch: any = {};
@@ -1863,8 +1849,9 @@ async function evaluateAccount(
       competition_source: "Product Pricing API 2022-05-01",
       market_competition_fresh: marketCompetitionFresh,
       sp_api_competition_fresh: competitionFresh,
-      scrapingbee_competition_fresh: scrapingBeeCompetitionFresh,
-      scrapingbee_metric_weight: scrapingBeeCompetitionFresh ? 0.75 : 0,
+      external_competition_fresh: externalCompetitionFresh,
+      external_competition_provider: "zyte",
+      external_competition_metric_weight: externalCompetitionFresh ? 0.75 : 0,
       fees_source: mergedEconomics.fees_source,
       ads_cost_source: adsCost.source,
       current_price: confirmedPrice,
@@ -1876,23 +1863,20 @@ async function evaluateAccount(
       ),
       competitor_reference_prices: pricing.referencePrices || [],
       competitor_reference_price_average: pricing.referenceAveragePrice || null,
+      external_competitor_price_average: similarCompetition.average || null,
+      external_competitor_price_minimum: similarCompetition.minimum || null,
+      external_competitor_price_maximum: similarCompetition.maximum || null,
+      external_competitor_count: similarCompetition.count || 0,
+      external_competition_checked_at: similarCompetition.checkedAt,
+      external_competition_source: similarCompetition.source,
+      // Compatibilidade de leitura com históricos anteriores; novos consumidores
+      // devem usar os campos neutros external_* acima.
       scrapingbee_competitor_price_average: similarCompetition.average || null,
       scrapingbee_competitor_price_minimum: similarCompetition.minimum || null,
       scrapingbee_competitor_price_maximum: similarCompetition.maximum || null,
       scrapingbee_competitor_count: similarCompetition.count || 0,
       scrapingbee_competition_checked_at: similarCompetition.checkedAt,
       scrapingbee_competition_source: similarCompetition.source,
-      scrapingbee_sales_estimate_average: averagePositive(
-        (similarCompetition.matches || []).map((match: any) =>
-          match.competitor_sales_estimate
-        ),
-      ),
-      scrapingbee_sales_estimate_confidence: similarCompetition.count > 0
-        ? "low"
-        : null,
-      scrapingbee_sales_estimate_source: similarCompetition.count > 0
-        ? "inferred"
-        : null,
       similar_competitor_price_average: similarCompetition.average || null,
       similar_competitor_price_minimum: similarCompetition.minimum || null,
       similar_competitor_price_maximum: similarCompetition.maximum || null,
@@ -2049,15 +2033,16 @@ async function evaluateAccount(
         (similarCompetition.count || 0),
       market_price_currency: currency,
       market_price_source: similarCompetition.count > 0
-        ? "sp_api_product_pricing_2022_05_01+scrapingbee_amazon_search"
+        ? "sp_api_product_pricing_2022_05_01+zyte_amazon_product_list"
         : "sp_api_product_pricing_2022_05_01",
       market_price_provider: similarCompetition.count > 0
-        ? "Amazon SP-API + ScrapingBee"
+        ? "Amazon SP-API + Zyte"
         : "Amazon SP-API",
       market_price_marketplace: account.marketplace_id,
       market_price_status: similarCompetition.error
         ? "failed"
-        : similarCompetition.count > 0 || decision.equivalentOfferCount > 0
+        : similarCompetition.count > 0 ||
+            numberValue(decision.equivalentOfferCount, 0) > 0
         ? "success"
         : "no_offers",
       market_price_error: similarCompetition.error || null,
@@ -3046,24 +3031,6 @@ async function fetchSimilarCompetition(
   product: any,
   aiBudget: { used: number; max: number },
 ) {
-  // Pesquisa externa de concorrentes foi removida. O repricing permanece
-  // protegido por margens e pelas fontes oficiais disponíveis.
-  void base44;
-  void account;
-  void accessToken;
-  void product;
-  void aiBudget;
-  return {
-    average: null,
-    minimum: null,
-    maximum: null,
-    count: 0,
-    matches: [],
-    checkedAt: nowIso(),
-    source: "external_competitor_source_disabled",
-    error: "external_competitor_source_disabled",
-  };
-
   const originalTitle = product.display_name || product.product_name || product.title || "";
   let title = originalTitle;
   const marketplaceId = account.marketplace_id || secrets.get("AMAZON_MARKETPLACE_ID") || "";
@@ -3095,51 +3062,62 @@ async function fetchSimilarCompetition(
   void aiBudget;
   const queries = similarSearchQueries(title);
   if (!product.asin || !queries.length) {
-    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred" };
+    return { average: null, minimum: null, maximum: null, count: 0, matches: [], checkedAt: nowIso(), source: "zyte_amazon_product_list_inferred" };
   }
-  const scrapingBeeKey = secrets.get("SCRAPINGBEE_API_KEY");
-  if (!scrapingBeeKey) {
-    return { average: null, count: 0, matches: [], checkedAt: nowIso(), source: "scrapingbee_amazon_search_inferred", error: "SCRAPINGBEE_API_KEY_missing" };
-  }
+  const domain = marketplaceId === "ATVPDKIKX0DER"
+    ? "www.amazon.com"
+    : String(account.country_code || "").toUpperCase() === "MX"
+    ? "www.amazon.com.mx"
+    : "www.amazon.com.br";
   const searchProducts: any[] = [];
   const queryErrors: string[] = [];
   for (const searchText of queries.slice(0, 2)) {
-    const query = new URLSearchParams({
-      query: searchText, domain: "com.br", pages: "1", sort_by: "featured",
-    });
+    const searchUrl = new URL(`https://${domain}/s`);
+    searchUrl.searchParams.set("k", searchText);
     try {
-      const response = await fetch(`https://app.scrapingbee.com/api/v1/amazon/search?${query}`, {
-        headers: { Authorization: `Bearer ${scrapingBeeKey}` },
-        signal: AbortSignal.timeout(35000),
+      const result = await zyteExtract({
+        base44,
+        amazonAccountId: account.id,
+        operation: "repricing_competitor_search",
+        url: searchUrl.toString(),
+        output: "productList",
+        cacheTtlMs: 6 * 60 * 60 * 1000,
+        extractFrom: "browserHtml",
+        tags: { marketplace_id: marketplaceId || "unknown", asin: product.asin },
       });
-      if (!response.ok) {
-        queryErrors.push(`${searchText}:HTTP_${response.status}`);
-        continue;
-      }
-      const payload = await response.json().catch(() => ({}));
-      if (Array.isArray(payload?.products)) searchProducts.push(...payload.products);
+      const products = Array.isArray(result.data?.productList?.products)
+        ? result.data.productList.products
+        : [];
+      searchProducts.push(...products.map((item: any, index: number) => ({
+        ...item,
+        asin: extractAmazonAsin(item?.url),
+        organic_position: index + 1,
+        cache_hit: result.cacheHit,
+      })));
     } catch (error: any) {
-      queryErrors.push(`${searchText}:${String(error?.message || "unavailable").slice(0, 80)}`);
+      queryErrors.push(`${searchText}:${String(error?.code || error?.message || "unavailable").slice(0, 100)}`);
     }
   }
   const uniqueProducts = [...new Map(searchProducts.filter((item: any) => item?.asin).map((item: any) => [item.asin, item])).values()];
   const pricedMatches = uniqueProducts.map((item: any) => {
-    const matchedTitle = String(item.title || "");
+    const matchedTitle = String(item.name || "");
     const similarity = genericProductSimilarity(title, matchedTitle);
     const variant = comparableVariant(title, matchedTitle);
     return {
       asin: item.asin || null,
       title: matchedTitle,
-      brand: item.manufacturer || null,
+      brand: null,
       similarity,
       matchedDimensions: variant.matched,
       variantCompatible: variant.ok,
-      averagePrice: numberValue(item.price || item.highest_price, 0),
-      amazonUrl: item.asin ? `https://www.amazon.com.br/dp/${item.asin}` : null,
-      ...(inferredMonthlySalesVolume(item.sales_volume) || {}),
+      averagePrice: numberValue(item.price || item.regularPrice, 0),
+      currency: item.currency || null,
+      amazonUrl: item.url || (item.asin ? `https://${domain}/dp/${item.asin}` : null),
       organic_position: finite(item.organic_position) ? Number(item.organic_position) : null,
-      sponsored: item.is_sponsored === true,
-      data_source: "scrapingbee_amazon_search",
+      sponsored: false,
+      extraction_probability: finite(item.metadata?.probability) ? Number(item.metadata.probability) : null,
+      cache_hit: item.cache_hit === true,
+      data_source: "zyte_amazon_product_list",
     };
   }).filter((item: any) => item.asin && item.asin !== product.asin && item.similarity >= 0.90 && item.variantCompatible && item.averagePrice > 0)
     .sort((a: any, b: any) => b.similarity - a.similarity || numberValue(a.organic_position, 999) - numberValue(b.organic_position, 999))
@@ -3151,7 +3129,7 @@ async function fetchSimilarCompetition(
     count: pricedMatches.length,
     matches: pricedMatches,
     checkedAt: nowIso(),
-    source: "scrapingbee_amazon_search_inferred",
+    source: "zyte_amazon_product_list_inferred",
     aiAssisted: false,
     canonicalSourceTitle: title,
     searchQueries: queries.slice(0, 2),

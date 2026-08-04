@@ -1,0 +1,23 @@
+{
+  "name": "ExternalApiRequestLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "provider": { "type": "string", "enum": ["zyte"] },
+    "operation": { "type": "string" },
+    "endpoint": { "type": "string" },
+    "target_url": { "type": "string" },
+    "output_type": { "type": "string" },
+    "request_hash": { "type": "string" },
+    "http_status": { "type": "number" },
+    "request_id": { "type": "string" },
+    "success": { "type": "boolean" },
+    "cache_hit": { "type": "boolean", "default": false },
+    "attempt_number": { "type": "number", "default": 1 },
+    "duration_ms": { "type": "number" },
+    "error_code": { "type": "string" },
+    "error_message": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["provider", "operation", "http_status", "success", "created_at"]
+}
