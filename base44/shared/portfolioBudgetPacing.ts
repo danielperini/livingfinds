@@ -245,11 +245,13 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     const hardCap = classification === 'hard_cap_risk';
     const overpacing = classification === 'overpacing' || hardCap;
     if (overpacing) {
+      // AUTO Ã© a campanha de descoberta/continuidade por SKU. Pacing jamais a
+      // pausa por desempenho: termos ruins sÃ£o tratados por bid/negativa exata.
       const normalCandidates = activeProfiles
-        .filter((profile: any) => !profile.protected)
+        .filter((profile: any) => !profile.protected && String(profile.campaign?.targeting_type || '').toUpperCase() !== 'AUTO')
         .sort((a: any, b: any) => b.wasteScore - a.wasteScore || b.todaySpend - a.todaySpend);
       const protectedLastResort = hardCap
-        ? activeProfiles.filter((profile: any) => profile.protected)
+        ? activeProfiles.filter((profile: any) => profile.protected && String(profile.campaign?.targeting_type || '').toUpperCase() !== 'AUTO')
           .sort((a: any, b: any) => a.priorityScore - b.priorityScore)
         : [];
       const candidates = [...normalCandidates, ...protectedLastResort];

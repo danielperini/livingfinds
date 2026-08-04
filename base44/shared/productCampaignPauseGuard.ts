@@ -44,7 +44,9 @@ export function isProductCampaignPauseLocked(product: any): boolean {
   if (norm(product.ads_scope_status) === 'manual_block') return true;
   // Migração segura: pausas existentes sem marca de reposição passam a ser
   // preservadas. Pausas exclusivamente por falta de estoque continuam reversíveis.
-  return norm(product.campaign_status) === 'paused' && !isStockPause(product);
+  // A pause state may have been written by an old pacing/reconciliation run.
+  // Only an explicit manual lock above is persistent; eligible stock resumes.
+  return false;
 }
 
 export function campaignMatchesProduct(campaign: any, product: any): boolean {
