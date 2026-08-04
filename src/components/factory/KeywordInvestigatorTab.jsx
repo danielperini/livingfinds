@@ -4,9 +4,9 @@
  * PRIORIDADE 1 (automático): Fontes oficiais Amazon via syncAmazonKeywordSuggestionsByAsin
  *   → Retorna sugestões da Amazon Ads API para o ASIN selecionado.
  *
- * PRIORIDADE 2 (sob demanda, desativado por padrão): ScrapingBee
+ * PRIORIDADE 2 (sob demanda, desativado por padrão): Zyte API
  *   → Pesquisa pública complementar. Requer toggle explícito + confirmação.
- *   → Kill switch: se ScrapingBee retornar erro, desativa automaticamente.
+ *   → Kill switch: se a Zyte retornar erro, desativa automaticamente.
  *   → Limite visual: aviso de consumo de créditos antes de executar.
  */
 import { useMemo, useState } from 'react';
@@ -165,7 +165,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
   const [amazonResult, setAmazonResult] = useState(null);
   const [amazonError, setAmazonError] = useState(null);
 
-  // ── ScrapingBee (fonte 2 — sob demanda) ────────────────────────────────
+  // ── Zyte API (fonte 2 — sob demanda) ──────────────────────────────────
   const [scrapingEnabled, setScrapingEnabled] = useState(false);
   const [scrapingKilled, setScrapingKilled] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -278,7 +278,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
     }
   };
 
-  // ── ScrapingBee handler ────────────────────────────────────────────────
+  // ── Zyte API handler ──────────────────────────────────────────────────
   const handleScrapingSearch = async () => {
     const derivedKeyword = keyword.trim() || String(selectedProduct?.product_name || selectedProduct?.display_name || selectedProduct?.title || '').trim();
     if (!derivedKeyword || loadingScraping || scrapingKilled) return;
@@ -287,23 +287,24 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
     setScrapingResult(null);
     try {
       const res = await base44.functions.invoke('scrapeAmazonKeywords', {
+        amazon_account_id: account.id,
         keyword: derivedKeyword,
-        asin: asinManual.trim() || undefined,
+        asin: asinManual.trim() || selectedAsin || undefined,
         marketplace: 'BR',
       });
       const data = res?.data || res;
       if (data?.ok) {
         setScrapingResult(data);
       } else {
-        // Kill switch: erro do ScrapingBee → desativa
+        // Kill switch: erro da Zyte → desativa
         setScrapingKilled(true);
         setScrapingEnabled(false);
-        setScrapingError(data?.error || 'ScrapingBee indisponível — pesquisa pública desativada automaticamente.');
+        setScrapingError(data?.error || 'Zyte indisponível — pesquisa pública desativada automaticamente.');
       }
     } catch (e) {
       setScrapingKilled(true);
       setScrapingEnabled(false);
-      setScrapingError('Erro de conexão com ScrapingBee — pesquisa pública desativada.');
+      setScrapingError(e?.response?.data?.error || e?.message || 'Erro de conexão com a Zyte — pesquisa pública desativada.');
     } finally {
       setLoadingScraping(false);
     }
@@ -400,13 +401,13 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
         <AmazonAdsResults suggestions={amazonResult.suggestions} asin={amazonResult.asin} />
       )}
 
-      {/* ── FONTE 2: ScrapingBee (sob demanda) ───────────────────────────── */}
-      {false && (<div className={`border rounded-xl p-4 space-y-3 ${scrapingKilled ? 'border-red-500/20 bg-red-500/5' : 'border-surface-2 bg-surface-1'}`}>
+      {/* ── FONTE 2: Zyte API (sob demanda) ──────────────────────────────── */}
+      <div className={`border rounded-xl p-4 space-y-3 ${scrapingKilled ? 'border-red-500/20 bg-red-500/5' : 'border-surface-2 bg-surface-1'}`}>
         {/* Header com toggle */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-slate-400" />
-            <p className="text-xs font-bold text-slate-300">Pesquisa Pública (ScrapingBee)</p>
+            <p className="text-xs font-bold text-slate-300">Pesquisa Pública (Zyte API)</p>
             <span className="text-[9px] px-1.5 py-0.5 bg-slate-500/15 border border-slate-500/20 text-slate-400 rounded-full">opcional · sob demanda</span>
             {scrapingKilled && (
               <span className="text-[9px] px-1.5 py-0.5 bg-red-500/15 border border-red-500/20 text-red-400 rounded-full">desativado automaticamente</span>
@@ -433,14 +434,14 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
         {!scrapingEnabled && !scrapingKilled && (
           <p className="text-[10px] text-slate-600">
             Extrai sugestões de autocomplete, buscas relacionadas e termos patrocinados diretamente da Amazon BR via scraping.
-            Complementar às fontes oficiais. Desativado por padrão para conservar créditos ScrapingBee.
+            Complementar às fontes oficiais. Desativado por padrão para conservar créditos Zyte.
           </p>
         )}
 
         {scrapingKilled && (
           <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/15 rounded-lg text-xs text-red-400">
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-            {scrapingError || 'ScrapingBee indisponível. Kill switch acionado automaticamente.'}
+            {scrapingError || 'Zyte indisponível. Kill switch acionado automaticamente.'}
           </div>
         )}
 
@@ -450,7 +451,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
             <div className="flex items-start gap-2 px-3 py-2 bg-amber-500/8 border border-amber-500/20 rounded-lg">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
               <p className="text-[10px] text-amber-300">
-                Cada pesquisa consome créditos ScrapingBee. Use apenas quando as sugestões da Amazon Ads não forem suficientes.
+                Cada pesquisa consome créditos Zyte. Resultados idênticos são atendidos pelo cache sem nova chamada paga.
               </p>
             </div>
             <div className="flex gap-3 flex-wrap">
@@ -481,27 +482,27 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
               className="flex items-center gap-2 px-5 py-2 bg-violet-500/20 border border-violet-500/35 text-violet-300 hover:bg-violet-500/30 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors"
             >
               {loadingScraping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              {loadingScraping ? 'Investigando...' : 'Pesquisar via ScrapingBee'}
+              {loadingScraping ? 'Investigando...' : 'Pesquisar via Zyte'}
             </button>
             {loadingScraping && (
               <div className="flex flex-col items-center justify-center py-8 gap-2">
                 <Loader2 className="w-6 h-6 text-violet-400 animate-spin" />
-                <p className="text-xs text-slate-400">Consultando Amazon via ScrapingBee... 5–15s</p>
+                <p className="text-xs text-slate-400">Consultando páginas públicas da Amazon via Zyte...</p>
               </div>
             )}
           </div>
         )}
-      </div>)}
+      </div>
 
-      {/* Resultados da fonte externa removida. */}
-      {false && scrapingResult && !loadingScraping && (
+      {/* Resultados públicos complementares da Zyte. */}
+      {scrapingResult && !loadingScraping && (
         <div className="space-y-3">
            <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs font-semibold text-white">{getAllScrapingKeywords().length} keywords únicas</span>
               <span className="text-[10px] text-slate-500">para "{scrapingResult.keyword}"</span>
               {scrapingResult.asin && <span className="text-[10px] font-mono text-cyan">{scrapingResult.asin}</span>}
-              <span className="text-[9px] px-1.5 py-0.5 bg-violet-500/10 border border-violet-500/20 text-violet-400 rounded-full">ScrapingBee</span>
+              <span className="text-[9px] px-1.5 py-0.5 bg-violet-500/10 border border-violet-500/20 text-violet-400 rounded-full">Zyte</span>
             </div>
             <button
               onClick={handleCopyAll}
@@ -537,7 +538,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
         </div>
       )}
 
-      {amazonResult && (
+      {(amazonResult || scrapingResult) && (
         <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1">
           <div className="border-b border-surface-2 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
