@@ -184,7 +184,13 @@ Deno.serve(async (request) => {
         if (key !== '|') termBankByKey.set(key, row);
       }
 
-      const rawRowsInWindow = searchTerms.filter((row: any) => String(row.date || '') >= cutoff && row.search_term);
+      const sourceCampaignId = String(body.source_campaign_id || '');
+      const sourceSearchTerm = normalizeSearchTerm(body.source_search_term || '');
+      const rawRowsInWindow = searchTerms.filter((row: any) =>
+        String(row.date || '') >= cutoff && row.search_term &&
+        (!sourceCampaignId || String(row.campaign_id || '') === sourceCampaignId) &&
+        (!sourceSearchTerm || normalizeSearchTerm(row.search_term) === sourceSearchTerm)
+      );
       const verifiedKeys = new Set(rawRowsInWindow
         .filter((row: any) => row.same_sku_attribution_verified === true)
         .map((row: any) => `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`));

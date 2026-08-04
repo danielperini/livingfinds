@@ -817,6 +817,13 @@ export default function AdsManagement() {
         base44.entities.Keyword.filter({ campaign_id: cid }, '-spend', 500).catch(() => [])
         )
       );
+      const canonicalTermBatches = await Promise.all(
+        possibleIds.map((cid) => base44.entities.SearchTerm.filter(
+          { amazon_account_id: account?.id, campaign_id: String(cid) },
+          '-last_seen_at',
+          500,
+        ).catch(() => []))
+      );
       // Buscar por ASIN apenas para campanhas NÃO canônicas (fallback para campanhas sem campaign_id linkado)
       // Campanhas canônicas (SP | MANUAL | EXACT | ...) têm exatamente 1 keyword — busca por ASIN inflaria o count com keywords de outras campanhas do mesmo produto
       const isAutoCampaign = campaignTargetingType(campaign) === 'AUTO';
@@ -840,7 +847,16 @@ export default function AdsManagement() {
       const negMap = new Map(negBatches.flat().map((n) => [n.id, n]));
 
       setKeywords(dedupedKws.filter((k) => k.source !== 'search_term'));
-      setSearchTerms(dedupedKws.filter((k) => k.source === 'search_term'));
+      const canonicalTerms = Array.from(new Map(
+        canonicalTermBatches.flat().map((term) => [term.id, {
+          ...term,
+          keyword_text: term.search_term_original || term.search_term || term.keyword_text,
+          sales: term.same_sku_sales ?? term.sales ?? 0,
+          orders: term.same_sku_orders ?? term.orders ?? 0,
+          acos: term.acos ?? term.acos_7d ?? 0,
+        }])
+      ).values());
+      setSearchTerms(canonicalTerms.length > 0 ? canonicalTerms : dedupedKws.filter((k) => k.source === 'search_term'));
       setNegSuggestions(Array.from(negMap.values()));
 
       if ((campaign.days_running || 0) >= 30) {
@@ -910,6 +926,20 @@ export default function AdsManagement() {
 
   const promoteKeyword = async (searchTerm) => {
     try {
+      if (searchTerm.search_term || searchTerm.search_term_original) {
+        const response = await base44.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+          amazon_account_id: account.id,
+          source_campaign_id: searchTerm.campaign_id,
+          source_search_term: searchTerm.search_term || searchTerm.search_term_original,
+          max_promotions: 1,
+          lookback_days: 65,
+          dry_run: false,
+          trigger_type: 'ads_campaign_search_term_promotion',
+        });
+        if (response?.data?.ok === false) throw new Error(response.data.error || 'Termo nao elegivel para promocao');
+        await loadKeywordsForCampaign(selectedCampaign);
+        return;
+      }
       const existing = await base44.entities.Keyword.filter({ amazon_account_id: account.id, campaign_id: searchTerm.campaign_id, keyword_text: searchTerm.keyword_text, source: 'manual' });
       if (existing.length > 0) {alert(`Keyword "${searchTerm.keyword_text}" já existe nesta campanha.`);return;}
       await base44.entities.Keyword.create({
@@ -1665,8 +1695,11 @@ export default function AdsManagement() {
                         </thead>
                         <tbody>
                           {searchTerms.map((st) => {
-                      const isWasting = (st.clicks || 0) >= 5 && (st.spend || 0) >= 2 && (st.sales || 0) === 0;
-                      const isGood = (st.sales || 0) > 0 && (st.acos || 0) > 0 && (st.acos || 0) < 40;
+                      const termSales = st.same_sku_sales ?? st.sales ?? 0;
+                      const termOrders = st.same_sku_orders ?? st.orders ?? 0;
+                      const termAcos = st.acos ?? st.acos_7d ?? 0;
+                      const isWasting = (st.clicks || 0) >= 5 && (st.spend || 0) >= 2 && termOrders === 0;
+                      const isGood = termOrders > 0 && termSales > 0 && termAcos > 0 && termAcos < 40;
                       return (
                         <tr key={st.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
                                 <td className="px-4 py-2.5 text-slate-300 max-w-[200px] truncate">{st.keyword_text || st.keyword || '—'}</td>
