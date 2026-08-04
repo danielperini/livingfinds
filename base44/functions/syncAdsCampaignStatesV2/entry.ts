@@ -25,6 +25,16 @@ function targetingType(campaign: any, local?: any) {
   return existing === 'MANUAL' ? 'MANUAL' : 'AUTO';
 }
 
+// Alguns perfis retornam a página completa mesmo quando recebem
+// targetingTypeFilter. A nomenclatura canônica criada pelo motor é mais
+// específica do que esse filtro inconsistente e precisa prevalecer.
+function canonicalNameTargetingType(campaign: any, local?: any): 'AUTO' | 'MANUAL' | null {
+  const name = String(campaign.name || local?.name || local?.campaign_name || '');
+  if (/^\s*AUTO\s*\|/i.test(name)) return 'AUTO';
+  if (/^\s*SP\s*\|\s*MANUAL\s*\|/i.test(name)) return 'MANUAL';
+  return null;
+}
+
 function adsBase(region: string) {
   const r = String(region || 'NA').toUpperCase();
   if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
@@ -209,6 +219,8 @@ Deno.serve(async (request) => {
         new Date(String(b.last_api_sync_at || b.updated_at || 0)).getTime() -
         new Date(String(a.last_api_sync_at || a.updated_at || 0)).getTime(),
       )[0];
+      const resolvedTargetingType = canonicalNameTargetingType(campaign, local) ||
+        campaign._resolvedTargetingType || targetingType(campaign, local);
       const record = {
         amazon_account_id: accountId,
         campaign_id: id,
@@ -216,8 +228,8 @@ Deno.serve(async (request) => {
         name: campaign.name,
         campaign_name: campaign.name,
         campaign_type: 'SP',
-        targeting_type: campaign._resolvedTargetingType || targetingType(campaign, local),
-        amazon_targeting_type: campaign._resolvedTargetingType || targetingType(campaign, local),
+        targeting_type: resolvedTargetingType,
+        amazon_targeting_type: resolvedTargetingType,
         amazon_status: remoteState,
         state: remoteState,
         status: remoteState,
