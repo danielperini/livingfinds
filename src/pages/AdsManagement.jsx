@@ -1714,13 +1714,10 @@ export default function AdsManagement() {
                             // Campanhas MANUAIS: criar nova campanha em vez de adicionar keyword
                             (selectedCampaign?.targeting_type || '').toUpperCase() === 'MANUAL' ?
                             <button
-                              onClick={() => {
-                                const prod = products.find((p) => p.asin === (st.advertised_asin || selectedCampaign?.asin));
-                                if (prod) setKickoffProduct(prod);
-                              }}
+                              onClick={() => promoteKeyword(st)}
                               title="Cria nova campanha canônica para este termo (1 campanha = 1 keyword EXACT)"
                               className="px-2.5 py-1 text-xs font-semibold bg-violet-500/20 text-violet-400 border border-violet-500/30 rounded-lg hover:bg-violet-500/30 transition-colors flex items-center gap-1">
-                                <Plus className="w-3 h-3" /> Nova campanha
+                                <Plus className="w-3 h-3" /> Promover variação
                                 </button> :
 
                             <button onClick={() => promoteKeyword(st)}

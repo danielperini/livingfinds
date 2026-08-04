@@ -216,16 +216,16 @@ Deno.serve(async (request) => {
         const observedCpc = aggregate.clicks > 0 ? aggregate.spend / aggregate.clicks : 0;
         const safeCpc = numberValue(assessment?.safe_max_cpc ?? econ?.safe_max_cpc, 0);
         const safeBid = calculateSafeHarvestBid({ observedCpc, safeCpc, minBid, maxBid });
-        const sourceAlreadyExact = aggregate.sources.some((source) =>
-          String(source.campaignType).toUpperCase() === 'MANUAL' && normalizeSearchTerm(source.matchType) === 'exact'
-        );
+        // Uma campanha MANUAL EXACT também descobre variações reais. Só bloqueie
+        // a promoção quando esta consulta já existir como EXACT para o ASIN;
+        // a mera origem MANUAL EXACT não transforma uma variação em duplicata.
         const evaluation = evaluateHarvestCandidate({
           aggregate,
           inStock: Boolean(product && availableInventory(product) > 0),
           economicsActionable: economicsAreActionable(econ, assessment),
           breakEvenAcos: numberValue(policy.break_even_acos, 0) || null,
           safeBid,
-          alreadyExact: exactKeys.has(key) || sourceAlreadyExact,
+          alreadyExact: exactKeys.has(key),
           alreadyPromoted: promotionByKey.has(key),
         });
         const roas = aggregate.spend > 0 ? aggregate.sameSkuSales / aggregate.spend : 0;
