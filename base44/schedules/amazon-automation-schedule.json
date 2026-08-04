@@ -56,6 +56,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Canonical dayparting - hourly after intraday metrics",
+      "function": "runCanonicalDaypartingEngine",
+      "cron": "12 * * * *",
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
+    },
+    {
       "name": "Repricing transport queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
