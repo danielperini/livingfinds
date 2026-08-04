@@ -453,11 +453,14 @@ export function proposeEconomicAdjustment(
     if (input.safeMaxCpc <= 0 || input.currentBid >= input.safeMaxCpc) {
       return observe('ZERO_IMPRESSIONS_ECONOMIC_CEILING', 'Sem impressoes, mas nao existe headroom abaixo do CPC maximo sustentavel.', 98, 12, 'SUSTAINABLE_CPC');
     }
+    const staleZeroDelivery = input.ageHours >= 168;
     const pct = input.classification === 'LOW_VOLUME_GUARDED' || input.ageHours < config.learningWindowHours
       ? Math.min(0.03, config.zeroImpressionIncreasePct)
       : config.zeroImpressionIncreasePct;
-    return bidAdjustment('increase_bid', input, config, pct, 'ZERO_IMPRESSIONS_SAFE_ENTRY',
-      `Campanha ativa e estruturalmente valida sem impressoes; aumento controlado de ate ${(pct * 100).toFixed(1)}% para tentar entrar no leilao.`,
+    return bidAdjustment('increase_bid', input, config, pct, staleZeroDelivery ? 'STALE_ZERO_DELIVERY_RECOVERY' : 'ZERO_IMPRESSIONS_SAFE_ENTRY',
+      staleZeroDelivery
+        ? `Campanha ativa há 7+ dias sem entrega; priorizada para recuperação com bid limitado ao CPC econômico.`
+        : `Campanha ativa e estruturalmente valida sem impressoes; aumento controlado de ate ${(pct * 100).toFixed(1)}% para tentar entrar no leilao.`,
       90, input.classification === 'LOW_VOLUME_GUARDED' ? config.lowVolumeCooldownHours : config.cooldownHours);
   }
 

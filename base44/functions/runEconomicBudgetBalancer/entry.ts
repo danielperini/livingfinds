@@ -356,7 +356,13 @@ Deno.serve(async (request) => {
       const totalSpend = prepared.reduce((sum, row) => sum + row.metrics.spend, 0);
       const remainingBudget = roundMoney(Math.max(0, config.accountDailyBudgetLimit - totalSpend));
 
-      for (const row of prepared) {
+      // Recuperação de entrega antiga vem antes de ajustes incrementais: uma
+      // campanha elegível com 7+ dias sem clique não pode ficar atrás na fila.
+      const decisionOrder = [...prepared].sort((left, right) => {
+        const staleZeroDelivery = (row: any) => row.age >= 168 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 ? 1 : 0;
+        return staleZeroDelivery(right) - staleZeroDelivery(left) || right.age - left.age;
+      });
+      for (const row of decisionOrder) {
         row.spendShare = totalSpend > 0 ? row.metrics.spend / totalSpend : 0;
         row.classification = classifyEconomicCampaign({
           campaignType: row.campaign.campaign_type || 'SP',
@@ -407,7 +413,7 @@ Deno.serve(async (request) => {
         decision.source_function === SOURCE && new Date(String(decision.created_at || decision.evaluated_at || 0)).getTime() >= oneHourAgo &&
         !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || ''))).length;
 
-      for (const row of prepared) {
+      for (const row of decisionOrder) {
         const allocation = allocationByCampaign.get(row.campaignId) || { targetShare: 0, virtualBudget: 0, segment: 'guarded' };
         row.targetShare = allocation.targetShare;
         row.classification = classifyEconomicCampaign({
