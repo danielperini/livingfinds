@@ -115,8 +115,25 @@ Deno.serve(async (request) => {
     const body = await request.json().catch(() => ({}));
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' });
 
-    const accountId = body.amazon_account_id;
-    if (!accountId) return Response.json({ ok: false, error: 'amazon_account_id obrigatório' });
+    // O scheduler é global à aplicação. Com uma única conta conectada, resolve
+    // o escopo automaticamente e evita uma conciliação periódica sem efeito.
+    // Havendo múltiplas contas, exige escopo explícito para não misturá-las.
+    let accountId = body.amazon_account_id;
+    if (!accountId) {
+      const connectedAccounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 2)
+        .catch(() => []);
+      if (connectedAccounts.length === 1) {
+        accountId = connectedAccounts[0].id;
+        console.log(`[syncV8] conta resolvida pelo scheduler: ${accountId}`);
+      } else {
+        return Response.json({
+          ok: false,
+          error: connectedAccounts.length === 0
+            ? 'Nenhuma conta Amazon conectada para sincronizar'
+            : 'amazon_account_id obrigatório quando houver mais de uma conta conectada',
+        }, { status: 400 });
+      }
+    }
 
     console.log('[syncV8] iniciando accountId=', accountId);
 
