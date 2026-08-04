@@ -20,6 +20,12 @@ function extractAsin(campaign: any): string | null {
   return match ? match[0].toUpperCase() : null;
 }
 
+function isAutoCampaign(campaign: any): boolean {
+  const targeting = String(campaign?.targeting_type || '').trim().toUpperCase();
+  const name = String(campaign?.name || campaign?.campaign_name || '').trim().toUpperCase();
+  return targeting === 'AUTO' || /^AUTO\s*\|/.test(name);
+}
+
 Deno.serve(async (req) => {
   const t0 = Date.now();
   try {
@@ -44,12 +50,12 @@ Deno.serve(async (req) => {
 
     // Carregar todas as campanhas AUTO não-arquivadas
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: accountId, targeting_type: 'AUTO' }, null, 3000
+      { amazon_account_id: accountId }, null, 3000
     ).catch(() => [] as any[]);
 
     const activeCampaigns = allCampaigns.filter((c: any) => {
       const s = (c.state || c.status || '').toLowerCase();
-      return s !== 'archived';
+      return s !== 'archived' && c.archived !== true && isAutoCampaign(c);
     });
 
     // Agrupar por ASIN

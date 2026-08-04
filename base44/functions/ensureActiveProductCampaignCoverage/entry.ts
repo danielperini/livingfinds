@@ -110,15 +110,14 @@ Deno.serve(async (req) => {
         }
       }
       const limitedEligible = eligible.slice(0, maxProducts);
-      const seen = new Set<string>();
+      const seenAsins = new Set<string>();
       const rows: any[] = [];
 
       for (const product of limitedEligible) {
         const sku = String(product.sku).trim();
         const asin = String(product.asin).trim().toUpperCase();
-        const key = `${sku}|${asin}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        if (seenAsins.has(asin)) continue;
+        seenAsins.add(asin);
 
         if (dryRun) {
           const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, asin }, null, 100);
