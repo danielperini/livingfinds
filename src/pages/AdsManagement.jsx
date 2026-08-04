@@ -25,13 +25,17 @@ const CAMPAIGN_REFRESH_MS = 10 * 60 * 1000;
 const AMAZON_SYNC_THROTTLE_MS = 30 * 60 * 1000;
 
 function campaignTargetingType(campaign) {
-  if (campaign._hasManualKeywords === true) return 'MANUAL';
+  // O tipo vindo da Amazon é a fonte de verdade.  Não deixe uma keyword
+  // associada incorretamente reclassificar uma AUTO e fazê-la "sumir" ao abrir.
+  const amazonType = String(campaign.amazon_targeting_type || '').toUpperCase();
+  if (amazonType === 'AUTO' || amazonType === 'MANUAL') return amazonType;
   const name = String(campaign.name || campaign.campaign_name || '');
   if (/MANUAL|EXACT|PHRASE|BROAD/i.test(name)) return 'MANUAL';
   if (/\bAUTO(?:MATIC[AO]?)?\b/i.test(name)) return 'AUTO';
-
   const explicit = String(campaign.targeting_type || campaign.targetingType || '').toUpperCase();
-  return explicit === 'MANUAL' ? 'MANUAL' : 'AUTO';
+  if (explicit === 'AUTO' || explicit === 'MANUAL') return explicit;
+  if (campaign._hasManualKeywords === true) return 'MANUAL';
+  return 'AUTO';
 }
 
 function isNew24h(campaign) {
@@ -669,6 +673,9 @@ export default function AdsManagement() {
       }
 
       const classifiedCampaigns = cams.map(campaign => {
+        // Uma associação local de keyword é apenas fallback para registros sem
+        // tipo. Nunca pode sobrescrever o targeting confirmado pela Amazon.
+        if (campaignTargetingType(campaign) === 'AUTO') return campaign;
         const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id]
           .filter(Boolean)
           .map(String);
@@ -676,18 +683,6 @@ export default function AdsManagement() {
           ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
           : campaign;
       });
-
-      const incorrectlyAuto = classifiedCampaigns.filter(campaign =>
-        campaign._hasManualKeywords === true &&
-        String(cams.find(row => row.id === campaign.id)?.targeting_type || '').toUpperCase() !== 'MANUAL'
-      );
-      if (incorrectlyAuto.length) {
-        await Promise.all(
-          incorrectlyAuto.map(campaign =>
-            base44.entities.Campaign.update(campaign.id, { targeting_type: 'MANUAL' }).catch(() => {})
-          )
-        );
-      }
 
       const operational = classifiedCampaigns.filter((c) => {
         const state = campaignState(c);
@@ -724,6 +719,7 @@ export default function AdsManagement() {
           try {
             const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
             const refreshedClassified = refreshed.map(campaign => {
+              if (campaignTargetingType(campaign) === 'AUTO') return campaign;
               const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
               return ids.some(id => manualCampaignIds.has(id))
                 ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
@@ -761,6 +757,7 @@ export default function AdsManagement() {
           try {
             const refreshed = await loadAllCampaigns(acc.id, {}, { includeExcluded: true });
             const refreshedClassified = refreshed.map(campaign => {
+              if (campaignTargetingType(campaign) === 'AUTO') return campaign;
               const ids = [campaign.campaign_id, campaign.amazon_campaign_id, campaign.id].filter(Boolean).map(String);
               return ids.some(id => manualCampaignIds.has(id))
                 ? { ...campaign, targeting_type: 'MANUAL', _hasManualKeywords: true }
@@ -869,7 +866,7 @@ export default function AdsManagement() {
     setPendingBids({});
     setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
     // Mudar aba para corresponder ao tipo da campanha selecionada
-    const isAuto = (campaign.targeting_type || '').toUpperCase() === 'AUTO';
+    const isAuto = campaignTargetingType(campaign) === 'AUTO';
     setColumnTab(isAuto ? 'auto' : 'manual');
     await loadKeywordsForCampaign(campaign);
   };
