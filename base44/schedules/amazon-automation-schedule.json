@@ -32,9 +32,9 @@
       "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
-      "name": "Unified daily close, bootstrap-aware audit and repricing - 01:00 BRT",
+      "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
       "function": "runUnifiedDecisionEngine",
-      "cron": "0 1 * * *",
+      "cron": "25 1 * * *",
       "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
     },
     {
