@@ -14,6 +14,12 @@
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Amazon campaign state reconciliation - every 15 minutes",
+      "function": "syncAdsCampaignStatesV2",
+      "cron": "1,16,31,46 * * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_state" }
+    },
+    {
       "name": "Amazon offer and buyability verification - every 10 minutes",
       "function": "syncAmazonOfferAvailability",
       "cron": "1,11,21,31,41,51 * * * *",

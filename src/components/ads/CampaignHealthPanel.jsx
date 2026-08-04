@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { TrendingUp, TrendingDown, Zap, Sparkles, AlertTriangle, CheckCircle, PauseCircle, Activity, Target, DollarSign, ShoppingCart } from 'lucide-react';
+import { TrendingDown, Zap, Sparkles, AlertTriangle, CheckCircle, PauseCircle, Activity, Target, DollarSign, ShoppingCart } from 'lucide-react';
 
 function MetricCard({ label, value, sub, tone = 'default' }) {
   const tones = {
@@ -43,10 +43,12 @@ function AcosBar({ asin, name, spend, sales, acos, orders }) {
 
 export default function CampaignHealthPanel({ campaigns, products }) {
   const stats = useMemo(() => {
-    const active = campaigns.filter(c => c.state === 'enabled' || c.status === 'enabled');
-    const paused = campaigns.filter(c => c.state === 'paused' || c.status === 'paused');
-    const auto = campaigns.filter(c => (c.targeting_type || '').toUpperCase() === 'AUTO');
-    const manual = campaigns.filter(c => (c.targeting_type || '').toUpperCase() !== 'AUTO');
+    const stateOf = (campaign) => String(campaign.state || campaign.status || '').toUpperCase();
+    // A tela não promove "em inserção" ou estrutura incompleta a campanha ativa.
+    const active = campaigns.filter(c => stateOf(c) === 'ENABLED' && c.is_operational !== false && c.archived !== true);
+    const paused = campaigns.filter(c => stateOf(c) === 'PAUSED' && c.archived !== true);
+    const auto = active.filter(c => (c.targeting_type || '').toUpperCase() === 'AUTO');
+    const manual = active.filter(c => (c.targeting_type || '').toUpperCase() !== 'AUTO');
 
     const totalSpend = campaigns.reduce((s, c) => s + (c.spend || 0), 0);
     const totalSales = campaigns.reduce((s, c) => s + (c.sales || 0), 0);
