@@ -265,7 +265,7 @@ Deno.serve(async (request) => {
 
       const today = brtDate();
       const [configRows, campaigns, adGroups, productAds, keywords, targets, products, economicsRows,
-        intradayRows, historyRows, priorDecisions, canonicalSnapshots] = await Promise.all([
+        intradayRows, historyRows, priorDecisions, canonicalSnapshots, promotions] = await Promise.all([
         list(base44.asServiceRole.entities.AutopilotConfig, { amazon_account_id: accountId }, '-updated_at', 1),
         list(base44.asServiceRole.entities.Campaign, { amazon_account_id: accountId }, '-updated_at', 5000),
         list(base44.asServiceRole.entities.AdGroup, { amazon_account_id: accountId }, '-updated_at', 10000),
@@ -280,6 +280,7 @@ Deno.serve(async (request) => {
         body.snapshot_run_id
           ? list(base44.asServiceRole.entities.RepricingSnapshot, { amazon_account_id: accountId, run_id: body.snapshot_run_id }, '-created_at', 10000)
           : list(base44.asServiceRole.entities.RepricingSnapshot, { amazon_account_id: accountId }, '-created_at', 10000),
+        list(base44.asServiceRole.entities.SearchTermPromotion, { amazon_account_id: accountId }, '-updated_at', 10000),
       ]);
 
       const rawConfig = configRows[0] || {};
@@ -291,6 +292,12 @@ Deno.serve(async (request) => {
       const accountDryRun = dryRun || !featureEnabled;
       const latestIntraday = latestIntradayByCampaign(intradayRows);
       const campaignRows = campaigns.filter((row) => upper(row.campaign_type || 'SP') === 'SP');
+      const campaignById = new Map<string, any>(campaignRows.map((row: any) => [campaignIdOf(row), row]));
+      const promotedFromAuto = new Set(promotions.filter((promotion: any) =>
+        ['manual_active', 'completed', 'keyword_created'].includes(lower(promotion.promotion_status)) &&
+        Boolean(promotion.destination_campaign_id) &&
+        upper(campaignById.get(String(promotion.source_campaign_id))?.targeting_type) === 'AUTO'
+      ).map((promotion: any) => String(promotion.destination_campaign_id)));
 
       const prepared: any[] = campaignRows.map((campaign) => {
         const campaignId = campaignIdOf(campaign);
@@ -338,6 +345,7 @@ Deno.serve(async (request) => {
         return {
           campaign, campaignId, intraday, metrics, product, economics, econ, inventory, canonicalSnapshot,
           productEligibility, age, history30, history65, profitAfterAds, acos, fresh, complete, lowVolume,
+          promotedFromAuto: promotedFromAuto.has(campaignId),
           metricVersion: metricsVersion(intraday || campaign, metrics),
         };
       });
@@ -365,6 +373,13 @@ Deno.serve(async (request) => {
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
+        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
+          row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
+          row.econ.available && row.productEligibility.eligible) {
+          // A promoção AUTO validada é evidência de intenção; recebe orçamento
+          // de entrada, enquanto o governador paralelo ajusta o bid seguro.
+          row.classification = 'PROTECTED_WINNER';
+        }
       }
 
       const allocations = allocateVirtualBudgets(prepared.map((row) => ({
@@ -410,6 +425,11 @@ Deno.serve(async (request) => {
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
+        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
+          row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
+          row.econ.available && row.productEligibility.eligible) {
+          row.classification = 'PROTECTED_WINNER';
+        }
         classificationCounts[row.classification] = (classificationCounts[row.classification] || 0) + 1;
 
         if (mode === 'zero_delivery_only' && !['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS', 'LOW_VOLUME_GUARDED'].includes(row.classification)) continue;
