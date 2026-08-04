@@ -89,7 +89,7 @@ const STATE_FILTERS = [
 
 const PAGE_SIZE = 50;
 
-function CampaignColumn({ title, icon: Icon, color, campaigns, activeCount, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget, onQuickArchive }) {
+function CampaignColumn({ title, sourceType, icon: Icon, color, campaigns, activeCount, products, selectedId, onSelect, loading, stateFilter, onStateFilter, extraAction, onQuickPause, onQuickResume, onReactivateBudget, onQuickArchive }) {
   const [page, setPage] = useState(1);
   const [itemLoading, setItemLoading] = useState({});
 
@@ -181,7 +181,7 @@ function CampaignColumn({ title, icon: Icon, color, campaigns, activeCount, prod
             return (
               <div
                 key={c.id || i}
-                onClick={() => onSelect(c)}
+                onClick={() => onSelect(c, sourceType)}
                 className={`group w-full text-left px-3 py-2.5 border-b border-surface-2/40 transition-all cursor-pointer ${
                 isSelected ?
                 'bg-surface-2 border-l-2 border-l-cyan' :
@@ -819,9 +819,12 @@ export default function AdsManagement() {
       );
       // Buscar por ASIN apenas para campanhas NÃO canônicas (fallback para campanhas sem campaign_id linkado)
       // Campanhas canônicas (SP | MANUAL | EXACT | ...) têm exatamente 1 keyword — busca por ASIN inflaria o count com keywords de outras campanhas do mesmo produto
+      const isAutoCampaign = campaignTargetingType(campaign) === 'AUTO';
       const isCanonical = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(campaign.name || campaign.campaign_name || '');
       let asinKws = [];
-      if (!isCanonical && campaign.asin && account?.id) {
+      // AUTO coleta search terms; jamais herda keywords de campanhas MANUAL
+      // pelo ASIN, pois isso abre o detalhe da automática com dados da manual.
+      if (!isAutoCampaign && !isCanonical && campaign.asin && account?.id) {
         asinKws = await base44.entities.Keyword.filter({ amazon_account_id: account.id, asin: campaign.asin }, '-spend', 200).catch(() => []);
       }
 
@@ -861,12 +864,12 @@ export default function AdsManagement() {
     }
   };
 
-  const selectCampaign = async (campaign) => {
+  const selectCampaign = async (campaign, sourceType) => {
     setSelectedCampaign(campaign);
     setPendingBids({});
     setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
     // Mudar aba para corresponder ao tipo da campanha selecionada
-    const isAuto = campaignTargetingType(campaign) === 'AUTO';
+    const isAuto = sourceType === 'AUTO' || campaignTargetingType(campaign) === 'AUTO';
     setColumnTab(isAuto ? 'auto' : 'manual');
     await loadKeywordsForCampaign(campaign);
   };
@@ -1234,6 +1237,7 @@ export default function AdsManagement() {
           {columnTab === 'auto' ?
           <CampaignColumn
             title="Automáticas"
+            sourceType="AUTO"
             icon={Zap}
             color="text-amber-400"
             campaigns={autoCampaigns}
@@ -1297,6 +1301,7 @@ export default function AdsManagement() {
             }
               <CampaignColumn
               title="Manuais"
+              sourceType="MANUAL"
               icon={Sparkles}
               color="text-cyan"
               campaigns={manualCampaigns}
