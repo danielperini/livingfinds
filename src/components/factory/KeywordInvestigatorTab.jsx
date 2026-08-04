@@ -401,7 +401,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
       )}
 
       {/* ── FONTE 2: ScrapingBee (sob demanda) ───────────────────────────── */}
-      <div className={`border rounded-xl p-4 space-y-3 ${scrapingKilled ? 'border-red-500/20 bg-red-500/5' : 'border-surface-2 bg-surface-1'}`}>
+      {false && (<div className={`border rounded-xl p-4 space-y-3 ${scrapingKilled ? 'border-red-500/20 bg-red-500/5' : 'border-surface-2 bg-surface-1'}`}>
         {/* Header com toggle */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
@@ -491,10 +491,10 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
             )}
           </div>
         )}
-      </div>
+      </div>)}
 
-      {/* Resultados ScrapingBee */}
-      {scrapingResult && !loadingScraping && (
+      {/* Resultados da fonte externa removida. */}
+      {false && scrapingResult && !loadingScraping && (
         <div className="space-y-3">
            <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3 flex-wrap">
@@ -537,7 +537,7 @@ export default function KeywordInvestigatorTab({ account, products = [], terms =
         </div>
       )}
 
-      {(amazonResult || scrapingResult) && (
+      {amazonResult && (
         <div className="overflow-hidden rounded-xl border border-surface-2 bg-surface-1">
           <div className="border-b border-surface-2 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

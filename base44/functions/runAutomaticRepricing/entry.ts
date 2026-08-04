@@ -3046,6 +3046,24 @@ async function fetchSimilarCompetition(
   product: any,
   aiBudget: { used: number; max: number },
 ) {
+  // Pesquisa externa de concorrentes foi removida. O repricing permanece
+  // protegido por margens e pelas fontes oficiais disponíveis.
+  void base44;
+  void account;
+  void accessToken;
+  void product;
+  void aiBudget;
+  return {
+    average: null,
+    minimum: null,
+    maximum: null,
+    count: 0,
+    matches: [],
+    checkedAt: nowIso(),
+    source: "external_competitor_source_disabled",
+    error: "external_competitor_source_disabled",
+  };
+
   const originalTitle = product.display_name || product.product_name || product.title || "";
   let title = originalTitle;
   const marketplaceId = account.marketplace_id || secrets.get("AMAZON_MARKETPLACE_ID") || "";

@@ -99,7 +99,7 @@ export default function MarketPriceCell({ product, accountId, onPriceUpdated }) 
 
   // ── Estado: SUCCESS ──────────────────────────────────────────────────────
   if (status === 'success' && avg != null) {
-    const sourceLabel = source === 'sp_api' ? 'Amazon SP-API' : source === 'zinc' ? 'Zinc' : source === 'scrapingbee' ? 'ScrapingBee' : source || '—';
+    const sourceLabel = source === 'sp_api' ? 'Amazon SP-API' : source === 'zinc' ? 'Zinc' : source || '—';
     return (
       <div className="space-y-1 min-w-[140px]">
         {/* Preço médio em destaque */}
