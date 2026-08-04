@@ -62,6 +62,8 @@ const DEFAULTS = {
   max_changes_per_cycle: 20,
   competition_max_age_minutes: 30,
   fees_max_age_hours: 24,
+  // Empresa no Simples Nacional: alíquota efetiva mínima informada pelo usuário.
+  simple_national_tax_pct: 7,
   enabled: true,
 };
 const MAX_QUEUE_ATTEMPTS = 5;
@@ -908,6 +910,12 @@ function policyInputs(economics: any, adsCost: any, settings: any) {
     referralFeePct: finite(economics.amazon_fee_percent)
       ? Number(economics.amazon_fee_percent)
       : null,
+    // O imposto do Simples incide sobre a receita, por isso é variável com o
+    // preço. tax_per_unit permanece reservado a tributos/custos unitários extras.
+    salesTaxPct: Math.max(7, numberValue(
+      economics.simple_national_tax_pct ?? settings.simple_national_tax_pct,
+      7,
+    )),
     costsConfirmed: economics.costs_confirmed_by_user === true,
     feesConfirmed: Boolean(
       economics.fees_verified_at &&

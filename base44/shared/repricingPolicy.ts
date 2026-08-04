@@ -11,6 +11,8 @@ export type RepricingEconomicInputs = {
   estimatedReturnCost: number;
   adsCostPerOrder: number | null;
   referralFeePct: number | null;
+  /** Alíquota efetiva sobre o preço de venda (Simples Nacional: 7% nesta conta). */
+  salesTaxPct?: number | null;
   costsConfirmed: boolean;
   feesConfirmed: boolean;
   adsCostConfirmed: boolean;
@@ -151,18 +153,25 @@ export function economicsAtPrice(
   const referralPct = finite(inputs.referralFeePct)
     ? Number(inputs.referralFeePct)
     : null;
+  // Compatibilidade com registros antigos: a conta opera no Simples a 7%.
+  const salesTaxPct = finite(inputs.salesTaxPct)
+    ? Number(inputs.salesTaxPct)
+    : 7;
   if (
     !finite(price) || price <= 0 || fixed === null || referralPct === null ||
-    referralPct < 0 || referralPct >= 100
+    referralPct < 0 || salesTaxPct < 0 ||
+    referralPct + salesTaxPct >= 100
   ) {
     return null;
   }
   const referralFee = price * referralPct / 100;
-  const unitProfit = price - fixed - referralFee;
+  const salesTax = price * salesTaxPct / 100;
+  const unitProfit = price - fixed - referralFee - salesTax;
   return {
     price: roundMoney(price),
     fixedCosts: fixed,
     referralFee: roundMoney(referralFee),
+    salesTax: roundMoney(salesTax),
     unitProfit: roundMoney(unitProfit),
     marginPct: round4(unitProfit / price * 100),
   };
@@ -177,13 +186,17 @@ export function priceForNetMargin(
   const referralPct = finite(inputs.referralFeePct)
     ? Number(inputs.referralFeePct)
     : null;
+  const salesTaxPct = finite(inputs.salesTaxPct)
+    ? Number(inputs.salesTaxPct)
+    : 7;
   const marginPct = Math.max(
     HARD_MINIMUM_MARGIN_PCT,
     Number(requestedMarginPct || 0),
   );
   if (
-    fixed === null || referralPct === null || referralPct < 0 ||
-    referralPct + marginPct >= 99.9
+    fixed === null || referralPct === null ||
+    referralPct < 0 || salesTaxPct < 0 ||
+    referralPct + salesTaxPct + marginPct >= 99.9
   ) return null;
 
   let low = Math.max(0.01, fixed);
@@ -233,6 +246,9 @@ export function validateRepricingEconomics(inputs: RepricingEconomicInputs) {
     ] as Array<[string, number]>
   ) {
     if (!finite(value) || Number(value) < 0) reasons.push(`${label} inválido.`);
+  }
+  if (finite(inputs.salesTaxPct) && Number(inputs.salesTaxPct) < 0) {
+    reasons.push("Alíquota de imposto sobre a venda inválida.");
   }
   if (
     !inputs.feesConfirmed || !finite(inputs.fbaFee) ||

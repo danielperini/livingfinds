@@ -9,7 +9,7 @@ const DEFAULTS = {
   repricing_rollout_mode: 'guarded', maximum_price_change_amount_24h: 2,
   minimum_price_change_amount: 0.05, price_change_window_hours: 24,
   automation_mode: 'recommendation_only',
-  max_changes_per_cycle: 20, competition_max_age_minutes: 30, fees_max_age_hours: 24, enabled: true,
+  max_changes_per_cycle: 20, competition_max_age_minutes: 30, fees_max_age_hours: 24, simple_national_tax_pct: 7, enabled: true,
 };
 const dateTime = value => value ? new Date(value).toLocaleString('pt-BR') : 'Ainda não executado';
 
@@ -49,6 +49,7 @@ export default function RepricingSettingsPanel({ accountId, account }) {
     try {
       if (Number(form.default_minimum_margin_pct) < 15) throw new Error('A margem mínima nunca pode ser inferior a 15%.');
       if (Number(form.default_target_margin_pct) < Number(form.default_minimum_margin_pct)) throw new Error('A margem-alvo deve ser maior ou igual à margem mínima.');
+      if (Number(form.simple_national_tax_pct) < 7) throw new Error('A alíquota do Simples Nacional desta conta não pode ser inferior a 7%.');
       const response = await base44.functions.invoke('runAutomaticRepricing', { operation: 'save_settings', amazon_account_id: accountId, settings: form });
       const result = response?.data || response;
       if (!result?.ok) throw new Error(result?.error || 'Falha ao salvar.');
@@ -91,6 +92,7 @@ export default function RepricingSettingsPanel({ accountId, account }) {
       <section className="rounded-xl border border-surface-2 bg-surface-1 p-5"><h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-4">Política global</h3><div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <NumberField label="Margem mínima" field="default_minimum_margin_pct" form={form} setForm={setForm} suffix="%" min={15} hint="Piso rígido: 15%" />
         <NumberField label="Margem-alvo" field="default_target_margin_pct" form={form} setForm={setForm} suffix="%" min={15} hint="Padrão: 20%" />
+        <NumberField label="Imposto Simples Nacional" field="simple_national_tax_pct" form={form} setForm={setForm} suffix="%" min={7} hint="Aplicado sobre o preço de venda" step={0.01} />
         <NumberField label="Variação máxima/ciclo" field="normal_max_change_pct" form={form} setForm={setForm} suffix="%" min={1} max={3} />
         <NumberField label="Variação máxima/24h" field="daily_max_change_pct" form={form} setForm={setForm} suffix="%" min={1} max={10} />
         <NumberField label="Mudança mínima efetiva" field="minimum_effective_change_pct" form={form} setForm={setForm} suffix="%" min={1} />
