@@ -865,13 +865,19 @@ export default function AdsManagement() {
   };
 
   const selectCampaign = async (campaign, sourceType) => {
-    setSelectedCampaign(campaign);
+    // O detalhe deve receber o mesmo tipo canônico usado na coluna. Isso
+    // corrige registros legados marcados como MANUAL antes da próxima sync.
+    const resolvedType = sourceType === 'AUTO' || campaignTargetingType(campaign) === 'AUTO'
+      ? 'AUTO'
+      : 'MANUAL';
+    const selected = { ...campaign, targeting_type: resolvedType };
+    setSelectedCampaign(selected);
     setPendingBids({});
     setActiveTab(campaignState(campaign) === 'paused' ? 'history' : 'keywords');
     // Mudar aba para corresponder ao tipo da campanha selecionada
-    const isAuto = sourceType === 'AUTO' || campaignTargetingType(campaign) === 'AUTO';
+    const isAuto = resolvedType === 'AUTO';
     setColumnTab(isAuto ? 'auto' : 'manual');
-    await loadKeywordsForCampaign(campaign);
+    await loadKeywordsForCampaign(selected);
   };
 
   const applyBids = async () => {

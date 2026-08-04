@@ -173,8 +173,12 @@ Deno.serve(async (request) => {
       { amazon_account_id: accountId }, '-updated_at', 5000
     ).catch(() => []);
 
-    const existingById = new Map<string, any>();
-    for (const row of existing) existingById.set(String(row.campaign_id), row);
+    const existingById = new Map<string, any[]>();
+    for (const row of existing) {
+      const id = String(row.campaign_id || row.amazon_campaign_id || '');
+      if (!id) continue;
+      existingById.set(id, [...(existingById.get(id) || []), row]);
+    }
 
     const remoteIds = new Set(found.keys());
     const toCreate: any[] = [];
@@ -183,7 +187,11 @@ Deno.serve(async (request) => {
     for (const campaign of found.values()) {
       const id = String(campaign.campaignId);
       const remoteState = normalizedState(campaign.state);
-      const local = existingById.get(id);
+      const localRows = existingById.get(id) || [];
+      const local = localRows.sort((a: any, b: any) =>
+        new Date(String(b.last_api_sync_at || b.updated_at || 0)).getTime() -
+        new Date(String(a.last_api_sync_at || a.updated_at || 0)).getTime(),
+      )[0];
       const record = {
         amazon_account_id: accountId,
         campaign_id: id,
@@ -192,6 +200,7 @@ Deno.serve(async (request) => {
         campaign_name: campaign.name,
         campaign_type: 'SP',
         targeting_type: campaign._resolvedTargetingType || targetingType(campaign, local),
+        amazon_targeting_type: campaign._resolvedTargetingType || targetingType(campaign, local),
         amazon_status: remoteState,
         state: remoteState,
         status: remoteState,
@@ -205,7 +214,9 @@ Deno.serve(async (request) => {
         last_api_sync_at: new Date().toISOString(),
       };
 
-      if (local) toUpdate.push({ id: local.id, ...record });
+      // Corrige também duplicatas antigas deste mesmo campaignId; caso contrário
+      // uma cópia MANUAL antiga pode voltar a ser exibida pela interface.
+      if (localRows.length) toUpdate.push(...localRows.map((row: any) => ({ id: row.id, ...record })));
       else toCreate.push(record);
     }
 

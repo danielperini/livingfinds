@@ -43,6 +43,11 @@
       ],
       "default": "AUTO"
     },
+    "amazon_targeting_type": {
+      "type": "string",
+      "enum": ["AUTO", "MANUAL"],
+      "description": "Tipo de segmentação confirmado pela resposta da Amazon Ads; prevalece sobre inferências locais."
+    },
     "product_lifecycle_stage": { "type": "string", "enum": ["LAUNCH", "TRACTION", "SCALE", "MATURITY", "DEFENSIVE", "OUT_OF_STOCK", "NOT_BUYABLE", "ECONOMICS_PENDING"] },
     "campaign_journey_stage": { "type": "string", "enum": ["DISCOVERY_PENDING", "DISCOVERY_AUTO_ACTIVE", "INITIAL_LEARNING", "SEARCH_TERM_COLLECTION", "TERM_EVALUATION", "HARVEST_PENDING", "MANUAL_CREATION_PENDING", "MANUAL_STRUCTURE_CONFIRMING", "NEGATIVE_EXACT_PENDING", "MANUAL_EXACT_LEARNING", "MANUAL_EXACT_OPTIMIZATION", "PROTECTED_WINNER", "LOW_VOLUME_GUARDED", "DEFENSIVE", "OUT_OF_STOCK", "INCOMPLETE", "ARCHIVED", "ERROR_RETRYABLE"] },
     "economic_state": { "type": "string" },
