@@ -264,9 +264,10 @@ Deno.serve(async (request) => {
       }
 
       const today = brtDate();
-      const [configRows, campaigns, adGroups, productAds, keywords, targets, products, economicsRows,
+      const [configRows, performanceRows, campaigns, adGroups, productAds, keywords, targets, products, economicsRows,
         intradayRows, historyRows, priorDecisions, canonicalSnapshots, promotions] = await Promise.all([
         list(base44.asServiceRole.entities.AutopilotConfig, { amazon_account_id: accountId }, '-updated_at', 1),
+        list(base44.asServiceRole.entities.PerformanceSettings, { amazon_account_id: accountId }, '-updated_at', 1),
         list(base44.asServiceRole.entities.Campaign, { amazon_account_id: accountId }, '-updated_at', 5000),
         list(base44.asServiceRole.entities.AdGroup, { amazon_account_id: accountId }, '-updated_at', 10000),
         list(base44.asServiceRole.entities.ProductAd, { amazon_account_id: accountId }, '-updated_at', 10000),
@@ -283,7 +284,9 @@ Deno.serve(async (request) => {
         list(base44.asServiceRole.entities.SearchTermPromotion, { amazon_account_id: accountId }, '-updated_at', 10000),
       ]);
 
-      const rawConfig = configRows[0] || {};
+      // PerformanceSettings é a fonte editável pelo usuário. AutopilotConfig
+      // mantém compatibilidade apenas para campos não expostos na tela.
+      const rawConfig = { ...(configRows[0] || {}), ...(performanceRows[0] || {}) };
       const config = resolveEconomicBalancerConfig(rawConfig);
       const rolloutPhase = String(rawConfig.unified_rollout_phase || 'dry_run');
       const featureEnabled = canonicalOrchestrator
