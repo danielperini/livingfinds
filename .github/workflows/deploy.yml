@@ -25,7 +25,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Instalar dependências
@@ -117,8 +117,14 @@ jobs:
               const payload = await response.json().catch(() => ({}));
               const count = Array.isArray(payload.products) ? payload.products.length : 0;
               console.log("SCRAPINGBEE_HTTP=" + response.status + "|PRODUCTS=" + count);
+              const detail = String(payload.message || payload.error || "sem detalhe").replace(/\r|\n/g, " ").slice(0, 240);
+              // A consulta é apenas um health-check complementar. Cota/limite
+              // não pode impedir a publicação de correções na VPS.
+              if ([401, 429].includes(response.status) && /limit|quota|monthly|credit|calls/i.test(detail)) {
+                console.log("::warning title=ScrapingBee cota indisponivel::HTTP " + response.status + " — " + detail);
+                Deno.exit(0);
+              }
               if (!response.ok) {
-                const detail = String(payload.message || payload.error || "sem detalhe").replace(/\r|\n/g, " ").slice(0, 240);
                 console.log("::error title=ScrapingBee HTTP " + response.status + "::" + detail);
                 throw new Error("ScrapingBee HTTP " + response.status);
               }
