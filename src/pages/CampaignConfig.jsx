@@ -3,7 +3,7 @@ import { base44 } from '@/api/base44Client';
 import { Link } from 'react-router-dom';
 import {
   Settings, DollarSign, Target, Zap, Clock, BarChart2,
-  Package, Brain, Shield, Save, RefreshCw, Loader2,
+  Package, Brain, Save, RefreshCw, Loader2,
   CheckCircle, AlertTriangle, Info, ChevronDown, ChevronUp,
   History, ExternalLink, Play
 } from 'lucide-react';
@@ -52,6 +52,7 @@ const DEFAULT_CONFIG = {
   // Objetivos
   target_acos: 25,
   max_acos: 40,
+  // ROAS is derived from ACoS (100 / ACoS), never an independent goal.
   target_roas: 4,
   target_tacos: 15,
   min_margin: 20,
@@ -174,18 +175,19 @@ function Field({ label, hint, children }) {
   );
 }
 
-function NumberInput({ value, onChange, min, max, step = 0.01, prefix, suffix }) {
+function NumberInput({ value, onChange, min, max, step = 0.01, prefix, suffix, readOnly = false }) {
   return (
     <div className="flex items-center gap-1.5">
       {prefix && <span className="text-xs text-slate-500">{prefix}</span>}
       <input
         type="number"
         value={value}
-        onChange={e => onChange(Number(e.target.value))}
+        onChange={e => onChange?.(Number(e.target.value))}
+        readOnly={readOnly}
         min={min}
         max={max}
         step={step}
-        className="w-full px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan/50"
+        className={`w-full px-3 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-cyan/50 ${readOnly ? 'cursor-not-allowed text-cyan/90' : ''}`}
       />
       {suffix && <span className="text-xs text-slate-500">{suffix}</span>}
     </div>
@@ -431,6 +433,11 @@ function SettingsHistoryPanel({ accountId }) {
   );
 }
 
+const deriveTargetRoas = (targetAcos) => {
+  const acos = Number(targetAcos);
+  return acos > 0 ? Math.round((100 / acos) * 100) / 100 : 0;
+};
+
 function ObjectivesTab({ cfg, set, accountId }) {
   const breakEven = cfg.min_margin > 0 ? (100 - cfg.min_margin).toFixed(1) : null;
   const acosAboveBreakeven = breakEven && cfg.target_acos > Number(breakEven);
@@ -451,8 +458,8 @@ function ObjectivesTab({ cfg, set, accountId }) {
           <Field label="ACoS máximo (%)">
             <NumberInput value={cfg.max_acos} onChange={v => set('max_acos', v)} min={1} max={200} step={0.5} suffix="%" />
           </Field>
-          <Field label="ROAS alvo">
-            <NumberInput value={cfg.target_roas} onChange={v => set('target_roas', v)} min={0.1} max={50} step={0.1} suffix="x" />
+          <Field label="ROAS alvo" hint="Derivado automaticamente: 100 ÷ ACoS alvo.">
+            <NumberInput value={deriveTargetRoas(cfg.target_acos)} readOnly min={0.1} max={50} step={0.1} suffix="x" />
           </Field>
           <Field label="TACoS alvo (%)">
             <NumberInput value={cfg.target_tacos} onChange={v => set('target_tacos', v)} min={1} max={100} step={0.5} suffix="%" />
@@ -913,7 +920,7 @@ export default function CampaignConfig() {
             max_increase_pct: r.bid_increase_step != null ? r.bid_increase_step : prev.max_increase_pct,
             max_decrease_pct: r.bid_decrease_step != null ? r.bid_decrease_step : prev.max_decrease_pct,
             target_acos: r.target_acos || prev.target_acos,
-            target_roas: r.target_roas || prev.target_roas,
+            target_roas: deriveTargetRoas(r.target_acos || prev.target_acos),
           }));
         }
 
@@ -923,7 +930,7 @@ export default function CampaignConfig() {
           setCfg(prev => ({
             ...prev,
             target_acos: c.acos_target || prev.target_acos,
-            target_roas: c.roas_target || prev.target_roas,
+            target_roas: deriveTargetRoas(c.acos_target || prev.target_acos),
             min_bid_global: c.min_bid || prev.min_bid_global,
             max_bid_global: c.max_bid || prev.max_bid_global,
             max_increase_pct: c.max_bid_increase_pct || prev.max_increase_pct,
@@ -939,7 +946,9 @@ export default function CampaignConfig() {
     })();
   }, []);
 
-  const set = (key, value) => setCfg(prev => ({ ...prev, [key]: value }));
+  const set = (key, value) => setCfg(prev => key === 'target_acos'
+    ? { ...prev, target_acos: value, target_roas: deriveTargetRoas(value) }
+    : { ...prev, [key]: value });
 
   const validate = () => {
     const errors = [];
@@ -948,6 +957,8 @@ export default function CampaignConfig() {
   };
 
   const save = async () => {
+    // Hierarquia financeira: ROAS não pode divergir do ACoS editável.
+    const targetRoas = deriveTargetRoas(cfg.target_acos);
     const errors = validate();
     if (errors.length > 0) {
       setMsg({ type: 'error', text: errors.join(' · ') });
@@ -992,7 +1003,7 @@ export default function CampaignConfig() {
         amazon_account_id: account.id,
         target_acos: cfg.target_acos,
         max_acos: cfg.max_acos,
-        target_roas: cfg.target_roas,
+        target_roas: targetRoas,
         target_tacos: cfg.target_tacos,
         min_bid: cfg.min_bid_global,
         max_bid: cfg.max_bid_global,
@@ -1020,7 +1031,7 @@ export default function CampaignConfig() {
         bid_increase_step: cfg.max_increase_pct,
         bid_decrease_step: cfg.max_decrease_pct,
         target_acos: cfg.target_acos,
-        target_roas: cfg.target_roas,
+        target_roas: targetRoas,
       };
       if (existing[0]) {
         await base44.entities.BudgetRule.update(existing[0].id, ruleData);
@@ -1033,7 +1044,7 @@ export default function CampaignConfig() {
       const autoData = {
         amazon_account_id: account.id,
         acos_target: cfg.target_acos,
-        roas_target: cfg.target_roas,
+        roas_target: targetRoas,
         daily_budget_limit: Number(cfg.daily_budget_total),
         max_bid_increase_pct: cfg.max_increase_pct,
         max_bid_decrease_pct: cfg.max_decrease_pct,
