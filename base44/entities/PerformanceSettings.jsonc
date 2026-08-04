@@ -44,6 +44,12 @@
       "default": 80,
       "description": "Limite di\u00e1rio geral de risco em R$. Fonte oficial do motor."
     },
+    "ads_resource_share_cap_pct": { "type": "number", "default": 5 },
+    "ads_resource_basis": { "type": "string", "default": "amazon_sales_projection_7d" },
+    "intraday_pacing_enabled": { "type": "boolean", "default": true },
+    "min_intraday_data_confidence": { "type": "string", "default": "medium" },
+    "low_value_hour_bid_reduction_pct": { "type": "number", "default": 15 },
+    "critical_pacing_bid_reduction_pct": { "type": "number", "default": 35 },
     "suggested_daily_budget": {
       "type": "number",
       "default": 0,

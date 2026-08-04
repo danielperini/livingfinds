@@ -1,5 +1,6 @@
 import {
   brtClock,
+  DEFAULT_DAILY_CAP,
   buildCampaignProfiles,
   buildPacingCurve,
   clamp,
@@ -7,6 +8,7 @@ import {
   pacingClassification,
   parseArray,
   positive,
+  productStock,
   r2,
   resolveDailyCap,
   readConfirmedTodaySpend,
@@ -25,6 +27,49 @@ import {
 const MAX_PAUSES = 6;
 const MAX_HARD_CAP_PAUSES = 25;
 const MAX_RESUMES = 8;
+
+function priorClosedDate(date: string, daysAgo: number) {
+  const value = new Date(`${date}T12:00:00-03:00`);
+  value.setDate(value.getDate() - daysAgo);
+  return value.toISOString().slice(0, 10);
+}
+
+function calculateEffectiveCap(params: { performance: any; products: any[]; economics: any[]; metrics: any[]; today: string }) {
+  const { performance, products, economics, metrics, today } = params;
+  const configured = positive(performance?.daily_budget_limit, DEFAULT_DAILY_CAP);
+  const resourceSharePct = clamp(positive(performance?.ads_resource_share_cap_pct, 5), 0, 100);
+  const validDates = Array.from({ length: 7 }, (_, index) => priorClosedDate(today, index + 1));
+  const salesByDate = new Map(validDates.map((date) => [date, 0]));
+  const rowsByDate = new Map(validDates.map((date) => [date, 0]));
+  for (const row of metrics) {
+    const date = String(row?.date || '');
+    if (!salesByDate.has(date)) continue;
+    salesByDate.set(date, Number(salesByDate.get(date) || 0) + Number(row?.sales || 0));
+    rowsByDate.set(date, Number(rowsByDate.get(date) || 0) + 1);
+  }
+  const validSalesDays = validDates.filter((date) => Number(rowsByDate.get(date) || 0) > 0);
+  const projectedRevenue = validSalesDays.length >= 3
+    ? r2(validSalesDays.reduce((sum, date) => sum + Number(salesByDate.get(date) || 0), 0) / validSalesDays.length)
+    : 0;
+  const resourceCap = projectedRevenue > 0 ? r2(projectedRevenue * resourceSharePct / 100) : 0;
+  const stockByAsin = new Map(products.map((product: any) => [String(product?.asin || ''), productStock(product)]));
+  const eligibleEconomics = economics.filter((economic: any) => {
+    const stock = Number(stockByAsin.get(String(economic?.asin || '')) || 0);
+    const margin = Number(economic?.contribution_margin_percent ?? economic?.current_margin_pct ?? 0);
+    return stock > 0 && Number(economic?.safe_max_cpc || 0) > 0 && margin >= 15 &&
+      !['missing_cost', 'missing_price', 'missing_fees', 'invalid', 'stale'].includes(String(economic?.economics_status || '').toLowerCase());
+  });
+  const acosLimit = eligibleEconomics.length
+    ? Math.min(Number(performance?.target_acos || 0) || 100, ...eligibleEconomics.map((economic: any) => Number(economic?.target_acos || economic?.break_even_acos || 100)))
+    : 0;
+  const economicCap = projectedRevenue > 0 && acosLimit > 0 ? r2(projectedRevenue * acosLimit / 100) : 0;
+  const cap = r2(Math.min(configured, resourceCap || configured, economicCap || configured));
+  return {
+    configured, resourceSharePct, projectedRevenue, validSalesDays: validSalesDays.length,
+    resourceCap, economicCap, cap, confidence: validSalesDays.length >= 5 ? 'high' : validSalesDays.length >= 3 ? 'medium' : 'low',
+    basis: 'amazon_sales_projection_7d', eligibleEconomics: eligibleEconomics.length,
+  };
+}
 
 export async function runPortfolioBudgetPacing(base44: any, account: any, body: any = {}) {
   const startedAt = Date.now();
@@ -54,12 +99,16 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
 
   const performance = performanceRows[0] || {};
   const config = configRows[0] || {};
-  if (performance?.pacing_enabled === false || config?.budget_optimization_enabled === false) {
+  if (performance?.pacing_enabled === false || performance?.intraday_pacing_enabled === false || config?.budget_optimization_enabled === false) {
     return { ok: true, skipped: true, reason: 'Pacing de orçamento desabilitado', amazon_account_id: accountId };
   }
 
   const existingController = controllerRows[0] || {};
-  const { cap: dailyCap, source: dailyCapSource } = resolveDailyCap(performance, config, account, existingController);
+  const capCalculation = calculateEffectiveCap({ performance, products, economics, metrics: closedMetrics, today: clock.date });
+  // O teto configurado pelo usuário nunca é sobrescrito: este valor é somente
+  // o teto operacional deste ciclo e é recalculado a partir de dados reais.
+  const dailyCap = capCalculation.cap;
+  const dailyCapSource = 'PerformanceSettings.daily_budget_limit+economic_pacing';
   const controller = await upsertDailyController(base44, {
     accountId,
     marketplaceId: account?.marketplace_id || account?.marketplace || null,
@@ -242,28 +291,24 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       }
     }
 
-    const hardCap = classification === 'hard_cap_risk';
+    const hardCap = classification === 'critical_overpacing';
     const overpacing = classification === 'overpacing' || hardCap;
-    if (overpacing) {
+    if (hardCap) {
       // AUTO Ã© a campanha de descoberta/continuidade por SKU. Pacing jamais a
       // pausa por desempenho: termos ruins sÃ£o tratados por bid/negativa exata.
       const normalCandidates = activeProfiles
         .filter((profile: any) => !profile.protected && String(profile.campaign?.targeting_type || '').toUpperCase() !== 'AUTO')
         .sort((a: any, b: any) => b.wasteScore - a.wasteScore || b.todaySpend - a.todaySpend);
-      const protectedLastResort = hardCap
-        ? activeProfiles.filter((profile: any) => profile.protected && String(profile.campaign?.targeting_type || '').toUpperCase() !== 'AUTO')
-          .sort((a: any, b: any) => a.priorityScore - b.priorityScore)
-        : [];
-      const candidates = [...normalCandidates, ...protectedLastResort];
-      const limit = hardCap ? MAX_HARD_CAP_PAUSES : MAX_PAUSES;
-      const reasonCode = hardCap ? 'PACING_HARD_CAP_STOP' : 'PACING_OVERSPEND_TEMP_STOP';
+      const candidates = normalCandidates;
+      const limit = MAX_HARD_CAP_PAUSES;
+      const reasonCode = 'PACING_CRITICAL_OVERPACING_TEMP_STOP';
       const activeByAsin = new Map<string, number>();
       activeProfiles.forEach((profile: any) => activeByAsin.set(profile.asin, (activeByAsin.get(profile.asin) || 0) + 1));
       let selected = 0;
       for (const profile of candidates) {
         if (selected >= limit) break;
         const countForAsin = activeByAsin.get(profile.asin) || 0;
-        if (!hardCap && (countForAsin <= 1 || profile.protected)) continue;
+        if (countForAsin <= 1 || profile.protected) continue;
         const reason = `${reasonCode}: pacing ${r2(pacingRatio)}x, gasto estimado R$ ${estimatedSpend.toFixed(2)}, ` +
           `esperado R$ ${expectedSpend.toFixed(2)}, projeção R$ ${projectedEod.toFixed(2)}, teto R$ ${dailyCap.toFixed(2)}`;
         const result = await setCampaignState(base44, {
@@ -306,7 +351,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       (classification !== 'underpacing' || bidIncreasePct > 0);
     const status = capStatus(dailyCap > 0 ? estimatedSpend / dailyCap : 0);
     const summary = {
-      classification, daily_cap: dailyCap, confirmed_spend: intraday.confirmedSpend,
+      classification, daily_cap: dailyCap, cap_calculation: capCalculation, confirmed_spend: intraday.confirmedSpend,
       metric_windows: metricWindows,
       estimated_pending_spend: intraday.estimatedPendingSpend, estimated_current_spend: estimatedSpend,
       expected_spend_by_now: expectedSpend, projected_eod: projectedEod, pacing_ratio: r2(pacingRatio),
@@ -316,7 +361,18 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
     if (!dryRun && controller?.id) {
       await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
         user_daily_spend_cap: controller.user_daily_spend_cap || dailyCap,
-        effective_daily_spend_cap: controller.effective_daily_spend_cap || controller.user_daily_spend_cap || dailyCap,
+        effective_daily_spend_cap: dailyCap,
+        ads_resource_share_cap_pct: capCalculation.resourceSharePct,
+        ads_resource_basis: capCalculation.basis,
+        resource_cap: capCalculation.resourceCap,
+        economic_daily_spend_cap: capCalculation.economicCap,
+        pacing_daily_target: dailyCap,
+        protected_future_hours_budget: reservedForStrongHours,
+        intraday_pacing_enabled: performance?.intraday_pacing_enabled !== false,
+        min_intraday_data_confidence: performance?.min_intraday_data_confidence || 'medium',
+        cap_calculation_source: capCalculation.basis,
+        cap_calculation_period_days: capCalculation.validSalesDays,
+        cap_calculation_confidence: capCalculation.confidence,
         daily_cap_source: dailyCapSource,
         confirmed_spend: intraday.confirmedSpend,
         ...metricWindows,
@@ -325,7 +381,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
         projected_end_of_day_spend: projectedEod,
         remaining_spend: remaining,
         cap_status: status,
-        spend_pacing: hardCap ? 'overpacing' : classification,
+      spend_pacing: classification === 'critical_overpacing' ? 'overpacing' : classification,
         pacing_ratio: r2(pacingRatio),
         current_hour_brt: clock.hour,
         expected_spend_by_now: expectedSpend,
@@ -388,7 +444,7 @@ export async function runPortfolioBudgetPacing(base44: any, account: any, body: 
       amazon_account_id: accountId,
       date_brt: clock.date,
       hour_brt: clock.hour,
-      daily_cap: dailyCap,
+      daily_cap: dailyCap, cap_calculation: capCalculation,
       daily_cap_source: dailyCapSource,
       confirmed_spend: intraday.confirmedSpend,
       metric_windows: {

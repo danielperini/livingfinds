@@ -40,6 +40,17 @@
       "type": "number",
       "default": 70
     },
+    "resource_cap": { "type": "number", "default": 0 },
+    "economic_daily_spend_cap": { "type": "number", "default": 0 },
+    "pacing_daily_target": { "type": "number", "default": 0 },
+    "protected_future_hours_budget": { "type": "number", "default": 0 },
+    "ads_resource_share_cap_pct": { "type": "number", "default": 5 },
+    "ads_resource_basis": { "type": "string", "default": "amazon_sales_projection_7d" },
+    "intraday_pacing_enabled": { "type": "boolean", "default": true },
+    "min_intraday_data_confidence": { "type": "string", "default": "medium" },
+    "cap_calculation_source": { "type": "string" },
+    "cap_calculation_period_days": { "type": "number", "default": 0 },
+    "cap_calculation_confidence": { "type": "string", "default": "low" },
     "updated_by": {
       "type": "string"
     },
@@ -136,7 +147,9 @@
       "enum": [
         "underpacing",
         "on_track",
+        "normal",
         "overpacing",
+        "critical_overpacing",
         "unknown"
       ],
       "default": "unknown"

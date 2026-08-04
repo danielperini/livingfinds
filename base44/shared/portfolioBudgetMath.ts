@@ -2,14 +2,9 @@ export const DEFAULT_DAILY_CAP = 115;
 export const IDEAL_METRICS_AGE_MINUTES = 30;
 export const MAX_METRICS_AGE_MINUTES = 60;
 
-const FALLBACK_HOURLY_WEIGHTS = [
-  1.5, 1.5, 1.5, 1.5, 1.5, 1.5,
-  2.5, 2.5, 2.5,
-  4, 4, 4,
-  5, 5, 5, 5, 5,
-  7, 7, 7, 7, 7,
-  6.5, 5,
-];
+// Sem amostra suficiente a regra é neutra e conservadora: distribuição
+// uniforme, sem antecipar orçamento com uma curva de mercado presumida.
+const FALLBACK_HOURLY_WEIGHTS = Array.from({ length: 24 }, () => 1);
 
 const TEMP_PAUSE_REASONS = [
   'PACING_OVERSPEND_TEMP_STOP',
@@ -129,7 +124,7 @@ export function buildPacingCurve(patterns: any[], dayOfWeek: number) {
   }
 
   let weights = fallback;
-  let source = 'fallback_weighted_curve';
+  let source = 'fallback_uniform_conservative';
   if (byHour.size >= 8) {
     const raw = Array.from({ length: 24 }, (_, hour) => {
       const rows = byHour.get(hour) || [];
@@ -316,10 +311,10 @@ export function readConfirmedTodaySpend(params: {
 }
 
 export function pacingClassification(ratio: number, spend: number, effectiveCap: number, projectedEod: number, cap: number) {
-  if (spend >= effectiveCap || projectedEod >= cap * 1.08) return 'hard_cap_risk';
-  if (ratio > 1.20 || projectedEod > cap * 1.03) return 'overpacing';
-  if (ratio < 0.85 && projectedEod < cap * 0.92) return 'underpacing';
-  return 'on_track';
+  if (ratio > 1.25 || spend >= effectiveCap || projectedEod > cap) return 'critical_overpacing';
+  if (ratio > 1.10 || projectedEod > cap) return 'overpacing';
+  if (ratio < 0.75 && projectedEod < cap * 0.92) return 'underpacing';
+  return 'normal';
 }
 
 function historical(campaign: any, targetAcos: number) {

@@ -52,7 +52,9 @@ Deno.serve(async (request) => {
       ? pacing.eligible_asins_for_bid_adjustment.filter(Boolean)
       : [];
     const pacingState = String(pacing?.spend_pacing || 'unknown');
-    const bidWriteBlockedByOverspend = ['overpacing', 'hard_cap_risk'].includes(pacingState);
+    // OVERPACING reduz bids primeiro no dayparting canônico; somente o estado
+    // crítico pode pausar MANUAL não protegida, nunca AUTO.
+    const bidWriteBlockedByOverspend = pacingState === 'critical_overpacing';
     if (pacing?.ok !== false && pacing?.allow_bid_actions === true &&
         !bidWriteBlockedByOverspend && eligibleAsins.length > 0) {
       const response = await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
@@ -69,7 +71,7 @@ Deno.serve(async (request) => {
     } else if (bidWriteBlockedByOverspend) {
       dayparting = {
         skipped: true,
-        reason: 'Overpacing/hard cap: controle feito por pausas específicas; restauração ou aumento de bid bloqueados',
+        reason: 'Critical overpacing: pausas temporárias elegíveis; aumento/restauração de bid bloqueados',
         executed: 0,
       };
     }
