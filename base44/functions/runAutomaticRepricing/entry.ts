@@ -1748,6 +1748,41 @@ async function evaluateAccount(
         "Limite absoluto de alteração de preço em 24 horas esgotado ou abaixo de R$ 0,05.",
       );
     }
+    // A Product Fees API é sensível ao preço. Antes de publicar uma mudança,
+    // recalcula as tarifas exatamente no preço final (inclusive faixas como
+    // R$99,99/R$100,00), em vez de projetar a tarifa consultada no preço atual.
+    if (
+      decision.suggestedPrice &&
+      Math.abs(Number(decision.suggestedPrice) - confirmedPrice) >= 0.01
+    ) {
+      const finalFeeResult = await fetchFees(
+        base44, account, accessToken, product.sku, Number(decision.suggestedPrice),
+        listing.sellerFulfillmentType === "AFN", currency,
+      );
+      if (!finalFeeResult.ok || !finalFeeResult.fees) {
+        decision.automaticEligible = false;
+        decision.blockReasons.push(
+          `Preço final bloqueado: a Product Fees API não confirmou as tarifas para R$ ${Number(decision.suggestedPrice).toFixed(2)} (${finalFeeResult.error || finalFeeResult.status}).`,
+        );
+      } else {
+        const finalPolicy = policyInputs({
+          ...mergedEconomics,
+          amazon_fee_percent: finalFeeResult.fees.referralFeePct,
+          fba_fee: finalFeeResult.fees.fbaFee,
+          amazon_fixed_fee: finalFeeResult.fees.fixedFee,
+        }, adsCost, settings);
+        const finalEconomics = economicsAtPrice(Number(decision.suggestedPrice), finalPolicy);
+        if (!finalEconomics || finalEconomics.marginPct + 0.0001 < 15) {
+          decision.automaticEligible = false;
+          decision.blockReasons.push(
+            "Preço final bloqueado: tarifas Amazon confirmadas reduzem a margem líquida abaixo de 15%.",
+          );
+        } else {
+          decision.projectedEconomics = finalEconomics;
+          decision.decisionReason = `${decision.decisionReason} Tarifas confirmadas pela Product Fees API no preço final.`;
+        }
+      }
+    }
     const economicConflict = Boolean(
       decision.currentEconomics && decision.currentEconomics.marginPct < 15,
     );
