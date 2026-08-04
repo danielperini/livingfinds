@@ -98,6 +98,9 @@ jobs:
             echo '--- verificando funções críticas carregadas ---'
             functions_json="\$(curl -fsS http://localhost:8000/functions)"
             echo "\$functions_json" | grep -q 'runAutomaticRepricing'
+            echo "\$functions_json" | grep -q 'runUnifiedDecisionEngine'
+            echo "\$functions_json" | grep -q 'buildCanonicalMarketplaceSnapshots'
+            echo "\$functions_json" | grep -q 'classifyMarketplaceCampaignJourneys'
             echo "\$functions_json" | grep -q 'importProductEconomics'
             echo "\$functions_json" | grep -q 'enrollStockedProductsInRepricing'
             echo '--- validando ScrapingBee real dentro do container ---'
@@ -192,6 +195,26 @@ jobs:
             ' </dev/null
 
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" = "true" ]; then
+            echo '--- bootstrap do motor unificado: histórico, snapshots e jornada ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/runUnifiedDecisionEngine", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({
+                  _service_role: true,
+                  bootstrap: true,
+                  daily_close: true,
+                  full_repricing_evaluation: true,
+                  dry_run: false,
+                  trigger_type: "deploy_unified_marketplace_bootstrap"
+                })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("UNIFIED_BOOTSTRAP_HTTP=" + response.status + "|OK=" + data.ok + "|SNAPSHOT_RUN=" + (data.snapshot_run_id || "unknown") + "|DATA=" + JSON.stringify(data).slice(0, 12000));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "unified marketplace bootstrap failed");
+            ' </dev/null
+
             echo '--- autocorreção diária dos relatórios ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
