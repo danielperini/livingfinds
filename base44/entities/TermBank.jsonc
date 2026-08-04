@@ -60,6 +60,17 @@
     "source_detail": {
       "type": "string"
     },
+    "source_types": { "type": "array", "items": { "type": "string" } },
+    "auto_occurrences": { "type": "number", "default": 0 },
+    "manual_exact_occurrences": { "type": "number", "default": 0 },
+    "manual_phrase_occurrences": { "type": "number", "default": 0 },
+    "manual_broad_occurrences": { "type": "number", "default": 0 },
+    "product_targeting_occurrences": { "type": "number", "default": 0 },
+    "amazon_suggestion_occurrences": { "type": "number", "default": 0 },
+    "bright_data_occurrences": { "type": "number", "default": 0 },
+    "economic_evidence_score": { "type": "number", "default": 0 },
+    "semantic_relevance_score": { "type": "number", "default": 0 },
+    "promotion_eligibility": { "type": "string" },
     "created_from": {
       "type": "string"
     },

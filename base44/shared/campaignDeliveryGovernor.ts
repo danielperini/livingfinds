@@ -101,7 +101,7 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
       return { code: 'ZERO_IMPRESSION_BID_BOOTSTRAP', action: 'bootstrap_bid', reason: 'Sem impressão: testar até duas recuperações controladas de bid, respeitando o teto econômico.', confidence: 95 };
     }
     if (input.isManualExact) {
-      return { code: 'ZERO_IMPRESSION_REPLACE_TERM', action: 'replace_term', reason: 'Sem impressão após a janela máxima: substituir a keyword, sem continuar aumentando bid.', confidence: 95 };
+      return { code: 'ZERO_IMPRESSION_BID_BOOTSTRAP', action: 'bootstrap_bid', reason: 'Sem impressão após a janela inicial: manter recuperação econômica e espaçada de bid, sem pausar ou substituir automaticamente.', confidence: 95 };
     }
     return { code: 'AUTO_ZERO_IMPRESSION_REVIEW', action: 'monitor', reason: 'Campanha automática sem impressão exige validação estrutural e de segmentações antes de novo gasto.', confidence: 85 };
   }
@@ -111,10 +111,10 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
       return { code: 'MOTOR_MONITORING_LOW_CTR_MATURITY', action: 'monitor', reason: 'A campanha ainda não completou 14 dias; relevância baixa será observada sem substituição prematura.', confidence: 70 };
     }
     if (input.impressions >= MIN_IMPRESSIONS_NO_CLICK && input.isManualExact) {
-      return { code: 'IMPRESSIONS_NO_CLICK_REPLACE_TERM', action: 'replace_term', reason: 'Há entrega, mas a keyword não gera clique; aumentar bid elevaria exposição sem corrigir relevância.', confidence: 95 };
+      return { code: 'IMPRESSIONS_NO_CLICK_BID_GUARD', action: 'profit_guard', reason: 'Há entrega, mas a keyword não gera clique; reduzir levemente ou manter o bid, sem pausar ou substituir automaticamente.', confidence: 95 };
     }
     if (input.impressions >= MIN_IMPRESSIONS_NO_CLICK) {
-      return { code: 'IMPRESSIONS_NO_CLICK_PAUSE', action: 'pause', reason: 'A campanha recebe impressões, mas não atrai cliques; pausar o desperdício e revisar segmentação.', confidence: 90 };
+      return { code: 'IMPRESSIONS_NO_CLICK_BID_GUARD', action: 'profit_guard', reason: 'A campanha recebe impressões, mas não atrai cliques; conter o bid e revisar a segmentação sem pausa automática.', confidence: 90 };
     }
     return { code: 'MOTOR_MONITORING_LOW_CTR_SAMPLE', action: 'monitor', reason: 'Amostra de impressões ainda insuficiente para concluir baixa relevância.', confidence: 60 };
   }
@@ -138,11 +138,11 @@ export function classifyDelivery(input: DeliveryInput): DeliveryDecision {
     });
     if (evidence.level === 'pause_candidate') {
       return {
-        code: input.isManualExact ? 'CLICKS_NO_SALE_REPLACE_TERM' : 'CLICKS_NO_SALE_PAUSE',
-        action: input.isManualExact ? 'replace_term' : 'pause',
-        reason: `Perda persistente confirmada após redução anterior, janela madura e evidência probabilística (P=${Math.round((evidence.probability_below_sustainable || 0) * 100)}%).`,
+        code: 'NO_CONVERSION_REDUCE_STRONG',
+        action: 'profit_guard',
+        reason: `Perda persistente confirmada após redução anterior e janela madura (P=${Math.round((evidence.probability_below_sustainable || 0) * 100)}%); aplicar nova redução gradual, nunca pausa automática apenas por falta de venda.`,
         confidence: 96,
-        evidence,
+        evidence: { ...evidence, recommended_reduction_pct: Math.min(0.12, Math.max(0.08, evidence.recommended_reduction_pct || 0)) },
       };
     }
     if (evidence.level === 'reduce_soft' || evidence.level === 'reduce_strong') {
@@ -213,7 +213,7 @@ export function classifyCurrentHour(input: HourlyProfitInput): { action: 'pause'
   if (input.sales <= 0) {
     const limit = input.maximumProfitableSpend;
     if (input.orders <= 0 && input.spend >= limit) {
-      return { action: 'pause', code: 'UNPROFITABLE_HOUR_NO_SALES', reason: `Horário consome ${input.spend.toFixed(2)} sem venda; pausar até a próxima janela.` };
+      return { action: 'hold', code: 'UNPROFITABLE_HOUR_BID_GUARD', reason: `Horário consome ${input.spend.toFixed(2)} sem venda; bloquear aumentos e delegar a redução gradual de bid ao balanceador econômico.` };
     }
     return { action: 'hold', code: 'HOUR_NO_SALE_BELOW_LIMIT', reason: 'Horário sem venda, mas ainda abaixo do limite de perda.' };
   }

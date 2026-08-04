@@ -5,7 +5,7 @@
  * re-lê os valores reais da Amazon e verifica se foram aplicados.
  *
  * Cobre:
- *   - bids de keywords: GET /sp/keywords/list por keywordId
+ *   - bids de keywords, Ad Groups e targets pelos endpoints v3 correspondentes
  *   - estados de campanhas: GET /sp/campaigns/list por campaignId
  *   - budgets de campanhas: mesma chamada de estados
  *
@@ -19,6 +19,19 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
+function confirmationFailureState(decision: any) {
+  const ambiguous = ['confirming', 'conflict_reconciling'].includes(String(decision.status || ''));
+  const canRetry = Number(decision.attempt_count || 0) < Number(decision.max_attempts || 3);
+  if (ambiguous && canRetry) {
+    return {
+      status: 'waiting_retry',
+      queue_status: 'scheduled',
+      next_retry_at: new Date(Date.now() + 5 * 60000).toISOString(),
+    };
+  }
+  return { status: ambiguous ? 'failed_final' : 'failed', queue_status: 'failed' };
+}
 
 async function getAdsToken(account: any): Promise<string> {
   const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
@@ -92,14 +105,23 @@ Deno.serve(async (req) => {
     const propagationCutoff = new Date(Date.now() - 5 * 60000).toISOString();
 
     // Carregar decisões executadas nas últimas 6h
-    const executed = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { amazon_account_id: aid, status: 'executed' }, '-executed_at', 100
-    ).catch(() => []);
+    const [executedRows, confirmingRows, conflictRows] = await Promise.all([
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'executed' }, '-executed_at', 100
+      ).catch(() => []),
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'confirming' }, '-last_attempt_at', 100
+      ).catch(() => []),
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'conflict_reconciling' }, '-last_attempt_at', 100
+      ).catch(() => []),
+    ]);
+    const executed = [...executedRows, ...confirmingRows, ...conflictRows];
 
     const recent = executed.filter((d: any) =>
-      d.executed_at
-      && d.executed_at >= cutoff6h
-      && d.executed_at <= propagationCutoff
+      (d.executed_at || d.last_attempt_at || d.updated_at)
+      && (d.executed_at || d.last_attempt_at || d.updated_at) >= cutoff6h
+      && (d.executed_at || d.last_attempt_at || d.updated_at) <= propagationCutoff
       && d.confirmation_status !== 'confirmed'
     );
 
@@ -109,6 +131,9 @@ Deno.serve(async (req) => {
 
     // Separar por tipo de entidade
     const bidDecisions = recent.filter((d: any) => ['set_bid', 'reduce_bid', 'increase_bid', 'update_bid'].includes(d.action));
+    const keywordBidDecisions = bidDecisions.filter((d: any) => !['ad_group', 'product_target'].includes(String(d.entity_type || '')));
+    const adGroupBidDecisions = bidDecisions.filter((d: any) => d.entity_type === 'ad_group');
+    const targetBidDecisions = bidDecisions.filter((d: any) => d.entity_type === 'product_target');
     const keywordStateDecisions = recent.filter((d: any) => ['pause_keyword', 'enable_keyword'].includes(d.action));
     const campDecisions = recent.filter((d: any) => ['pause_campaign', 'enable_campaign', 'set_budget', 'update_budget', 'reduce_budget', 'increase_budget'].includes(d.action));
     const confirmableIds = new Set([...bidDecisions, ...keywordStateDecisions, ...campDecisions].map((d: any) => String(d.id)));
@@ -121,7 +146,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 1. Confirmar bids de keywords ─────────────────────────────────────
-    const kwIds = [...new Set([...bidDecisions, ...keywordStateDecisions].map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
+    const kwIds = [...new Set([...keywordBidDecisions, ...keywordStateDecisions].map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
     const amazonKwById = new Map<string, any>();
 
     for (let i = 0; i < kwIds.length; i += 50) {
@@ -152,17 +177,44 @@ Deno.serve(async (req) => {
       if (i + 50 < campIds.length) await sleep(300);
     }
 
-    // ── 3. Comparar e corrigir divergências ────────────────────────────────
+    // ── 3. Confirmar bids de Ad Groups e targets ──────────────────────────
+    const adGroupIds = [...new Set(adGroupBidDecisions.map((d: any) => String(d.entity_id || d.ad_group_id)).filter(Boolean))];
+    const amazonAdGroupById = new Map<string, any>();
+    for (let i = 0; i < adGroupIds.length; i += 50) {
+      const batch = adGroupIds.slice(i, i + 50);
+      const data = await adsPost(base, token, clientId, profileId, '/sp/adGroups/list',
+        { adGroupIdFilter: { include: batch }, maxResults: 50 },
+        'application/vnd.spAdGroup.v3+json'
+      );
+      for (const group of (data?.adGroups || [])) amazonAdGroupById.set(String(group.adGroupId), group);
+      if (i + 50 < adGroupIds.length) await sleep(300);
+    }
+
+    const targetIds = [...new Set(targetBidDecisions.map((d: any) => String(d.entity_id || d.target_id)).filter(Boolean))];
+    const amazonTargetById = new Map<string, any>();
+    for (let i = 0; i < targetIds.length; i += 50) {
+      const batch = targetIds.slice(i, i + 50);
+      const data = await adsPost(base, token, clientId, profileId, '/sp/targets/list',
+        { targetIdFilter: { include: batch }, maxResults: 50 },
+        'application/vnd.spTargetingClause.v3+json'
+      );
+      for (const target of (data?.targetingClauses || data?.targets || [])) {
+        amazonTargetById.set(String(target.targetId), target);
+      }
+      if (i + 50 < targetIds.length) await sleep(300);
+    }
+
+    // ── 4. Comparar e corrigir divergências ────────────────────────────────
     let confirmed = 0, divergences = 0, retried = 0;
     const divergenceLog: any[] = [];
 
-    for (const d of bidDecisions) {
+    for (const d of keywordBidDecisions) {
       const kwId = String(d.entity_id || d.keyword_id || '');
       const amz = amazonKwById.get(kwId);
       if (!amz) {
         divergences++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'failed',
+          ...confirmationFailureState(d),
           confirmation_status: 'not_found',
           confirmation_error: 'Keyword não encontrada no probe remoto após a janela de propagação.',
           error_message: 'Confirmação Amazon falhou: keyword não encontrada.',
@@ -178,6 +230,9 @@ Deno.serve(async (req) => {
       if (diff < 0.01) {
         confirmed++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'executed',
+          queue_status: 'completed',
+          executed_at: d.executed_at || now,
           confirmation_status: 'confirmed',
           confirmation_error: null,
           confirmed_at: now,
@@ -193,7 +248,7 @@ Deno.serve(async (req) => {
 
         // Marcar a decisão como failed e devolver o caso ao motor canônico.
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'failed',
+          ...confirmationFailureState(d),
           confirmation_status: 'divergent',
           confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
           error_message: `Confirmação Amazon divergente: esperado R$${expectedBid.toFixed(2)}, Amazon retornou R$${amzBid.toFixed(2)}`,
@@ -211,13 +266,81 @@ Deno.serve(async (req) => {
       }
     }
 
+    for (const d of adGroupBidDecisions) {
+      const entityId = String(d.entity_id || d.ad_group_id || '');
+      const amz = amazonAdGroupById.get(entityId);
+      const amzBid = Number(amz?.defaultBid?.amount ?? amz?.defaultBid ?? 0);
+      const expectedBid = Number(d.value_after || 0);
+      const diff = Math.abs(amzBid - expectedBid);
+      if (!amz) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          ...confirmationFailureState(d), confirmation_status: 'not_found',
+          confirmation_error: 'Ad Group não encontrado no probe remoto após a janela de propagação.',
+          error_message: 'Confirmação Amazon falhou: Ad Group não encontrado.', updated_at: now,
+        }).catch(() => {});
+      } else if (diff < 0.01) {
+        confirmed++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'executed', queue_status: 'completed', executed_at: d.executed_at || now,
+          confirmation_status: 'confirmed', confirmation_error: null, confirmed_at: now,
+        }).catch(() => {});
+      } else {
+        divergences++;
+        divergenceLog.push({ type: 'ad_group_bid_mismatch', ad_group_id: entityId, expected: expectedBid, amazon: amzBid, diff });
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          ...confirmationFailureState(d), confirmation_status: 'divergent',
+          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
+          error_message: 'Confirmação Amazon divergente para Ad Group.', updated_at: now,
+        }).catch(() => {});
+      }
+      if (amz) {
+        const rows = await base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: aid, ad_group_id: entityId }, null, 1).catch(() => []);
+        if (rows[0]) await base44.asServiceRole.entities.AdGroup.update(rows[0].id, { default_bid: amzBid, synced_at: now }).catch(() => {});
+      }
+    }
+
+    for (const d of targetBidDecisions) {
+      const entityId = String(d.entity_id || d.target_id || '');
+      const amz = amazonTargetById.get(entityId);
+      const amzBid = Number(amz?.bid?.amount ?? amz?.bid ?? 0);
+      const expectedBid = Number(d.value_after || 0);
+      const diff = Math.abs(amzBid - expectedBid);
+      if (!amz) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          ...confirmationFailureState(d), confirmation_status: 'not_found',
+          confirmation_error: 'Target não encontrado no probe remoto após a janela de propagação.',
+          error_message: 'Confirmação Amazon falhou: target não encontrado.', updated_at: now,
+        }).catch(() => {});
+      } else if (diff < 0.01) {
+        confirmed++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'executed', queue_status: 'completed', executed_at: d.executed_at || now,
+          confirmation_status: 'confirmed', confirmation_error: null, confirmed_at: now,
+        }).catch(() => {});
+      } else {
+        divergences++;
+        divergenceLog.push({ type: 'target_bid_mismatch', target_id: entityId, expected: expectedBid, amazon: amzBid, diff });
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          ...confirmationFailureState(d), confirmation_status: 'divergent',
+          confirmation_error: `Bid remoto R$${amzBid.toFixed(2)} diverge do esperado R$${expectedBid.toFixed(2)}.`,
+          error_message: 'Confirmação Amazon divergente para target.', updated_at: now,
+        }).catch(() => {});
+      }
+      if (amz) {
+        const rows = await base44.asServiceRole.entities.ProductTarget.filter({ amazon_account_id: aid, target_id: entityId }, null, 1).catch(() => []);
+        if (rows[0]) await base44.asServiceRole.entities.ProductTarget.update(rows[0].id, { bid: amzBid, synced_at: now }).catch(() => {});
+      }
+    }
+
     for (const d of keywordStateDecisions) {
       const kwId = String(d.entity_id || d.keyword_id || '');
       const amz = amazonKwById.get(kwId);
       if (!amz) {
         divergences++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'failed',
+          ...confirmationFailureState(d),
           confirmation_status: 'not_found',
           confirmation_error: 'Keyword não encontrada no probe remoto após a janela de propagação.',
           error_message: 'Confirmação Amazon falhou: keyword não encontrada.',
@@ -230,6 +353,9 @@ Deno.serve(async (req) => {
       if (amazonState === expectedState) {
         confirmed++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'executed',
+          queue_status: 'completed',
+          executed_at: d.executed_at || now,
           confirmation_status: 'confirmed',
           confirmation_error: null,
           confirmed_at: now,
@@ -237,7 +363,7 @@ Deno.serve(async (req) => {
       } else {
         divergences++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'failed',
+          ...confirmationFailureState(d),
           confirmation_status: 'divergent',
           confirmation_error: `Estado remoto ${amazonState || 'desconhecido'} diverge do esperado ${expectedState}.`,
           error_message: `Estado da keyword divergente: esperado ${expectedState}, Amazon retornou ${amazonState || 'desconhecido'}.`,
@@ -252,7 +378,7 @@ Deno.serve(async (req) => {
       if (!amz) {
         divergences++;
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'failed',
+          ...confirmationFailureState(d),
           confirmation_status: 'not_found',
           confirmation_error: 'Campanha não encontrada no probe remoto após a janela de propagação.',
           error_message: 'Confirmação Amazon falhou: campanha não encontrada.',
@@ -274,7 +400,7 @@ Deno.serve(async (req) => {
           divergenceLog.push({ type: 'state_mismatch', campaign_id: campId, expected: expectedState, amazon: amzState });
 
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-            status: 'failed',
+            ...confirmationFailureState(d),
             confirmation_status: 'divergent',
             confirmation_error: `Estado remoto ${amzState || 'desconhecido'} diverge do esperado ${expectedState}.`,
             error_message: `Estado Amazon divergente: esperado ${expectedState}, Amazon retornou ${amzState}`,
@@ -285,6 +411,9 @@ Deno.serve(async (req) => {
         } else {
           confirmed++;
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+            status: 'executed',
+            queue_status: 'completed',
+            executed_at: d.executed_at || now,
             confirmation_status: 'confirmed',
             confirmation_error: null,
             confirmed_at: now,
@@ -302,7 +431,7 @@ Deno.serve(async (req) => {
           divergenceLog.push({ type: 'budget_mismatch', campaign_id: campId, expected: expectedBudget, amazon: amzBudget });
 
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-            status: 'failed',
+            ...confirmationFailureState(d),
             confirmation_status: 'divergent',
             confirmation_error: `Budget remoto R$${amzBudget.toFixed(2)} diverge do esperado R$${expectedBudget.toFixed(2)}.`,
             error_message: `Budget Amazon divergente: esperado R$${expectedBudget.toFixed(2)}, Amazon retornou R$${amzBudget.toFixed(2)}`,
@@ -317,6 +446,9 @@ Deno.serve(async (req) => {
         } else if (!hasDivergence) {
           confirmed++;
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+            status: 'executed',
+            queue_status: 'completed',
+            executed_at: d.executed_at || now,
             confirmation_status: 'confirmed',
             confirmation_error: null,
             confirmed_at: now,
@@ -336,13 +468,15 @@ Deno.serve(async (req) => {
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       records_processed: recent.length,
-      result_summary: JSON.stringify({ confirmed, divergences, retried, kw_checked: kwIds.length, camp_checked: campIds.length }).slice(0, 500),
+      result_summary: JSON.stringify({ confirmed, divergences, retried, kw_checked: kwIds.length, ad_groups_checked: adGroupIds.length, targets_checked: targetIds.length, camp_checked: campIds.length }).slice(0, 500),
     }).catch(() => {});
 
     return Response.json({
       ok: true,
       decisions_checked: recent.length,
       kw_checked: kwIds.length,
+      ad_groups_checked: adGroupIds.length,
+      targets_checked: targetIds.length,
       camp_checked: campIds.length,
       confirmed,
       divergences,

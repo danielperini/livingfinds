@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
-import { Save, Loader2, Shield, AlertTriangle, Info, Target, DollarSign } from 'lucide-react';
+import { Save, Loader2, Shield, Info, Target, DollarSign } from 'lucide-react';
 
 const PRIORITY_MODE_LABELS = {
   acos_first:   { label: 'Reduzir ACoS',         hint: 'IA prioriza reduzir custo de publicidade sobre vendas' },
@@ -22,8 +22,8 @@ const DEFAULTS = {
   ai_daily_budget_target: 0,
   ai_budget_enforcement: false,
   total_daily_budget: 500,
-  max_bid_increase_pct: 15,
-  max_bid_decrease_pct: 20,
+  max_bid_increase_pct: 6,
+  max_bid_decrease_pct: 12,
   max_budget_increase_pct: 20,
   max_budget_decrease_pct: 20,
   min_bid: 0.10,
@@ -40,6 +40,35 @@ const DEFAULTS = {
   placement_optimization_enabled: true,
   dayparting_enabled: true,
   budget_optimization_enabled: true,
+  economic_budget_balancer_enabled: false,
+  max_campaign_spend_share: 25,
+  max_auto_discovery_share: 30,
+  overshare_warning_threshold: 25,
+  overshare_reduction_threshold: 35,
+  auto_discovery_target_share: 25,
+  manual_learning_target_share: 35,
+  winner_target_share: 40,
+  guarded_target_share: 10,
+  zero_impression_bid_increase_pct: 5,
+  no_click_bid_increase_pct: 2.5,
+  no_click_bid_reduction_pct: 3,
+  click_reduction_soft_pct: 6,
+  click_reduction_medium_pct: 10,
+  click_reduction_strong_pct: 12,
+  click_reduction_soft_start: 5,
+  click_reduction_medium_start: 16,
+  click_reduction_strong_start: 26,
+  max_spend_without_sale: 0,
+  test_tolerance_factor: 1.25,
+  maximum_impressions_without_click: 100,
+  learning_observe_hours: 6,
+  learning_window_hours: 24,
+  economic_metrics_fresh_minutes: 30,
+  economic_decision_window_minutes: 15,
+  economic_cooldown_hours: 6,
+  low_volume_cooldown_hours: 24,
+  max_changes_per_cycle: 20,
+  max_changes_per_hour: 40,
   search_term_optimization_enabled: true,
   bid_optimization_enabled: true,
   auto_create_manual_exact: true,
@@ -86,7 +115,7 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
     } finally { setSaving(false); }
   };
 
-  const Field = ({ label, k, type = 'number', step = 1, min, max, hint }) => (
+  const Field = ({ label, k, type = 'number', step = 1, min = undefined, max = undefined, hint = '' }) => (
     <div>
       <label className="block text-xs text-slate-400 mb-1">{label}</label>
       <input
@@ -98,7 +127,7 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
     </div>
   );
 
-  const Toggle = ({ label, k, danger, hint }) => (
+  const Toggle = ({ label, k, danger = false, hint = '' }) => (
     <div className={`flex items-center justify-between p-3 rounded-xl border ${danger ? 'border-amber-400/20 bg-amber-400/5' : 'border-surface-2 bg-surface-1'}`}>
       <div>
         <p className="text-sm font-medium text-slate-300">{label}</p>
@@ -231,6 +260,52 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
           <Field label={`Bid Máximo (${form.currency_symbol || 'R$'})`} k="max_bid" step={0.10} min={0.10} />
           <Field label="Aumento Máx. (%)" k="max_bid_increase_pct" min={1} max={50} />
           <Field label="Redução Máx. (%)" k="max_bid_decrease_pct" min={1} max={50} />
+        </div>
+      </div>
+
+      {/* Balanceador econômico */}
+      <div className="rounded-xl border border-cyan/20 bg-cyan/5 p-4">
+        <div className="mb-3 flex items-center gap-2">
+          <DollarSign className="h-4 w-4 text-cyan" />
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-300">Balanceador econômico</p>
+        </div>
+        <Toggle label="Executar balanceador econômico" k="economic_budget_balancer_enabled" danger
+          hint="Feature flag por conta. Desligado mantém apenas o dry-run com dados reais." />
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="Share máx. campanha (%)" k="max_campaign_spend_share" min={5} max={100} />
+          <Field label="Share máx. AUTO (%)" k="max_auto_discovery_share" min={5} max={100} />
+          <Field label="Alerta overshare (%)" k="overshare_warning_threshold" min={5} max={100} />
+          <Field label="Redução overshare (%)" k="overshare_reduction_threshold" min={5} max={100} />
+        </div>
+        <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Participação-alvo do orçamento virtual</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="AUTO descoberta (%)" k="auto_discovery_target_share" min={0} max={100} />
+          <Field label="Manuais novas (%)" k="manual_learning_target_share" min={0} max={100} />
+          <Field label="Vencedoras (%)" k="winner_target_share" min={0} max={100} />
+          <Field label="Guardadas (%)" k="guarded_target_share" min={0} max={100} />
+        </div>
+        <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Entrada no leilão e redução progressiva</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="Aumento sem impressão (%)" k="zero_impression_bid_increase_pct" step={0.5} min={0} max={6} />
+          <Field label="Aumento sem clique (%)" k="no_click_bid_increase_pct" step={0.5} min={0} max={3} />
+          <Field label="Redução sem clique (%)" k="no_click_bid_reduction_pct" step={0.5} min={0} max={12} />
+          <Field label="Impressões sem clique" k="maximum_impressions_without_click" min={20} />
+          <Field label="Redução 5–15 cliques (%)" k="click_reduction_soft_pct" min={0} max={12} />
+          <Field label="Redução 16–25 cliques (%)" k="click_reduction_medium_pct" min={0} max={12} />
+          <Field label="Redução 26+ cliques (%)" k="click_reduction_strong_pct" min={0} max={12} />
+          <Field label={`Gasto máx. sem venda (${form.currency_symbol || 'R$'})`} k="max_spend_without_sale" step={0.5} min={0} hint="0 = margem × tolerância" />
+          <Field label="Fator de tolerância" k="test_tolerance_factor" step={0.05} min={0.5} max={3} />
+        </div>
+        <p className="mb-2 mt-4 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Janelas e limites operacionais</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Field label="Somente observar (h)" k="learning_observe_hours" min={1} max={24} />
+          <Field label="Aprendizado inicial (h)" k="learning_window_hours" min={6} max={72} />
+          <Field label="Dados frescos (min)" k="economic_metrics_fresh_minutes" min={10} max={180} />
+          <Field label="Janela idempotente (min)" k="economic_decision_window_minutes" min={10} max={60} />
+          <Field label="Cooldown padrão (h)" k="economic_cooldown_hours" min={1} max={72} />
+          <Field label="Cooldown baixo volume (h)" k="low_volume_cooldown_hours" min={6} max={168} />
+          <Field label="Mudanças por ciclo" k="max_changes_per_cycle" min={1} max={100} />
+          <Field label="Mudanças por hora" k="max_changes_per_hour" min={1} max={200} />
         </div>
       </div>
 

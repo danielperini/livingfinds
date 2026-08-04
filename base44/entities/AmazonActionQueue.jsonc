@@ -5,6 +5,9 @@
     "amazon_account_id": {
       "type": "string"
     },
+    "canonical_decision_id": { "type": "string" },
+    "snapshot_id": { "type": "string" },
+    "transport_only": { "type": "boolean", "default": true },
     "operation": {
       "type": "string"
     },

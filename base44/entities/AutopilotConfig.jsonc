@@ -122,11 +122,11 @@
     },
     "max_bid_increase_pct": {
       "type": "number",
-      "default": 15
+      "default": 6
     },
     "max_bid_decrease_pct": {
       "type": "number",
-      "default": 20
+      "default": 12
     },
     "max_budget_increase_pct": {
       "type": "number",
@@ -264,6 +264,148 @@
     "budget_optimization_enabled": {
       "type": "boolean",
       "default": true
+    },
+    "economic_budget_balancer_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Feature flag por conta. Quando desligada, o balanceador somente permite dry-run."
+    },
+    "unified_marketplace_decision_engine_v1": {
+      "type": "boolean",
+      "default": false,
+      "description": "Feature flag canônica por conta. Desligada mantém todo o motor unificado em dry-run."
+    },
+    "unified_engine_dry_run": {
+      "type": "boolean",
+      "default": true
+    },
+    "unified_rollout_phase": {
+      "type": "string",
+      "enum": ["dry_run", "single_account", "bids_only", "campaigns", "budget", "repricing", "full"],
+      "default": "dry_run"
+    },
+    "unified_max_actions_per_cycle": { "type": "number", "default": 5 },
+    "unified_max_bid_actions_per_cycle": { "type": "number", "default": 5 },
+    "unified_max_campaign_actions_per_cycle": { "type": "number", "default": 0 },
+    "unified_max_price_actions_per_cycle": { "type": "number", "default": 0 },
+    "unified_max_daily_spend": { "type": "number", "default": 80 },
+    "unified_max_price_change_pct": { "type": "number", "default": 2 },
+    "unified_min_prediction_confidence": { "type": "number", "default": 90 },
+    "unified_min_economic_confidence": { "type": "number", "default": 90 },
+    "max_campaign_spend_share": {
+      "type": "number",
+      "default": 25,
+      "description": "Participacao maxima recomendada de uma campanha no gasto diario, em percentual."
+    },
+    "max_auto_discovery_share": {
+      "type": "number",
+      "default": 30,
+      "description": "Teto de participacao da descoberta automatica no gasto diario, em percentual."
+    },
+    "overshare_warning_threshold": {
+      "type": "number",
+      "default": 25
+    },
+    "overshare_reduction_threshold": {
+      "type": "number",
+      "default": 35
+    },
+    "auto_discovery_target_share": {
+      "type": "number",
+      "default": 25
+    },
+    "manual_learning_target_share": {
+      "type": "number",
+      "default": 35
+    },
+    "winner_target_share": {
+      "type": "number",
+      "default": 40
+    },
+    "guarded_target_share": {
+      "type": "number",
+      "default": 10
+    },
+    "zero_impression_bid_increase_pct": {
+      "type": "number",
+      "default": 5
+    },
+    "no_click_bid_increase_pct": {
+      "type": "number",
+      "default": 2.5
+    },
+    "no_click_bid_reduction_pct": {
+      "type": "number",
+      "default": 3
+    },
+    "click_reduction_soft_pct": {
+      "type": "number",
+      "default": 6
+    },
+    "click_reduction_medium_pct": {
+      "type": "number",
+      "default": 10
+    },
+    "click_reduction_strong_pct": {
+      "type": "number",
+      "default": 12
+    },
+    "click_reduction_soft_start": {
+      "type": "number",
+      "default": 5
+    },
+    "click_reduction_medium_start": {
+      "type": "number",
+      "default": 16
+    },
+    "click_reduction_strong_start": {
+      "type": "number",
+      "default": 26
+    },
+    "max_spend_without_sale": {
+      "type": "number",
+      "default": 0,
+      "description": "0 usa margem por pedido multiplicada por test_tolerance_factor."
+    },
+    "test_tolerance_factor": {
+      "type": "number",
+      "default": 1.25
+    },
+    "maximum_impressions_without_click": {
+      "type": "number",
+      "default": 100
+    },
+    "learning_observe_hours": {
+      "type": "number",
+      "default": 6
+    },
+    "learning_window_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "economic_metrics_fresh_minutes": {
+      "type": "number",
+      "default": 30
+    },
+    "economic_decision_window_minutes": {
+      "type": "number",
+      "default": 15
+    },
+    "economic_cooldown_hours": {
+      "type": "number",
+      "default": 6
+    },
+    "low_volume_cooldown_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "max_changes_per_cycle": {
+      "type": "number",
+      "default": 20
+    },
+    "max_changes_per_hour": {
+      "type": "number",
+      "default": 40
     },
     "search_term_optimization_enabled": {
       "type": "boolean",

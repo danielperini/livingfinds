@@ -43,6 +43,7 @@ import {
   priceChangeUsedInWindow,
 } from "../../shared/guardedPriceChangePolicy.ts";
 import { listingOfferStatus } from "../../shared/listingOfferStatus.ts";
+import { canonicalDecisionIdempotencyKey, canonicalEntityLockKey } from "../../shared/canonicalDecisionPolicy.ts";
 
 const DEFAULTS = {
   default_minimum_margin_pct: 15,
@@ -1108,6 +1109,26 @@ async function queuePriceAction(base44: any, params: any) {
       status: "pending",
       next_evaluation_at: new Date(Date.now() + 5 * 60000).toISOString(),
     });
+  let canonicalDecision: any = null;
+  if (params.canonicalSnapshot) {
+    const idempotencyKey = canonicalDecisionIdempotencyKey({
+      amazon_account_id: params.accountId, marketplace_id: params.marketplaceId,
+      entity_type: 'product_price', entity_id: params.product.id, action: 'update_listing_price',
+      window: String(params.canonicalSnapshot.window_end || day),
+    });
+    const existingDecision = await base44.asServiceRole.entities.OptimizationDecision.filter(
+      { amazon_account_id: params.accountId, idempotency_key: idempotencyKey }, '-created_at', 1,
+    ).catch(() => []);
+    canonicalDecision = existingDecision[0] || await base44.asServiceRole.entities.OptimizationDecision.create({
+      amazon_account_id: params.accountId, marketplace_id: params.marketplaceId,
+      entity_type: 'product_price', entity_id: params.product.id, asin: params.product.asin, sku: params.product.sku,
+      action: 'update_listing_price', canonical_action: 'REPRICE', value_before: oldPrice, value_after: newPrice,
+      status: 'approved', snapshot_id: params.canonicalSnapshot.id, idempotency_key: idempotencyKey,
+      entity_lock_key: canonicalEntityLockKey({ amazon_account_id: params.accountId, marketplace_id: params.marketplaceId, entity_type: 'product_price', entity_id: params.product.id }),
+      reason: params.decision.decisionReason, correlation_id: params.correlationId || null,
+      source: 'runUnifiedDecisionEngine', max_attempts: MAX_QUEUE_ATTEMPTS,
+    });
+  }
   const action = await base44.asServiceRole.entities.AmazonActionQueue.create({
     amazon_account_id: params.accountId,
     operation: "update_listing_price",
@@ -1144,6 +1165,9 @@ async function queuePriceAction(base44: any, params: any) {
     max_attempts: MAX_QUEUE_ATTEMPTS,
     next_retry_at: nowIso(),
     history_id: history?.id || null,
+    canonical_decision_id: canonicalDecision?.id || null,
+    snapshot_id: params.canonicalSnapshot?.id || null,
+    transport_only: Boolean(canonicalDecision),
     source: params.manual ? "manual_suggested_price" : "automatic_repricing",
     confidence: Math.round(numberValue(params.decision.confidence) * 100),
     created_at: nowIso(),
@@ -1155,6 +1179,7 @@ async function queuePriceAction(base44: any, params: any) {
       { action_queue_id: action.id },
     ).catch(() => {});
   }
+  if (canonicalDecision?.id && action?.id) await base44.asServiceRole.entities.OptimizationDecision.update(canonicalDecision.id, { transport_queue_id: action.id }).catch(() => {});
   return { created: true, action };
 }
 
@@ -1169,7 +1194,7 @@ async function evaluateAccount(
     0,
     10,
   );
-  const [products, economicsRows, salesRows, adsRows, historyRows, actionRows] =
+  const [products, economicsRows, salesRows, adsRows, historyRows, actionRows, snapshots] =
     await Promise.all([
       base44.asServiceRole.entities.Product.filter(
         { amazon_account_id: account.id },
@@ -1200,6 +1225,10 @@ async function evaluateAccount(
         { amazon_account_id: account.id, entity_type: "product_price" },
         "-created_at",
         5000,
+      ).catch(() => []),
+      base44.asServiceRole.entities.RepricingSnapshot.filter(
+        { amazon_account_id: account.id },
+        '-created_at', 5000,
       ).catch(() => []),
     ]);
   const salesMap = groupSales(
@@ -2130,6 +2159,10 @@ async function evaluateAccount(
         settings,
         manual,
         changedBy: options.changed_by || "scheduler",
+        canonicalSnapshot: options._canonical_orchestrator === 'runUnifiedDecisionEngine'
+          ? snapshots.find((snapshot: any) => normalizeSku(snapshot.sku) === normalizeSku(product.sku) || String(snapshot.asin || '') === String(product.asin || ''))
+          : null,
+        correlationId: options.decision_engine_correlation_id,
       });
       if (queuedAction.created) queued += 1;
       queuedForProcessing = Boolean(

@@ -3,6 +3,9 @@
   "type": "object",
   "properties": {
     "amazon_account_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "snapshot_id": { "type": "string" },
+    "snapshot_key": { "type": "string" },
     "marketplace_id": { "type": "string" },
     "profile_id": { "type": "string" },
     "decision_type": {
@@ -14,7 +17,9 @@
       "enum": ["campaign", "ad_group", "keyword", "product_target", "product", "account"]
     },
     "entity_id": { "type": "string" },
+    "entity_name": { "type": "string" },
     "campaign_id": { "type": "string" },
+    "campaign_name": { "type": "string" },
     "ad_group_id": { "type": "string" },
     "keyword_id": { "type": "string" },
     "keyword_text": { "type": "string" },
@@ -24,6 +29,8 @@
     "action": { "type": "string" },
     "rationale": { "type": "string" },
     "rule_key": { "type": "string" },
+    "reason_code": { "type": "string" },
+    "canonical_action_type": { "type": "string" },
     "priority": { "type": "number" },
     "data_used": { "type": "string" },
     "metric_window": {
@@ -52,6 +59,14 @@
     "proposed_config": { "type": "string" },
     "expected_impact_pct": { "type": "number" },
     "expected_impact_value": { "type": "number" },
+    "account_daily_budget_limit": { "type": "number" },
+    "account_daily_spend": { "type": "number" },
+    "remaining_account_budget": { "type": "number" },
+    "campaign_virtual_budget": { "type": "number" },
+    "campaign_spend_share": { "type": "number" },
+    "campaign_target_share": { "type": "number" },
+    "spend_share_deviation": { "type": "number" },
+    "campaign_classification": { "type": "string" },
     "confidence": { "type": "number", "default": 0 },
     "risk": {
       "type": "string",
@@ -61,7 +76,7 @@
     "approval_status": { "type": "string" },
     "status": {
       "type": "string",
-      "enum": ["proposed", "approved", "rejected", "executing", "executed", "failed", "cancelled", "expired", "pending_approval", "skipped", "rolled_back"],
+      "enum": ["proposed", "pending", "approved", "scheduled", "executing", "confirming", "executed", "completed", "waiting_retry", "conflict_reconciling", "blocked", "failed", "failed_final", "cancelled", "expired", "pending_approval", "skipped", "superseded", "rolled_back"],
       "default": "proposed"
     },
     "queue_status": {
@@ -103,6 +118,11 @@
     "scheduled_for": { "type": "string", "format": "date-time" },
     "next_retry_at": { "type": "string", "format": "date-time" },
     "attempt_count": { "type": "number", "default": 0 },
+    "max_attempts": { "type": "number", "default": 3 },
+    "lock_key": { "type": "string" },
+    "rollback_plan": { "type": "string" },
+    "rollback_status": { "type": "string" },
+    "transport_queue_id": { "type": "string" },
     "last_attempt_at": { "type": "string", "format": "date-time" },
     "settings_source": { "type": "string" },
     "settings_snapshot": { "type": "string" },

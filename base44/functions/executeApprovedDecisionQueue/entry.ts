@@ -5,6 +5,7 @@ import {
   type PriorityClass,
 } from '../../shared/decisionExecutionPolicy.ts';
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
+import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
 
 const MAX_BATCH = 30;
 const API_DELAY_MS = 400;
@@ -100,11 +101,18 @@ Deno.serve(async (request) => {
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
 
     const aid = account.id;
-    const approved = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { amazon_account_id: aid, status: 'approved' },
-      'created_at',
-      MAX_BATCH + 50
+    const [approvedRows, retryRows] = await Promise.all([
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
+      ),
+      base44.asServiceRole.entities.OptimizationDecision.filter(
+        { amazon_account_id: aid, status: 'waiting_retry' }, 'next_retry_at', MAX_BATCH + 50
+      ).catch(() => []),
+    ]);
+    const dueRetries = retryRows.filter((decision: any) =>
+      !decision.next_retry_at || new Date(decision.next_retry_at).getTime() <= Date.now()
     );
+    const approved = [...approvedRows, ...dueRetries];
 
     if (approved.length === 0) {
       const parity = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
@@ -228,9 +236,12 @@ Deno.serve(async (request) => {
     }
 
     const stillApproved = preAutoCancel > 0
-      ? await base44.asServiceRole.entities.OptimizationDecision.filter(
-          { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
-        ).catch(() => [])
+      ? [
+          ...await base44.asServiceRole.entities.OptimizationDecision.filter(
+            { amazon_account_id: aid, status: 'approved' }, 'created_at', MAX_BATCH + 50
+          ).catch(() => []),
+          ...dueRetries.filter((decision: any) => !['cancelled', 'blocked', 'failed_final'].includes(String(decision.status || ''))),
+        ]
       : approved;
 
     if (stillApproved.length === 0) {
@@ -250,7 +261,18 @@ Deno.serve(async (request) => {
     for (const decision of toProcess) {
       if (Date.now() - t0 > 90000) break;
 
+      let lockOwnerId: string | null = null;
       try {
+        if (Number(decision.attempt_count || 0) >= Number(decision.max_attempts || 3)) {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'failed_final',
+            queue_status: 'failed',
+            error_message: 'MAX_ATTEMPTS_EXHAUSTED',
+          }).catch(() => {});
+          results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: 'MAX_ATTEMPTS_EXHAUSTED' });
+          skipped++;
+          continue;
+        }
         const capability = validateAmazonAction({
           action: decision.action,
           execution_mode: decision.execution_mode,
@@ -271,6 +293,66 @@ Deno.serve(async (request) => {
           continue;
         }
 
+        const isCanonical = Boolean(decision.snapshot_id || decision.canonical_action_type || decision.source_function === 'runEconomicBudgetBalancer');
+        let snapshot: any = null;
+        if (isCanonical && decision.snapshot_id) {
+          const rows = await base44.asServiceRole.entities.RepricingSnapshot.filter({ id: decision.snapshot_id }, null, 1).catch(() => []);
+          snapshot = rows[0] || null;
+        }
+        if (isCanonical) {
+          const confidenceRaw = Number(decision.confidence || 0);
+          const governance = evaluateDecisionGovernance({
+            actionType: decision.action,
+            entityType: decision.entity_type,
+            currentValue: decision.value_before ?? decision.current_value,
+            proposedValue: decision.value_after ?? decision.proposed_value,
+            snapshotId: decision.snapshot_id,
+            reasonCode: decision.reason_code || decision.rule_key,
+            reason: decision.rationale,
+            confidence: confidenceRaw > 1 ? confidenceRaw / 100 : confidenceRaw,
+            predictionConfidence: snapshot?.prediction_confidence,
+            economicConfidence: snapshot?.economic_confidence,
+            dataFresh: snapshot?.data_fresh === true,
+            adsDataFresh: snapshot?.ads_data_fresh_at != null,
+            spApiDataFresh: snapshot?.sp_api_data_fresh_at != null,
+            economicsDataFresh: snapshot?.economics_data_fresh_at != null,
+            productEligible: !['NOT_ELIGIBLE', 'OUT_OF_STOCK', 'NOT_BUYABLE', 'PRODUCT_INACTIVE'].includes(String(snapshot?.product_state || '')),
+            listingActive: !['inactive', 'not_found', 'error'].includes(String(snapshot?.listing_status || '').toLowerCase()),
+            offerActive: !['inactive', 'closed', 'not_found'].includes(String(snapshot?.offer_status || '').toLowerCase()),
+            buyable: snapshot?.buyable === true,
+            inStock: Number(snapshot?.inventory_available || 0) > 0,
+            stockCoverageDays: snapshot?.stock_coverage_days,
+            economicsComplete: snapshot?.economic_state !== 'ECONOMICS_PENDING',
+            profitAfterAds: snapshot?.profit_after_ads,
+            marginRate: snapshot?.margin_rate,
+            currentAcos: snapshot?.current_acos,
+            targetAcos: snapshot?.target_acos,
+            safeMaxCpc: snapshot?.safe_max_cpc,
+            economicFloor: snapshot?.economic_floor,
+            competitionFresh: snapshot?.data_fresh === true,
+            winnerProtected: snapshot?.winner_protected === true,
+            sameSkuOrders: snapshot?.same_sku_orders,
+            haloOrders: snapshot?.halo_orders,
+            cooldownActive: false,
+            accountDailyCap: decision.account_daily_budget_limit,
+            accountSpend: decision.account_daily_spend,
+            proposedSpendImpact: decision.expected_impact_value,
+            defensive: snapshot?.risk_state === 'LOSS_CONFIRMED',
+            parentAsin: snapshot?.parent_asin === true,
+            rollbackPlan: decision.rollback_plan,
+          });
+          if (!governance.allowed) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'blocked',
+              queue_status: 'completed',
+              error_message: `GOVERNANCE_BLOCK: ${governance.blockers.map((blocker) => blocker.code).join(',')}`.slice(0, 500),
+            }).catch(() => {});
+            results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, governance });
+            skipped++;
+            continue;
+          }
+        }
+
         // HARD GUARD: bloquear create_keyword se campanha já tem keyword ativa
         // Regra canônica: 1 campanha manual = 1 keyword EXACT
         if (
@@ -283,6 +365,38 @@ Deno.serve(async (request) => {
             decision.campaign_id,
             decision.keyword_text || decision.action || ''
           );
+        }
+
+        if (isCanonical && decision.lock_key) {
+          lockOwnerId = crypto.randomUUID();
+          const lockResponse = await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+            amazon_account_id: aid,
+            lock_key: decision.lock_key,
+            owner_id: lockOwnerId,
+            ttl_ms: 300000,
+            _service_role: true,
+          }).catch((error: any) => ({ data: { ok: false, acquired: false, error: error?.message || String(error) } }));
+          const lock = lockResponse?.data || lockResponse || {};
+          if (lock.acquired !== true) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'waiting_retry',
+              queue_status: 'scheduled',
+              next_retry_at: new Date(Date.now() + 5 * 60000).toISOString(),
+              error_message: 'ENTITY_LOCK_BUSY: outra avaliação ou execução detém o lock canônico.',
+            }).catch(() => {});
+            results.push({ id: decision.id, action: decision.action, ok: false, scheduled: true, reason: 'ENTITY_LOCK_BUSY' });
+            skipped++;
+            lockOwnerId = null;
+            continue;
+          }
+        }
+
+        if (decision.status === 'waiting_retry') {
+          await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+            status: 'approved',
+            queue_status: 'pending',
+            next_retry_at: null,
+          }).catch(() => {});
         }
 
         // Usa o roteador canônico: ajustes de bid são enviados para atualização pareada
@@ -316,6 +430,16 @@ Deno.serve(async (request) => {
       } catch (e: any) {
         results.push({ id: decision.id, action: decision.action, ok: false, error: e.message });
         failed++;
+      } finally {
+        if (lockOwnerId && decision.lock_key) {
+          await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
+            amazon_account_id: aid,
+            lock_key: decision.lock_key,
+            owner_id: lockOwnerId,
+            action: 'release',
+            _service_role: true,
+          }).catch(() => {});
+        }
       }
 
       if (toProcess.indexOf(decision) < toProcess.length - 1) await sleep(API_DELAY_MS);

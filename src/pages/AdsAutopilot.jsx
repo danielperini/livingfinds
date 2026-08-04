@@ -4,7 +4,6 @@ import { loadAllCampaigns, getAutopilotEligible } from '@/lib/campaignUtils';
 import Recommendations from '@/pages/Recommendations';
 import AutopilotKPIBar from '@/components/autopilot/AutopilotKPIBar';
 import AutopilotConfigPanel from '@/components/autopilot/AutopilotConfigPanel';
-import AutopilotDecisionsTable from '@/components/autopilot/AutopilotDecisionsTable';
 import AutopilotAlertsPanel from '@/components/autopilot/AutopilotAlertsPanel';
 import BiddingRulesPanel from '@/components/learner/BiddingRulesPanel';
 import MLLearningPanel from '@/components/learner/MLLearningPanel';
@@ -16,17 +15,18 @@ import AcosViolationPanel from '@/components/autopilot/AcosViolationPanel';
 import GuardrailsPanel from '@/components/autopilot/GuardrailsPanel';
 import AutoCampaignJourneyPanel from '@/components/autopilot/AutoCampaignJourneyPanel';
 import KeywordLifecyclePanel from '@/components/autopilot/KeywordLifecyclePanel';
+import EconomicBudgetBalancerPanel from '@/components/autopilot/EconomicBudgetBalancerPanel';
 import StatusBadge from '@/components/ui/StatusBadge';
 import {
-  RefreshCw, Loader2, Settings, AlertTriangle, History,
-  TrendingDown, Search, Brain, CheckCircle, XCircle,
-  Filter, ChevronDown, ChevronUp, TrendingUp, Clock, Shield,
+  RefreshCw, Loader2, TrendingDown, CheckCircle, XCircle,
+  ChevronDown, ChevronUp, TrendingUp, Clock,
   Package,
 } from 'lucide-react';
 
 // Abas ativas — removidas as mortas (converted, recommendations inline, negatives stub)
 const TABS = [
   { id: 'decisions',       label: '🤖 Decisões IA' },
+  { id: 'balance',         label: '⚖️ Balanceamento' },
   { id: 'guardrails',      label: '🛡 Guardrails' },
   { id: 'journey',         label: '🚀 Jornada AUTO' },
   { id: 'weekly_learning', label: '🧬 Aprendizado Semanal' },
@@ -464,6 +464,8 @@ export default function AdsAutopilot() {
         </div>
       )}
 
+      {tab === 'balance' && <EconomicBudgetBalancerPanel account={account} config={config} />}
+
       {tab === 'journey' && (
         <div className="space-y-8">
           <AutoCampaignJourneyPanel account={account} />
@@ -521,7 +523,7 @@ export default function AdsAutopilot() {
       {tab === 'budget' && <BudgetValidationPanel account={account} />}
       {tab === 'guardrails' && <GuardrailsPanel accountId={account.id} />}
       {tab === 'rules' && <BiddingRulesPanel amazonAccountId={account.id} />}
-      {tab === 'config' && <AutopilotConfigPanel account={account} config={config} onSaved={loadData} />}
+      {tab === 'config' && <AutopilotConfigPanel amazonAccountId={account.id} onConfigSaved={loadData} />}
     </div>
   );
 }

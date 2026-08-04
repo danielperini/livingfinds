@@ -2,300 +2,87 @@
   "timezone": "America/Sao_Paulo",
   "jobs": [
     {
-      "name": "Weekly AI deterministic rule review - Sunday 03:00 BRT",
-      "function": "runWeeklyClaudeRuleReview",
-      "cron": "0 3 * * 0",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Daily deterministic rule outcome monitor - 03:30 BRT",
-      "function": "monitorRulePerformance",
-      "cron": "30 3 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Amazon Ads Reports Poll + Daily AI - every 10 minutes",
+      "name": "Amazon Ads report polling - every 10 minutes",
       "function": "pollAmazonAdsReportJobs",
       "cron": "*/10 * * * *",
       "payload": { "_service_role": true, "max_jobs": 10 }
     },
     {
-      "name": "Fresh same-SKU search-term report - hourly",
-      "function": "refreshSameSkuSearchTermReports",
-      "cron": "22 * * * *",
-      "payload": { "_service_role": true, "force_new": true, "trigger_type": "scheduler_intraday" }
-    },
-    {
-      "name": "Daily active SKU AUTO campaign coverage - 07:10 BRT",
-      "function": "ensureActiveProductCampaignCoverage",
-      "cron": "10 7 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "max_products": 200, "lookback_days": 65, "max_promotions": 50, "run_harvest": false }
-    },
-    {
-      "name": "Daily low-volume product AUTO profit guard - 07:25 BRT",
-      "function": "enforceLowVolumeProductAdsStrategy",
-      "cron": "25 7 * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "daily_low_volume_profit_guard" }
-    },
-    {
-      "name": "AUTO campaign repair queue - odd minutes (staggered from profit guard)",
-      "function": "processAutoCampaignRepairQueueV2",
-      "cron": "1-59/2 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Immediate same-SKU term harvest self-heal - every 20 minutes",
-      "function": "runImmediateSameSkuSearchTermHarvest",
-      "cron": "4,24,44 * * * *",
-      "payload": { "_service_role": true, "max_promotions": 25, "lookback_days": 15, "trigger_type": "scheduler_self_heal" }
-    },
-    {
-      "name": "Repair incomplete search-term promotions - every 30 minutes",
-      "function": "completeIncompleteWeeklyPromotions",
-      "cron": "11,41 * * * *",
-      "payload": { "_service_role": true, "max_promotions": 5 }
-    },
-    {
-      "name": "Scheduled bid and dayparting executor - staggered from report polling",
-      "function": "runScheduledBidAdjustments",
-      "cron": "5,15,25,35,45,55 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Request closed-day Amazon Ads reports - 00:01 BRT",
-      "function": "ensureDailyReportsCurrent",
-      "cron": "1 0 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "SKU Profit Protection - every 2 minutes",
-      "function": "enforceSkuProfitProtection",
-      "cron": "*/2 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Campaign delivery and profit governor - every 15 minutes",
-      "function": "runCampaignDeliveryGovernor",
-      "cron": "12,27,42,57 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Profit-safe campaign bid and budget journey - every 15 minutes",
-      "function": "adjustBidsWithConversion",
-      "cron": "14,29,44,59 * * * *",
-      "payload": { "_service_role": true, "dry_run": false }
-    },
-    {
-      "name": "Manual zero-click delivery diagnosis and safe bid rescue - every 3 hours",
-      "function": "runManualZeroDeliveryBootstrap",
-      "cron": "8 */3 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Daily report freshness self-heal - hourly",
-      "function": "ensureDailyReportsCurrent",
-      "cron": "5 7-23 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Daily Budget Pacing Plan - 00:05 BRT",
-      "function": "runDailyBudgetPacingEngine",
-      "cron": "5 0 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Amazon Intraday Metrics Pipeline",
+      "name": "Amazon intraday campaign metrics - every 15 minutes",
       "function": "syncAmazonIntradayCampaignMetrics",
       "cron": "2,17,32,47 * * * *",
       "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
     },
     {
-      "name": "Winner intraday budget refill after metrics sync - staggered",
-      "function": "runWinnerBudgetRefill",
-      "cron": "8,22,38,52 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Campaign budget floor R$15 - hourly",
-      "function": "redistributeCampaignBudgets",
-      "cron": "10 * * * *",
-      "payload": { "_service_role": true, "mode": "fix_below_minimum" }
-    },
-    {
-      "name": "Motor v8 complete hourly pipeline - staggered from bid executor",
-      "function": "runMotorImediato",
-      "cron": "31 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Confirm canonical Amazon decisions - every 10 minutes",
-      "function": "confirmExecutedDecisions",
-      "cron": "7,17,27,37,47,57 * * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Amazon offer availability verification - every 10 minutes",
+      "name": "Amazon offer and buyability verification - every 10 minutes",
       "function": "syncAmazonOfferAvailability",
       "cron": "1,11,21,31,41,51 * * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "Persistent Product Campaign Pause Guard - every 10 minutes",
-      "function": "autoStockCampaignGuard",
-      "cron": "3,13,23,33,43,53 * * * *",
-      "payload": { "_service_role": true, "enforce_pause_locks": true }
-    },
-    {
-      "name": "Zero-sales reactivation monitor - every 3 hours",
-      "function": "monitorZeroSalesReactivation",
-      "cron": "42 */3 * * *",
+      "name": "Closed-day Amazon reports request - 00:01 BRT",
+      "function": "ensureDailyReportsCurrent",
+      "cron": "1 0 * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "Campaign portfolio health and delivery cycle - daily",
-      "function": "runCampaignPortfolioGrowthCycle",
-      "cron": "45 4 * * *",
-      "payload": { "_service_role": true, "full_expansion": false }
+      "name": "Unified marketplace decision engine - every 15 minutes",
+      "function": "runUnifiedDecisionEngine",
+      "cron": "4,19,34,49 * * * *",
+      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
-      "name": "AUTO winners, Keyword Bank and guarded expansion - weekly",
-      "function": "runCampaignPortfolioGrowthCycle",
-      "cron": "15 6 * * 1",
-      "payload": { "_service_role": true, "full_expansion": true }
+      "name": "Unified daily close, bootstrap-aware audit and repricing - 01:00 BRT",
+      "function": "runUnifiedDecisionEngine",
+      "cron": "0 1 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
     },
     {
-      "name": "Hourly Metrics Bridge and Dayparting Patterns",
-      "function": "rebuildHourlyMetricsFromReports",
-      "cron": "55 * * * *",
-      "payload": { "_service_role": true, "lookback_days": 3 }
+      "name": "Canonical decision executor - every 15 minutes",
+      "function": "executeApprovedDecisionQueue",
+      "cron": "6,21,36,51 * * * *",
+      "payload": { "_service_role": true, "max_decisions": 25 }
     },
     {
-      "name": "Portfolio Daily Budget Pacing",
-      "function": "runIntraDayPacingCycle",
-      "cron": "10,40 6-23 * * *",
-      "payload": { "_service_role": true, "source_function": "scheduler_portfolio_pacing" }
-    },
-    {
-      "name": "Amazon Action Queue - operational windows 00-03 and 13 BRT",
-      "function": "processAmazonNightWindow",
-      "cron": "0 0-3,13 * * *",
+      "name": "Canonical Amazon decision confirmation - every 15 minutes",
+      "function": "confirmExecutedDecisions",
+      "cron": "9,24,39,54 * * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "Amazon Recovery - 06:00 BRT",
-      "function": "runMorningRecovery0600",
-      "cron": "0 6 * * *",
-      "payload": { "_service_role": true, "force": true }
+      "name": "Repricing transport queue - every 5 minutes",
+      "function": "runAutomaticRepricing",
+      "cron": "*/5 * * * *",
+      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20, "transport_only": true }
     },
     {
-      "name": "Amazon Reports Audit ML - 06:40 BRT",
-      "function": "runMorningAmazonSchedule",
-      "cron": "40 6 * * *",
-      "payload": { "_service_role": true, "force": true }
+      "name": "Repricing transport reconciliation - 04:43 BRT",
+      "function": "runAutomaticRepricing",
+      "cron": "43 4 * * *",
+      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100, "transport_only": true }
     },
     {
-      "name": "Daily AUTO+MANUAL winner harvest, Factory and exact promotion - 07:45 BRT",
-      "function": "harvestConvertedSearchTerms",
-      "cron": "45 7 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "max_promotions": 25, "lookback_days": 65, "trigger_type": "scheduled_daily_unified_winner_harvest" }
-    },
-    {
-      "name": "Amazon Ads hourly history - 05:15 BRT",
-      "function": "syncUnifiedAdsReportsHourly",
-      "cron": "15 5 * * *",
-      "payload": { "_service_role": true, "days": 14, "force": true }
-    },
-    {
-      "name": "Full hourly rebuild after Amazon report - 05:35 BRT",
-      "function": "rebuildHourlyMetricsFromReports",
-      "cron": "35 5 * * *",
-      "payload": { "_service_role": true, "full": true, "lookback_days": 30 }
-    },
-    {
-      "name": "Daily Economic Assessment - 08:00 BRT",
-      "function": "runDailyEconomicAssessment",
-      "cron": "0 8 * * *",
-      "payload": { "_service_role": true, "force": true }
-    },
-    {
-      "name": "Rolling Weekly Ads and Economics Report - 08:20 BRT",
-      "function": "runWeeklyAdsPerformanceReport",
-      "cron": "20 8 * * *",
-      "payload": { "_service_role": true, "force": true }
-    },
-    {
-      "name": "Profit-aware daily dayparting - 08:35 BRT",
-      "function": "runDailyDayparting",
-      "cron": "35 8 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "Profit-aware bidding strategy and Top of Search - 08:50 BRT",
-      "function": "applyBiddingStrategyByCampaign",
-      "cron": "50 8 * * *",
-      "payload": { "_service_role": true }
-    },
-    {
-      "name": "SP-API Finance Events freshness self-heal - 05:50 BRT",
+      "name": "Finance events freshness - 05:50 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "50 5 * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "SP-API Finance Events refresh - 13:20 and 20:20 BRT",
+      "name": "Finance events refresh - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",
       "payload": { "_service_role": true }
     },
     {
-      "name": "Pacing full checkpoints - 06, 13, 19 and 22 BRT",
-      "function": "runIntraDayPacingCycle",
-      "cron": "0 6,13,19,22 * * *",
-      "payload": { "_service_role": true, "checkpoint": true, "source_function": "scheduler_full_checkpoint" }
+      "name": "Daily decision outcome monitor - 03:30 BRT",
+      "function": "monitorRulePerformance",
+      "cron": "30 3 * * *",
+      "payload": { "_service_role": true }
     },
     {
-      "name": "Daily Amazon product title enrichment - 08:55 BRT",
-      "function": "enrichProductNames",
-      "cron": "55 8 * * *",
-      "payload": { "_service_role": true, "force_all": true, "trigger_type": "scheduled_daily_title_enrichment" }
-    },
-    {
-      "name": "Daily Amazon API price study - 02:37 BRT",
-      "function": "runAutomaticRepricing",
-      "cron": "37 2 * * *",
-      "payload": { "_service_role": true, "operation": "full_evaluation", "max_products": 200, "recommendation_only": false, "emergency_margin_recovery": true, "force_all_decisions": true, "trigger_type": "scheduled_daily_price_study" }
-    },
-    {
-      "name": "Active SKU competitor study and margin recovery - hourly at :36",
-      "function": "runAutomaticRepricing",
-      "cron": "36 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "operation": "evaluate", "max_products": 200, "recommendation_only": true, "emergency_margin_recovery": true, "force_all_decisions": true, "trigger_type": "scheduled_hourly_margin_recovery" }
-    },
-    {
-      "name": "Repricing price queue - every 5 minutes",
-      "function": "runAutomaticRepricing",
-      "cron": "*/5 * * * *",
-      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20 }
-    },
-    {
-      "name": "Repricing daily reconciliation - 04:43 BRT",
-      "function": "runAutomaticRepricing",
-      "cron": "43 4 * * *",
-      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100 }
-    },
-    {
-      "name": "Amazon Ads absolute bid ceiling audit - every 30 minutes",
-      "function": "bulkSetAllBids",
-      "cron": "9,39 * * * *",
-      "run_on_startup": true,
-      "payload": { "_service_role": true, "bid": 1 }
-    },
-    {
-      "name": "Final daily reports reconciliation - 23:45 BRT",
-      "function": "dailyReportReconciliation",
-      "cron": "45 23 * * *",
+      "name": "Weekly deterministic rule review - Sunday 03:00 BRT",
+      "function": "runWeeklyClaudeRuleReview",
+      "cron": "0 3 * * 0",
       "payload": { "_service_role": true }
     }
   ]

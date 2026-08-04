@@ -1,145 +1,106 @@
-import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 /**
- * runUnifiedDecisionEngine
- *
- * Entrada canônica e única do motor de decisões do LivingFinds.
- * Reconciliador manual, motor determinístico, regras nativas Amazon, migração
- * da fila antiga e monitor de tendência compartilham o mesmo ciclo.
+ * The only decision producer.  It deliberately does not execute Amazon calls:
+ * executeApprovedDecisionQueue and confirmExecutedDecisions own that lifecycle.
  */
+const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
+  try {
+    const result = await base44.asServiceRole.functions.invoke(name, payload);
+    return result?.data || result || { ok: true };
+  } catch (error: any) {
+    return { ok: false, error: error?.response?.data?.error || error?.message || String(error) };
+  }
+};
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
+    if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
-    if (!authenticated && !body._service_role) {
-      return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
-    }
-
-    const payload = {
-      ...body,
+    const accountId = body.amazon_account_id || null;
+    const dailyClose = body.daily_close === true;
+    const dryRun = body.dry_run === true;
+    const correlationId = body.correlation_id || crypto.randomUUID();
+    const common = {
+      amazon_account_id: accountId,
       _service_role: true,
-      source_function: body.source_function || 'runUnifiedDecisionEngine',
-      engine_version: 'unified-v4-repricing',
+      _canonical_orchestrator: 'runUnifiedDecisionEngine',
+      decision_engine_correlation_id: correlationId,
+      dry_run: dryRun,
     };
 
-    const scopeBeforeResponse = await base44.asServiceRole.functions.invoke(
-      'reconcileManualBidCycleScope',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        _service_role: true,
-        skip_sync: body.skip_scope_sync === true,
-      },
-    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-    const scopeBefore = scopeBeforeResponse?.data || scopeBeforeResponse || {};
+    // Previous-day reports must be requested before the daily close.  Intraday
+    // runs only consume already persisted, fresh data.
+    const reportRequest = dailyClose && !body.skip_sync
+      ? await invoke(base44, 'ensureDailyReportsCurrent', common)
+      : { ok: true, skipped: true };
+    const scopeBefore = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
 
-    const bootstrapResponse = await base44.asServiceRole.functions.invoke(
-      'runManualZeroDeliveryBootstrap',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        dry_run: body.dry_run === true,
-        _service_role: true,
-      },
-    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-    const bootstrap = bootstrapResponse?.data || bootstrapResponse || {};
+    // Rebuild first.  Every later action has a historical RepricingSnapshot id.
+    const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
+      ...common,
+      mode: dailyClose || body.bootstrap === true ? 'bootstrap' : 'incremental',
+      daily_close: dailyClose,
+      persist: true,
+      window_minutes: 15,
+    });
+    const snapshotRunId = snapshots.run_id || snapshots.snapshot_run_id || correlationId;
 
-    const result = await base44.asServiceRole.functions.invoke(
-      'runDeterministicDecisionEngine',
-      payload,
-    );
-    const data = result?.data || result || {};
+    const economicAssessment = dailyClose
+      ? await invoke(base44, 'runDailyEconomicAssessment', { ...common, force: true, assessment_date: body.assessment_date || null })
+      : { ok: true, skipped: true };
 
-    // O motor unificado apenas orquestra. Decisao de preco, guardrails e fila
-    // idempotente permanecem centralizados em runAutomaticRepricing.
-    const repricing = body.skip_repricing === true
-      ? { ok: true, skipped: true, reason: 'skip_repricing_requested' }
-      : await base44.asServiceRole.functions.invoke(
-        'runAutomaticRepricing',
-        {
-          amazon_account_id: body.amazon_account_id || null,
-          operation: body.full_repricing_evaluation === true
-            ? 'full_evaluation'
-            : 'evaluate',
-          // Uma simulacao do motor central nunca pode criar acao de preco.
-          recommendation_only:
-            body.dry_run === true || body.repricing_recommendation_only === true,
-          trigger: 'runUnifiedDecisionEngine',
-          decision_engine_correlation_id: data?.correlationId || null,
-          _service_role: true,
-        },
-      ).then((response: any) => response?.data || response || {})
-        .catch((error: any) => ({
-          ok: false,
-          error: error?.response?.data?.error || error?.message || String(error),
-        }));
+    const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
 
-    const nativeRulesResponse = await base44.asServiceRole.functions.invoke(
-      'syncAmazonScheduleBidRules',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        dry_run: body.dry_run === true,
-        _service_role: true,
-      },
-    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-    const nativeRules = nativeRulesResponse?.data || nativeRulesResponse || {};
+    // Classification/audit happens before bids. Legacy engines may add non-bid
+    // observations, but cannot execute or produce bid/budget decisions here.
+    const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
+      ...common,
+      skip_economic_bid_budget: true,
+      skip_direct_execution: true,
+      daily_close: dailyClose,
+      snapshot_run_id: snapshotRunId,
+    });
+    const economicBalancer = await invoke(base44, 'runEconomicBudgetBalancer', {
+      ...common,
+      mode: dailyClose || body.bootstrap === true ? 'all' : 'incremental',
+      skip_sync: true,
+      queue_only: true,
+      snapshot_run_id: snapshotRunId,
+      daily_close: dailyClose,
+    });
+    const repricing = body.skip_repricing === true ? { ok: true, skipped: true } : await invoke(base44, 'runAutomaticRepricing', {
+      ...common,
+      operation: dailyClose || body.full_repricing_evaluation === true ? 'full_evaluation' : 'evaluate',
+      recommendation_only: dryRun || body.repricing_recommendation_only === true,
+      snapshot_run_id: snapshotRunId,
+      daily_close: dailyClose,
+      trigger: 'runUnifiedDecisionEngine',
+    });
 
-    // Remove apenas ações legadas ainda pendentes. O histórico executado é mantido.
-    const legacyQueueResponse = await base44.asServiceRole.functions.invoke(
-      'reconcileLegacyDaypartingQueue',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        _service_role: true,
-      },
-    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-    const legacyQueue = legacyQueueResponse?.data || legacyQueueResponse || {};
+    // One pipeline is authoritative for AUTO, manual EXACT, legacy phrase/broad
+    // and product-targeting search terms. It is read-only with regard to Amazon.
+    const searchTerms = dailyClose || body.bootstrap === true
+      ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', { ...common, lookback_days: 65, max_promotions: 25, queue_only: true })
+      : { ok: true, skipped: true };
+    const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
-    const scopeAfterResponse = await base44.asServiceRole.functions.invoke(
-      'reconcileManualBidCycleScope',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        _service_role: true,
-        skip_sync: true,
-      },
-    ).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
-    const scopeAfter = scopeAfterResponse?.data || scopeAfterResponse || {};
-
-    const trendMonitorResponse = await base44.asServiceRole.functions.invoke(
-      'runAcosTrendMonitor',
-      {
-        amazon_account_id: body.amazon_account_id || null,
-        trigger: 'runUnifiedDecisionEngine',
-        _service_role: true,
-      },
-    ).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
-    const trendMonitor = trendMonitorResponse?.data || trendMonitorResponse || {};
-
+    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, deterministic, economicBalancer, repricing, searchTerms, scopeAfter };
     return Response.json({
-      ok: data?.ok !== false && repricing?.ok !== false &&
-        scopeAfter?.ok !== false && nativeRules?.ok !== false &&
-        legacyQueue?.ok !== false,
-      engine: 'unified',
-      engine_version: 'unified-v4-repricing',
-      delegated_to: 'runDeterministicDecisionEngine',
-      repricing_delegated_to: 'runAutomaticRepricing',
-      amazon_account_id: body.amazon_account_id || null,
-      manual_bid_scope_before: scopeBefore,
-      manual_zero_delivery_bootstrap: bootstrap,
-      result: data,
-      repricing,
-      amazon_schedule_bid_rules: nativeRules,
-      legacy_dayparting_queue: legacyQueue,
-      manual_bid_scope_after: scopeAfter,
-      acos_trend_monitor: trendMonitor,
+      ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
+      engine: 'unified-marketplace-decision-governance',
+      engine_version: 'unified-v5-canonical-snapshot',
+      correlation_id: correlationId,
+      snapshot_run_id: snapshotRunId,
+      daily_close: dailyClose,
+      dry_run: dryRun,
+      execution: 'queued_only; separate executor and confirmation schedules own Amazon mutations',
+      stages,
     });
   } catch (error: any) {
-    return Response.json(
-      {
-        ok: false,
-        engine: 'unified',
-        error: error?.message || 'Falha no motor unificado de decisões',
-      },
-      { status: 500 },
-    );
+    return Response.json({ ok: false, engine: 'unified-marketplace-decision-governance', error: error?.message || 'Falha no motor unificado' }, { status: 500 });
   }
 });

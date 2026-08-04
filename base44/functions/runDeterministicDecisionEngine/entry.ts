@@ -692,6 +692,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const force_batch = body.force_batch === true;
+    const skipEconomicBidBudget = body.skip_economic_bid_budget === true;
 
     // ── Resolver conta ────────────────────────────────────────────────────
     let account: any = null;
@@ -2057,7 +2058,6 @@ Deno.serve(async (req) => {
       const campAgeHours = campCreatedAt ? (Date.now() - new Date(campCreatedAt).getTime()) / 3600000 : 999;
       const hasMinExposureTime = campAgeHours >= FB.NO_SALES_FIRST_REVIEW_HOURS;
       const campAgeDays = campAgeHours / 24;
-      const canPauseCampaign = campAgeDays >= FB.NO_SALES_CAMPAIGN_PAUSE_DAYS;
       const isSecondReview = campAgeDays >= FB.NO_SALES_SECOND_REVIEW_DAYS;
       const isNewProduct = product?.is_new_asin === true || campAgeDays < FB.NEW_PRODUCT_MAX_LEARNING_DAYS;
 
@@ -2112,32 +2112,28 @@ Deno.serve(async (req) => {
           && noConversionEvidence.level !== 'wait_for_data') {
         const iKey = `no_conversion|${aid}|${entityId}|${today}`;
         if (!usedIdemKeys.has(iKey)) {
-          const shouldPause = canPauseCampaign
-            && noConversionEvidence.level === 'pause_candidate'
-            && !isNewProduct;
           const reductionPct = attributionConfidence === 'complete'
             ? Math.min(
+                0.12,
                 settings.max_bid_decrease_pct,
                 Math.max(0.10, noConversionEvidence.recommended_reduction_pct),
               )
             : Math.min(0.10, settings.max_bid_decrease_pct);
-          const newBid = shouldPause
-            ? settings.min_bid
-            : clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
-          const phase = canPauseCampaign ? '3ª revisão (14d+)' : isSecondReview ? '2ª revisão (10d+)' : '1ª revisão (7d+)';
+          const newBid = clamp(currentBid * (1 - reductionPct), settings.min_bid, settings.max_bid);
+          const phase = campAgeDays >= FB.NO_SALES_CAMPAIGN_PAUSE_DAYS ? '3ª revisão (14d+)' : isSecondReview ? '2ª revisão (10d+)' : '1ª revisão (7d+)';
           const confidence = noConversionEvidence.level === 'pause_candidate'
             ? 90
             : noConversionEvidence.level === 'reduce_strong' ? 82 : 70;
           const nextReviewDays = noConversionEvidence.level === 'reduce_soft' ? 5 : 3;
           decisions.push(buildDecision(aid, correlationId, {
-            decision_type: shouldPause ? 'reduce_waste' : 'bid_change',
+            decision_type: 'bid_change',
             entity_type: 'keyword', entity_id: entityId,
             campaign_id: kw.campaign_id, keyword_id: kw.keyword_id, asin: resolvedAsin,
-            keyword_text: kw.keyword_text, action: shouldPause ? 'pause_keyword' : 'set_bid',
+            keyword_text: kw.keyword_text, action: 'set_bid',
             value_before: currentBid, value_after: newBid,
-            rationale: `[${phase}] ZERO conversões após ${kw_clicks} cliques (${noConversionEvidence.click_multiple}× os ${noConversionEvidence.expected_clicks_per_order} cliques esperados por pedido) e R${kw_spend.toFixed(2)} de gasto (${noConversionEvidence.spend_multiple ?? 0}× o limite de aquisição R${noConvMinSpend.toFixed(2)}). Intenção: ${kwIntent?.intent_type || 'desconhecida'}. ${shouldPause ? 'PAUSA — baixa relevância persistente, maturidade e evidência financeira confirmadas.' : `Bid reduzido ${Math.round(reductionPct * 100)}%.`}`,
-            rule_key: shouldPause ? 'no_conversion_pause' : 'no_conversion_reduce',
-            risk: shouldPause ? 'medium' : 'low', priority: PRIORITY.waste_reduction,
+            rationale: `[${phase}] ZERO conversões após ${kw_clicks} cliques (${noConversionEvidence.click_multiple}× os ${noConversionEvidence.expected_clicks_per_order} cliques esperados por pedido) e R${kw_spend.toFixed(2)} de gasto (${noConversionEvidence.spend_multiple ?? 0}× o limite de aquisição R${noConvMinSpend.toFixed(2)}). Intenção: ${kwIntent?.intent_type || 'desconhecida'}. Bid reduzido ${Math.round(reductionPct * 100)}%; pausa por ausência de venda é proibida.`,
+            rule_key: 'no_conversion_reduce',
+            risk: 'low', priority: PRIORITY.waste_reduction,
             search_intent: kwIntent, settings_source: settings.source, settings_snapshot: settingsSnapshot,
             idempotency_key: iKey, opportunity_state: 'no_opportunity',
             confidence,
@@ -2178,7 +2174,7 @@ Deno.serve(async (req) => {
             goal_policy_snapshot: JSON.stringify(keywordGoalPolicy),
           }));
           entityChangedThisCycle.set(entityId, 'no_conversion');
-          if (shouldPause) stats.paused++; else stats.bid_reduce++;
+          stats.bid_reduce++;
         }
         continue;
       }
@@ -2432,12 +2428,14 @@ Deno.serve(async (req) => {
     // ≥95% de utilização via Budget Usage API (Campaign.current_spend),
     // confirma na Amazon antes de atualizar localmente. Cooldown 24h, +20% max.
     const campaignBudgetDecisions: any[] = []; // mantido vazio — rescue executa diretamente
-    await runImmediateBudgetRescue({
-      aid, now, today, correlationId, base44,
-      campaigns, campWindowMetrics, acosByAsin, productMap, campaignAsinMap,
-      authorizedEligibleAsins, settings, dataFreshness,
-      usedIdemKeys, entityChangedThisCycle, account, stats,
-    });
+    if (!skipEconomicBidBudget) {
+      await runImmediateBudgetRescue({
+        aid, now, today, correlationId, base44,
+        campaigns, campWindowMetrics, acosByAsin, productMap, campaignAsinMap,
+        authorizedEligibleAsins, settings, dataFreshness,
+        usedIdemKeys, entityChangedThisCycle, account, stats,
+      });
+    }
 
     // ── 10c. Guardrail global de orçamento ────────────────────────────────
     if (budgetGuardrailActive) {
@@ -2450,7 +2448,13 @@ Deno.serve(async (req) => {
     }
 
     // Combinar decisões (rescue já executou diretamente — não entra no allDecisions)
-    const allDecisions = [...decisions, ...campaignBudgetDecisions];
+    const economicBidBudgetActions = new Set([
+      'set_bid', 'update_bid', 'increase_bid', 'reduce_bid',
+      'set_budget', 'update_budget', 'increase_budget', 'reduce_budget',
+    ]);
+    const allDecisions = [...decisions, ...campaignBudgetDecisions].filter((decision: any) =>
+      !skipEconomicBidBudget || !economicBidBudgetActions.has(String(decision.action || ''))
+    );
     for (const decision of allDecisions) {
       decision.data_window_start = decision.data_window_start || cutoff30d;
       decision.data_window_end = decision.data_window_end || latestMetricsDate;
@@ -2578,7 +2582,7 @@ Deno.serve(async (req) => {
     }
 
     // ── 11b. Disparar execução imediata (fire-and-forget) ────────────────
-    if (saved > 0) {
+    if (saved > 0 && body._canonical_orchestrator !== 'runUnifiedDecisionEngine' && body.skip_direct_execution !== true) {
       base44.asServiceRole.functions.invoke('executeApprovedDecisionQueue', {
         amazon_account_id: aid,
         _service_role: true,
@@ -2616,6 +2620,7 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: true,
       engine: 'unified-strategic-v8',
+      economic_bid_budget_delegated: skipEconomicBidBudget,
       correlationId,
       data_freshness: dataFreshness,
       data_age_hours: Math.round(dataAge),

@@ -247,6 +247,12 @@ Deno.serve(async (req) => {
         const campaign = campaignById.get(campaignId);
         const campaignType = campaignTypeOf(campaign);
         const rawMatchType = String(row.matchType || row.keywordType || '').toLowerCase();
+        const normalizedMatchType = canonicalMatchType(rawMatchType, campaignType);
+        const sourceType = campaignType === 'AUTO' ? 'AUTO_SEARCH_TERM'
+          : String(row.targetingExpression || row.targetExpression || '').trim() ? 'PRODUCT_TARGETING_SEARCH_TERM'
+          : normalizedMatchType === 'exact' ? 'MANUAL_EXACT_SEARCH_TERM'
+          : normalizedMatchType === 'phrase' ? 'MANUAL_PHRASE_SEARCH_TERM'
+          : 'MANUAL_BROAD_SEARCH_TERM';
         const product = resolveAdvertisedProduct(row);
         const attribution = resolveSameSkuAttribution(row);
         const impressions = Number(row.impressions || 0);
@@ -264,9 +270,16 @@ Deno.serve(async (req) => {
           keyword_id: keywordId,
           keyword_text: row.keyword || row.keywordText || '',
           keyword_type: row.keywordType || '',
-          match_type: canonicalMatchType(rawMatchType, campaignType),
+          match_type: normalizedMatchType,
           search_term: term,
           normalized_search_term: normalizedTerm,
+          search_term_original: term,
+          search_term_normalized: normalizedTerm,
+          campaign_type: campaignType,
+          targeting_type: campaign?.targeting_type || (campaignType === 'AUTO' ? 'AUTO' : 'MANUAL'),
+          target_id: String(row.targetingId || row.targetId || keywordId || ''),
+          target_expression: String(row.targetingExpression || row.targetExpression || ''),
+          source_type: sourceType,
           advertised_asin: product.asin,
           advertised_sku: product.sku,
           sku_resolution_status: product.status,
@@ -290,9 +303,13 @@ Deno.serve(async (req) => {
           total_orders: attribution.totalOrders,
           total_sales: attribution.totalSales,
           same_sku_orders: attribution.sameSkuOrders,
+          same_sku_units: attribution.sameSkuOrders,
           same_sku_sales: attribution.sameSkuSales,
           halo_orders: attribution.haloOrders,
+          halo_units: attribution.haloOrders,
           halo_sales: attribution.haloSales,
+          same_asin_order: attribution.sameSkuOrders > 0,
+          halo_order: attribution.haloOrders > 0,
           same_sku_attribution_verified: attribution.verified,
           attribution_window_days: attribution.windowDays,
           attribution_source: attribution.source,
@@ -309,6 +326,7 @@ Deno.serve(async (req) => {
           performance_window: `${job.start_date || date}|${job.end_date || date}`,
           unique_key: [accountId, campaignId, adGroupId, sourceIdentity, normalizedTerm, date].join('|'),
           synced_at: now,
+          metrics_fresh_at: now,
           last_seen_at: `${date}T23:59:59-03:00`,
           last_evaluated_at: now,
           evaluation_count: 1,

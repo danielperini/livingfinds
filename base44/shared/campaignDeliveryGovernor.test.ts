@@ -46,7 +46,7 @@ Deno.test('zero impressão permite apenas bootstrap controlado', () => {
   equal(result.code, 'ZERO_IMPRESSION_BID_BOOTSTRAP', 'código');
 });
 
-Deno.test('impressões sem clique substituem termo e nunca aumentam bid', () => {
+Deno.test('impressões sem clique acionam guard de bid sem pausa ou substituição', () => {
   const result = classifyDelivery({
     ageHours: 15 * 24,
     metricsFresh: true,
@@ -61,11 +61,11 @@ Deno.test('impressões sem clique substituem termo e nunca aumentam bid', () => 
     breakEvenAcos: 25,
     targetAcos: 15,
   });
-  equal(result.action, 'replace_term', 'ação');
-  equal(result.code, 'IMPRESSIONS_NO_CLICK_REPLACE_TERM', 'código');
+  equal(result.action, 'profit_guard', 'ação');
+  equal(result.code, 'IMPRESSIONS_NO_CLICK_BID_GUARD', 'código');
 });
 
-Deno.test('cliques sem venda só substituem após redução e evidência madura', () => {
+Deno.test('cliques sem venda continuam em redução gradual mesmo com evidência madura', () => {
   const result = classifyDelivery({
     ageHours: 20 * 24,
     metricsFresh: true,
@@ -87,8 +87,8 @@ Deno.test('cliques sem venda só substituem após redução e evidência madura'
     persistentLowRelevance: true,
     attributionConfidence: 'complete',
   });
-  equal(result.action, 'replace_term', 'ação');
-  equal(result.code, 'CLICKS_NO_SALE_REPLACE_TERM', 'código');
+  equal(result.action, 'profit_guard', 'ação');
+  equal(result.code, 'NO_CONVERSION_REDUCE_STRONG', 'código');
 });
 
 Deno.test('economia ausente não é interpretada como perda estrutural', () => {
@@ -107,7 +107,7 @@ Deno.test('margem negativa validada pausa todos os ads', () => {
   equal(result.blocked, true, 'bloqueio');
 });
 
-Deno.test('horário sem venda e acima do limite é pausado com atribuição completa', () => {
+Deno.test('horário sem venda e acima do limite delega redução sem pausar', () => {
   const result = classifyCurrentHour({
     sampleDays: 14,
     clicks: 12,
@@ -119,7 +119,8 @@ Deno.test('horário sem venda e acima do limite é pausado com atribuição comp
     targetAcos: 15,
     attributionConfidence: 'complete',
   });
-  equal(result.action, 'pause', 'ação');
+  equal(result.action, 'hold', 'ação');
+  equal(result.code, 'UNPROFITABLE_HOUR_BID_GUARD', 'código');
 });
 
 Deno.test('horário rentável reativa apenas campanha pausada pelo governador', () => {

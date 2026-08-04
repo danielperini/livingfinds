@@ -18,7 +18,7 @@ Deno.serve(async (request) => {
       const rows = await base44.asServiceRole.entities.OptimizationDecision.filter({ id }, null, 1).catch(() => []);
       const decision = rows[0];
       if (decision?.action === 'pause_campaign') pauseIds.push(id);
-      else if (decision && BID_ACTIONS.has(decision.action)) pairedBidIds.push(id);
+      else if (decision && BID_ACTIONS.has(decision.action) && decision.entity_type === 'keyword') pairedBidIds.push(id);
       else otherIds.push(id);
     }
 
