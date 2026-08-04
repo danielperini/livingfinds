@@ -171,7 +171,7 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
   if (!input.economicsComplete || input.safeMaxCpc <= 0) return block('ECONOMICS_INCOMPLETE', 'Economia ou CPC seguro indisponível.');
   if (input.cooldownActive) return block('COOLDOWN_ACTIVE', 'Já houve alteração na janela de cooldown.');
   if (input.winnerProtected) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU e lucro protegem a entidade até a próxima janela.', 99, 12);
-  if (input.ageHours < 6) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION', 'Primeiras seis horas reservadas para observação.', 98, 6);
+  if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas reservadas para observação; somente risco financeiro crítico pode usar rota defensiva separada.', 98, 48);
 
   if (input.impressions <= 0 && input.clicks <= 0) {
     if (input.currentBid >= input.safeMaxCpc) return block('SAFE_CPC_CEILING', 'Sem impressões, mas o bid já alcançou o CPC seguro.');

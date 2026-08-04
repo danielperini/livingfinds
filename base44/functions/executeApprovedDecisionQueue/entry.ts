@@ -300,6 +300,17 @@ Deno.serve(async (request) => {
           snapshot = rows[0] || null;
         }
         if (isCanonical) {
+          const priorEntityDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
+            amazon_account_id: aid,
+            entity_id: decision.entity_id,
+          }, '-executed_at', 10).catch(() => []);
+          const executorCooldownActive = priorEntityDecisions.some((prior: any) => {
+            if (String(prior.id || '') === String(decision.id || '')) return false;
+            const isBid = /bid/i.test(String(prior.canonical_action_type || prior.action || prior.decision_type || ''));
+            const changedAt = new Date(String(prior.executed_at || prior.approved_at || prior.created_at || 0)).getTime();
+            return isBid && Number.isFinite(changedAt) && changedAt >= Date.now() - 48 * 3600000 &&
+              !['failed', 'cancelled', 'rejected', 'skipped', 'blocked'].includes(String(prior.status || ''));
+          });
           const confidenceRaw = Number(decision.confidence || 0);
           const governance = evaluateDecisionGovernance({
             actionType: decision.action,
@@ -333,7 +344,7 @@ Deno.serve(async (request) => {
             winnerProtected: snapshot?.winner_protected === true,
             sameSkuOrders: snapshot?.same_sku_orders,
             haloOrders: snapshot?.halo_orders,
-            cooldownActive: false,
+            cooldownActive: executorCooldownActive,
             accountDailyCap: decision.account_daily_budget_limit,
             accountSpend: decision.account_daily_spend,
             proposedSpendImpact: decision.expected_impact_value,

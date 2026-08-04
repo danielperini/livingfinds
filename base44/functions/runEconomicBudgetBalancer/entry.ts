@@ -487,6 +487,13 @@ Deno.serve(async (request) => {
 
         let canonicalBid: ReturnType<typeof buildCanonicalBidDecision> | null = null;
         if (['increase_bid', 'reduce_bid'].includes(adjustment.action) && bidEntity) {
+          const bidCooldownActive = priorDecisions.some((decision) => {
+            const isSameEntity = String(decision.entity_id || '') === String(bidEntity.entityId);
+            const isBidAction = /bid/i.test(String(decision.canonical_action_type || decision.action || decision.decision_type || ''));
+            const changedAt = new Date(String(decision.executed_at || decision.approved_at || decision.created_at || 0)).getTime();
+            return isSameEntity && isBidAction && Number.isFinite(changedAt) && changedAt >= now - 48 * 3600000 &&
+              !['failed', 'cancelled', 'rejected', 'skipped', 'blocked'].includes(String(decision.status || ''));
+          });
           const priorReductionCount = priorDecisions.filter((decision) =>
             String(decision.entity_id || '') === String(bidEntity.entityId) &&
             Number(decision.value_after) < Number(decision.value_before) &&
@@ -507,7 +514,7 @@ Deno.serve(async (request) => {
             structurallyComplete: row.complete,
             dataFresh: row.fresh,
             economicsComplete: row.econ.available,
-            cooldownActive: false,
+            cooldownActive: bidCooldownActive,
             pendingInsertion: ['pending', 'pending_insertion', 'processing', 'draft'].includes(lower(row.campaign.amazon_status || row.campaign.state)),
             winnerProtected: row.canonicalSnapshot?.winner_protected === true || row.classification === 'PROTECTED_WINNER',
             lowVolumeGuarded: row.lowVolume,
@@ -590,7 +597,10 @@ Deno.serve(async (request) => {
         }
 
         const valueBefore = isBudget ? currentBudget : bidEntity.currentBid;
-        const evaluationDueAt = new Date(Date.now() + adjustment.nextReviewHours * 3600000).toISOString();
+        // Bid exige 48h de cooldown e reavaliação somente após 72h. Budget
+        // permanece recomendação auditável e não entra na fila automática.
+        const reviewHours = isBudget ? adjustment.nextReviewHours : 72;
+        const evaluationDueAt = new Date(Date.now() + reviewHours * 3600000).toISOString();
         const evidence = {
           snapshot_id: row.canonicalSnapshot?.id || null,
           snapshot_key: row.canonicalSnapshot?.snapshot_key || null,
@@ -748,13 +758,13 @@ Deno.serve(async (request) => {
           campaign_classification: row.classification,
           confidence: adjustment.confidence / 100,
           decision_confidence_level: adjustment.confidence >= 90 ? 'high' : adjustment.confidence >= 75 ? 'medium' : 'low',
-          risk: adjustment.action === 'increase_budget' ? 'medium' : 'low',
-          requires_approval: false,
-          approval_status: 'auto_approved',
-          status: 'approved',
-          queue_status: 'pending',
+          risk: adjustment.action === 'increase_budget' ? 'high' : 'low',
+          requires_approval: isBudget,
+          approval_status: isBudget ? 'pending_manual_review' : 'auto_approved',
+          status: isBudget ? 'pending_approval' : 'approved',
+          queue_status: isBudget ? 'scheduled' : 'pending',
           execution_channel: SOURCE,
-          execution_mode: 'EXECUTE_NOW',
+          execution_mode: isBudget ? 'MANUAL_REVIEW' : 'EXECUTE_NOW',
           priority_class: row.classification === 'OVERSHARE_NO_CONVERSION' ? 'P1' : 'P2',
           confirmation_required: true,
           confirmation_status: 'pending',
@@ -779,7 +789,7 @@ Deno.serve(async (request) => {
           intervention_state: action,
           evaluation_due_at: evaluationDueAt,
           cooldown_until: evaluationDueAt,
-          next_review_days: adjustment.nextReviewHours / 24,
+          next_review_days: reviewHours / 24,
           idempotency_key: key,
           lock_key: canonicalEntityLockKey({
             accountId,
