@@ -471,7 +471,7 @@
     },
     "market_price_source": {
       "type": "string",
-      "description": "Provedor que retornou os dados: zinc ou scrapingbee"
+      "description": "Fonte técnica dos preços públicos, como Amazon SP-API e Zyte."
     },
     "market_price_provider": {
       "type": "string",
