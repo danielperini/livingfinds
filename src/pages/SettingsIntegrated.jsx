@@ -25,6 +25,12 @@ export default function SettingsIntegrated() {
             1,
           ).catch(() => []);
           if (active) setEnabled(settings?.[0]?.dayparting_enabled !== false);
+
+          await base44.functions.invoke('syncDaypartingConfiguration', {
+            amazon_account_id: current.id,
+            bootstrap_default_rules: true,
+            force_holidays: true,
+          }).catch(() => null);
         }
       } finally {
         if (active) setLoading(false);
@@ -34,21 +40,21 @@ export default function SettingsIntegrated() {
   }, []);
 
   return (
-    <>
+    <div className="w-full min-w-0 flex flex-col items-start">
       <Settings />
-      <section className="px-6 pb-10 max-w-3xl w-full">
-        <div className="mb-3 text-left">
+      <section className="w-full max-w-3xl px-6 pb-10 self-start text-left">
+        <div className="mb-3">
           <h2 className="text-base font-semibold text-white">Dayparting</h2>
           <p className="text-xs text-slate-500 mt-1">
             Agendamento central de campanhas, bids e placements. As regras são persistidas em AmazonScheduledRule e executadas pelo motor existente.
           </p>
         </div>
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 gap-4 w-full">
           {loading
             ? <div className="bg-surface-1 border border-surface-2 rounded-xl p-6"><Loader2 className="w-5 h-5 animate-spin text-cyan" /></div>
             : <DaypartingPanel account={account} enabled={enabled} />}
         </div>
       </section>
-    </>
+    </div>
   );
 }
