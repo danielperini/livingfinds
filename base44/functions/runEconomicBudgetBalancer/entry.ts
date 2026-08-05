@@ -55,18 +55,6 @@ async function list(entity: any, filters: Record<string, unknown>, sort = '-upda
   return entity.filter(filters, sort, limit).catch(() => []);
 }
 
-function mapCampaignRows(rows: any[]): Map<string, any[]> {
-  const result = new Map<string, any[]>();
-  for (const row of rows) {
-    const id = String(row?.campaign_id || row?.amazon_campaign_id || '');
-    if (!id) continue;
-    const current = result.get(id) || [];
-    current.push(row);
-    result.set(id, current);
-  }
-  return result;
-}
-
 function latestIntradayByCampaign(rows: any[]): Map<string, any> {
   const result = new Map<string, any>();
   const sorted = [...rows].sort((a, b) =>
@@ -284,8 +272,6 @@ Deno.serve(async (request) => {
         list(base44.asServiceRole.entities.SearchTermPromotion, { amazon_account_id: accountId }, '-updated_at', 10000),
       ]);
 
-      // PerformanceSettings é a fonte editável pelo usuário. AutopilotConfig
-      // mantém compatibilidade apenas para campos não expostos na tela.
       const rawConfig = { ...(configRows[0] || {}), ...(performanceRows[0] || {}) };
       const config = resolveEconomicBalancerConfig(rawConfig);
       const rolloutPhase = String(rawConfig.unified_rollout_phase || 'dry_run');
@@ -355,9 +341,12 @@ Deno.serve(async (request) => {
 
       const totalSpend = prepared.reduce((sum, row) => sum + row.metrics.spend, 0);
       const remainingBudget = roundMoney(Math.max(0, config.accountDailyBudgetLimit - totalSpend));
+      const reservedPendingSpend = priorDecisions
+        .filter((decision) => ['approved', 'scheduled', 'executing', 'confirming'].includes(String(decision.status || '')))
+        .reduce((sum, decision) => sum + Math.max(0, finite(decision.expected_impact_value)), 0);
+      const accountCommittedSpend = roundMoney(totalSpend + reservedPendingSpend);
+      const accountOutOfBudget = config.accountDailyBudgetLimit > 0 && accountCommittedSpend >= config.accountDailyBudgetLimit;
 
-      // Recuperação de entrega antiga vem antes de ajustes incrementais: uma
-      // campanha elegível com 7+ dias sem clique não pode ficar atrás na fila.
       const decisionOrder = [...prepared].sort((left, right) => {
         const staleZeroDelivery = (row: any) => row.age >= 168 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 ? 1 : 0;
         return staleZeroDelivery(right) - staleZeroDelivery(left) || right.age - left.age;
@@ -374,6 +363,7 @@ Deno.serve(async (request) => {
           structurallyComplete: row.complete,
           economicsAvailable: row.econ.available,
           inStock: row.productEligibility.eligible,
+          accountOutOfBudget,
           ...row.metrics,
           spendShare: row.spendShare,
           targetShare: 0,
@@ -382,11 +372,9 @@ Deno.serve(async (request) => {
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
-        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
+        if (!accountOutOfBudget && row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
           row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
           row.econ.available && row.productEligibility.eligible) {
-          // A promoção AUTO validada é evidência de intenção; recebe orçamento
-          // de entrada, enquanto o governador paralelo ajusta o bid seguro.
           row.classification = 'PROTECTED_WINNER';
         }
       }
@@ -426,6 +414,7 @@ Deno.serve(async (request) => {
           structurallyComplete: row.complete,
           economicsAvailable: row.econ.available,
           inStock: row.productEligibility.eligible,
+          accountOutOfBudget,
           ...row.metrics,
           spendShare: row.spendShare,
           targetShare: row.targetShare,
@@ -434,14 +423,14 @@ Deno.serve(async (request) => {
           acos: row.acos,
           targetAcos: row.econ.targetAcos,
         }, config);
-        if (row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
+        if (!accountOutOfBudget && row.promotedFromAuto && upper(row.campaign.targeting_type) === 'MANUAL' &&
           row.metrics.impressions <= 0 && row.metrics.clicks <= 0 && row.metrics.spend <= 0 &&
           row.econ.available && row.productEligibility.eligible) {
           row.classification = 'PROTECTED_WINNER';
         }
         classificationCounts[row.classification] = (classificationCounts[row.classification] || 0) + 1;
 
-        if (mode === 'zero_delivery_only' && !['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS', 'LOW_VOLUME_GUARDED'].includes(row.classification)) continue;
+        if (mode === 'zero_delivery_only' && !['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS', 'LOW_VOLUME_GUARDED', 'ACCOUNT_OUT_OF_BUDGET'].includes(row.classification)) continue;
         if (changesThisHour >= config.maxChangesPerHour) {
           blocked.push({ campaign_id: row.campaignId, classification: row.classification, reason: 'MAX_CHANGES_PER_HOUR' });
           continue;
@@ -451,7 +440,7 @@ Deno.serve(async (request) => {
         const provisionalAction = row.classification === 'PROTECTED_WINNER' ? 'increase_budget'
           : ['NEW_NO_IMPRESSIONS', 'NEW_IMPRESSIONS_NO_CLICKS'].includes(row.classification) ? 'increase_bid'
             : 'reduce_bid';
-        const bidEntity = provisionalAction === 'increase_budget' ? null : chooseBidEntity({
+        const bidEntity = ['PROTECTED_WINNER', 'ACCOUNT_OUT_OF_BUDGET'].includes(row.classification) ? null : chooseBidEntity({
           campaign: row.campaign,
           classification: row.classification,
           action: provisionalAction,
@@ -597,8 +586,6 @@ Deno.serve(async (request) => {
         }
 
         const valueBefore = isBudget ? currentBudget : bidEntity.currentBid;
-        // Bid exige 48h de cooldown e reavaliação somente após 72h. Budget
-        // permanece recomendação auditável e não entra na fila automática.
         const reviewHours = isBudget ? adjustment.nextReviewHours : 72;
         const evaluationDueAt = new Date(Date.now() + reviewHours * 3600000).toISOString();
         const evidence = {
@@ -606,6 +593,8 @@ Deno.serve(async (request) => {
           snapshot_key: row.canonicalSnapshot?.snapshot_key || null,
           account_daily_budget_limit: config.accountDailyBudgetLimit,
           account_daily_spend: roundMoney(totalSpend),
+          account_committed_spend: accountCommittedSpend,
+          account_out_of_budget: accountOutOfBudget,
           remaining_account_budget: remainingBudget,
           hours_remaining_today: Math.max(0, 24 - Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date()))),
           campaign_virtual_budget: allocation.virtualBudget,
@@ -694,7 +683,7 @@ Deno.serve(async (request) => {
           cooldownActive: false,
           accountDailyCap: config.accountDailyBudgetLimit,
           accountSpend: totalSpend,
-          reservedPendingSpend: priorDecisions.filter((decision) => ['approved', 'scheduled', 'executing', 'confirming'].includes(String(decision.status || ''))).reduce((sum, decision) => sum + Math.max(0, finite(decision.expected_impact_value)), 0),
+          reservedPendingSpend,
           proposedSpendImpact: isBudget ? Math.max(0, finite(adjustment.valueAfter) - valueBefore) : 0,
           defensive: row.canonicalSnapshot?.risk_state === 'LOSS_CONFIRMED',
           rollbackPlan,
@@ -851,6 +840,8 @@ Deno.serve(async (request) => {
         sync,
         account_daily_budget_limit: config.accountDailyBudgetLimit,
         account_daily_spend: roundMoney(totalSpend),
+        account_committed_spend: accountCommittedSpend,
+        account_out_of_budget: accountOutOfBudget,
         remaining_account_budget: remainingBudget,
         classifications: classificationCounts,
         campaigns_analyzed: campaignSummary.length,
@@ -883,6 +874,8 @@ Deno.serve(async (request) => {
           dry_run: accountDryRun,
           feature_enabled: featureEnabled,
           account_daily_spend: result.account_daily_spend,
+          account_committed_spend: result.account_committed_spend,
+          account_out_of_budget: result.account_out_of_budget,
           remaining_account_budget: result.remaining_account_budget,
           classifications: classificationCounts,
           proposed: result.changes_proposed,
