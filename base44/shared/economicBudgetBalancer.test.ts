@@ -58,6 +58,37 @@ const safeEntry = proposeEconomicAdjustment({
 assert.equal(safeEntry.action, 'increase_bid');
 assert.equal(safeEntry.valueAfter, 0.31);
 
+const outOfBudgetClassification = classifyEconomicCampaign({
+  campaignType: 'SP', isAuto: false, state: 'enabled', ageHours: 200, dataFresh: true,
+  structurallyComplete: true, economicsAvailable: true, inStock: true,
+  accountOutOfBudget: true,
+  impressions: 0, clicks: 0, orders: 0, sales: 0,
+  spendShare: 0, targetShare: 0.05, lowVolume: false,
+  profitAfterAds: 0, acos: null, targetAcos: 25,
+}, config);
+assert.equal(outOfBudgetClassification, 'ACCOUNT_OUT_OF_BUDGET');
+
+const outOfBudgetHold = proposeEconomicAdjustment({
+  classification: outOfBudgetClassification, ageHours: 200, isAuto: false, highlyRelevant: true,
+  economicsAvailable: true, currentBid: 0.30, currentBudget: 5, safeMaxCpc: 0.60,
+  impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0,
+  spendShare: 0, targetShare: 0.05, maxSpendWithoutSale: 15,
+  budgetExhausted: true, remainingAccountBudget: 0, budgetOptimizationEnabled: true,
+}, config);
+assert.equal(outOfBudgetHold.action, 'observe');
+assert.equal(outOfBudgetHold.rule, 'ACCOUNT_OUT_OF_BUDGET_HOLD');
+assert.equal(outOfBudgetHold.blockedBy, 'ACCOUNT_OUT_OF_BUDGET');
+
+const winnerWhileOutOfBudget = classifyEconomicCampaign({
+  campaignType: 'SP', isAuto: false, state: 'enabled', ageHours: 500, dataFresh: true,
+  structurallyComplete: true, economicsAvailable: true, inStock: true,
+  accountOutOfBudget: true,
+  impressions: 1000, clicks: 30, orders: 4, sales: 200,
+  spendShare: 0.35, targetShare: 0.40, lowVolume: false,
+  profitAfterAds: 40, acos: 15, targetAcos: 25,
+}, config);
+assert.equal(winnerWhileOutOfBudget, 'PROTECTED_WINNER');
+
 const unsafe = proposeEconomicAdjustment({
   classification: 'ECONOMICALLY_UNSAFE', ageHours: 48, isAuto: false, highlyRelevant: true,
   economicsAvailable: false, currentBid: 0.30, currentBudget: 5, safeMaxCpc: 0,
