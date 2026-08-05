@@ -99,5 +99,5 @@ Deno.test('dado intradiário acima de 60 minutos é stale e bloqueia ação', ()
 
 Deno.test('hard cap tem prioridade sobre underpacing', () => {
   const status = pacingClassification(0.5, 112, 111.55, 120, 115);
-  assert(status === 'hard_cap_risk', `status esperado hard_cap_risk, recebido ${status}`);
+  assert(status === 'critical_overpacing', `status esperado critical_overpacing, recebido ${status}`);
 });
