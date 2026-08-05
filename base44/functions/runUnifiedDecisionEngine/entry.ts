@@ -71,9 +71,15 @@ Deno.serve(async (request) => {
       daily_close: dailyClose,
     });
 
-    // Etapa de teste: produz somente propostas por padrão. Só grava na fila
-    // quando a feature flag persistida e enable_live_test forem ambos verdadeiros.
-    const scheduledDaypart = body.skip_scheduled_daypart === true
+    const scheduledCampaignState = body.skip_scheduled_daypart === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
+          ...common,
+          holiday_dates: body.holiday_dates || null,
+          now: body.now || null,
+        });
+
+    const scheduledBidDaypart = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueScheduledAdsDaypartTest', {
           ...common,
@@ -105,13 +111,13 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, economicBalancer, scheduledDaypart,
-      repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter,
+      manualStructureAudit, deterministic, economicBalancer, scheduledCampaignState,
+      scheduledBidDaypart, repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v6-scheduled-daypart-test',
+      engine_version: 'unified-v7-live-campaign-daypart',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
