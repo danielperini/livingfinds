@@ -22,7 +22,7 @@ Deno.serve(async (request) => {
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const now = body.now ? new Date(body.now) : new Date();
     const dryRun = body.dry_run === true;
-    const totals = { proposed: 0, queued: 0, skipped: 0 };
+    const totals = { proposed: 0, queued: 0, executed_pause: 0, skipped: 0 };
     const results: any[] = [];
 
     for (const account of accounts) {
@@ -36,6 +36,7 @@ Deno.serve(async (request) => {
       const policy = resolveScheduledAdsDaypart(now, holidays);
       const existing = new Set(prior.map((d: any) => String(d.idempotency_key || '')).filter(Boolean));
       const proposed: any[] = [];
+      const pauseDecisionIds: string[] = [];
 
       for (const campaign of campaigns) {
         const campaignId = idOf(campaign);
@@ -60,7 +61,7 @@ Deno.serve(async (request) => {
       totals.proposed += proposed.length;
       if (!dryRun) {
         for (const item of proposed) {
-          await base44.asServiceRole.entities.OptimizationDecision.create({
+          const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
             amazon_account_id: accountId,
             decision_type: 'scheduled_campaign_daypart',
             entity_type: 'campaign',
@@ -86,7 +87,7 @@ Deno.serve(async (request) => {
             idempotency_key: item.key,
             conflict_group: `${accountId}|campaign|${item.campaignId}`,
             source_function: SOURCE,
-            model_version: 'canonical-campaign-daypart-v1',
+            model_version: 'canonical-campaign-daypart-v2',
             not_before: now.toISOString(),
             execute_before: new Date(now.getTime() + 45 * 60_000).toISOString(),
             max_attempts: 3,
@@ -94,13 +95,23 @@ Deno.serve(async (request) => {
             updated_at: new Date().toISOString(),
           });
           totals.queued++;
+          if (item.action === 'pause_campaign') pauseDecisionIds.push(String(decision.id));
+        }
+
+        if (pauseDecisionIds.length) {
+          const execution = await base44.asServiceRole.functions.invoke('executePauseDecisionSafe', {
+            decision_ids: pauseDecisionIds,
+            _service_role: true,
+          });
+          const data = execution?.data || execution || {};
+          totals.executed_pause += Number(data.executed || 0);
         }
       }
-      results.push({ amazon_account_id: accountId, policy, dry_run: dryRun, proposed: proposed.length });
+      results.push({ amazon_account_id: accountId, policy, dry_run: dryRun, proposed: proposed.length, pause_decisions: pauseDecisionIds.length });
     }
 
-    return Response.json({ ok: true, engine: 'canonical-campaign-daypart-v1', totals, results });
+    return Response.json({ ok: true, engine: 'canonical-campaign-daypart-v2', totals, results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'canonical-campaign-daypart-v1', error: error?.message || 'Falha ao aplicar estado do dayparting' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'canonical-campaign-daypart-v2', error: error?.message || 'Falha ao aplicar estado do dayparting' }, { status: 500 });
   }
 });
