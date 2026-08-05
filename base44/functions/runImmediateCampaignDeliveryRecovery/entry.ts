@@ -22,6 +22,8 @@ Deno.serve(async (request) => {
     const common = {
       amazon_account_id: accountId,
       _service_role: true,
+      _canonical_orchestrator: 'runUnifiedDecisionEngine',
+      decision_engine_correlation_id: body.correlation_id || crypto.randomUUID(),
       force: true,
       minimum_age_hours: 72,
       immediate: true,
@@ -40,13 +42,19 @@ Deno.serve(async (request) => {
     });
     const confirmation = await invoke(base44, 'confirmExecutedDecisions', common);
 
+    const accountResults = Array.isArray(delivery?.results) ? delivery.results : [];
+    const actions = accountResults.flatMap((row: any) => Array.isArray(row?.actions) ? row.actions : []);
+    const repaired = actions.filter((action: any) => action.action === 'REPAIR_STRUCTURE').length;
+    const queued = actions.filter((action: any) => ['INCREASE_BID', 'PAUSE_AND_REPLACE', 'ARCHIVE_NO_PRODUCT', 'ARCHIVE_OUT_OF_STOCK'].includes(action.action)).length;
+
     return Response.json({
       ok: [structure, delivery, executor, confirmation].every(stage => stage?.ok !== false),
-      evaluated: Number(delivery?.evaluated || delivery?.total || 0),
-      queued: Number(delivery?.queued || delivery?.decisions_created || 0),
-      repaired: Number(structure?.repaired || structure?.created || structure?.migrated || 0),
+      evaluated: actions.length,
+      queued,
+      repaired,
       executed: Number(executor?.executed || 0),
       confirmed: Number(confirmation?.confirmed || 0),
+      correlation_id: common.decision_engine_correlation_id,
       stages: { structure, delivery, executor, confirmation },
     });
   } catch (error: any) {
