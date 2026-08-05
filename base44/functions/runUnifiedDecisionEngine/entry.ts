@@ -1,8 +1,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 /**
- * The only decision producer. It deliberately does not execute Amazon calls:
- * executeApprovedDecisionQueue and confirmExecutedDecisions own that lifecycle.
+ * The only decision producer. It deliberately does not execute Amazon calls,
+ * except canonical reconciliation functions that already confirm the remote
+ * Amazon state before persisting local changes.
  */
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -12,6 +13,15 @@ const invoke = async (base44: any, name: string, payload: Record<string, unknown
     return { ok: false, error: error?.response?.data?.error || error?.message || String(error) };
   }
 };
+
+function brtHour(now = new Date()): number {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    hour12: false,
+  }).format(now);
+  return Number(hour) % 24;
+}
 
 Deno.serve(async (request) => {
   try {
@@ -24,6 +34,8 @@ Deno.serve(async (request) => {
     const dailyClose = body.daily_close === true;
     const dryRun = body.dry_run === true;
     const correlationId = body.correlation_id || crypto.randomUUID();
+    const currentHour = brtHour(body.now ? new Date(body.now) : new Date());
+    const autoAuditWindow = dailyClose || body.bootstrap === true || body.force_auto_campaign_audit === true || currentHour % 3 === 0;
     const common = {
       amazon_account_id: accountId,
       _service_role: true,
@@ -51,8 +63,6 @@ Deno.serve(async (request) => {
       : { ok: true, skipped: true };
 
     const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
-    // Estruturas incompletas não podem aguardar o fechamento diário: reparar ou
-    // arquivar antes de qualquer decisão de bid para evitar campanhas ativas sem entrega.
     const manualStructureAudit = await invoke(base44, 'enforceCanonicalManualCampaigns', {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
@@ -79,6 +89,37 @@ Deno.serve(async (request) => {
           ...common,
           snapshot_run_id: snapshotRunId,
         });
+
+    const automaticCampaignDedup = autoAuditWindow
+      ? await invoke(base44, 'deduplicateAutoCampaignsByAsin', {
+          ...common,
+          dry_run: dryRun,
+          trigger_type: 'unified_auto_campaign_3h_guard',
+        })
+      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
+
+    const automaticWasteGuard = autoAuditWindow
+      ? await invoke(base44, 'runWeeklyWasteTermsCleanup', {
+          ...common,
+          mode: 'daily_guard',
+          auto_only: true,
+          max_term_words: 3,
+          lookback_hours: 48,
+          allow_campaign_pause: false,
+          trigger_type: 'unified_auto_campaign_3h_guard',
+        })
+      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
+
+    const automaticBidGuard = autoAuditWindow
+      ? await invoke(base44, 'smartBidFromCpc', {
+          ...common,
+          auto_only: true,
+          lookback_hours: 48,
+          reduce_only: true,
+          target_source: 'PerformanceSettings',
+          trigger_type: 'unified_auto_campaign_3h_guard',
+        })
+      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
 
     const scheduledCampaignState = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
@@ -110,9 +151,6 @@ Deno.serve(async (request) => {
     const searchTerms = dailyClose || body.bootstrap === true
       ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', { ...common, lookback_days: 65, max_promotions: 25, queue_only: true })
       : { ok: true, skipped: true };
-    const autoSearchTermGuard = dailyClose
-      ? await invoke(base44, 'runWeeklyWasteTermsCleanup', { ...common, mode: 'daily_guard', allow_campaign_pause: false })
-      : { ok: true, skipped: true };
     const cpcGuard = dailyClose
       ? await invoke(base44, 'smartBidFromCpc', { ...common })
       : { ok: true, skipped: true };
@@ -121,18 +159,25 @@ Deno.serve(async (request) => {
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, deterministic, economicBalancer, deliveryHealth,
+      automaticCampaignDedup, automaticWasteGuard, automaticBidGuard,
       scheduledCampaignState, scheduledBidDaypart, repricing, searchTerms,
-      autoSearchTermGuard, cpcGuard, scopeAfter,
+      cpcGuard, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v8-campaign-delivery-health',
+      engine_version: 'unified-v9-auto-campaign-3h-guard',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
-      execution: 'queued_only; separate executor and confirmation schedules own Amazon mutations',
+      auto_campaign_audit: {
+        due: autoAuditWindow,
+        interval_hours: 3,
+        brt_hour: currentHour,
+        lookback_hours: 48,
+      },
+      execution: 'queued decisions plus canonical Amazon-confirmed reconciliation',
       stages,
     });
   } catch (error: any) {
