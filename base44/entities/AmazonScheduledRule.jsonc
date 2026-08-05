@@ -2,187 +2,54 @@
   "name": "AmazonScheduledRule",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
-    "marketplace_id": {
-      "type": "string"
-    },
-    "profile_id": {
-      "type": "string"
-    },
-    "optimization_rule_id": {
-      "type": "string"
-    },
-    "rule_name": {
-      "type": "string"
-    },
-    "rule_category": {
+    "amazon_account_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "profile_id": { "type": "string" },
+    "optimization_rule_id": { "type": "string" },
+    "rule_name": { "type": "string" },
+    "rule_category": { "type": "string", "default": "BID" },
+    "rule_subcategory": { "type": "string", "default": "SCHEDULE" },
+    "action_type": {
       "type": "string",
-      "default": "BID"
+      "enum": ["PAUSE_CAMPAIGN", "ENABLE_CAMPAIGN", "BID_PERCENT", "TOP_OF_SEARCH", "REST_OF_SEARCH", "PRODUCT_PAGES", "FIRST_PAGE"]
     },
-    "rule_subcategory": {
-      "type": "string",
-      "default": "SCHEDULE"
-    },
-    "recurrence_type": {
-      "type": "string",
-      "enum": [
-        "DAILY",
-        "WEEKLY"
-      ],
-      "default": "WEEKLY"
-    },
-    "days_of_week": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "start_time": {
-      "type": "string"
-    },
-    "end_time": {
-      "type": "string"
-    },
-    "duration_start": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "duration_end": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "adjustment_operator": {
-      "type": "string",
-      "default": "INCREMENT"
-    },
-    "adjustment_unit": {
-      "type": "string",
-      "default": "PERCENT"
-    },
-    "adjustment_value": {
-      "type": "number"
-    },
-    "slot_classification": {
-      "type": "string",
-      "enum": [
-        "ELITE_TIME",
-        "STRONG_TIME",
-        "PISO",
-        "EFICIENTE",
-        "PICO"
-      ]
-    },
-    "campaign_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "asins": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "targeting_types": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "status": {
-      "type": "string",
-      "enum": [
-        "planned",
-        "creating",
-        "enabled",
-        "paused",
-        "unsupported",
-        "failed",
-        "archived"
-      ],
-      "default": "planned"
-    },
-    "association_status": {
-      "type": "string",
-      "enum": [
-        "pending",
-        "partial",
-        "associated",
-        "failed"
-      ],
-      "default": "pending"
-    },
-    "associated_campaign_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "failed_campaign_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "native_api_supported": {
-      "type": "boolean"
-    },
-    "fallback_mode": {
-      "type": "string",
-      "enum": [
-        "amazon_native_positive_app_negative",
-        "app_managed_only"
-      ],
-      "default": "amazon_native_positive_app_negative"
-    },
-    "idempotency_key": {
-      "type": "string"
-    },
-    "engine_version": {
-      "type": "string"
-    },
-    "reason": {
-      "type": "string"
-    },
-    "amazon_request_id": {
-      "type": "string"
-    },
-    "amazon_response_status": {
-      "type": "number"
-    },
-    "amazon_response": {
-      "type": "string"
-    },
-    "last_error": {
-      "type": "string"
-    },
-    "last_synced_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "last_associated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "next_review_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "updated_at": {
-      "type": "string",
-      "format": "date-time"
-    }
+    "scope_type": { "type": "string", "enum": ["ALL", "SELECTED"], "default": "ALL" },
+    "holiday_mode": { "type": "string", "enum": ["AUTO_BR", "IGNORE", "WEEKEND_POLICY"], "default": "AUTO_BR" },
+    "timezone": { "type": "string", "default": "America/Sao_Paulo" },
+    "recurrence_type": { "type": "string", "enum": ["DAILY", "WEEKLY"], "default": "WEEKLY" },
+    "days_of_week": { "type": "array", "items": { "type": "string" } },
+    "start_time": { "type": "string" },
+    "end_time": { "type": "string" },
+    "duration_start": { "type": "string", "format": "date-time" },
+    "duration_end": { "type": "string", "format": "date-time" },
+    "adjustment_operator": { "type": "string", "default": "INCREMENT" },
+    "adjustment_unit": { "type": "string", "default": "PERCENT" },
+    "adjustment_value": { "type": "number" },
+    "slot_classification": { "type": "string", "enum": ["ELITE_TIME", "STRONG_TIME", "PISO", "EFICIENTE", "PICO"] },
+    "campaign_ids": { "type": "array", "items": { "type": "string" } },
+    "asins": { "type": "array", "items": { "type": "string" } },
+    "targeting_types": { "type": "array", "items": { "type": "string" } },
+    "holiday_dates": { "type": "array", "items": { "type": "string" } },
+    "holiday_sync_year": { "type": "number" },
+    "holiday_synced_at": { "type": "string", "format": "date-time" },
+    "status": { "type": "string", "enum": ["planned", "creating", "enabled", "paused", "unsupported", "failed", "archived"], "default": "planned" },
+    "association_status": { "type": "string", "enum": ["pending", "partial", "associated", "failed"], "default": "pending" },
+    "associated_campaign_ids": { "type": "array", "items": { "type": "string" } },
+    "failed_campaign_ids": { "type": "array", "items": { "type": "string" } },
+    "native_api_supported": { "type": "boolean" },
+    "fallback_mode": { "type": "string", "enum": ["amazon_native_positive_app_negative", "app_managed_only"], "default": "amazon_native_positive_app_negative" },
+    "idempotency_key": { "type": "string" },
+    "engine_version": { "type": "string" },
+    "reason": { "type": "string" },
+    "amazon_request_id": { "type": "string" },
+    "amazon_response_status": { "type": "number" },
+    "amazon_response": { "type": "string" },
+    "last_error": { "type": "string" },
+    "last_synced_at": { "type": "string", "format": "date-time" },
+    "last_associated_at": { "type": "string", "format": "date-time" },
+    "next_review_at": { "type": "string", "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
   },
-  "required": [
-    "amazon_account_id",
-    "rule_name",
-    "idempotency_key"
-  ]
+  "required": ["amazon_account_id", "rule_name", "idempotency_key"]
 }
