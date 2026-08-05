@@ -1,4 +1,4 @@
-export const ECONOMIC_BALANCER_VERSION = 'economic-budget-balancer-v1';
+export const ECONOMIC_BALANCER_VERSION = 'economic-budget-balancer-v2';
 
 export type CampaignEconomicState =
   | 'NEW_PENDING_INSERTION'
@@ -10,6 +10,7 @@ export type CampaignEconomicState =
   | 'OVERSHARE_WITH_CONVERSION'
   | 'LOW_VOLUME_GUARDED'
   | 'PROTECTED_WINNER'
+  | 'ACCOUNT_OUT_OF_BUDGET'
   | 'ECONOMICALLY_UNSAFE'
   | 'OUT_OF_STOCK'
   | 'DATA_STALE'
@@ -64,6 +65,7 @@ export type CampaignClassificationInput = {
   structurallyComplete: boolean;
   economicsAvailable: boolean;
   inStock: boolean;
+  accountOutOfBudget?: boolean;
   impressions: number;
   clicks: number;
   orders: number;
@@ -222,6 +224,8 @@ export function classifyEconomicCampaign(
     input.acos !== null && (targetAcos <= 0 || input.acos <= targetAcos);
   if (winner) return 'PROTECTED_WINNER';
 
+  if (input.accountOutOfBudget) return 'ACCOUNT_OUT_OF_BUDGET';
+
   const absoluteShareCap = input.isAuto
     ? Math.min(config.maxCampaignSpendShare, config.maxAutoDiscoveryShare)
     : config.maxCampaignSpendShare;
@@ -259,7 +263,7 @@ function candidateWeight(candidate: VirtualBudgetCandidate): number {
     : candidate.stockCoverageDays < 7 ? 0.45
       : candidate.stockCoverageDays < 14 ? 0.75
         : candidate.stockCoverageDays >= 45 ? 1.10 : 1;
-  const riskMultiplier = ['ECONOMICALLY_UNSAFE', 'DATA_STALE', 'INCOMPLETE', 'NOT_ELIGIBLE', 'OUT_OF_STOCK']
+  const riskMultiplier = ['ACCOUNT_OUT_OF_BUDGET', 'ECONOMICALLY_UNSAFE', 'DATA_STALE', 'INCOMPLETE', 'NOT_ELIGIBLE', 'OUT_OF_STOCK']
       .includes(candidate.classification)
     ? 0.05
     : candidate.classification === 'OVERSHARE_NO_CONVERSION' ? 0.30
@@ -377,6 +381,16 @@ export function proposeEconomicAdjustment(
 ): EconomicAdjustment {
   if (input.ageHours < config.learningObserveHours) {
     return observe('LEARNING_OBSERVE_ONLY', `Campanha ativa ha ${input.ageHours.toFixed(1)}h; observar ate ${config.learningObserveHours}h.`, 95, config.learningObserveHours);
+  }
+
+  if (input.classification === 'ACCOUNT_OUT_OF_BUDGET') {
+    return observe(
+      'ACCOUNT_OUT_OF_BUDGET_HOLD',
+      'A conta atingiu o teto diario; zero entrega ou baixa entrega nao pode ser interpretada como bid insuficiente. Nenhum aumento, reducao ou pausa sera proposto ate a proxima janela com orçamento disponivel.',
+      99,
+      6,
+      'ACCOUNT_OUT_OF_BUDGET',
+    );
   }
 
   if (['NEW_PENDING_INSERTION', 'OUT_OF_STOCK', 'DATA_STALE', 'INCOMPLETE', 'NOT_ELIGIBLE'].includes(input.classification)) {
