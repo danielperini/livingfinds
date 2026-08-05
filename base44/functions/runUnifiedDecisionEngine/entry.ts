@@ -1,10 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
-/**
- * The only decision producer. It deliberately does not execute Amazon calls,
- * except canonical reconciliation functions that already confirm the remote
- * Amazon state before persisting local changes.
- */
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
     const result = await base44.asServiceRole.functions.invoke(name, payload);
@@ -16,9 +11,7 @@ const invoke = async (base44: any, name: string, payload: Record<string, unknown
 
 function brtHour(now = new Date()): number {
   const hour = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Sao_Paulo',
-    hour: '2-digit',
-    hour12: false,
+    timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false,
   }).format(now);
   return Number(hour) % 24;
 }
@@ -35,7 +28,7 @@ Deno.serve(async (request) => {
     const dryRun = body.dry_run === true;
     const correlationId = body.correlation_id || crypto.randomUUID();
     const currentHour = brtHour(body.now ? new Date(body.now) : new Date());
-    const autoAuditWindow = dailyClose || body.bootstrap === true || body.force_auto_campaign_audit === true || currentHour % 3 === 0;
+    const lifecycleWindow = dailyClose || body.bootstrap === true || body.force_campaign_lifecycle === true || currentHour % 3 === 0;
     const common = {
       amazon_account_id: accountId,
       _service_role: true,
@@ -48,7 +41,6 @@ Deno.serve(async (request) => {
       ? await invoke(base44, 'ensureDailyReportsCurrent', common)
       : { ok: true, skipped: true };
     const scopeBefore = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
-
     const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
       ...common,
       mode: dailyClose || body.bootstrap === true ? 'bootstrap' : 'incremental',
@@ -61,13 +53,11 @@ Deno.serve(async (request) => {
     const economicAssessment = dailyClose
       ? await invoke(base44, 'runDailyEconomicAssessment', { ...common, force: true, assessment_date: body.assessment_date || null })
       : { ok: true, skipped: true };
-
     const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
     const manualStructureAudit = await invoke(base44, 'enforceCanonicalManualCampaigns', {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
-
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
@@ -75,60 +65,31 @@ Deno.serve(async (request) => {
       daily_close: dailyClose,
       snapshot_run_id: snapshotRunId,
     });
-    const economicBalancer = await invoke(base44, 'runEconomicBudgetBalancer', {
-      ...common,
-      mode: dailyClose || body.bootstrap === true ? 'all' : 'incremental',
-      skip_sync: true,
-      queue_only: true,
-      snapshot_run_id: snapshotRunId,
-      daily_close: dailyClose,
-    });
-    const deliveryHealth = body.skip_campaign_delivery_health === true
-      ? { ok: true, skipped: true }
-      : await invoke(base44, 'reconcileCampaignDeliveryHealth', {
+
+    const campaignLifecycle = lifecycleWindow
+      ? await invoke(base44, 'runCanonicalCampaignLifecycleLayer', {
           ...common,
+          daily_close: dailyClose,
           snapshot_run_id: snapshotRunId,
+        })
+      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
+
+    const economicBalancer = lifecycleWindow
+      ? { ok: true, skipped: true, delegated_to: 'runCanonicalCampaignLifecycleLayer' }
+      : await invoke(base44, 'runEconomicBudgetBalancer', {
+          ...common,
+          mode: 'incremental', skip_sync: true, queue_only: true,
+          snapshot_run_id: snapshotRunId, daily_close: false,
         });
 
-    const automaticCampaignDedup = autoAuditWindow
-      ? await invoke(base44, 'deduplicateAutoCampaignsByAsin', {
-          ...common,
-          dry_run: dryRun,
-          trigger_type: 'unified_auto_campaign_3h_guard',
-        })
-      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
-
-    const automaticWasteGuard = autoAuditWindow
-      ? await invoke(base44, 'runWeeklyWasteTermsCleanup', {
-          ...common,
-          mode: 'daily_guard',
-          auto_only: true,
-          max_term_words: 3,
-          lookback_hours: 48,
-          allow_campaign_pause: false,
-          trigger_type: 'unified_auto_campaign_3h_guard',
-        })
-      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
-
-    const automaticBidGuard = autoAuditWindow
-      ? await invoke(base44, 'smartBidFromCpc', {
-          ...common,
-          auto_only: true,
-          lookback_hours: 48,
-          reduce_only: true,
-          target_source: 'PerformanceSettings',
-          trigger_type: 'unified_auto_campaign_3h_guard',
-        })
-      : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
-
+    const deliveryHealth = body.skip_campaign_delivery_health === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'reconcileCampaignDeliveryHealth', { ...common, snapshot_run_id: snapshotRunId });
     const scheduledCampaignState = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
-          ...common,
-          holiday_dates: body.holiday_dates || null,
-          now: body.now || null,
+          ...common, holiday_dates: body.holiday_dates || null, now: body.now || null,
         });
-
     const scheduledBidDaypart = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueScheduledAdsDaypartTest', {
@@ -138,46 +99,38 @@ Deno.serve(async (request) => {
           holiday_dates: body.holiday_dates || null,
           now: body.now || null,
         });
-
-    const repricing = body.skip_repricing === true ? { ok: true, skipped: true } : await invoke(base44, 'runAutomaticRepricing', {
-      ...common,
-      operation: dailyClose || body.full_repricing_evaluation === true ? 'full_evaluation' : 'evaluate',
-      recommendation_only: dryRun || body.repricing_recommendation_only === true,
-      snapshot_run_id: snapshotRunId,
-      daily_close: dailyClose,
-      trigger: 'runUnifiedDecisionEngine',
-    });
-
-    const searchTerms = dailyClose || body.bootstrap === true
-      ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', { ...common, lookback_days: 65, max_promotions: 25, queue_only: true })
-      : { ok: true, skipped: true };
-    const cpcGuard = dailyClose
-      ? await invoke(base44, 'smartBidFromCpc', { ...common })
-      : { ok: true, skipped: true };
+    const repricing = body.skip_repricing === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runAutomaticRepricing', {
+          ...common,
+          operation: dailyClose || body.full_repricing_evaluation === true ? 'full_evaluation' : 'evaluate',
+          recommendation_only: dryRun || body.repricing_recommendation_only === true,
+          snapshot_run_id: snapshotRunId,
+          daily_close: dailyClose,
+          trigger: 'runUnifiedDecisionEngine',
+        });
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, economicBalancer, deliveryHealth,
-      automaticCampaignDedup, automaticWasteGuard, automaticBidGuard,
-      scheduledCampaignState, scheduledBidDaypart, repricing, searchTerms,
-      cpcGuard, scopeAfter,
+      manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
+      deliveryHealth, scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v9-auto-campaign-3h-guard',
+      engine_version: 'unified-v10-canonical-campaign-lifecycle',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
-      auto_campaign_audit: {
-        due: autoAuditWindow,
+      campaign_lifecycle: {
+        due: lifecycleWindow,
         interval_hours: 3,
         brt_hour: currentHour,
-        lookback_hours: 48,
+        schedule_owner: 'runUnifiedDecisionEngine',
       },
-      execution: 'queued decisions plus canonical Amazon-confirmed reconciliation',
+      execution: 'fila canônica, confirmação Amazon e persistência posterior',
       stages,
     });
   } catch (error: any) {
