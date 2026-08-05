@@ -51,9 +51,12 @@ Deno.serve(async (request) => {
       : { ok: true, skipped: true };
 
     const journeyAudit = await invoke(base44, 'classifyMarketplaceCampaignJourneys', common);
-    const manualStructureAudit = dailyClose || body.bootstrap === true
-      ? await invoke(base44, 'enforceCanonicalManualCampaigns', { ...common, trigger_type: 'unified_daily_manual_structure_audit' })
-      : { ok: true, skipped: true };
+    // Estruturas incompletas não podem aguardar o fechamento diário: reparar ou
+    // arquivar antes de qualquer decisão de bid para evitar campanhas ativas sem entrega.
+    const manualStructureAudit = await invoke(base44, 'enforceCanonicalManualCampaigns', {
+      ...common,
+      trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
+    });
 
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
@@ -70,6 +73,12 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
     });
+    const deliveryHealth = body.skip_campaign_delivery_health === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'reconcileCampaignDeliveryHealth', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+        });
 
     const scheduledCampaignState = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
@@ -111,13 +120,14 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, economicBalancer, scheduledCampaignState,
-      scheduledBidDaypart, repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter,
+      manualStructureAudit, deterministic, economicBalancer, deliveryHealth,
+      scheduledCampaignState, scheduledBidDaypart, repricing, searchTerms,
+      autoSearchTermGuard, cpcGuard, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v7-live-campaign-daypart',
+      engine_version: 'unified-v8-campaign-delivery-health',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
