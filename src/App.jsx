@@ -24,7 +24,7 @@ import AdsAutopilot from '@/pages/AdsAutopilotScheduled';
 import AdsManagement from '@/pages/AdsManagement';
 import InventorySales from '@/pages/InventorySales';
 import Logs from '@/pages/Logs';
-import Settings from '@/pages/Settings';
+import Settings from '@/pages/SettingsIntegrated';
 import Products from '@/pages/ProductsScheduled';
 import Repricing from '@/pages/Repricing';
 import Report from '@/pages/Report';
@@ -64,7 +64,6 @@ const AuthenticatedApp = () => {
   const [showSplash, setShowSplash] = useState(false);
 
   useEffect(() => {
-    // Controle por sessão — reaparece no reload, não na navegação interna
     const checkSplash = async () => {
       try {
         const isAuth = await base44.auth.isAuthenticated();
@@ -107,9 +106,7 @@ const AuthenticatedApp = () => {
     return <UserNotRegisteredError />;
   }
 
-  // Enquanto não resolvemos se deve mostrar splash, não renderizar nada sensível
   if (!splashDone && !showSplash && !isLoadingAuth && !isLoadingPublicSettings && !authError) {
-    // Aguardando checkSplash resolver — mostrar spinner mínimo
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-canvas">
         <div className="w-6 h-6 border-2 border-cyan/40 border-t-cyan rounded-full animate-spin" />
@@ -124,66 +121,63 @@ const AuthenticatedApp = () => {
       )}
       <Routes>
         <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/amazon-ads-callback" element={<AmazonAdsCallback />} />
-      <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/ads" element={<AdsManagement />} />
-          <Route path="/autopilot" element={<AdsAutopilot />} />
-          <Route path="/inventory" element={<InventorySales />} />
-          <Route path="/products" element={<Products />} />
-          <Route path="/repricing" element={<Repricing />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/bid-logs" element={<BidLogs />} />
-          <Route path="/metrics" element={<MetricsDashboard />} />
-          <Route path="/search-terms" element={<SearchTerms />} />
-          <Route path="/diagnostico" element={<Diagnostico />} />
-          <Route path="/report" element={<Report />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/users" element={<Users />} />
-          <Route path="/sp-api-setup" element={<SpApiSetup />} />
-          <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
-          <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
-          <Route path="/saude-do-sistema" element={<SystemHealth />} />
-          <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
-          <Route path="/dayparting" element={<DaypartingDashboard />} />
-          <Route path="/manual" element={<ManualInstrucoes />} />
-          <Route path="/optimizer" element={<OptimizerPipeline />} />
-          <Route path="/currency-audit" element={<CurrencyAudit />} />
-          <Route path="/keyword-management" element={<KeywordManagement />} />
-          <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
-          <Route path="/term-bank" element={<Navigate to="/campaign-factory" replace />} />
-          <Route path="/campaign-factory" element={<CampaignFactory />} />
-          <Route path="/daypart-crossasin" element={<DaypartCrossAsinPage />} />
-          <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
-          <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
-          <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
-          <Route path="/sala-de-comando" element={<SalaDeComando />} />
-          <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
-          <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
-          <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando?tab=prelecao" replace />} />
-          <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
-          {/* Redirecionamentos: rotas consolidadas */}
-          <Route path="/recommendations" element={<Navigate to="/autopilot" replace />} />
-          <Route path="/dayparting" element={<Navigate to="/autopilot" replace />} />
-          <Route path="/learner" element={<Navigate to="/autopilot" replace />} />
-          <Route path="/motor-config" element={<Navigate to="/autopilot" replace />} />
-          {/* Redirecionamentos: rotas removidas da sidebar → Sala de Comando */}
-          <Route path="/alerts" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/bids-log" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/queue-monitor" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/task-queue" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/eficiencia-ia" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/incomplete-campaigns" element={<Navigate to="/sala-de-comando" replace />} />
-          <Route path="/transitions" element={<Navigate to="/products" replace />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/amazon-ads-callback" element={<AmazonAdsCallback />} />
+        <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/ads" element={<AdsManagement />} />
+            <Route path="/autopilot" element={<AdsAutopilot />} />
+            <Route path="/inventory" element={<InventorySales />} />
+            <Route path="/products" element={<Products />} />
+            <Route path="/repricing" element={<Repricing />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/bid-logs" element={<BidLogs />} />
+            <Route path="/metrics" element={<MetricsDashboard />} />
+            <Route path="/search-terms" element={<SearchTerms />} />
+            <Route path="/diagnostico" element={<Diagnostico />} />
+            <Route path="/report" element={<Report />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/users" element={<Users />} />
+            <Route path="/sp-api-setup" element={<SpApiSetup />} />
+            <Route path="/sp-api-self-auth" element={<SpApiSelfAuth />} />
+            <Route path="/integracoes/amazon" element={<AmazonIntegracao />} />
+            <Route path="/saude-do-sistema" element={<SystemHealth />} />
+            <Route path="/configuracao-de-campanhas" element={<CampaignConfig />} />
+            <Route path="/dayparting" element={<Navigate to="/settings" replace />} />
+            <Route path="/manual" element={<ManualInstrucoes />} />
+            <Route path="/optimizer" element={<OptimizerPipeline />} />
+            <Route path="/currency-audit" element={<CurrencyAudit />} />
+            <Route path="/keyword-management" element={<KeywordManagement />} />
+            <Route path="/amazon-oauth-setup" element={<AmazonOAuthSetup />} />
+            <Route path="/term-bank" element={<Navigate to="/campaign-factory" replace />} />
+            <Route path="/campaign-factory" element={<CampaignFactory />} />
+            <Route path="/daypart-crossasin" element={<DaypartCrossAsinPage />} />
+            <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
+            <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
+            <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
+            <Route path="/sala-de-comando" element={<SalaDeComando />} />
+            <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
+            <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
+            <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando?tab=prelecao" replace />} />
+            <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
+            <Route path="/recommendations" element={<Navigate to="/autopilot" replace />} />
+            <Route path="/learner" element={<Navigate to="/autopilot" replace />} />
+            <Route path="/motor-config" element={<Navigate to="/autopilot" replace />} />
+            <Route path="/alerts" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/bids-log" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/queue-monitor" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/task-queue" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/eficiencia-ia" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/incomplete-campaigns" element={<Navigate to="/sala-de-comando" replace />} />
+            <Route path="/transitions" element={<Navigate to="/products" replace />} />
+          </Route>
         </Route>
-      </Route>
-      <Route path="*" element={<PageNotFound />} />
-    </Routes>
+        <Route path="*" element={<PageNotFound />} />
+      </Routes>
     </>
   );
 };
