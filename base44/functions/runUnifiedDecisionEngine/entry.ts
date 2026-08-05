@@ -1,7 +1,7 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 
 /**
- * The only decision producer.  It deliberately does not execute Amazon calls:
+ * The only decision producer. It deliberately does not execute Amazon calls:
  * executeApprovedDecisionQueue and confirmExecutedDecisions own that lifecycle.
  */
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
@@ -32,14 +32,11 @@ Deno.serve(async (request) => {
       dry_run: dryRun,
     };
 
-    // Previous-day reports must be requested before the daily close.  Intraday
-    // runs only consume already persisted, fresh data.
     const reportRequest = dailyClose && !body.skip_sync
       ? await invoke(base44, 'ensureDailyReportsCurrent', common)
       : { ok: true, skipped: true };
     const scopeBefore = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: body.skip_sync === true });
 
-    // Rebuild first.  Every later action has a historical RepricingSnapshot id.
     const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
       ...common,
       mode: dailyClose || body.bootstrap === true ? 'bootstrap' : 'incremental',
@@ -58,8 +55,6 @@ Deno.serve(async (request) => {
       ? await invoke(base44, 'enforceCanonicalManualCampaigns', { ...common, trigger_type: 'unified_daily_manual_structure_audit' })
       : { ok: true, skipped: true };
 
-    // Classification/audit happens before bids. Legacy engines may add non-bid
-    // observations, but cannot execute or produce bid/budget decisions here.
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
@@ -75,6 +70,25 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
     });
+
+    const scheduledCampaignState = body.skip_scheduled_daypart === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
+          ...common,
+          holiday_dates: body.holiday_dates || null,
+          now: body.now || null,
+        });
+
+    const scheduledBidDaypart = body.skip_scheduled_daypart === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'queueScheduledAdsDaypartTest', {
+          ...common,
+          dry_run: body.scheduled_daypart_dry_run !== false,
+          enable_live_test: body.enable_scheduled_daypart_live_test === true,
+          holiday_dates: body.holiday_dates || null,
+          now: body.now || null,
+        });
+
     const repricing = body.skip_repricing === true ? { ok: true, skipped: true } : await invoke(base44, 'runAutomaticRepricing', {
       ...common,
       operation: dailyClose || body.full_repricing_evaluation === true ? 'full_evaluation' : 'evaluate',
@@ -84,14 +98,9 @@ Deno.serve(async (request) => {
       trigger: 'runUnifiedDecisionEngine',
     });
 
-    // One pipeline is authoritative for AUTO, manual EXACT, legacy phrase/broad
-    // and product-targeting search terms. It is read-only with regard to Amazon.
     const searchTerms = dailyClose || body.bootstrap === true
       ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', { ...common, lookback_days: 65, max_promotions: 25, queue_only: true })
       : { ok: true, skipped: true };
-    // Após consolidar o dia anterior, corta desperdício por termo antes de
-    // considerar qualquer pausa ampla. A função cria negativas EXATAS na
-    // origem; pausas de campanha permanecem deliberadamente desabilitadas.
     const autoSearchTermGuard = dailyClose
       ? await invoke(base44, 'runWeeklyWasteTermsCleanup', { ...common, mode: 'daily_guard', allow_campaign_pause: false })
       : { ok: true, skipped: true };
@@ -100,11 +109,15 @@ Deno.serve(async (request) => {
       : { ok: true, skipped: true };
     const scopeAfter = await invoke(base44, 'reconcileManualBidCycleScope', { ...common, skip_sync: true });
 
-    const stages = { reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit, manualStructureAudit, deterministic, economicBalancer, repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter };
+    const stages = {
+      reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
+      manualStructureAudit, deterministic, economicBalancer, scheduledCampaignState,
+      scheduledBidDaypart, repricing, searchTerms, autoSearchTermGuard, cpcGuard, scopeAfter,
+    };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v5-canonical-snapshot',
+      engine_version: 'unified-v7-live-campaign-daypart',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
