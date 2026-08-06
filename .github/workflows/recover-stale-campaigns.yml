@@ -1,0 +1,54 @@
+name: Recuperar campanhas sem entrega
+
+on:
+  workflow_run:
+    workflows: ["Deploy para VPS"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: recover-stale-campaigns
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preparar SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Executar recuperação canônica na VPS
+        env:
+          SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no
+          TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+        run: |
+          ssh $SSHOPTS "$TARGET" "bash -s" <<EOF
+            set -e
+            cd "$VPS_PATH"
+            for attempt in \$(seq 1 30); do
+              if curl -sf http://127.0.0.1:8000/health >/dev/null; then break; fi
+              sleep 2
+            done
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/reconcileCampaignDeliveryHealth", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({
+                  _service_role: true,
+                  _canonical_orchestrator: "runUnifiedDecisionEngine",
+                  dry_run: false,
+                  force: true,
+                  trigger_type: "post_deploy_stale_zero_delivery_recovery"
+                })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("RECOVERY_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data).slice(0, 20000));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "Falha na recuperação imediata de campanhas");
+            ' </dev/null
+          EOF
