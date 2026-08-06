@@ -4,11 +4,19 @@ import { classifyCampaignDeliveryHealth, nextConservativeBid } from './campaignD
 const base = {
   ageHours: 96, impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0,
   complete: true, hasProduct: true, inStock: true, protectedWinner: false,
-  accountOutOfBudget: false, priorBidEscalations: 0,
+  accountOutOfBudget: false, priorBidEscalations: 0, operationalState: 'ENABLED',
 };
 
 Deno.test('campanha incompleta deve ser reparada antes de alterar bid', () => {
   assert.equal(classifyCampaignDeliveryHealth({ ...base, complete: false }), 'REPAIR_STRUCTURE');
+});
+
+Deno.test('campanha em inserção há mais de 6 horas deve ser reparada', () => {
+  assert.equal(classifyCampaignDeliveryHealth({ ...base, ageHours: 24, operationalState: 'INSERTING' }), 'REPAIR_STRUCTURE');
+});
+
+Deno.test('campanha em inserção recente ainda pode aguardar', () => {
+  assert.equal(classifyCampaignDeliveryHealth({ ...base, ageHours: 3, operationalState: 'INSERTING' }), 'WAIT');
 });
 
 Deno.test('produto sem estoque deve ser arquivado e não escalado', () => {
@@ -19,9 +27,13 @@ Deno.test('campanha nova aguarda 72 horas', () => {
   assert.equal(classifyCampaignDeliveryHealth({ ...base, ageHours: 48 }), 'WAIT');
 });
 
-Deno.test('zero entrega após 72h aumenta bid de forma conservadora', () => {
+Deno.test('zero entrega após 72h aumenta bid respeitando incremento configurado', () => {
   assert.equal(classifyCampaignDeliveryHealth(base), 'INCREASE_BID');
-  assert.equal(nextConservativeBid(0.5, 0.6), 0.55);
+  assert.equal(nextConservativeBid(0.5, 0.8, 0.1, 0.2), 0.6);
+});
+
+Deno.test('incremento nunca ultrapassa bid máximo', () => {
+  assert.equal(nextConservativeBid(0.75, 0.8, 0.1, 0.2), 0.8);
 });
 
 Deno.test('após três tentativas sem entrega pausa e substitui', () => {
