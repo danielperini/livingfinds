@@ -92,6 +92,12 @@ Deno.serve(async (request) => {
           ...common,
           bootstrap_default_rules: body.bootstrap === true,
         });
+    const daypartBudgetRestore = body.skip_scheduled_daypart === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'reconcileDaypartCampaignBudgets', {
+          ...common,
+          now: body.now || null,
+        });
     const scheduledCampaignState = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
@@ -119,13 +125,13 @@ Deno.serve(async (request) => {
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
-      deliveryHealth, daypartConfiguration, scheduledCampaignState, scheduledBidDaypart,
-      repricing, scopeAfter,
+      deliveryHealth, daypartConfiguration, daypartBudgetRestore,
+      scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v11-persisted-daypart-rules',
+      engine_version: 'unified-v12-daypart-budget-restore',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -140,6 +146,7 @@ Deno.serve(async (request) => {
         source_of_truth: 'AmazonScheduledRule',
         live_when_not_dry_run: true,
         confirmation_required: true,
+        budget_policy: 'restaura somente reduções confirmadas do app; nunca ignora hard cap global',
       },
       execution: 'fila canônica, confirmação Amazon e persistência posterior',
       stages,
