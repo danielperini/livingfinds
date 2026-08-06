@@ -15,8 +15,6 @@ export type PersistedDaypartRule = {
   status?: string;
 };
 
-const DAY_NAMES = ['SUNDAY', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY'];
-
 function partsAt(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -24,10 +22,9 @@ function partsAt(date: Date, timeZone: string) {
     weekday: 'long', hour: '2-digit', minute: '2-digit', hour12: false,
   }).formatToParts(date);
   const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
-  const weekday = String(get('weekday')).toUpperCase();
   return {
     dateKey: `${get('year')}-${get('month')}-${get('day')}`,
-    weekday: DAY_NAMES.includes(weekday) ? weekday : weekday,
+    weekday: String(get('weekday')).toUpperCase(),
     minuteOfDay: (Number(get('hour')) % 24) * 60 + Number(get('minute')),
   };
 }
@@ -41,26 +38,33 @@ function parseMinute(value: unknown): number | null {
   return hour * 60 + minute;
 }
 
-function insideWindow(nowMinute: number, start: number, end: number): boolean {
-  if (start === end) return false;
-  return start < end ? nowMinute >= start && nowMinute < end : nowMinute >= start || nowMinute < end;
-}
-
-export function ruleMatchesNow(rule: PersistedDaypartRule, now = new Date()): boolean {
-  if (String(rule.status || '').toLowerCase() !== 'enabled') return false;
+function windowContext(rule: PersistedDaypartRule, now: Date) {
   const timeZone = rule.timezone || 'America/Sao_Paulo';
   const local = partsAt(now, timeZone);
   const start = parseMinute(rule.start_time);
   const end = parseMinute(rule.end_time);
-  if (start === null || end === null || !insideWindow(local.minuteOfDay, start, end)) return false;
+  if (start === null || end === null || start === end) return null;
+  const overnight = start > end;
+  const inside = overnight
+    ? local.minuteOfDay >= start || local.minuteOfDay < end
+    : local.minuteOfDay >= start && local.minuteOfDay < end;
+  if (!inside) return null;
+  const startedPreviousDay = overnight && local.minuteOfDay < end;
+  const anchor = startedPreviousDay ? partsAt(new Date(now.getTime() - 24 * 60 * 60_000), timeZone) : local;
+  return { local, anchor };
+}
+
+export function ruleMatchesNow(rule: PersistedDaypartRule, now = new Date()): boolean {
+  if (String(rule.status || '').toLowerCase() !== 'enabled') return false;
+  const context = windowContext(rule, now);
+  if (!context) return false;
 
   const holidays = new Set((rule.holiday_dates || []).map(String));
-  const holiday = holidays.has(local.dateKey);
+  const holiday = holidays.has(context.anchor.dateKey);
   const days = new Set((rule.days_of_week || []).map((day) => String(day).toUpperCase()));
   const holidayMode = String(rule.holiday_mode || 'IGNORE').toUpperCase();
-  if (holidayMode === 'WEEKEND_POLICY' && holiday) return true;
-  if (holidayMode === 'AUTO_BR' && holiday) return true;
-  return days.has(local.weekday);
+  if ((holidayMode === 'WEEKEND_POLICY' || holidayMode === 'AUTO_BR') && holiday) return true;
+  return days.has(context.anchor.weekday);
 }
 
 export function campaignMatchesRule(rule: PersistedDaypartRule, campaign: any): boolean {
@@ -84,6 +88,7 @@ export function bidMultiplierForRule(rule: PersistedDaypartRule): number {
 }
 
 export function ruleWindowKey(rule: PersistedDaypartRule, now = new Date()): string {
-  const local = partsAt(now, rule.timezone || 'America/Sao_Paulo');
-  return `${rule.id || rule.rule_name || 'rule'}|${local.dateKey}|${rule.start_time || ''}-${rule.end_time || ''}`;
+  const context = windowContext(rule, now);
+  const anchorDate = context?.anchor.dateKey || partsAt(now, rule.timezone || 'America/Sao_Paulo').dateKey;
+  return `${rule.id || rule.rule_name || 'rule'}|${anchorDate}|${rule.start_time || ''}-${rule.end_time || ''}`;
 }
