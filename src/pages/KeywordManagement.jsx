@@ -1,43 +1,56 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Download, Loader2, RefreshCw, Search, Upload, X, Zap } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
-import {
-  Search, RefreshCw, Loader2, X,
-  Brain, Upload, Check, Square, Download, Zap
-} from 'lucide-react';
+import { loadAllCampaigns, campaignIsArchived } from '@/lib/campaignUtils';
 import { Button } from '@/components/ui/button';
+import PremiumDataTable from '@/components/ui/PremiumDataTable';
 
 const CLASSIFICATION_CONFIG = {
   winner: { label: 'Vencedor', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' },
-  emerging: { label: 'Emergente', color: 'text-cyan bg-cyan/10 border-cyan/20' },
   promising: { label: 'Promissor', color: 'text-blue-400 bg-blue-400/10 border-blue-400/20' },
-  exploratory: { label: 'Exploratório', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' },
   inefficient: { label: 'Ineficiente', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
   negate_candidate: { label: 'Negativar', color: 'text-red-400 bg-red-400/10 border-red-400/20' },
-  no_data: { label: 'Sem Dados', color: 'text-slate-500 bg-slate-500/10 border-slate-500/20' },
+  no_data: { label: 'Sem dados', color: 'text-slate-400 bg-slate-400/10 border-slate-400/20' },
 };
 
-function classifyTerm(kw, acosTarget = 30) {
-  const clicks = kw.clicks || 0;
-  const orders = kw.orders || 0;
-  const spend = kw.spend || 0;
-  const sales = kw.sales || 0;
-  const acos = kw.acos || 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const idOfCampaign = (campaign) => String(campaign?.campaign_id || campaign?.amazon_campaign_id || campaign?.id || '').trim();
+const idOfTermCampaign = (term) => String(term?.campaign_id || term?.amazon_campaign_id || '').trim();
+const termText = (term) => String(term?.search_term || term?.keyword_text || term?.keyword || '').trim();
+const suggestionKey = (item) => `${String(item?.campaign_id || '').trim()}::${String(item?.keyword_text || '').trim().toLocaleLowerCase('pt-BR')}::exact`;
 
+function metricsOf(term) {
+  return {
+    clicks: Number(term?.clicks || 0),
+    orders: Number(term?.orders_14d ?? term?.orders ?? 0),
+    spend: Number(term?.spend || 0),
+    sales: Number(term?.sales_14d ?? term?.sales ?? 0),
+    acos: Number(term?.acos_14d ?? term?.acos ?? 0),
+  };
+}
+
+function classifyTerm(term, acosTarget) {
+  const { clicks, orders, spend, acos } = metricsOf(term);
   if (clicks < 5) return 'no_data';
   if (orders >= 2 && acos > 0 && acos <= acosTarget) return 'winner';
-  if (clicks >= 10 && spend > 2 && orders === 0) return 'negate_candidate';
-  if (clicks >= 5 && orders === 0) return 'inefficient';
-  if (acos > acosTarget * 1.5) return 'inefficient';
+  if (orders === 0 && clicks >= 10 && spend > 2) return 'negate_candidate';
+  if (orders === 0 || (acos > 0 && acos > acosTarget * 1.5)) return 'inefficient';
   return 'promising';
+}
+
+function campaignIsAutomatic(campaign, term) {
+  const explicit = String(campaign?.amazon_targeting_type || campaign?.targeting_type || term?.targeting_type || '').toUpperCase();
+  if (explicit) return explicit === 'AUTO' || explicit === 'AUTOMATIC';
+  return /\bAUTO(?:MATIC[AO]?)?\b/i.test(String(campaign?.name || campaign?.campaign_name || term?.campaign_name || ''));
 }
 
 export default function KeywordManagement() {
   const [account, setAccount] = useState(null);
   const [keywords, setKeywords] = useState([]);
   const [negatives, setNegatives] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('search'); // 'search' | 'negatives'
+  const [activeTab, setActiveTab] = useState('search');
   const [actionMsg, setActionMsg] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const [selectedNegatives, setSelectedNegatives] = useState(new Set());
@@ -45,27 +58,33 @@ export default function KeywordManagement() {
   const [importing, setImporting] = useState(false);
   const [fetchingApi, setFetchingApi] = useState(false);
   const [harvesting, setHarvesting] = useState(false);
+  const [autoNegating, setAutoNegating] = useState(false);
   const [acosTarget, setAcosTarget] = useState(30);
   const fileInputRef = useRef(null);
+  const autoRunKeyRef = useRef('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const me = await base44.auth.me();
       const accounts = await base44.entities.AmazonAccount.filter({ user_id: me.id });
-      const acc = accounts[0] || (await base44.entities.AmazonAccount.list())[0];
-      setAccount(acc);
+      const acc = accounts[0] || (await base44.entities.AmazonAccount.list('-updated_date', 1))[0];
+      setAccount(acc || null);
       if (!acc) return;
 
-      const rules = await base44.entities.BudgetRule.filter({ amazon_account_id: acc.id });
-      if (rules[0]?.target_acos) setAcosTarget(rules[0].target_acos);
-
-      const [searchTerms, negs] = await Promise.all([
+      const [rules, searchTerms, suggestions, loadedCampaigns] = await Promise.all([
+        base44.entities.BudgetRule.filter({ amazon_account_id: acc.id }),
         base44.entities.SearchTerm.filter({ amazon_account_id: acc.id }, '-clicks', 2000),
-        base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_date', 500),
+        base44.entities.NegativeKeywordSuggestion.filter({ amazon_account_id: acc.id }, '-created_date', 1000),
+        loadAllCampaigns(acc.id, {}, { includeExcluded: true }),
       ]);
+
+      if (rules[0]?.target_acos) setAcosTarget(Number(rules[0].target_acos));
       setKeywords(searchTerms);
-      setNegatives(negs);
+      setNegatives(suggestions);
+      setCampaigns(loadedCampaigns.filter((campaign) => !campaignIsArchived(campaign)));
+    } catch (error) {
+      setActionMsg({ type: 'error', text: `Falha ao carregar Keywords: ${error?.message || 'erro desconhecido'}` });
     } finally {
       setLoading(false);
     }
@@ -73,430 +92,211 @@ export default function KeywordManagement() {
 
   useEffect(() => { load(); }, [load]);
 
-  const negateKeyword = async (kw) => {
-    setActionLoading(kw.id);
-    try {
-      await base44.entities.NegativeKeywordSuggestion.create({
-        amazon_account_id: account.id,
-        campaign_id: kw.campaign_id,
-        ad_group_id: kw.ad_group_id,
-        keyword_text: kw.keyword_text || kw.keyword,
-        match_type: 'exact',
-        clicks: kw.clicks,
-        spend: kw.spend,
-        sales: kw.sales,
-        acos: kw.acos,
-        reason: `${kw.clicks} cliques, $${(kw.spend || 0).toFixed(2)} gasto, ${kw.orders || 0} pedidos`,
-        status: 'pending',
+  const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [idOfCampaign(campaign), campaign])), [campaigns]);
+  const activeCampaignIds = useMemo(() => new Set(campaigns.map(idOfCampaign).filter(Boolean)), [campaigns]);
+
+  const visibleKeywords = useMemo(() => keywords
+    .filter((term) => {
+      const campaignId = idOfTermCampaign(term);
+      return !campaignId || activeCampaignIds.has(campaignId);
+    })
+    .map((term) => {
+      const metrics = metricsOf(term);
+      return { ...term, ...metrics, _displayTerm: termText(term), _class: classifyTerm(term, acosTarget) };
+    }), [keywords, activeCampaignIds, acosTarget]);
+
+  const visibleNegatives = useMemo(() => negatives.filter((item) => {
+    const campaignId = String(item?.campaign_id || '').trim();
+    return !campaignId || activeCampaignIds.has(campaignId);
+  }), [negatives, activeCampaignIds]);
+
+  const eligibleAutoNegatives = useMemo(() => {
+    const existing = new Set(visibleNegatives.filter((item) => item.status !== 'rejected').map(suggestionKey));
+    return visibleKeywords.filter((term) => {
+      const campaignId = idOfTermCampaign(term);
+      const campaign = campaignById.get(campaignId);
+      if (!campaignId || !campaign || !campaignIsAutomatic(campaign, term)) return false;
+      if (term._class !== 'negate_candidate' || term.orders > 0 || !term._displayTerm) return false;
+      return !existing.has(`${campaignId}::${term._displayTerm.toLocaleLowerCase('pt-BR')}::exact`);
+    });
+  }, [visibleKeywords, visibleNegatives, campaignById]);
+
+  const executeNegativeSuggestion = useCallback(async (suggestion) => {
+    await base44.entities.NegativeKeywordSuggestion.update(suggestion.id, { status: 'approved' });
+    await base44.functions.invoke('executeAgentAction', { action_id: suggestion.id, approve: true });
+  }, []);
+
+  const autoNegateEligible = useCallback(async (silent = false) => {
+    if (!account || autoNegating || eligibleAutoNegatives.length === 0) return;
+    setAutoNegating(true);
+    let applied = 0;
+    let conflicts = 0;
+    let failed = 0;
+
+    for (const term of eligibleAutoNegatives.slice(0, 20)) {
+      try {
+        const suggestion = await base44.entities.NegativeKeywordSuggestion.create({
+          amazon_account_id: account.id,
+          campaign_id: idOfTermCampaign(term),
+          ad_group_id: term.ad_group_id,
+          campaign_name: term.campaign_name,
+          keyword_text: term._displayTerm,
+          match_type: 'exact',
+          clicks: term.clicks,
+          spend: term.spend,
+          sales: term.sales,
+          acos: term.acos,
+          reason: `Regra determinística: ${term.clicks} cliques, R$ ${term.spend.toFixed(2)} gastos e zero pedidos. Negativa exata em campanha automática.`,
+          status: 'pending',
+        });
+        await executeNegativeSuggestion(suggestion);
+        applied += 1;
+        await sleep(350);
+      } catch (error) {
+        const status = Number(error?.response?.status || error?.status || 0);
+        if (status === 409) conflicts += 1;
+        else if (status === 429) { failed += 1; break; }
+        else failed += 1;
+      }
+    }
+
+    setAutoNegating(false);
+    if (!silent || applied || failed) {
+      setActionMsg({
+        type: failed ? 'info' : 'success',
+        text: `Negativação automática: ${applied} aplicadas, ${conflicts} já existentes, ${failed} falhas. Apenas campanhas automáticas ativas e termos sem pedidos foram processados.`,
       });
-      setActionMsg({ type: 'success', text: `✓ Sugestão criada para "${kw.keyword_text}"` });
-      await load();
-    } catch (e) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
     }
+    await load();
+  }, [account, autoNegating, eligibleAutoNegatives, executeNegativeSuggestion, load]);
+
+  useEffect(() => {
+    if (loading || !account || eligibleAutoNegatives.length === 0) return;
+    const key = `${account.id}:${eligibleAutoNegatives.map((item) => item.id).sort().join(',')}`;
+    if (autoRunKeyRef.current === key) return;
+    autoRunKeyRef.current = key;
+    autoNegateEligible(true);
+  }, [loading, account, eligibleAutoNegatives, autoNegateEligible]);
+
+  const approveNegative = async (item) => {
+    setActionLoading(item.id);
+    try {
+      await executeNegativeSuggestion(item);
+      setActionMsg({ type: 'success', text: `“${item.keyword_text}” negativada como exata na Amazon.` });
+      await load();
+    } catch (error) {
+      setActionMsg({ type: 'error', text: error?.message || 'Falha ao negativar termo.' });
+    } finally { setActionLoading(null); }
   };
 
-  const approveNegative = async (s) => {
-    setActionLoading(s.id);
+  const rejectNegative = async (item) => {
+    setActionLoading(item.id);
     try {
-      await base44.entities.NegativeKeywordSuggestion.update(s.id, { status: 'approved' });
-      await base44.functions.invoke('executeAgentAction', { action_id: s.id, approve: true });
-      setActionMsg({ type: 'success', text: `✓ "${s.keyword_text}" negativada` });
+      await base44.entities.NegativeKeywordSuggestion.update(item.id, { status: 'rejected' });
       await load();
-    } catch (e) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
-    }
-  };
-
-  const rejectNegative = async (s) => {
-    setActionLoading(s.id);
-    try {
-      await base44.entities.NegativeKeywordSuggestion.update(s.id, { status: 'rejected' });
-      setActionMsg({ type: 'info', text: `✕ "${s.keyword_text}" rejeitada` });
-      await load();
-    } catch (e) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setActionLoading(null);
-      setTimeout(() => setActionMsg(null), 8000);
-    }
+    } finally { setActionLoading(null); }
   };
 
   const bulkApproveNegatives = async () => {
-    if (selectedNegatives.size === 0) return;
     setBulkApplying(true);
     let success = 0;
     for (const id of selectedNegatives) {
-      try {
-        await base44.entities.NegativeKeywordSuggestion.update(id, { status: 'approved' });
-        await base44.functions.invoke('executeAgentAction', { action_id: id, approve: true });
-        success++;
-      } catch {}
+      const item = visibleNegatives.find((candidate) => candidate.id === id);
+      if (!item || item.status !== 'pending') continue;
+      try { await executeNegativeSuggestion(item); success += 1; await sleep(350); } catch {}
     }
-    setBulkApplying(false);
     setSelectedNegatives(new Set());
-    setActionMsg({ type: 'success', text: `✓ ${success} termos negativados` });
+    setBulkApplying(false);
+    setActionMsg({ type: 'success', text: `${success} negativas exatas aplicadas.` });
     await load();
-    setTimeout(() => setActionMsg(null), 10000);
   };
 
   const fetchFromApi = async () => {
-    if (!account || fetchingApi) return;
+    if (!account) return;
     setFetchingApi(true);
     try {
-      const res = await base44.functions.invoke('fetchSearchTermsFromApi', {
-        amazon_account_id: account.id,
-        days: 30,
-        manual: true,
-      });
-      const d = res.data;
-      if (d?.skipped) {
-        setActionMsg({ type: 'info', text: '✓ Busca já realizada hoje. Use reimportação para forçar.' });
-      } else if (d?.pending) {
-        setActionMsg({ type: 'info', text: `⏳ Relatório em processamento (ID: ${d.report_id}). Tente novamente em 1–2 min.` });
-      } else if (d?.ok) {
-        setActionMsg({ type: 'success', text: `✓ ${d.imported} novos termos · ${d.updated} atualizados · Período: ${d.period}` });
-        await load();
-      } else {
-        setActionMsg({ type: 'error', text: d?.error || d?.message || 'Falha ao buscar termos' });
-      }
-    } catch (e) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setFetchingApi(false);
-      setTimeout(() => setActionMsg(null), 15000);
-    }
+      const response = await base44.functions.invoke('fetchSearchTermsFromApi', { amazon_account_id: account.id, days: 30, manual: true });
+      const data = response.data;
+      setActionMsg({ type: data?.ok ? 'success' : 'info', text: data?.ok ? `${data.imported || 0} novos termos e ${data.updated || 0} atualizados.` : (data?.error || data?.message || 'Relatório solicitado à Amazon.') });
+      await load();
+    } catch (error) { setActionMsg({ type: 'error', text: error?.message || 'Falha ao buscar termos.' }); }
+    finally { setFetchingApi(false); }
   };
 
   const runHarvest = async () => {
-    if (!account || harvesting) return;
+    if (!account) return;
     setHarvesting(true);
     try {
-      const res = await base44.functions.invoke('harvestConvertedSearchTerms', { amazon_account_id: account.id });
-      const d = res.data;
-      if (d?.ok) {
-        setActionMsg({ type: 'success', text: `🌾 ${d.harvested} termos colhidos para campanha manual · Safe cutoff: ${d.safe_cutoff}` });
-        await load();
-      } else {
-        setActionMsg({ type: 'error', text: d?.error || 'Falha na colheita' });
-      }
-    } catch (e) {
-      setActionMsg({ type: 'error', text: e.message });
-    } finally {
-      setHarvesting(false);
-      setTimeout(() => setActionMsg(null), 12000);
-    }
+      const response = await base44.functions.invoke('harvestConvertedSearchTerms', { amazon_account_id: account.id });
+      setActionMsg({ type: response.data?.ok ? 'success' : 'error', text: response.data?.ok ? `${response.data.harvested || 0} termos promovidos para campanhas manuais.` : (response.data?.error || 'Falha na colheita.') });
+      await load();
+    } catch (error) { setActionMsg({ type: 'error', text: error?.message || 'Falha na colheita.' }); }
+    finally { setHarvesting(false); }
   };
 
-  const handleImportFile = async (e) => {
-    const file = e.target.files?.[0];
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
     if (!file || !account) return;
     setImporting(true);
     try {
-      const uploadRes = await base44.integrations.Core.UploadFile({ file });
-      const importRes = await base44.functions.invoke('importSearchTermReport', {
-        file_url: uploadRes.file_url,
-        amazon_account_id: account.id,
-      });
-      if (importRes.data?.ok) {
-        setActionMsg({ type: 'success', text: `✓ ${importRes.data.imported} termos importados` });
-        await load();
-      }
-    } catch (err) {
-      setActionMsg({ type: 'error', text: err.message });
-    } finally {
-      setImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      setTimeout(() => setActionMsg(null), 10000);
-    }
+      const upload = await base44.integrations.Core.UploadFile({ file });
+      await base44.functions.invoke('importSearchTermReport', { file_url: upload.file_url, amazon_account_id: account.id });
+      await load();
+    } catch (error) { setActionMsg({ type: 'error', text: error?.message || 'Falha ao importar arquivo.' }); }
+    finally { setImporting(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   };
 
-  const classifiedKeywords = keywords.map(kw => ({
-    ...kw,
-    // SearchTerm usa search_term, Keyword usa keyword_text
-    _displayTerm: kw.search_term || kw.keyword_text || kw.keyword || '',
-    // Normalizar campos de métricas: SearchTerm usa orders_14d, Keyword usa orders
-    _orders: kw.orders_14d ?? kw.orders ?? 0,
-    _sales: kw.sales_14d ?? kw.sales ?? 0,
-    _acos: kw.acos_14d ?? kw.acos ?? 0,
-    _class: classifyTerm({
-      clicks: kw.clicks,
-      orders: kw.orders_14d ?? kw.orders ?? 0,
-      spend: kw.spend,
-      sales: kw.sales_14d ?? kw.sales ?? 0,
-      acos: kw.acos_14d ?? kw.acos ?? 0,
-    }, acosTarget),
-  })).filter(kw => {
-    const matchSearch = !search || kw._displayTerm.toLowerCase().includes(search.toLowerCase());
-    return matchSearch;
-  });
+  const keywordColumns = useMemo(() => [
+    { id: 'term', header: 'Termo', sortValue: (row) => row._displayTerm, cell: (row) => <div className="max-w-[300px]"><p className="font-medium text-white truncate">{row._displayTerm}</p><p className="text-[10px] text-slate-400 truncate">{row.campaign_name || 'Campanha ativa'}</p></div> },
+    { id: 'class', header: 'Classe', sortValue: (row) => CLASSIFICATION_CONFIG[row._class]?.label, cell: (row) => { const cfg = CLASSIFICATION_CONFIG[row._class]; return <span className={`rounded-full border px-2 py-1 text-xs font-medium ${cfg.color}`}>{cfg.label}</span>; } },
+    { id: 'clicks', header: 'Cliques', sortValue: (row) => row.clicks, cell: (row) => row.clicks.toLocaleString('pt-BR') },
+    { id: 'spend', header: 'Gasto', sortValue: (row) => row.spend, cell: (row) => row.spend.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
+    { id: 'sales', header: 'Vendas', sortValue: (row) => row.sales, cell: (row) => <span className="text-emerald-400">{row.sales.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span> },
+    { id: 'acos', header: 'ACoS', sortValue: (row) => row.acos, cell: (row) => row.acos > 0 ? `${row.acos.toFixed(1)}%` : '—' },
+    { id: 'action', header: 'Ação', sortValue: (row) => row._class, cell: (row) => row._class === 'negate_candidate' ? <span className="text-xs text-red-400">Automática exata</span> : '—' },
+  ], []);
 
-  const filteredNegatives = negatives.filter(s => {
-    const matchSearch = !search || (s.keyword_text || '').toLowerCase().includes(search.toLowerCase());
-    return matchSearch;
-  });
+  const negativeColumns = useMemo(() => [
+    { id: 'select', header: 'Sel.', sortValue: (row) => selectedNegatives.has(row.id) ? 1 : 0, cell: (row) => row.status === 'pending' ? <input type="checkbox" checked={selectedNegatives.has(row.id)} onChange={() => setSelectedNegatives((current) => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next; })} /> : null },
+    { id: 'term', header: 'Termo', sortValue: (row) => row.keyword_text, cell: (row) => <span className="font-medium text-white">{row.keyword_text}</span> },
+    { id: 'status', header: 'Status', sortValue: (row) => row.status, cell: (row) => <span className={row.status === 'approved' ? 'text-emerald-400' : row.status === 'rejected' ? 'text-red-400' : 'text-amber-400'}>{row.status || 'pending'}</span> },
+    { id: 'campaign', header: 'Campanha', sortValue: (row) => row.campaign_name, cell: (row) => row.campaign_name || '—' },
+    { id: 'clicks', header: 'Cliques', sortValue: (row) => Number(row.clicks || 0), cell: (row) => Number(row.clicks || 0).toLocaleString('pt-BR') },
+    { id: 'spend', header: 'Gasto', sortValue: (row) => Number(row.spend || 0), cell: (row) => Number(row.spend || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) },
+    { id: 'acos', header: 'ACoS', sortValue: (row) => Number(row.acos || 0), cell: (row) => Number(row.acos || 0) > 0 ? `${Number(row.acos).toFixed(1)}%` : '—' },
+    { id: 'actions', header: 'Ações', sortValue: (row) => row.status, cell: (row) => row.status === 'pending' ? <div className="flex gap-2"><Button size="sm" variant="outline" disabled={actionLoading === row.id} onClick={() => approveNegative(row)}><Check className="h-3 w-3" /> Aprovar</Button><Button size="sm" variant="outline" disabled={actionLoading === row.id} onClick={() => rejectNegative(row)}><X className="h-3 w-3" /> Rejeitar</Button></div> : '—' },
+  ], [selectedNegatives, actionLoading]);
 
-  const pendingNegatives = negatives.filter(s => s.status === 'pending').length;
-  const approvedNegatives = negatives.filter(s => s.status === 'approved').length;
+  const pendingNegatives = visibleNegatives.filter((item) => item.status === 'pending').length;
 
   return (
     <div className="p-6 space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
-            <Search className="w-5 h-5 text-cyan" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white">Gestão de Palavras-chave</h1>
-            <p className="text-xs text-slate-400">
-              {keywords.length} search terms · {pendingNegatives} negativas pendentes
-            </p>
-          </div>
-        </div>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div><h1 className="text-lg font-bold text-white">Gestão de Palavras-chave</h1><p className="text-xs text-slate-400">{visibleKeywords.length} termos de campanhas atuais · {pendingNegatives} negativas pendentes · campanhas arquivadas ocultadas</p></div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={fetchFromApi}
-            disabled={fetchingApi || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Download className={`w-4 h-4 ${fetchingApi ? 'animate-spin' : ''}`} />
-            {fetchingApi ? 'Buscando...' : 'Buscar Termos via API'}
-          </button>
-          <button
-            onClick={runHarvest}
-            disabled={harvesting || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-emerald-400/10 border border-emerald-400/20 text-emerald-400 hover:bg-emerald-400/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Zap className={`w-4 h-4 ${harvesting ? 'animate-spin' : ''}`} />
-            {harvesting ? 'Analisando...' : 'Analisar → Campanha Manual'}
-          </button>
+          <Button size="sm" variant="outline" onClick={fetchFromApi} disabled={fetchingApi || !account}><Download className={`h-4 w-4 ${fetchingApi ? 'animate-spin' : ''}`} /> Buscar Amazon</Button>
+          <Button size="sm" variant="outline" onClick={runHarvest} disabled={harvesting || !account}><Zap className={`h-4 w-4 ${harvesting ? 'animate-spin' : ''}`} /> Promover convertidos</Button>
+          <Button size="sm" onClick={() => autoNegateEligible(false)} disabled={autoNegating || eligibleAutoNegatives.length === 0}><X className={`h-4 w-4 ${autoNegating ? 'animate-spin' : ''}`} /> Negativar elegíveis ({eligibleAutoNegatives.length})</Button>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} className="hidden" />
-          <Button onClick={() => fileInputRef.current?.click()} disabled={importing} variant="outline" size="sm">
-            <Upload className={`w-4 h-4 ${importing ? 'animate-spin' : ''}`} />
-            {importing ? 'Importando...' : 'Importar CSV'}
-          </Button>
-          <Button onClick={load} disabled={loading} variant="outline" size="sm">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
+          <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()} disabled={importing}><Upload className="h-4 w-4" /> Importar</Button>
+          <Button size="sm" variant="outline" onClick={load} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></Button>
         </div>
       </div>
 
-      {actionMsg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${
-          actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' :
-          actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-400' :
-          'bg-cyan/10 border-cyan/20 text-cyan'
-        }`}>{actionMsg.text}</div>
-      )}
+      {actionMsg && <div className={`rounded-xl border px-4 py-3 text-sm ${actionMsg.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-300' : actionMsg.type === 'success' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-blue-500/30 bg-blue-500/10 text-blue-300'}`}>{actionMsg.text}</div>}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-2 border-b border-surface-2">
-        <button
-          onClick={() => setActiveTab('search')}
-          className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
-            activeTab === 'search'
-              ? 'border-cyan text-cyan'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          Search Terms
-        </button>
-        <button
-          onClick={() => setActiveTab('negatives')}
-          className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors ${
-            activeTab === 'negatives'
-              ? 'border-red-500 text-red-400'
-              : 'border-transparent text-slate-500 hover:text-slate-300'
-          }`}
-        >
-          Palavras Negativas {pendingNegatives > 0 && `(${pendingNegatives})`}
-        </button>
+      <div className="flex gap-2 border-b border-[#24324F]">
+        <button className={`px-4 py-2 text-sm font-semibold ${activeTab === 'search' ? 'border-b-2 border-[#5B8CFF] text-white' : 'text-slate-400'}`} onClick={() => setActiveTab('search')}>Search Terms</button>
+        <button className={`px-4 py-2 text-sm font-semibold ${activeTab === 'negatives' ? 'border-b-2 border-[#FF5D5D] text-white' : 'text-slate-400'}`} onClick={() => setActiveTab('negatives')}>Palavras negativas ({pendingNegatives})</button>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative sm:w-64">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Pesquisar..."
-          className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
-        />
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-20"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
+      {loading ? <div className="flex justify-center py-20"><Loader2 className="h-7 w-7 animate-spin text-[#5B8CFF]" /></div> : activeTab === 'search' ? (
+        <PremiumDataTable columns={keywordColumns} data={visibleKeywords} searchable searchPlaceholder="Pesquisar termo ou campanha..." initialSort={{ id: 'clicks', direction: 'desc' }} emptyMessage="Nenhum termo de campanha atual encontrado." />
       ) : (
-        <>
-          {/* Search Terms Tab */}
-          {activeTab === 'search' && (
-            <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-surface-2 bg-surface-2/40">
-                      {['Termo', 'Classe', 'Cliques', 'Spend', 'Vendas', 'ACoS', 'Ação'].map(h => (
-                        <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {classifiedKeywords.length === 0 ? (
-                      <tr><td colSpan={7} className="px-4 py-12 text-center text-sm text-slate-500">
-                        Nenhum search term encontrado. Use "Buscar Termos via API" para importar dados da Amazon.
-                      </td></tr>
-                    ) : classifiedKeywords.map(kw => {
-                      const cfg = CLASSIFICATION_CONFIG[kw._class];
-                      const isLoading = actionLoading === kw.id;
-                      const canNegate = kw._class === 'negate_candidate' || kw._class === 'inefficient';
-
-                      return (
-                        <tr key={kw.id} className="border-b border-surface-2/40 hover:bg-surface-2/30">
-                          <td className="px-4 py-2.5 max-w-[220px]">
-                            <p className="text-xs text-slate-200 truncate font-medium">{kw._displayTerm}</p>
-                            {kw.campaign_name && <p className="text-[10px] text-slate-500 truncate">{kw.campaign_name}</p>}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${cfg.color}`}>{cfg.label}</span>
-                          </td>
-                          <td className="px-4 py-2.5 text-xs text-slate-400">{(kw.clicks || 0).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-xs text-slate-400">R${(kw.spend || 0).toFixed(2)}</td>
-                          <td className="px-4 py-2.5 text-xs text-emerald-400">R${(kw._sales || 0).toFixed(2)}</td>
-                          <td className="px-4 py-2.5">
-                            <span className={`text-xs font-semibold ${(kw._acos || 0) > 50 ? 'text-red-400' : (kw._acos || 0) > 30 ? 'text-amber-400' : (kw._acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
-                              {(kw._acos || 0) > 0 ? `${(kw._acos || 0).toFixed(1)}%` : '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {canNegate && (
-                              <Button
-                                onClick={() => negateKeyword(kw)}
-                                disabled={isLoading}
-                                variant="outline"
-                                size="sm"
-                                className="text-red-400 border-red-500/30 hover:bg-red-500/10"
-                              >
-                                <X className="w-3 h-3 mr-1" />
-                                Negativar
-                              </Button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Negative Keywords Tab */}
-          {activeTab === 'negatives' && (
-            <>
-              {selectedNegatives.size > 0 && (
-                <div className="bg-surface-2 border border-surface-3 rounded-xl p-4 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Check className="w-5 h-5 text-cyan" />
-                    <p className="text-sm text-slate-300"><strong className="text-white">{selectedNegatives.size}</strong> selecionados</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button onClick={bulkApproveNegatives} disabled={bulkApplying} size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white">
-                      <Check className="w-4 h-4 mr-1" />
-                      Negativar ({selectedNegatives.size})
-                    </Button>
-                    <Button onClick={() => setSelectedNegatives(new Set())} variant="ghost" size="sm">Limpar</Button>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-surface-2 bg-surface-2/40">
-                        <th className="px-4 py-3 w-10"></th>
-                        {['Termo', 'Status', 'Campanha', 'Cliques', 'Spend', 'Vendas', 'ACoS', 'Ações'].map(h => (
-                          <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredNegatives.map(s => {
-                        const isSelected = selectedNegatives.has(s.id);
-                        const isLoading = actionLoading === s.id;
-                        const statusConfig = {
-                          pending: { label: 'Pendente', color: 'text-amber-400 bg-amber-400/10 border-amber-400/20' },
-                          approved: { label: 'Aprovado', color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20' },
-                          rejected: { label: 'Rejeitado', color: 'text-red-400 bg-red-400/10 border-red-400/20' },
-                        }[s.status || 'pending'];
-
-                        return (
-                          <tr key={s.id} className={`border-b border-surface-2/40 hover:bg-surface-2/30 ${isSelected ? 'bg-cyan/5' : ''}`}>
-                            <td className="px-4 py-3">
-                              {s.status === 'pending' && (
-                                <button
-                                  onClick={() => setSelectedNegatives(prev => {
-                                    const next = new Set(prev);
-                                    if (next.has(s.id)) next.delete(s.id);
-                                    else next.add(s.id);
-                                    return next;
-                                  })}
-                                  className={`flex items-center justify-center w-5 h-5 rounded ${isSelected ? 'bg-cyan text-white' : 'bg-surface-3 hover:bg-surface-2'}`}
-                                >
-                                  {isSelected ? <Check className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5 text-slate-500" />}
-                                </button>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 max-w-[200px]">
-                              <p className="text-xs text-slate-200 truncate font-medium">{s.keyword_text}</p>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${statusConfig.color}`}>{statusConfig.label}</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <p className="text-xs text-slate-400 truncate max-w-[150px]">{s.campaign_name || '—'}</p>
-                            </td>
-                            <td className="px-4 py-3 text-xs text-slate-400">{(s.clicks || 0).toLocaleString()}</td>
-                            <td className="px-4 py-3 text-xs text-slate-400">${(s.spend || 0).toFixed(2)}</td>
-                            <td className="px-4 py-3 text-xs text-emerald-400">${(s.sales || 0).toFixed(2)}</td>
-                            <td className="px-4 py-3">
-                              <span className={`text-xs font-semibold ${(s.acos || 0) > 50 ? 'text-red-400' : (s.acos || 0) > 30 ? 'text-amber-400' : (s.acos || 0) > 0 ? 'text-emerald-400' : 'text-slate-600'}`}>
-                                {(s.acos || 0) > 0 ? `${(s.acos || 0).toFixed(1)}%` : '—'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              {s.status === 'pending' ? (
-                                <div className="flex items-center gap-1.5">
-                                  <Button onClick={() => approveNegative(s)} disabled={isLoading} variant="outline" size="sm" className="text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10">
-                                    {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                                    Aprovar
-                                  </Button>
-                                  <Button onClick={() => rejectNegative(s)} disabled={isLoading} variant="outline" size="sm" className="text-red-400 border-red-500/30 hover:bg-red-500/10">
-                                    {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
-                                    Rejeitar
-                                  </Button>
-                                </div>
-                              ) : (
-                                <span className={`text-xs ${statusConfig.color.split(' ')[0]}`}>{statusConfig.label}</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
-          )}
-        </>
+        <div className="space-y-3">
+          {selectedNegatives.size > 0 && <div className="flex items-center justify-between rounded-xl border border-[#24324F] bg-[#0B1224] p-3"><span>{selectedNegatives.size} selecionadas</span><Button size="sm" onClick={bulkApproveNegatives} disabled={bulkApplying}>{bulkApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Aplicar negativas exatas</Button></div>}
+          <PremiumDataTable columns={negativeColumns} data={visibleNegatives} searchable searchPlaceholder="Pesquisar negativa ou campanha..." initialSort={{ id: 'status', direction: 'asc' }} emptyMessage="Nenhuma negativa de campanha atual encontrada." />
+        </div>
       )}
     </div>
   );
