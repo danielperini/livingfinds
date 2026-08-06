@@ -39,13 +39,11 @@ import SpApiSelfAuth from '@/pages/SpApiSelfAuth';
 import AmazonIntegracao from '@/pages/integracoes/Amazon';
 import SystemHealth from '@/pages/SystemHealth';
 import CampaignConfig from '@/pages/CampaignConfig';
-import DaypartingDashboard from '@/pages/DaypartingDashboard';
 import ManualInstrucoes from '@/pages/ManualInstrucoes';
 import OptimizerPipeline from '@/pages/OptimizerPipeline';
 import CurrencyAudit from '@/pages/CurrencyAudit';
 import KeywordManagement from '@/pages/KeywordManagement';
 import AmazonOAuthSetup from '@/pages/AmazonOAuthSetup';
-import TermBankPage from '@/pages/TermBankPage';
 import CampaignFactory from '@/pages/CampaignFactory';
 import DaypartCrossAsinPage from '@/pages/DaypartCrossAsinPage';
 import ListingEnhancementPage from '@/pages/ListingEnhancementPage';
@@ -53,10 +51,9 @@ import AdsAuthorizationPage from '@/pages/AdsAuthorizationPage';
 import Users from '@/pages/Users';
 
 import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
-import SalaDeComando from '@/pages/SalaDeComando';
+import SalaDeComandoPremium from '@/pages/SalaDeComandoPremium';
+import SalaDeComandoLegacy from '@/pages/SalaDeComando';
 import KickoffQueueMonitor from '@/pages/KickoffQueueMonitor';
-import StrategyEnginePage from '@/pages/StrategyEnginePage';
-import WeeklyPrelectionPage from '@/pages/WeeklyPrelectionPage';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -102,9 +99,7 @@ const AuthenticatedApp = () => {
     );
   }
 
-  if (authError?.type === 'user_not_registered') {
-    return <UserNotRegisteredError />;
-  }
+  if (authError?.type === 'user_not_registered') return <UserNotRegisteredError />;
 
   if (!splashDone && !showSplash && !isLoadingAuth && !isLoadingPublicSettings && !authError) {
     return (
@@ -116,9 +111,7 @@ const AuthenticatedApp = () => {
 
   return (
     <>
-      {showSplash && (
-        <AppOpeningSplash onComplete={() => { setShowSplash(false); setSplashDone(true); }} />
-      )}
+      {showSplash && <AppOpeningSplash onComplete={() => { setShowSplash(false); setSplashDone(true); }} />}
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -159,11 +152,12 @@ const AuthenticatedApp = () => {
             <Route path="/products/listing-enhancement" element={<ListingEnhancementPage />} />
             <Route path="/settings/ads-authorization" element={<AdsAuthorizationPage />} />
             <Route path="/keyword-ml" element={<KeywordMLDashboard />} />
-            <Route path="/sala-de-comando" element={<SalaDeComando />} />
+            <Route path="/sala-de-comando" element={<SalaDeComandoPremium />} />
+            <Route path="/sala-de-comando/legacy" element={<SalaDeComandoLegacy />} />
             <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
-            <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
-            <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando?tab=prelecao" replace />} />
-            <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando?tab=estrategias" replace />} />
+            <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />
+            <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando/legacy?tab=prelecao" replace />} />
+            <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />
             <Route path="/recommendations" element={<Navigate to="/autopilot" replace />} />
             <Route path="/learner" element={<Navigate to="/autopilot" replace />} />
             <Route path="/motor-config" element={<Navigate to="/autopilot" replace />} />
