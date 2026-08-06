@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from '@/App.jsx'
 import '@/index.css'
 import '@/styles/premium-theme.css'
+import '@/styles/workspaces-premium.css'
 import '@/dashboardSeparatedChartsEntry.jsx'
 import { installCampaignInsertionGuard } from '@/lib/installCampaignInsertionGuard'
 
