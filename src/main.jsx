@@ -12,11 +12,13 @@ import { installCampaignInsertionGuard } from '@/lib/installCampaignInsertionGua
 import { installGlobalTableSorting } from '@/lib/installGlobalTableSorting'
 import { installUnlimitedKeywordReads } from '@/lib/installUnlimitedKeywordReads'
 import { installActiveCampaignReads } from '@/lib/installActiveCampaignReads'
+import { installAutomaticNegativeHarvest } from '@/lib/installAutomaticNegativeHarvest'
 
 installCampaignInsertionGuard()
 installGlobalTableSorting()
 installUnlimitedKeywordReads()
 installActiveCampaignReads()
+installAutomaticNegativeHarvest()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <App />
