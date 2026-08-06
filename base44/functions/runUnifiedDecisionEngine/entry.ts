@@ -85,20 +85,25 @@ Deno.serve(async (request) => {
     const deliveryHealth = body.skip_campaign_delivery_health === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'reconcileCampaignDeliveryHealth', { ...common, snapshot_run_id: snapshotRunId });
+
+    const daypartConfiguration = body.skip_scheduled_daypart === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'syncDaypartingConfiguration', {
+          ...common,
+          bootstrap_default_rules: body.bootstrap === true,
+        });
     const scheduledCampaignState = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
-          ...common, holiday_dates: body.holiday_dates || null, now: body.now || null,
+          ...common, now: body.now || null,
         });
     const scheduledBidDaypart = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueScheduledAdsDaypartTest', {
           ...common,
-          dry_run: body.scheduled_daypart_dry_run !== false,
-          enable_live_test: body.enable_scheduled_daypart_live_test === true,
-          holiday_dates: body.holiday_dates || null,
           now: body.now || null,
         });
+
     const repricing = body.skip_repricing === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runAutomaticRepricing', {
@@ -114,12 +119,13 @@ Deno.serve(async (request) => {
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
-      deliveryHealth, scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
+      deliveryHealth, daypartConfiguration, scheduledCampaignState, scheduledBidDaypart,
+      repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v10-canonical-campaign-lifecycle',
+      engine_version: 'unified-v11-persisted-daypart-rules',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -129,6 +135,11 @@ Deno.serve(async (request) => {
         interval_hours: 3,
         brt_hour: currentHour,
         schedule_owner: 'runUnifiedDecisionEngine',
+      },
+      dayparting: {
+        source_of_truth: 'AmazonScheduledRule',
+        live_when_not_dry_run: true,
+        confirmation_required: true,
       },
       execution: 'fila canônica, confirmação Amazon e persistência posterior',
       stages,
