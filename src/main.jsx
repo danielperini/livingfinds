@@ -6,8 +6,10 @@ import '@/styles/premium-theme.css'
 import '@/styles/workspaces-premium.css'
 import '@/dashboardSeparatedChartsEntry.jsx'
 import { installCampaignInsertionGuard } from '@/lib/installCampaignInsertionGuard'
+import { installGlobalTableSorting } from '@/lib/installGlobalTableSorting'
 
 installCampaignInsertionGuard()
+installGlobalTableSorting()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <App />
