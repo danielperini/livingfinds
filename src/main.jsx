@@ -8,9 +8,11 @@ import '@/styles/sortable-tables.css'
 import '@/dashboardSeparatedChartsEntry.jsx'
 import { installCampaignInsertionGuard } from '@/lib/installCampaignInsertionGuard'
 import { installGlobalTableSorting } from '@/lib/installGlobalTableSorting'
+import { installUnlimitedKeywordReads } from '@/lib/installUnlimitedKeywordReads'
 
 installCampaignInsertionGuard()
 installGlobalTableSorting()
+installUnlimitedKeywordReads()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <App />
