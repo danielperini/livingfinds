@@ -20,13 +20,27 @@ export type DeliveryHealthInput = {
   protectedWinner: boolean;
   accountOutOfBudget: boolean;
   priorBidEscalations: number;
+  operationalState?: string;
 };
+
+const STALE_TRANSITIONAL_STATES = new Set([
+  'INSERTING',
+  'INCOMPLETE',
+  'CREATING',
+  'PENDING',
+  'DRAFT',
+  'PENDING_REVIEW',
+]);
 
 export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): DeliveryAction {
   if (input.protectedWinner || input.orders > 0 || input.sales > 0) return 'PROTECT_WINNER';
   if (!input.hasProduct) return 'ARCHIVE_NO_PRODUCT';
   if (!input.inStock) return 'ARCHIVE_OUT_OF_STOCK';
-  if (!input.complete) return 'REPAIR_STRUCTURE';
+
+  const state = String(input.operationalState || '').trim().toUpperCase();
+  const staleTransition = STALE_TRANSITIONAL_STATES.has(state) && input.ageHours >= 6;
+  if (!input.complete || staleTransition) return 'REPAIR_STRUCTURE';
+
   if (input.ageHours < 72) return 'WAIT';
   if (input.impressions > 0 || input.clicks > 0) return 'WAIT';
   if (input.accountOutOfBudget) return 'WAIT';
@@ -34,8 +48,17 @@ export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): Deli
   return 'PAUSE_AND_REPLACE';
 }
 
-export function nextConservativeBid(currentBid: number, maxBid: number): number {
-  const safeCurrent = Math.max(0.02, Number(currentBid) || 0.02);
+export function nextConservativeBid(
+  currentBid: number,
+  maxBid: number,
+  configuredIncrement = 0.1,
+  minBid = 0.02,
+): number {
+  const safeMin = Math.max(0.02, Number(minBid) || 0.02);
+  const safeCurrent = Math.max(safeMin, Number(currentBid) || safeMin);
   const cappedMax = Math.max(safeCurrent, Number(maxBid) || safeCurrent);
-  return Math.min(cappedMax, Math.round(safeCurrent * 1.1 * 100) / 100);
+  const increment = Math.max(0.01, Number(configuredIncrement) || 0.1);
+  const percentageStep = Math.round(safeCurrent * 1.1 * 100) / 100;
+  const fixedStep = Math.round((safeCurrent + increment) * 100) / 100;
+  return Math.min(cappedMax, Math.max(percentageStep, fixedStep));
 }
