@@ -3,7 +3,6 @@ import { classifyCampaignDeliveryHealth, nextConservativeBid } from '../../share
 
 const SOURCE = 'reconcileCampaignDeliveryHealth';
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
-const paused = (v: unknown) => String(v || '').toLowerCase() === 'paused';
 const upper = (v: unknown) => String(v || '').trim().toUpperCase();
 const n = (v: unknown) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const idOf = (c: any) => String(c.amazon_campaign_id || c.campaign_id || c.id || '');
@@ -76,8 +75,11 @@ Deno.serve(async (request) => {
       for (const row of metrics) {
         const cid = String(row.campaign_id || '');
         const agg = metricsByCampaign.get(cid) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
-        agg.impressions += n(row.impressions); agg.clicks += n(row.clicks); agg.orders += n(row.orders);
-        agg.sales += n(row.sales); agg.spend += n(row.spend);
+        agg.impressions += n(row.impressions);
+        agg.clicks += n(row.clicks);
+        agg.orders += n(row.orders);
+        agg.sales += n(row.sales);
+        agg.spend += n(row.spend);
         metricsByCampaign.set(cid, agg);
       }
       const accountOutOfBudget = spendControllers.some((r: any) => r.account_out_of_budget === true || r.hard_cap_reached === true);
@@ -113,9 +115,15 @@ Deno.serve(async (request) => {
           !['failed', 'rejected', 'cancelled'].includes(String(d.status || ''))
         ).length;
         const action = classifyCampaignDeliveryHealth({
-          ageHours, ...m, complete, hasProduct: !!product, inStock: stock > 0,
+          ageHours,
+          ...m,
+          complete,
+          hasProduct: !!product,
+          inStock: stock > 0,
           protectedWinner: campaign.protected_high_performance === true,
-          accountOutOfBudget, priorBidEscalations, operationalState: state,
+          accountOutOfBudget,
+          priorBidEscalations: priorEscalations,
+          operationalState: state,
         });
 
         if (action === 'REPAIR_STRUCTURE') {
@@ -128,11 +136,22 @@ Deno.serve(async (request) => {
           const key = `${SOURCE}|${accountId}|${campaignId}|${action}`;
           if (!dryRun && !prior.some((d: any) => d.idempotency_key === key)) {
             await base44.asServiceRole.entities.OptimizationDecision.create({
-              amazon_account_id: accountId, decision_type: 'campaign_delivery_health', entity_type: 'campaign',
-              entity_id: campaignId, campaign_id: campaignId, action: 'archive_campaign',
-              rationale: action, rule_key: action, reason_code: action, status: 'pending_approval',
-              requires_approval: true, approval_status: 'manual_review_required', idempotency_key: key,
-              source_function: SOURCE, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+              amazon_account_id: accountId,
+              decision_type: 'campaign_delivery_health',
+              entity_type: 'campaign',
+              entity_id: campaignId,
+              campaign_id: campaignId,
+              action: 'archive_campaign',
+              rationale: action,
+              rule_key: action,
+              reason_code: action,
+              status: 'pending_approval',
+              requires_approval: true,
+              approval_status: 'manual_review_required',
+              idempotency_key: key,
+              source_function: SOURCE,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
             });
           }
           actions.push({ campaign_id: campaignId, asin, action });
@@ -155,17 +174,34 @@ Deno.serve(async (request) => {
             const key = `${SOURCE}|${accountId}|${campaignId}|${keywordId}|${priorEscalations}`;
             if (!dryRun && !prior.some((d: any) => d.idempotency_key === key)) {
               const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
-                amazon_account_id: accountId, decision_type: 'campaign_delivery_health', entity_type: 'keyword',
-                entity_id: keywordId, keyword_id: keywordId, campaign_id: campaignId, action: 'set_bid',
-                value_before: currentBid, value_after: targetBid, current_value: currentBid, proposed_value: targetBid,
-                rationale: 'ZERO_DELIVERY_AFTER_72H', rule_key: 'ZERO_DELIVERY_BID_ESCALATION',
-                reason_code: 'ZERO_DELIVERY_BID_ESCALATION', status: 'approved', queue_status: 'pending',
-                execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending',
-                requires_approval: false, approval_status: 'auto_approved', idempotency_key: key,
-                conflict_group: `${accountId}|keyword|${keywordId}`, source_function: SOURCE,
-                model_version: 'campaign-delivery-health-v2',
+                amazon_account_id: accountId,
+                decision_type: 'campaign_delivery_health',
+                entity_type: 'keyword',
+                entity_id: keywordId,
+                keyword_id: keywordId,
+                campaign_id: campaignId,
+                action: 'set_bid',
+                value_before: currentBid,
+                value_after: targetBid,
+                current_value: currentBid,
+                proposed_value: targetBid,
+                rationale: 'ZERO_DELIVERY_AFTER_72H',
+                rule_key: 'ZERO_DELIVERY_BID_ESCALATION',
+                reason_code: 'ZERO_DELIVERY_BID_ESCALATION',
+                status: 'approved',
+                queue_status: 'pending',
+                execution_mode: 'STANDARD_QUEUE',
+                confirmation_required: true,
+                confirmation_status: 'pending',
+                requires_approval: false,
+                approval_status: 'auto_approved',
+                idempotency_key: key,
+                conflict_group: `${accountId}|keyword|${keywordId}`,
+                source_function: SOURCE,
+                model_version: 'campaign-delivery-health-v2.1',
                 data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, max_bid: maxBid }),
-                created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
               });
               queuedDecisionIds.push(String(decision.id));
             }
@@ -200,22 +236,37 @@ Deno.serve(async (request) => {
             const key = `${SOURCE}|${accountId}|${campaignId}|pause_after_confirmed_replacement`;
             if (!prior.some((d: any) => d.idempotency_key === key)) {
               const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
-                amazon_account_id: accountId, decision_type: 'campaign_delivery_health', entity_type: 'campaign',
-                entity_id: campaignId, campaign_id: campaignId, action: 'pause_campaign',
-                rationale: 'ZERO_DELIVERY_REPLACEMENT_CONFIRMED_ON_AMAZON', rule_key: 'ZERO_DELIVERY_REPLACE',
-                reason_code: 'ZERO_DELIVERY_REPLACE', status: 'approved', queue_status: 'pending',
-                execution_mode: 'STANDARD_QUEUE', requires_approval: false, approval_status: 'auto_approved',
-                confirmation_required: true, confirmation_status: 'pending', idempotency_key: key,
-                conflict_group: `${accountId}|campaign|${campaignId}`, source_function: SOURCE,
-                model_version: 'campaign-delivery-health-v2',
+                amazon_account_id: accountId,
+                decision_type: 'campaign_delivery_health',
+                entity_type: 'campaign',
+                entity_id: campaignId,
+                campaign_id: campaignId,
+                action: 'pause_campaign',
+                rationale: 'ZERO_DELIVERY_REPLACEMENT_CONFIRMED_ON_AMAZON',
+                rule_key: 'ZERO_DELIVERY_REPLACE',
+                reason_code: 'ZERO_DELIVERY_REPLACE',
+                status: 'approved',
+                queue_status: 'pending',
+                execution_mode: 'STANDARD_QUEUE',
+                requires_approval: false,
+                approval_status: 'auto_approved',
+                confirmation_required: true,
+                confirmation_status: 'pending',
+                idempotency_key: key,
+                conflict_group: `${accountId}|campaign|${campaignId}`,
+                source_function: SOURCE,
+                model_version: 'campaign-delivery-health-v2.1',
                 data_used: JSON.stringify({ asin, replacement: replacementData }),
-                created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
               });
               queuedDecisionIds.push(String(decision.id));
             }
           }
           actions.push({
-            campaign_id: campaignId, asin, action,
+            campaign_id: campaignId,
+            asin,
+            action,
             replacement_confirmed: confirmedReplacement(replacementData),
             replacement_result: replacementData,
             old_campaign_paused_only_after_confirmation: true,
@@ -282,8 +333,8 @@ Deno.serve(async (request) => {
       });
     }
 
-    return Response.json({ ok: true, engine: 'campaign-delivery-health-v2', results });
+    return Response.json({ ok: true, engine: 'campaign-delivery-health-v2.1', results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'campaign-delivery-health-v2', error: error?.message || 'Falha na reconciliação de entrega' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'campaign-delivery-health-v2.1', error: error?.message || 'Falha na reconciliação de entrega' }, { status: 500 });
   }
 });
