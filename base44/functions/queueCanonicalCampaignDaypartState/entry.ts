@@ -1,11 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { normalizeHolidayDates, resolveScheduledAdsDaypart } from '../../shared/scheduledAdsDaypartPolicy.ts';
+import { campaignMatchesRule, ruleMatchesNow, ruleWindowKey } from '../../shared/persistedDaypartRulePolicy.ts';
 
 const SOURCE = 'queueCanonicalCampaignDaypartState';
-const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
-const paused = (v: unknown) => String(v || '').toLowerCase() === 'paused';
-const idOf = (c: any) => String(c.amazon_campaign_id || c.campaign_id || c.id || '');
-const upper = (v: unknown) => String(v || '').trim().toUpperCase();
+const active = (value: unknown) => ['enabled', 'active'].includes(String(value || '').toLowerCase());
+const paused = (value: unknown) => String(value || '').toLowerCase() === 'paused';
+const idOf = (campaign: any) => String(campaign.amazon_campaign_id || campaign.campaign_id || campaign.id || '');
 
 Deno.serve(async (request) => {
   try {
@@ -22,40 +21,35 @@ Deno.serve(async (request) => {
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const now = body.now ? new Date(body.now) : new Date();
     const dryRun = body.dry_run === true;
-    const totals = { proposed: 0, queued: 0, executed_pause: 0, skipped: 0 };
+    const totals = { matched_rules: 0, proposed: 0, queued: 0, executed_pause: 0, skipped: 0 };
     const results: any[] = [];
 
     for (const account of accounts) {
       const accountId = String(account.id);
-      const [configs, campaigns, prior] = await Promise.all([
-        base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
+      const [rules, campaigns, prior] = await Promise.all([
+        base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: accountId, status: 'enabled' }, '-updated_at', 500).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
       ]);
-      const holidays = normalizeHolidayDates(configs[0]?.ads_holiday_dates || configs[0]?.holiday_dates || body.holiday_dates);
-      const policy = resolveScheduledAdsDaypart(now, holidays);
-      const existing = new Set(prior.map((d: any) => String(d.idempotency_key || '')).filter(Boolean));
+      const applicableRules = rules.filter((rule: any) => ['PAUSE_CAMPAIGN', 'ENABLE_CAMPAIGN'].includes(String(rule.action_type || '').toUpperCase()) && ruleMatchesNow(rule, now));
+      totals.matched_rules += applicableRules.length;
+      const existing = new Set(prior.map((decision: any) => String(decision.idempotency_key || '')).filter(Boolean));
       const proposed: any[] = [];
       const pauseDecisionIds: string[] = [];
 
-      for (const campaign of campaigns) {
-        const campaignId = idOf(campaign);
-        if (!campaignId || campaign.archived === true || upper(campaign.campaign_type || 'SP') !== 'SP') continue;
-        const automatic = upper(campaign.targeting_type) === 'AUTO';
-        const shouldPause = policy.pauseAll || (policy.pauseAutomatic && automatic);
-        const pausedByCycle = prior.some((d: any) =>
-          d.source_function === SOURCE && String(d.campaign_id || '') === campaignId && d.action === 'pause_campaign' &&
-          ['approved', 'executing', 'confirming', 'executed', 'confirmed'].includes(String(d.status || ''))
-        );
-        const shouldEnable = policy.restoreCampaigns && pausedByCycle;
-        if (shouldPause && !active(campaign.state || campaign.status)) continue;
-        if (shouldEnable && !paused(campaign.state || campaign.status)) continue;
-        if (!shouldPause && !shouldEnable) continue;
+      for (const rule of applicableRules) {
+        const action = String(rule.action_type).toUpperCase() === 'PAUSE_CAMPAIGN' ? 'pause_campaign' : 'enable_campaign';
+        for (const campaign of campaigns) {
+          const campaignId = idOf(campaign);
+          if (!campaignId || campaign.archived === true || !campaignMatchesRule(rule, campaign)) continue;
+          if (action === 'pause_campaign' && !active(campaign.state || campaign.status)) continue;
+          if (action === 'enable_campaign' && !paused(campaign.state || campaign.status)) continue;
 
-        const action = shouldPause ? 'pause_campaign' : 'enable_campaign';
-        const key = `${SOURCE}|${accountId}|${policy.windowKey}|${campaignId}|${action}`;
-        if (existing.has(key)) { totals.skipped++; continue; }
-        proposed.push({ campaignId, action, key, name: campaign.name || campaign.campaign_name || null });
+          const key = `${SOURCE}|${accountId}|${ruleWindowKey(rule, now)}|${campaignId}|${action}`;
+          if (existing.has(key)) { totals.skipped++; continue; }
+          existing.add(key);
+          proposed.push({ rule, campaignId, action, key, name: campaign.name || campaign.campaign_name || null });
+        }
       }
 
       totals.proposed += proposed.length;
@@ -70,13 +64,13 @@ Deno.serve(async (request) => {
             campaign_name: item.name,
             action: item.action,
             canonical_action_type: 'CAMPAIGN_STATE_CHANGE',
-            rationale: `${policy.window}: estado programado pelo dayparting canônico`,
-            rule_key: `SCHEDULED_DAYPART_${policy.window}`,
-            reason_code: `SCHEDULED_DAYPART_${policy.window}`,
+            rationale: `${item.rule.rule_name}: regra persistida de dayparting`,
+            rule_key: String(item.rule.id || item.rule.idempotency_key || ''),
+            reason_code: 'PERSISTED_DAYPART_RULE',
             value_before: item.action === 'pause_campaign' ? 'ENABLED' : 'PAUSED',
             value_after: item.action === 'pause_campaign' ? 'PAUSED' : 'ENABLED',
             confidence: 1,
-            risk: 'medium',
+            risk: item.action === 'pause_campaign' ? 'high' : 'medium',
             requires_approval: false,
             approval_status: 'auto_approved',
             status: 'approved',
@@ -87,7 +81,8 @@ Deno.serve(async (request) => {
             idempotency_key: item.key,
             conflict_group: `${accountId}|campaign|${item.campaignId}`,
             source_function: SOURCE,
-            model_version: 'canonical-campaign-daypart-v2',
+            model_version: 'persisted-daypart-v1',
+            data_used: JSON.stringify({ scheduled_rule_id: item.rule.id, rule_name: item.rule.rule_name }),
             not_before: now.toISOString(),
             execute_before: new Date(now.getTime() + 45 * 60_000).toISOString(),
             max_attempts: 3,
@@ -99,19 +94,30 @@ Deno.serve(async (request) => {
         }
 
         if (pauseDecisionIds.length) {
-          const execution = await base44.asServiceRole.functions.invoke('executePauseDecisionSafe', {
-            decision_ids: pauseDecisionIds,
-            _service_role: true,
-          });
+          const execution = await base44.asServiceRole.functions.invoke('executePauseDecisionSafe', { decision_ids: pauseDecisionIds, _service_role: true });
           const data = execution?.data || execution || {};
           totals.executed_pause += Number(data.executed || 0);
         }
+
+        for (const rule of applicableRules) {
+          const count = proposed.filter((item) => item.rule.id === rule.id).length;
+          await base44.asServiceRole.entities.AmazonScheduledRule.update(rule.id, {
+            last_execution_at: now.toISOString(),
+            last_execution_status: count ? 'queued' : 'no_changes',
+            last_execution_count: count,
+            amazon_response_status: count ? 202 : 204,
+            amazon_response: JSON.stringify({ queued: count, confirmation_required: true }),
+            last_error: null,
+            updated_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
       }
-      results.push({ amazon_account_id: accountId, policy, dry_run: dryRun, proposed: proposed.length, pause_decisions: pauseDecisionIds.length });
+
+      results.push({ amazon_account_id: accountId, dry_run: dryRun, matched_rules: applicableRules.length, proposed: proposed.length });
     }
 
-    return Response.json({ ok: true, engine: 'canonical-campaign-daypart-v2', totals, results });
+    return Response.json({ ok: true, engine: 'persisted-campaign-daypart-v1', totals, results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'canonical-campaign-daypart-v2', error: error?.message || 'Falha ao aplicar estado do dayparting' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'persisted-campaign-daypart-v1', error: error?.message || 'Falha ao aplicar regras persistidas de campanha' }, { status: 500 });
   }
 });
