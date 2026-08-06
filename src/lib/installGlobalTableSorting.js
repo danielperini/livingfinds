@@ -1,5 +1,4 @@
 const SORTABLE_SELECTOR = 'table:not([data-no-global-sort])';
-const ACTION_LABELS = new Set(['ações', 'acao', 'ação', 'actions']);
 
 function normalize(value) {
   return String(value ?? '')
@@ -22,6 +21,7 @@ function parseCellValue(cell) {
 
   const cleaned = raw
     .replace(/R\$/gi, '')
+    .replace(/\$/g, '')
     .replace(/%/g, '')
     .replace(/x$/i, '')
     .replace(/[^\d,.-]/g, '');
@@ -91,17 +91,17 @@ function enhanceTable(table) {
   if (!(table instanceof HTMLTableElement)) return;
   const headerRow = table.tHead?.rows?.[0];
   const tbody = table.tBodies?.[0];
-  if (!headerRow || !tbody || tbody.rows.length < 2) return;
+  if (!headerRow || !tbody) return;
 
   table.classList.add('premium-sortable-table');
   Array.from(headerRow.cells).forEach((header, index) => {
-    const label = normalize(header.textContent).toLocaleLowerCase('pt-BR');
-    if (!label || ACTION_LABELS.has(label) || header.hasAttribute('data-no-sort')) return;
+    const label = normalize(header.textContent);
+    if (!label || header.hasAttribute('data-no-sort')) return;
     header.setAttribute('data-global-sortable', 'true');
     header.setAttribute('tabindex', '0');
     header.setAttribute('role', 'button');
     header.setAttribute('aria-sort', header.getAttribute('aria-sort') || 'none');
-    header.setAttribute('title', `Ordenar por ${normalize(header.textContent)}`);
+    header.setAttribute('title', `Ordenar por ${label}`);
     header.dataset.sortColumnIndex = String(index);
   });
 }
@@ -133,9 +133,14 @@ export function installGlobalTableSorting() {
 
   const observer = new MutationObserver(mutations => {
     for (const mutation of mutations) {
+      const table = mutation.target instanceof Element ? mutation.target.closest?.('table') : null;
+      if (table) enhanceTable(table);
+
       mutation.addedNodes.forEach(node => {
         if (!(node instanceof Element)) return;
         if (node.matches?.(SORTABLE_SELECTOR)) enhanceTable(node);
+        const parentTable = node.closest?.('table');
+        if (parentTable) enhanceTable(parentTable);
         enhanceAll(node);
       });
     }
