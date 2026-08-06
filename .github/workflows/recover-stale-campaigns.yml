@@ -75,7 +75,7 @@ jobs:
                   throw new Error(data.error || "Falha na recuperação imediata de campanhas");
                 }
               ' </dev/null
-EOF
+          EOF
             then
               success=1
               break
