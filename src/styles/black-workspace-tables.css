@@ -1,0 +1,66 @@
+/* LivingFinds — contraste operacional obrigatório
+ * Mantém todas as áreas autenticadas e tabelas em fundo preto com texto legível.
+ */
+.lf-app-shell,
+.lf-workspace {
+  background: #000 !important;
+  color: #fff !important;
+}
+
+.lf-workspace > *,
+.lf-workspace > :is(div, section, article) {
+  color: #fff;
+}
+
+.lf-workspace :is(.bg-surface-1, .bg-surface-2, .bg-surface-3),
+.lf-workspace :is(section, article, .card)[class*="border"] {
+  background-color: #050505 !important;
+  background-image: none !important;
+  border-color: #27272a !important;
+}
+
+.lf-workspace table {
+  width: 100%;
+  background: #000 !important;
+  color: #fff !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.lf-workspace table thead,
+.lf-workspace table thead tr,
+.lf-workspace table thead th {
+  background: #090909 !important;
+  color: #f8fafc !important;
+  border-color: #27272a !important;
+}
+
+.lf-workspace table tbody,
+.lf-workspace table tbody tr,
+.lf-workspace table tbody td {
+  background-color: #000 !important;
+  color: #fff !important;
+  border-color: #18181b !important;
+}
+
+.lf-workspace table tbody tr:hover,
+.lf-workspace table tbody tr:hover td {
+  background-color: #111827 !important;
+}
+
+.lf-workspace table :is(.text-slate-300, .text-slate-400, .text-slate-500, .text-slate-600) {
+  color: #e5e7eb !important;
+}
+
+.lf-workspace table th[data-global-sortable="true"] {
+  padding-right: 2rem !important;
+}
+
+.lf-workspace table th[data-global-sortable="true"]::after {
+  color: #94a3b8 !important;
+  opacity: 1;
+}
+
+.lf-workspace table th[data-sort-direction="asc"]::after,
+.lf-workspace table th[data-sort-direction="desc"]::after {
+  color: #60a5fa !important;
+}
