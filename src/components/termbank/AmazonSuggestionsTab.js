@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import AmazonSuggestionsTabOriginal from './AmazonSuggestionsTab.jsx';
 
 const resolveProductTitle = (product) => {
@@ -20,6 +20,24 @@ const resolveProductTitle = (product) => {
   if (product?.sku) return `Produto ${product.sku}`;
   return product?.asin ? `Produto ${product.asin}` : 'Produto sem título';
 };
+
+const DARK_SELECT_CSS = `
+  .amazon-suggestions-dark-product-select select {
+    background-color: #0f172a !important;
+    color: #f8fafc !important;
+    border-color: #334155 !important;
+    color-scheme: dark;
+  }
+  .amazon-suggestions-dark-product-select select:focus {
+    border-color: #6366f1 !important;
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.28);
+    outline: none;
+  }
+  .amazon-suggestions-dark-product-select select option {
+    background: #0f172a !important;
+    color: #f8fafc !important;
+  }
+`;
 
 export default function AmazonSuggestionsTab(props) {
   const rootRef = useRef(null);
@@ -45,7 +63,7 @@ export default function AmazonSuggestionsTab(props) {
       select.style.color = '#f8fafc';
       select.style.borderColor = '#334155';
       select.style.colorScheme = 'dark';
-      select.style.minWidth = 'min(100%, 420px)';
+      select.style.minWidth = 'min(100%, 520px)';
 
       Array.from(select.options || []).forEach((option) => {
         option.style.backgroundColor = '#0f172a';
@@ -68,26 +86,10 @@ export default function AmazonSuggestionsTab(props) {
     return () => observer.disconnect();
   }, [titleByAsin]);
 
-  return (
-    <div ref={rootRef} className="amazon-suggestions-dark-product-select">
-      <style>{`
-        .amazon-suggestions-dark-product-select select {
-          background-color: #0f172a !important;
-          color: #f8fafc !important;
-          border-color: #334155 !important;
-          color-scheme: dark;
-        }
-        .amazon-suggestions-dark-product-select select:focus {
-          border-color: #6366f1 !important;
-          box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.28);
-          outline: none;
-        }
-        .amazon-suggestions-dark-product-select select option {
-          background: #0f172a !important;
-          color: #f8fafc !important;
-        }
-      `}</style>
-      <AmazonSuggestionsTabOriginal {...props} />
-    </div>
+  return React.createElement(
+    'div',
+    { ref: rootRef, className: 'amazon-suggestions-dark-product-select' },
+    React.createElement('style', null, DARK_SELECT_CSS),
+    React.createElement(AmazonSuggestionsTabOriginal, props),
   );
 }
