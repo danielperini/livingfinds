@@ -58,6 +58,15 @@ Deno.serve(async (request) => {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
+
+    const economicCurveAdsGuard = body.skip_economic_curve_ads_guard === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runEconomicCurveAdsGuard', {
+          ...common,
+          max_actions: 20,
+          target_mer_pct: body.target_mer_pct,
+        });
+
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
@@ -124,18 +133,29 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
-      deliveryHealth, daypartConfiguration, daypartBudgetRestore,
+      manualStructureAudit, economicCurveAdsGuard, deterministic, campaignLifecycle,
+      economicBalancer, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v12-daypart-budget-restore',
+      engine_version: 'unified-v13-economic-curve-bayes-mer',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
+      economic_ads_guard: {
+        function: 'runEconomicCurveAdsGuard',
+        sales_curve: 'ABC 80/15/5',
+        profit_curve: 'ABC 80/15/5 lucro pós-Ads',
+        dynamic_asin_loss_budget: true,
+        sequential_zero_sale_ceiling: true,
+        bayesian_cvr_guard: true,
+        mer_tacos_guardrail: true,
+        execution_owner: 'executeApprovedDecisionQueue',
+        confirmation_required: true,
+      },
       campaign_lifecycle: {
         due: lifecycleWindow,
         interval_hours: 3,
