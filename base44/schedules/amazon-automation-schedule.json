@@ -38,6 +38,12 @@
       "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
+      "name": "Blended MER guardrail - every 15 minutes",
+      "function": "runBlendedMerGuardrail",
+      "cron": "5,20,35,50 * * * *",
+      "payload": { "_service_role": true, "dry_run": false, "max_actions": 10, "trigger_type": "scheduler_blended_mer" }
+    },
+    {
       "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
       "function": "runUnifiedDecisionEngine",
       "cron": "25 1 * * *",
