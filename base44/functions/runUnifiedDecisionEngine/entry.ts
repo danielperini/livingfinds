@@ -58,6 +58,17 @@ Deno.serve(async (request) => {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
+
+    // Proteção P1 ocorre antes das decisões regulares: usa dados intradiários
+    // persistidos e reduz somente bids perdedores quando o próximo clique pode
+    // ultrapassar R$ 5 de gasto acima do ACoS permitido.
+    const intradayLossGuard = body.skip_intraday_loss_guard === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runIntradayAdsLossGuard', {
+          ...common,
+          max_actions: 20,
+        });
+
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
@@ -124,18 +135,24 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
-      deliveryHealth, daypartConfiguration, daypartBudgetRestore,
+      manualStructureAudit, intradayLossGuard, deterministic, campaignLifecycle,
+      economicBalancer, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v12-daypart-budget-restore',
+      engine_version: 'unified-v13-intraday-loss-guard',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
+      intraday_loss_guard: {
+        loss_limit_brl: 5,
+        anticipates_next_click: true,
+        execution_owner: 'executeApprovedDecisionQueue',
+        confirmation_required: true,
+      },
       campaign_lifecycle: {
         due: lifecycleWindow,
         interval_hours: 3,
