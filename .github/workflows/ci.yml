@@ -55,4 +55,6 @@ jobs:
             base44/shared/portfolioBudgetMath.ts \
             base44/shared/portfolioBudgetActions.ts \
             base44/shared/portfolioBudgetPacing.ts \
+            base44/functions/runEconomicCurveAdsGuard/entry.ts \
+            base44/functions/runUnifiedDecisionEngine/entry.ts \
             server/src/scheduler.ts
