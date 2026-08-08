@@ -1,0 +1,19 @@
+{
+  "name": "ManualGrowthObjectiveSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "baseline_productive_manuals": { "type": "number" },
+    "current_productive_manuals": { "type": "number" },
+    "target_productive_manuals": { "type": "number" },
+    "target_multiplier": { "type": "number" },
+    "elapsed_hours": { "type": "number" },
+    "growth_gap": { "type": "number" },
+    "safe_campaigns_queued": { "type": "number" },
+    "status": { "type": "string" },
+    "baseline_at": { "type": "string", "format": "date-time" },
+    "checked_at": { "type": "string", "format": "date-time" },
+    "details": { "type": "object" }
+  },
+  "required": ["amazon_account_id", "baseline_productive_manuals", "current_productive_manuals", "target_productive_manuals", "checked_at"]
+}

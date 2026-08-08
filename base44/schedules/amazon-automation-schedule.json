@@ -68,6 +68,12 @@
       "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
     },
     {
+      "name": "Profitable manual growth objective - every 3 hours",
+      "function": "runManualProfitableGrowthObjective",
+      "cron": "14 */3 * * *",
+      "payload": { "_service_role": true, "dry_run": false }
+    },
+    {
       "name": "Repricing transport queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
