@@ -10,7 +10,8 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
-    "ui:audit": "node scripts/capture-all-routes.mjs"
+    "ui:audit": "node scripts/capture-all-routes.mjs",
+    "test:ui-contract": "node --test src/lib/pagination.test.js src/lib/profitProjectionMath.test.js"
   },
   "dependencies": {
     "@base44/sdk": "^0.8.41",

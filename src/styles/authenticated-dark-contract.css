@@ -144,6 +144,41 @@ html[data-theme] { color-scheme: dark; }
 .lf-premium-drawer-content { border-radius: 16px 16px 0 0 !important; }
 .lf-premium-tooltip-content { border-radius: 10px !important; background: #10182b !important; }
 
+.premium-data-table__pagination {
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: var(--lf-surface-elevated);
+  border-color: var(--lf-border-canonical);
+}
+
+.premium-data-table__page-controls {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.premium-data-table__page-controls button,
+.premium-data-table__density-label select {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--lf-border-canonical);
+  border-radius: 8px;
+  background: var(--lf-surface) !important;
+  color: var(--lf-foreground-muted) !important;
+  font-size: 12px;
+}
+
+.premium-data-table__page-controls button:hover:not(:disabled),
+.premium-data-table__page-controls button.is-current {
+  border-color: var(--lf-primary);
+  background: rgba(91, 108, 255, .18) !important;
+  color: var(--lf-foreground) !important;
+}
+
+.premium-data-table__page-controls button:disabled { opacity: .42; cursor: not-allowed; }
+.premium-data-table__ellipsis { padding-inline: 2px; color: var(--lf-foreground-subtle); }
+
 :is(.lf-premium-select-content, .lf-premium-dropdown-content) [role="option"],
 :is(.lf-premium-select-content, .lf-premium-dropdown-content) [role="menuitem"] {
   color: var(--lf-foreground-muted) !important;
