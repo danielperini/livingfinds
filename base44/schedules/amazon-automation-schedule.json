@@ -80,6 +80,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "FBA replenishment planner - 06:10 BRT",
+      "function": "runFbaReplenishmentPlanner",
+      "cron": "10 6 * * *",
+      "payload": { "_service_role": true, "lead_time_days": 14, "safety_stock_days": 7 }
+    },
+    {
       "name": "Finance events refresh - 13:20 and 20:20 BRT",
       "function": "syncFinanceEventsFromSpApi",
       "cron": "20 13,20 * * *",
