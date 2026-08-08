@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import { Calculator, Loader2, RefreshCw, Target, TrendingUp } from 'lucide-react';
+import { projectProfitSeries } from '@/lib/profitProjectionMath';
 
 const money = (value) => `R$${Number(value || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const number = (value) => Number(value || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
@@ -58,6 +59,11 @@ export default function ProfitProjectionPanel({ account }) {
       recentDates.has(row.assessment_date) && Number(row.real_sales || row.ads_sales || 0) > 0
     ).map((row) => row.asin));
     const sample = currentRows.filter((row) => sellingAsins.has(row.asin));
+    const dailyProfit = Object.values(sample.reduce((byDate, row) => {
+      if (!byDate[row.assessment_date]) byDate[row.assessment_date] = { date: row.assessment_date, profit: 0 };
+      byDate[row.assessment_date].profit += Number(row.profit_after_ads || 0);
+      return byDate;
+    }, {}));
     const totals = sample.reduce((acc, row) => ({
       profit: acc.profit + Number(row.profit_after_ads || 0),
       spend: acc.spend + Number(row.spend || 0),
@@ -68,7 +74,7 @@ export default function ProfitProjectionPanel({ account }) {
     const salesPerUnit = totals.units > 0 ? totals.sales / totals.units : 0;
     const profitPerUnit = totals.units > 0 ? totals.profit / totals.units : 0;
     const observedAdsPercent = totals.sales > 0 ? totals.spend / totals.sales * 100 : 0;
-    return { dates: latestDates, totals, salesPerUnit, profitPerUnit, observedAdsPercent, activeSkus: profitableAsins.size, currentProducts: currentAsins.size, sellingProducts: sellingAsins.size };
+    return { dates: latestDates, totals, salesPerUnit, profitPerUnit, observedAdsPercent, activeSkus: profitableAsins.size, currentProducts: currentAsins.size, sellingProducts: sellingAsins.size, forecast: projectProfitSeries(dailyProfit) };
   }, [assessments, products]);
 
   const selectedAdsPercent = adsPercent === '' ? model.observedAdsPercent : Math.max(0, Number(adsPercent));
@@ -82,7 +88,7 @@ export default function ProfitProjectionPanel({ account }) {
   const avgSkuMonthlyProfit = model.activeSkus > 0 && model.dates.length > 0 ? (model.totals.profit / model.dates.length * 30) / model.activeSkus : 0;
   const skusNeeded = avgSkuMonthlyProfit > 0 ? Math.ceil(Number(monthlyGoal || 0) / avgSkuMonthlyProfit) : 0;
   const additionalSkus = Math.max(0, skusNeeded - model.activeSkus);
-  const dataReady = model.dates.length >= 30 && safeProfitPerUnit > 0;
+  const dataReady = model.forecast.ready && safeProfitPerUnit > 0;
 
   if (loading) return <div className="flex justify-center py-20"><Loader2 className="h-6 w-6 animate-spin text-cyan" /></div>;
 
@@ -102,10 +108,15 @@ export default function ProfitProjectionPanel({ account }) {
       <Card label="Receita mensal prevista" value={money(projectedRevenue)} detail={`Ticket médio ${money(model.salesPerUnit)}`} />
       <Card label="ROI sobre Ads" value={`${projectedRoi.toFixed(2)}x`} detail={`Investimento previsto ${money(projectedAds)}`} tone={projectedRoi >= 1 ? 'text-emerald-400' : 'text-amber-400'} />
     </div>
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Card label="Lucro mensal P10" value={money(model.forecast.p10)} detail="Cenário conservador, com incerteza histórica" tone="text-amber-400" />
+      <Card label="Lucro mensal P50" value={money(model.forecast.p50)} detail={`Cenário central · confiança ${model.forecast.diagnostics.confidence || 0}%`} tone="text-cyan" />
+      <Card label="Lucro mensal P90" value={money(model.forecast.p90)} detail="Cenário favorável, não é garantia" tone="text-emerald-400" />
+    </div>
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="rounded-xl border border-surface-2 bg-surface-1 p-4"><p className="flex items-center gap-2 text-sm font-semibold text-white"><Target className="h-4 w-4 text-cyan" /> Capacidade de portfólio</p><div className="mt-4 grid grid-cols-3 gap-3 text-center"><div><p className="text-xl font-bold text-white">{model.activeSkus}</p><p className="text-[10px] text-slate-500">SKUs lucrativos e atuais</p></div><div><p className="text-xl font-bold text-cyan">{skusNeeded}</p><p className="text-[10px] text-slate-500">SKUs equivalentes necessários</p></div><div><p className="text-xl font-bold text-amber-400">{additionalSkus}</p><p className="text-[10px] text-slate-500">SKUs adicionais estimados</p></div></div><p className="mt-3 text-[10px] text-slate-500">{model.sellingProducts} de {model.currentProducts} SKUs ativos/com estoque venderam nos últimos 30 dias.</p></div>
       <div className="rounded-xl border border-surface-2 bg-surface-1 p-4"><p className="flex items-center gap-2 text-sm font-semibold text-white"><TrendingUp className="h-4 w-4 text-emerald-400" /> Sugestão orientada por dados</p><p className="mt-3 text-sm leading-relaxed text-slate-300">{safeProfitPerUnit > 0 ? `Para alcançar ${money(monthlyGoal)}, a loja precisa sustentar cerca de ${number(unitsNeededDay)} unidades/dia. Antes de ampliar o catálogo, priorize os ${model.activeSkus} SKUs com lucro confirmado e mantenha Ads em até ${selectedAdsPercent.toFixed(1)}% da receita simulada.` : 'A margem projetada não é positiva com os dados e o nível de Ads informado. Revise preço, custos, taxa Amazon ou reduza o investimento em Ads antes de buscar escala.'}</p></div>
     </div>
-    <p className="text-[10px] text-slate-500">Projeção financeira, não garantia de resultado. O cálculo usa lucro pós-Ads, receita, unidades e investimento efetivamente registrados; dados parciais reduzem a confiabilidade.</p>
+    <p className="text-[10px] text-slate-500">Modelo: Holt + tendência robusta Theil-Sen + efeito semanal + intervalos P10/P50/P90 de quantis empíricos dos resíduos. Projeção financeira, não garantia de resultado.</p>
   </div>;
 }
