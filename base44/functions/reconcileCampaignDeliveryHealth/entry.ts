@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { classifyCampaignDeliveryHealth, nextConservativeBid } from '../../shared/campaignDeliveryHealthPolicy.ts';
+import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 
 const SOURCE = 'reconcileCampaignDeliveryHealth';
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -20,6 +21,33 @@ function isConflict(error: any): boolean {
   const status = Number(error?.status || error?.response?.status || error?.response?.data?.status || 0);
   const message = String(error?.response?.data?.error || error?.message || error || '').toLowerCase();
   return status === 409 || message.includes('duplicate key') || message.includes('unique constraint') || message.includes('already exists');
+}
+
+function stockEvidenceTime(product: any): number {
+  const candidates = [
+    product?.inventory_synced_at,
+    product?.fba_inventory_synced_at,
+    product?.inventory_last_synced_at,
+    product?.sp_api_inventory_synced_at,
+    product?.ads_last_eligibility_check_at,
+    product?.listing_checked_at,
+    product?.updated_date,
+    product?.updated_at,
+  ];
+  for (const value of candidates) {
+    const ms = new Date(String(value || '')).getTime();
+    if (Number.isFinite(ms) && ms > 0) return ms;
+  }
+  return 0;
+}
+
+function confirmedOutOfStock(product: any, eligibility: ReturnType<typeof productAdsEligibility>): boolean {
+  if (!product || eligibility.reason !== 'PRODUCT_OUT_OF_STOCK') return false;
+  const explicit = String(product.inventory_status || '').toLowerCase() === 'out_of_stock' ||
+    String(product.ads_eligibility_status || '').toLowerCase() === 'out_of_stock';
+  const evidenceAt = stockEvidenceTime(product);
+  const fresh = evidenceAt > 0 && Date.now() - evidenceAt <= 90 * 60 * 1000;
+  return explicit && fresh;
 }
 
 async function createDecisionIdempotent(base44: any, payload: any): Promise<{ decision: any; reused: boolean }> {
@@ -109,6 +137,7 @@ Deno.serve(async (request) => {
       const repairCampaignIds: string[] = [];
       const queuedDecisionIds = new Set<string>();
       let reusedDecisions = 0;
+      let cancelledFalseStockDecisions = 0;
 
       for (const campaign of campaigns) {
         if (campaign.archived === true || upper(campaign.campaign_type || 'SP') !== 'SP') continue;
@@ -119,7 +148,7 @@ Deno.serve(async (request) => {
         if (!campaignId) continue;
         const asin = upper(campaign.asin || campaign.advertised_asin || String(campaign.name || '').match(/B0[A-Z0-9]{8}/i)?.[0]);
         const product = productByAsin.get(asin);
-        const stock = n(product?.fulfillable_quantity ?? product?.inventory_quantity ?? product?.stock);
+        const eligibility = productAdsEligibility(product);
         const campaignKeywords = kwByCampaign.get(campaignId) || [];
         const campaignAdGroups = adGroupsByCampaign.get(campaignId) || [];
         const campaignProductAds = productAdsByCampaign.get(campaignId) || [];
@@ -130,6 +159,26 @@ Deno.serve(async (request) => {
             campaignKeywords.some((row: any) => active(row.state || row.status) && upper(row.match_type || row.matchType) === 'EXACT')
           : campaignAdGroups.length === 0 || campaignAdGroups.some((row: any) => active(row.state || row.status));
 
+        if (eligibility.inStock) {
+          const falseStockDecisions = prior.filter((d: any) =>
+            d.source_function === SOURCE &&
+            String(d.campaign_id || '') === campaignId &&
+            String(d.reason_code || d.rule_key || d.rationale || '') === 'ARCHIVE_OUT_OF_STOCK' &&
+            ['pending_approval', 'approved', 'waiting_retry'].includes(String(d.status || '').toLowerCase())
+          );
+          if (!dryRun) {
+            for (const decision of falseStockDecisions) {
+              await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+                status: 'cancelled',
+                queue_status: 'cancelled',
+                error_message: `FALSE_OUT_OF_STOCK_REVOKED: SP-API canonical stock=${eligibility.stock}.`,
+                updated_at: new Date().toISOString(),
+              }).catch(() => {});
+              cancelledFalseStockDecisions++;
+            }
+          }
+        }
+
         const createdAt = new Date(campaign.created_at || campaign.created_date || Date.now()).getTime();
         const ageHours = Math.max(0, (Date.now() - createdAt) / 3600000);
         const m = metricsByCampaign.get(campaignId) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
@@ -137,17 +186,30 @@ Deno.serve(async (request) => {
           d.source_function === SOURCE && String(d.campaign_id || '') === campaignId && d.action === 'set_bid' &&
           !['failed', 'rejected', 'cancelled'].includes(String(d.status || ''))
         ).length;
-        const action = classifyCampaignDeliveryHealth({
+        let action = classifyCampaignDeliveryHealth({
           ageHours,
           ...m,
           complete,
           hasProduct: !!product,
-          inStock: stock > 0,
+          inStock: eligibility.inStock,
           protectedWinner: campaign.protected_high_performance === true,
           accountOutOfBudget,
           priorBidEscalations: priorEscalations,
           operationalState: state,
         });
+
+        if (action === 'ARCHIVE_OUT_OF_STOCK' && !confirmedOutOfStock(product, eligibility)) {
+          actions.push({
+            campaign_id: campaignId,
+            asin,
+            action: 'VERIFY_STOCK',
+            reason: 'OUT_OF_STOCK_NOT_CONFIRMED_BY_FRESH_SP_API_EVIDENCE',
+            stock: eligibility.stock,
+            eligibility_reason: eligibility.reason,
+            status_signals: eligibility.statusSignals,
+          });
+          continue;
+        }
 
         if (action === 'REPAIR_STRUCTURE') {
           repairCampaignIds.push(campaignId);
@@ -173,12 +235,21 @@ Deno.serve(async (request) => {
               approval_status: 'manual_review_required',
               idempotency_key: key,
               source_function: SOURCE,
+              data_used: JSON.stringify({
+                asin,
+                canonical_stock: eligibility.stock,
+                eligibility_reason: eligibility.reason,
+                status_signals: eligibility.statusSignals,
+                inventory_status: product?.inventory_status || null,
+                ads_eligibility_status: product?.ads_eligibility_status || null,
+                stock_evidence_at: stockEvidenceTime(product) || null,
+              }),
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             });
             if (reused) reusedDecisions++;
           }
-          actions.push({ campaign_id: campaignId, asin, action });
+          actions.push({ campaign_id: campaignId, asin, action, stock: eligibility.stock });
           continue;
         }
 
@@ -222,7 +293,7 @@ Deno.serve(async (request) => {
                 idempotency_key: key,
                 conflict_group: `${accountId}|keyword|${keywordId}`,
                 source_function: SOURCE,
-                model_version: 'campaign-delivery-health-v2.2',
+                model_version: 'campaign-delivery-health-v2.3-canonical-stock',
                 data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, max_bid: maxBid }),
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
@@ -282,7 +353,7 @@ Deno.serve(async (request) => {
               idempotency_key: key,
               conflict_group: `${accountId}|campaign|${campaignId}`,
               source_function: SOURCE,
-              model_version: 'campaign-delivery-health-v2.2',
+              model_version: 'campaign-delivery-health-v2.3-canonical-stock',
               data_used: JSON.stringify({ asin, replacement: replacementData }),
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
@@ -346,7 +417,7 @@ Deno.serve(async (request) => {
         source_function: SOURCE,
         records_processed: campaigns.length,
         records_imported: actions.length,
-        message: `Recuperação imediata: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas e ${actions.filter((a) => a.action === 'PAUSE_AND_REPLACE').length} substituições.`,
+        message: `Recuperação imediata: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados e ${actions.filter((a) => a.action === 'PAUSE_AND_REPLACE').length} substituições.`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});
@@ -356,17 +427,24 @@ Deno.serve(async (request) => {
         dry_run: dryRun,
         account_out_of_budget: accountOutOfBudget,
         settings: { target_acos: targetAcos, min_bid: minBid, max_bid: maxBid, increment },
+        canonical_stock_policy: {
+          source: 'Product/SP-API canonical fields via productAdsEligibility',
+          fields: ['fulfillable_quantity', 'available_quantity', 'inventory_quantity', 'stock', 'fba_inventory'],
+          archive_requires_fresh_explicit_out_of_stock: true,
+          freshness_minutes: 90,
+        },
         actions,
         repair: repair?.data || repair || null,
         queued_decision_ids: decisionIds,
         reused_decisions: reusedDecisions,
+        cancelled_false_stock_decisions: cancelledFalseStockDecisions,
         execution: execution?.data || execution,
         confirmation: confirmation?.data || confirmation,
       });
     }
 
-    return Response.json({ ok: true, engine: 'campaign-delivery-health-v2.2', results });
+    return Response.json({ ok: true, engine: 'campaign-delivery-health-v2.3-canonical-stock', results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'campaign-delivery-health-v2.2', error: error?.message || 'Falha na reconciliação de entrega' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'campaign-delivery-health-v2.3-canonical-stock', error: error?.message || 'Falha na reconciliação de entrega' }, { status: 500 });
   }
 });
