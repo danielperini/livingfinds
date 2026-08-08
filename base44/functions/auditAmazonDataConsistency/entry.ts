@@ -7,7 +7,12 @@ function latest(rows:any[]){const value=rows.reduce((max,row)=>Math.max(max,ts(r
 Deno.serve(async(request)=>{const startedAt=new Date().toISOString();try{
  const base44=createClientFromRequest(request),body=await request.json().catch(()=>({}));
  if(!body._service_role)return Response.json({ok:false,error:'Uso interno'},{status:403});
- const accountId=body.amazon_account_id;if(!accountId)return Response.json({ok:false,error:'amazon_account_id obrigatório'},{status:400});
+ let accountId=body.amazon_account_id;
+ if(!accountId){
+  const accounts=await base44.asServiceRole.entities.AmazonAccount.filter({status:'connected'},'-updated_at',1).catch(()=>[]);
+  accountId=accounts[0]?.id;
+ }
+ if(!accountId)return Response.json({ok:false,error:'Nenhuma conta Amazon conectada'},{status:404});
  const cutoff30=new Date(Date.now()-30*86400000).toISOString().slice(0,10);
  const [campaigns,products,metrics,hourly,logs,decisions,configRows]=await Promise.all([
   base44.asServiceRole.entities.Campaign.filter({amazon_account_id:accountId},'-updated_at',5000).catch(()=>[]),

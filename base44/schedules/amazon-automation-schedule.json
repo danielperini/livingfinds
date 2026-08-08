@@ -56,6 +56,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Ads automation E2E health audit - every 15 minutes",
+      "function": "auditAdsAutomationE2E",
+      "cron": "13,28,43,58 * * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_e2e_audit" }
+    },
+    {
       "name": "Canonical dayparting - hourly after intraday metrics",
       "function": "runCanonicalDaypartingEngine",
       "cron": "12 * * * *",
@@ -78,6 +84,12 @@
       "function": "syncFinanceEventsFromSpApi",
       "cron": "50 5 * * *",
       "payload": { "_service_role": true }
+    },
+    {
+      "name": "Amazon data consistency reconciliation - daily after close",
+      "function": "auditAmazonDataConsistency",
+      "cron": "10 2 * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_daily_reconciliation" }
     },
     {
       "name": "Finance events refresh - 13:20 and 20:20 BRT",
