@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 
 const SOURCE = 'runAsinPortfolioDiversificationGuard';
 const finite = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -70,12 +71,16 @@ Deno.serve(async (request) => {
 
       const campaignRows = campaigns.filter((campaign: any) => active(campaign.state || campaign.status) && upper(campaign.campaign_type || 'SP') === 'SP');
       const portfolio = new Map<string, any>();
+      const excludedProducts: any[] = [];
       for (const campaign of campaignRows) {
         const asin = asinOf(campaign, productAds);
         if (!asin) continue;
         const product = productByAsin.get(asin);
-        const stock = finite(product?.available_quantity ?? product?.fba_inventory ?? product?.fulfillable_quantity, 0);
-        if (!product || stock <= 0 || product.listing_suppressed === true || product.listing_buyable === false) continue;
+        const eligibility = productAdsEligibility(product);
+        if (!eligibility.eligible) {
+          excludedProducts.push({ asin, campaign_id: campaignIdOf(campaign), reason: eligibility.reason, stock: eligibility.stock });
+          continue;
+        }
         const id = campaignIdOf(campaign);
         const metrics = latest.get(id) || campaign;
         const row = portfolio.get(asin) || { asin, product, campaigns: [], spend: 0, sales: 0, orders: 0, clicks: 0 };
@@ -90,11 +95,13 @@ Deno.serve(async (request) => {
       const rows = [...portfolio.values()];
       const totalSpend = rows.reduce((sum, row) => sum + row.spend, 0);
       const eligibleForExploration = rows.filter((row) => {
+        const eligibility = productAdsEligibility(row.product);
+        if (!eligibility.eligible) return false;
         const profitAfterAds = finite(row.product.profit_after_ads, 0);
         const breakEvenAcos = finite(row.product.break_even_acos_pct, 0);
         const observedAcos = row.sales > 0 ? row.spend / row.sales * 100 : null;
         const lossWithoutSale = row.sales <= 0 && row.spend >= Math.max(5, finite(row.product.maximum_ad_spend_per_order, 0));
-        const economicallyUnsafe = row.product.cost_confirmed === false || row.product.ads_eligibility_status === 'out_of_stock' || lossWithoutSale || (observedAcos !== null && breakEvenAcos > 0 && observedAcos >= breakEvenAcos);
+        const economicallyUnsafe = row.product.cost_confirmed === false || lossWithoutSale || (observedAcos !== null && breakEvenAcos > 0 && observedAcos >= breakEvenAcos);
         return !economicallyUnsafe && (profitAfterAds >= 0 || row.spend <= 2 || row.orders > 0);
       });
       const floorShare = eligibleForExploration.length > 0
@@ -156,8 +163,8 @@ Deno.serve(async (request) => {
           action,
           canonical_action_type: 'CAMPAIGN_BUDGET_CHANGE',
           rationale: underExposed
-            ? `ASIN ${row.asin} elegível recebeu ${(currentShare * 100).toFixed(1)}% do gasto, abaixo do piso exploratório ${(floorShare * 100).toFixed(1)}%. Aumento limitado a 10% para gerar oportunidade de aprendizado sem romper ACoS/MER.`
-            : `ASIN ${row.asin} concentrou ${(currentShare * 100).toFixed(1)}% do gasto, acima do teto ${(shareCap * 100).toFixed(1)}%, sem proteção econômica suficiente. Redução libera capital para outros ASINs elegíveis.`,
+            ? `ASIN ${row.asin} ativo e com estoque recebeu ${(currentShare * 100).toFixed(1)}% do gasto, abaixo do piso exploratório ${(floorShare * 100).toFixed(1)}%. Aumento limitado a 10% para gerar oportunidade de aprendizado sem romper ACoS/MER.`
+            : `ASIN ${row.asin} concentrou ${(currentShare * 100).toFixed(1)}% do gasto, acima do teto ${(shareCap * 100).toFixed(1)}%, sem proteção econômica suficiente. Redução libera capital para outros ASINs ativos com estoque.`,
           rule_key: reasonCode,
           reason_code: reasonCode,
           value_before: currentBudget,
@@ -177,7 +184,7 @@ Deno.serve(async (request) => {
           idempotency_key: key,
           conflict_group: `${accountId}|campaign|${campaignId}`,
           source_function: SOURCE,
-          data_used: JSON.stringify({ asin: row.asin, total_spend: totalSpend, asin_spend: row.spend, asin_sales: row.sales, asin_orders: row.orders, asin_acos: acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, exploration_pool_share: explorationPoolShare, target_acos: targetAcos }),
+          data_used: JSON.stringify({ asin: row.asin, total_spend: totalSpend, asin_spend: row.spend, asin_sales: row.sales, asin_orders: row.orders, asin_acos: acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, exploration_pool_share: explorationPoolShare, target_acos: targetAcos, product_eligibility: 'active_and_in_stock' }),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -191,16 +198,16 @@ Deno.serve(async (request) => {
         source_function: SOURCE,
         records_processed: rows.length,
         records_imported: decisions.length,
-        message: `Diversificação automática: ${eligibleForExploration.length} ASIN(s) elegíveis, piso ${(floorShare * 100).toFixed(1)}% por ASIN, teto ${(maxAsinShare * 100).toFixed(1)}% e ${decisions.length} decisão(ões).`,
+        message: `Diversificação automática somente em produtos ativos com estoque: ${eligibleForExploration.length} ASIN(s) elegíveis, ${excludedProducts.length} campanha(s) excluída(s) do esforço por produto inativo/sem estoque/não comprável, piso ${(floorShare * 100).toFixed(1)}% e ${decisions.length} decisão(ões).`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => null);
 
-      results.push({ amazon_account_id: accountId, total_spend: roundMoney(totalSpend), eligible_asins: eligibleForExploration.length, exploration_pool_share: explorationPoolShare, floor_share_per_asin: floorShare, max_asin_share: maxAsinShare, max_winner_share: maxWinnerShare, observations, decisions });
+      results.push({ amazon_account_id: accountId, total_spend: roundMoney(totalSpend), eligible_asins: eligibleForExploration.length, excluded_campaigns: excludedProducts, exploration_pool_share: explorationPoolShare, floor_share_per_asin: floorShare, max_asin_share: maxAsinShare, max_winner_share: maxWinnerShare, observations, decisions });
     }
 
-    return Response.json({ ok: true, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V1', automatic: true, ui_required: false, results });
+    return Response.json({ ok: true, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V2_ACTIVE_STOCK_ONLY', automatic: true, ui_required: false, product_eligibility_policy: 'active_and_in_stock_only', results });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V1', error: error?.message || String(error) }, { status: 500 });
+    return Response.json({ ok: false, engine: 'ASIN_PORTFOLIO_DIVERSIFICATION_V2_ACTIVE_STOCK_ONLY', error: error?.message || String(error) }, { status: 500 });
   }
 });
