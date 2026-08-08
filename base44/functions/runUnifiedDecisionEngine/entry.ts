@@ -58,6 +58,21 @@ Deno.serve(async (request) => {
       ...common,
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
+
+    // Guardrail econômico atua antes da expansão/diversificação. Ele reduz somente bids
+    // economicamente inseguros e mantém vencedores protegidos. Assim, o portfólio pode
+    // dar oportunidade a mais ASINs sem continuar financiando tráfego que já demonstrou
+    // risco por margem, cliques secos, CVR posterior ou pressão MER/TACoS.
+    const economicCurveAdsGuard = body.skip_economic_curve_ads_guard === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runEconomicCurveAdsGuard', {
+          ...common,
+          max_actions: 20,
+          target_mer_pct: body.target_mer_pct,
+          snapshot_run_id: snapshotRunId,
+          trigger_type: dailyClose ? 'unified_daily_economic_curve_guard' : 'unified_intraday_economic_curve_guard',
+        });
+
     const deterministic = await invoke(base44, 'runDeterministicDecisionEngine', {
       ...common,
       skip_economic_bid_budget: true,
@@ -133,18 +148,31 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, decisionV3Shadow, asinDiversification, campaignLifecycle, economicBalancer,
+      manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
+      asinDiversification, campaignLifecycle, economicBalancer,
       deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v13-asin-portfolio-diversification',
+      engine_version: 'unified-v14-economic-curve-bayes-mer-diversification',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
+      economic_ads_guard: {
+        function: 'runEconomicCurveAdsGuard',
+        sales_curve: 'ABC 80/15/5',
+        profit_curve: 'ABC por lucro pós-Ads real persistido',
+        dynamic_asin_loss_budget: true,
+        sequential_zero_sale_ceiling: true,
+        bayesian_cvr_guard: true,
+        mer_tacos_guardrail: true,
+        protects_profitable_winners: true,
+        execution_owner: 'executeApprovedDecisionQueue',
+        confirmation_required: true,
+      },
       campaign_lifecycle: {
         due: lifecycleWindow,
         interval_hours: 3,
@@ -154,7 +182,7 @@ Deno.serve(async (request) => {
       asin_portfolio: {
         automatic: true,
         ui_required: false,
-        policy: 'exploration floor for economically eligible ASINs + concentration cap; loss guards remain superior',
+        policy: 'exploration floor for economically eligible ASINs + concentration cap; economic curve guard has precedence over exploration',
       },
       dayparting: {
         source_of_truth: 'AmazonScheduledRule',
