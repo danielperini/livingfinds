@@ -11,13 +11,15 @@ const INACTIVE_TOKENS = [
   'inactive', 'inativo', 'disabled', 'desativado', 'archived', 'arquivado',
   'deleted', 'excluido', 'closed', 'encerrado', 'removed', 'removido',
   'suppressed', 'suprimido', 'blocked', 'bloqueado', 'not_buyable',
-  'unavailable', 'indisponivel', 'out_of_stock', 'sem_estoque',
+  'unavailable', 'indisponivel',
 ];
 
 const ACTIVE_TOKENS = [
   'active', 'ativo', 'enabled', 'habilitado', 'buyable', 'compravel',
   'live', 'available', 'disponivel',
 ];
+
+const OUT_OF_STOCK_TOKENS = ['out_of_stock', 'sem_estoque', 'stockout'];
 
 const statusValues = (product: any) => [
   product?.status,
@@ -60,8 +62,9 @@ export function productAdsEligibility(product: any): ProductAdsEligibility {
 
   const explicitlyInactive = product.active === false || product.is_active === false || product.enabled === false || hasToken(signals, INACTIVE_TOKENS);
   const explicitlyActive = product.active === true || product.is_active === true || product.enabled === true || hasToken(signals, ACTIVE_TOKENS);
-  const active = !explicitlyInactive && (explicitlyActive || signals.length === 0 || stock > 0);
-  const inStock = stock > 0;
+  const outOfStockSignal = hasToken(signals, OUT_OF_STOCK_TOKENS);
+  const active = !explicitlyInactive && (explicitlyActive || signals.length === 0 || stock > 0 || outOfStockSignal);
+  const inStock = stock > 0 && !outOfStockSignal;
 
   if (!active) return { eligible: false, active: false, inStock, stock, reason: 'PRODUCT_INACTIVE', statusSignals: signals };
   if (!inStock) return { eligible: false, active: true, inStock: false, stock, reason: 'PRODUCT_OUT_OF_STOCK', statusSignals: signals };
