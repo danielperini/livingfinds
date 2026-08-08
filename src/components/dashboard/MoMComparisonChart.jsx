@@ -36,6 +36,21 @@ const CustomTooltip = ({ active, payload, label, activeMetric }) => {
   );
 };
 
+function RevenueTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-[#10182B] border border-surface-2 rounded-lg p-3 text-xs shadow-xl">
+      <p className="text-slate-400 mb-1.5 font-medium">Dia {label}</p>
+      {payload.map((point) => (
+        <div key={point.dataKey} className="flex items-center justify-between gap-4 mb-1 last:mb-0">
+          <span className="flex items-center gap-2 text-slate-300"><span className="w-2 h-2 rounded-full" style={{ background: point.color }} />{point.name}</span>
+          <strong className="text-white">{point.value == null ? '—' : fmtBRL(point.value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DeltaBadge({ current, prev, lowerIsBetter = false }) {
   if (!prev || prev === 0 || !current) return null;
   const delta = ((current - prev) / Math.abs(prev)) * 100;
@@ -272,6 +287,35 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
       )}
 
       {/* Rodapé informativo */}
+      <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="daily-revenue-comparison">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h3 id="daily-revenue-comparison" className="text-sm font-semibold text-slate-200">Faturamento real por dia</h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">Comparação direta por dia do mês · Finance Events SP-API e relatórios consolidados.</p>
+          </div>
+          <span className="text-[10px] text-orange-300 bg-orange-400/10 border border-orange-400/20 rounded-full px-2 py-1 whitespace-nowrap">Faturamento</span>
+        </div>
+        {chartData.some((point) => point.curRevenue != null || point.prevRevenue != null) ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={3}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
+              <XAxis dataKey="day" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false}
+                label={{ value: 'Dia do mês', position: 'insideBottomRight', offset: -4, fontSize: 9, fill: '#94A3B8' }} />
+              <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={50}
+                tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
+              <Tooltip content={<RevenueTooltip />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
+              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
+              <Bar dataKey="prevRevenue" name={prevMonthLabel} fill="#FB923C55" radius={[4, 4, 0, 0]} maxBarSize={20} />
+              <Bar dataKey="curRevenue" name={`${curMonthLabel} (atual)`} fill="#FB923C" radius={[4, 4, 0, 0]} maxBarSize={20} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">
+            Sem faturamento real diário suficiente para a comparação.
+          </div>
+        )}
+      </section>
+
       <p className="text-[9px] text-slate-600 mt-2">
         Dados do banco atualizados automaticamente pelos relatórios baixados diariamente.
         {daysWithPrevData < daysInPrevMonth ? (
