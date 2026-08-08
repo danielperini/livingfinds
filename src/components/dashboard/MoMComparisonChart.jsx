@@ -36,7 +36,7 @@ const CustomTooltip = ({ active, payload, label, activeMetric }) => {
   );
 };
 
-function RevenueTooltip({ active, payload, label }) {
+function RevenueTooltip({ active, payload, label, unit = 'brl' }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-[#10182B] border border-surface-2 rounded-lg p-3 text-xs shadow-xl">
@@ -44,7 +44,7 @@ function RevenueTooltip({ active, payload, label }) {
       {payload.map((point) => (
         <div key={point.dataKey} className="flex items-center justify-between gap-4 mb-1 last:mb-0">
           <span className="flex items-center gap-2 text-slate-300"><span className="w-2 h-2 rounded-full" style={{ background: point.color }} />{point.name}</span>
-          <strong className="text-white">{point.value == null ? '—' : fmtBRL(point.value)}</strong>
+          <strong className="text-white">{point.value == null ? '—' : unit === 'units' ? `${Number(point.value).toLocaleString('pt-BR')} unid.` : fmtBRL(point.value)}</strong>
         </div>
       ))}
     </div>
@@ -72,6 +72,8 @@ function DeltaBadge({ current, prev, lowerIsBetter = false }) {
  */
 export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
   const [activeMetric, setActiveMetric] = useState('spend');
+  const [rollingPeriod, setRollingPeriod] = useState(30);
+  const [rollingMetric, setRollingMetric] = useState('revenue');
 
   const metric = METRICS.find(m => m.key === activeMetric);
 
@@ -147,6 +149,33 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
     }
     return points;
   }, [totalDays, adsByDate, salesDailyByDate, curYear, curMonth, prevMonthDate, yesterdayStr, daysInPrevMonth]);
+
+  const rollingComparison = useMemo(() => {
+    const shiftIsoDate = (isoDate, offset) => {
+      const date = new Date(`${isoDate}T12:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + offset);
+      return date.toISOString().slice(0, 10);
+    };
+    const metricValue = (entry) => rollingMetric === 'units' ? Number(entry?.units || 0) : Number(entry?.revenue || 0);
+    const points = [];
+    for (let offset = rollingPeriod - 1; offset >= 0; offset -= 1) {
+      const currentDate = shiftIsoDate(yesterdayStr, -offset);
+      const previousDate = shiftIsoDate(currentDate, -rollingPeriod);
+      points.push({
+        label: currentDate.slice(8, 10) + '/' + currentDate.slice(5, 7),
+        current: salesDailyByDate[currentDate] ? metricValue(salesDailyByDate[currentDate]) : null,
+        previous: salesDailyByDate[previousDate] ? metricValue(salesDailyByDate[previousDate]) : null,
+      });
+    }
+    return points;
+  }, [rollingMetric, rollingPeriod, salesDailyByDate, yesterdayStr]);
+
+  const rollingTotals = useMemo(() => rollingComparison.reduce((totals, point) => ({
+    current: totals.current + (point.current || 0),
+    previous: totals.previous + (point.previous || 0),
+    currentDays: totals.currentDays + (point.current != null ? 1 : 0),
+    previousDays: totals.previousDays + (point.previous != null ? 1 : 0),
+  }), { current: 0, previous: 0, currentDays: 0, previousDays: 0 }), [rollingComparison]);
 
   // KPIs totais acumulados
   const totals = useMemo(() => {
@@ -312,6 +341,63 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         ) : (
           <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">
             Sem faturamento real diário suficiente para a comparação.
+          </div>
+        )}
+      </section>
+
+      <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="rolling-comparison-title">
+        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3 mb-4">
+          <div>
+            <h3 id="rolling-comparison-title" className="text-sm font-semibold text-slate-200">Comparação por período móvel</h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              Janela selecionada versus a janela imediatamente anterior de mesmo tamanho. Usa apenas dias confirmados na SP-API.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-lg border border-surface-3 bg-surface-2 p-0.5">
+              {[7, 15, 30, 60, 90].map((days) => (
+                <button key={days} type="button" onClick={() => setRollingPeriod(days)}
+                  className={`px-2.5 py-1.5 rounded text-[11px] font-semibold transition-colors ${rollingPeriod === days ? 'bg-cyan text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                  {days}d
+                </button>
+              ))}
+            </div>
+            <div className="flex rounded-lg border border-surface-3 bg-surface-2 p-0.5">
+              <button type="button" onClick={() => setRollingMetric('revenue')}
+                className={`px-2.5 py-1.5 rounded text-[11px] font-semibold transition-colors ${rollingMetric === 'revenue' ? 'bg-orange-400 text-slate-950' : 'text-slate-400 hover:text-slate-200'}`}>Faturamento</button>
+              <button type="button" onClick={() => setRollingMetric('units')}
+                className={`px-2.5 py-1.5 rounded text-[11px] font-semibold transition-colors ${rollingMetric === 'units' ? 'bg-cyan text-white' : 'text-slate-400 hover:text-slate-200'}`}>Unidades vendidas</button>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="rounded-lg border border-surface-2 bg-surface-2/60 p-3">
+            <p className="text-[10px] text-slate-500">Últimos {rollingPeriod} dias · {rollingTotals.currentDays} com dados</p>
+            <p className="mt-1 text-base font-bold text-white">{rollingMetric === 'units' ? `${rollingTotals.current.toLocaleString('pt-BR')} unid.` : fmtBRL(rollingTotals.current)}</p>
+          </div>
+          <div className="rounded-lg border border-surface-2 bg-surface-2/60 p-3">
+            <p className="text-[10px] text-slate-500">Período anterior · {rollingTotals.previousDays} com dados</p>
+            <p className="mt-1 text-base font-bold text-slate-300">{rollingMetric === 'units' ? `${rollingTotals.previous.toLocaleString('pt-BR')} unid.` : fmtBRL(rollingTotals.previous)}</p>
+          </div>
+        </div>
+
+        {rollingComparison.some((point) => point.current != null || point.previous != null) ? (
+          <ResponsiveContainer width="100%" height={240}>
+            <ComposedChart data={rollingComparison} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={3}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: rollingPeriod > 30 ? 8 : 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} interval={rollingPeriod > 30 ? Math.ceil(rollingPeriod / 12) : 0} />
+              <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={56}
+                tickFormatter={(value) => rollingMetric === 'units' ? value.toFixed(0) : (value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`)} />
+              <Tooltip content={<RevenueTooltip unit={rollingMetric === 'units' ? 'units' : 'brl'} />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
+              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
+              <Bar dataKey="previous" name="Período anterior" fill={rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
+              <Bar dataKey="current" name={`Últimos ${rollingPeriod} dias`} fill={rollingMetric === 'units' ? '#4DA3FF' : '#FB923C'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">
+            Não há dados confirmados para este período. O gráfico será preenchido conforme os relatórios forem sincronizados.
           </div>
         )}
       </section>
