@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import WeeklyReportView from '@/components/analytics/WeeklyReportView';
 import AcosEvolutionPanel from '@/components/analytics/AcosEvolutionPanel';
 import BudgetCoveragePanel from '@/components/analytics/BudgetCoveragePanel';
+import ProfitProjectionPanel from '@/components/analytics/ProfitProjectionPanel';
 
 const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16'];
 
@@ -327,6 +328,7 @@ export default function Analytics() {
         {[
           { id: 'metricas', label: 'Métricas & Gráficos' },
           { id: 'semanal', label: 'Aferição Econômica & Relatório Semanal' },
+          { id: 'projecao_lucro', label: 'Projeção de Lucro' },
         ].map(t => (
           <button key={t.id} onClick={() => setActiveMainTab(t.id)}
             className={`px-5 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeMainTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
@@ -339,6 +341,12 @@ export default function Analytics() {
       {activeMainTab === 'semanal' && (
         account
           ? <WeeklyReportView account={account} />
+          : !loading ? <div className="flex items-center justify-center py-16"><p className="text-sm text-slate-500">Conta Amazon não encontrada.</p></div> : null
+      )}
+
+      {activeMainTab === 'projecao_lucro' && (
+        account
+          ? <ProfitProjectionPanel account={account} />
           : !loading ? <div className="flex items-center justify-center py-16"><p className="text-sm text-slate-500">Conta Amazon não encontrada.</p></div> : null
       )}
 
