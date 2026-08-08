@@ -62,6 +62,13 @@
       "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
     },
     {
+      "name": "Zyte real competitor research - every 6 hours",
+      "function": "refreshZyteCompetitorResearch",
+      "cron": "18 1,7,13,19 * * *",
+      "payload": { "_service_role": true, "max_products": 20 },
+      "run_on_startup": true
+    },
+    {
       "name": "Repricing transport queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
