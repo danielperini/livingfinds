@@ -62,17 +62,33 @@ Deno.serve(async (request) => {
       const increment = finite(settings.bid_increment || settings.allowed_increment || 0.1);
       const maxSpendWithoutSale = finite(settings.max_spend_without_sale || Math.max(5, globalBudget * 0.05));
 
+      const eligibleAsins = new Set(products
+        .filter((product: any) => finite(product.fulfillable_quantity ?? product.available_quantity ?? product.inventory_quantity ?? product.stock ?? product.fba_inventory) > 0)
+        .map((product: any) => upper(product.asin))
+        .filter(Boolean));
+      const manualCampaignsByAsin = new Map<string, number>();
+      for (const campaign of campaigns) {
+        if (!active(campaign.state || campaign.status) || upper(campaign.targeting_type) !== 'MANUAL') continue;
+        const asin = upper(campaign.asin || campaign.advertised_asin || (String(campaign.name || '').match(/B0[A-Z0-9]{8}/i)?.[0]));
+        if (!asin) continue;
+        manualCampaignsByAsin.set(asin, (manualCampaignsByAsin.get(asin) || 0) + 1);
+      }
+      const uncoveredManualSlots = [...eligibleAsins].reduce((sum, asin) => sum + Math.max(0, 10 - (manualCampaignsByAsin.get(asin) || 0)), 0);
+      const automaticExpansionLimit = Math.max(25, Math.min(50, uncoveredManualSlots || 25));
+
       const kickoff = await invoke(base44, 'ensureActiveProductCampaignCoverage', {
         ...common,
         auto_initial_bid: 0.5,
         manual_initial_bid: 0.6,
-        maximum_initial_manual_campaigns: 4,
+        minimum_manual_terms_per_asin: 10,
+        maximum_initial_manual_campaigns: 30,
         minimum_term_relevance: 0.9,
         exact_only: true,
         one_term_per_campaign: true,
         require_stock: true,
         term_source_order: ['TermBank', 'AmazonAdsSuggestions'],
         idempotent_by: ['amazon_account_id', 'asin', 'normalized_term', 'match_type'],
+        run_harvest: false,
       });
 
       const harvesting = await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
@@ -88,7 +104,8 @@ Deno.serve(async (request) => {
         include_manual_sources: true,
         negative_exact_after_manual_confirmation: true,
         queue_only: true,
-        max_promotions: 25,
+        max_promotions: automaticExpansionLimit,
+        trigger_type: 'canonical_profitable_asin_expansion',
       });
 
       const autoDedup = await invoke(base44, 'deduplicateAutoCampaignsByAsin', {
@@ -211,7 +228,7 @@ Deno.serve(async (request) => {
         source_function: 'runCanonicalCampaignLifecycleLayer',
         records_processed: campaigns.length,
         records_imported: retirementDecisions.length,
-        message: `Ciclo centralizado concluído: ${retirementDecisions.length} AUTO(s) em encerramento; target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
+        message: `Ciclo centralizado concluído: expansão automática até ${automaticExpansionLimit} promoção(ões) comprovadas; ${retirementDecisions.length} AUTO(s) em encerramento; target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});
@@ -219,6 +236,16 @@ Deno.serve(async (request) => {
       results.push({
         amazon_account_id: accountId,
         settings: { target_acos: targetAcos, global_budget: globalBudget, min_bid: minBid, max_bid: maxBid, increment, max_spend_without_sale: maxSpendWithoutSale },
+        expansion: {
+          mode: 'automatic',
+          ui_required: false,
+          eligible_asins: eligibleAsins.size,
+          minimum_manual_terms_per_asin: 10,
+          maximum_manual_campaigns_per_asin: 30,
+          uncovered_manual_slots: uncoveredManualSlots,
+          max_promotions_this_cycle: automaticExpansionLimit,
+          internal_harvest_deduplicated: true,
+        },
         stages: { kickoff, harvesting, autoDedup, wasteGuard, manualBidGuard, budget },
         retirement_decisions: retirementDecisions,
       });
@@ -229,6 +256,8 @@ Deno.serve(async (request) => {
       engine: CAMPAIGN_LIFECYCLE_VERSION,
       schedule_owner: 'runUnifiedDecisionEngine',
       interval_hours: 3,
+      automatic_expansion: true,
+      ui_required: false,
       results,
     });
   } catch (error: any) {
