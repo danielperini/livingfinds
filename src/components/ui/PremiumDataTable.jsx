@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Search } from 'lucide-react';
+import { pageRange, visiblePageNumbers } from '@/lib/pagination';
 
 function normalize(value) {
   if (value == null) return '';
@@ -27,11 +28,13 @@ export default function PremiumDataTable({
   searchPlaceholder = 'Pesquisar...',
   initialSort,
   pageSize = 50,
+  pageSizeOptions = [25, 50, 100],
   className = '',
 }) {
   const [sort, setSort] = useState(initialSort || null);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [activePageSize, setActivePageSize] = useState(pageSize);
 
   const visible = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase('pt-BR');
@@ -55,9 +58,11 @@ export default function PremiumDataTable({
     return rows;
   }, [columns, data, query, sort]);
 
-  const pages = Math.max(1, Math.ceil(visible.length / pageSize));
+  const pages = Math.max(1, Math.ceil(visible.length / activePageSize));
   const safePage = Math.min(page, pages);
-  const paginated = visible.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const paginated = visible.slice((safePage - 1) * activePageSize, safePage * activePageSize);
+  const range = pageRange(safePage, activePageSize, visible.length);
+  const pageItems = visiblePageNumbers(safePage, pages);
 
   const toggleSort = (column) => {
     setPage(1);
@@ -119,9 +124,20 @@ export default function PremiumDataTable({
 
       {pages > 1 && (
         <div className="premium-data-table__pagination">
-          <button type="button" disabled={safePage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button>
-          <span>Página {safePage} de {pages}</span>
-          <button type="button" disabled={safePage === pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}>Próxima</button>
+          <span aria-live="polite">Exibindo {range.from}–{range.to} de {visible.length.toLocaleString('pt-BR')}</span>
+          <div className="premium-data-table__page-controls" aria-label="Navegação entre páginas">
+            <label className="premium-data-table__density-label">
+              <span className="sr-only">Linhas por página</span>
+              <select value={activePageSize} onChange={(event) => { setActivePageSize(Number(event.target.value)); setPage(1); }}>
+                {pageSizeOptions.map((option) => <option key={option} value={option}>{option}/página</option>)}
+              </select>
+            </label>
+            <button type="button" aria-label="Página anterior" disabled={safePage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button>
+            {pageItems.map((item) => typeof item === 'string'
+              ? <span key={item} className="premium-data-table__ellipsis" aria-hidden="true">…</span>
+              : <button key={item} type="button" aria-label={`Ir para página ${item}`} aria-current={item === safePage ? 'page' : undefined} className={item === safePage ? 'is-current' : ''} onClick={() => setPage(item)}>{item}</button>)}
+            <button type="button" aria-label="Próxima página" disabled={safePage === pages} onClick={() => setPage((value) => Math.min(pages, value + 1))}>Próxima</button>
+          </div>
         </div>
       )}
     </section>
