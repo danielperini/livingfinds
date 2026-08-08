@@ -99,6 +99,10 @@ jobs:
             echo "\$functions_json" | grep -q 'importProductEconomics'
             echo "\$functions_json" | grep -q 'enrollStockedProductsInRepricing'
             echo "\$functions_json" | grep -q 'scrapeAmazonKeywords'
+            if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" != "true" ]; then
+              echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
+              exit 0
+            fi
             # Mantém o agrupamento original das verificações e rotinas seguintes.
             if true; then
             echo '--- validar credencial e extração Zyte sem revelar o segredo ---'
