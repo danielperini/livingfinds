@@ -135,7 +135,7 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
       </div>
       <button onClick={() => set(k, !form[k])}
         className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${form[k] ? (danger ? 'bg-amber-500' : 'bg-cyan') : 'bg-surface-3'}`}>
-        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form[k] ? 'translate-x-5' : 'translate-x-0.5'}`} />
+        <span className={`absolute top-0.5 w-5 h-5 bg-cyan rounded-full shadow transition-transform ${form[k] ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </button>
     </div>
   );
@@ -222,7 +222,7 @@ export default function AutopilotConfigPanel({ amazonAccountId, onConfigSaved })
             </div>
             <button onClick={() => set('ai_budget_enforcement', !form.ai_budget_enforcement)}
               className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ml-4 ${form.ai_budget_enforcement ? 'bg-cyan' : 'bg-surface-3'}`}>
-              <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.ai_budget_enforcement ? 'translate-x-5' : 'translate-x-0.5'}`} />
+              <span className={`absolute top-0.5 w-5 h-5 bg-cyan rounded-full shadow transition-transform ${form.ai_budget_enforcement ? 'translate-x-5' : 'translate-x-0.5'}`} />
             </button>
           </div>
           {form.ai_budget_enforcement && (

@@ -1,0 +1,176 @@
+/* LivingFinds — contrato visual do shell autenticado
+ * Esta é a camada final de apresentação. Não altera dados nem regras de negócio.
+ */
+
+:root {
+  --lf-canvas: #050913;
+  --lf-workspace: #070b17;
+  --lf-surface: #0b1224;
+  --lf-surface-elevated: #10182b;
+  --lf-surface-hover: #13203a;
+  --lf-surface-focus: #172642;
+  --lf-border-canonical: #24324f;
+  --lf-border-subtle: rgba(255, 255, 255, 0.07);
+  --lf-foreground: #f8fafc;
+  --lf-foreground-muted: #c7d0e0;
+  --lf-foreground-subtle: #94a3b8;
+  --lf-disabled: #64748b;
+  --lf-primary: #5b6cff;
+  --lf-primary-hover: #7180ff;
+  --lf-success: #3ddc84;
+  --lf-warning: #f6b84a;
+  --lf-danger: #ff5d5d;
+  --lf-info: #4da3ff;
+  --lf-space-1: 4px;
+  --lf-space-2: 8px;
+  --lf-space-3: 12px;
+  --lf-space-4: 16px;
+  --lf-space-6: 24px;
+  --lf-space-8: 32px;
+}
+
+html[data-theme] { color-scheme: dark; }
+
+.lf-app-shell {
+  color: var(--lf-foreground) !important;
+  background: var(--lf-canvas) !important;
+  isolation: isolate;
+}
+
+.lf-app-shell .lf-workspace {
+  background:
+    radial-gradient(circle at 90% -5%, rgba(91, 108, 255, 0.10), transparent 30%),
+    linear-gradient(180deg, var(--lf-workspace), var(--lf-canvas) 68%) !important;
+}
+
+.lf-workspace > :is(div, section, article) {
+  padding-bottom: var(--lf-space-8);
+}
+
+/* Espaçamento, leitura e superfícies transversais. */
+.lf-app-shell :is(p, label, small, .text-xs, .text-sm) { line-height: 1.45; }
+.lf-app-shell :is(label, .text-xs, .text-sm) { color: var(--lf-foreground-muted); }
+.lf-app-shell :is(h1, h2, h3, h4, th, strong) { color: var(--lf-foreground); }
+.lf-app-shell .text-slate-500,
+.lf-app-shell .text-slate-600 { color: var(--lf-foreground-subtle) !important; }
+
+.lf-app-shell :is(.bg-white, .bg-gray-50, .bg-slate-50, .bg-gray-100, .bg-slate-100),
+.lf-app-shell [style*="background: white" i],
+.lf-app-shell [style*="background-color: white" i],
+.lf-app-shell [style*="background: #fff" i],
+.lf-app-shell [style*="background-color: #fff" i] {
+  background: var(--lf-surface) !important;
+  color: var(--lf-foreground) !important;
+}
+
+.lf-app-shell :is(.bg-background, .bg-popover, .bg-card, .bg-muted) {
+  background-color: var(--lf-surface) !important;
+  color: var(--lf-foreground) !important;
+}
+
+.lf-app-shell :is(section, article, .card, [class*="bg-surface-"])[class*="border"] {
+  border-color: var(--lf-border-subtle) !important;
+  border-radius: 14px;
+}
+
+.lf-app-shell :is(input, select, textarea, [role="combobox"]) {
+  min-height: 40px;
+  background: var(--lf-surface) !important;
+  border-color: var(--lf-border-canonical) !important;
+  border-radius: 10px !important;
+  color: var(--lf-foreground) !important;
+}
+
+.lf-app-shell :is(input, textarea)::placeholder { color: var(--lf-foreground-subtle) !important; }
+.lf-app-shell :is(input, select, textarea, [role="combobox"]):focus,
+.lf-app-shell :is(input, select, textarea, [role="combobox"]):focus-visible {
+  border-color: var(--lf-primary) !important;
+  box-shadow: 0 0 0 3px rgba(91, 108, 255, 0.20) !important;
+  outline: none !important;
+}
+
+/* Todas as tabelas internas preservam scroll horizontal e contraste operacional. */
+.lf-app-shell :is(.premium-data-table, .overflow-x-auto:has(table), .overflow-auto:has(table)) {
+  border: 1px solid var(--lf-border-canonical);
+  border-radius: 14px;
+  background: var(--lf-surface);
+}
+
+.lf-app-shell table {
+  background: var(--lf-surface) !important;
+  color: var(--lf-foreground) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.lf-app-shell thead,
+.lf-app-shell thead tr,
+.lf-app-shell th {
+  background: var(--lf-surface-elevated) !important;
+  color: var(--lf-foreground-muted) !important;
+}
+
+.lf-app-shell th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-height: 44px;
+  padding: 10px 14px !important;
+  font-size: 0.75rem !important;
+  font-weight: 650 !important;
+  letter-spacing: 0.025em;
+}
+
+.lf-app-shell tbody,
+.lf-app-shell tbody tr,
+.lf-app-shell td { background: var(--lf-surface) !important; color: var(--lf-foreground) !important; }
+.lf-app-shell td { padding: 10px 14px !important; border-color: var(--lf-border-subtle) !important; }
+.lf-app-shell tbody tr:hover > td,
+.lf-app-shell tbody tr:hover { background: var(--lf-surface-hover) !important; }
+
+/* Componentes via portal ficam fora de .lf-app-shell; as classes abaixo são explícitas. */
+:is(.lf-premium-select-content, .lf-premium-dropdown-content, .lf-premium-popover-content,
+    .lf-premium-dialog-content, .lf-premium-drawer-content, .lf-premium-tooltip-content,
+    [data-sonner-toaster] [data-sonner-toast]) {
+  color: var(--lf-foreground) !important;
+  border-color: var(--lf-border-canonical) !important;
+  background: var(--lf-surface-elevated) !important;
+  box-shadow: 0 24px 72px rgba(0, 0, 0, .52), inset 0 1px 0 var(--lf-border-subtle) !important;
+}
+
+.lf-premium-select-content,
+.lf-premium-dropdown-content,
+.lf-premium-popover-content { border-radius: 12px !important; padding: 6px !important; }
+.lf-premium-dialog-content { border-radius: 16px !important; }
+.lf-premium-drawer-content { border-radius: 16px 16px 0 0 !important; }
+.lf-premium-tooltip-content { border-radius: 10px !important; background: #10182b !important; }
+
+:is(.lf-premium-select-content, .lf-premium-dropdown-content) [role="option"],
+:is(.lf-premium-select-content, .lf-premium-dropdown-content) [role="menuitem"] {
+  color: var(--lf-foreground-muted) !important;
+  border-radius: 8px;
+}
+
+:is(.lf-premium-select-content, .lf-premium-dropdown-content) :is([data-highlighted], [data-state="checked"]) {
+  color: var(--lf-foreground) !important;
+  background: rgba(91, 108, 255, .18) !important;
+  box-shadow: inset 2px 0 0 var(--lf-primary);
+}
+
+[data-radix-popper-content-wrapper] input,
+[data-radix-popper-content-wrapper] select,
+[data-radix-popper-content-wrapper] textarea {
+  background: var(--lf-surface) !important;
+  border-color: var(--lf-border-canonical) !important;
+  color: var(--lf-foreground) !important;
+}
+
+@media (max-width: 1023px) {
+  .lf-workspace > :is(div, section, article) { padding-bottom: var(--lf-space-6); }
+  .lf-app-shell th, .lf-app-shell td { padding-inline: 12px !important; }
+}
+
+@media (max-width: 639px) {
+  .lf-app-shell :is(section, article, .card, [class*="bg-surface-"])[class*="border"] { border-radius: 12px; }
+  .lf-app-shell :is(.overflow-x-auto:has(table), .overflow-auto:has(table)) { margin-inline: -2px; }
+  .lf-app-shell table { min-width: 720px; }
+}

@@ -91,7 +91,7 @@ function Toggle({ label, desc, field, form, setForm, warning }) {
       </div>
       <button onClick={() => setForm(p => ({ ...p, [field]: !p[field] }))}
         className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ${form[field] ? 'bg-cyan' : 'bg-surface-3'}`}>
-        <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all duration-200 ${form[field] ? 'left-6' : 'left-1'}`} />
+        <span className={`absolute top-1 w-4 h-4 bg-cyan rounded-full shadow transition-all duration-200 ${form[field] ? 'left-6' : 'left-1'}`} />
       </button>
     </div>
   );

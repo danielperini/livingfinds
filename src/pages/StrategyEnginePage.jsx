@@ -325,7 +325,7 @@ export default function StrategyEnginePage() {
             <span className="text-xs text-slate-400">Simulação</span>
             <button onClick={() => setDryRun(!dryRun)}
               className={`relative w-9 h-5 rounded-full transition-colors flex-shrink-0 ${dryRun ? 'bg-amber-500' : 'bg-cyan'}`}>
-              <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${dryRun ? 'left-0.5' : 'left-4'}`} />
+              <span className={`absolute top-0.5 w-4 h-4 bg-cyan rounded-full shadow transition-all ${dryRun ? 'left-0.5' : 'left-4'}`} />
             </button>
           </div>
           <button onClick={runEngine} disabled={running || !account}
