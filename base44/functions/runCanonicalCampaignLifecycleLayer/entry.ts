@@ -1,5 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import { CAMPAIGN_LIFECYCLE_VERSION, shouldRetireAutoCampaign } from '../../shared/campaignLifecyclePolicy.ts';
+import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 
 const invoke = async (base44: any, name: string, payload: Record<string, unknown>) => {
   try {
@@ -62,6 +63,10 @@ Deno.serve(async (request) => {
       const increment = finite(settings.bid_increment || settings.allowed_increment || 0.1);
       const maxSpendWithoutSale = finite(settings.max_spend_without_sale || Math.max(5, globalBudget * 0.05));
 
+      const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
+      const eligibilityByAsin = new Map([...productByAsin.entries()].map(([asin, product]) => [asin, productAdsEligibility(product)]));
+      const eligibleAsins = [...eligibilityByAsin.entries()].filter(([, eligibility]) => eligibility.eligible).map(([asin]) => asin);
+
       const kickoff = await invoke(base44, 'ensureActiveProductCampaignCoverage', {
         ...common,
         auto_initial_bid: 0.5,
@@ -71,6 +76,8 @@ Deno.serve(async (request) => {
         exact_only: true,
         one_term_per_campaign: true,
         require_stock: true,
+        require_active_product: true,
+        eligible_asins: eligibleAsins,
         term_source_order: ['TermBank', 'AmazonAdsSuggestions'],
         idempotent_by: ['amazon_account_id', 'asin', 'normalized_term', 'match_type'],
       });
@@ -89,6 +96,9 @@ Deno.serve(async (request) => {
         negative_exact_after_manual_confirmation: true,
         queue_only: true,
         max_promotions: 25,
+        require_stock: true,
+        require_active_product: true,
+        eligible_asins: eligibleAsins,
       });
 
       const autoDedup = await invoke(base44, 'deduplicateAutoCampaignsByAsin', {
@@ -107,6 +117,7 @@ Deno.serve(async (request) => {
         negative_match_type: 'NEGATIVE_EXACT',
         include_auto: true,
         include_manual: true,
+        eligible_asins: eligibleAsins,
         trigger_type: 'canonical_campaign_lifecycle',
       });
 
@@ -121,6 +132,7 @@ Deno.serve(async (request) => {
         reduce_only_when_unprofitable: true,
         max_spend_without_sale: maxSpendWithoutSale,
         never_exceed_target_acos: true,
+        eligible_asins: eligibleAsins,
         trigger_type: 'canonical_campaign_lifecycle',
       });
 
@@ -136,9 +148,9 @@ Deno.serve(async (request) => {
         enable_intraday_reallocation: true,
         protect_winners_from_budget_exhaustion: true,
         never_exceed_account_daily_budget: true,
+        eligible_asins: eligibleAsins,
       });
 
-      const stockByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), finite(p.fulfillable_quantity ?? p.inventory_quantity ?? p.stock)]));
       const lastThreeDays = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
       const metricsByCampaign = new Map<string, { orders: number; sales: number }>();
       for (const row of metricsRows) {
@@ -152,22 +164,77 @@ Deno.serve(async (request) => {
 
       const retirementDecisions: any[] = [];
       for (const campaign of campaigns) {
-        if (!active(campaign.state || campaign.status) || !isAuto(campaign)) continue;
+        if (!active(campaign.state || campaign.status)) continue;
         const id = campaignId(campaign);
         const asin = upper(campaign.asin || campaign.advertised_asin || (String(campaign.name || '').match(/B0[A-Z0-9]{8}/i)?.[0]));
+        if (!id || !asin) continue;
+
+        const product = productByAsin.get(asin);
+        const eligibility = productAdsEligibility(product);
+        if (!eligibility.eligible) {
+          const reasonCode = eligibility.reason;
+          const key = `CAMPAIGN_PRODUCT_ELIGIBILITY|${accountId}|${id}|${reasonCode}`;
+          if (priorDecisions.some((row: any) => row.idempotency_key === key && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(row.status || '')))) continue;
+          if (body.dry_run === true) {
+            retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, dry_run: true });
+            continue;
+          }
+          const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
+            amazon_account_id: accountId,
+            decision_type: 'product_ads_eligibility',
+            entity_type: 'campaign',
+            entity_id: id,
+            campaign_id: id,
+            campaign_name: campaign.name || campaign.campaign_name || null,
+            asin,
+            sku: product?.sku || null,
+            action: 'pause_campaign',
+            canonical_action_type: 'CAMPAIGN_STATE_CHANGE',
+            rationale: reasonCode === 'PRODUCT_INACTIVE'
+              ? 'Produto inativo no catálogo canônico: campanha retirada da operação para não consumir verba nem esforço do motor.'
+              : reasonCode === 'PRODUCT_OUT_OF_STOCK'
+                ? 'Produto sem estoque disponível: campanha retirada da operação até o estoque retornar.'
+                : 'Produto não elegível para Ads no catálogo canônico: campanha retirada da operação até regularização.',
+            rule_key: reasonCode,
+            reason_code: reasonCode,
+            value_before: 'ENABLED',
+            value_after: 'PAUSED',
+            confidence: 1,
+            risk: 'low',
+            requires_approval: false,
+            approval_status: 'auto_approved_deterministic',
+            status: 'approved',
+            queue_status: 'pending',
+            priority_class: 'P1',
+            execution_mode: 'EXPEDITED_QUEUE',
+            confirmation_required: true,
+            confirmation_status: 'pending',
+            idempotency_key: key,
+            conflict_group: `${accountId}|campaign|${id}`,
+            source_function: 'runCanonicalCampaignLifecycleLayer',
+            model_version: CAMPAIGN_LIFECYCLE_VERSION,
+            data_used: JSON.stringify({ asin, sku: product?.sku || null, product_status_signals: eligibility.statusSignals, stock: eligibility.stock, eligibility_reason: reasonCode }),
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+          retirementDecisions.push({ campaign_id: id, asin, reason_code: reasonCode, decision_id: decision.id });
+          continue;
+        }
+
+        if (!isAuto(campaign)) continue;
         const metrics = metricsByCampaign.get(id) || { orders: 0, sales: 0 };
         const retire = shouldRetireAutoCampaign({
           ageDays: daysOld(campaign.created_at || campaign.created_date),
           consecutiveDaysWithoutSales: metrics.orders === 0 && metrics.sales === 0 ? 3 : 0,
           protectedWinner: campaign.protected_high_performance === true,
-          inStock: (stockByAsin.get(asin) || 0) > 0,
+          inStock: true,
           structurallyComplete: campaign.incomplete !== true,
         });
         if (!retire) continue;
         const key = `AUTO_LIFECYCLE_RETIRE|${accountId}|${id}|30D_3D_NO_SALES`;
         if (priorDecisions.some((row: any) => row.idempotency_key === key && !['failed', 'rejected', 'cancelled'].includes(String(row.status || '')))) continue;
         if (body.dry_run === true) {
-          retirementDecisions.push({ campaign_id: id, asin, dry_run: true });
+          retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', dry_run: true });
           continue;
         }
         const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
@@ -201,7 +268,7 @@ Deno.serve(async (request) => {
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
-        retirementDecisions.push({ campaign_id: id, asin, decision_id: decision.id });
+        retirementDecisions.push({ campaign_id: id, asin, reason_code: 'AUTO_30D_3D_NO_SALES_RETIRE', decision_id: decision.id });
       }
 
       await base44.asServiceRole.entities.SyncExecutionLog.create({
@@ -211,7 +278,7 @@ Deno.serve(async (request) => {
         source_function: 'runCanonicalCampaignLifecycleLayer',
         records_processed: campaigns.length,
         records_imported: retirementDecisions.length,
-        message: `Ciclo centralizado concluído: ${retirementDecisions.length} AUTO(s) em encerramento; target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
+        message: `Ciclo centralizado: ${eligibleAsins.length} ASIN(s) ativos com estoque; ${retirementDecisions.length} campanha(s) em retirada/encerramento; target ACoS ${targetAcos}%; budget global ${globalBudget}.`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});
@@ -219,6 +286,7 @@ Deno.serve(async (request) => {
       results.push({
         amazon_account_id: accountId,
         settings: { target_acos: targetAcos, global_budget: globalBudget, min_bid: minBid, max_bid: maxBid, increment, max_spend_without_sale: maxSpendWithoutSale },
+        product_eligibility: { active_in_stock_asins: eligibleAsins.length, policy: 'active_and_in_stock_only' },
         stages: { kickoff, harvesting, autoDedup, wasteGuard, manualBidGuard, budget },
         retirement_decisions: retirementDecisions,
       });
@@ -229,6 +297,7 @@ Deno.serve(async (request) => {
       engine: CAMPAIGN_LIFECYCLE_VERSION,
       schedule_owner: 'runUnifiedDecisionEngine',
       interval_hours: 3,
+      product_eligibility_policy: 'active_and_in_stock_only',
       results,
     });
   } catch (error: any) {
