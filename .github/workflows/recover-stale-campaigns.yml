@@ -78,7 +78,7 @@ jobs:
                   trigger_type: "post_deploy_stale_zero_delivery_recovery",
                 });
                 const healthEngine = String(health.engine || "");
-                if (!healthEngine.startsWith("campaign-delivery-health-v2.2")) {
+                if (!healthEngine.startsWith("campaign-delivery-health-v2.3-canonical-stock")) {
                   throw new Error("Versão antiga da recuperação ainda carregada na VPS: " + (healthEngine || "desconhecida"));
                 }
 
@@ -103,6 +103,9 @@ jobs:
                 });
 
                 console.log("POST_DEPLOY_SALES_RECOVERY_SUMMARY=" + JSON.stringify({
+                  delivery_health_engine: healthEngine,
+                  cancelled_false_stock_decisions: health?.results?.reduce((sum, row) => sum + Number(row.cancelled_false_stock_decisions || 0), 0) || 0,
+                  stock_verifications: health?.results?.reduce((sum, row) => sum + (row.actions || []).filter((a) => a.action === "VERIFY_STOCK").length, 0) || 0,
                   recovery_active: recovery?.reports?.[0]?.recovery_active ?? null,
                   growth_allowed: recovery?.reports?.[0]?.growth_allowed ?? null,
                   queued: recovery?.reports?.[0]?.queued?.length ?? 0,
