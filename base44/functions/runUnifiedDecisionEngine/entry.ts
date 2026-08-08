@@ -66,6 +66,14 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
     });
 
+    const asinDiversification = body.skip_asin_diversification === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runAsinPortfolioDiversificationGuard', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+          trigger_type: dailyClose ? 'unified_daily_asin_diversification' : 'unified_intraday_asin_diversification',
+        });
+
     const campaignLifecycle = lifecycleWindow
       ? await invoke(base44, 'runCanonicalCampaignLifecycleLayer', {
           ...common,
@@ -124,14 +132,14 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, campaignLifecycle, economicBalancer,
+      manualStructureAudit, deterministic, asinDiversification, campaignLifecycle, economicBalancer,
       deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v12-daypart-budget-restore',
+      engine_version: 'unified-v13-asin-portfolio-diversification',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -141,6 +149,11 @@ Deno.serve(async (request) => {
         interval_hours: 3,
         brt_hour: currentHour,
         schedule_owner: 'runUnifiedDecisionEngine',
+      },
+      asin_portfolio: {
+        automatic: true,
+        ui_required: false,
+        policy: 'exploration floor for economically eligible ASINs + concentration cap; loss guards remain superior',
       },
       dayparting: {
         source_of_truth: 'AmazonScheduledRule',
