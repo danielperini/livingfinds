@@ -150,6 +150,22 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
     return points;
   }, [totalDays, adsByDate, salesDailyByDate, curYear, curMonth, prevMonthDate, yesterdayStr, daysInPrevMonth]);
 
+  const cumulativeRevenueData = useMemo(() => {
+    let currentTotal = 0;
+    let previousTotal = 0;
+    return [{ day: 0, curCumulative: 0, prevCumulative: 0 }, ...chartData.map((point) => {
+      const hasCurrent = point.curRevenue != null;
+      const hasPrevious = point.prevRevenue != null;
+      if (hasCurrent) currentTotal += Number(point.curRevenue);
+      if (hasPrevious) previousTotal += Number(point.prevRevenue);
+      return {
+        day: point.day,
+        curCumulative: hasCurrent ? currentTotal : null,
+        prevCumulative: hasPrevious ? previousTotal : null,
+      };
+    })];
+  }, [chartData]);
+
   const rollingComparison = useMemo(() => {
     const shiftIsoDate = (isoDate, offset) => {
       const date = new Date(`${isoDate}T12:00:00Z`);
@@ -343,6 +359,34 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             Sem faturamento real diário suficiente para a comparação.
           </div>
         )}
+      </section>
+
+      <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="cumulative-revenue-title">
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <h3 id="cumulative-revenue-title" className="text-sm font-semibold text-slate-200">Faturamento acumulado no mês</h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">A curva começa em R$ 0 no dia 0 e soma cada dia confirmado até o mesmo ponto do mês.</p>
+          </div>
+          <span className="text-[10px] text-indigo-200 bg-indigo-400/10 border border-indigo-400/20 rounded-full px-2 py-1 whitespace-nowrap">Acumulado</span>
+        </div>
+        {cumulativeRevenueData.some((point) => point.curCumulative != null && point.day > 0) || cumulativeRevenueData.some((point) => point.prevCumulative != null && point.day > 0) ? (
+          <ResponsiveContainer width="100%" height={220}>
+            <ComposedChart data={cumulativeRevenueData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
+              <XAxis dataKey="day" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false}
+                label={{ value: 'Dia do mês', position: 'insideBottomRight', offset: -4, fontSize: 9, fill: '#94A3B8' }} />
+              <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={54}
+                tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
+              <Tooltip content={<RevenueTooltip />} cursor={{ stroke: 'rgba(91,108,255,.45)', strokeDasharray: '3 3' }} />
+              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
+              <Line type="monotone" dataKey="prevCumulative" name={`${prevMonthLabel} acumulado`} stroke="#FB923C88" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
+              <Line type="monotone" dataKey="curCumulative" name={`${curMonthLabel} acumulado`} stroke="#FB923C" strokeWidth={2.8} dot={false} connectNulls={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">Sem faturamento diário confirmado para formar a curva acumulada.</div>
+        )}
+        <p className="mt-2 text-[9px] text-slate-600">Dias sem confirmação permanecem como lacuna visual, para não confundir dado ausente com faturamento zero.</p>
       </section>
 
       <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="rolling-comparison-title">
