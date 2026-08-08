@@ -1,71 +1,61 @@
 .lf-app-shell {
-  --premium-bg: #070B17;
+  --premium-bg: #050913;
+  --premium-workspace: #070B17;
   --premium-surface: #0B1224;
+  --premium-surface-elevated: #10182B;
   --premium-hover: #13203A;
   --premium-border: #24324F;
-  --premium-text: #FFFFFF;
+  --premium-border-subtle: rgba(255, 255, 255, .07);
+  --premium-text: #F8FAFC;
   --premium-muted: #9CA9C5;
+  --premium-muted-2: #64748B;
   --premium-green: #3DDC84;
+  --premium-yellow: #F6B84A;
   --premium-red: #FF5D5D;
   --premium-blue: #5B8CFF;
   background: var(--premium-bg) !important;
   color: var(--premium-text) !important;
   color-scheme: dark;
+  font-feature-settings: "tnum" 1, "ss01" 1;
 }
 
-.lf-app-shell .lf-workspace,
+.lf-app-shell .lf-workspace {
+  background: var(--premium-workspace) !important;
+  color: var(--premium-text) !important;
+}
+
 .lf-app-shell main,
 .lf-app-shell section,
 .lf-app-shell article {
   color: var(--premium-text);
 }
 
-.lf-app-shell table,
-.lf-app-shell [role="grid"] {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--premium-surface) !important;
+/* Nunca permitir superfícies claras dentro do shell autenticado. */
+.lf-app-shell .bg-white,
+.lf-app-shell .bg-gray-50,
+.lf-app-shell .bg-slate-50,
+.lf-app-shell .bg-gray-100,
+.lf-app-shell .bg-slate-100,
+.lf-app-shell [class*="bg-white/"],
+.lf-app-shell [style*="background: white"],
+.lf-app-shell [style*="background:white"],
+.lf-app-shell [style*="background-color: white"],
+.lf-app-shell [style*="background-color:white"],
+.lf-app-shell [style*="#fff"],
+.lf-app-shell [style*="#FFF"],
+.lf-app-shell [style*="#ffffff"],
+.lf-app-shell [style*="#FFFFFF"] {
+  background-color: var(--premium-surface) !important;
   color: var(--premium-text) !important;
 }
 
-.lf-app-shell thead,
-.lf-app-shell thead tr,
-.lf-app-shell [role="rowgroup"]:first-child,
-.lf-app-shell [role="columnheader"] {
-  background: var(--premium-surface) !important;
-  color: var(--premium-text) !important;
-}
-
-.lf-app-shell tbody,
-.lf-app-shell tbody tr,
-.lf-app-shell [role="row"] {
-  background: var(--premium-surface) !important;
-  color: var(--premium-text) !important;
-}
-
-.lf-app-shell tbody tr:hover,
-.lf-app-shell [role="row"]:hover {
-  background: var(--premium-hover) !important;
-}
-
-.lf-app-shell th,
-.lf-app-shell td,
-.lf-app-shell [role="cell"],
-.lf-app-shell [role="columnheader"] {
-  border-color: var(--premium-border) !important;
-  color: var(--premium-text) !important;
-}
-
-.lf-app-shell input:not([type="checkbox"]):not([type="radio"]),
-.lf-app-shell select,
-.lf-app-shell textarea,
-.lf-app-shell [role="combobox"],
-.lf-app-shell [role="listbox"],
-.lf-app-shell [role="menu"],
-.lf-app-shell [role="dialog"],
-.lf-app-shell [role="tooltip"] {
-  background: var(--premium-surface) !important;
-  border-color: var(--premium-border) !important;
+.lf-app-shell .text-black,
+.lf-app-shell .text-gray-700,
+.lf-app-shell .text-gray-800,
+.lf-app-shell .text-gray-900,
+.lf-app-shell .text-slate-700,
+.lf-app-shell .text-slate-800,
+.lf-app-shell .text-slate-900 {
   color: var(--premium-text) !important;
 }
 
@@ -79,29 +69,233 @@
   color: var(--premium-muted) !important;
 }
 
-.lf-app-shell .bg-white,
-.lf-app-shell .bg-gray-50,
-.lf-app-shell .bg-slate-50,
-.lf-app-shell .bg-gray-100,
-.lf-app-shell .bg-slate-100 {
-  background: var(--premium-surface) !important;
+/* Tipografia e hierarquia: menos ruído, melhor leitura. */
+.lf-app-shell h1,
+.lf-app-shell h2,
+.lf-app-shell h3,
+.lf-app-shell h4 {
+  color: var(--premium-text);
+  letter-spacing: -0.02em;
 }
 
-.lf-app-shell .text-gray-700,
-.lf-app-shell .text-gray-800,
-.lf-app-shell .text-gray-900,
-.lf-app-shell .text-slate-700,
-.lf-app-shell .text-slate-800,
-.lf-app-shell .text-slate-900 {
+.lf-app-shell p,
+.lf-app-shell label,
+.lf-app-shell small {
+  line-height: 1.45;
+}
+
+.lf-app-shell .tabular-nums,
+.lf-app-shell td,
+.lf-app-shell th {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Tabelas e grids. */
+.lf-app-shell table,
+.lf-app-shell [role="grid"],
+.lf-app-shell .rdt_Table,
+.lf-app-shell .MuiDataGrid-root,
+.lf-app-shell .ag-root-wrapper,
+.lf-app-shell .ag-root,
+.lf-app-shell .ag-body-viewport,
+.lf-app-shell .ag-center-cols-viewport {
+  width: 100%;
+  background: var(--premium-surface) !important;
+  color: var(--premium-text) !important;
+  border-color: var(--premium-border-subtle) !important;
+}
+
+.lf-app-shell table {
+  border-collapse: collapse;
+}
+
+.lf-app-shell thead,
+.lf-app-shell thead tr,
+.lf-app-shell [role="rowgroup"]:first-child,
+.lf-app-shell [role="columnheader"],
+.lf-app-shell .rdt_TableHead,
+.lf-app-shell .rdt_TableHeadRow,
+.lf-app-shell .MuiDataGrid-columnHeaders,
+.lf-app-shell .MuiDataGrid-columnHeader,
+.lf-app-shell .ag-header,
+.lf-app-shell .ag-header-row,
+.lf-app-shell .ag-header-cell {
+  background: var(--premium-surface-elevated) !important;
   color: var(--premium-text) !important;
 }
 
+.lf-app-shell tbody,
+.lf-app-shell tbody tr,
+.lf-app-shell [role="row"],
+.lf-app-shell .rdt_TableBody,
+.lf-app-shell .rdt_TableRow,
+.lf-app-shell .MuiDataGrid-row,
+.lf-app-shell .MuiDataGrid-cell,
+.lf-app-shell .ag-row,
+.lf-app-shell .ag-cell {
+  background: var(--premium-surface) !important;
+  color: var(--premium-text) !important;
+}
+
+.lf-app-shell tbody tr:nth-child(even),
+.lf-app-shell .rdt_TableRow:nth-child(even),
+.lf-app-shell .MuiDataGrid-row:nth-of-type(even) {
+  background: rgba(255, 255, 255, .012) !important;
+}
+
+.lf-app-shell tbody tr:hover,
+.lf-app-shell [role="row"]:hover,
+.lf-app-shell .rdt_TableRow:hover,
+.lf-app-shell .MuiDataGrid-row:hover,
+.lf-app-shell .ag-row-hover {
+  background: var(--premium-hover) !important;
+}
+
+.lf-app-shell th,
+.lf-app-shell td,
+.lf-app-shell [role="cell"],
+.lf-app-shell [role="columnheader"],
+.lf-app-shell .rdt_TableCell,
+.lf-app-shell .rdt_TableCol,
+.lf-app-shell .MuiDataGrid-cell,
+.lf-app-shell .MuiDataGrid-columnHeader,
+.lf-app-shell .ag-cell,
+.lf-app-shell .ag-header-cell {
+  border-color: var(--premium-border-subtle) !important;
+  color: var(--premium-text) !important;
+}
+
+.lf-app-shell th,
+.lf-app-shell [role="columnheader"] {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .045em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lf-app-shell td,
+.lf-app-shell [role="cell"] {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.lf-app-shell th,
+.lf-app-shell td {
+  padding: 10px 12px;
+}
+
+.lf-app-shell thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+/* Controles. */
+.lf-app-shell input:not([type="checkbox"]):not([type="radio"]),
+.lf-app-shell select,
+.lf-app-shell textarea,
+.lf-app-shell [role="combobox"],
+.lf-app-shell [role="listbox"],
+.lf-app-shell [role="menu"],
+.lf-app-shell [role="dialog"],
+.lf-app-shell [role="tooltip"] {
+  background: var(--premium-surface) !important;
+  border-color: var(--premium-border) !important;
+  color: var(--premium-text) !important;
+}
+
+.lf-app-shell input:not([type="checkbox"]):not([type="radio"]),
+.lf-app-shell select,
+.lf-app-shell textarea,
+.lf-app-shell [role="combobox"] {
+  min-height: 38px;
+}
+
+.lf-app-shell select option {
+  background: var(--premium-surface) !important;
+  color: var(--premium-text) !important;
+}
+
+.lf-app-shell input:focus,
+.lf-app-shell select:focus,
+.lf-app-shell textarea:focus,
+.lf-app-shell [role="combobox"]:focus-within {
+  outline: none !important;
+  border-color: var(--premium-blue) !important;
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, .14) !important;
+}
+
+/* Portais (Radix/shadcn/etc.) renderizados fora do .lf-app-shell. */
+body:has(.lf-app-shell) [data-radix-popper-content-wrapper] > *,
+body:has(.lf-app-shell) [data-radix-menu-content],
+body:has(.lf-app-shell) [data-radix-select-content],
+body:has(.lf-app-shell) [data-radix-dropdown-menu-content],
+body:has(.lf-app-shell) [data-radix-dialog-content],
+body:has(.lf-app-shell) [role="listbox"],
+body:has(.lf-app-shell) [role="menu"],
+body:has(.lf-app-shell) [role="dialog"],
+body:has(.lf-app-shell) [role="tooltip"] {
+  background: var(--premium-surface) !important;
+  border-color: var(--premium-border) !important;
+  color: var(--premium-text) !important;
+}
+
+body:has(.lf-app-shell) [role="option"],
+body:has(.lf-app-shell) [role="menuitem"],
+body:has(.lf-app-shell) [data-radix-select-item],
+body:has(.lf-app-shell) option {
+  background: var(--premium-surface) !important;
+  color: var(--premium-text) !important;
+}
+
+body:has(.lf-app-shell) [role="option"]:hover,
+body:has(.lf-app-shell) [role="menuitem"]:hover,
+body:has(.lf-app-shell) [data-highlighted] {
+  background: var(--premium-hover) !important;
+  color: var(--premium-text) !important;
+}
+
+/* Cards e painéis: bordas discretas e hierarquia previsível. */
+.lf-app-shell [class*="rounded-"][class*="border"],
+.lf-app-shell .card,
+.lf-app-shell [data-slot="card"] {
+  border-color: var(--premium-border-subtle) !important;
+}
+
+.lf-app-shell [class*="shadow-"] {
+  --tw-shadow-color: rgba(0, 0, 0, .22);
+}
+
+/* Status semânticos preservados, mas legíveis no escuro. */
+.lf-app-shell .text-emerald-400,
+.lf-app-shell .text-emerald-500,
+.lf-app-shell .text-green-400,
+.lf-app-shell .text-green-500 {
+  color: var(--premium-green) !important;
+}
+
+.lf-app-shell .text-red-400,
+.lf-app-shell .text-red-500,
+.lf-app-shell .text-rose-400,
+.lf-app-shell .text-rose-500 {
+  color: var(--premium-red) !important;
+}
+
+.lf-app-shell .text-amber-400,
+.lf-app-shell .text-amber-500,
+.lf-app-shell .text-yellow-400,
+.lf-app-shell .text-yellow-500 {
+  color: var(--premium-yellow) !important;
+}
+
+/* PremiumDataTable canônica. */
 .premium-data-table {
   overflow: hidden;
   border: 1px solid var(--premium-border);
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--premium-surface);
-  box-shadow: 0 18px 45px rgba(0, 0, 0, .18);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .18);
 }
 
 .premium-data-table__toolbar,
@@ -110,8 +304,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--premium-border);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--premium-border-subtle);
   background: var(--premium-surface);
 }
 
@@ -146,6 +340,7 @@
 .premium-data-table__scroll {
   width: 100%;
   overflow-x: auto;
+  scrollbar-color: #334155 transparent;
 }
 
 .premium-data-table table {
@@ -154,8 +349,8 @@
 
 .premium-data-table th,
 .premium-data-table td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--premium-border);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--premium-border-subtle);
   text-align: left;
   vertical-align: middle;
 }
@@ -163,8 +358,8 @@
 .premium-data-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
-  background: var(--premium-surface) !important;
+  z-index: 2;
+  background: var(--premium-surface-elevated) !important;
 }
 
 .premium-data-table__sorter {
@@ -175,7 +370,7 @@
   color: var(--premium-text);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: .055em;
+  letter-spacing: .045em;
   text-transform: uppercase;
 }
 
@@ -187,13 +382,13 @@
 }
 
 .premium-data-table__empty {
-  padding: 40px 18px !important;
+  padding: 32px 18px !important;
   text-align: center !important;
   color: var(--premium-muted) !important;
 }
 
 .premium-data-table__pagination {
-  border-top: 1px solid var(--premium-border);
+  border-top: 1px solid var(--premium-border-subtle);
   border-bottom: 0;
 }
 
@@ -214,4 +409,28 @@
 .premium-data-table__pagination button:disabled {
   opacity: .42;
   cursor: not-allowed;
+}
+
+/* Reduz ruído visual em telas densas sem esconder informação. */
+@media (min-width: 1280px) {
+  .lf-app-shell .lf-workspace > * {
+    max-width: 1920px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .lf-app-shell th,
+  .lf-app-shell td,
+  .premium-data-table th,
+  .premium-data-table td {
+    padding: 9px 10px;
+  }
+
+  .premium-data-table__toolbar,
+  .premium-data-table__pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
