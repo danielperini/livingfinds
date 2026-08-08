@@ -1,0 +1,54 @@
+{
+  "name": "FbaReplenishmentRecommendation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "product_name": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "marketplace_country": { "type": "string" },
+    "recommendation_date": { "type": "string", "format": "date" },
+    "idempotency_key": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["no_action", "watch", "replenish", "critical", "blocked_api_unavailable"],
+      "default": "no_action"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"],
+      "default": "low"
+    },
+    "daily_sales_velocity": { "type": "number", "default": 0 },
+    "available_inventory": { "type": "number", "default": 0 },
+    "reserved_inventory": { "type": "number", "default": 0 },
+    "inbound_inventory": { "type": "number", "default": 0 },
+    "days_of_supply": { "type": "number" },
+    "days_of_supply_with_inbound": { "type": "number" },
+    "lead_time_days": { "type": "number", "default": 14 },
+    "safety_stock_days": { "type": "number", "default": 7 },
+    "target_coverage_days": { "type": "number", "default": 21 },
+    "target_inventory_units": { "type": "number", "default": 0 },
+    "recommended_units": { "type": "number", "default": 0 },
+    "ads_growth_factor": { "type": "number", "default": 1 },
+    "profit_after_ads": { "type": "number" },
+    "acos": { "type": "number" },
+    "tacos": { "type": "number" },
+    "inventory_signal_quality": { "type": "string" },
+    "calculation_reason": { "type": "string" },
+    "execution_capability": {
+      "type": "string",
+      "enum": ["api_supported", "recommendation_only_br_marketplace", "unknown"],
+      "default": "unknown"
+    },
+    "amazon_inbound_plan_id": { "type": "string" },
+    "amazon_operation_id": { "type": "string" },
+    "amazon_shipment_ids": { "type": "array", "items": { "type": "string" } },
+    "amazon_status": { "type": "string" },
+    "last_error": { "type": "string" },
+    "calculated_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "asin", "sku", "recommendation_date", "idempotency_key"]
+}
