@@ -1,0 +1,3 @@
+import { assertEquals } from 'jsr:@std/assert';
+import { buildDecisionEvidencePacketV3, generateBidCandidatesV3, simulateCandidateOutcomeV3 } from './index.ts';
+Deno.test('V3 always emits HOLD and simulation is reproducible', () => { const p = buildDecisionEvidencePacketV3({ amazon_account_id:'a', entity_id:'k', entity_type:'keyword', current_bid:.5, clicks:40, orders:4, spend:15, margin_per_order:20, safe_cpc:1, economics_available:true, in_stock:true, data_fresh:true, maturity_ratio:1 }); const hold = generateBidCandidatesV3(p).find(x=>x.action_type==='NO_ACTION')!; assertEquals(simulateCandidateOutcomeV3(p,hold), simulateCandidateOutcomeV3(p,hold)); });

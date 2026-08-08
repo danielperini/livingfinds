@@ -1,0 +1,20 @@
+{
+  "name": "DecisionV3ShadowRun",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "v2_decision_id": { "type": "string" },
+    "packet_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "status": { "type": "string", "enum": ["shadow", "blocked", "insufficient_data"] },
+    "evidence_packet": { "type": "object" },
+    "candidates": { "type": "array", "items": { "type": "object" } },
+    "selected_candidate_id": { "type": "string" },
+    "v2_action": { "type": "string" },
+    "v3_action": { "type": "string" },
+    "agreement": { "type": "boolean" },
+    "causal_status": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "packet_id", "policy_version", "status", "created_at"]
+}

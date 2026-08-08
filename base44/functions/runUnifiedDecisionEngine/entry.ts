@@ -65,6 +65,7 @@ Deno.serve(async (request) => {
       daily_close: dailyClose,
       snapshot_run_id: snapshotRunId,
     });
+    const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
 
     const asinDiversification = body.skip_asin_diversification === true
       ? { ok: true, skipped: true }
@@ -132,7 +133,7 @@ Deno.serve(async (request) => {
 
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
-      manualStructureAudit, deterministic, asinDiversification, campaignLifecycle, economicBalancer,
+      manualStructureAudit, deterministic, decisionV3Shadow, asinDiversification, campaignLifecycle, economicBalancer,
       deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
