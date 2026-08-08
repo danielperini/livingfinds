@@ -59,10 +59,6 @@ Deno.serve(async (request) => {
       trigger_type: dailyClose ? 'unified_daily_manual_structure_audit' : 'unified_intraday_manual_structure_audit',
     });
 
-    // Guardrail econômico atua antes da expansão/diversificação. Ele reduz somente bids
-    // economicamente inseguros e mantém vencedores protegidos. Assim, o portfólio pode
-    // dar oportunidade a mais ASINs sem continuar financiando tráfego que já demonstrou
-    // risco por margem, cliques secos, CVR posterior ou pressão MER/TACoS.
     const economicCurveAdsGuard = body.skip_economic_curve_ads_guard === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runEconomicCurveAdsGuard', {
@@ -81,6 +77,17 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
     });
     const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
+
+    // Recuperação intradiária: somente quando a receita real está abaixo da trajetória.
+    // Não aumenta o gasto agregado por princípio: reduz primeiro campanhas improdutivas,
+    // depois transfere capacidade e sobe bids apenas de keywords comprovadamente conversoras.
+    const salesRecovery = body.skip_sales_recovery === true || dailyClose
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runIntradaySalesRecovery', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+          trigger_type: 'unified_intraday_sales_recovery',
+        });
 
     const asinDiversification = body.skip_asin_diversification === true
       ? { ok: true, skipped: true }
@@ -149,14 +156,14 @@ Deno.serve(async (request) => {
     const stages = {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
-      asinDiversification, campaignLifecycle, economicBalancer,
+      salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,
       deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v14-economic-curve-bayes-mer-diversification',
+      engine_version: 'unified-v15-intraday-sales-recovery',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -173,6 +180,16 @@ Deno.serve(async (request) => {
         execution_owner: 'executeApprovedDecisionQueue',
         confirmation_required: true,
       },
+      sales_recovery: {
+        function: 'runIntradaySalesRecovery',
+        automatic: true,
+        policy: 'quando receita fica abaixo da trajetória, corta perdedores e transfere capacidade para vencedores comprovados sem elevar gasto agregado por princípio',
+        max_bid_step_pct: 8,
+        max_budget_step_pct: 10,
+        top_of_search_change: false,
+        execution_owner: 'executeApprovedDecisionQueue',
+        confirmation_required: true,
+      },
       campaign_lifecycle: {
         due: lifecycleWindow,
         interval_hours: 3,
@@ -182,7 +199,7 @@ Deno.serve(async (request) => {
       asin_portfolio: {
         automatic: true,
         ui_required: false,
-        policy: 'exploration floor for economically eligible ASINs + concentration cap; economic curve guard has precedence over exploration',
+        policy: 'exploration floor for economically eligible ASINs + concentration cap; economic curve guard and sales recovery have precedence over exploration',
       },
       dayparting: {
         source_of_truth: 'AmazonScheduledRule',
