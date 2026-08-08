@@ -25,7 +25,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           test -n "${{ secrets.VPS_HOST }}"
 
-      - name: Executar recuperação canônica na VPS
+      - name: Executar recuperação canônica e estímulo de vendas na VPS
         env:
           SSHOPTS: -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
           TARGET: ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
@@ -54,26 +54,61 @@ jobs:
 
               docker compose -f server/docker-compose.yml exec -T app deno eval '
                 const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
-                const response = await fetch("http://127.0.0.1:8000/functions/reconcileCampaignDeliveryHealth", {
-                  method: "POST",
-                  headers: { "content-type": "application/json", "x-api-token": token },
-                  body: JSON.stringify({
-                    _service_role: true,
-                    _canonical_orchestrator: "runUnifiedDecisionEngine",
-                    dry_run: false,
-                    force: true,
-                    trigger_type: "post_deploy_stale_zero_delivery_recovery"
-                  })
+                const call = async (name, payload) => {
+                  const response = await fetch("http://127.0.0.1:8000/functions/" + name, {
+                    method: "POST",
+                    headers: { "content-type": "application/json", "x-api-token": token },
+                    body: JSON.stringify(payload),
+                  });
+                  const data = await response.json().catch(() => ({}));
+                  console.log(name.toUpperCase() + "_HTTP=" + response.status + "|OK=" + data.ok + "|ENGINE=" + String(data.engine || "") + "|DATA=" + JSON.stringify(data).slice(0, 20000));
+                  if (!response.ok || data.ok === false) throw new Error(data.error || ("Falha em " + name));
+                  return data;
+                };
+
+                const common = {
+                  _service_role: true,
+                  _canonical_orchestrator: "runUnifiedDecisionEngine",
+                  dry_run: false,
+                };
+
+                const health = await call("reconcileCampaignDeliveryHealth", {
+                  ...common,
+                  force: true,
+                  trigger_type: "post_deploy_stale_zero_delivery_recovery",
                 });
-                const data = await response.json().catch(() => ({}));
-                const engine = String(data.engine || "");
-                console.log("RECOVERY_HTTP=" + response.status + "|OK=" + data.ok + "|ENGINE=" + engine + "|DATA=" + JSON.stringify(data).slice(0, 20000));
-                if (!engine.startsWith("campaign-delivery-health-v2.2")) {
-                  throw new Error("Versão antiga da recuperação ainda carregada na VPS: " + (engine || "desconhecida"));
+                const healthEngine = String(health.engine || "");
+                if (!healthEngine.startsWith("campaign-delivery-health-v2.2")) {
+                  throw new Error("Versão antiga da recuperação ainda carregada na VPS: " + (healthEngine || "desconhecida"));
                 }
-                if (!response.ok || data.ok === false) {
-                  throw new Error(data.error || "Falha na recuperação imediata de campanhas");
+
+                const recovery = await call("runIntradaySalesRecovery", {
+                  ...common,
+                  trigger_type: "post_deploy_intraday_sales_recovery",
+                });
+                if (String(recovery.engine || "") !== "INTRADAY_SALES_RECOVERY_V1") {
+                  throw new Error("Versão de sales recovery não carregada na VPS: " + String(recovery.engine || "desconhecida"));
                 }
+
+                const executor = await call("executeApprovedDecisionQueue", {
+                  _service_role: true,
+                  max_decisions: 25,
+                  trigger_type: "post_deploy_sales_recovery_executor",
+                });
+
+                await new Promise((resolve) => setTimeout(resolve, 5000));
+                const confirmation = await call("confirmExecutedDecisions", {
+                  _service_role: true,
+                  trigger_type: "post_deploy_sales_recovery_confirmation",
+                });
+
+                console.log("POST_DEPLOY_SALES_RECOVERY_SUMMARY=" + JSON.stringify({
+                  recovery_active: recovery?.reports?.[0]?.recovery_active ?? null,
+                  growth_allowed: recovery?.reports?.[0]?.growth_allowed ?? null,
+                  queued: recovery?.reports?.[0]?.queued?.length ?? 0,
+                  executor_executed: executor?.executed ?? null,
+                  confirmation,
+                }).slice(0, 20000));
               ' </dev/null
           EOF
             then
