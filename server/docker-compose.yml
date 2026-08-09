@@ -31,6 +31,7 @@ services:
     environment:
       DATABASE_URL: postgres://livingfinds:${DB_PASSWORD:-CHANGE_ME}@db:5432/livingfinds
       TZ: America/Sao_Paulo
+      ENABLE_SCHEDULER: 'true'
     ports:
       - '8000:8000'
 
