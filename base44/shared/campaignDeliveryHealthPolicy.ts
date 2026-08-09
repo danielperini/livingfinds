@@ -32,8 +32,13 @@ const STALE_TRANSITIONAL_STATES = new Set([
   'PENDING_REVIEW',
 ]);
 
+export const ZERO_DELIVERY_TEST_HOURS = 72;
+export const MAX_ZERO_DELIVERY_BID_ESCALATIONS = 2;
+
 export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): DeliveryAction {
-  if (input.protectedWinner || input.orders > 0 || input.sales > 0) return 'PROTECT_WINNER';
+  if (input.orders > 0 || input.sales > 0 || (input.protectedWinner && (input.impressions > 0 || input.clicks > 0 || input.spend > 0))) {
+    return 'PROTECT_WINNER';
+  }
   if (!input.hasProduct) return 'ARCHIVE_NO_PRODUCT';
   if (!input.inStock) return 'ARCHIVE_OUT_OF_STOCK';
 
@@ -41,10 +46,10 @@ export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): Deli
   const staleTransition = STALE_TRANSITIONAL_STATES.has(state) && input.ageHours >= 6;
   if (!input.complete || staleTransition) return 'REPAIR_STRUCTURE';
 
-  if (input.ageHours < 72) return 'WAIT';
-  if (input.impressions > 0 || input.clicks > 0) return 'WAIT';
+  if (input.ageHours < ZERO_DELIVERY_TEST_HOURS) return 'WAIT';
+  if (input.impressions > 0 || input.clicks > 0 || input.spend > 0) return 'WAIT';
   if (input.accountOutOfBudget) return 'WAIT';
-  if (input.priorBidEscalations < 3) return 'INCREASE_BID';
+  if (input.priorBidEscalations < MAX_ZERO_DELIVERY_BID_ESCALATIONS) return 'INCREASE_BID';
   return 'PAUSE_AND_REPLACE';
 }
 

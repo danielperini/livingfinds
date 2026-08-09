@@ -78,9 +78,6 @@ Deno.serve(async (request) => {
     });
     const decisionV3Shadow = await invoke(base44, 'runDecisionArbiterV3', common);
 
-    // Recuperação intradiária: somente quando a receita real está abaixo da trajetória.
-    // Não aumenta o gasto agregado por princípio: reduz primeiro campanhas improdutivas,
-    // depois transfere capacidade e sobe bids apenas de keywords comprovadamente conversoras.
     const salesRecovery = body.skip_sales_recovery === true || dailyClose
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runIntradaySalesRecovery', {
@@ -163,7 +160,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v15-intraday-sales-recovery',
+      engine_version: 'unified-v16-profitable-serving-campaign-rotation',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -187,6 +184,17 @@ Deno.serve(async (request) => {
         max_bid_step_pct: 8,
         max_budget_step_pct: 10,
         top_of_search_change: false,
+        execution_owner: 'executeApprovedDecisionQueue',
+        confirmation_required: true,
+      },
+      delivery_rotation: {
+        function: 'reconcileCampaignDeliveryHealth',
+        automatic: true,
+        zero_delivery_test_hours: 72,
+        max_bid_recovery_attempts: 2,
+        economic_bid_cap: true,
+        replacement_priority: 'same-SKU converted Search Terms from canonical harvest',
+        pause_old_only_after_confirmed_replacement: true,
         execution_owner: 'executeApprovedDecisionQueue',
         confirmation_required: true,
       },
