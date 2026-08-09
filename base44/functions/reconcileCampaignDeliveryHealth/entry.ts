@@ -58,9 +58,7 @@ async function createDecisionIdempotent(base44: any, payload: any): Promise<{ de
   } catch (error: any) {
     if (!isConflict(error)) throw error;
     const existing = await base44.asServiceRole.entities.OptimizationDecision.filter(
-      { idempotency_key: payload.idempotency_key },
-      '-created_at',
-      1,
+      { idempotency_key: payload.idempotency_key }, '-created_at', 1,
     ).catch(() => []);
     if (!existing.length) throw error;
     return { decision: existing[0], reused: true };
@@ -172,16 +170,14 @@ Deno.serve(async (request) => {
 
         if (eligibility.inStock) {
           const falseStockDecisions = prior.filter((d: any) =>
-            d.source_function === SOURCE &&
-            String(d.campaign_id || '') === campaignId &&
+            d.source_function === SOURCE && String(d.campaign_id || '') === campaignId &&
             String(d.reason_code || d.rule_key || d.rationale || '') === 'ARCHIVE_OUT_OF_STOCK' &&
             ['pending_approval', 'approved', 'waiting_retry'].includes(String(d.status || '').toLowerCase())
           );
           if (!dryRun) {
             for (const decision of falseStockDecisions) {
               await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-                status: 'cancelled',
-                queue_status: 'cancelled',
+                status: 'cancelled', queue_status: 'cancelled',
                 error_message: `FALSE_OUT_OF_STOCK_REVOKED: SP-API canonical stock=${eligibility.stock}.`,
                 updated_at: new Date().toISOString(),
               }).catch(() => {});
@@ -198,28 +194,20 @@ Deno.serve(async (request) => {
           !['failed', 'rejected', 'cancelled'].includes(String(d.status || ''))
         ).length;
         let action = classifyCampaignDeliveryHealth({
-          ageHours,
-          ...m,
-          complete,
-          hasProduct: !!product,
-          inStock: eligibility.inStock,
-          protectedWinner: campaign.protected_high_performance === true,
-          accountOutOfBudget,
-          priorBidEscalations: priorEscalations,
-          operationalState: state,
+          ageHours, ...m, complete, hasProduct: !!product, inStock: eligibility.inStock,
+          protectedWinner: campaign.protected_high_performance === true, accountOutOfBudget,
+          priorBidEscalations: priorEscalations, operationalState: state,
         });
 
         if (action === 'ARCHIVE_OUT_OF_STOCK' && !confirmedOutOfStock(product, eligibility)) {
           actions.push({ campaign_id: campaignId, asin, action: 'VERIFY_STOCK', reason: 'OUT_OF_STOCK_NOT_CONFIRMED_BY_FRESH_SP_API_EVIDENCE', stock: eligibility.stock, eligibility_reason: eligibility.reason, status_signals: eligibility.statusSignals });
           continue;
         }
-
         if (action === 'REPAIR_STRUCTURE') {
           repairCampaignIds.push(campaignId);
           actions.push({ campaign_id: campaignId, asin, action, age_hours: ageHours, state: upper(state), complete });
           continue;
         }
-
         if (action === 'ARCHIVE_NO_PRODUCT' || action === 'ARCHIVE_OUT_OF_STOCK') {
           const key = `${SOURCE}|${accountId}|${campaignId}|${action}`;
           if (!dryRun) {
@@ -287,47 +275,20 @@ Deno.serve(async (request) => {
         if (action === 'PAUSE_AND_REPLACE') {
           const currentTerm = campaignKeywords.find((row: any) => active(row.state || row.status));
           const currentTermText = currentTerm?.keyword_text || currentTerm?.keyword || '';
-          let replacement: any = { ok: false, reason: 'NO_CONFIRMED_REPLACEMENT' };
+          let replacement: any = { ok: false, reason: 'NO_CONFIRMED_SAME_SKU_REPLACEMENT' };
 
           if (!dryRun) {
             const harvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
-              amazon_account_id: accountId,
-              _service_role: true,
-              lookback_days: 65,
-              max_promotions: 1,
-              dry_run: false,
-              trigger_type: 'zero_delivery_replacement_same_sku_first',
+              amazon_account_id: accountId, _service_role: true, lookback_days: 65, max_promotions: 1,
+              dry_run: false, trigger_type: 'zero_delivery_replacement_same_sku_first',
             }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
             const harvestData = harvest?.data || harvest || {};
             const promotedTerms = Array.isArray(harvestData?.reports)
               ? harvestData.reports.flatMap((r: any) => Array.isArray(r.promoted_terms) ? r.promoted_terms : [])
               : [];
             const sameAsinReplacement = promotedTerms.find((r: any) => upper(r.asin) === asin && String(r.campaign_id || '') !== campaignId);
-            if (sameAsinReplacement) {
-              replacement = { ok: true, confirmed: true, source: 'same_sku_search_term_harvest', promoted_confirmed: 1, ...sameAsinReplacement };
-            } else {
-              replacement = await base44.asServiceRole.functions.invoke('ensureActiveProductCampaignCoverage', {
-                amazon_account_id: accountId,
-                asin,
-                _service_role: true,
-                _canonical_orchestrator: 'runUnifiedDecisionEngine',
-                force_zero_delivery_replacement: true,
-                replace_campaign_id: campaignId,
-                exclude_terms: [currentTermText].filter(Boolean),
-                maximum_initial_manual_campaigns: 1,
-                minimum_term_relevance: 0.9,
-                exact_only: true,
-                one_term_per_campaign: true,
-                require_stock: true,
-                term_source_order: ['TermBank', 'AmazonAdsSuggestions'],
-                initial_bid: Math.max(minBid, 0.6),
-                confirm_on_amazon: true,
-                dry_run: false,
-              }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-            }
-          } else {
-            replacement = { ok: true, dry_run: true };
-          }
+            if (sameAsinReplacement) replacement = { ok: true, confirmed: true, source: 'same_sku_search_term_harvest', promoted_confirmed: 1, ...sameAsinReplacement };
+          } else replacement = { ok: true, dry_run: true };
 
           const replacementData = replacement?.data || replacement || {};
           if (!dryRun && confirmedReplacement(replacementData)) {
@@ -346,7 +307,15 @@ Deno.serve(async (request) => {
             const decisionId = String(decision?.id || '');
             if (decisionId && !['confirmed', 'executed', 'cancelled', 'rejected'].includes(String(decision?.status || '').toLowerCase())) queuedDecisionIds.add(decisionId);
           }
-          actions.push({ campaign_id: campaignId, asin, action: 'PAUSE_AND_REPLACE', old_term: currentTermText || null, replacement_confirmed: confirmedReplacement(replacementData), replacement_source: replacementData?.source || replacementData?.trigger_type || null, replacement_result: replacementData, old_campaign_paused_only_after_confirmation: true });
+          actions.push({
+            campaign_id: campaignId, asin,
+            action: confirmedReplacement(replacementData) ? 'PAUSE_AND_REPLACE' : 'KEEP_UNTIL_CONFIRMED_REPLACEMENT',
+            old_term: currentTermText || null,
+            replacement_confirmed: confirmedReplacement(replacementData),
+            replacement_source: replacementData?.source || null,
+            replacement_result: replacementData,
+            old_campaign_paused_only_after_confirmation: true,
+          });
         }
       }
 
@@ -369,7 +338,7 @@ Deno.serve(async (request) => {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: accountId, sync_type: 'campaign_delivery_health', status: execution?.ok === false || confirmation?.ok === false ? 'partial' : 'completed',
         source_function: SOURCE, records_processed: campaigns.length, records_imported: actions.length,
-        message: `Profitable serving rotation: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${actions.filter((a) => a.action === 'PAUSE_AND_REPLACE').length} rotações.`,
+        message: `Profitable serving rotation: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${actions.filter((a) => a.action === 'PAUSE_AND_REPLACE').length} rotações confirmadas.`,
         result_summary: JSON.stringify({ actions: actions.slice(0, 200), execution, confirmation }).slice(0, 12000),
         started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       }).catch(() => {});
