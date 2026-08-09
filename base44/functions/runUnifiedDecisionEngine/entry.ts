@@ -29,6 +29,10 @@ Deno.serve(async (request) => {
     const correlationId = body.correlation_id || crypto.randomUUID();
     const currentHour = brtHour(body.now ? new Date(body.now) : new Date());
     const lifecycleWindow = dailyClose || body.bootstrap === true || body.force_campaign_lifecycle === true || currentHour % 3 === 0;
+    // Meta de portfólio: ampliar em 40% a quantidade de campanhas que realmente
+    // entregam (impressões/cliques/gasto), nunca a mera contagem de campanhas criadas.
+    // É uma meta subordinada aos guardrails econômicos, estoque e confirmação Amazon.
+    const servingCampaignGrowthTargetPct = Math.min(Math.max(Number(body.serving_campaign_growth_target_pct ?? 40), 0), 100);
     const common = {
       amazon_account_id: accountId,
       _service_role: true,
@@ -91,6 +95,9 @@ Deno.serve(async (request) => {
       : await invoke(base44, 'runAsinPortfolioDiversificationGuard', {
           ...common,
           snapshot_run_id: snapshotRunId,
+          serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
+          growth_metric: 'SERVING_CAMPAIGNS',
+          never_expand_for_count_only: true,
           trigger_type: dailyClose ? 'unified_daily_asin_diversification' : 'unified_intraday_asin_diversification',
         });
 
@@ -99,6 +106,9 @@ Deno.serve(async (request) => {
           ...common,
           daily_close: dailyClose,
           snapshot_run_id: snapshotRunId,
+          serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
+          growth_metric: 'SERVING_CAMPAIGNS',
+          expansion_policy: 'replace_zero_delivery_then_expand_economically_eligible',
         })
       : { ok: true, skipped: true, next_window_hours: 3 - (currentHour % 3) };
 
@@ -112,7 +122,13 @@ Deno.serve(async (request) => {
 
     const deliveryHealth = body.skip_campaign_delivery_health === true
       ? { ok: true, skipped: true }
-      : await invoke(base44, 'reconcileCampaignDeliveryHealth', { ...common, snapshot_run_id: snapshotRunId });
+      : await invoke(base44, 'reconcileCampaignDeliveryHealth', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+          serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
+          growth_metric: 'SERVING_CAMPAIGNS',
+          prioritize_zero_delivery_rotation: true,
+        });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true
       ? { ok: true, skipped: true }
@@ -160,11 +176,19 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v16-profitable-serving-campaign-rotation',
+      engine_version: 'unified-v17-serving-campaign-growth-goal',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
       dry_run: dryRun,
+      serving_campaign_growth_goal: {
+        target_growth_pct: servingCampaignGrowthTargetPct,
+        metric: 'SERVING_CAMPAIGNS',
+        definition: 'campanhas elegíveis com entrega real; não campanhas apenas existentes',
+        policy: 'meta, não hard quota: primeiro rotacionar ZERO_DELIVERY e expandir apenas com estoque, CPC econômico, orçamento e guardrails ACoS/MER/TACoS válidos',
+        scheduler_driven: true,
+        confirmation_required: true,
+      },
       economic_ads_guard: {
         function: 'runEconomicCurveAdsGuard',
         sales_curve: 'ABC 80/15/5',
@@ -203,11 +227,13 @@ Deno.serve(async (request) => {
         interval_hours: 3,
         brt_hour: currentHour,
         schedule_owner: 'runUnifiedDecisionEngine',
+        serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
       },
       asin_portfolio: {
         automatic: true,
         ui_required: false,
         policy: 'exploration floor for economically eligible ASINs + concentration cap; economic curve guard and sales recovery have precedence over exploration',
+        serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
       },
       dayparting: {
         source_of_truth: 'AmazonScheduledRule',
