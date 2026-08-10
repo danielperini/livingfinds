@@ -237,15 +237,6 @@ export default function DecisionalOverview({
             tone={snapshot30.profit > 0 ? 'success' : snapshot30.profit < 0 ? 'danger' : 'default'}
           />
         </div>
-
-        {/* Motor — agregado JUNTO aos KPIs (logo abaixo dos cards de Gasto Ads e ACoS) */}
-        <div className="mt-5 pt-5 border-t border-[var(--border-color)]">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
-            <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
-          </div>
-          <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} />
-        </div>
       </div>
 
       {/* ════ Atenção necessária — painel separado, full width ════ */}
@@ -255,6 +246,15 @@ export default function DecisionalOverview({
           <p className="text-[11px] text-theme-muted hidden sm:block">Alertas ativos de alta severidade e críticos.</p>
         </div>
         <AttentionPanel accountId={account?.id} />
+      </div>
+
+      {/* ════ O que o Motor está fazendo agora — card dedicado, ao final ════ */}
+      <div className="rounded-2xl border border-[var(--border-color)] bg-theme-card p-5 shadow-card">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
+          <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
+        </div>
+        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} />
       </div>
     </div>
   );
