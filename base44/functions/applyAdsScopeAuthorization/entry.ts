@@ -174,6 +174,68 @@ function calcEligibility(product: any, authorized: boolean): {
   return { eligibility_status: 'eligible', ineligibility_reason: '' };
 }
 
+async function reconcileRecoveredOutOfStockAlerts(
+  base44: any,
+  amazonAccountId: string,
+  products: any[],
+  now: string,
+  dryRun = false,
+): Promise<{ alerts_checked: number; alerts_resolved: number; recovered_asins: string[] }> {
+  const activeAlerts: any[] = [];
+  for (const status of ['active', 'acknowledged']) {
+    for (let offset = 0; ; offset += 250) {
+      const page = await base44.asServiceRole.entities.Alert.filter(
+        { amazon_account_id: amazonAccountId, alert_type: 'out_of_stock', status },
+        '-created_at',
+        250,
+        offset,
+      ).catch(() => []);
+      activeAlerts.push(...page);
+      if (page.length < 250) break;
+    }
+  }
+
+  const productsByAsin = new Map(
+    products
+      .filter((product: any) => product.asin)
+      .map((product: any) => [String(product.asin).trim().toUpperCase(), product]),
+  );
+  const recovered = activeAlerts.filter((alert: any) => {
+    const asin = String(alert.asin || '').trim().toUpperCase();
+    const product = productsByAsin.get(asin);
+    if (!asin || !product) return false;
+    return calcEligibility(product, isSkuAuthorized(product)).eligibility_status !== 'out_of_stock';
+  });
+
+  if (!dryRun && recovered.length > 0) {
+    const updates = recovered.map((alert: any) => ({
+      id: alert.id,
+      status: 'resolved',
+      resolved_at: now,
+      resolution_reason: 'stock_recovered_or_product_no_longer_out_of_stock',
+      data_freshness: 'fresh',
+      updated_at: now,
+    }));
+    for (let index = 0; index < updates.length; index += 50) {
+      const batch = updates.slice(index, index + 50);
+      try {
+        await base44.asServiceRole.entities.Alert.bulkUpdate(batch);
+      } catch {
+        for (const update of batch) {
+          const { id, ...data } = update;
+          await base44.asServiceRole.entities.Alert.update(id, data).catch(() => {});
+        }
+      }
+    }
+  }
+
+  return {
+    alerts_checked: activeAlerts.length,
+    alerts_resolved: recovered.length,
+    recovered_asins: [...new Set(recovered.map((alert: any) => String(alert.asin || '').trim().toUpperCase()).filter(Boolean))],
+  };
+}
+
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
@@ -183,7 +245,7 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
       if (user.role !== 'admin') return Response.json({ error: 'Admin only' }, { status: 403 });
     }
-    const { amazon_account_id, dry_run = false } = body;
+    const { amazon_account_id, dry_run = false, reconcile_alerts_only = false } = body;
     if (!amazon_account_id) return Response.json({ error: 'amazon_account_id obrigatório' }, { status: 400 });
 
     const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazon_account_id });
@@ -193,10 +255,26 @@ Deno.serve(async (req) => {
     const now = new Date().toISOString();
 
     // 1. Carregar todos os produtos da conta
-    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id }, null, 500);
+    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id }, undefined, 500);
+
+    if (reconcile_alerts_only) {
+      const reconciliation = await reconcileRecoveredOutOfStockAlerts(
+        base44,
+        amazon_account_id,
+        products,
+        now,
+        dry_run,
+      );
+      return Response.json({
+        ok: true,
+        reconcile_alerts_only: true,
+        dry_run,
+        ...reconciliation,
+      });
+    }
 
     // 2. Carregar campanhas operacionais
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, null, 500);
+    const campaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id }, undefined, 500);
     const operationalCampaigns = campaigns.filter((c: any) =>
       !['archived', 'ARCHIVED'].includes(c.state || c.status || '')
     );
@@ -223,6 +301,7 @@ Deno.serve(async (req) => {
       decisions_cancelled: 0,
       kickoff_removed: 0,
       alerts_created: 0,
+      alerts_resolved: 0,
     };
 
     const productUpdates: any[] = [];
@@ -366,12 +445,12 @@ Deno.serve(async (req) => {
           amazon_account_id,
           asin,
           status: 'pending',
-        }, null, 100).catch(() => []);
+        }, undefined, 100).catch(() => []);
         const scheduled = await base44.asServiceRole.entities.OptimizationDecision.filter({
           amazon_account_id,
           asin,
           status: 'approved',
-        }, null, 100).catch(() => []);
+        }, undefined, 100).catch(() => []);
         const toCancel = [...pending, ...scheduled].filter((d: any) =>
           !['executed', 'failed', 'rolled_back'].includes(d.status || '')
         );
@@ -393,7 +472,7 @@ Deno.serve(async (req) => {
           amazon_account_id,
           asin,
           status: 'scheduled',
-        }, null, 50).catch(() => []);
+        }, undefined, 50).catch(() => []);
         for (const q of queued as any[]) {
           await base44.asServiceRole.entities.ProductKickoffQueue.update(q.id, {
             status: 'cancelled',
@@ -484,7 +563,7 @@ Deno.serve(async (req) => {
             amazon_account_id,
             deduplication_key: alert.deduplication_key,
             status: 'active',
-          }, null, 1);
+          }, undefined, 1);
           if (existing.length === 0) {
             await base44.asServiceRole.entities.Alert.create(alert);
             alertsCreated++;
@@ -494,6 +573,16 @@ Deno.serve(async (req) => {
         } catch {}
       }
       report.alerts_created = alertsCreated;
+
+      const alertReconciliation = await reconcileRecoveredOutOfStockAlerts(
+        base44,
+        amazon_account_id,
+        products,
+        now,
+        false,
+      );
+      report.alerts_resolved = alertReconciliation.alerts_resolved;
+      report.recovered_alert_asins = alertReconciliation.recovered_asins;
 
     } else {
       // dry_run: apenas simular updates sem gravar
