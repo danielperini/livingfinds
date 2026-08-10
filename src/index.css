@@ -16,14 +16,14 @@
   --surface-2-color: #172033;
   --surface-3-color: #1E2A40;
   --text-primary:    #F8FAFC;
-  --text-secondary:  #CBD5E1;
-  --text-muted:      #94A3B8;
-  --border-color:    #263244;
-  --border-strong:   #374357;
-  --accent-color:    #3B82F6;
-  --danger-color:    #EF4444;
-  --warning-color:   #F59E0B;
-  --success-color:   #10B981;
+  --text-secondary:  #E2E8F0;
+  --text-muted:      #B6C2D6;
+  --border-color:    #2A3754;
+  --border-strong:   #3F517A;
+  --accent-color:    #60A5FA;
+  --danger-color:    #F87171;
+  --warning-color:   #FBBF24;
+  --success-color:   #34D399;
   --input-bg:        #0F172A;
   --input-text:      #F8FAFC;
   --input-border:    #334155;
@@ -461,9 +461,10 @@ html[data-theme="light"] {
 
 @layer base {
   * { @apply border-border outline-ring/50; }
+  html { font-size: 17px; }
   body {
     @apply font-body;
-    font-size: 14px;
+    font-size: 16px;
   }
   h1, h2, h3, h4, h5 { @apply font-heading; }
 }

@@ -12,16 +12,9 @@ export const THEMES = [
 
 export function ThemeProvider({ children }) {
   const [theme, setThemeState] = useState(() => {
-    // One-time migration: 'dark' era o padrão antigo; usuários que nunca
-    // escolheram explicitamente passam para o Clean Light Pro ('light').
-    const saved = localStorage.getItem('lf_theme');
-    const migrated = localStorage.getItem('lf_theme_v2_migrated');
-    let initial = saved || 'light';
-    if (!migrated) {
-      localStorage.setItem('lf_theme_v2_migrated', '1');
-      if (!saved || saved === 'dark') initial = 'light';
-      localStorage.setItem('lf_theme', initial);
-    }
+    // Tema escuro forçado em todo o sistema: leitura confortável e alto contraste.
+    const initial = 'dark';
+    localStorage.setItem('lf_theme', initial);
     document.documentElement.setAttribute('data-theme', initial);
     return initial;
   });
@@ -40,9 +33,9 @@ export function ThemeProvider({ children }) {
 
   useEffect(() => {
     base44.auth.me().then(me => {
-      // Respeita apenas preferências explícitas; 'dark' era o default legado.
-      if (me?.user_appearance_theme && me.user_appearance_theme !== theme && me.user_appearance_theme !== 'dark') {
-        setThemeState(me.user_appearance_theme);
+      // Persiste o tema escuro no perfil do usuário para garantir uniformidade visual.
+      if (me?.user_appearance_theme && me.user_appearance_theme !== 'dark') {
+        base44.auth.updateMe({ user_appearance_theme: 'dark' }).catch(() => {});
       }
     }).catch(() => {});
   }, []);
