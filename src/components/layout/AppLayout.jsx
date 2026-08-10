@@ -118,10 +118,13 @@ export default function AppLayout() {
   }, [location.pathname]);
 
   return (
-    <div className="lf-app-shell flex h-screen overflow-hidden text-[var(--text-primary)]">
+    <div className="lf-app-shell flex h-screen overflow-hidden text-[var(--text-primary)]" style={{ isolation: 'isolate' }}>
       {mobileOpen ? <button type="button" className="fixed inset-0 bg-black/70 z-40 lg:hidden cursor-default" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" /> : null}
 
-      <aside className={`lf-sidebar fixed lg:relative z-50 h-full flex flex-col border-r transition-all duration-200 ease-out ${collapsed ? 'w-[76px]' : 'w-[238px]'} ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
+      <aside
+        className={`lf-sidebar fixed lg:relative z-50 h-full flex flex-col border-r transition-all duration-200 ease-out ${collapsed ? 'w-[76px]' : 'w-[238px]'} ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+        style={{ backgroundColor: 'var(--sidebar-bg-color)', borderColor: 'var(--sidebar-border-color)' }}
+      >
         <div className={`flex items-center h-[72px] px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           <Link to="/" className="flex items-center gap-3 min-w-0" aria-label="Ir para a visão geral">
             <BrandMark />
