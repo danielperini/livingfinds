@@ -59,54 +59,55 @@
   --header-bg:       #111827;
 }
 
-/* CLARO */
-[data-theme="light"] {
-  --app-bg:          #F3F4F6;
-  --surface-1-color: #FFFFFF;
-  --surface-2-color: #F8FAFC;
-  --surface-3-color: #E5E7EB;
-  --text-primary:    #0F172A;
-  --text-secondary:  #334155;
-  --text-muted:      #64748B;
-  --border-color:    #CBD5E1;
-  --border-strong:   #94A3B8;
-  --accent-color:    #2563EB;
-  --danger-color:    #DC2626;
-  --warning-color:   #D97706;
-  --success-color:   #16A34A;
-  --input-bg:        #FFFFFF;
-  --input-text:      #0F172A;
-  --input-border:    #CBD5E1;
-  --input-placeholder: #64748B;
-  --chart-grid:      #E2E8F0;
-  --chart-axis:      #64748B;
-  --chart-label:     #334155;
-  --tooltip-bg:      #FFFFFF;
-  --tooltip-border:  #CBD5E1;
-  --tooltip-text:    #0F172A;
-  --table-header-bg: #F1F5F9;
+/* CLARO — Clean Light Pro (padrão visual do redesign) */
+html[data-theme="light"] {
+  --app-bg:            #FFFFFF;
+  --surface-1-color:   #FFFFFF;
+  --surface-2-color:   #F8FAFC;
+  --surface-3-color:   #F1F5F9;
+  --text-primary:      #0F172A;
+  --text-secondary:    #334155;
+  --text-muted:        #64748B;
+  --border-color:      #E2E8F0;
+  --border-strong:     #CBD5E1;
+  --accent-color:      #1A8A44;
+  --accent-blue:        #0066CC;
+  --danger-color:      #DC2626;
+  --warning-color:     #D97706;
+  --success-color:    #16A34A;
+  --input-bg:         #FFFFFF;
+  --input-text:       #0F172A;
+  --input-border:     #E2E8F0;
+  --input-placeholder: #94A3B8;
+  --chart-grid:       #E2E8F0;
+  --chart-axis:       #64748B;
+  --chart-label:      #334155;
+  --tooltip-bg:       #FFFFFF;
+  --tooltip-border:   #E2E8F0;
+  --tooltip-text:     #0F172A;
+  --table-header-bg:  #F8FAFC;
   --table-header-text: #475569;
-  --table-row-bg:    #FFFFFF;
-  --table-row-text:  #0F172A;
-  --table-row-hover: #F8FAFC;
-  --table-border:    #E2E8F0;
+  --table-row-bg:     #FFFFFF;
+  --table-row-text:   #0F172A;
+  --table-row-hover:  #F8FAFC;
+  --table-border:     #E2E8F0;
   --badge-success-bg:   #DCFCE7;
   --badge-success-text: #166534;
   --badge-warning-bg:   #FEF3C7;
   --badge-warning-text: #92400E;
   --badge-danger-bg:    #FEE2E2;
   --badge-danger-text:  #991B1B;
-  --badge-info-bg:      #DBEAFE;
-  --badge-info-text:    #1E40AF;
+  --badge-info-bg:      #E0EDFF;
+  --badge-info-text:    #0066CC;
   --badge-neutral-bg:   #F1F5F9;
   --badge-neutral-text: #475569;
-  --modal-bg:        #FFFFFF;
-  --modal-border:    #CBD5E1;
-  --modal-text:      #0F172A;
-  --overlay-bg:      rgba(0,0,0,0.35);
+  --modal-bg:         #FFFFFF;
+  --modal-border:     #E2E8F0;
+  --modal-text:       #0F172A;
+  --overlay-bg:       rgba(15,23,42,0.28);
   --sidebar-bg-color:    #FFFFFF;
-  --sidebar-border-color: #CBD5E1;
-  --header-bg:       #FFFFFF;
+  --sidebar-border-color: #E2E8F0;
+  --header-bg:        #FFFFFF;
 }
 
 /* BEGE */
@@ -327,6 +328,29 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   CLEAN LIGHT PRO — overrides das classes lf-* (premium CSS hardcoded dark).
+   Aplicam somente no tema claro, garantindo que a sidebar, o shell e os
+   botões sigam os tokens do Clean Light Pro sem reescrever o CSS premium.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html[data-theme="light"] { background-color: #FFFFFF !important; color: #0F172A !important; }
+html[data-theme="light"] body { background-color: #FFFFFF !important; color: #0F172A !important; }
+html[data-theme="light"] #root { background-color: #FFFFFF !important; }
+html[data-theme="light"] .lf-app-shell { background-color: #FFFFFF !important; color: #0F172A !important; }
+html[data-theme="light"] .lf-sidebar { background-color: #FFFFFF !important; border-color: #E2E8F0 !important; }
+html[data-theme="light"] .lf-topbar { background-color: #FFFFFF !important; border-color: #E2E8F0 !important; }
+html[data-theme="light"] .lf-workspace { background-color: #FFFFFF !important; }
+html[data-theme="light"] .lf-search { background-color: #F8FAFC !important; border-color: #E2E8F0 !important; color: #64748B !important; }
+html[data-theme="light"] .lf-icon-button { color: #64748B !important; border-color: #E2E8F0 !important; background-color: transparent !important; }
+html[data-theme="light"] .lf-icon-button:hover { color: #0F172A !important; background-color: #F8FAFC !important; }
+html[data-theme="light"] .lf-nav-link { color: #475569 !important; border-radius: 0.5rem; }
+html[data-theme="light"] .lf-nav-link:hover { background-color: #F1F5F9 !important; color: #0F172A !important; }
+html[data-theme="light"] .lf-nav-link-active,
+html[data-theme="light"] .lf-nav-link-active:hover { background-color: #DCFCE7 !important; color: #1A8A44 !important; }
+html[data-theme="light"] .lf-primary-button { background-color: #1A8A44 !important; color: #ffffff !important; border: none !important; }
+html[data-theme="light"] .lf-primary-button:hover { background-color: #0F5C2E !important; }
+html[data-theme="light"] h1, html[data-theme="light"] h2, html[data-theme="light"] h3 { color: #0F172A !important; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
    TOKENS SHADCN / RADIX — mantidos para componentes UI da lib
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -369,26 +393,26 @@ body {
   }
 }
 
-[data-theme="light"] {
-  --background: 210 40% 98%;
+html[data-theme="light"] {
+  --background: 0 0% 100%;
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
   --popover: 0 0% 100%;
   --popover-foreground: 222 47% 11%;
-  --primary: 221 83% 53%;
+  --primary: 211 100% 40%;
   --primary-foreground: 0 0% 100%;
   --secondary: 210 40% 96%;
   --secondary-foreground: 222 47% 11%;
   --muted: 210 40% 96%;
   --muted-foreground: 215 16% 47%;
-  --accent: 210 40% 93%;
-  --accent-foreground: 222 47% 11%;
+  --accent: 146 64% 96%;
+  --accent-foreground: 146 64% 22%;
   --destructive: 0 84% 60%;
   --destructive-foreground: 0 0% 100%;
   --border: 214 32% 91%;
   --input: 214 32% 91%;
-  --ring: 221 83% 53%;
+  --ring: 211 100% 40%;
 }
 
 [data-theme="beige"] {

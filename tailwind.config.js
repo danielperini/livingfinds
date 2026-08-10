@@ -33,6 +33,8 @@ module.exports = {
           3: '#22263A',
         },
         cyan: { DEFAULT: '#3B82F6', dim: '#1E3A8A', ice: '#7DD3FC' },
+        amazon: { DEFAULT: '#1A8A44', light: '#DCFCE7', deep: '#0F5C2E' },
+        azure: { DEFAULT: '#0066CC', light: '#E0EDFF' },
         green: { DEFAULT: '#10B981', forest: '#065F46', pale: '#D1FAE5' },
         amber: { DEFAULT: '#F59E0B', burnt: '#B45309', soft: '#FEF3C7' },
         crimson: { DEFAULT: '#EF4444', deep: '#7F1D1D', pale: '#FECACA' },
@@ -42,6 +44,10 @@ module.exports = {
         body: ['var(--font-body)'],
         display: ['var(--font-display)'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+      },
+      boxShadow: {
+        card: '0 4px 16px rgba(0,0,0,0.06)',
+        'card-hover': '0 6px 20px rgba(0,0,0,0.08)',
       },
       keyframes: {
         'accordion-down': { from: { height: '0' }, to: { height: 'var(--radix-accordion-content-height)' } },

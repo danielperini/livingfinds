@@ -22,6 +22,7 @@ import AiChangesBreakdown from '@/components/dashboard/AiChangesBreakdown';
 import FinanceSyncDiagnostic from '@/components/dashboard/FinanceSyncDiagnostic';
 import MotorStatusBySku from '@/components/analytics/MotorStatusBySku';
 import BudgetHistoryPanel from '@/components/dashboard/BudgetHistoryPanel';
+import DecisionalOverview from '@/components/dashboard/DecisionalOverview';
 import { canonicalAccountSalesByDate } from '../../base44/shared/salesDailyIntegrity.ts';
 
 // ─── Utilitários de período fechado ─────────────────────────────────────────
@@ -741,6 +742,18 @@ export default function Dashboard() {
 
   return (
     <div className="p-5 space-y-5 animate-fade-in">
+
+      {/* ── 0. VISÃO DECISIONAL — Clean Light Pro (3 faixas) ───────────────────── */}
+      <DecisionalOverview
+        account={account}
+        user={user}
+        campaigns={campaigns}
+        metricsDaily={allMetrics}
+        salesDaily={salesDaily}
+        decisions={allDecisions?.length ? allDecisions : decisions}
+        bidChanges={bidChanges}
+        onRefresh={loadData}
+      />
 
       {/* ── 1. HEADER ───────────────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">

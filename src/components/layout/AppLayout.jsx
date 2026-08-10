@@ -125,7 +125,7 @@ export default function AppLayout() {
         <div className={`flex items-center h-[72px] px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           <Link to="/" className="flex items-center gap-3 min-w-0" aria-label="Ir para a visão geral">
             <BrandMark />
-            {!collapsed ? <span className="font-semibold text-white text-[17px] tracking-[-0.03em]">livingfinds</span> : null}
+            {!collapsed ? <span className="font-semibold text-theme-primary text-[17px] tracking-[-0.03em]">livingfinds</span> : null}
           </Link>
           {!collapsed ? <button type="button" onClick={() => setCollapsed(true)} className="lf-icon-button hidden lg:flex items-center justify-center w-8 text-slate-500 hover:text-slate-200" aria-label="Recolher menu" title="Recolher menu"><ChevronLeft className="w-4 h-4" /></button> : null}
         </div>
@@ -138,7 +138,7 @@ export default function AppLayout() {
                 {group.items.map(({ path, icon: Icon, label, sub }) => {
                   const active = location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
                   return (
-                    <Link key={path} to={path} onClick={() => setMobileOpen(false)} className={`lf-nav-link flex items-center gap-3 px-3 text-slate-400 hover:text-slate-100 ${active ? 'lf-nav-link-active' : ''} ${collapsed ? 'justify-center' : ''} ${sub && !collapsed ? 'ml-3' : ''}`} title={collapsed ? label : undefined}>
+                    <Link key={path} to={path} onClick={() => setMobileOpen(false)} className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-surface-2 transition-colors ${active ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''} ${sub && !collapsed ? 'ml-3' : ''}`} title={collapsed ? label : undefined}>
                       <Icon className={`${sub ? 'w-3.5 h-3.5' : 'w-[18px] h-[18px]'} flex-shrink-0`} strokeWidth={1.8} />
                       {!collapsed ? <span className={`${sub ? 'text-xs' : 'text-sm'} font-medium truncate`}>{label}</span> : null}
                     </Link>
@@ -149,20 +149,30 @@ export default function AppLayout() {
           ))}
         </nav>
 
-        <div className="p-3 space-y-2 border-t border-white/[0.06]">
-          <Link to="/settings" className={`lf-nav-link flex items-center gap-3 px-3 text-slate-400 hover:text-slate-100 ${location.pathname.startsWith('/settings') ? 'lf-nav-link-active' : ''} ${collapsed ? 'justify-center' : ''}`} title={collapsed ? 'Configurações' : undefined}>
+        <div className="p-3 space-y-2 border-t border-[var(--border-color)]">
+          <Link to="/settings" className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-surface-2 transition-colors ${location.pathname.startsWith('/settings') ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''}`} title={collapsed ? 'Configurações' : undefined}>
             <Settings className="w-[18px] h-[18px]" strokeWidth={1.8} />
             {!collapsed ? <span className="text-sm font-medium">Configurações</span> : null}
           </Link>
           {!collapsed ? (
-            <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] p-3">
+            <div className="rounded-xl border border-[var(--border-color)] bg-theme-card-2 p-3">
               <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0"><p className="text-xs font-medium text-slate-200 truncate">Conta Amazon</p><p className="text-[10px] text-slate-500 mt-0.5 truncate">{account?.name || account?.profile_name || 'Conta conectada'}</p></div>
-                <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-theme-primary truncate">Conta Amazon</p>
+                  <p className="text-[10px] text-theme-muted mt-0.5 truncate">{account?.name || account?.profile_name || 'Conta conectada'}</p>
+                </div>
+                {account?.status === 'connected' ? (
+                  <span className="relative flex w-2 h-2 flex-shrink-0" title="Conta conectada">
+                    <span className="absolute inline-flex w-full h-full rounded-full bg-emerald-400 opacity-60 animate-pulse-badge" />
+                    <span className="relative inline-flex w-2 h-2 rounded-full bg-emerald-500" />
+                  </span>
+                ) : (
+                  <ShieldCheck className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                )}
               </div>
               <ModeBadge mode={accountMode} className="mt-2" />
             </div>
-          ) : <button type="button" onClick={() => setCollapsed(false)} className="lf-icon-button w-full flex items-center justify-center text-slate-400 hover:text-white" aria-label="Expandir menu" title="Expandir menu"><ChevronRight className="w-4 h-4" /></button>}
+          ) : <button type="button" onClick={() => setCollapsed(false)} className="lf-icon-button w-full flex items-center justify-center text-slate-400 hover:text-slate-100" aria-label="Expandir menu" title="Expandir menu"><ChevronRight className="w-4 h-4" /></button>}
         </div>
       </aside>
 
