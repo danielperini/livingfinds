@@ -236,6 +236,20 @@ body {
   color-scheme: light;
 }
 
+/*
+ * O popup de <select> nativo do Windows pode manter o fundo claro mesmo no
+ * tema escuro. Defina as cores das opções explicitamente para não renderizar
+ * texto claro sobre branco, preservando o campo fechado no tema da aplicação.
+ */
+[data-theme="dark"] .lf-workspace select option {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+[data-theme="dark"] .lf-workspace select option:disabled {
+  color: #64748b !important;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    OVERRIDES DE CLASSES TAILWIND — todos os temas não-escuros
    ═══════════════════════════════════════════════════════════════════════════ */
