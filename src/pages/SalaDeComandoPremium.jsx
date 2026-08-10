@@ -74,6 +74,7 @@ export default function SalaDeComandoPremium() {
   const [activeTab, setActiveTab] = useState('pendentes');
   const [account, setAccount] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [verTodasPrioridades, setVerTodasPrioridades] = useState(false);
   const [data, setData] = useState({
     alerts: [], decisions: [], kickoff: [], repair: [], keyword: [], syncRuns: [], bidLogs: [],
   });
@@ -124,7 +125,7 @@ export default function SalaDeComandoPremium() {
   }, [data]);
 
   const priorityItems = useMemo(() => {
-    const alerts = summary.activeAlerts.slice(0, 6).map(item => ({
+    const alerts = summary.activeAlerts.slice(0, 30).map(item => ({
       id: `alert-${item.id}`,
       type: 'Alerta',
       title: item.title || item.message || item.alert_type || 'Alerta operacional',
@@ -132,7 +133,7 @@ export default function SalaDeComandoPremium() {
       tone: ['critical', 'high'].includes(String(item.severity || '').toLowerCase()) ? 'danger' : 'warning',
       meta: item.asin || item.campaign_name || item.alert_type || 'Motor de alertas',
     }));
-    const decisions = summary.pendingDecisions.slice(0, 6).map(item => ({
+    const decisions = summary.pendingDecisions.slice(0, 30).map(item => ({
       id: `decision-${item.id}`,
       type: 'Decisão',
       title: item.title || item.action || item.decision_type || 'Decisão pendente',
@@ -140,8 +141,10 @@ export default function SalaDeComandoPremium() {
       tone: 'info',
       meta: item.asin || item.keyword_text || item.campaign_name || 'Motor de decisões',
     }));
-    return [...alerts, ...decisions].slice(0, 8);
+    return [...alerts, ...decisions];
   }, [summary]);
+
+  const visiblePriorities = verTodasPrioridades ? priorityItems : priorityItems.slice(0, 5);
 
   const renderTab = () => {
     if (activeTab === 'pendentes') {
@@ -162,26 +165,39 @@ export default function SalaDeComandoPremium() {
                 <p className="text-xs text-slate-500 mt-1">O histórico e as rotinas continuam disponíveis no painel completo.</p>
               </div>
             ) : (
-              <div className="divide-y divide-white/[0.06]">
-                {priorityItems.map(item => (
-                  <div key={item.id} className="p-5 flex items-start gap-4 hover:bg-white/[0.025] transition-colors">
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${item.tone === 'danger' ? 'bg-red-500/12 text-red-400' : item.tone === 'warning' ? 'bg-amber-500/12 text-amber-400' : 'bg-blue-500/12 text-blue-300'}`}>
-                      {item.tone === 'danger' ? <AlertTriangle className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[10px] uppercase tracking-wider text-slate-500">{item.type}</span>
-                        <span className="text-[10px] text-slate-600">{item.meta}</span>
+              <>
+                <div className="divide-y divide-white/[0.06]">
+                  {visiblePriorities.map(item => (
+                    <div key={item.id} className="p-5 flex items-start gap-4 hover:bg-white/[0.025] transition-colors">
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${item.tone === 'danger' ? 'bg-red-500/12 text-red-400' : item.tone === 'warning' ? 'bg-amber-500/12 text-amber-400' : 'bg-blue-500/12 text-blue-300'}`}>
+                        {item.tone === 'danger' ? <AlertTriangle className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                       </div>
-                      <h3 className="text-sm font-semibold text-white mt-1">{item.title}</h3>
-                      <p className="text-xs text-slate-400 leading-relaxed mt-1 line-clamp-2">{item.detail}</p>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] uppercase tracking-wider text-slate-500">{item.type}</span>
+                          <span className="text-[10px] text-slate-600">{item.meta}</span>
+                        </div>
+                        <h3 className="text-sm font-semibold text-white mt-1">{item.title}</h3>
+                        <p className="text-xs text-slate-400 leading-relaxed mt-1 line-clamp-2">{item.detail}</p>
+                      </div>
+                      <Link to={LEGACY_LINKS.pendentes} className="p-2 rounded-lg border border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.04]" aria-label="Ver detalhes">
+                        <ExternalLink className="w-4 h-4" />
+                      </Link>
                     </div>
-                    <Link to={LEGACY_LINKS.pendentes} className="p-2 rounded-lg border border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.04]" aria-label="Ver detalhes">
-                      <ExternalLink className="w-4 h-4" />
-                    </Link>
+                  ))}
+                </div>
+                {priorityItems.length > 5 && (
+                  <div className="px-5 py-3 border-t border-white/[0.06] flex items-center justify-center bg-white/[0.02]">
+                    <button
+                      type="button"
+                      onClick={() => setVerTodasPrioridades(v => !v)}
+                      className="text-xs font-semibold text-blue-300 hover:text-blue-200 transition-colors"
+                    >
+                      {verTodasPrioridades ? 'Ver menos' : `Ver todas (${priorityItems.length})`}
+                    </button>
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </section>
 
