@@ -320,4 +320,450 @@ Deno.serve(async (req) => {
 
     const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-    // â”€â”€ ProÛ­ù¶‰ËkºwµçMĞ°4(€€€€€€€€€€€€€É•Ù¥•İ|ÜÉ¡}…ĞèÉ•Ù¥•ÜÜÉ¡Ğ°4(€€€€€€€€€€€€€¹•áÑ}É•Ù¥•İ}…Ğè…µÁ• €ğ!=UIM|Ğà€ü™¥ÉÍĞĞá¡¹‘ÍĞ€è¹½Ü°4(€€€€€€€€€€€€€Ñ…É•Ñ}…½ÌèÑ…É•Ñ½Ì°4(€€€€€€€€€€€€€Ñ…É•Ñ}…½Í}Í½ÕÉ”èÑ…É•Ñ½ÍM½ÕÉ”°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}…½Ìè¹Õ´¡­Ü¹…½Ì¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}ÍÁ•¹è¹Õ´¡­Ü¹ÍÁ•¹¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}Í…±•Ìè¹Õ´¡­Ü¹Í…±•Ì¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}½É‘•ÉÌè¹Õ´¡­Ü¹½É‘•ÉÌ¤°4(€€€€€€€€€€€€€¥µÁÉ•ÍÍ¥½¹Ìè¹Õ´¡­Ü¹¥µÁÉ•ÍÍ¥½¹Ì¤°4(€€€€€€€€€€€€€±¥­Ìè¹Õ´¡­Ü¹±¥­Ì¤°4(€€€€€€€€€€€€€¥‘•µÁ½Ñ•¹å}­•äè¥-•ä°4(€€€€€€€€€€€€€±…ÍÑ}…Ñ¥½¸è‰¥‘ÁÁ±¥•€ü€¥¹¥Ñ¥…±}‰¥‘}…ÁÁ±¥•œ€è€±¥™•å±•}É•¥ÍÑ•É•œ°4(€€€€€€€€€€€€€±…ÍÑ}…Ñ¥½¹}…Ğè¹½Ü°4(€€€€€€€€€€€€€É•…Ñ•‘}…Ğè¹½Ü°4(€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…Ğè¹½Ü°4(€€€€€€€€€€€ôì4(4(€€€€€€€€€€€…İ…¥Ğ‰…Í”ĞĞ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹5…¹Õ…±…µÁ…¥¹	¥‘1¥™•å±”¹É•…Ñ”¡¹•İ1¤¹…Ñ   ¤€ôøíô¤ì4(€€€€€€€€€€€•á¥ÍÑ¥¹1m±-•åt€ô¹•İ1ì4(€€€€€€€€€€€É•Á½ÉĞ¹±¥™•å±•Í}É•…Ñ•¬¬ì4(4(€€€€€€€€€€€É•Á½ÉĞ¹…Õ‘¥Ñ}É½İÌ¹ÁÕÍ ¡ì4(€€€€€€€€€€€€€…µÁ…¥¸è…µÁ…¥¸¹…µÁ…¥¹}¹…µ”ñğ…µÁ…¥¸¹¹…µ”°4(€€€€€€€€€€€€€…‘}É½ÕÀè…œ¹¹…µ”°4(€€€€€€€€€€€€€…Í¥¸è…µÁÍ¥¸°4(€€€€€€€€€€€€€­•åİ½Éè­Ü¹­•åİ½É‘}Ñ•áĞ°4(€€€€€€€€€€€€€…•} è5…Ñ ¹É½Õ¹¡…µÁ• ¤°4(€€€€€€€€€€€€€…}‘•™…Õ±Ñ}‰¥èÉ½Õ¹È¡…	¥‘Q½M•Ğ¤°4(€€€€€€€€€€€€€­İ}‰¥èÉ½Õ¹È¡­İ	¥‘Q½M•Ğ¤°4(€€€€€€€€€€€€€…µ…é½¹}ÍÕ•ÍÑ•è¹Õ±°°4(€€€€€€€€€€€€€ÍÑ…ÑÕÌè¹•İ1¹ÍÑ…ÑÕÌ°4(€€€€€€€€€€€€€…Ñ¥½¸è‰¥‘ÁÁ±¥•€ü€¥¹¥Ñ¥…±}‰¥‘}…ÁÁ±¥•œ€è€±¥™•å±•}É•¥ÍÑ•É•œ°4(€€€€€€€€€€€ô¤ì4(4(€€€€€€€€€ô•±Í”ì4(€€€€€€€€€€€€¼¼ƒŠRŠR AÉ½•ÍÍ…È±¥™•å±”•á¥ÍÑ•¹Ñ”ƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€€€€€€€€€½¹ÍĞ±Œ€ô•á¥ÍÑ1ì4(€€€€€€€€€€€½¹ÍĞ±MÑ…ÑÕÌ€ô±Œ¹ÍÑ…ÑÕÌì4(4(€€€€€€€€€€€€¼¼ÑÕ…±¥é…È·¥ÑÉ¥…Ì‘¼‰…¹¼4(€€€€€€€€€€€½¹ÍĞµ•ÑÉ¥ÍUÁ‘…Ñ”è…¹ä€ôì4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}…‘}É½ÕÁ}‘•™…Õ±Ñ}‰¥èÉ•½¹¥±•‘	¥°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}­•åİ½É‘}‰¥èÉ•½¹¥±•‘-İ	¥°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}…½Ìè¹Õ´¡­Ü¹…½Ì¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}ÍÁ•¹è¹Õ´¡­Ü¹ÍÁ•¹¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}Í…±•Ìè¹Õ´¡­Ü¹Í…±•Ì¤°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}½É‘•ÉÌè¹Õ´¡­Ü¹½É‘•ÉÌ¤°4(€€€€€€€€€€€€€¥µÁÉ•ÍÍ¥½¹Ìè¹Õ´¡­Ü¹¥µÁÉ•ÍÍ¥½¹Ì¤°4(€€€€€€€€€€€€€±¥­Ìè¹Õ´¡­Ü¹±¥­Ì¤°4(€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…Ğè¹½Ü°4(€€€€€€€€€€€ôì4(4(€€€€€€€€€€€€¼¼ƒŠRŠR Mèİ¥Ñ¡¥¹|Ğá ƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€€€€€€€€€¥˜€¡±MÑ…ÑÕÌ€ôôô€±…Õ¹¡|Á|Ğá œ¤ì4(€€€€€€€€€€€€€½¹ÍĞ¥ÍMÑ¥±±%¸Ğá €ô…µÁ• €ğ!=UIM|Ğàì4(4(€€€€€€€€€€€€€€¼¼Y•É¥™¥…ÈÉ¥Í¼•µ•É•¹¥…°€¡•á—Ÿ¼Á•Éµ¥Ñ¥‘„…¹Ñ•Ì‘”€Ğá ¤4(€€€€€€€€€€€€€½¹ÍĞ­İ±¥­Ì€ô¹Õ´¡­Ü¹±¥­Ì¤ì4(€€€€€€€€€€€€€½¹ÍĞ­İMÁ•¹€ô¹Õ´¡­Ü¹ÍÁ•¹¤ì4(€€€€€€€€€€€€€½¹ÍĞ­İ=É‘•ÉÌ€ô¹Õ´¡­Ü¹½É‘•ÉÌ¤ì4(€€€€€€€€€€€€€½¹ÍĞµ…áAÉ½™¥Ñ…‰±•Á„€ô…µÁ½¸ü¹µ…á¥µÕµ}ÁÉ½™¥Ñ…‰±•}…‘}ÍÁ•¹ñğ5I9e}5%9}MA9ì4(4(€€€€€€€€€€€€€½¹ÍĞ•µ•É•¹åQÉ¥•È€ô€…±Œ¹•µ•É•¹å}ÑÉ¥•É•4(€€€€€€€€€€€€€€€€˜˜­İ=É‘•ÉÌ€ôôô€À4(€€€€€€€€€€€€€€€€˜˜­İ±¥­Ì€øô5I9e}5%9}1%-L4(€€€€€€€€€€€€€€€€˜˜€¡­İMÁ•¹€øô5I9e}5%9}MA9ñğ­İMÁ•¹€øôµ…áAÉ½™¥Ñ…‰±•Á„€¨€À¸Ô¤ì4(4(€€€€€€€€€€€€€¥˜€¡•µ•É•¹åQÉ¥•È€˜˜¡…Í‘Í•ÍÌ¤ì4(€€€€€€€€€€€€€€€€¼¼I•‘Õé¥È‰¥€ÄÀ”ƒŠP½¹Ñ•»Ÿ¼•µ•É•¹¥…°4(€€€€€€€€€€€€€€€½¹ÍĞ¹•İ-İ	¥€ôÉ½Õ¹È¡5…Ñ ¹µ…à¡±½‰…±5¥¹	¥°É•½¹¥±•‘-İ	¥€¨€À¸äÀ¤¤ì4(€€€€€€€€€€€€€€€½¹ÍĞÉ•Ì€ô…İ…¥ĞÕÁ‘…Ñ•-•åİ½É‘	¥‘=¹µ…é½¸¡…‘Í¹‘Á½¥¹Ğ°…‘ÍQ½­•¸„°ÁÉ½™¥±•%°­İ%°¹•İ-İ	¥¤ì4(€€€€€€€€€€€€€€€¥˜€¡É•Ì¹ÍÕ•ÍÌ¤ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÕÉÉ•¹Ñ}­•åİ½É‘}‰¥€ô¹•İ-İ	¥ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹•µ•É•¹å}ÑÉ¥•É•€ôÑÉÕ”ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹•µ•É•¹å}É•…Í½¸€ô€‘í­İ±¥­Íô±¥ÅÕ•Ì°H‘í­İMÁ•¹¹Ñ½¥á• È¥ô…ÍÑ½Ì°é•É¼½µÁÉ…Í€ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€•µ•É•¹å}É•‘ÕÑ¥½¸œì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹±…ÍÑ}…Ñ¥½¸€ô€•µ•É•¹å}‰¥‘}É•‘ÕÑ¥½¹|ÄÁÁĞœì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹±…ÍÑ}…Ñ¥½¹}…Ğ€ô¹½Üì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹…µ…é½¹}É•ÅÕ•ÍÑ}¥€ôÉ•Ì¹É•ÅÕ•ÍÑ%ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹½½±‘½İ¹}Õ¹Ñ¥°€ô¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€¬!=UIM|Ğà€¨€ÌØÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤ì4(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹•µ•É•¹å}É•‘ÕÑ¥½¹Ì¬¬ì4(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹‰¥‘Í}…ÁÁ±¥•‘}Ñ½}…µ…é½¸¬¬ì4(4(€€€€€€€€€€€€€€€€€€¼¼I•‘Õé¥È‘•™…Õ±Ğ‰¥‘¼ÉÕÁ¼Í”­İ½Õ¹ĞôôôÄ4(€€€€€€€€€€€€€€€€€¥˜€¡­İ½Õ¹Ğ€ôôô€Ä¤ì4(€€€€€€€€€€€€€€€€€€€½¹ÍĞ…I•Ì€ô…İ…¥ĞÕÁ‘…Ñ•‘É½ÕÁ	¥‘=¹µ…é½¸¡…‘Í¹‘Á½¥¹Ğ°…‘ÍQ½­•¸„°ÁÉ½™¥±•%°…%°¹•İ-İ	¥¤ì4(€€€€€€€€€€€€€€€€€€€¥˜€¡…I•Ì¹ÍÕ•ÍÌ¤µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÕÉÉ•¹Ñ}…‘}É½ÕÁ}‘•™…Õ±Ñ}‰¥€ô¹•İ-İ	¥ì4(€€€€€€€€€€€€€€€€€ô4(4(€€€€€€€€€€€€€€€€€€¼¼I•¥ÍÑÉ…È¹„™¥±„½™¥¥…°‘”‘•¥ÏÕ•ÌÁ…É„É…ÍÑÉ•…‰¥±¥‘…‘”4(€€€€€€€€€€€€€€€€€…İ…¥Ğ‰…Í”ĞĞ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹=ÁÑ¥µ¥é…Ñ¥½¹•¥Í¥½¸¹É•…Ñ”¡ì4(€€€€€€€€€€€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€€€€€€€€€€€‘•¥Í¥½¹}ÑåÁ”è€‰¥‘}¡…¹”œ°4(€€€€€€€€€€€€€€€€€€€•¹Ñ¥Ñå}ÑåÁ”è€­•åİ½Éœ°4(€€€€€€€€€€€€€€€€€€€•¹Ñ¥Ñå}¥è­İ%°4(€€€€€€€€€€€€€€€€€€€…µÁ…¥¹}¥è…µÁ…¥¹%°4(€€€€€€€€€€€€€€€€€€€­•åİ½É‘}¥è­İ%°4(€€€€€€€€€€€€€€€€€€€­•åİ½É‘}Ñ•áĞè­Ü¹­•åİ½É‘}Ñ•áĞ°4(€€€€€€€€€€€€€€€€€€€…Í¥¸è…µÁÍ¥¸°4(€€€€€€€€€€€€€€€€€€€…Ñ¥½¸è€Í•Ñ}‰¥œ°4(€€€€€€€€€€€€€€€€€€€Ù…±Õ•}‰•™½É”èÉ•½¹¥±•‘-İ	¥°4(€€€€€€€€€€€€€€€€€€€Ù…±Õ•}…™Ñ•Èè¹•İ-İ	¥°4(€€€€€€€€€€€€€€€€€€€É…Ñ¥½¹…±”èƒÂ~j =9Q;<5I9%0è€‘í­İ±¥­Íô±¥ÅÕ•Ì°H‘í­İMÁ•¹¹Ñ½¥á• È¥ô…ÍÑ½Ì°é•É¼½µÁÉ…Ì¹…ÌÁÉ¥µ•¥É…Ì€Ğá ¸	¥É•‘Õé¥‘¼€ÄÀ”‘”H‘íÉ•½¹¥±•‘-İ	¥‘ôÁ…É„H‘í¹•İ-İ	¥‘ô¹€°4(€€€€€€€€€€€€€€€€€€€ÍÑ…ÑÕÌè€•á•ÕÑ•œ°4(€€€€€€€€€€€€€€€€€€€¥‘•µÁ½Ñ•¹å}­•äè•µ•É•¹å}±…Õ¹¡ğ‘í…¥‘õğ‘í­İ%‘õğ‘í¹½Ü¹Í±¥” À°€ÄÀ¥õ€°4(€€€€€€€€€€€€€€€€€€€Í½ÕÉ•}™Õ¹Ñ¥½¸è€ÉÕ¹5…¹Õ…±…µÁ…¥¹	¥‘1¥™•å±”œ°4(€€€€€€€€€€€€€€€€€€€É•…Ñ•‘}…Ğè¹½Ü°4(€€€€€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôøíô¤ì4(€€€€€€€€€€€€€€€ô•±Í”ì4(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹‰¥‘Í}™…¥±•¬¬ì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€Á•¹‘¥¹}½¹™¥Éµ…Ñ¥½¸œì4(€€€€€€€€€€€€€€€ô4(€€€€€€€€€€€€€ô•±Í”¥˜€ …¥ÍMÑ¥±±%¸Ğá €˜˜±MÑ…ÑÕÌ€ôôô€±…Õ¹¡|Á|Ğá œ¤ì4(€€€€€€€€€€€€€€€€¼¼A…ÍÍ½Ô€Ğá ƒŠHµ½Ù•ÈÁ…É„É•Ù¥Ï¼4(€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€İ…¥Ñ¥¹|Ğá¡}É•Ù¥•Üœì4(€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹¹•áÑ}É•Ù¥•İ}…Ğ€ô¹½Üì4(€€€€€€€€€€€€€ô•±Í”ì4(€€€€€€€€€€€€€€€É•Á½ÉĞ¹İ¥Ñ¡¥¹|Ğá¡}ÁÉ½Ñ•Ñ•¬¬ì4(€€€€€€€€€€€€€ô4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€€¼¼ƒŠRŠR Mèİ…¥Ñ¥¹|Ğá¡}É•Ù¥•ÜƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€€€€€€€€€€¼¼•±•…‘¼„…ÁÁ±å%¹¥Ñ¥…±	¥‘ÍQ½±±…µÁ…¥¹Ì€¡•Ù¥Ñ„Ñ¥µ•½ÕĞ¤¸4(€€€€€€€€€€€€¼¼ÅÕ¤…Á•¹…ÌÍ¥¹…±¥é…µ½ÌÅÕ”•ÍÓ„ÁÉ½¹Ñ¼Á…É„¼…©ÕÍÑ”¥¹¥¥…°¸4(€€€€€€€€€€€•±Í”¥˜€¡±MÑ…ÑÕÌ€ôôô€İ…¥Ñ¥¹|Ğá¡}É•Ù¥•Üœ¤ì4(€€€€€€€€€€€€€€¼¼;¼™…é•È¡…µ…‘…Ì‘”ÍÕ•ÍÓ¼…ÅÕ¤ƒŠP…ÁÁ±å%¹¥Ñ¥…±	¥‘ÍQ½±±…µÁ…¥¹Ì4(€€€€€€€€€€€€€€¼¼ƒ¤¡…µ…‘¼Á•±¼½ÉÅÕ•ÍÑÉ…‘½È”ÁÉ½•ÍÍ„Õµ„­•åİ½ÉÁ½ÈÙ•è½´Ñ¡É½ÑÑ±”¸4(€€€€€€€€€€€€€€¼¼Á•¹…Ì…É…¹Ñ¥ÈÅÕ”µ…¹…•µ•¹Ñ}Í½ÕÉ”•ÍÓ„µ…É…‘¼½ÉÉ•Ñ…µ•¹Ñ”¸4(€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹µ…¹…•µ•¹Ñ}Í½ÕÉ”€ô€±…Õ¹¡}±¥™•å±”œì4(€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹¹•áÑ}É•Ù¥•İ}…Ğ€ô¹½Üì€¼¼ÁÉ½¹Ñ¼Á…É„ÁÉ½•ÍÍ…È…½É„4(€€€€€€€€€€€€€É•Á½ÉĞ¹Á½ÍÑ|Ğá¡}…‘©ÕÍÑµ•¹ÑÌ¬¬ì4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€€¼¼ƒŠRŠR Mèİ…¥Ñ¥¹|ÜÉ¡}É•Ù¥•Ü€¼…µ…é½¹}‰¥‘}…ÁÁ±¥•€¼…µ…é½¹}‰¥‘}±¥µ¥Ñ•ƒŠRŠR 4(€€€€€€€€€€€•±Í”¥˜€¡lİ…¥Ñ¥¹|ÜÉ¡}É•Ù¥•Üœ°€…µ…é½¹}‰¥‘}…ÁÁ±¥•œ°€…µ…é½¹}‰¥‘}±¥µ¥Ñ•œ°€Í•ÉÙ¥¹}±•…É¹¥¹œt¹¥¹±Õ‘•Ì¡±MÑ…ÑÕÌ¤¤ì(€€€€€€€€€€€€€½¹ÍĞÉ•Ù¥•ÜÜÉ¡Ğ€ô±Œ¹É•Ù¥•İ|ÜÉ¡}…Ğ€ü¹•Ü…Ñ”¡±Œ¹É•Ù¥•İ|ÜÉ¡}…Ğ¤¹•ÑQ¥µ” ¤€è€Àì4(€€€€€€€€€€€€€½¹ÍĞÉ•Ù¥•İÕ”€ô…Ñ”¹¹½Ü ¤€øôÉ•Ù¥•ÜÜÉ¡Ğì4(4(€€€€€€€€€€€€€¥˜€¡É•Ù¥•İÕ”¤ì4(€€€€€€€€€€€€€€€½¹ÍĞ­İ½Ì€ô¹Õ´¡­Ü¹…½Ì¤ì4(€€€€€€€€€€€€€€€½¹ÍĞ­İMÁ•¹€ô¹Õ´¡­Ü¹ÍÁ•¹¤ì(€€€€€€€€€€€€€€€½¹ÍĞ­İ=É‘•ÉÌ€ô¹Õ´¡­Ü¹½É‘•ÉÌ¤ì(€€€€€€€€€€€€€€€½¹ÍĞ­İ%µÁÉ•ÍÍ¥½¹Ì€ô¹Õ´¡­Ü¹¥µÁÉ•ÍÍ¥½¹Ì¤ì(€€€€€€€€€€€€€€€½¹ÍĞ­İ±¥­Ì€ô¹Õ´¡­Ü¹±¥­Ì¤ì(€€€€€€€€€€€€€€€½¹ÍĞ­İM…±•Ì€ô¹Õ´¡­Ü¹Í…±•Ì¤ì(€€€€€€€€€€€€€€€½¹ÍĞÕÉÉ•¹ÑÁÁ±¥•‘	¥€ô±Œ¹Á½ÍÑ|Ğá¡}‰¥ñğÉ•½¹¥±•‘-İ	¥ì(€€€€€€€€€€€€€€€½¹ÍĞ½½±‘½İ¹U¹Ñ¥°€ô±Œ¹½½±‘½İ¹}Õ¹Ñ¥°€ü¹•Ü…Ñ”¡±Œ¹½½±‘½İ¹}Õ¹Ñ¥°¤¹•ÑQ¥µ” ¤€è€Àì(€€€€€€€€€€€€€€€½¹ÍĞ¥¹½½±‘½İ¸€ô…Ñ”¹¹½Ü ¤€ğ½½±‘½İ¹U¹Ñ¥°ì(€€€€€€€€€€€€€€€½¹ÍĞÉ…İÙÈ€ô¹Õ´¡…µÁ½¸ü¹½¹Ù•ÉÍ¥½¹}É…Ñ•|ÌÁ€üü…µÁ½¸ü¹¡¥ÍÑ½É¥…±}ÙÈ€üüÍ•ÑÑ¥¹Ì¹½¹Ù•ÉÍ¥½¹}É…Ñ”€üü€À¸ÀÔ¤ì(€€€€€€€€€€€€€€€½¹ÍĞ½¹Í•ÉÙ…Ñ¥Ù•ÙÈ€ô5…Ñ ¹µ…à À¸ÀÀÔ°5…Ñ ¹µ¥¸ À¸ÔÀ°É…İÙÈ€ø€Ä€üÉ…İÙÈ€¼€ÄÀÀ€èÉ…İÙÈñğ€À¸ÀÔ¤¤ì(€€€€€€€€€€€€€€€½¹ÍĞÑÉ…™™¥Œ€ô…±Õ±…Ñ•QÉ…™™¥MÕ™™¥¥•¹ä¡ì(€€€€€€€€€€€€€€€€€±¥­Ìè­İ±¥­Ì°(€€€€€€€€€€€€€€€€€½¹Í•ÉÙ…Ñ¥Ù•ÙÈ°(€€€€€€€€€€€€€€€€€•Ù…±Õ…Ñ¥½¹½¹™¥‘•¹”è€À¸àÀ°(€€€€€€€€€€€€€€€ô¤ì(€€€€€€€€€€€€€€€½¹ÍĞµ…áAÉ½™¥Ñ…‰±•MÁ•¹€ô¹Õ´¡…µÁ½¸ü¹µ…á¥µÕµ}ÁÉ½™¥Ñ…‰±•}…‘}ÍÁ•¹ñğ5I9e}5%9}MA9¤ì(€€€€€€€€€€€€€€€½¹ÍĞ±½ÍÍ	Õ‘•Ğ€ô5…Ñ ¹µ…à È¸ÔÀ°5…Ñ ¹µ¥¸ ÄÔ°µ…áAÉ½™¥Ñ…‰±•MÁ•¹€¨€À¸ÈÔ¤¤ì(€€€€€€€€€€€€€€€½¹ÍĞ…±±½İ•‘MÁ•¹€ô­İM…±•Ì€ø€À€ü­İM…±•Ì€¨€¡Ñ…É•Ñ½Ì€¼€ÄÀÀ¤€è€Àì(€€€€€€€€€€€€€€€½¹ÍĞÍ•ÉÙ¥¹1•…É¹¥¹AÉ½Ñ•Ñ•€ôÍ¡½Õ±‘AÉ½Ñ•ÑM•ÉÙ¥¹5…¹Õ…°¡ì(€€€€€€€€€€€€€€€€€µ…¹Õ…°èÑÉÕ”°(€€€€€€€€€€€€€€€€€¥µÁÉ•ÍÍ¥½¹Ìè­İ%µÁÉ•ÍÍ¥½¹Ì°(€€€€€€€€€€€€€€€€€±¥­Ìè­İ±¥­Ì°(€€€€€€€€€€€€€€€€€ÍÁ•¹è­İMÁ•¹°(€€€€€€€€€€€€€€€€€½É‘•ÉÌè­İ=É‘•ÉÌ°(€€€€€€€€€€€€€€€€€½¹Í•ÉÙ…Ñ¥Ù•ÙÈ°(€€€€€€€€€€€€€€€€€•Ù…±Õ…Ñ¥½¹½¹™¥‘•¹”è€À¸àÀ°(€€€€€€€€€€€€€€€€€±½ÍÌè5…Ñ ¹µ…à À°­İMÁ•¹€´…±±½İ•‘MÁ•¹¤°(€€€€€€€€€€€€€€€€€±½ÍÍ	Õ‘•Ğ°(€€€€€€€€€€€€€€€ô¤ì(4(€€€€€€€€€€€€€€€É•Á½ÉĞ¹Á½ÍÑ|ÜÉ¡}É•Ù¥•İÌ¬¬ì4(4(€€€€€€€€€€€€€€€¥˜€¡¥¹½½±‘½İ¸¤ì(€€€€€€€€€€€€€€€€€€¼¼;¼…¥È‘ÕÉ…¹Ñ”½½±‘½İ¸(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€İ…¥Ñ¥¹|ÜÉ¡}É•Ù¥•Üœì(€€€€€€€€€€€€€€€ô•±Í”¥˜€¡Í•ÉÙ¥¹1•…É¹¥¹AÉ½Ñ•Ñ•¤ì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€Í•ÉÙ¥¹}±•…É¹¥¹œœì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹µ…¹…•µ•¹Ñ}Í½ÕÉ”€ô€Õ¹¥™¥•‘}‘•¥Í¥½¹}•¹¥¹”œì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹¹•áÑ}É•Ù¥•İ}…Ğ€ô¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€¬€ÈĞ€¨€ÌØÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤ì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÑÉ…™™¥}ÍÕ™™¥¥•¹ä€ôÑÉ…™™¥Œ¹ÑÉ…™™¥}ÍÕ™™¥¥•¹äì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÑÉ…™™¥}É•ÅÕ¥É•‘}±¥­Ì€ôÑÉ…™™¥Œ¹É•ÅÕ¥É•‘}±¥­Ìì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÑÉ…™™¥}é•É½}½É‘•É}ÁÉ½‰…‰¥±¥Ñä€ôÑÉ…™™¥Œ¹é•É½}½É‘•É}ÁÉ½‰…‰¥±¥Ñäì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹±…ÍÑ}…Ñ¥½¸€ô€¡½±‘}™½É}ÑÉ…™™¥}ÍÕ™™¥¥•¹äœì(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹±…ÍÑ}…Ñ¥½¹}…Ğ€ô¹½Üì(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹Í•ÉÙ¥¹}±•…É¹¥¹}ÁÉ½Ñ•Ñ•¬¬ì(€€€€€€€€€€€€€€€ô•±Í”¥˜€¡­İMÁ•¹€ğ€Äñğ­İ%µÁÉ•ÍÍ¥½¹Ì€ğ€ÄÀ¤ì(€€€€€€€€€€€€€€€€€€¼¼…‘½Ì¥¹ÍÕ™¥¥•¹Ñ•ÌƒŠP…Õ…É‘…Èµ½Ñ½È4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€¹½}…µ…é½¹}ÍÕ•ÍÑ¥½¸œì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹µ…¹…•µ•¹Ñ}Í½ÕÉ”€ô€Õ¹¥™¥•‘}‘•¥Í¥½¹}•¹¥¹”œì4(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹‘•±¥Ù•É•‘}Ñ½}•¹¥¹”¬¬ì4(€€€€€€€€€€€€€€€ô•±Í”ì4(€€€€€€€€€€€€€€€€€€¼¼¹ÑÉ•…È•ÍÓ¼…¼µ½Ñ½È…½É„4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌ€ô€Õ¹¥™¥•‘}•¹¥¹•}µ…¹…•µ•¹Ğœì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹µ…¹…•µ•¹Ñ}Í½ÕÉ”€ô€Õ¹¥™¥•‘}‘•¥Í¥½¹}•¹¥¹”œì4(€€€€€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹¹•áÑ}É•Ù¥•İ}…Ğ€ô¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€¬!=UIM|Ğà€¨€ÌØÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤ì4(€€€€€€€€€€€€€€€€€É•Á½ÉĞ¹‘•±¥Ù•É•‘}Ñ½}•¹¥¹”¬¬ì4(€€€€€€€€€€€€€€€ô4(€€€€€€€€€€€€€ô4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€€¼¼ƒŠRŠR MèÕ¹¥™¥•‘}•¹¥¹•}µ…¹…•µ•¹Ğ€¼ÍÑ…‰¥±¥é•ƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€€€€€€€€€•±Í”¥˜€¡±MÑ…ÑÕÌ€ôôô€Õ¹¥™¥•‘}•¹¥¹•}µ…¹…•µ•¹Ğœ¤ì4(€€€€€€€€€€€€€€¼¼5½Ñ½È•É•¹¥„ƒŠP…Á•¹…Ì…ÑÕ…±¥é…È·¥ÑÉ¥…Ì4(€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹µ…¹…•µ•¹Ñ}Í½ÕÉ”€ô€Õ¹¥™¥•‘}‘•¥Í¥½¹}•¹¥¹”œì4(€€€€€€€€€€€€€€¼¼5…É…ÈÁËÍá¥µ„É•Ù¥Ï¼Á•É§Í‘¥„4(€€€€€€€€€€€€€µ•ÑÉ¥ÍUÁ‘…Ñ”¹¹•áÑ}É•Ù¥•İ}…Ğ€ô¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€¬!=UIM|Ğà€¨€ÌØÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤ì4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€€¼¼ƒŠRŠR M…±Ù…È…ÑÕ…±¥é‡Ÿ¼‘¼±¥™•å±”ƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€€€€€€€€€¥˜€¡±Œ¹¥¤ì4(€€€€€€€€€€€€€…İ…¥Ğ‰…Í”ĞĞ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹5…¹Õ…±…µÁ…¥¹	¥‘1¥™•å±”¹ÕÁ‘…Ñ”¡±Œ¹¥°µ•ÑÉ¥ÍUÁ‘…Ñ”¤¹…Ñ   ¤€ôøíô¤ì4(€€€€€€€€€€€€€É•Á½ÉĞ¹±¥™•å±•Í}ÕÁ‘…Ñ•¬¬ì4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€É•Á½ÉĞ¹…Õ‘¥Ñ}É½İÌ¹ÁÕÍ ¡ì4(€€€€€€€€€€€€€…µÁ…¥¸è…µÁ…¥¸¹…µÁ…¥¹}¹…µ”ñğ…µÁ…¥¸¹¹…µ”°4(€€€€€€€€€€€€€…‘}É½ÕÀè…œ¹¹…µ”°4(€€€€€€€€€€€€€…Í¥¸è…µÁÍ¥¸°4(€€€€€€€€€€€€€­•åİ½Éè­Ü¹­•åİ½É‘}Ñ•áĞ°4(€€€€€€€€€€€€€…•} è5…Ñ ¹É½Õ¹¡…µÁ• ¤°4(€€€€€€€€€€€€€…}‘•™…Õ±Ñ}‰¥èÉ½Õ¹È¡µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÕÉÉ•¹Ñ}…‘}É½ÕÁ}‘•™…Õ±Ñ}‰¥€üüÉ•½¹¥±•‘	¥¤°4(€€€€€€€€€€€€€­İ}‰¥èÉ½Õ¹È¡µ•ÑÉ¥ÍUÁ‘…Ñ”¹ÕÉÉ•¹Ñ}­•åİ½É‘}‰¥€üüÉ•½¹¥±•‘-İ	¥¤°4(€€€€€€€€€€€€€…µ…é½¹}ÍÕ•ÍÑ•èµ•ÑÉ¥ÍUÁ‘…Ñ”¹…µ…é½¹}ÍÕ•ÍÑ•‘}‰¥€üü±Œ¹…µ…é½¹}ÍÕ•ÍÑ•‘}‰¥€üü¹Õ±°°4(€€€€€€€€€€€€€…µ…é½¹}±½İ•Èèµ•ÑÉ¥ÍUÁ‘…Ñ”¹…µ…é½¹}ÍÕ•ÍÑ•‘}‰¥‘}±½İ•È€üü±Œ¹…µ…é½¹}ÍÕ•ÍÑ•‘}‰¥‘}±½İ•È€üü¹Õ±°°4(€€€€€€€€€€€€€ÍÑ…ÑÕÌèµ•ÑÉ¥ÍUÁ‘…Ñ”¹ÍÑ…ÑÕÌñğ±MÑ…ÑÕÌ°4(€€€€€€€€€€€€€…Ñ¥½¸èµ•ÑÉ¥ÍUÁ‘…Ñ”¹±…ÍÑ}…Ñ¥½¸ñğ€µ•ÑÉ¥Í}ÕÁ‘…Ñ•œ°4(€€€€€€€€€€€ô¤ì4(€€€€€€€€€ô4(4(€€€€€€€€€…İ…¥ĞÍ±••À ÔÀÀ¤ì€¼¼Q¡É½ÑÑ±”•¹ÑÉ”­•åİ½É‘ÌÁ…É„»¼Í…ÑÕÉ…ÈÉ…Ñ”±¥µ¥Ğµ…é½¸4(€€€€€€€ô4(€€€€€ô4(€€€ô4(4(€€€€¼¼ƒŠRŠR 1½œ‘”•á•×Ÿ¼ƒŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠRŠR 4(€€€½¹ÍĞÑ½‘…ä€ô¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€´€Ì€¨€ÌØÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤¹Í±¥” À°€ÄÀ¤ì4(€€€…İ…¥Ğ‰…Í”ĞĞ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹Må¹á•ÕÑ¥½¹1½œ¹É•…Ñ”¡ì4(€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€½Á•É…Ñ¥½¸è€ÉÕ¹}µ…¹Õ…±}…µÁ…¥¹}‰¥‘}±¥™•å±”œ°4(€€€€€ÑÉ¥•É}ÑåÁ”è‰½‘ä¹}Í•ÉÙ¥•}É½±”€ü€…ÕÑ½µ…Ñ¥Œœ€è€µ…¹Õ…°œ°4(€€€€€ÍÑ…ÑÕÌè€ÍÕ•ÍÌœ°4(€€€€€•á•ÕÑ¥½¹}‘…Ñ”èÑ½‘…ä°4(€€€€€ÍÑ…ÉÑ•‘}…Ğè¹½Ü°4(€€€€€½µÁ±•Ñ•‘}…Ğè¹½İ%Í¼ ¤°4(€€€€€É•½É‘Í}ÁÉ½•ÍÍ•èÉ•Á½ÉĞ¹±¥™•å±•Í}É•…Ñ•€¬É•Á½ÉĞ¹±¥™•å±•Í}ÕÁ‘…Ñ•°4(€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäè)M=8¹ÍÑÉ¥¹¥™ä¡ì4(€€€€€€€…µÁ…¥¹ÌèÉ•Á½ÉĞ¹…µÁ…¥¹Í}…¹…±åé•°4(€€€€€€€…‘}É½ÕÁÌèÉ•Á½ÉĞ¹…‘}É½ÕÁÍ}™½Õ¹°4(€€€€€€€­•åİ½É‘ÌèÉ•Á½ÉĞ¹­•åİ½É‘Í}™½Õ¹°4(€€€€€€€É•…Ñ•èÉ•Á½ÉĞ¹±¥™•å±•Í}É•…Ñ•°4(€€€€€€€ÕÁ‘…Ñ•èÉ•Á½ÉĞ¹±¥™•å±•Í}ÕÁ‘…Ñ•°4(€€€€€€€‰¥‘Í}…ÁÁ±¥•èÉ•Á½ÉĞ¹‰¥‘Í}…ÁÁ±¥•‘}Ñ½}…µ…é½¸°4(€€€€€€€•µ•É•¹äèÉ•Á½ÉĞ¹•µ•É•¹å}É•‘ÕÑ¥½¹Ì°4(€€€€€€€Á½ÍÑ|Ğá èÉ•Á½ÉĞ¹Á½ÍÑ|Ğá¡}…‘©ÕÍÑµ•¹ÑÌ°4(€€€€€€€‘•±¥Ù•É•‘}Ñ½}•¹¥¹”èÉ•Á½ÉĞ¹‘•±¥Ù•É•‘}Ñ½}•¹¥¹”°(€€€€€€€İ¥Ñ¡¥¹|Ğá¡}ÁÉ½Ñ•Ñ•èÉ•Á½ÉĞ¹İ¥Ñ¡¥¹|Ğá¡}ÁÉ½Ñ•Ñ•°(€€€€€€€Í•ÉÙ¥¹}±•…É¹¥¹}ÁÉ½Ñ•Ñ•èÉ•Á½ÉĞ¹Í•ÉÙ¥¹}±•…É¹¥¹}ÁÉ½Ñ•Ñ•°(€€€€€ô¤°4(€€€ô¤¹…Ñ   ¤€ôøíô¤ì4(4(€€€É•ÑÕÉ¸I•ÍÁ½¹Í”¹©Í½¸¡ì4(€€€€€½¬èÑÉÕ”°4(€€€€€…µ…é½¹}…•ÍÌè¡…Í‘Í•ÍÌ°4(€€€€€ÍÕµµ…Éäèì4(€€€€€€€…µÁ…¥¹Í}…¹…±åé•èÉ•Á½ÉĞ¹…µÁ…¥¹Í}…¹…±åé•°4(€€€€€€€…‘}É½ÕÁÍ}™½Õ¹èÉ•Á½ÉĞ¹…‘}É½ÕÁÍ}™½Õ¹°4(€€€€€€€­•åİ½É‘Í}™½Õ¹èÉ•Á½ÉĞ¹­•åİ½É‘Í}™½Õ¹°4(€€€€€€€±¥™•å±•Í}É•…Ñ•èÉ•Á½ÉĞ¹±¥™•å±•Í}É•…Ñ•°4(€€€€€€€±¥™•å±•Í}ÕÁ‘…Ñ•èÉ•Á½ÉĞ¹±¥™•å±•Í}ÕÁ‘…Ñ•°4(€€€€€€€‰¥‘Í}…ÁÁ±¥•‘}Ñ½}…µ…é½¸èÉ•Á½ÉĞ¹‰¥‘Í}…ÁÁ±¥•‘}Ñ½}…µ…é½¸°4(€€€€€€€‰¥‘Í}™…¥±•èÉ•Á½ÉĞ¹‰¥‘Í}™…¥±•°4(€€€€€€€İ¥Ñ¡¥¹|Ğá¡}ÁÉ½Ñ•Ñ•èÉ•Á½ÉĞ¹İ¥Ñ¡¥¹|Ğá¡}ÁÉ½Ñ•Ñ•°4(€€€€€€€•µ•É•¹å}É•‘ÕÑ¥½¹ÌèÉ•Á½ÉĞ¹•µ•É•¹å}É•‘ÕÑ¥½¹Ì°4(€€€€€€€Á½ÍÑ|Ğá¡}…‘©ÕÍÑµ•¹ÑÌèÉ•Á½ÉĞ¹Á½ÍÑ|Ğá¡}…‘©ÕÍÑµ•¹ÑÌ°4(€€€€€€€Á½ÍÑ|ÜÉ¡}É•Ù¥•İÌèÉ•Á½ÉĞ¹Á½ÍÑ|ÜÉ¡}É•Ù¥•İÌ°(€€€€€€€‘•±¥Ù•É•‘}Ñ½}•¹¥¹”èÉ•Á½ÉĞ¹‘•±¥Ù•É•‘}Ñ½}•¹¥¹”°(€€€€€€€Í•ÉÙ¥¹}±•…É¹¥¹}ÁÉ½Ñ•Ñ•èÉ•Á½ÉĞ¹Í•ÉÙ¥¹}±•…É¹¥¹}ÁÉ½Ñ•Ñ•°(€€€€€ô°4(€€€€€…Õ‘¥Ñ}Ñ…‰±”èÉ•Á½ÉĞ¹…Õ‘¥Ñ}É½İÌ¹Í±¥” À°€ÔÀ¤°4(€€€ô¤ì4(4(€ô…Ñ €¡•ÉÉ½Èè…¹ä¤ì4(€€€½¹Í½±”¹•ÉÉ½È mÉÕ¹5…¹Õ…±…µÁ…¥¹	¥‘1¥™•å±•tœ°•ÉÉ½È¹µ•ÍÍ…”¤ì4(€€€É•ÑÕÉ¸I•ÍÁ½¹Í”¹©Í½¸¡ì½¬è™…±Í”°•ÉÉ½Èè•ÉÉ½È¹µ•ÍÍ…”ô°ìÍÑ…ÑÕÌè€ÔÀÀô¤ì4(€ô4)ô¤ì(
+    // â”€â”€ Processar cada campanha manual â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    for (const campaign of manualCampaigns) {
+      const campaignId = campaign.campaign_id || campaign.amazon_campaign_id || '';
+      if (!campaignId) continue;
+
+      const campAgeH = ageHours(campaign.created_at || campaign.created_date);
+      const campAsin = campaign.asin || '';
+      const campEcon = econByAsin[campAsin] || null;
+      const safeMaxCpc = campEcon?.safe_max_cpc || globalMaxCpc || 0;
+      const targetAcos = campEcon?.target_acos || num(settings.target_acos) || 0;
+      const targetAcosSource = campEcon ? 'product_economics' : settings.target_acos ? 'performance_settings' : 'none';
+
+      // Ad groups desta campanha
+      // Se nÃ£o houver ad groups sincronizados, processar as keywords diretamente pela campanha
+      // criando um grupo sintÃ©tico com os dados disponÃ­veis nas keywords
+      const groups = agByCampaignId[campaignId] || [];
+
+      // Verificar se hÃ¡ keywords diretas para esta campanha (ad groups nÃ£o sincronizados)
+      const kwsForCampaign = kwByCampaignId[campaignId] || [];
+      if (groups.length === 0 && kwsForCampaign.length > 0) {
+        // Agrupar keywords pelo ad_group_id para simular os grupos
+        const syntheticGroups: Record<string, { agId: string; kws: any[] }> = {};
+        for (const kw of kwsForCampaign) {
+          const agId = kw.ad_group_id || '';
+          if (!syntheticGroups[agId]) syntheticGroups[agId] = { agId, kws: [] };
+          syntheticGroups[agId].kws.push(kw);
+        }
+        for (const sg of Object.values(syntheticGroups)) {
+          // Criar grupo sintÃ©tico
+          groups.push({
+            ad_group_id: sg.agId,
+            campaign_id: campaignId,
+            name: `AG | EXACT | ${campAsin}`,
+            default_bid: INITIAL_BID,
+            state: 'enabled',
+            _synthetic: true,
+            _kws: sg.kws,
+          });
+        }
+      }
+
+      report.ad_groups_found += groups.length;
+
+      for (const ag of groups) {
+        const agId = ag.ad_group_id || ag.amazon_ad_group_id || '';
+        if (!agId) continue;
+
+        // Buscar keywords: grupo sintÃ©tico jÃ¡ tem as keywords; senÃ£o buscar por ad_group_id
+        const syntheticKws: any[] = (ag as any)._synthetic ? ((ag as any)._kws || []) : [];
+        const groupKwsByAg = syntheticKws.length > 0 ? syntheticKws : (kwByAdGroupId[agId] || []);
+        const groupKws = groupKwsByAg.filter((k: any) => {
+          const mt = (k.match_type || '').toLowerCase();
+          return mt === 'exact' || mt === 'phrase' || mt === 'broad';
+        });
+        report.keywords_found += groupKws.length;
+
+        const agDefaultBid = num(ag.default_bid || INITIAL_BID);
+        const kwCount = groupKws.length;
+
+        // â”€â”€ Verificar reconciliaÃ§Ã£o real com Amazon â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        let amazonAGBid: number | null = null;
+        if (hasAdsAccess) {
+          const agData = await fetchAdGroupFromAmazon(adsEndpoint, adsToken!, profileId, agId);
+          amazonAGBid = agData.defaultBid;
+          // Reconciliar divergÃªncia local
+          if (amazonAGBid !== null && Math.abs(amazonAGBid - agDefaultBid) > 0.01) {
+            await base44.asServiceRole.entities.AdGroup.update(ag.id, {
+              default_bid: amazonAGBid,
+              updated_at: now,
+            }).catch(() => {});
+          }
+        }
+        const reconciledAGBid = amazonAGBid ?? agDefaultBid;
+
+        for (const kw of groupKws) {
+          const kwId = kw.keyword_id || kw.amazon_keyword_id || '';
+          if (!kwId) continue;
+
+          const lcKey = lifecycleKey(campaignId, agId, kwId);
+          const existLC = existingLC[lcKey];
+
+          const kwBid = num(kw.bid || kw.current_bid || INITIAL_BID);
+
+          // â”€â”€ Verificar bid real da keyword na Amazon â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          let amazonKwBid: number | null = null;
+          if (hasAdsAccess) {
+            const kwData = await fetchKeywordFromAmazon(adsEndpoint, adsToken!, profileId, kwId);
+            amazonKwBid = kwData.bid;
+            // Reconciliar
+            if (amazonKwBid !== null && Math.abs(amazonKwBid - kwBid) > 0.01) {
+              await base44.asServiceRole.entities.Keyword.update(kw.id, {
+                bid: amazonKwBid,
+                current_bid: amazonKwBid,
+                updated_at: now,
+              }).catch(() => {});
+            }
+          }
+          const reconciledKwBid = amazonKwBid ?? kwBid;
+
+          // â”€â”€ CRIAR lifecycle se nÃ£o existe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          if (!existLC) {
+            const first48hEndsAt = new Date(
+              new Date(campaign.created_at || campaign.created_date || now).getTime() + HOURS_48 * 3600000
+            ).toISOString();
+            const review72hAt = new Date(
+              new Date(campaign.created_at || campaign.created_date || now).getTime() + HOURS_72 * 3600000
+            ).toISOString();
+
+            // Aplicar bid inicial R$0,50 se ainda nÃ£o aplicado
+            // SÃ³ aplica se a campanha Ã© nova (<1h) ou o bid estiver acima do inicial sem justificativa
+            const isVeryNew = campAgeH < 2;
+            let kwBidToSet = reconciledKwBid;
+            let agBidToSet = reconciledAGBid;
+            let bidApplied = false;
+            let requestId = '';
+
+            if (isVeryNew && hasAdsAccess) {
+              // Campanha nova: aplicar R$0,50 se ainda nÃ£o estÃ¡ correto
+              if (Math.abs(reconciledKwBid - INITIAL_BID) > 0.01) {
+                const kwRes = await updateKeywordBidOnAmazon(adsEndpoint, adsToken!, profileId, kwId, INITIAL_BID);
+                requestId = kwRes.requestId;
+                if (kwRes.success) {
+                  kwBidToSet = INITIAL_BID;
+                  bidApplied = true;
+                  report.bids_applied_to_amazon++;
+                } else {
+                  report.bids_failed++;
+                }
+              }
+              if (Math.abs(reconciledAGBid - INITIAL_BID) > 0.01 && kwCount === 1) {
+                // Grupo com 1 keyword: alinhar default bid tambÃ©m
+                const agRes = await updateAdGroupBidOnAmazon(adsEndpoint, adsToken!, profileId, agId, INITIAL_BID);
+                if (agRes.success) agBidToSet = INITIAL_BID;
+              }
+            }
+
+            const iKey = `lifecycle_init|${aid}|${campaignId}|${agId}|${kwId}`;
+            const newLC = {
+              amazon_account_id: aid,
+              campaign_id: campaignId,
+              ad_group_id: agId,
+              keyword_id: kwId,
+              asin: campAsin,
+              sku: kw.sku || '',
+              keyword_text: kw.keyword_text || '',
+              match_type: kw.match_type || 'exact',
+              campaign_name: campaign.campaign_name || campaign.name || '',
+              ad_group_name: ag.name || ag.ad_group_name || '',
+              campaign_created_at: campaign.created_at || campaign.created_date || now,
+              initial_bid: INITIAL_BID,
+              ad_group_initial_bid: agBidToSet,
+              keyword_initial_bid: kwBidToSet,
+              current_ad_group_default_bid: agBidToSet,
+              current_keyword_bid: kwBidToSet,
+              amazon_confirmed_at: bidApplied ? now : null,
+              amazon_request_id: requestId,
+              ad_group_keywords_count: kwCount,
+              keyword_has_individual_bid: kwBid > 0,
+              management_source: 'launch_lifecycle',
+              status: campAgeH < HOURS_48 ? 'launch_0_48h' : 'waiting_48h_review',
+              first_48h_ends_at: first48hEndsAt,
+              review_72h_at: review72hAt,
+              next_review_at: campAgeH < HOURS_48 ? first48hEndsAt : now,
+              target_acos: targetAcos,
+              target_acos_source: targetAcosSource,
+              current_acos: num(kw.acos),
+              current_spend: num(kw.spend),
+              current_sales: num(kw.sales),
+              current_orders: num(kw.orders),
+              impressions: num(kw.impressions),
+              clicks: num(kw.clicks),
+              idempotency_key: iKey,
+              last_action: bidApplied ? 'initial_bid_applied' : 'lifecycle_registered',
+              last_action_at: now,
+              created_at: now,
+              updated_at: now,
+            };
+
+            await base44.asServiceRole.entities.ManualCampaignBidLifecycle.create(newLC).catch(() => {});
+            existingLC[lcKey] = newLC;
+            report.lifecycles_created++;
+
+            report.audit_rows.push({
+              campaign: campaign.campaign_name || campaign.name,
+              ad_group: ag.name,
+              asin: campAsin,
+              keyword: kw.keyword_text,
+              age_h: Math.round(campAgeH),
+              ag_default_bid: round2(agBidToSet),
+              kw_bid: round2(kwBidToSet),
+              amazon_suggested: null,
+              status: newLC.status,
+              action: bidApplied ? 'initial_bid_applied' : 'lifecycle_registered',
+            });
+
+          } else {
+            // â”€â”€ Processar lifecycle existente â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            const lc = existLC;
+            const lcStatus = lc.status;
+
+            // Atualizar mÃ©tricas do banco
+            const metricsUpdate: any = {
+              current_ad_group_default_bid: reconciledAGBid,
+              current_keyword_bid: reconciledKwBid,
+              current_acos: num(kw.acos),
+              current_spend: num(kw.spend),
+              current_sales: num(kw.sales),
+              current_orders: num(kw.orders),
+              impressions: num(kw.impressions),
+              clicks: num(kw.clicks),
+              updated_at: now,
+            };
+
+            // â”€â”€ FASE: within_48h â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            if (lcStatus === 'launch_0_48h') {
+              const isStillIn48h = campAgeH < HOURS_48;
+
+              // Verificar risco emergencial (exceÃ§Ã£o permitida antes de 48h)
+              const kwClicks = num(kw.clicks);
+              const kwSpend = num(kw.spend);
+              const kwOrders = num(kw.orders);
+              const maxProfitableCpa = campEcon?.maximum_profitable_ad_spend || EMERGENCY_MIN_SPEND;
+
+              const emergencyTrigger = !lc.emergency_triggered
+                && kwOrders === 0
+                && kwClicks >= EMERGENCY_MIN_CLICKS
+                && (kwSpend >= EMERGENCY_MIN_SPEND || kwSpend >= maxProfitableCpa * 0.5);
+
+              if (emergencyTrigger && hasAdsAccess) {
+                // Reduzir bid 10% â€” contenÃ§Ã£o emergencial
+                const newKwBid = round2(Math.max(globalMinBid, reconciledKwBid * 0.90));
+                const res = await updateKeywordBidOnAmazon(adsEndpoint, adsToken!, profileId, kwId, newKwBid);
+                if (res.success) {
+                  metricsUpdate.current_keyword_bid = newKwBid;
+                  metricsUpdate.emergency_triggered = true;
+                  metricsUpdate.emergency_reason = `${kwClicks} cliques, R$${kwSpend.toFixed(2)} gastos, zero compras`;
+                  metricsUpdate.status = 'emergency_reduction';
+                  metricsUpdate.last_action = 'emergency_bid_reduction_10pct';
+                  metricsUpdate.last_action_at = now;
+                  metricsUpdate.amazon_request_id = res.requestId;
+                  metricsUpdate.cooldown_until = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
+                  report.emergency_reductions++;
+                  report.bids_applied_to_amazon++;
+
+                  // Reduzir default bid do grupo se kwCount===1
+                  if (kwCount === 1) {
+                    const agRes = await updateAdGroupBidOnAmazon(adsEndpoint, adsToken!, profileId, agId, newKwBid);
+                    if (agRes.success) metricsUpdate.current_ad_group_default_bid = newKwBid;
+                  }
+
+                  // Registrar na fila oficial de decisÃµes para rastreabilidade
+                  await base44.asServiceRole.entities.OptimizationDecision.create({
+                    amazon_account_id: aid,
+                    decision_type: 'bid_change',
+                    entity_type: 'keyword',
+                    entity_id: kwId,
+                    campaign_id: campaignId,
+                    keyword_id: kwId,
+                    keyword_text: kw.keyword_text,
+                    asin: campAsin,
+                    action: 'set_bid',
+                    value_before: reconciledKwBid,
+                    value_after: newKwBid,
+                    rationale: `ğŸš¨ CONTENÃ‡ÃƒO EMERGENCIAL: ${kwClicks} cliques, R$${kwSpend.toFixed(2)} gastos, zero compras nas primeiras 48h. Bid reduzido 10% de R$${reconciledKwBid} para R$${newKwBid}.`,
+                    status: 'executed',
+                    idempotency_key: `emergency_launch|${aid}|${kwId}|${now.slice(0, 10)}`,
+                    source_function: 'runManualCampaignBidLifecycle',
+                    created_at: now,
+                  }).catch(() => {});
+                } else {
+                  report.bids_failed++;
+                  metricsUpdate.status = 'pending_confirmation';
+                }
+              } else if (!isStillIn48h && lcStatus === 'launch_0_48h') {
+                // Passou 48h â†’ mover para revisÃ£o
+                metricsUpdate.status = 'waiting_48h_review';
+                metricsUpdate.next_review_at = now;
+              } else {
+                report.within_48h_protected++;
+              }
+            }
+
+            // â”€â”€ FASE: waiting_48h_review â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // Delegado a applyInitialBidsToAllCampaigns (evita timeout).
+            // Aqui apenas sinalizamos que estÃ¡ pronto para o ajuste inicial.
+            else if (lcStatus === 'waiting_48h_review') {
+              // NÃ£o fazer chamadas de sugestÃ£o aqui â€” applyInitialBidsToAllCampaigns
+              // Ã© chamado pelo orquestrador e processa uma keyword por vez com throttle.
+              // Apenas garantir que management_source estÃ¡ marcado corretamente.
+              metricsUpdate.management_source = 'launch_lifecycle';
+              metricsUpdate.next_review_at = now; // pronto para processar agora
+              report.post_48h_adjustments++;
+            }
+
+            // â”€â”€ FASE: waiting_72h_review / amazon_bid_applied / amazon_bid_limited â”€â”€
+            else if (['waiting_72h_review', 'amazon_bid_applied', 'amazon_bid_limited', 'serving_learning'].includes(lcStatus)) {
+              const review72hAt = lc.review_72h_at ? new Date(lc.review_72h_at).getTime() : 0;
+              const reviewDue = Date.now() >= review72hAt;
+
+              if (reviewDue) {
+                const kwAcos = num(kw.acos);
+                const kwSpend = num(kw.spend);
+                const kwOrders = num(kw.orders);
+                const kwImpressions = num(kw.impressions);
+                const kwClicks = num(kw.clicks);
+                const kwSales = num(kw.sales);
+                const currentAppliedBid = lc.post_48h_bid || reconciledKwBid;
+                const cooldownUntil = lc.cooldown_until ? new Date(lc.cooldown_until).getTime() : 0;
+                const inCooldown = Date.now() < cooldownUntil;
+                const rawCvr = num(campEcon?.conversion_rate_30d ?? campEcon?.historical_cvr ?? settings.conversion_rate ?? 0.05);
+                const conservativeCvr = Math.max(0.005, Math.min(0.50, rawCvr > 1 ? rawCvr / 100 : rawCvr || 0.05));
+                const traffic = calculateTrafficSufficiency({
+                  clicks: kwClicks,
+                  conservativeCvr,
+                  evaluationConfidence: 0.80,
+                });
+                const maxProfitableSpend = num(campEcon?.maximum_profitable_ad_spend || EMERGENCY_MIN_SPEND);
+                const lossBudget = Math.max(2.50, Math.min(15, maxProfitableSpend * 0.25));
+                const allowedSpend = kwSales > 0 ? kwSales * (targetAcos / 100) : 0;
+                const servingLearningProtected = shouldProtectServingManual({
+                  manual: true,
+                  impressions: kwImpressions,
+                  clicks: kwClicks,
+                  spend: kwSpend,
+                  orders: kwOrders,
+                  conservativeCvr,
+                  evaluationConfidence: 0.80,
+                  loss: Math.max(0, kwSpend - allowedSpend),
+                  lossBudget,
+                });
+
+                report.post_72h_reviews++;
+
+                if (inCooldown) {
+                  // NÃ£o agir durante cooldown
+                  metricsUpdate.status = 'waiting_72h_review';
+                } else if (servingLearningProtected) {
+                  metricsUpdate.status = 'serving_learning';
+                  metricsUpdate.management_source = 'unified_decision_engine';
+                  metricsUpdate.next_review_at = new Date(Date.now() + 24 * 3600000).toISOString();
+                  metricsUpdate.traffic_sufficiency = traffic.traffic_sufficiency;
+                  metricsUpdate.traffic_required_clicks = traffic.required_clicks;
+                  metricsUpdate.traffic_zero_order_probability = traffic.zero_order_probability;
+                  metricsUpdate.last_action = 'hold_for_traffic_sufficiency';
+                  metricsUpdate.last_action_at = now;
+                  report.serving_learning_protected++;
+                } else if (kwSpend < 1 || kwImpressions < 10) {
+                  // Dados insuficientes â€” aguardar motor
+                  metricsUpdate.status = 'no_amazon_suggestion';
+                  metricsUpdate.management_source = 'unified_decision_engine';
+                  report.delivered_to_engine++;
+                } else {
+                  // Entregar gestÃ£o ao motor agora
+                  metricsUpdate.status = 'unified_engine_management';
+                  metricsUpdate.management_source = 'unified_decision_engine';
+                  metricsUpdate.next_review_at = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
+                  report.delivered_to_engine++;
+                }
+              }
+            }
+
+            // â”€â”€ FASE: unified_engine_management / stabilized â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            else if (lcStatus === 'unified_engine_management') {
+              // Motor gerencia â€” apenas atualizar mÃ©tricas
+              metricsUpdate.management_source = 'unified_decision_engine';
+              // Marcar prÃ³xima revisÃ£o periÃ³dica
+              metricsUpdate.next_review_at = new Date(Date.now() + HOURS_48 * 3600000).toISOString();
+            }
+
+            // â”€â”€ Salvar atualizaÃ§Ã£o do lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            if (lc.id) {
+              await base44.asServiceRole.entities.ManualCampaignBidLifecycle.update(lc.id, metricsUpdate).catch(() => {});
+              report.lifecycles_updated++;
+            }
+
+            report.audit_rows.push({
+              campaign: campaign.campaign_name || campaign.name,
+              ad_group: ag.name,
+              asin: campAsin,
+              keyword: kw.keyword_text,
+              age_h: Math.round(campAgeH),
+              ag_default_bid: round2(metricsUpdate.current_ad_group_default_bid ?? reconciledAGBid),
+              kw_bid: round2(metricsUpdate.current_keyword_bid ?? reconciledKwBid),
+              amazon_suggested: metricsUpdate.amazon_suggested_bid ?? lc.amazon_suggested_bid ?? null,
+              amazon_lower: metricsUpdate.amazon_suggested_bid_lower ?? lc.amazon_suggested_bid_lower ?? null,
+              status: metricsUpdate.status || lcStatus,
+              action: metricsUpdate.last_action || 'metrics_updated',
+            });
+          }
+
+          await sleep(500); // Throttle entre keywords para nÃ£o saturar rate limit Amazon
+        }
+      }
+    }
+
+    // â”€â”€ Log de execuÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    const today = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);
+    await base44.asServiceRole.entities.SyncExecutionLog.create({
+      amazon_account_id: aid,
+      operation: 'run_manual_campaign_bid_lifecycle',
+      trigger_type: body._service_role ? 'automatic' : 'manual',
+      status: 'success',
+      execution_date: today,
+      started_at: now,
+      completed_at: nowIso(),
+      records_processed: report.lifecycles_created + report.lifecycles_updated,
+      result_summary: JSON.stringify({
+        campaigns: report.campaigns_analyzed,
+        ad_groups: report.ad_groups_found,
+        keywords: report.keywords_found,
+        created: report.lifecycles_created,
+        updated: report.lifecycles_updated,
+        bids_applied: report.bids_applied_to_amazon,
+        emergency: report.emergency_reductions,
+        post_48h: report.post_48h_adjustments,
+        delivered_to_engine: report.delivered_to_engine,
+        within_48h_protected: report.within_48h_protected,
+        serving_learning_protected: report.serving_learning_protected,
+      }),
+    }).catch(() => {});
+
+    return Response.json({
+      ok: true,
+      amazon_access: hasAdsAccess,
+      summary: {
+        campaigns_analyzed: report.campaigns_analyzed,
+        ad_groups_found: report.ad_groups_found,
+        keywords_found: report.keywords_found,
+        lifecycles_created: report.lifecycles_created,
+        lifecycles_updated: report.lifecycles_updated,
+        bids_applied_to_amazon: report.bids_applied_to_amazon,
+        bids_failed: report.bids_failed,
+        within_48h_protected: report.within_48h_protected,
+        emergency_reductions: report.emergency_reductions,
+        post_48h_adjustments: report.post_48h_adjustments,
+        post_72h_reviews: report.post_72h_reviews,
+        delivered_to_engine: report.delivered_to_engine,
+        serving_learning_protected: report.serving_learning_protected,
+      },
+      audit_table: report.audit_rows.slice(0, 50),
+    });
+
+  } catch (error: any) {
+    console.error('[runManualCampaignBidLifecycle]', error.message);
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  }
+});

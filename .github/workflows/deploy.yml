@@ -247,7 +247,19 @@ jobs:
                 body: JSON.stringify({ _service_role: true, force: true })
               });
               const assessment = await assessmentResponse.json().catch(() => ({}));
-         ßÞ-¢G§²ÚîÆ­yÔivo Campaign Factory e mÃ©tricas horÃ¡rias ---'
+              console.log("ECONOMIC_ASSESSMENT_HTTP=" + assessmentResponse.status + "|OK=" + assessment.ok + "|DATE=" + (assessment.assessment_date || "unknown") + "|PRODUCTS=" + (assessment.products_assessed ?? assessment.records_processed ?? 0));
+              if (!assessmentResponse.ok || assessment.ok === false) throw new Error(assessment.error || "daily economic assessment failed");
+
+              const weeklyResponse = await fetch("http://127.0.0.1:8000/functions/runWeeklyAdsPerformanceReport", {
+                method: "POST", headers,
+                body: JSON.stringify({ _service_role: true, force: true })
+              });
+              const weekly = await weeklyResponse.json().catch(() => ({}));
+              console.log("WEEKLY_REPORT_HTTP=" + weeklyResponse.status + "|OK=" + weekly.ok + "|START=" + (weekly.week_start || "unknown") + "|END=" + (weekly.week_end || "unknown") + "|COVERAGE=" + (weekly.data_coverage_percent ?? 0) + "|PRODUCTS=" + (weekly.products_analyzed ?? 0));
+              if (!weeklyResponse.ok || weekly.ok === false) throw new Error(weekly.error || "weekly report failed");
+            ' </dev/null
+
+            echo '--- retroativo Campaign Factory e mÃ©tricas horÃ¡rias ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const headers = { "content-type": "application/json", "x-api-token": token };
