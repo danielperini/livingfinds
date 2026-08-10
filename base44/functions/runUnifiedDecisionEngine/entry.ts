@@ -120,6 +120,23 @@ Deno.serve(async (request) => {
           snapshot_run_id: snapshotRunId, daily_close: false,
         });
 
+    const servingGrowth = body.skip_serving_campaign_growth === true || !lifecycleWindow
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'runServingCampaignGrowthObjective', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+          serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
+          max_auto_budget_expansions: body.max_auto_budget_expansions ?? 2,
+          max_new_exact_per_run: body.max_new_exact_per_run ?? 2,
+          delivery_lookback_days: 7,
+          trigger_type: dailyClose ? 'unified_daily_serving_growth_v18' : 'unified_intraday_serving_growth_v18',
+        });
+    const servingGrowthReport = Array.isArray(servingGrowth?.reports) ? servingGrowth.reports[0] : null;
+    const servingGrowthGap = Math.max(0, Number(servingGrowthReport?.growth_gap || 0));
+    const replacementCapacity = servingGrowthReport
+      ? Math.min(20, Math.max(2, servingGrowthGap))
+      : 6;
+
     const deliveryHealth = body.skip_campaign_delivery_health === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'reconcileCampaignDeliveryHealth', {
@@ -128,6 +145,8 @@ Deno.serve(async (request) => {
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
           growth_metric: 'SERVING_CAMPAIGNS',
           prioritize_zero_delivery_rotation: true,
+          delivery_lookback_days: 7,
+          max_replacements_per_run: replacementCapacity,
         });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true
@@ -170,13 +189,13 @@ Deno.serve(async (request) => {
       reportRequest, scopeBefore, snapshots, economicAssessment, journeyAudit,
       manualStructureAudit, economicCurveAdsGuard, deterministic, decisionV3Shadow,
       salesRecovery, asinDiversification, campaignLifecycle, economicBalancer,
-      deliveryHealth, daypartConfiguration, daypartBudgetRestore,
+      servingGrowth, deliveryHealth, daypartConfiguration, daypartBudgetRestore,
       scheduledCampaignState, scheduledBidDaypart, repricing, scopeAfter,
     };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v17-serving-campaign-growth-goal',
+      engine_version: 'unified-v18-serving-discovery-and-rotation',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -184,8 +203,14 @@ Deno.serve(async (request) => {
       serving_campaign_growth_goal: {
         target_growth_pct: servingCampaignGrowthTargetPct,
         metric: 'SERVING_CAMPAIGNS',
+        baseline_serving_campaigns: servingGrowthReport?.baseline_serving_campaigns ?? null,
+        current_serving_campaigns: servingGrowthReport?.current_serving_campaigns ?? null,
+        target_serving_campaigns: servingGrowthReport?.target_serving_campaigns ?? null,
+        growth_gap: servingGrowthReport?.growth_gap ?? null,
+        goal_met: servingGrowthReport?.goal_met === true,
         definition: 'campanhas elegíveis com entrega real; não campanhas apenas existentes',
-        policy: 'meta, não hard quota: primeiro rotacionar ZERO_DELIVERY e expandir apenas com estoque, CPC econômico, orçamento e guardrails ACoS/MER/TACoS válidos',
+        completion_rule: 'cumprida somente quando current_serving_campaigns >= target_serving_campaigns',
+        policy: 'AUTO limitada por orçamento recebe discovery econômico; Search Terms AUTO alimentam EXACT; ZERO_DELIVERY madura é substituída 1:1; EXISTS nunca cumpre a meta',
         scheduler_driven: true,
         confirmation_required: true,
       },
@@ -216,6 +241,7 @@ Deno.serve(async (request) => {
         automatic: true,
         zero_delivery_test_hours: 72,
         max_bid_recovery_attempts: 2,
+        max_replacements_per_run: replacementCapacity,
         economic_bid_cap: true,
         replacement_priority: 'same-SKU converted Search Terms from canonical harvest',
         pause_old_only_after_confirmed_replacement: true,
@@ -228,6 +254,7 @@ Deno.serve(async (request) => {
         brt_hour: currentHour,
         schedule_owner: 'runUnifiedDecisionEngine',
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
+        serving_growth_stage: 'runServingCampaignGrowthObjective',
       },
       asin_portfolio: {
         automatic: true,

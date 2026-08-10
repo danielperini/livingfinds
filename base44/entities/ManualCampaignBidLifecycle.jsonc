@@ -134,6 +134,7 @@
         "amazon_bid_applied",
         "amazon_bid_limited",
         "no_amazon_suggestion",
+        "serving_learning",
         "unified_engine_management",
         "waiting_72h_review",
         "stabilized",
@@ -191,6 +192,18 @@
       "default": 0
     },
     "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "traffic_sufficiency": {
+      "type": "number",
+      "default": 0
+    },
+    "traffic_required_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "traffic_zero_order_probability": {
       "type": "number",
       "default": 0
     },

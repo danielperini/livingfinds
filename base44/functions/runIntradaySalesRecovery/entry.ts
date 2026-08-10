@@ -73,7 +73,7 @@ Deno.serve(async (request) => {
     if (body._canonical_orchestrator !== 'runUnifiedDecisionEngine') return Response.json({ ok: false, error: 'Uso exclusivo pelo motor canônico' }, { status: 403 });
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 20);
     const reports: any[] = [];
 
@@ -282,9 +282,9 @@ Deno.serve(async (request) => {
         }
       }
 
-      let manualGrowth: any = { ok: true, skipped: true };
+      let servingGrowth: any = { ok: true, skipped: true };
       if (growthAllowed && revenueRatio < 0.40 && body.dry_run !== true) {
-        manualGrowth = await base44.asServiceRole.functions.invoke('runManualProfitableGrowthObjective', {
+        servingGrowth = await base44.asServiceRole.functions.invoke('runServingCampaignGrowthObjective', {
           amazon_account_id: aid, _service_role: true, dry_run: false, trigger_type: 'intraday_sales_recovery',
         }).then((result: any) => result?.data || result || { ok: true }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
       }
@@ -306,8 +306,8 @@ Deno.serve(async (request) => {
         spend_today: r2(spendToday), tacos: tacos == null ? null : r2(tacos * 100), target_tacos: r2(merTarget * 100),
         losers: losers.map((x) => ({ campaign_id: x.id, asin: x.asin, spend: r2(x.todayM.spend), orders: x.todayM.orders, sales: r2(x.todayM.sales), acos: x.todayAcos == null ? null : r2(x.todayAcos) })),
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
-        queued, manual_growth: manualGrowth,
-        policy: { canonical_sales_only: true, dedupe_campaigns: true, no_global_spend_increase: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        queued, serving_growth: servingGrowth,
+        policy: { canonical_sales_only: true, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 

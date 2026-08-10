@@ -39,6 +39,19 @@ function campaignIdOf(campaign: any): string {
   return String(campaign?.campaign_id || campaign?.amazon_campaign_id || '');
 }
 
+function sourceCampaignType(row: any, campaignById: Map<string, any>): 'AUTO' | 'MANUAL' | '' {
+  const campaign = campaignById.get(String(row?.campaign_id || ''));
+  const explicit = String(
+    row?.source_campaign_type || campaign?.amazon_targeting_type || campaign?.targeting_type || '',
+  ).trim().toUpperCase();
+  if (explicit.includes('AUTO')) return 'AUTO';
+  if (explicit.includes('MANUAL')) return 'MANUAL';
+  const name = String(campaign?.name || campaign?.campaign_name || '').trim().toUpperCase();
+  if (/^AUTO\s*\|/.test(name) || /\|\s*AUTO\s*\|/.test(name)) return 'AUTO';
+  if (/^SP\s*\|\s*MANUAL\s*\|/.test(name)) return 'MANUAL';
+  return '';
+}
+
 function campaignName(asin: string, term: string): string {
   const clean = term.replace(/[^a-z0-9\sÃ¡Ã©Ã­Ã³ÃºÃ¢ÃªÃ´Ã£ÃµÃ§-]/gi, '').trim().slice(0, 48);
   return `SP | MANUAL | EXACT | ${asin} | ${clean}`.slice(0, 128);
@@ -186,11 +199,20 @@ Deno.serve(async (request) => {
 
       const sourceCampaignId = String(body.source_campaign_id || '');
       const sourceSearchTerm = normalizeSearchTerm(body.source_search_term || '');
-      const rawRowsInWindow = searchTerms.filter((row: any) =>
-        String(row.date || '') >= cutoff && row.search_term &&
-        (!sourceCampaignId || String(row.campaign_id || '') === sourceCampaignId) &&
-        (!sourceSearchTerm || normalizeSearchTerm(row.search_term) === sourceSearchTerm)
-      );
+      const requestedSourceType = String(body.source_campaign_type || '').trim().toUpperCase();
+      const targetAsins = new Set((Array.isArray(body.target_asins) ? body.target_asins : [])
+        .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
+      const excludedAsins = new Set((Array.isArray(body.exclude_asins) ? body.exclude_asins : [])
+        .map((value: unknown) => String(value || '').trim().toUpperCase()).filter(Boolean));
+      const rawRowsInWindow = searchTerms.filter((row: any) => {
+        const asin = String(row.advertised_asin || row.asin || '').trim().toUpperCase();
+        return String(row.date || '') >= cutoff && row.search_term &&
+          (!sourceCampaignId || String(row.campaign_id || '') === sourceCampaignId) &&
+          (!sourceSearchTerm || normalizeSearchTerm(row.search_term) === sourceSearchTerm) &&
+          (!targetAsins.size || targetAsins.has(asin)) &&
+          !excludedAsins.has(asin) &&
+          (!requestedSourceType || sourceCampaignType(row, campaignById) === requestedSourceType);
+      });
       const verifiedKeys = new Set(rawRowsInWindow
         .filter((row: any) => row.same_sku_attribution_verified === true)
         .map((row: any) => `${String(row.advertised_asin || '').toUpperCase()}|${normalizeSearchTerm(row.search_term)}`));
@@ -265,470 +287,4 @@ Deno.serve(async (request) => {
           orders: aggregate.totalOrders,
           sales: Number(aggregate.totalSales.toFixed(4)),
           same_sku_orders: aggregate.sameSkuOrders,
-          same_sku_sales: Number(aggregate.sameSkuSales.toFixed(4)),
-          halo_orders: aggregate.haloOrders,
-          halo_sales: Number(aggregate.haloSales.toFixed(4)),
-          same_sku_attribution_verified: aggregate.attributionVerified,
-          source_campaign_ids: [...new Set(aggregate.sources.map((source) => source.campaignId).filter(Boolean))],
-          source_ad_group_ids: [...new Set(aggregate.sources.map((source) => source.adGroupId).filter(Boolean))],
-          last_evidence_date: aggregate.latestDate || today,
-          cpc: Number(observedCpc.toFixed(4)),
-          ctr: aggregate.impressions > 0 ? Number((aggregate.clicks / aggregate.impressions * 100).toFixed(4)) : 0,
-          conversion_rate: Number(cvr.toFixed(4)),
-          cvr: Number(cvr.toFixed(4)),
-          acos: evaluation.sameSkuAcos == null ? 0 : Number(evaluation.sameSkuAcos.toFixed(4)),
-          roas: Number(roas.toFixed(4)),
-          bid_initial: safeBid || existingBank?.bid_initial || minBid,
-          bid_current: existingBank?.bid_current || safeBid || minBid,
-          performance_score: Math.min(100, Math.round(aggregate.sameSkuOrders * 30 + Math.min(30, roas * 3) + Math.min(20, aggregate.clicks))),
-          classification,
-          first_seen_at: existingBank?.first_seen_at || now,
-          last_seen_at: aggregate.latestDate ? `${aggregate.latestDate}T23:59:59-03:00` : now,
-          last_performance_update: now,
-          updated_at: now,
-        };
-
-        if (!dryRun) {
-          if (existingBank) {
-            await base44.asServiceRole.entities.TermBank.update(existingBank.id, bankRecord).catch(() => null);
-            bankUpdated++;
-          } else {
-            const created = await base44.asServiceRole.entities.TermBank.create({ ...bankRecord, created_at: now }).catch(() => null);
-            if (created) {
-              termBankByKey.set(key, created);
-              bankCreated++;
-            }
-          }
-        }
-
-        if (evaluation.eligible) {
-          candidates.push({ aggregate, key, product, econ, assessment, policy, safeBid, evaluation, bank: existingBank });
-        } else {
-          rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: evaluation.reason, same_sku_orders: aggregate.sameSkuOrders });
-        }
-      }
-
-      candidates.sort((a, b) =>
-        b.aggregate.sameSkuOrders - a.aggregate.sameSkuOrders ||
-        (a.evaluation.sameSkuAcos ?? 9999) - (b.evaluation.sameSkuAcos ?? 9999)
-      );
-      const selected = candidates.slice(0, maxPromotions);
-      const promoted: any[] = [];
-      const failed: any[] = [];
-
-      if (!dryRun) {
-        for (let offset = 0; offset < selected.length; offset += BATCH_SIZE) {
-          const batch = selected.slice(offset, offset + BATCH_SIZE);
-          const prepared: any[] = [];
-
-          for (const candidate of batch) {
-            const primarySource = candidate.aggregate.sources[0] || {};
-            const idempotencyKey = `${aid}|${candidate.aggregate.asin}|${candidate.aggregate.normalizedTerm}|EXACT|same_sku_v1`;
-            try {
-              const promotion = await base44.asServiceRole.entities.SearchTermPromotion.create({
-                amazon_account_id: aid,
-                asin: candidate.aggregate.asin,
-                sku: candidate.aggregate.sku || candidate.product?.sku || '',
-                source_campaign_id: primarySource.campaignId || '',
-                source_ad_group_id: primarySource.adGroupId || '',
-                source_search_term: candidate.aggregate.term,
-                normalized_search_term: candidate.aggregate.normalizedTerm,
-                source_paths: candidate.aggregate.sources,
-                orders: candidate.aggregate.totalOrders,
-                sales: candidate.aggregate.totalSales,
-                same_sku_orders: candidate.aggregate.sameSkuOrders,
-                same_sku_sales: candidate.aggregate.sameSkuSales,
-                halo_orders: candidate.aggregate.haloOrders,
-                halo_sales: candidate.aggregate.haloSales,
-                same_sku_attribution_verified: true,
-                spend: candidate.aggregate.spend,
-                clicks: candidate.aggregate.clicks,
-                average_cpc: candidate.aggregate.clicks > 0 ? candidate.aggregate.spend / candidate.aggregate.clicks : 0,
-                acos: candidate.evaluation.sameSkuAcos || 0,
-                roas: candidate.aggregate.spend > 0 ? candidate.aggregate.sameSkuSales / candidate.aggregate.spend : 0,
-                target_bid: candidate.safeBid,
-                destination_campaign_name: campaignName(candidate.aggregate.asin, candidate.aggregate.term),
-                promotion_status: 'campaign_creating',
-                completion_status: 'incomplete',
-                idempotency_key: idempotencyKey,
-                created_at: now,
-                updated_at: now,
-              });
-              promotionByKey.set(candidate.key, promotion);
-              prepared.push({ ...candidate, promotion });
-            } catch (error: any) {
-              failed.push({ asin: candidate.aggregate.asin, term: candidate.aggregate.term, stage: 'promotion_record', error: error?.message || String(error) });
-            }
-          }
-          if (!prepared.length) continue;
-
-          const campaignResponse = await ads(base44, aid, 'sameSkuHarvestCreateCampaigns', '/sp/campaigns', {
-            campaigns: prepared.map((item) => ({
-              name: campaignName(item.aggregate.asin, item.aggregate.term),
-              targetingType: 'MANUAL',
-              state: 'ENABLED',
-              budget: { budgetType: 'DAILY', budget },
-              startDate: today,
-            })),
-          }, 'application/vnd.spCampaign.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-
-          const withCampaign: any[] = [];
-          for (let index = 0; index < prepared.length; index++) {
-            const item = prepared[index];
-            const success = successAt(campaignResponse, 'campaigns', index);
-            const campaignId = String(success?.campaignId || '');
-            if (!campaignId) {
-              const error = amazonFailure(campaignResponse, 'Amazon nÃ£o retornou campaignId');
-              await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, { promotion_status: 'repair_required', last_error: error, updated_at: now }).catch(() => null);
-              failed.push({ asin: item.aggregate.asin, term: item.aggregate.term, stage: 'campaign', error });
-              continue;
-            }
-            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: 'campaign_created', destination_campaign_id: campaignId, updated_at: now,
-            }).catch(() => null);
-            withCampaign.push({ ...item, campaignId });
-          }
-          if (!withCampaign.length) continue;
-          await wait(1500);
-
-          const adGroupResponse = await ads(base44, aid, 'sameSkuHarvestCreateAdGroups', '/sp/adGroups', {
-            adGroups: withCampaign.map((item) => ({
-              name: `AG | EXACT | ${item.aggregate.asin}`,
-              campaignId: item.campaignId,
-              defaultBid: item.safeBid,
-              state: 'ENABLED',
-            })),
-          }, 'application/vnd.spAdGroup.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-
-          const withAdGroup: any[] = [];
-          for (let index = 0; index < withCampaign.length; index++) {
-            const item = withCampaign[index];
-            const success = successAt(adGroupResponse, 'adGroups', index);
-            const adGroupId = String(success?.adGroupId || '');
-            if (!adGroupId) {
-              const error = amazonFailure(adGroupResponse, 'Amazon nÃ£o retornou adGroupId');
-              await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, { promotion_status: 'repair_required', last_error: error, updated_at: now }).catch(() => null);
-              failed.push({ asin: item.aggregate.asin, term: item.aggregate.term, stage: 'ad_group', error });
-              continue;
-            }
-            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: 'ad_group_created', destination_ad_group_id: adGroupId, updated_at: now,
-            }).catch(() => null);
-            withAdGroup.push({ ...item, adGroupId });
-          }
-          if (!withAdGroup.length) continue;
-          await wait(1500);
-
-          const productAdResponse = await ads(base44, aid, 'sameSkuHarvestCreateProductAds', '/sp/productAds', {
-            productAds: withAdGroup.map((item) => ({
-              campaignId: item.campaignId,
-              adGroupId: item.adGroupId,
-              ...(item.aggregate.sku || item.product?.sku ? { sku: item.aggregate.sku || item.product?.sku } : { asin: item.aggregate.asin }),
-              state: 'ENABLED',
-            })),
-          }, 'application/vnd.spProductAd.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-
-          const withProductAd: any[] = [];
-          for (let index = 0; index < withAdGroup.length; index++) {
-            const item = withAdGroup[index];
-            const success = successAt(productAdResponse, 'productAds', index);
-            const productAdId = String(success?.adId || success?.productAdId || '');
-            if (!success && unwrap(productAdResponse)?.ok !== true) {
-              const error = amazonFailure(productAdResponse, 'Amazon nÃ£o confirmou Product Ad');
-              await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, { promotion_status: 'repair_required', last_error: error, updated_at: now }).catch(() => null);
-              failed.push({ asin: item.aggregate.asin, term: item.aggregate.term, stage: 'product_ad', error });
-              continue;
-            }
-            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: 'product_ad_created', destination_ad_id: productAdId || null, updated_at: now,
-            }).catch(() => null);
-            withProductAd.push({ ...item, productAdId });
-          }
-          if (!withProductAd.length) continue;
-          await wait(1500);
-
-          const keywordResponse = await ads(base44, aid, 'sameSkuHarvestCreateExactKeywords', '/sp/keywords', {
-            keywords: withProductAd.map((item) => ({
-              campaignId: item.campaignId,
-              adGroupId: item.adGroupId,
-              keywordText: item.aggregate.term,
-              matchType: 'EXACT',
-              state: 'ENABLED',
-              bid: item.safeBid,
-            })),
-          }, 'application/vnd.spKeyword.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-
-          const withKeyword: any[] = [];
-          for (let index = 0; index < withProductAd.length; index++) {
-            const item = withProductAd[index];
-            const success = successAt(keywordResponse, 'keywords', index);
-            const keywordId = String(success?.keywordId || '');
-            if (!keywordId) {
-              const error = amazonFailure(keywordResponse, 'Amazon nÃ£o retornou keywordId');
-              await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, { promotion_status: 'repair_required', last_error: error, updated_at: now }).catch(() => null);
-              failed.push({ asin: item.aggregate.asin, term: item.aggregate.term, stage: 'keyword', error });
-              continue;
-            }
-            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: 'manual_active', destination_keyword_id: keywordId, updated_at: now,
-            }).catch(() => null);
-            withKeyword.push({ ...item, keywordId });
-          }
-          if (!withKeyword.length) continue;
-          await wait(1500);
-
-          const negatives: any[] = [];
-          for (const item of withKeyword) {
-            const distinct = new Set<string>();
-            for (const source of item.aggregate.sources.filter(sourceNeedsNegative)) {
-              const key = `${source.campaignId}|${source.adGroupId}|${item.aggregate.normalizedTerm}`;
-              if (distinct.has(key)) continue;
-              distinct.add(key);
-              negatives.push({
-                item,
-                payload: {
-                  campaignId: source.campaignId,
-                  adGroupId: source.adGroupId,
-                  keywordText: item.aggregate.term,
-                  matchType: 'NEGATIVE_EXACT',
-                  state: 'ENABLED',
-                },
-              });
-            }
-          }
-          let negativeResponse: any = { ok: true };
-          if (negatives.length) {
-            negativeResponse = await ads(base44, aid, 'sameSkuHarvestCreateSourceNegatives', '/sp/negativeKeywords', {
-              negativeKeywords: negatives.map((entry) => entry.payload),
-            }, 'application/vnd.spNegativeKeyword.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-          }
-
-          for (const item of withKeyword) {
-            const itemNegatives = negatives.map((entry, index) => ({ ...entry, index })).filter((entry) => entry.item.promotion.id === item.promotion.id);
-            const negativeIds = itemNegatives.map((entry) => {
-              const success = successAt(negativeResponse, 'negativeKeywords', entry.index);
-              return String(success?.keywordId || success?.negativeKeywordId || '');
-            }).filter(Boolean);
-            const negativesComplete = itemNegatives.length === 0 || negativeIds.length === itemNegatives.length;
-
-            await Promise.all([
-              base44.asServiceRole.entities.Campaign.create({
-                amazon_account_id: aid,
-                campaign_id: item.campaignId,
-                amazon_campaign_id: item.campaignId,
-                asin: item.aggregate.asin,
-                sku: item.aggregate.sku || item.product?.sku || null,
-                name: campaignName(item.aggregate.asin, item.aggregate.term),
-                campaign_name: campaignName(item.aggregate.asin, item.aggregate.term),
-                campaign_type: 'SP',
-                targeting_type: 'MANUAL',
-                state: 'enabled',
-                status: 'enabled',
-                daily_budget: budget,
-                created_by_app: true,
-                learning_eligible: true,
-                launch_phase: 'new',
-                completion_status: 'complete',
-                is_incomplete: false,
-                keyword_count: 1,
-                ad_group_id: item.adGroupId,
-                created_at: now,
-                synced_at: now,
-              }).catch(() => null),
-              base44.asServiceRole.entities.Keyword.create({
-                amazon_account_id: aid,
-                campaign_id: item.campaignId,
-                ad_group_id: item.adGroupId,
-                keyword_id: item.keywordId,
-                asin: item.aggregate.asin,
-                keyword_text: item.aggregate.term,
-                keyword: item.aggregate.term,
-                match_type: 'exact',
-                state: 'enabled',
-                status: 'enabled',
-                current_bid: item.safeBid,
-                bid: item.safeBid,
-                source: 'same_sku_search_term_harvest',
-                first_seen_at: now,
-                last_seen_at: now,
-                synced_at: now,
-              }).catch(() => null),
-              item.productAdId ? base44.asServiceRole.entities.ProductAd.create({
-                amazon_account_id: aid,
-                product_ad_id: item.productAdId,
-                campaign_id: item.campaignId,
-                ad_group_id: item.adGroupId,
-                asin: item.aggregate.asin,
-                sku: item.aggregate.sku || item.product?.sku || '',
-                state: 'enabled',
-                status: 'enabled',
-                synced_at: now,
-              }).catch(() => null) : Promise.resolve(null),
-            ]);
-
-            for (const row of item.aggregate.sourceRows) {
-              if (!row.id) continue;
-              await base44.asServiceRole.entities.SearchTerm.update(row.id, {
-                promoted_to_manual: true,
-                promoted_at: now,
-                manual_campaign_id: item.campaignId,
-                manual_ad_group_id: item.adGroupId,
-                manual_keyword_id: item.keywordId,
-                manual_keyword_state: 'enabled',
-                negated_in_source: negativesComplete && itemNegatives.length > 0,
-                negated_at: negativesComplete && itemNegatives.length > 0 ? now : null,
-                classification: 'PROMOTED_EXACT',
-                decision_status: 'executed',
-                last_action: 'same_sku_sale_promoted_to_manual_exact',
-                last_action_at: now,
-              }).catch(() => null);
-            }
-
-            const bankRow = termBankByKey.get(item.key);
-            if (bankRow?.id) {
-              await base44.asServiceRole.entities.TermBank.update(bankRow.id, {
-                promotion_status: 'promoted_to_manual',
-                classification: 'winner',
-                campaign_id: item.campaignId,
-                amazon_campaign_id: item.campaignId,
-                keyword_id: item.keywordId,
-                bid_initial: item.safeBid,
-                bid_current: item.safeBid,
-                updated_at: now,
-              }).catch(() => null);
-            }
-
-            await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: negativesComplete ? 'completed' : 'repair_required',
-              completion_status: negativesComplete ? 'complete' : 'manual_active_negative_pending',
-              destination_campaign_id: item.campaignId,
-              destination_ad_group_id: item.adGroupId,
-              destination_ad_id: item.productAdId || null,
-              destination_keyword_id: item.keywordId,
-              negative_keyword_id: negativeIds[0] || null,
-              last_error: negativesComplete ? null : amazonFailure(negativeResponse, 'Negativa da origem pendente'),
-              completed_at: negativesComplete ? now : null,
-              updated_at: now,
-            }).catch(() => null);
-
-            await base44.asServiceRole.entities.OptimizationDecision.create({
-              amazon_account_id: aid,
-              decision_type: 'keyword_add',
-              entity_type: 'keyword',
-              entity_id: item.keywordId,
-              campaign_id: item.campaignId,
-              ad_group_id: item.adGroupId,
-              keyword_id: item.keywordId,
-              keyword_text: item.aggregate.term,
-              asin: item.aggregate.asin,
-              sku: item.aggregate.sku || item.product?.sku || '',
-              action: 'promote_same_sku_search_term_to_manual_exact',
-              rationale: `AÃ§Ã£o: criar EXACT para â€œ${item.aggregate.term}â€. Causa: ${item.aggregate.sameSkuOrders} pedido(s) e R$ ${item.aggregate.sameSkuSales.toFixed(2)} de venda do mesmo SKU. ConsequÃªncia: isolar lance lucrativo e negativar a origem somente apÃ³s a keyword manual existir.`,
-              rule_key: 'SAME_SKU_FIRST_SALE_IMMEDIATE_PROMOTION_V1',
-              data_used: JSON.stringify({
-                same_sku_orders: item.aggregate.sameSkuOrders,
-                same_sku_sales: item.aggregate.sameSkuSales,
-                halo_orders: item.aggregate.haloOrders,
-                halo_sales: item.aggregate.haloSales,
-                spend: item.aggregate.spend,
-                same_sku_acos: item.evaluation.sameSkuAcos,
-                safe_cpc: numberValue(item.assessment?.safe_max_cpc ?? item.econ?.safe_max_cpc, 0),
-                sources: item.aggregate.sources,
-                negatives_complete: negativesComplete,
-              }),
-              metric_window: `${cutoff}|${today}`,
-              data_scope_validated: true,
-              data_scope_status: 'VALID',
-              proposed_value: item.safeBid,
-              same_sku_orders: item.aggregate.sameSkuOrders,
-              same_sku_sales: item.aggregate.sameSkuSales,
-              halo_orders: item.aggregate.haloOrders,
-              halo_sales: item.aggregate.haloSales,
-              attribution_confidence: 'verified_same_sku_report',
-              current_cpc: item.aggregate.clicks > 0 ? item.aggregate.spend / item.aggregate.clicks : 0,
-              safe_cpc: numberValue(item.assessment?.safe_max_cpc ?? item.econ?.safe_max_cpc, 0),
-              target_acos: targetAcos,
-              confidence: 95,
-              risk: 'low',
-              requires_approval: false,
-              status: 'executed',
-              execution_mode: 'EXECUTE_NOW',
-              confirmation_required: true,
-              confirmation_status: 'pending',
-              idempotency_key: `${aid}|${item.aggregate.asin}|${item.aggregate.normalizedTerm}|same_sku_exact_v1`,
-              source_function: 'runImmediateSameSkuSearchTermHarvest',
-              evaluated_at: now,
-              executed_at: now,
-              evaluation_due_at: new Date(Date.now() + 14 * 86400000).toISOString(),
-              next_review_days: 14,
-              created_at: now,
-            }).catch(() => null);
-
-            exactKeys.add(item.key);
-            promoted.push({
-              asin: item.aggregate.asin,
-              sku: item.aggregate.sku || item.product?.sku || '',
-              term: item.aggregate.term,
-              same_sku_orders: item.aggregate.sameSkuOrders,
-              same_sku_sales: Number(item.aggregate.sameSkuSales.toFixed(2)),
-              bid: item.safeBid,
-              campaign_id: item.campaignId,
-              keyword_id: item.keywordId,
-              source_negatives: negativeIds.length,
-              consequence: negativesComplete ? 'manual_exact_active_source_negated' : 'manual_exact_active_negative_repair_pending',
-            });
-          }
-          await wait(1500);
-        }
-      }
-
-      const result = {
-        amazon_account_id: aid,
-        window: `${cutoff}|${today}`,
-        search_term_rows: rowsInWindow.length,
-        unique_asin_terms: aggregates.length,
-        same_sku_candidates: candidates.length,
-        selected: selected.length,
-        promoted: promoted.length,
-        failed: failed.length,
-        bank_created: bankCreated,
-        bank_updated: bankUpdated,
-        rejected_count: rejected.length,
-        promoted_terms: promoted,
-        rejected_sample: rejected.slice(0, 50),
-        failures: failed,
-      };
-      reports.push(result);
-
-      if (!dryRun) {
-        await base44.asServiceRole.entities.SyncExecutionLog.create({
-          amazon_account_id: aid,
-          operation: 'immediate_same_sku_search_term_harvest_v1',
-          trigger_type: body.trigger_type || 'automatic',
-          status: failed.length ? (promoted.length ? 'warning' : 'error') : 'success',
-          execution_date: today,
-          started_at: new Date(startedAt).toISOString(),
-          completed_at: new Date().toISOString(),
-          duration_ms: Date.now() - startedAt,
-          records_processed: promoted.length,
-          records_received: rowsInWindow.length,
-          records_imported: bankCreated,
-          result_summary: JSON.stringify(result).slice(0, 12000),
-          error_message: failed.length ? failed.slice(0, 5).map((row) => `${row.asin}|${row.term}|${row.stage}: ${row.error}`).join('; ').slice(0, 1000) : null,
-        }).catch(() => null);
-      }
-    }
-
-    return Response.json({
-      ok: reports.every((report) => report.failed === 0),
-      dry_run: dryRun,
-      policy: 'one_same_sku_sale_then_manual_exact_if_profitable_and_not_duplicate',
-      lookback_days: lookbackDays,
-      accounts_processed: reports.length,
-      reports,
-      duration_ms: Date.now() - startedAt,
-    });
-  } catch (error: any) {
-    return Response.json({ ok: false, error: error?.message || String(error), duration_ms: Date.now() - startedAt }, { status: 500 });
-  }
-});
+          same_sku_sales: Number(aggregate.sameSkuSales.toFßmw¶‰žËkºwµçDôôÑÉÕ”¤ì4(€€€€€€€€€€€€€½¹ÍÐ•ÉÉ½È€ô…µ…é½¹…¥±ÕÉ”¡ÁÉ½‘ÕÑ‘I•ÍÁ½¹Í”°€µ…é½¸»¼½¹™¥Éµ½ÔAÉ½‘ÕÐœ¤ì4(€€€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•ÉµAÉ½µ½Ñ¥½¸¹ÕÁ‘…Ñ”¡¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥°ìÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè€É•Á…¥É}É•ÅÕ¥É•œ°±…ÍÑ}•ÉÉ½Èè•ÉÉ½È°ÕÁ‘…Ñ•‘}…Ðè¹½Üô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€€€™…¥±•¹ÁÕÍ ¡ì…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°Ñ•É´è¥Ñ•´¹…É•…Ñ”¹Ñ•É´°ÍÑ…”è€ÁÉ½‘ÕÑ}…œ°•ÉÉ½Èô¤ì4(€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì4(€€€€€€€€€€€ô4(€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•ÉµAÉ½µ½Ñ¥½¸¹ÕÁ‘…Ñ”¡¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥°ì4(€€€€€€€€€€€€€ÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè€ÁÉ½‘ÕÑ}…‘}É•…Ñ•œ°‘•ÍÑ¥¹…Ñ¥½¹}…‘}¥èÁÉ½‘ÕÑ‘%ñð¹Õ±°°ÕÁ‘…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€Ý¥Ñ¡AÉ½‘ÕÑ¹ÁÕÍ ¡ì€¸¸¹¥Ñ•´°ÁÉ½‘ÕÑ‘%ô¤ì4(€€€€€€€€€ô4(€€€€€€€€€¥˜€ …Ý¥Ñ¡AÉ½‘ÕÑ¹±•¹Ñ ¤½¹Ñ¥¹Õ”ì4(€€€€€€€€€…Ý…¥ÐÝ…¥Ð ÄÔÀÀ¤ì4(4(€€€€€€€€€½¹ÍÐ­•åÝ½É‘I•ÍÁ½¹Í”€ô…Ý…¥Ð…‘Ì¡‰…Í”ÐÐ°…¥°€Í…µ•M­Õ!…ÉÙ•ÍÑÉ•…Ñ•á…Ñ-•åÝ½É‘Ìœ°€œ½ÍÀ½­•åÝ½É‘Ìœ°ì4(€€€€€€€€€€€­•åÝ½É‘ÌèÝ¥Ñ¡AÉ½‘ÕÑ¹µ…À ¡¥Ñ•´¤€ôø€¡ì4(€€€€€€€€€€€€€…µÁ…¥¹%è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€…‘É½ÕÁ%è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€­•åÝ½É‘Q•áÐè¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€µ…Ñ¡QåÁ”è€aPœ°4(€€€€€€€€€€€€€ÍÑ…Ñ”è€9	1œ°4(€€€€€€€€€€€€€‰¥è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€ô¤¤°4(€€€€€€€€€ô°€…ÁÁ±¥…Ñ¥½¸½Ù¹¹ÍÁ-•åÝ½É¹ØÌ­©Í½¸œ¤¹…Ñ  ¡•ÉÉ½Èè…¹ä¤€ôø€¡ì½¬è™…±Í”°•ÉÉ½Èè•ÉÉ½Èü¹µ•ÍÍ…”ñðMÑÉ¥¹œ¡•ÉÉ½È¤ô¤¤ì4(4(€€€€€€€€€½¹ÍÐÝ¥Ñ¡-•åÝ½Éè…¹åmt€ômtì4(€€€€€€€€€™½È€¡±•Ð¥¹‘•à€ô€Àì¥¹‘•à€ðÝ¥Ñ¡AÉ½‘ÕÑ¹±•¹Ñ ì¥¹‘•à¬¬¤ì4(€€€€€€€€€€€½¹ÍÐ¥Ñ•´€ôÝ¥Ñ¡AÉ½‘ÕÑ‘m¥¹‘•átì4(€€€€€€€€€€€½¹ÍÐÍÕ•ÍÌ€ôÍÕ•ÍÍÐ¡­•åÝ½É‘I•ÍÁ½¹Í”°€­•åÝ½É‘Ìœ°¥¹‘•à¤ì4(€€€€€€€€€€€½¹ÍÐ­•åÝ½É‘%€ôMÑÉ¥¹œ¡ÍÕ•ÍÌü¹­•åÝ½É‘%ñð€œœ¤ì4(€€€€€€€€€€€¥˜€ …­•åÝ½É‘%¤ì4(€€€€€€€€€€€€€½¹ÍÐ•ÉÉ½È€ô…µ…é½¹…¥±ÕÉ”¡­•åÝ½É‘I•ÍÁ½¹Í”°€µ…é½¸»¼É•Ñ½É¹½Ô­•åÝ½É‘%œ¤ì4(€€€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•ÉµAÉ½µ½Ñ¥½¸¹ÕÁ‘…Ñ”¡¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥°ìÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè€É•Á…¥É}É•ÅÕ¥É•œ°±…ÍÑ}•ÉÉ½Èè•ÉÉ½È°ÕÁ‘…Ñ•‘}…Ðè¹½Üô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€€€™…¥±•¹ÁÕÍ ¡ì…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°Ñ•É´è¥Ñ•´¹…É•…Ñ”¹Ñ•É´°ÍÑ…”è€­•åÝ½Éœ°•ÉÉ½Èô¤ì4(€€€€€€€€€€€€€½¹Ñ¥¹Õ”ì4(€€€€€€€€€€€ô4(€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•ÉµAÉ½µ½Ñ¥½¸¹ÕÁ‘…Ñ”¡¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥°ì4(€€€€€€€€€€€€€ÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè€µ…¹Õ…±}…Ñ¥Ù”œ°‘•ÍÑ¥¹…Ñ¥½¹}­•åÝ½É‘}¥è­•åÝ½É‘%°ÕÁ‘…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€Ý¥Ñ¡-•åÝ½É¹ÁÕÍ ¡ì€¸¸¹¥Ñ•´°­•åÝ½É‘%ô¤ì4(€€€€€€€€€ô4(€€€€€€€€€¥˜€ …Ý¥Ñ¡-•åÝ½É¹±•¹Ñ ¤½¹Ñ¥¹Õ”ì4(€€€€€€€€€…Ý…¥ÐÝ…¥Ð ÄÔÀÀ¤ì4(4(€€€€€€€€€½¹ÍÐ¹•…Ñ¥Ù•Ìè…¹åmt€ômtì4(€€€€€€€€€™½È€¡½¹ÍÐ¥Ñ•´½˜Ý¥Ñ¡-•åÝ½É¤ì4(€€€€€€€€€€€½¹ÍÐ‘¥ÍÑ¥¹Ð€ô¹•ÜM•ÐñÍÑÉ¥¹œø ¤ì4(€€€€€€€€€€€™½È€¡½¹ÍÐÍ½ÕÉ”½˜¥Ñ•´¹…É•…Ñ”¹Í½ÕÉ•Ì¹™¥±Ñ•È¡Í½ÕÉ•9••‘Í9•…Ñ¥Ù”¤¤ì4(€€€€€€€€€€€€€½¹ÍÐ­•ä€ô€‘íÍ½ÕÉ”¹…µÁ…¥¹%‘õð‘íÍ½ÕÉ”¹…‘É½ÕÁ%‘õð‘í¥Ñ•´¹…É•…Ñ”¹¹½Éµ…±¥é•‘Q•Éµõ€ì4(€€€€€€€€€€€€€¥˜€¡‘¥ÍÑ¥¹Ð¹¡…Ì¡­•ä¤¤½¹Ñ¥¹Õ”ì4(€€€€€€€€€€€€€‘¥ÍÑ¥¹Ð¹…‘¡­•ä¤ì4(€€€€€€€€€€€€€¹•…Ñ¥Ù•Ì¹ÁÕÍ ¡ì4(€€€€€€€€€€€€€€€¥Ñ•´°4(€€€€€€€€€€€€€€€Á…å±½…èì4(€€€€€€€€€€€€€€€€€…µÁ…¥¹%èÍ½ÕÉ”¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€€€…‘É½ÕÁ%èÍ½ÕÉ”¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€€€€€­•åÝ½É‘Q•áÐè¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€€€€€µ…Ñ¡QåÁ”è€9Q%Y}aPœ°4(€€€€€€€€€€€€€€€€€ÍÑ…Ñ”è€9	1œ°4(€€€€€€€€€€€€€€€ô°4(€€€€€€€€€€€€€ô¤ì4(€€€€€€€€€€€ô4(€€€€€€€€€ô4(€€€€€€€€€±•Ð¹•…Ñ¥Ù•I•ÍÁ½¹Í”è…¹ä€ôì½¬èÑÉÕ”ôì4(€€€€€€€€€¥˜€¡¹•…Ñ¥Ù•Ì¹±•¹Ñ ¤ì4(€€€€€€€€€€€¹•…Ñ¥Ù•I•ÍÁ½¹Í”€ô…Ý…¥Ð…‘Ì¡‰…Í”ÐÐ°…¥°€Í…µ•M­Õ!…ÉÙ•ÍÑÉ•…Ñ•M½ÕÉ•9•…Ñ¥Ù•Ìœ°€œ½ÍÀ½¹•…Ñ¥Ù•-•åÝ½É‘Ìœ°ì4(€€€€€€€€€€€€€¹•…Ñ¥Ù•-•åÝ½É‘Ìè¹•…Ñ¥Ù•Ì¹µ…À ¡•¹ÑÉä¤€ôø•¹ÑÉä¹Á…å±½…¤°4(€€€€€€€€€€€ô°€…ÁÁ±¥…Ñ¥½¸½Ù¹¹ÍÁ9•…Ñ¥Ù•-•åÝ½É¹ØÌ­©Í½¸œ¤¹…Ñ  ¡•ÉÉ½Èè…¹ä¤€ôø€¡ì½¬è™…±Í”°•ÉÉ½Èè•ÉÉ½Èü¹µ•ÍÍ…”ñðMÑÉ¥¹œ¡•ÉÉ½È¤ô¤¤ì4(€€€€€€€€€ô4(4(€€€€€€€€€™½È€¡½¹ÍÐ¥Ñ•´½˜Ý¥Ñ¡-•åÝ½É¤ì4(€€€€€€€€€€€½¹ÍÐ¥Ñ•µ9•…Ñ¥Ù•Ì€ô¹•…Ñ¥Ù•Ì¹µ…À ¡•¹ÑÉä°¥¹‘•à¤€ôø€¡ì€¸¸¹•¹ÑÉä°¥¹‘•àô¤¤¹™¥±Ñ•È ¡•¹ÑÉä¤€ôø•¹ÑÉä¹¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥€ôôô¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥¤ì4(€€€€€€€€€€€½¹ÍÐ¹•…Ñ¥Ù•%‘Ì€ô¥Ñ•µ9•…Ñ¥Ù•Ì¹µ…À ¡•¹ÑÉä¤€ôøì4(€€€€€€€€€€€€€½¹ÍÐÍÕ•ÍÌ€ôÍÕ•ÍÍÐ¡¹•…Ñ¥Ù•I•ÍÁ½¹Í”°€¹•…Ñ¥Ù•-•åÝ½É‘Ìœ°•¹ÑÉä¹¥¹‘•à¤ì4(€€€€€€€€€€€€€É•ÑÕÉ¸MÑÉ¥¹œ¡ÍÕ•ÍÌü¹­•åÝ½É‘%ñðÍÕ•ÍÌü¹¹•…Ñ¥Ù•-•åÝ½É‘%ñð€œœ¤ì4(€€€€€€€€€€€ô¤¹™¥±Ñ•È¡	½½±•…¸¤ì4(€€€€€€€€€€€½¹ÍÐ¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ô¥Ñ•µ9•…Ñ¥Ù•Ì¹±•¹Ñ €ôôô€Àñð¹•…Ñ¥Ù•%‘Ì¹±•¹Ñ €ôôô¥Ñ•µ9•…Ñ¥Ù•Ì¹±•¹Ñ ì4(4(€€€€€€€€€€€…Ý…¥ÐAÉ½µ¥Í”¹…±°¡l4(€€€€€€€€€€€€€‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹…µÁ…¥¸¹É•…Ñ”¡ì4(€€€€€€€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€…µ…é½¹}…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°4(€€€€€€€€€€€€€€€Í­Ôè¥Ñ•´¹…É•…Ñ”¹Í­Ôñð¥Ñ•´¹ÁÉ½‘ÕÐü¹Í­Ôñð¹Õ±°°4(€€€€€€€€€€€€€€€¹…µ”è…µÁ…¥¹9…µ”¡¥Ñ•´¹…É•…Ñ”¹…Í¥¸°¥Ñ•´¹…É•…Ñ”¹Ñ•É´¤°4(€€€€€€€€€€€€€€€…µÁ…¥¹}¹…µ”è…µÁ…¥¹9…µ”¡¥Ñ•´¹…É•…Ñ”¹…Í¥¸°¥Ñ•´¹…É•…Ñ”¹Ñ•É´¤°4(€€€€€€€€€€€€€€€…µÁ…¥¹}ÑåÁ”è€M@œ°4(€€€€€€€€€€€€€€€Ñ…É•Ñ¥¹}ÑåÁ”è€59U0œ°4(€€€€€€€€€€€€€€€ÍÑ…Ñ”è€•¹…‰±•œ°4(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌè€•¹…‰±•œ°4(€€€€€€€€€€€€€€€‘…¥±å}‰Õ‘•Ðè‰Õ‘•Ð°4(€€€€€€€€€€€€€€€É•…Ñ•‘}‰å}…ÁÀèÑÉÕ”°4(€€€€€€€€€€€€€€€±•…É¹¥¹}•±¥¥‰±”èÑÉÕ”°4(€€€€€€€€€€€€€€€±…Õ¹¡}Á¡…Í”è€¹•Üœ°4(€€€€€€€€€€€€€€€½µÁ±•Ñ¥½¹}ÍÑ…ÑÕÌè€½µÁ±•Ñ”œ°4(€€€€€€€€€€€€€€€¥Í}¥¹½µÁ±•Ñ”è™…±Í”°4(€€€€€€€€€€€€€€€­•åÝ½É‘}½Õ¹Ðè€Ä°4(€€€€€€€€€€€€€€€…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€€€É•…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€€€Íå¹•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤°4(€€€€€€€€€€€€€‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹-•åÝ½É¹É•…Ñ”¡ì4(€€€€€€€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€€€­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€€€…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°4(€€€€€€€€€€€€€€€­•åÝ½É‘}Ñ•áÐè¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€€€­•åÝ½Éè¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€€€µ…Ñ¡}ÑåÁ”è€•á…Ðœ°4(€€€€€€€€€€€€€€€ÍÑ…Ñ”è€•¹…‰±•œ°4(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌè€•¹…‰±•œ°4(€€€€€€€€€€€€€€€ÕÉÉ•¹Ñ}‰¥è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€€€‰¥è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€€€Í½ÕÉ”è€Í…µ•}Í­Õ}Í•…É¡}Ñ•Éµ}¡…ÉÙ•ÍÐœ°4(€€€€€€€€€€€€€€€™¥ÉÍÑ}Í••¹}…Ðè¹½Ü°4(€€€€€€€€€€€€€€€±…ÍÑ}Í••¹}…Ðè¹½Ü°4(€€€€€€€€€€€€€€€Íå¹•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤°4(€€€€€€€€€€€€€¥Ñ•´¹ÁÉ½‘ÕÑ‘%€ü‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹AÉ½‘ÕÑ¹É•…Ñ”¡ì4(€€€€€€€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€€€€€€€ÁÉ½‘ÕÑ}…‘}¥è¥Ñ•´¹ÁÉ½‘ÕÑ‘%°4(€€€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€€€…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°4(€€€€€€€€€€€€€€€Í­Ôè¥Ñ•´¹…É•…Ñ”¹Í­Ôñð¥Ñ•´¹ÁÉ½‘ÕÐü¹Í­Ôñð€œœ°4(€€€€€€€€€€€€€€€ÍÑ…Ñ”è€•¹…‰±•œ°4(€€€€€€€€€€€€€€€ÍÑ…ÑÕÌè€•¹…‰±•œ°4(€€€€€€€€€€€€€€€Íå¹•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤€èAÉ½µ¥Í”¹É•Í½±Ù”¡¹Õ±°¤°4(€€€€€€€€€€€t¤ì4(4(€€€€€€€€€€€™½È€¡½¹ÍÐÉ½Ü½˜¥Ñ•´¹…É•…Ñ”¹Í½ÕÉ•I½ÝÌ¤ì4(€€€€€€€€€€€€€¥˜€ …É½Ü¹¥¤½¹Ñ¥¹Õ”ì4(€€€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•É´¹ÕÁ‘…Ñ”¡É½Ü¹¥°ì4(€€€€€€€€€€€€€€€ÁÉ½µ½Ñ•‘}Ñ½}µ…¹Õ…°èÑÉÕ”°4(€€€€€€€€€€€€€€€ÁÉ½µ½Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€€€µ…¹Õ…±}…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€µ…¹Õ…±}…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€€€µ…¹Õ…±}­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€€€µ…¹Õ…±}­•åÝ½É‘}ÍÑ…Ñ”è€•¹…‰±•œ°4(€€€€€€€€€€€€€€€¹•…Ñ•‘}¥¹}Í½ÕÉ”è¹•…Ñ¥Ù•Í½µÁ±•Ñ”€˜˜¥Ñ•µ9•…Ñ¥Ù•Ì¹±•¹Ñ €ø€À°4(€€€€€€€€€€€€€€€¹•…Ñ•‘}…Ðè¹•…Ñ¥Ù•Í½µÁ±•Ñ”€˜˜¥Ñ•µ9•…Ñ¥Ù•Ì¹±•¹Ñ €ø€À€ü¹½Ü€è¹Õ±°°4(€€€€€€€€€€€€€€€±…ÍÍ¥™¥…Ñ¥½¸è€AI=5=Q}aPœ°4(€€€€€€€€€€€€€€€‘•¥Í¥½¹}ÍÑ…ÑÕÌè€•á•ÕÑ•œ°4(€€€€€€€€€€€€€€€±…ÍÑ}…Ñ¥½¸è€Í…µ•}Í­Õ}Í…±•}ÁÉ½µ½Ñ•‘}Ñ½}µ…¹Õ…±}•á…Ðœ°4(€€€€€€€€€€€€€€€±…ÍÑ}…Ñ¥½¹}…Ðè¹½Ü°4(€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€½¹ÍÐ‰…¹­I½Ü€ôÑ•Éµ	…¹­	å-•ä¹•Ð¡¥Ñ•´¹­•ä¤ì4(€€€€€€€€€€€¥˜€¡‰…¹­I½Üü¹¥¤ì4(€€€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹Q•Éµ	…¹¬¹ÕÁ‘…Ñ”¡‰…¹­I½Ü¹¥°ì4(€€€€€€€€€€€€€€€ÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè€ÁÉ½µ½Ñ•‘}Ñ½}µ…¹Õ…°œ°4(€€€€€€€€€€€€€€€±…ÍÍ¥™¥…Ñ¥½¸è€Ý¥¹¹•Èœ°4(€€€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€…µ…é½¹}…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€€€­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€€€‰¥‘}¥¹¥Ñ¥…°è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€€€‰¥‘}ÕÉÉ•¹Ðè¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€€€€€€€ô4(4(€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹M•…É¡Q•ÉµAÉ½µ½Ñ¥½¸¹ÕÁ‘…Ñ”¡¥Ñ•´¹ÁÉ½µ½Ñ¥½¸¹¥°ì4(€€€€€€€€€€€€€ÁÉ½µ½Ñ¥½¹}ÍÑ…ÑÕÌè¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ü€½µÁ±•Ñ•œ€è€É•Á…¥É}É•ÅÕ¥É•œ°4(€€€€€€€€€€€€€½µÁ±•Ñ¥½¹}ÍÑ…ÑÕÌè¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ü€½µÁ±•Ñ”œ€è€µ…¹Õ…±}…Ñ¥Ù•}¹•…Ñ¥Ù•}Á•¹‘¥¹œœ°4(€€€€€€€€€€€€€‘•ÍÑ¥¹…Ñ¥½¹}…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€‘•ÍÑ¥¹…Ñ¥½¹}…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€‘•ÍÑ¥¹…Ñ¥½¹}…‘}¥è¥Ñ•´¹ÁÉ½‘ÕÑ‘%ñð¹Õ±°°4(€€€€€€€€€€€€€‘•ÍÑ¥¹…Ñ¥½¹}­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€¹•…Ñ¥Ù•}­•åÝ½É‘}¥è¹•…Ñ¥Ù•%‘ÍlÁtñð¹Õ±°°4(€€€€€€€€€€€€€±…ÍÑ}•ÉÉ½Èè¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ü¹Õ±°€è…µ…é½¹…¥±ÕÉ”¡¹•…Ñ¥Ù•I•ÍÁ½¹Í”°€9•…Ñ¥Ù„‘„½É¥•´Á•¹‘•¹Ñ”œ¤°4(€€€€€€€€€€€€€½µÁ±•Ñ•‘}…Ðè¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ü¹½Ü€è¹Õ±°°4(€€€€€€€€€€€€€ÕÁ‘…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(4(€€€€€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹=ÁÑ¥µ¥é…Ñ¥½¹•¥Í¥½¸¹É•…Ñ”¡ì4(€€€€€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€€€€€‘•¥Í¥½¹}ÑåÁ”è€­•åÝ½É‘}…‘œ°4(€€€€€€€€€€€€€•¹Ñ¥Ñå}ÑåÁ”è€­•åÝ½Éœ°4(€€€€€€€€€€€€€•¹Ñ¥Ñå}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€…‘}É½ÕÁ}¥è¥Ñ•´¹…‘É½ÕÁ%°4(€€€€€€€€€€€€€­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€­•åÝ½É‘}Ñ•áÐè¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°4(€€€€€€€€€€€€€Í­Ôè¥Ñ•´¹…É•…Ñ”¹Í­Ôñð¥Ñ•´¹ÁÉ½‘ÕÐü¹Í­Ôñð€œœ°4(€€€€€€€€€€€€€…Ñ¥½¸è€ÁÉ½µ½Ñ•}Í…µ•}Í­Õ}Í•…É¡}Ñ•Éµ}Ñ½}µ…¹Õ…±}•á…Ðœ°4(€€€€€€€€€€€€€É…Ñ¥½¹…±”èŸ¼èÉ¥…ÈaPÁ…É„ƒŠp‘í¥Ñ•´¹…É•…Ñ”¹Ñ•Éµ÷Št¸…ÕÍ„è€‘í¥Ñ•´¹…É•…Ñ”¹Í…µ•M­Õ=É‘•ÉÍôÁ•‘¥‘¼¡Ì¤”H€‘í¥Ñ•´¹…É•…Ñ”¹Í…µ•M­ÕM…±•Ì¹Ñ½¥á• È¥ô‘”Ù•¹‘„‘¼µ•Íµ¼M-T¸½¹Í•Å×©¹¥„è¥Í½±…È±…¹”±ÕÉ…Ñ¥Ù¼”¹•…Ñ¥Ù…È„½É¥•´Í½µ•¹Ñ”…ÃÍÌ„­•åÝ½Éµ…¹Õ…°•á¥ÍÑ¥È¹€°4(€€€€€€€€€€€€€ÉÕ±•}­•äè€M5}M-U}%IMQ}M1}%55%Q}AI=5=Q%=9}XÄœ°4(€€€€€€€€€€€€€‘…Ñ…}ÕÍ•è)M=8¹ÍÑÉ¥¹¥™ä¡ì4(€€€€€€€€€€€€€€€Í…µ•}Í­Õ}½É‘•ÉÌè¥Ñ•´¹…É•…Ñ”¹Í…µ•M­Õ=É‘•ÉÌ°4(€€€€€€€€€€€€€€€Í…µ•}Í­Õ}Í…±•Ìè¥Ñ•´¹…É•…Ñ”¹Í…µ•M­ÕM…±•Ì°4(€€€€€€€€€€€€€€€¡…±½}½É‘•ÉÌè¥Ñ•´¹…É•…Ñ”¹¡…±½=É‘•ÉÌ°4(€€€€€€€€€€€€€€€¡…±½}Í…±•Ìè¥Ñ•´¹…É•…Ñ”¹¡…±½M…±•Ì°4(€€€€€€€€€€€€€€€ÍÁ•¹è¥Ñ•´¹…É•…Ñ”¹ÍÁ•¹°4(€€€€€€€€€€€€€€€Í…µ•}Í­Õ}…½Ìè¥Ñ•´¹•Ù…±Õ…Ñ¥½¸¹Í…µ•M­Õ½Ì°4(€€€€€€€€€€€€€€€Í…™•}ÁŒè¹Õµ‰•ÉY…±Õ”¡¥Ñ•´¹…ÍÍ•ÍÍµ•¹Ðü¹Í…™•}µ…á}ÁŒ€üü¥Ñ•´¹•½¸ü¹Í…™•}µ…á}ÁŒ°€À¤°4(€€€€€€€€€€€€€€€Í½ÕÉ•Ìè¥Ñ•´¹…É•…Ñ”¹Í½ÕÉ•Ì°4(€€€€€€€€€€€€€€€¹•…Ñ¥Ù•Í}½µÁ±•Ñ”è¹•…Ñ¥Ù•Í½µÁ±•Ñ”°4(€€€€€€€€€€€€€ô¤°4(€€€€€€€€€€€€€µ•ÑÉ¥}Ý¥¹‘½Üè€‘íÕÑ½™™õð‘íÑ½‘…åõ€°4(€€€€€€€€€€€€€‘…Ñ…}Í½Á•}Ù…±¥‘…Ñ•èÑÉÕ”°4(€€€€€€€€€€€€€‘…Ñ…}Í½Á•}ÍÑ…ÑÕÌè€Y1%œ°4(€€€€€€€€€€€€€ÁÉ½Á½Í•‘}Ù…±Õ”è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€Í…µ•}Í­Õ}½É‘•ÉÌè¥Ñ•´¹…É•…Ñ”¹Í…µ•M­Õ=É‘•ÉÌ°4(€€€€€€€€€€€€€Í…µ•}Í­Õ}Í…±•Ìè¥Ñ•´¹…É•…Ñ”¹Í…µ•M­ÕM…±•Ì°4(€€€€€€€€€€€€€¡…±½}½É‘•ÉÌè¥Ñ•´¹…É•…Ñ”¹¡…±½=É‘•ÉÌ°4(€€€€€€€€€€€€€¡…±½}Í…±•Ìè¥Ñ•´¹…É•…Ñ”¹¡…±½M…±•Ì°4(€€€€€€€€€€€€€…ÑÑÉ¥‰ÕÑ¥½¹}½¹™¥‘•¹”è€Ù•É¥™¥•‘}Í…µ•}Í­Õ}É•Á½ÉÐœ°4(€€€€€€€€€€€€€ÕÉÉ•¹Ñ}ÁŒè¥Ñ•´¹…É•…Ñ”¹±¥­Ì€ø€À€ü¥Ñ•´¹…É•…Ñ”¹ÍÁ•¹€¼¥Ñ•´¹…É•…Ñ”¹±¥­Ì€è€À°4(€€€€€€€€€€€€€Í…™•}ÁŒè¹Õµ‰•ÉY…±Õ”¡¥Ñ•´¹…ÍÍ•ÍÍµ•¹Ðü¹Í…™•}µ…á}ÁŒ€üü¥Ñ•´¹•½¸ü¹Í…™•}µ…á}ÁŒ°€À¤°4(€€€€€€€€€€€€€Ñ…É•Ñ}…½ÌèÑ…É•Ñ½Ì°4(€€€€€€€€€€€€€½¹™¥‘•¹”è€äÔ°4(€€€€€€€€€€€€€É¥Í¬è€±½Üœ°4(€€€€€€€€€€€€€É•ÅÕ¥É•Í}…ÁÁÉ½Ù…°è™…±Í”°4(€€€€€€€€€€€€€ÍÑ…ÑÕÌè€•á•ÕÑ•œ°4(€€€€€€€€€€€€€•á•ÕÑ¥½¹}µ½‘”è€aUQ}9=\œ°4(€€€€€€€€€€€€€½¹™¥Éµ…Ñ¥½¹}É•ÅÕ¥É•èÑÉÕ”°4(€€€€€€€€€€€€€½¹™¥Éµ…Ñ¥½¹}ÍÑ…ÑÕÌè€Á•¹‘¥¹œœ°4(€€€€€€€€€€€€€¥‘•µÁ½Ñ•¹å}­•äè€‘í…¥‘õð‘í¥Ñ•´¹…É•…Ñ”¹…Í¥¹õð‘í¥Ñ•´¹…É•…Ñ”¹¹½Éµ…±¥é•‘Q•ÉµõñÍ…µ•}Í­Õ}•á…Ñ}ØÅ€°4(€€€€€€€€€€€€€Í½ÕÉ•}™Õ¹Ñ¥½¸è€ÉÕ¹%µµ•‘¥…Ñ•M…µ•M­ÕM•…É¡Q•Éµ!…ÉÙ•ÍÐœ°4(€€€€€€€€€€€€€•Ù…±Õ…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€•á•ÕÑ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€€€•Ù…±Õ…Ñ¥½¹}‘Õ•}…Ðè¹•Ü…Ñ”¡…Ñ”¹¹½Ü ¤€¬€ÄÐ€¨€àØÐÀÀÀÀÀ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€€€€€€€€€¹•áÑ}É•Ù¥•Ý}‘…åÌè€ÄÐ°4(€€€€€€€€€€€€€É•…Ñ•‘}…Ðè¹½Ü°4(€€€€€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(4(€€€€€€€€€€€•á…Ñ-•åÌ¹…‘¡¥Ñ•´¹­•ä¤ì4(€€€€€€€€€€€ÁÉ½µ½Ñ•¹ÁÕÍ ¡ì4(€€€€€€€€€€€€€…Í¥¸è¥Ñ•´¹…É•…Ñ”¹…Í¥¸°4(€€€€€€€€€€€€€Í­Ôè¥Ñ•´¹…É•…Ñ”¹Í­Ôñð¥Ñ•´¹ÁÉ½‘ÕÐü¹Í­Ôñð€œœ°4(€€€€€€€€€€€€€Ñ•É´è¥Ñ•´¹…É•…Ñ”¹Ñ•É´°4(€€€€€€€€€€€€€Í…µ•}Í­Õ}½É‘•ÉÌè¥Ñ•´¹…É•…Ñ”¹Í…µ•M­Õ=É‘•ÉÌ°4(€€€€€€€€€€€€€Í…µ•}Í­Õ}Í…±•Ìè9Õµ‰•È¡¥Ñ•´¹…É•…Ñ”¹Í…µ•M­ÕM…±•Ì¹Ñ½¥á• È¤¤°4(€€€€€€€€€€€€€‰¥è¥Ñ•´¹Í…™•	¥°4(€€€€€€€€€€€€€…µÁ…¥¹}¥è¥Ñ•´¹…µÁ…¥¹%°4(€€€€€€€€€€€€€­•åÝ½É‘}¥è¥Ñ•´¹­•åÝ½É‘%°4(€€€€€€€€€€€€€Í½ÕÉ•}¹•…Ñ¥Ù•Ìè¹•…Ñ¥Ù•%‘Ì¹±•¹Ñ °4(€€€€€€€€€€€€€½¹Í•ÅÕ•¹”è¹•…Ñ¥Ù•Í½µÁ±•Ñ”€ü€µ…¹Õ…±}•á…Ñ}…Ñ¥Ù•}Í½ÕÉ•}¹•…Ñ•œ€è€µ…¹Õ…±}•á…Ñ}…Ñ¥Ù•}¹•…Ñ¥Ù•}É•Á…¥É}Á•¹‘¥¹œœ°4(€€€€€€€€€€€ô¤ì4(€€€€€€€€€ô4(€€€€€€€€€…Ý…¥ÐÝ…¥Ð ÄÔÀÀ¤ì4(€€€€€€€ô4(€€€€€ô4(4(€€€€€½¹ÍÐÉ•ÍÕ±Ð€ôì4(€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€Ý¥¹‘½Üè€‘íÕÑ½™™õð‘íÑ½‘…åõ€°4(€€€€€€€Í•…É¡}Ñ•Éµ}É½ÝÌèÉ½ÝÍ%¹]¥¹‘½Ü¹±•¹Ñ °4(€€€€€€€Õ¹¥ÅÕ•}…Í¥¹}Ñ•ÉµÌè…É•…Ñ•Ì¹±•¹Ñ °4(€€€€€€€Í…µ•}Í­Õ}…¹‘¥‘…Ñ•Ìè…¹‘¥‘…Ñ•Ì¹±•¹Ñ °4(€€€€€€€Í•±•Ñ•èÍ•±•Ñ•¹±•¹Ñ °4(€€€€€€€ÁÉ½µ½Ñ•èÁÉ½µ½Ñ•¹±•¹Ñ °4(€€€€€€€™…¥±•è™…¥±•¹±•¹Ñ °4(€€€€€€€‰…¹­}É•…Ñ•è‰…¹­É•…Ñ•°4(€€€€€€€‰…¹­}ÕÁ‘…Ñ•è‰…¹­UÁ‘…Ñ•°4(€€€€€€€É•©•Ñ•‘}½Õ¹ÐèÉ•©•Ñ•¹±•¹Ñ °4(€€€€€€€ÁÉ½µ½Ñ•‘}Ñ•ÉµÌèÁÉ½µ½Ñ•°4(€€€€€€€É•©•Ñ•‘}Í…µÁ±”èÉ•©•Ñ•¹Í±¥” À°€ÔÀ¤°4(€€€€€€€™…¥±ÕÉ•Ìè™…¥±•°4(€€€€€ôì4(€€€€€É•Á½ÉÑÌ¹ÁÕÍ ¡É•ÍÕ±Ð¤ì4(4(€€€€€¥˜€ …‘ÉåIÕ¸¤ì4(€€€€€€€…Ý…¥Ð‰…Í”ÐÐ¹…ÍM•ÉÙ¥•I½±”¹•¹Ñ¥Ñ¥•Ì¹Må¹á•ÕÑ¥½¹1½œ¹É•…Ñ”¡ì4(€€€€€€€€€…µ…é½¹}…½Õ¹Ñ}¥è…¥°4(€€€€€€€€€½Á•É…Ñ¥½¸è€¥µµ•‘¥…Ñ•}Í…µ•}Í­Õ}Í•…É¡}Ñ•Éµ}¡…ÉÙ•ÍÑ}ØÄœ°4(€€€€€€€€€ÑÉ¥•É}ÑåÁ”è‰½‘ä¹ÑÉ¥•É}ÑåÁ”ñð€…ÕÑ½µ…Ñ¥Œœ°4(€€€€€€€€€ÍÑ…ÑÕÌè™…¥±•¹±•¹Ñ €ü€¡ÁÉ½µ½Ñ•¹±•¹Ñ €ü€Ý…É¹¥¹œœ€è€•ÉÉ½Èœ¤€è€ÍÕ•ÍÌœ°4(€€€€€€€€€•á•ÕÑ¥½¹}‘…Ñ”èÑ½‘…ä°4(€€€€€€€€€ÍÑ…ÉÑ•‘}…Ðè¹•Ü…Ñ”¡ÍÑ…ÉÑ•‘Ð¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€€€€€½µÁ±•Ñ•‘}…Ðè¹•Ü…Ñ” ¤¹Ñ½%M=MÑÉ¥¹œ ¤°4(€€€€€€€€€‘ÕÉ…Ñ¥½¹}µÌè…Ñ”¹¹½Ü ¤€´ÍÑ…ÉÑ•‘Ð°4(€€€€€€€€€É•½É‘Í}ÁÉ½•ÍÍ•èÁÉ½µ½Ñ•¹±•¹Ñ °4(€€€€€€€€€É•½É‘Í}É••¥Ù•èÉ½ÝÍ%¹]¥¹‘½Ü¹±•¹Ñ °4(€€€€€€€€€É•½É‘Í}¥µÁ½ÉÑ•è‰…¹­É•…Ñ•°4(€€€€€€€€€É•ÍÕ±Ñ}ÍÕµµ…Éäè)M=8¹ÍÑÉ¥¹¥™ä¡É•ÍÕ±Ð¤¹Í±¥” À°€ÄÈÀÀÀ¤°4(€€€€€€€€€•ÉÉ½É}µ•ÍÍ…”è™…¥±•¹±•¹Ñ €ü™…¥±•¹Í±¥” À°€Ô¤¹µ…À ¡É½Ü¤€ôø€‘íÉ½Ü¹…Í¥¹õð‘íÉ½Ü¹Ñ•Éµõð‘íÉ½Ü¹ÍÑ…•ôè€‘íÉ½Ü¹•ÉÉ½Éõ€¤¹©½¥¸ œì€œ¤¹Í±¥” À°€ÄÀÀÀ¤€è¹Õ±°°4(€€€€€€€ô¤¹…Ñ   ¤€ôø¹Õ±°¤ì4(€€€€€ô4(€€€ô4(4(€€€É•ÑÕÉ¸I•ÍÁ½¹Í”¹©Í½¸¡ì4(€€€€€½¬èÉ•Á½ÉÑÌ¹•Ù•Éä ¡É•Á½ÉÐ¤€ôøÉ•Á½ÉÐ¹™…¥±•€ôôô€À¤°4(€€€€€‘Éå}ÉÕ¸è‘ÉåIÕ¸°4(€€€€€Á½±¥äè€½¹•}Í…µ•}Í­Õ}Í…±•}Ñ¡•¹}µ…¹Õ…±}•á…Ñ}¥™}ÁÉ½™¥Ñ…‰±•}…¹‘}¹½Ñ}‘ÕÁ±¥…Ñ”œ°4(€€€€€±½½­‰…­}‘…åÌè±½½­‰…­…åÌ°4(€€€€€…½Õ¹ÑÍ}ÁÉ½•ÍÍ•èÉ•Á½ÉÑÌ¹±•¹Ñ °4(€€€€€É•Á½ÉÑÌ°4(€€€€€‘ÕÉ…Ñ¥½¹}µÌè…Ñ”¹¹½Ü ¤€´ÍÑ…ÉÑ•‘Ð°4(€€€ô¤ì4(€ô…Ñ €¡•ÉÉ½Èè…¹ä¤ì4(€€€É•ÑÕÉ¸I•ÍÁ½¹Í”¹©Í½¸¡ì½¬è™…±Í”°•ÉÉ½Èè•ÉÉ½Èü¹µ•ÍÍ…”ñðMÑÉ¥¹œ¡•ÉÉ½È¤°‘ÕÉ…Ñ¥½¹}µÌè…Ñ”¹¹½Ü ¤€´ÍÑ…ÉÑ•‘Ðô°ìÍÑ…ÑÕÌè€ÔÀÀô¤ì4(€ô4)ô¤ì4(

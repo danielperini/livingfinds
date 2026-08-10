@@ -47,3 +47,12 @@ Deno.test('não aumenta bid quando conta está sem orçamento', () => {
 Deno.test('campanhas com vendas permanecem protegidas', () => {
   assert.equal(classifyCampaignDeliveryHealth({ ...base, orders: 1, sales: 50 }), 'PROTECT_WINNER');
 });
+
+Deno.test('manual madura que começou a entregar não volta para ZERO_DELIVERY', () => {
+  assert.equal(classifyCampaignDeliveryHealth({
+    ...base,
+    ageHours: 240,
+    impressions: 1,
+    priorBidEscalations: 3,
+  }), 'WAIT');
+});

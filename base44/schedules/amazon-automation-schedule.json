@@ -69,10 +69,10 @@
       "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
     },
     {
-      "name": "Profitable manual growth objective - every 3 hours",
-      "function": "runManualProfitableGrowthObjective",
+      "name": "Serving campaign growth v18 - every 3 hours",
+      "function": "runServingCampaignGrowthObjective",
       "cron": "14 */3 * * *",
-      "payload": { "_service_role": true, "dry_run": false }
+      "payload": { "_service_role": true, "dry_run": false, "serving_campaign_growth_target_pct": 40, "trigger_type": "scheduler_serving_growth_v18" }
     },
     {
       "name": "Repricing transport queue - every 5 minutes",

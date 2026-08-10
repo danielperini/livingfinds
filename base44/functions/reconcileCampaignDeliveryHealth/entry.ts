@@ -76,8 +76,11 @@ Deno.serve(async (request) => {
     }
 
     const dryRun = body.dry_run === true;
+    const deliveryLookbackDays = Math.max(1, Math.min(30, Math.floor(n(body.delivery_lookback_days) || 7)));
+    const deliveryCutoff = new Date(Date.now() - (deliveryLookbackDays - 1) * 86400000).toISOString().slice(0, 10);
+    const maxReplacementsPerRun = Math.max(0, Math.min(20, Math.floor(n(body.max_replacements_per_run) || 6)));
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const results: any[] = [];
 
@@ -88,7 +91,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
         base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
         base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
-        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []),
+        base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
         base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: accountId }, '-date', 3).catch(() => []),
@@ -130,6 +133,8 @@ Deno.serve(async (request) => {
 
       const metricsByCampaign = new Map<string, any>();
       for (const row of metrics) {
+        const metricDate = String(row.date || '').slice(0, 10);
+        if (metricDate && metricDate < deliveryCutoff) continue;
         const cid = String(row.campaign_id || '');
         const agg = metricsByCampaign.get(cid) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
         agg.impressions += n(row.impressions);
@@ -145,8 +150,14 @@ Deno.serve(async (request) => {
       const queuedDecisionIds = new Set<string>();
       let reusedDecisions = 0;
       let cancelledFalseStockDecisions = 0;
+      let replacementsAttempted = 0;
+      let replacementsConfirmed = 0;
 
-      for (const campaign of campaigns) {
+      const campaignsOldestFirst = [...campaigns].sort((a: any, b: any) =>
+        new Date(String(a.created_at || a.created_date || 0)).getTime() -
+        new Date(String(b.created_at || b.created_date || 0)).getTime()
+      );
+      for (const campaign of campaignsOldestFirst) {
         if (campaign.archived === true || upper(campaign.campaign_type || 'SP') !== 'SP') continue;
         const state = campaign.state || campaign.status || campaign.amazon_status;
         if (!active(state) && !transitional(state)) continue;
@@ -259,7 +270,7 @@ Deno.serve(async (request) => {
                 rule_key: 'ZERO_DELIVERY_BID_ESCALATION', reason_code: 'ZERO_DELIVERY_BID_ESCALATION', status: 'approved', queue_status: 'pending',
                 execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending', requires_approval: false,
                 approval_status: 'auto_approved', idempotency_key: key, conflict_group: `${accountId}|keyword|${keywordId}`,
-                source_function: SOURCE, model_version: 'campaign-delivery-health-v3.0-profitable-serving-rotation',
+                source_function: SOURCE, model_version: 'campaign-delivery-health-v4.0-serving-growth-v18',
                 data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_actionable: economicsAreActionable(econ, assessment) }),
                 created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
               });
@@ -273,21 +284,47 @@ Deno.serve(async (request) => {
         }
 
         if (action === 'PAUSE_AND_REPLACE') {
+          if (replacementsAttempted >= maxReplacementsPerRun) {
+            actions.push({
+              campaign_id: campaignId,
+              asin,
+              action: 'KEEP_UNTIL_REPLACEMENT_CAPACITY',
+              replacement_limit: maxReplacementsPerRun,
+              reason: 'ONE_TO_ONE_REPLACEMENT_RUN_LIMIT',
+            });
+            continue;
+          }
+          replacementsAttempted++;
           const currentTerm = campaignKeywords.find((row: any) => active(row.state || row.status));
           const currentTermText = currentTerm?.keyword_text || currentTerm?.keyword || '';
           let replacement: any = { ok: false, reason: 'NO_CONFIRMED_SAME_SKU_REPLACEMENT' };
 
           if (!dryRun) {
-            const harvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+            const autoHarvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
               amazon_account_id: accountId, _service_role: true, lookback_days: 65, max_promotions: 1,
-              dry_run: false, trigger_type: 'zero_delivery_replacement_same_sku_first',
+              target_asins: [asin], source_campaign_type: 'AUTO',
+              dry_run: false, trigger_type: 'zero_delivery_replacement_same_sku_auto_first',
             }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-            const harvestData = harvest?.data || harvest || {};
-            const promotedTerms = Array.isArray(harvestData?.reports)
+            let harvestData = autoHarvest?.data || autoHarvest || {};
+            let promotedTerms = Array.isArray(harvestData?.reports)
               ? harvestData.reports.flatMap((r: any) => Array.isArray(r.promoted_terms) ? r.promoted_terms : [])
               : [];
+            if (!promotedTerms.some((r: any) => upper(r.asin) === asin)) {
+              const fallbackHarvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+                amazon_account_id: accountId, _service_role: true, lookback_days: 65, max_promotions: 1,
+                target_asins: [asin], dry_run: false,
+                trigger_type: 'zero_delivery_replacement_same_sku_fallback',
+              }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+              harvestData = fallbackHarvest?.data || fallbackHarvest || {};
+              promotedTerms = Array.isArray(harvestData?.reports)
+                ? harvestData.reports.flatMap((r: any) => Array.isArray(r.promoted_terms) ? r.promoted_terms : [])
+                : [];
+            }
             const sameAsinReplacement = promotedTerms.find((r: any) => upper(r.asin) === asin && String(r.campaign_id || '') !== campaignId);
-            if (sameAsinReplacement) replacement = { ok: true, confirmed: true, source: 'same_sku_search_term_harvest', promoted_confirmed: 1, ...sameAsinReplacement };
+            if (sameAsinReplacement) {
+              replacement = { ok: true, confirmed: true, source: 'same_sku_search_term_harvest_auto_first', promoted_confirmed: 1, ...sameAsinReplacement };
+              replacementsConfirmed++;
+            }
           } else replacement = { ok: true, dry_run: true };
 
           const replacementData = replacement?.data || replacement || {};
@@ -299,7 +336,7 @@ Deno.serve(async (request) => {
               rule_key: 'ZERO_DELIVERY_REPLACE', reason_code: 'ZERO_DELIVERY_REPLACE', status: 'approved', queue_status: 'pending',
               execution_mode: 'STANDARD_QUEUE', requires_approval: false, approval_status: 'auto_approved', confirmation_required: true,
               confirmation_status: 'pending', idempotency_key: key, conflict_group: `${accountId}|campaign|${campaignId}`, source_function: SOURCE,
-              model_version: 'campaign-delivery-health-v3.0-profitable-serving-rotation',
+              model_version: 'campaign-delivery-health-v4.0-serving-growth-v18',
               data_used: JSON.stringify({ asin, old_term: currentTermText || null, replacement: replacementData }),
               created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
             });
@@ -338,15 +375,15 @@ Deno.serve(async (request) => {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: accountId, sync_type: 'campaign_delivery_health', status: execution?.ok === false || confirmation?.ok === false ? 'partial' : 'completed',
         source_function: SOURCE, records_processed: campaigns.length, records_imported: actions.length,
-        message: `Profitable serving rotation: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${actions.filter((a) => a.action === 'PAUSE_AND_REPLACE').length} rotações confirmadas.`,
-        result_summary: JSON.stringify({ actions: actions.slice(0, 200), execution, confirmation }).slice(0, 12000),
+        message: `Serving v18 rotation: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${replacementsConfirmed}/${replacementsAttempted} substituições 1:1 confirmadas.`,
+        result_summary: JSON.stringify({ actions: actions.slice(0, 200), replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, execution, confirmation }).slice(0, 12000),
         started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       }).catch(() => {});
 
-      results.push({ amazon_account_id: accountId, campaigns_checked: campaigns.length, actions, repair, queued_decision_ids: decisionIds, execution, confirmation, reused_decisions: reusedDecisions, cancelled_false_stock_decisions: cancelledFalseStockDecisions });
+      results.push({ amazon_account_id: accountId, campaigns_checked: campaigns.length, actions, repair, queued_decision_ids: decisionIds, execution, confirmation, reused_decisions: reusedDecisions, cancelled_false_stock_decisions: cancelledFalseStockDecisions, replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, max_replacements_per_run: maxReplacementsPerRun });
     }
 
-    return Response.json({ ok: results.every((r) => r.execution?.ok !== false && r.confirmation?.ok !== false), dry_run: dryRun, policy_version: 'campaign-delivery-health-v3.0-profitable-serving-rotation', results });
+    return Response.json({ ok: results.every((r) => r.execution?.ok !== false && r.confirmation?.ok !== false), dry_run: dryRun, policy_version: 'campaign-delivery-health-v4.0-serving-growth-v18', results });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }

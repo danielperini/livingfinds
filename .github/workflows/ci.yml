@@ -46,8 +46,13 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run pacing unit tests
-        run: deno test base44/shared/portfolioBudgetPacing.test.ts
+      - name: Run Amazon Ads policy unit tests
+        run: |
+          deno test \
+            base44/shared/portfolioBudgetPacing.test.ts \
+            base44/shared/campaignDeliveryHealthPolicy.test.ts \
+            base44/shared/searchTermHarvestPolicy.test.ts \
+            base44/shared/servingCampaignGrowthPolicy.test.ts
 
       - name: Check changed TypeScript modules
         run: |
@@ -55,4 +60,6 @@ jobs:
             base44/shared/portfolioBudgetMath.ts \
             base44/shared/portfolioBudgetActions.ts \
             base44/shared/portfolioBudgetPacing.ts \
+            base44/shared/servingCampaignGrowthPolicy.ts \
+            base44/functions/runServingCampaignGrowthObjective/entry.ts \
             server/src/scheduler.ts
