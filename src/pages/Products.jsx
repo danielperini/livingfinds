@@ -100,18 +100,18 @@ function applySort(items, sortBy, colSort) {
 
 function KpiCard({ label, value, detail, tone = 'default' }) {
   const tones = {
-    default: 'bg-surface-1 border-surface-2 text-slate-300',
-    success: 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400',
-    warning: 'bg-amber-500/5 border-amber-500/20 text-amber-400',
-    danger: 'bg-red-500/5 border-red-500/20 text-red-400',
+    default: 'bg-surface-1 border-surface-2 text-slate-200',
+    success: 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300',
+    warning: 'bg-amber-500/5 border-amber-500/20 text-amber-300',
+    danger: 'bg-red-500/5 border-red-500/20 text-red-300',
     cyan: 'bg-cyan/5 border-cyan/20 text-cyan',
-    violet: 'bg-violet-500/5 border-violet-500/20 text-violet-400',
+    violet: 'bg-violet-500/5 border-violet-500/20 text-violet-300',
   };
   return (
     <div className={`rounded-xl p-4 border ${tones[tone]}`}>
-      <p className="text-xs text-slate-500 mb-1">{label}</p>
-      <p className="text-xl font-bold">{value}</p>
-      {detail && <p className="text-xs text-slate-500 mt-0.5">{detail}</p>}
+      <p className="text-xs text-slate-400 mb-1">{label}</p>
+      <p className="text-2xl font-bold text-white">{value}</p>
+      {detail && <p className="text-sm text-slate-400 mt-0.5">{detail}</p>}
     </div>
   );
 }
@@ -122,12 +122,12 @@ function SortTh({ label, colKey, colSort, onSort, className = '' }) {
   const desc = active && colSort?.direction === 'desc';
   return (
     <th
-      className={`px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none hover:text-slate-300 transition-colors ${className}`}
+      className={`px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none hover:text-slate-100 transition-colors ${className}`}
       onClick={() => onSort(colKey)}
     >
       <span className="inline-flex items-center gap-1">
         {label}
-        <span className={active ? 'text-cyan' : 'text-slate-600'}>
+        <span className={active ? 'text-cyan' : 'text-slate-500'}>
           {desc ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
         </span>
       </span>
@@ -539,7 +539,7 @@ export default function Products({ externalRefreshTrigger }) {
           </div>
           <div>
             <h1 className="text-lg font-bold text-white">Produtos & Ads</h1>
-            <p className="text-xs text-slate-400">
+            <p className="text-sm text-slate-200">
               {visibleProducts.length} ASINs ativos · {activeAds} ads ativos · {withoutCampaign} sem campanha
               {accounts.length > 1 && <span className="text-cyan ml-1">· {accounts.length} contas</span>}
             </p>
@@ -575,7 +575,7 @@ export default function Products({ externalRefreshTrigger }) {
                 setTimeout(() => setActionMsg(null), 12000);
               }
             }}
-            className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-xs font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
           >
             {priceQueryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
             Consultar próximo ativo
@@ -584,7 +584,7 @@ export default function Products({ externalRefreshTrigger }) {
       </div>
 
       {actionMsg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-400' : 'bg-cyan/10 border-cyan/20 text-cyan'}`}>
+        <div className={`px-4 py-3 rounded-xl border text-base font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-300' : 'bg-cyan/10 border-cyan/20 text-cyan'}`}>
           {actionMsg.text}
         </div>
       )}
@@ -613,13 +613,13 @@ export default function Products({ externalRefreshTrigger }) {
             onChange={e => setSearchInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') { setSearch(searchInput.trim()); setPage(1); } }}
             placeholder="Buscar por ASIN, SKU ou nome..."
-            className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+            className="w-full pl-10 pr-4 py-2.5 bg-surface-1 border border-surface-2 rounded-lg text-base text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan/50"
           />
         </div>
         <button
           type="button"
           onClick={() => { setSearch(searchInput.trim()); setPage(1); }}
-          className="px-4 py-2.5 bg-cyan/15 border border-cyan/30 text-cyan text-sm font-semibold rounded-lg hover:bg-cyan/25 transition-colors whitespace-nowrap"
+          className="px-4 py-2.5 bg-cyan/15 border border-cyan/30 text-cyan text-base font-semibold rounded-lg hover:bg-cyan/25 transition-colors whitespace-nowrap"
         >
           Buscar
         </button>
@@ -627,7 +627,7 @@ export default function Products({ externalRefreshTrigger }) {
           <button
             type="button"
             onClick={() => { setSearchInput(''); setSearch(''); setPage(1); }}
-            className="flex items-center gap-1 px-3 py-2.5 bg-surface-2 border border-surface-3 text-slate-400 hover:text-white text-sm rounded-lg transition-colors"
+            className="flex items-center gap-1 px-3 py-2.5 bg-surface-2 border border-surface-3 text-slate-200 hover:text-white text-base rounded-lg transition-colors"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -637,7 +637,7 @@ export default function Products({ externalRefreshTrigger }) {
       {/* Filtros */}
       <div className="flex flex-col gap-2">
         {search && (
-          <div className="flex items-center gap-2 text-xs text-slate-400">
+          <div className="flex items-center gap-2 text-sm text-slate-200">
             <span className="px-2.5 py-1 rounded-full bg-cyan/10 border border-cyan/20 text-cyan font-semibold">
               {filtered.length} produto{filtered.length !== 1 ? 's' : ''} encontrado{filtered.length !== 1 ? 's' : ''}
             </span>
@@ -657,7 +657,7 @@ export default function Products({ externalRefreshTrigger }) {
             ...(restocked > 0 ? [{ key: 'restocked', label: `🔄 Reabastecidos (${restocked})` }] : []),
           ].map(item => (
             <button type="button" key={item.key} onClick={() => { setFilter(item.key); setPage(1); }}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === item.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
+              className={`text-sm px-3 py-1.5 rounded-full border transition-colors whitespace-nowrap ${filter === item.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-300 border-surface-3 hover:text-slate-100'}`}>
               {item.label}
             </button>
           ))}
@@ -668,24 +668,24 @@ export default function Products({ externalRefreshTrigger }) {
         <div className="flex items-center justify-center py-20"><Loader2 className="w-7 h-7 text-cyan animate-spin" /></div>
       ) : !account ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-          <Package className="w-12 h-12 text-slate-600" />
-          <p className="text-sm text-slate-400">Nenhuma conta Amazon configurada.</p>
+          <Package className="w-12 h-12 text-slate-400" />
+          <p className="text-base text-slate-200">Nenhuma conta Amazon configurada.</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3 text-center">
-          <Package className="w-12 h-12 text-slate-600" />
-          <p className="text-sm text-slate-400">{products.length === 0 ? 'Sem produtos. Execute um Sync no Dashboard.' : 'Nenhum produto encontrado com estes filtros.'}</p>
+          <Package className="w-12 h-12 text-slate-400" />
+          <p className="text-base text-slate-200">{products.length === 0 ? 'Sem produtos. Execute um Sync no Dashboard.' : 'Nenhum produto encontrado com estes filtros.'}</p>
         </div>
       ) : (
         <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-surface-2 flex items-center justify-between">
-            <p className="text-xs text-slate-500">
+            <p className="text-sm text-slate-300">
               {filtered.length} produtos · página {safePage} de {totalPages}
-              {colSort && <span className="ml-2 text-cyan text-[10px]">ordenado por coluna</span>}
+              {colSort && <span className="ml-2 text-cyan text-xs">ordenado por coluna</span>}
               {selectedIds.size > 0 && <span className="ml-2 text-cyan font-semibold">{selectedIds.size} selecionado{selectedIds.size > 1 ? 's' : ''}</span>}
             </p>
             <select value={sortBy} onChange={e => { setSortBy(e.target.value); setColSort(null); setPage(1); }}
-              className="text-xs bg-surface-2 border border-surface-3 text-slate-300 rounded-lg px-2 py-1 focus:outline-none">
+              className="text-sm bg-surface-2 border border-surface-3 text-slate-200 rounded-lg px-2 py-1 focus:outline-none">
               <option value="newest">Mais recentes</option>
               <option value="oldest">Mais antigas</option>
               <option value="stock_high">Maior estoque</option>
@@ -705,15 +705,15 @@ export default function Products({ externalRefreshTrigger }) {
 
           {selectedIds.size > 0 && (
             <div className="px-4 py-2.5 bg-cyan/10 border-b border-cyan/20 flex items-center gap-3 flex-wrap">
-              <span className="text-xs font-semibold text-cyan">{selectedIds.size} produto{selectedIds.size > 1 ? 's' : ''} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
+              <span className="text-sm font-semibold text-cyan">{selectedIds.size} produto{selectedIds.size > 1 ? 's' : ''} selecionado{selectedIds.size > 1 ? 's' : ''}</span>
               <div className="flex items-center gap-2 flex-wrap">
                 <button type="button" onClick={bulkPause} disabled={!!bulkActionLoading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border bg-amber-500/15 border-amber-500/30 text-amber-400 hover:bg-amber-500/25 disabled:opacity-50 transition-colors">
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg border bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25 disabled:opacity-50 transition-colors">
                   {bulkActionLoading === 'pause' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pause className="w-3 h-3" />}
                   Pausar campanhas
                 </button>
                 <button type="button" onClick={clearSelection}
-                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-400 hover:text-white transition-colors">
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-sm text-slate-200 hover:text-white transition-colors">
                   <X className="w-3 h-3" />Limpar seleção
                 </button>
               </div>
@@ -721,29 +721,29 @@ export default function Products({ externalRefreshTrigger }) {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-base">
               <thead>
                 <tr className="border-b border-surface-2 bg-surface-2/40">
                   <th className="px-3 py-3 w-10">
                     <button type="button" onClick={toggleSelectAll}
-                      className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
+                      className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
                       {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Produto</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Produto</th>
                   <SortTh label="Custo/un." colKey="unit_cost" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Estoque" colKey="stock" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Status Ads" colKey="ads_status" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Vendas 30d" colKey="sales" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Spend 30d" colKey="spend" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="ACoS" colKey="acos" colSort={colSort} onSort={handleColSort} />
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Units 30d</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Units 30d</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">
                     <span title="Média, mínimo e máximo das ofertas públicas encontradas para este mesmo ASIN no marketplace atual.">
                       Preço Amazon ℹ
                     </span>
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Ações</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -783,10 +783,10 @@ export default function Products({ externalRefreshTrigger }) {
           {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 px-4 py-3 border-t border-surface-2">
               <button type="button" onClick={() => setPage(c => Math.max(1, c - 1))} disabled={safePage === 1}
-                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">← Anterior</button>
-              <span className="text-xs text-slate-500">{safePage} / {totalPages}</span>
+                className="px-3 py-1.5 text-sm rounded-lg bg-surface-2 border border-surface-3 text-slate-200 hover:text-white disabled:opacity-40 transition-colors">← Anterior</button>
+              <span className="text-sm text-slate-300">{safePage} / {totalPages}</span>
               <button type="button" onClick={() => setPage(c => Math.min(totalPages, c + 1))} disabled={safePage === totalPages}
-                className="px-3 py-1.5 text-xs rounded-lg bg-surface-2 border border-surface-3 text-slate-400 hover:text-white disabled:opacity-40 transition-colors">Próxima →</button>
+                className="px-3 py-1.5 text-sm rounded-lg bg-surface-2 border border-surface-3 text-slate-200 hover:text-white disabled:opacity-40 transition-colors">Próxima →</button>
             </div>
           )}
         </div>

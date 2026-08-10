@@ -1133,15 +1133,15 @@ export default function ProductsScheduled() {
         )}
 
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white">
+          <p className="text-base font-semibold text-white">
             Produtos & Ads — atualização automática ativa
           </p>
 
-          <p className="text-xs text-slate-400 mt-1">
+          <p className="text-sm text-slate-200 mt-1">
             Campanhas, catálogo, estoque e vínculos são atualizados automaticamente nas janelas 00:00–04:00 e 13:00–14:00.
           </p>
 
-          <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-xs text-slate-500">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 text-sm text-slate-300">
             <span>
               📊 Ads:{' '}
               <span className="text-slate-300">
@@ -1187,7 +1187,7 @@ export default function ProductsScheduled() {
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`px-4 py-2 text-base font-medium border-b-2 transition-colors ${activeTab === tab.key ? 'border-cyan text-cyan' : 'border-transparent text-slate-200 hover:text-white'}`}
           >
             {tab.label}
           </button>

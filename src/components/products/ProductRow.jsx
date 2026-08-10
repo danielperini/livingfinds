@@ -116,7 +116,7 @@ function CampaignDropdown({ product }) {
     const st = String(c.state || c.status || '').toLowerCase();
     if (st === 'enabled' || st === 'active') return 'text-emerald-400';
     if (st === 'paused') return 'text-amber-400';
-    return 'text-slate-500';
+    return 'text-slate-300';
   };
 
   const statusLabel = (c) => {
@@ -130,17 +130,17 @@ function CampaignDropdown({ product }) {
   return (
     <div className="mt-1">
       <button type="button" onClick={toggle}
-        className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-cyan transition-colors">
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <Megaphone className="w-3 h-3" />
+        className="flex items-center gap-1 text-xs text-slate-300 hover:text-cyan transition-colors">
+        {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        <Megaphone className="w-4 h-4" />
         Campanhas
         {loaded && campaigns.length > 0 && <span className="ml-0.5 text-cyan font-semibold">({campaigns.length})</span>}
       </button>
       {open && (
         <div className="mt-1.5 ml-1 border-l border-surface-3 pl-2.5 space-y-1.5">
-          {loading && <p className="text-[10px] text-slate-600 animate-pulse">Carregando...</p>}
+          {loading && <p className="text-xs text-slate-400 animate-pulse">Carregando...</p>}
           {!loading && campaigns.length === 0 && (
-            <p className="text-[10px] text-slate-600 italic">Nenhuma campanha ativa encontrada para este ASIN.</p>
+            <p className="text-xs text-slate-400 italic">Nenhuma campanha ativa encontrada para este ASIN.</p>
           )}
           {!loading && campaigns.map((c, i) => {
             const name = c.campaign_name || c.name || `Campanha ${c.campaign_id || c.id || i}`;
@@ -148,13 +148,13 @@ function CampaignDropdown({ product }) {
             const spend = Number(c.spend || 0);
             const acos = Number(c.acos || 0);
             return (
-              <div key={id || i} className="text-[10px] leading-snug">
+              <div key={id || i} className="text-xs leading-snug">
                 <p className="text-slate-300 font-medium truncate max-w-[260px]" title={name}>{name}</p>
-                <div className="flex items-center gap-2 text-[9px] mt-0.5 flex-wrap">
+                <div className="flex items-center gap-2 text-[11px] mt-0.5 flex-wrap">
                   <span className={`font-semibold ${statusColor(c)}`}>{statusLabel(c)}</span>
-                  {id && <span className="font-mono text-slate-600">...{String(id).slice(-8)}</span>}
-                  {spend > 0 && <span className="text-slate-500">Spend: R${spend.toFixed(2)}</span>}
-                  {acos > 0 && <span className="text-slate-500">ACoS: {acos.toFixed(1)}%</span>}
+                  {id && <span className="font-mono text-slate-400">...{String(id).slice(-8)}</span>}
+                  {spend > 0 && <span className="text-slate-300">Spend: R${spend.toFixed(2)}</span>}
+                  {acos > 0 && <span className="text-slate-300">ACoS: {acos.toFixed(1)}%</span>}
                 </div>
               </div>
             );
@@ -177,34 +177,34 @@ export function OfferStatusBadge({ product }) {
     : null;
 
   const staleTag = freshness === 'stale' && (
-    <span className="block text-[9px] text-amber-400/70 mt-0.5">Desatualizado</span>
+    <span className="block text-[11px] text-amber-400/70 mt-0.5">Desatualizado</span>
   );
   const dateTag = syncLabel && (
-    <span className="block text-[9px] text-slate-600 mt-0.5">{syncLabel}</span>
+    <span className="block text-[11px] text-slate-400 mt-0.5">{syncLabel}</span>
   );
 
   if (freshness === 'unknown') {
     return (
       <div>
-        <span className="flex items-center gap-1 text-xs text-slate-500 font-semibold">
+        <span className="flex items-center gap-1 text-sm text-slate-300 font-semibold">
           <AlertCircle className="w-3.5 h-3.5" />Desconhecido
         </span>
-        <span className="block text-[9px] text-slate-600 mt-0.5">Sem dado de estoque</span>
+        <span className="block text-[11px] text-slate-400 mt-0.5">Sem dado de estoque</span>
       </div>
     );
   }
   if (status === 'out_of_stock') return (
     <div>
-      <span className="flex items-center gap-1 text-xs text-red-400 font-semibold"><XCircle className="w-3.5 h-3.5" />Sem Estoque</span>
+      <span className="flex items-center gap-1 text-sm text-red-400 font-semibold"><XCircle className="w-3.5 h-3.5" />Sem Estoque</span>
       {staleTag}{dateTag}
     </div>
   );
   if (status === 'low_stock') return (
     <div>
-      <span className="flex items-center gap-1 text-xs text-amber-400 font-semibold">
+      <span className="flex items-center gap-1 text-sm text-amber-400 font-semibold">
         <AlertCircle className="w-3.5 h-3.5" />Estoque Baixo ({fba})
         {freshness === 'stale' && (
-          <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+          <span className="ml-1 text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
             desatualizado
           </span>
         )}
@@ -214,10 +214,10 @@ export function OfferStatusBadge({ product }) {
   );
   if (status === 'active') return (
     <div>
-      <span className="flex items-center gap-1 text-xs text-emerald-400 font-semibold">
+      <span className="flex items-center gap-1 text-sm text-emerald-400 font-semibold">
         <ShoppingBag className="w-3.5 h-3.5" />Em Estoque ({fba > 0 ? fba : '?'})
         {freshness === 'stale' && (
-          <span className="ml-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
+          <span className="ml-1 text-[11px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 leading-none">
             desatualizado
           </span>
         )}
@@ -225,8 +225,8 @@ export function OfferStatusBadge({ product }) {
       {dateTag}
     </div>
   );
-  if (status === 'archived') return <span className="flex items-center gap-1 text-xs text-slate-500"><XCircle className="w-3.5 h-3.5" />Arquivada</span>;
-  return <span className="flex items-center gap-1 text-xs text-amber-400"><AlertCircle className="w-3.5 h-3.5" />Inativa</span>;
+  if (status === 'archived') return <span className="flex items-center gap-1 text-sm text-slate-300"><XCircle className="w-3.5 h-3.5" />Arquivada</span>;
+  return <span className="flex items-center gap-1 text-sm text-amber-400"><AlertCircle className="w-3.5 h-3.5" />Inativa</span>;
 }
 
 export function CampaignStatusCell({ product }) {
@@ -235,27 +235,27 @@ export function CampaignStatusCell({ product }) {
   const campStatus = String(product?.campaign_status || '').toLowerCase();
 
   if (!hasCampaign) return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">
-      <XCircle className="w-3 h-3" />Sem campanha
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-300 border border-slate-500/15">
+      <XCircle className="w-4 h-4" />Sem campanha
     </span>
   );
 
   let badge;
   if (campStatus === 'archived' || campStatus === 'encerrada') {
-    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/15 text-slate-400 border border-slate-500/20">Encerrada</span>;
+    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-500/15 text-slate-200 border border-slate-500/20">Encerrada</span>;
   } else if (campStatus === 'paused' || campStatus === 'pausada') {
-    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/20"><Pause className="w-3 h-3" />Pausada</span>;
+    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/20"><Pause className="w-4 h-4" />Pausada</span>;
   } else if (campStatus === 'active' || campStatus === 'enabled') {
-    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />Ativa</span>;
+    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />Ativa</span>;
   } else if (campStatus === 'incomplete') {
-    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-500/15 text-red-400 border border-red-500/20"><AlertCircle className="w-3 h-3" />Incompleta</span>;
+    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500/15 text-red-400 border border-red-500/20"><AlertCircle className="w-4 h-4" />Incompleta</span>;
   } else {
-    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-500/10 text-slate-500 border border-slate-500/15">Indisponível</span>;
+    badge = <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-300 border border-slate-500/15">Indisponível</span>;
   }
   return (
     <div className="space-y-1">
       {badge}
-      {campaignId && <p className="text-[10px] text-slate-600 font-mono truncate max-w-[110px]">...{String(campaignId).slice(-8)}</p>}
+      {campaignId && <p className="text-xs text-slate-400 font-mono truncate max-w-[110px]">...{String(campaignId).slice(-8)}</p>}
     </div>
   );
 }
@@ -263,8 +263,8 @@ export function CampaignStatusCell({ product }) {
 function PropagationBadge({ result, propagating }) {
   if (propagating) {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-cyan animate-pulse">
-        <Loader2 className="w-3 h-3 animate-spin" />
+      <span className="inline-flex items-center gap-1 text-xs text-cyan animate-pulse">
+        <Loader2 className="w-4 h-4 animate-spin" />
         Sincronizando...
       </span>
     );
@@ -272,15 +272,15 @@ function PropagationBadge({ result, propagating }) {
   if (!result) return null;
   if (result.type === 'success') {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 animate-fade-in">
-        <Wifi className="w-3 h-3" />
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-400 animate-fade-in">
+        <Wifi className="w-4 h-4" />
         Sincronizado na Amazon
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-400 animate-fade-in" title={result.text}>
-      <WifiOff className="w-3 h-3" />
+    <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-400 animate-fade-in" title={result.text}>
+      <WifiOff className="w-4 h-4" />
       {result.text}
     </span>
   );
@@ -316,12 +316,12 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     if (outOfStock && kickoffPending) {
       return (
         <div className="space-y-1">
-          <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-400/90">
-            <Loader2 className="w-3 h-3 animate-pulse" />
+          <span className="flex items-center gap-1 text-xs font-semibold text-amber-400/90">
+            <Loader2 className="w-4 h-4 animate-pulse" />
             Aguardando Estoque
           </span>
           <button type="button" onClick={handleCancel} disabled={cancelling}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] font-semibold rounded border bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors">
+            className="flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded border bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20 disabled:opacity-50 transition-colors">
             {cancelling ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <XCircle className="w-2.5 h-2.5" />}
             Cancelar
           </button>
@@ -331,7 +331,7 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     // Produto sem estoque sem kickoff → bloquear
     if (outOfStock) {
       return (
-        <span className="text-[10px] text-red-400/80 italic max-w-[160px] leading-tight">
+        <span className="text-xs text-red-400/80 italic max-w-[160px] leading-tight">
           Sem estoque — Kick-off bloqueado até reposição.
         </span>
       );
@@ -339,25 +339,25 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
     return (
       <div className="space-y-1.5">
         {stuckQueueCount > 0 && (
-          <div className="flex items-center gap-1 text-[10px] font-semibold text-amber-400">
-            <AlertCircle className="w-3 h-3" />
+          <div className="flex items-center gap-1 text-xs font-semibold text-amber-400">
+            <AlertCircle className="w-4 h-4" />
             {stuckQueueCount} na fila — travado{stuckQueueCount > 1 ? 's' : ''}
           </div>
         )}
         <div className="flex items-center gap-1.5">
           <button type="button" onClick={() => onKickoff(product)} disabled={isLoading}
             title={incomplete ? "Reparar campanha incompleta" : stuckQueueCount > 0 ? "Limpar fila travada e iniciar novo kick-off" : "Vincular e ativar campanha para este produto"}
-            className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+            className={`flex items-center gap-1 px-2.5 py-1.5 text-sm font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
               stuckQueueCount > 0 ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25' :
               incomplete ? 'bg-red-500/15 border-red-500/30 text-red-400 hover:bg-red-500/25' :
               'bg-cyan/15 border-cyan/30 text-cyan hover:bg-cyan/25'
             }`}>
-            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
             {incomplete ? 'Reparar' : stuckQueueCount > 0 ? 'Reiniciar Kick-off' : 'Vincular e Ativar'}
           </button>
           <button type="button" onClick={() => onAccelerator(product)} disabled={isLoading}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
-            {isLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-semibold rounded-lg border transition-all disabled:opacity-50 bg-emerald-500/15 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap">
+            {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
             Acelerar
           </button>
         </div>
@@ -367,23 +367,23 @@ function ActionButtons({ product, onKickoff, onAccelerator, onToggleCampaign, on
 
   return (
     <div className="space-y-1">
-      {pausedByStock && <p className="text-[9px] text-red-400/80 italic">Pausado por estoque zero</p>}
+      {pausedByStock && <p className="text-[11px] text-red-400/80 italic">Pausado por estoque zero</p>}
       <div className="flex items-center gap-1.5">
         <button type="button" onClick={() => handleToggle(product)} disabled={isLoading}
           title={active ? 'Pausar campanha' : 'Ativar campanha'}
-          className={`flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
+          className={`flex items-center gap-1 px-3 py-1.5 text-sm font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap ${
             active ? 'bg-amber-500/20 border-amber-500/30 text-amber-400 hover:bg-amber-500/30' :
                      'bg-emerald-500/20 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/30'
           }`}>
           {(isLoading && amazonPropagating)
-            ? <Loader2 className="w-3 h-3 animate-spin" />
-            : active ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />
+            ? <Loader2 className="w-4 h-4 animate-spin" />
+            : active ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />
           }
           {active ? 'Pausar' : 'Ativar'}
         </button>
         <button type="button" onClick={() => onArchiveCampaign(product)} disabled={isLoading}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20">
-          {isLoading && !amazonPropagating ? <Loader2 className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+          className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-semibold rounded-lg border transition-all disabled:opacity-50 whitespace-nowrap bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20">
+          {isLoading && !amazonPropagating ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
           Arquivar
         </button>
       </div>
@@ -402,7 +402,7 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
   const name = visibleName(product);
   const fallback = !product?.display_name?.trim() && !product?.product_name?.trim();
   const acos = Number(product?.acos || 0);
-  const acosColor = acos > 50 ? 'text-red-400' : acos > 30 ? 'text-amber-400' : acos > 0 ? 'text-emerald-400' : 'text-slate-500';
+  const acosColor = acos > 50 ? 'text-red-400' : acos > 30 ? 'text-amber-400' : acos > 0 ? 'text-emerald-400' : 'text-slate-300';
 
   const startEdit = () => { setEditValue(product?.display_name || product?.product_name || ''); setEditingName(true); };
   const saveEdit = async () => {
@@ -422,7 +422,7 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
     >
       <td className="px-3 py-3 w-10">
         <button type="button" onClick={() => onToggleSelect(product.id)}
-          className={`p-0.5 rounded transition-colors ${selected ? 'text-cyan' : 'text-slate-600 hover:text-slate-400'}`}>
+          className={`p-0.5 rounded transition-colors ${selected ? 'text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
           {selected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
         </button>
       </td>
@@ -432,7 +432,7 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
             <img src={product.product_image_url} alt={product.asin} className="w-12 h-12 rounded-lg object-cover bg-surface-3 flex-shrink-0 mt-0.5" />
           ) : (
             <div className="w-12 h-12 rounded-lg bg-surface-3 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <Package className="w-5 h-5 text-slate-600" />
+              <Package className="w-5 h-5 text-slate-400" />
             </div>
           )}
           <div className="min-w-0 flex-1">
@@ -440,32 +440,32 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
               <div className="flex items-center gap-1">
                 <input autoFocus value={editValue} onChange={e => setEditValue(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') setEditingName(false); }}
-                  className="flex-1 min-w-0 text-xs px-2 py-1 bg-surface-3 border border-cyan/40 rounded text-white focus:outline-none" />
+                  className="flex-1 min-w-0 text-sm px-2 py-1 bg-surface-3 border border-cyan/40 rounded text-white focus:outline-none" />
                 <button type="button" onClick={saveEdit} disabled={savingName} className="p-1 text-emerald-400 hover:text-emerald-300">
-                  {savingName ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  {savingName ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 </button>
-                <button type="button" onClick={() => setEditingName(false)} className="p-1 text-slate-500 hover:text-slate-300">
-                  <X className="w-3 h-3" />
+                <button type="button" onClick={() => setEditingName(false)} className="p-1 text-slate-300 hover:text-slate-300">
+                  <X className="w-4 h-4" />
                 </button>
               </div>
             ) : (
               <div className="flex items-start gap-1 group">
-                <p className={`text-xs leading-snug font-medium line-clamp-2 ${fallback ? 'text-slate-500 italic' : 'text-slate-100'}`} title={name}>
+                <p className={`text-sm leading-snug font-medium line-clamp-2 ${fallback ? 'text-slate-300 italic' : 'text-slate-100'}`} title={name}>
                   {name}
-                  {product?.display_name?.trim() && <span className="ml-1 text-cyan/60 text-[10px]">(editado)</span>}
+                  {product?.display_name?.trim() && <span className="ml-1 text-cyan/60 text-xs">(editado)</span>}
                 </p>
-                <button type="button" onClick={startEdit} className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-cyan transition-opacity mt-0.5" title="Editar nome">
+                <button type="button" onClick={startEdit} className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-0.5 text-slate-300 hover:text-cyan transition-opacity mt-0.5" title="Editar nome">
                   <Pencil className="w-2.5 h-2.5" />
                 </button>
               </div>
             )}
             <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-xs font-mono text-cyan">{product?.asin}</span>
-              {product?.sku && <span className="text-xs text-slate-500 font-mono">SKU: {product.sku}</span>}
+              <span className="text-sm font-mono text-cyan">{product?.asin}</span>
+              {product?.sku && <span className="text-sm text-slate-300 font-mono">SKU: {product.sku}</span>}
             </div>
             {product?.asin && (
               <a href={`https://www.amazon.com.br/dp/${product.asin}`} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-0.5 text-[10px] text-slate-600 hover:text-cyan mt-0.5 transition-colors">
+                className="inline-flex items-center gap-0.5 text-xs text-slate-400 hover:text-cyan mt-0.5 transition-colors">
                 <ExternalLink className="w-2.5 h-2.5" />Ver na Amazon
               </a>
             )}
@@ -473,20 +473,20 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
           </div>
         </div>
       </td>
-      <td className="px-4 py-3 text-xs">
+      <td className="px-4 py-3 text-sm">
         {product?._economics?.costs_confirmed_by_user || product?.cost_confirmed ? (
           <div>
             <p className="font-semibold text-slate-300">{formatBRL(product?._economics?.unit_cost ?? product?.product_cost ?? 0)}</p>
-            <p className="text-[9px] text-slate-600">confirmado pelo usuário</p>
+            <p className="text-[11px] text-slate-400">confirmado pelo usuário</p>
           </div>
         ) : <span className="text-amber-400">Pendente</span>}
       </td>
       <td className="px-4 py-3"><OfferStatusBadge product={product} /></td>
       <td className="px-4 py-3"><CampaignStatusCell product={product} /></td>
-      <td className="px-4 py-3 text-xs text-emerald-400 font-semibold">{formatBRL(product?.total_sales_30d || product?.total_revenue_30d || 0)}</td>
-      <td className="px-4 py-3 text-xs text-slate-400">{formatBRL(product?.total_spend_30d || 0)}</td>
-      <td className="px-4 py-3 text-xs"><span className={acosColor}>{formatPercent(acos)}</span></td>
-      <td className="px-4 py-3 text-xs text-slate-400">{Number(product?.units_sold_30d || product?.total_units_30d || 0).toLocaleString('pt-BR')}</td>
+      <td className="px-4 py-3 text-sm text-emerald-400 font-semibold">{formatBRL(product?.total_sales_30d || product?.total_revenue_30d || 0)}</td>
+      <td className="px-4 py-3 text-sm text-slate-200">{formatBRL(product?.total_spend_30d || 0)}</td>
+      <td className="px-4 py-3 text-sm"><span className={acosColor}>{formatPercent(acos)}</span></td>
+      <td className="px-4 py-3 text-sm text-slate-200">{Number(product?.units_sold_30d || product?.total_units_30d || 0).toLocaleString('pt-BR')}</td>
       <td className="px-4 py-3 min-w-[160px]">
         <MarketPriceCell
           product={product}
@@ -500,7 +500,7 @@ export default function ProductRow({ product, account, onToggleCampaign, onArchi
           onCancelKickoff={onCancelKickoff} loading={actionLoading} stuckQueueCount={stuckQueueCount || 0}
           amazonPropagating={amazonPropagating} amazonResult={amazonResult} />
         {productMessage && (
-          <p className={`text-[10px] mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
+          <p className={`text-xs mt-1 font-medium ${productMessage.type === 'success' ? 'text-emerald-400' : productMessage.type === 'error' ? 'text-red-400' : 'text-amber-400'}`}>
             {productMessage.text}
           </p>
         )}
