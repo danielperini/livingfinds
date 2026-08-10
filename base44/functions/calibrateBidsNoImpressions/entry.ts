@@ -7,6 +7,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { classifyUnifiedEconomicStatus } from '../../shared/economicDecisionState.ts';
 import {
   classifyNoImpressionCalibration,
+  shouldMaintainActiveNoImpressionAlert,
   type NoImpressionCalibrationDecision,
 } from '../../shared/noImpressionCalibrationPolicy.ts';
 
@@ -418,8 +419,8 @@ Deno.serve(async (request) => {
             alertUpdates.set(lifecycleUpdate.id, lifecycleUpdate);
             if (lifecycleUpdate.status === 'resolved') summary.alerts_resolved++;
             if (lifecycleUpdate.status === 'stale') summary.alerts_staled++;
-            continue;
           }
+          if (!shouldMaintainActiveNoImpressionAlert(decision.action)) continue;
 
           let resultingBid = currentBid;
           if (decision.action === 'BOOST_CONFIRMED_ZERO' && !reconcileOnly) {

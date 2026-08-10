@@ -26,6 +26,12 @@ export type NoImpressionCalibrationDecision = {
   reason: string;
 };
 
+export function shouldMaintainActiveNoImpressionAlert(
+  action: NoImpressionCalibrationAction,
+): boolean {
+  return action === 'BOOST_CONFIRMED_ZERO' || action === 'HOLD_CONFIRMED_ZERO';
+}
+
 /**
  * Missing rows are unknown data, never zero delivery. A bid increase is only
  * allowed when two daily targeting rows confirm zero impressions and every

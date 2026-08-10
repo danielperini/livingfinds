@@ -1,5 +1,8 @@
 import { strict as assert } from 'node:assert';
-import { classifyNoImpressionCalibration } from './noImpressionCalibrationPolicy.ts';
+import {
+  classifyNoImpressionCalibration,
+  shouldMaintainActiveNoImpressionAlert,
+} from './noImpressionCalibrationPolicy.ts';
 
 const base = {
   keywordEnabled: true,
@@ -66,4 +69,13 @@ Deno.test('teto de lance preserva alerta mas impede novo aumento', () => {
   assert.equal(classifyNoImpressionCalibration({
     ...base, currentBid: 1,
   }).action, 'HOLD_CONFIRMED_ZERO');
+});
+
+Deno.test('somente zero confirmado pode criar ou manter alerta ativo', () => {
+  assert.equal(shouldMaintainActiveNoImpressionAlert('BOOST_CONFIRMED_ZERO'), true);
+  assert.equal(shouldMaintainActiveNoImpressionAlert('HOLD_CONFIRMED_ZERO'), true);
+  assert.equal(shouldMaintainActiveNoImpressionAlert('STALE_GUARDRAIL'), false);
+  assert.equal(shouldMaintainActiveNoImpressionAlert('STALE_NO_DATA'), false);
+  assert.equal(shouldMaintainActiveNoImpressionAlert('RESOLVE_INELIGIBLE'), false);
+  assert.equal(shouldMaintainActiveNoImpressionAlert('RESOLVE_IMPRESSIONS'), false);
 });
