@@ -208,7 +208,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
       {pageItems.map(([dateKey, items]) => (
         <div key={dateKey} className="space-y-2.5">
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">{dateKey}</p>
-          <div className="space-y-2.5">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 items-start">
             {items.map(it => <DecisionCard key={it.id} item={it} />)}
           </div>
         </div>

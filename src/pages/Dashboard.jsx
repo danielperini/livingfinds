@@ -741,7 +741,7 @@ export default function Dashboard() {
   }) || null;
 
   return (
-    <div className="p-5 space-y-5 animate-fade-in">
+    <div className="px-4 md:px-6 py-5 space-y-5 animate-fade-in">
 
       {/* ── 0. VISÃO DECISIONAL — Clean Light Pro (3 faixas) ───────────────────── */}
       <DecisionalOverview
