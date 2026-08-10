@@ -198,7 +198,7 @@ export default function AppOpeningSplash({ onComplete }) {
         zIndex: 9999,
         opacity,
         transition,
-        background: 'var(--app-bg, #0B1120)',
+        background: '#0B1120',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -212,10 +212,10 @@ export default function AppOpeningSplash({ onComplete }) {
 
         {/* Saudação */}
         <div className="space-y-1">
-          <p className="text-3xl font-bold text-white">
+          <h1 className="text-4xl font-bold text-white">
             {greeting}{firstName ? `, ${firstName}` : ''}
-          </p>
-          <p className="text-sm text-slate-400">
+          </h1>
+          <p className="text-base text-slate-300">
             Atualizando os dados mais recentes da sua conta Amazon
           </p>
         </div>

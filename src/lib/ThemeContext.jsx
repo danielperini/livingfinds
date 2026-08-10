@@ -19,15 +19,29 @@ export function ThemeProvider({ children }) {
     return initial;
   });
 
+  // Trava operacional: o tema escuro é obrigatório em todo o sistema.
+  // Qualquer tentativa de alternar para outro tema é silenciosamente revertida.
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('lf_theme', theme);
+    if (theme !== 'dark') {
+      setThemeState('dark');
+      return;
+    }
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('lf_theme', 'dark');
   }, [theme]);
 
+  // No mount (incluindo HMR), força o estado interno e o atributo DOM para escuro.
+  useEffect(() => {
+    setThemeState('dark');
+    document.documentElement.setAttribute('data-theme', 'dark');
+    localStorage.setItem('lf_theme', 'dark');
+  }, []);
+
   const setTheme = async (newTheme) => {
-    setThemeState(newTheme);
+    // Tema escuro é obrigatório: qualquer seleção da UI é normalizada para 'dark'.
+    setThemeState('dark');
     try {
-      await base44.auth.updateMe({ user_appearance_theme: newTheme });
+      await base44.auth.updateMe({ user_appearance_theme: 'dark' });
     } catch { /* silencioso */ }
   };
 
