@@ -3,6 +3,7 @@ import {
   ChevronDown, ChevronRight, Loader2, Bot,
 } from 'lucide-react';
 import DataFreshnessBadge from '@/components/ui/DataFreshnessBadge';
+import DecisionColloquy from '@/components/dashboard/DecisionColloquy';
 import {
   getMotorActionType, getMotorActionBadge, getMotorReasonLabel, getAmazonConfirmationStatus,
 } from '@/lib/motorLabels';
@@ -106,10 +107,21 @@ function DecisionCard({ item }) {
         <ConfirmationPill status={confirm} />
       </div>
 
-      {expanded && dataUsed && (
-        <pre className="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 text-[10px] text-slate-600 overflow-x-auto whitespace-pre-wrap break-words max-h-40">
+      {expanded && (
+        <>
+          <DecisionColloquy raw={raw} />
+          {dataUsed && (
+            <details className="mt-3 group">
+              <summary className="text-[10px] text-slate-400 cursor-pointer hover:text-slate-600 select-none list-none flex items-center gap-1">
+                <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                Dados técnicos
+              </summary>
+              <pre className="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-200 text-[10px] text-slate-600 overflow-x-auto whitespace-pre-wrap break-words max-h-40">
 {JSON.stringify(dataUsed, null, 2)}
-        </pre>
+              </pre>
+            </details>
+          )}
+        </>
       )}
     </div>
   );
