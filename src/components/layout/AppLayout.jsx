@@ -133,12 +133,12 @@ export default function AppLayout() {
         <nav className="flex-1 px-2.5 pb-4 overflow-y-auto scrollbar-thin" aria-label="Navegação principal">
           {navGroups.map((group) => (
             <div key={group.label} className="mb-4">
-              {!collapsed ? <p className="px-3 mb-2 text-[10px] font-semibold tracking-[0.12em] uppercase text-slate-600">{group.label}</p> : null}
+              {!collapsed ? <p className="px-3 mb-2 text-[10px] font-semibold tracking-[0.12em] uppercase text-slate-400">{group.label}</p> : null}
               <div className="space-y-1">
                 {group.items.map(({ path, icon: Icon, label, sub }) => {
                   const active = location.pathname === path || (path !== '/' && location.pathname.startsWith(path));
                   return (
-                    <Link key={path} to={path} onClick={() => setMobileOpen(false)} className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-surface-2 transition-colors ${active ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''} ${sub && !collapsed ? 'ml-3' : ''}`} title={collapsed ? label : undefined}>
+                    <Link key={path} to={path} onClick={() => setMobileOpen(false)} className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-300 hover:text-white hover:bg-surface-2 transition-colors ${active ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''} ${sub && !collapsed ? 'ml-3' : ''}`} title={collapsed ? label : undefined}>
                       <Icon className={`${sub ? 'w-3.5 h-3.5' : 'w-[18px] h-[18px]'} flex-shrink-0`} strokeWidth={1.8} />
                       {!collapsed ? <span className={`${sub ? 'text-xs' : 'text-sm'} font-medium truncate`}>{label}</span> : null}
                     </Link>
@@ -150,7 +150,7 @@ export default function AppLayout() {
         </nav>
 
         <div className="p-3 space-y-2 border-t border-[var(--border-color)]">
-          <Link to="/settings" className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-surface-2 transition-colors ${location.pathname.startsWith('/settings') ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''}`} title={collapsed ? 'Configurações' : undefined}>
+          <Link to="/settings" className={`lf-nav-link flex items-center gap-3 px-3 rounded-lg text-slate-300 hover:text-white hover:bg-surface-2 transition-colors ${location.pathname.startsWith('/settings') ? 'lf-nav-link-active !bg-amazon-light !text-amazon font-semibold' : ''} ${collapsed ? 'justify-center' : ''}`} title={collapsed ? 'Configurações' : undefined}>
             <Settings className="w-[18px] h-[18px]" strokeWidth={1.8} />
             {!collapsed ? <span className="text-sm font-medium">Configurações</span> : null}
           </Link>
@@ -172,13 +172,13 @@ export default function AppLayout() {
               </div>
               <ModeBadge mode={accountMode} className="mt-2" />
             </div>
-          ) : <button type="button" onClick={() => setCollapsed(false)} className="lf-icon-button w-full flex items-center justify-center text-slate-400 hover:text-slate-100" aria-label="Expandir menu" title="Expandir menu"><ChevronRight className="w-4 h-4" /></button>}
+          ) : <button type="button" onClick={() => setCollapsed(false)} className="lf-icon-button w-full flex items-center justify-center text-slate-300 hover:text-white" aria-label="Expandir menu" title="Expandir menu"><ChevronRight className="w-4 h-4" /></button>}
         </div>
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="lf-topbar min-h-[72px] flex items-center gap-3 px-4 md:px-6 border-b flex-shrink-0">
-          <button type="button" className="lf-icon-button lg:hidden w-10 flex items-center justify-center text-slate-400 hover:text-slate-100" onClick={() => setMobileOpen(true)} aria-label="Abrir menu" title="Abrir menu"><Menu className="w-5 h-5" /></button>
+          <button type="button" className="lf-icon-button lg:hidden w-10 flex items-center justify-center text-slate-300 hover:text-white" onClick={() => setMobileOpen(true)} aria-label="Abrir menu" title="Abrir menu"><Menu className="w-5 h-5" /></button>
           <div className="min-w-0 flex-1"><h1 className="text-lg md:text-xl font-semibold text-white tracking-[-0.025em] truncate">{currentMeta[0]}</h1><p className="hidden sm:block text-xs text-slate-500 mt-0.5 truncate">{currentMeta[1]}</p></div>
           <div className="hidden xl:flex lf-search h-10 w-[320px] items-center gap-2 px-3" role="search"><Search className="w-4 h-4 text-slate-500" /><span className="text-xs text-slate-500">Use a busca disponível em cada área</span></div>
           <button type="button" className="lf-icon-button relative w-10 flex items-center justify-center border border-white/[0.06] bg-white/[0.025] text-slate-400 hover:text-white" aria-label="Notificações" title="Notificações"><Bell className="w-[18px] h-[18px]" /></button>
