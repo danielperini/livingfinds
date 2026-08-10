@@ -69,15 +69,15 @@ function ChartTooltip({ active, payload, label }) {
   const row = payload[0]?.payload || {};
   const number = (value) => value == null ? '—' : Number(value).toLocaleString('pt-BR');
   return (
-    <div className="bg-[#111318] border border-surface-3 rounded-lg p-3 text-[11px] shadow-xl min-w-52">
-      <div className="flex items-center justify-between gap-3 mb-2"><strong>{label}</strong><span className="text-[9px] text-slate-500">{row.sourceLabel}</span></div>
+    <div className="rounded-lg p-3 text-xs shadow-xl min-w-56" style={{ backgroundColor: 'var(--tooltip-bg)', border: '1px solid var(--tooltip-border)', color: 'var(--tooltip-text)' }}>
+      <div className="flex items-center justify-between gap-3 mb-2"><strong>{label}</strong><span className="text-[10px] opacity-70">{row.sourceLabel}</span></div>
       <div className="space-y-1">
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Gasto Ads</span><strong>{row.gasto == null ? '—' : fmtBRL(row.gasto)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Vendas Ads</span><strong>{row.vendasAds == null ? '—' : fmtBRL(row.vendasAds)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Faturamento real</span><strong>{row.faturamentoReal == null ? '—' : fmtBRL(row.faturamentoReal)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Impressões</span><strong>{number(row.impressoes)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Cliques</span><strong>{number(row.cliques)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="text-slate-500">Alterações IA</span><strong>{number(row.alteracoes || 0)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Gasto Ads</span><strong>{row.gasto == null ? '—' : fmtBRL(row.gasto)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Vendas Ads</span><strong>{row.vendasAds == null ? '—' : fmtBRL(row.vendasAds)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Faturamento real</span><strong>{row.faturamentoReal == null ? '—' : fmtBRL(row.faturamentoReal)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Impressões</span><strong>{number(row.impressoes)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Cliques</span><strong>{number(row.cliques)}</strong></p>
+        <p className="flex justify-between gap-4"><span className="opacity-70">Alterações IA</span><strong>{number(row.alteracoes || 0)}</strong></p>
       </div>
     </div>
   );
@@ -295,29 +295,29 @@ export default function LivePerformanceChart() {
   return (
     <section className="bg-surface-1 border border-surface-2 rounded-xl p-5" data-live-performance-chart="true">
       <div className="flex items-start justify-between gap-3 flex-wrap mb-2">
-        <div><h2 className="text-sm font-semibold text-slate-300">Gasto · Vendas · Faturamento Real</h2><p className="text-[10px] text-slate-500 mt-0.5">Histórico completo de 30 dias · relatório diário + API Ads intradiária + faturamento SP‑API · atualização automática a cada 10 minutos</p></div>
-        <button onClick={refreshBackend} disabled={state.refreshing} className="flex items-center gap-1.5 text-[10px] text-slate-400 hover:text-white border border-surface-3 rounded-lg px-2 py-1.5 disabled:opacity-50"><RefreshCw className={`w-3 h-3 ${state.refreshing ? 'animate-spin' : ''}`} />Atualizar agora</button>
+        <div><h2 className="text-base font-semibold text-theme-primary">Gasto · Vendas · Faturamento Real</h2><p className="text-xs text-theme-secondary mt-1">Histórico completo de 30 dias · relatório diário + API Ads intradiária + faturamento SP‑API · atualização automática a cada 10 minutos</p></div>
+        <button onClick={refreshBackend} disabled={state.refreshing} className="flex items-center gap-1.5 text-xs text-theme-secondary hover:text-theme-primary border border-[var(--border-color)] rounded-lg px-3 py-2 disabled:opacity-50"><RefreshCw className={`w-3.5 h-3.5 ${state.refreshing ? 'animate-spin' : ''}`} />Atualizar agora</button>
       </div>
 
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] mb-3">
-        <span className={adsCurrent ? 'text-emerald-400' : 'text-amber-400'}>Ads até {fmtDateFull(lastAdsDate)}</span>
-        <span className={spCurrent ? 'text-emerald-400' : 'text-amber-400'}>SP‑API até {fmtDateFull(lastSpDate)}</span>
-        <span className={aiCurrent ? 'text-emerald-400' : 'text-amber-400'}>IA até {fmtDateFull(lastAiDate)}</span>
-        <span className="text-slate-500">Hoje {fmtDateFull(today)}: API intradiária</span>
-        <span className="text-slate-600">Tela atualizada {state.loadedAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-        {state.error ? <span className="text-red-400">Última tentativa: {state.error}</span> : null}
-        {syncMessage ? <span className="text-cyan-400">{syncMessage}</span> : null}
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs mb-3">
+        <span className={adsCurrent ? 'text-emerald-600' : 'text-amber-600'}>Ads até <strong className="font-semibold">{fmtDateFull(lastAdsDate)}</strong></span>
+        <span className={spCurrent ? 'text-emerald-600' : 'text-amber-600'}>SP‑API até <strong className="font-semibold">{fmtDateFull(lastSpDate)}</strong></span>
+        <span className={aiCurrent ? 'text-emerald-600' : 'text-amber-600'}>IA até <strong className="font-semibold">{fmtDateFull(lastAiDate)}</strong></span>
+        <span className="text-theme-secondary">Hoje <strong className="text-theme-primary font-semibold">{fmtDateFull(today)}</strong>: API intradiária</span>
+        <span className="text-theme-muted">Tela atualizada {state.loadedAt?.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+        {state.error ? <span className="text-red-600">Última tentativa: {state.error}</span> : null}
+        {syncMessage ? <span className="text-cyan-700">{syncMessage}</span> : null}
       </div>
 
-      <div className="flex flex-wrap gap-4 text-[10px] mb-3">
-        <span className="text-blue-400">Gasto 7d fechados: <strong>{fmtBRL(totals.gasto)}</strong></span>
-        <span className="text-emerald-400">Vendas Ads 7d fechados: <strong>{fmtBRL(totals.vendas)}</strong></span>
-        <span className="text-orange-400">Faturamento real 7d fechados: <strong>{fmtBRL(totals.real)}</strong></span>
-        <span className="text-amber-400">Alterações IA: <strong>{totals.alteracoes}</strong></span>
+      <div className="flex flex-wrap gap-4 text-xs mb-3">
+        <span className="text-blue-600">Gasto 7d fechados: <strong className="font-bold text-theme-primary">{fmtBRL(totals.gasto)}</strong></span>
+        <span className="text-emerald-600">Vendas Ads 7d fechados: <strong className="font-bold text-theme-primary">{fmtBRL(totals.vendas)}</strong></span>
+        <span className="text-orange-600">Faturamento real 7d fechados: <strong className="font-bold text-theme-primary">{fmtBRL(totals.real)}</strong></span>
+        <span className="text-amber-600">Alterações IA: <strong className="font-bold text-theme-primary">{totals.alteracoes}</strong></span>
       </div>
 
       {(coverage.adsDays < coverage.closedDays || coverage.spDays < coverage.closedDays) ? (
-        <div className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[10px] text-amber-300">
+        <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Cobertura dos {coverage.closedDays} dias fechados: Ads {coverage.adsDays}/{coverage.closedDays} · SP‑API {coverage.spDays}/{coverage.closedDays}. Dias ausentes aparecem como lacunas, nunca como zero. O backfill SP‑API é iniciado automaticamente.
         </div>
       ) : null}
@@ -326,9 +326,9 @@ export default function LivePerformanceChart() {
         <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <defs><linearGradient id="liveSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} /><stop offset="95%" stopColor="#3B82F6" stopOpacity={0} /></linearGradient><linearGradient id="liveSales" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#10B981" stopOpacity={0.25} /><stop offset="95%" stopColor="#10B981" stopOpacity={0} /></linearGradient></defs>
           <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-          <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-          <YAxis yAxisId="brl" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={44} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
-          <YAxis yAxisId="volume" orientation="right" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={38} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
+          <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+          <YAxis yAxisId="brl" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} width={48} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
+          <YAxis yAxisId="volume" orientation="right" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} width={42} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
           <YAxis yAxisId="actions" orientation="right" hide />
           <Tooltip content={<ChartTooltip />} />
           <Bar yAxisId="volume" dataKey="impressoes" name="Impressões" fill="#8B5CF6" opacity={0.28} />
@@ -339,7 +339,7 @@ export default function LivePerformanceChart() {
           <Line yAxisId="brl" type="monotone" dataKey="faturamentoReal" name="Faturamento real" stroke="#FB923C" strokeWidth={2.2} dot={false} connectNulls={false} />
         </ComposedChart>
       </ResponsiveContainer>
-      <p className="text-[9px] text-slate-600 mt-2">Totais de cada fonte são calculados pelos sete dias encerrados na última data disponível dessa própria fonte; a API intradiária não substitui o relatório fechado.</p>
+      <p className="text-xs text-theme-muted mt-3">Totais de cada fonte são calculados pelos sete dias encerrados na última data disponível dessa própria fonte; a API intradiária não substitui o relatório fechado.</p>
     </section>
   );
 }
