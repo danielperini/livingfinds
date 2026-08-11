@@ -147,6 +147,8 @@ Deno.serve(async (request) => {
           prioritize_zero_delivery_rotation: true,
           delivery_lookback_days: 7,
           max_replacements_per_run: replacementCapacity,
+          max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
+          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
         });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true
@@ -195,7 +197,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v18-serving-discovery-and-rotation',
+      engine_version: 'unified-v19-profitable-serving-recovery',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -210,7 +212,7 @@ Deno.serve(async (request) => {
         goal_met: servingGrowthReport?.goal_met === true,
         definition: 'campanhas elegíveis com entrega real; não campanhas apenas existentes',
         completion_rule: 'cumprida somente quando current_serving_campaigns >= target_serving_campaigns',
-        policy: 'AUTO limitada por orçamento recebe discovery econômico; Search Terms AUTO alimentam EXACT; ZERO_DELIVERY madura é substituída 1:1; EXISTS nunca cumpre a meta',
+        policy: 'AUTO limitada por orçamento recebe discovery econômico; ZERO_DELIVERY usa reparo 1:1 com safe_max_cpc e teto de perda por ASIN; campanhas com gasto sem venda não recebem expansão',
         scheduler_driven: true,
         confirmation_required: true,
       },
@@ -242,7 +244,13 @@ Deno.serve(async (request) => {
         zero_delivery_test_hours: 72,
         max_bid_recovery_attempts: 2,
         max_replacements_per_run: replacementCapacity,
+        max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
+        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
         economic_bid_cap: true,
+        trusted_bootstrap_economics: 'somente custo confirmado, preço, break-even e safe_max_cpc explícitos',
+        asin_zero_sale_spend_cap: 'clamp(4 x safe_max_cpc, R$2,50, R$5,00)',
+        duplicate_campaign_rows_removed_before_decision: true,
+        serving_evidence_prevents_false_structure_repair: true,
         replacement_priority: 'same-SKU converted Search Terms from canonical harvest',
         pause_old_only_after_confirmed_replacement: true,
         execution_owner: 'executeApprovedDecisionQueue',
