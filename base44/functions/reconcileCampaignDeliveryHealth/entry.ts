@@ -97,9 +97,13 @@ Deno.serve(async (request) => {
     const dryRun = body.dry_run === true;
     const deliveryLookbackDays = Math.max(1, Math.min(30, Math.floor(n(body.delivery_lookback_days) || 7)));
     const deliveryCutoff = new Date(Date.now() - (deliveryLookbackDays - 1) * 86400000).toISOString().slice(0, 10);
-    const maxReplacementsPerRun = Math.max(0, Math.min(20, Math.floor(n(body.max_replacements_per_run) || 6)));
-    const maxStructureRepairsPerRun = Math.max(0, Math.min(5, Math.floor(n(body.max_structure_repairs_per_run) || 3)));
-    const maxBidRecoveriesPerRun = Math.max(0, Math.min(5, Math.floor(n(body.max_bid_recoveries_per_run) || 3)));
+    const configuredLimit = (value: unknown, fallback: number, maximum: number) => {
+      const parsed = Number(value);
+      return Math.max(0, Math.min(maximum, Number.isFinite(parsed) ? Math.floor(parsed) : fallback));
+    };
+    const maxReplacementsPerRun = configuredLimit(body.max_replacements_per_run, 6, 20);
+    const maxStructureRepairsPerRun = configuredLimit(body.max_structure_repairs_per_run, 3, 5);
+    const maxBidRecoveriesPerRun = configuredLimit(body.max_bid_recoveries_per_run, 3, 5);
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
@@ -180,7 +184,11 @@ Deno.serve(async (request) => {
         aggregate.spend += n(metric.spend);
         metricsByAsin.set(asin, aggregate);
       }
-      const accountOutOfBudget = spendControllers.some((r: any) => r.account_out_of_budget === true || r.hard_cap_reached === true);
+      const today = new Date().toISOString().slice(0, 10);
+      const currentSpendController = spendControllers.find((row: any) => String(row.date || row.controller_date || '').slice(0, 10) === today);
+      // Hard stop is intraday state. A controller from yesterday must not freeze today's
+      // zero-delivery recovery; when today's controller exists, however, it remains absolute.
+      const accountOutOfBudget = currentSpendController?.account_out_of_budget === true || currentSpendController?.hard_cap_reached === true;
       const accountHardStop = spendControllers.some((r: any) => r.global_kill_switch === true || ['critical', 'cap_imminent', 'cap_reached'].includes(String(r.cap_status || '').toLowerCase()));
       const actions: any[] = [];
       const repairCandidates: any[] = [];
