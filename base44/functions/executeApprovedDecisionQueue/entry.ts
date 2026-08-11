@@ -91,11 +91,11 @@ Deno.serve(async (request) => {
 
     let account: any = null;
     if (body.amazon_account_id) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1);
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1);
       account = accs[0] || null;
     }
     if (!account) {
-      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, null, 1);
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, undefined, 1);
       account = accs[0] || null;
     }
     if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
@@ -122,8 +122,23 @@ Deno.serve(async (request) => {
       return Response.json({ ok: true, executed: 0, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
     }
 
-    const keywords = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 1000).catch(() => []);
-    const validKwIds = new Set(keywords.map((k: any) => k.keyword_id || k.id).filter(Boolean));
+    const decisionKeywordIds = [...new Set(approved.map((decision: any) => String(decision.keyword_id || '')).filter(Boolean))];
+    const validKwIds = new Set<string>();
+    for (let offset = 0; offset < decisionKeywordIds.length; offset += 100) {
+      const ids = decisionKeywordIds.slice(offset, offset + 100);
+      const [byAmazonId, byLocalId] = await Promise.all([
+        base44.asServiceRole.entities.Keyword.filter(
+          { amazon_account_id: aid, keyword_id: { $in: ids } }, '-updated_date', Math.max(500, ids.length * 10),
+        ).catch(() => []),
+        base44.asServiceRole.entities.Keyword.filter(
+          { amazon_account_id: aid, id: { $in: ids } }, '-updated_date', Math.max(500, ids.length * 10),
+        ).catch(() => []),
+      ]);
+      for (const keyword of [...byAmazonId, ...byLocalId]) {
+        if (keyword.keyword_id) validKwIds.add(String(keyword.keyword_id));
+        if (keyword.id) validKwIds.add(String(keyword.id));
+      }
+    }
 
     // ── Revalidação de decisões obsoletas (STALE_DECISION_REVALIDATION) ──────
     // Antes de executar: verificar se decisões de pausa ainda são válidas.
@@ -296,7 +311,7 @@ Deno.serve(async (request) => {
         const isCanonical = Boolean(decision.snapshot_id || decision.canonical_action_type || decision.source_function === 'runEconomicBudgetBalancer');
         let snapshot: any = null;
         if (isCanonical && decision.snapshot_id) {
-          const rows = await base44.asServiceRole.entities.RepricingSnapshot.filter({ id: decision.snapshot_id }, null, 1).catch(() => []);
+          const rows = await base44.asServiceRole.entities.RepricingSnapshot.filter({ id: decision.snapshot_id }, undefined, 1).catch(() => []);
           snapshot = rows[0] || null;
         }
         if (isCanonical) {
