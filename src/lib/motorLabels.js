@@ -99,7 +99,16 @@ export function getMotorActionBadge(item) {
  * @returns {{ label: string, tone: 'green'|'amber'|'red'|'slate', symbol: '✓'|'⏳'|'✗'|'·' }}
  */
 export function getAmazonConfirmationStatus(item) {
-  const status = String(item?.confirmation_status || item?.status || item?.queue_status || '').toLowerCase();
+  const decisionStatus = String(item?.status || '').toLowerCase();
+
+  // Estados terminais sem envio devem prevalecer sobre um confirmation_status
+  // antigo (por exemplo, "pending"). Caso contrário uma decisão ignorada ou
+  // bloqueada aparece falsamente como pendente na Amazon.
+  if (['skipped', 'rejected', 'cancelled', 'canceled', 'winner_protection_blocked'].includes(decisionStatus)) {
+    return { label: 'Não enviado à Amazon', tone: 'slate', symbol: '·' };
+  }
+
+  const status = String(item?.confirmation_status || decisionStatus || item?.queue_status || '').toLowerCase();
 
   if (['confirmed', 'executed', 'completed', 'success'].includes(status)) {
     return { label: 'Confirmado na Amazon', tone: 'green', symbol: '✓' };

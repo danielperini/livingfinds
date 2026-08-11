@@ -14,6 +14,13 @@ function todayBRT() { return new Date(Date.now() - 3 * 3600000).toISOString().sl
 function nowIso() { return new Date().toISOString(); }
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
+function healthAlertDate(alert: any): string | null {
+  const keyMatch = String(alert?.deduplication_key || '').match(/_(\d{4}-\d{2}-\d{2})$/);
+  if (keyMatch?.[1]) return keyMatch[1];
+  const messageMatch = String(alert?.message || '').match(/hoje \((\d{4}-\d{2}-\d{2})\)/i);
+  return messageMatch?.[1] || null;
+}
+
 // Etapas monitoradas — sem min_hour_brt; qualquer hora é válida para retry
 const REQUIRED_STEPS = [
   { operation: 'token_refresh',              fn: 'refreshAmazonAdsTokenDailyOrHourly', critical: true  },
@@ -78,9 +85,24 @@ Deno.serve(async (req) => {
 
     const activeHealthAlerts = await base44.asServiceRole.entities.Alert.filter(
       { amazon_account_id: aid, status: 'active', source_function: 'runDailyHealthMonitor' },
-      '-created_at', 200
+      '-created_at', 1000
     ).catch(() => []);
     const resolvedHealthAlertIds = new Set<string>();
+
+    // Alertas do monitor são diários. Um alerta de data anterior não pode
+    // continuar ativo nem reaparecer no painel por causa da ordenação/limite.
+    // O estado corrente da etapa será representado somente pelo alerta de hoje.
+    for (const alert of activeHealthAlerts) {
+      const alertDate = healthAlertDate(alert);
+      if (!alertDate || alertDate === today) continue;
+      await base44.asServiceRole.entities.Alert.update(alert.id, {
+        status: 'resolved',
+        resolved_at: nowIso(),
+        resolution_reason: 'stale_daily_health_alert',
+      }).catch(() => {});
+      resolvedHealthAlertIds.add(String(alert.id));
+    }
+
     const resolveHealthAlertsFor = async (operation: string) => {
       const prefix = `daily_health_fail_${operation}_`;
       const matches = activeHealthAlerts.filter((alert: any) =>
