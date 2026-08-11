@@ -8,6 +8,7 @@
  *  4. Bulk upsert para performance e evitar timeout
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { buildCampaignAsinIndex, normalizeNegativeMatchType } from '../../shared/adsAsinResolution.ts';
 
 function adsBase(region: string): string {
   const r = String(region || 'NA').toUpperCase();
@@ -51,6 +52,18 @@ async function adsPost(base: string, token: string, clientId: string, profileId:
   return data;
 }
 
+async function loadAll(entity: any, filter: Record<string, unknown>, maxRows = 60000): Promise<any[]> {
+  const rows: any[] = [];
+  const pageSize = 5000;
+  for (let skip = 0; skip < maxRows; skip += pageSize) {
+    const page = await entity.filter(filter, '-updated_date', Math.min(pageSize, maxRows - skip), skip).catch(() => []);
+    if (!Array.isArray(page) || page.length === 0) break;
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
+
 Deno.serve(async (req) => {
   const startTime = Date.now();
   try {
@@ -81,6 +94,18 @@ Deno.serve(async (req) => {
 
     let agReceived = 0, agUpserted = 0, kwReceived = 0, kwUpserted = 0;
     const errors: string[] = [];
+    const canonicalFilter = { amazon_account_id: amazonAccountId };
+    const [campaignRows, productAdRows, existingKeywordRows] = await Promise.all([
+      loadAll(base44.asServiceRole.entities.Campaign, canonicalFilter, 10000),
+      loadAll(base44.asServiceRole.entities.ProductAd, canonicalFilter, 20000),
+      loadAll(base44.asServiceRole.entities.Keyword, canonicalFilter, 60000),
+    ]);
+    const campaignAsinById = buildCampaignAsinIndex(campaignRows, productAdRows, existingKeywordRows);
+    const kwMap = new Map<string, any>();
+    for (const row of existingKeywordRows) {
+      const id = String(row.keyword_id || '');
+      if (id && !kwMap.has(id)) kwMap.set(id, row);
+    }
 
     // ── Ad Groups SP ──────────────────────────────────────────────────────
     try {
@@ -137,17 +162,10 @@ Deno.serve(async (req) => {
       console.log(`[syncAGKW] keywords recebidas: ${kwReceived}`);
 
       if (kwList.length > 0) {
-        const existingKWs = await base44.asServiceRole.entities.Keyword.filter(
-          { amazon_account_id: amazonAccountId }, null, 10000
-        ).catch(() => []);
-        const kwMap = new Map<string, any>(existingKWs.map((r: any) => [String(r.keyword_id), r]));
-
         // Carregar keywords pausadas como duplicatas (não devem ser re-ativadas pelo sync)
         const pausedDupIds = new Set<string>();
-        const pausedDups = await base44.asServiceRole.entities.Keyword.filter(
-          { amazon_account_id: amazonAccountId, state: 'paused' }, null, 5000
-        ).catch(() => []);
-        for (const kw of pausedDups) {
+        for (const kw of existingKeywordRows) {
+          if (String(kw.state || kw.status || '').toLowerCase() !== 'paused') continue;
           if (kw.keyword_id) pausedDupIds.add(String(kw.keyword_id));
         }
 
@@ -167,6 +185,7 @@ Deno.serve(async (req) => {
             campaign_id: String(kw.campaignId),
             ad_group_id: String(kw.adGroupId),
             keyword_id: String(kw.keywordId),
+            asin: campaignAsinById.get(String(kw.campaignId)) || cur?.asin || '',
             keyword_text: kw.keywordText,
             keyword: kw.keywordText,
             match_type: (kw.matchType || 'BROAD').toLowerCase(),
@@ -202,10 +221,7 @@ Deno.serve(async (req) => {
       console.log(`[syncAGKW] negative keywords recebidas: ${negList.length}`);
 
       if (negList.length > 0) {
-        const existingNeg = await base44.asServiceRole.entities.Keyword.filter(
-          { amazon_account_id: amazonAccountId, match_type: { $in: ['negative_exact', 'negative_phrase'] } }, null, 5000
-        ).catch(() => []);
-        const negIds = new Set(existingNeg.map((r: any) => r.keyword_id));
+        const negIds = new Set(existingKeywordRows.map((r: any) => String(r.keyword_id || '')).filter(Boolean));
         const toCreate: any[] = [];
         const now = new Date().toISOString();
         for (const kw of negList) {
@@ -216,9 +232,10 @@ Deno.serve(async (req) => {
               campaign_id: String(kw.campaignId),
               ad_group_id: String(kw.adGroupId),
               keyword_id: kid,
+              asin: campaignAsinById.get(String(kw.campaignId)) || '',
               keyword_text: kw.keywordText,
               keyword: kw.keywordText,
-              match_type: `negative_${(kw.matchType || 'exact').toLowerCase()}`,
+              match_type: normalizeNegativeMatchType(kw.matchType),
               state: 'archived',
               status: 'archived',
               bid: 0,

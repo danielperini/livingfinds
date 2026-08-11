@@ -10,6 +10,29 @@ import {
   LineChart, Line, AreaChart, Area, ReferenceLine,
 } from 'recharts';
 
+const normalizeAsin = value => {
+  const asin = String(value || '').trim().toUpperCase();
+  return /^[A-Z0-9]{10}$/.test(asin) ? asin : '';
+};
+
+const buildCampaignAsinMap = (campaigns, productAds) => {
+  const candidates = new Map();
+  const add = row => {
+    const campaignId = String(row?.campaign_id || row?.amazon_campaign_id || '').trim();
+    const asin = normalizeAsin(row?.asin);
+    if (!campaignId || !asin) return;
+    if (!candidates.has(campaignId)) candidates.set(campaignId, new Set());
+    candidates.get(campaignId).add(asin);
+  };
+  campaigns.forEach(add);
+  productAds.forEach(add);
+  return new Map(
+    [...candidates.entries()]
+      .filter(([, asins]) => asins.size === 1)
+      .map(([campaignId, asins]) => [campaignId, [...asins][0]])
+  );
+};
+
 export default function LogDeBids() {
   const [account, setAccount] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -33,7 +56,7 @@ export default function LogDeBids() {
       if (!acc) return;
 
       // Buscar de 3 fontes: AdsBidChangeLog, OptimizationDecision e CampaignChangeHistory
-      const [apiLogs, autopilotDecs, campaignHistory] = await Promise.all([
+      const [apiLogs, autopilotDecs, campaignHistory, campaigns, productAds] = await Promise.all([
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: acc.id }, '-created_at', 300),
         base44.entities.OptimizationDecision.filter(
           { amazon_account_id: acc.id, decision_type: 'bid_change' }, '-created_at', 300
@@ -41,7 +64,31 @@ export default function LogDeBids() {
         base44.entities.CampaignChangeHistory.filter(
           { amazon_account_id: acc.id, change_type: 'BASE_BID' }, '-changed_at', 300
         ),
+        base44.entities.Campaign.filter({ amazon_account_id: acc.id }, '-updated_date', 5000).catch(() => []),
+        base44.entities.ProductAd.filter({ amazon_account_id: acc.id }, '-updated_date', 10000).catch(() => []),
       ]);
+      const campaignAsinById = buildCampaignAsinMap(campaigns, productAds);
+      const resolveAsin = row => normalizeAsin(row?.asin)
+        || campaignAsinById.get(String(row?.campaign_id || row?.amazon_campaign_id || '').trim())
+        || '';
+
+      const normalizedApiLogs = apiLogs.map(l => {
+        const oldBid = Number(l.old_bid ?? l.bid_before ?? 0);
+        const newBid = Number(l.new_bid ?? l.bid_after ?? 0);
+        const diff = newBid - oldBid;
+        return {
+          ...l,
+          date: l.date || l.created_at?.slice(0, 10) || l.created_date?.slice(0, 10) || '',
+          keyword: l.keyword || l.keyword_text || '',
+          asin: resolveAsin(l),
+          old_bid: oldBid,
+          new_bid: newBid,
+          change_amount: l.change_amount ?? diff,
+          change_percent: l.change_percent ?? l.change_pct ?? (oldBid > 0 ? (diff / oldBid) * 100 : 0),
+          direction: l.direction || (diff > 0.001 ? 'increase' : diff < -0.001 ? 'decrease' : 'unchanged'),
+          _source: 'api',
+        };
+      });
 
       // Normalizar OptimizationDecision
       const decLogs = autopilotDecs.map(d => ({
@@ -51,7 +98,7 @@ export default function LogDeBids() {
         campaign_name: '',
         keyword_id: d.keyword_id || d.entity_id || '',
         keyword: d.keyword_text || '',
-        asin: d.asin || '',
+        asin: resolveAsin(d),
         old_bid: d.value_before || 0,
         new_bid: d.value_after || 0,
         change_amount: (d.value_after || 0) - (d.value_before || 0),
@@ -77,7 +124,7 @@ export default function LogDeBids() {
           campaign_name: h.campaign_id || '',
           keyword_id: h.keyword_id || '',
           keyword: h.keyword_id || '',
-          asin: '',
+          asin: resolveAsin(h),
           old_bid: oldVal,
           new_bid: newVal,
           change_amount: diff,
@@ -92,502 +139,4 @@ export default function LogDeBids() {
         };
       });
 
-      // Unir e ordenar por data desc, deduplicar por keyword_id+date+direction
-      const seen = new Set();
-      const allLogs = [
-        ...apiLogs.map(l => ({ ...l, _source: 'api' })),
-        ...decLogs,
-        ...histLogs,
-      ]
-        .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''))
-        .filter(l => {
-          const key = `${l.keyword_id}|${l.date}|${l.direction}|${l._source}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-
-      setLogs(allLogs);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
-  }, []);
-
-  const syncFromApi = async () => {
-    if (!account || syncing) return;
-    setSyncing(true);
-    setSyncMsg(null);
-    try {
-      const res = await base44.functions.invoke('syncBidChangesFromApi', { amazon_account_id: account.id });
-      const d = res.data;
-      if (d?.ok) {
-        setSyncMsg({ type: 'success', text: `âœ“ ${d.keywords_synced} keywords sincronizadas Â· ${d.changes} alteraÃ§Ãµes detectadas (â†‘${d.increases} â†“${d.decreases})` });
-        await load();
-      } else {
-        setSyncMsg({ type: 'error', text: d?.error || 'Falha na sincronizaÃ§Ã£o' });
-      }
-    } catch (e) {
-      setSyncMsg({ type: 'error', text: e.message });
-    } finally {
-      setSyncing(false);
-      setTimeout(() => setSyncMsg(null), 12000);
-    }
-  };
-
-  // Verificar se bids foram atualizados hoje
-  const today = new Date().toISOString().slice(0, 10);
-  const lastBidDate = logs.find(l => l._source === 'api')?.date || logs.find(l => l._source === 'api')?.created_at?.slice(0, 10) || null;
-  const bidsUpdatedToday = lastBidDate === today;
-
-  const runBidEngines = async () => {
-    if (!account || runningBidEngine) return;
-    setRunningBidEngine(true);
-    setBidEngineMsg(null);
-    try {
-      const [smartRes, calibRes] = await Promise.all([
-        base44.functions.invoke('smartBidFromCpc', { amazon_account_id: account.id }),
-        base44.functions.invoke('calibrateBidsNoImpressions', { amazon_account_id: account.id }),
-      ]);
-      const s = smartRes?.data?.summary || {};
-      const c = calibRes?.data?.summary || {};
-      setBidEngineMsg({
-        type: 'success',
-        text: `âœ“ SmartBid: ${s.keywords_adjusted || 0} ajustadas Â· CalibraÃ§Ã£o: ${(c.keywords_boosted || 0) + (c.keywords_reduced || 0)} ajustadas`,
-      });
-      await load();
-    } catch (e) {
-      setBidEngineMsg({ type: 'error', text: e.message });
-    } finally {
-      setRunningBidEngine(false);
-      setTimeout(() => setBidEngineMsg(null), 15000);
-    }
-  };
-
-  // Carrega na montagem e repete uma vez por dia enquanto a pÃ¡gina estiver aberta
-  useEffect(() => {
-    const STORAGE_KEY = 'livingfinds:bidlog:lastLoad';
-    const DAY_MS = 24 * 60 * 60 * 1000;
-
-    const maybeLoad = () => {
-      const last = Number(localStorage.getItem(STORAGE_KEY) || 0);
-      if (Date.now() - last >= DAY_MS) {
-        localStorage.setItem(STORAGE_KEY, String(Date.now()));
-        load();
-      }
-    };
-
-    // Carrega imediatamente na montagem (sem verificar o intervalo)
-    localStorage.setItem(STORAGE_KEY, String(Date.now()));
-    load();
-
-    const timer = window.setInterval(maybeLoad, DAY_MS);
-    return () => window.clearInterval(timer);
-  }, [load]);
-
-  const filtered = logs.filter(l => {
-    const matchSearch = !search || (
-      (l.keyword || '').toLowerCase().includes(search.toLowerCase()) ||
-      (l.asin || '').toLowerCase().includes(search.toLowerCase()) ||
-      (l.campaign_name || l.campaign_id || '').toLowerCase().includes(search.toLowerCase())
-    );
-    const matchDirection = filters.direction === 'all' || l.direction === filters.direction;
-    const matchStatus = filters.status === 'all' || l.status === filters.status;
-    const matchDate = !filters.date || l.date === filters.date;
-    return matchSearch && matchDirection && matchStatus && matchDate;
-  });
-
-  // KPIs
-  const total = filtered.length;
-  const aumento = filtered.filter(l => l.direction === 'increase').length;
-  const reducao = filtered.filter(l => l.direction === 'decrease').length;
-  const erros = filtered.filter(l => l.status === 'failed').length;
-  const executed = filtered.filter(l => l.status === 'executed').length;
-  const pctChange = total > 0 ? ((aumento - reducao) / total * 100).toFixed(1) : 0;
-
-  // GrÃ¡fico de tendÃªncia: agrupa aumentos/reduÃ§Ãµes por data (Ãºltimos 30 dias)
-  const trendData = (() => {
-    const map = new Map();
-    for (const l of logs) {
-      const date = l.date || l.created_at?.slice(0, 10);
-      if (!date) continue;
-      const prev = map.get(date) || { date, aumentos: 0, reducoes: 0, total: 0 };
-      if (l.direction === 'increase') prev.aumentos++;
-      else if (l.direction === 'decrease') prev.reducoes++;
-      prev.total++;
-      map.set(date, prev);
-    }
-    return Array.from(map.values())
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .slice(-30)
-      .map(d => ({ ...d, date: d.date.slice(5) }));
-  })();
-
-  // GrÃ¡fico de evoluÃ§Ã£o de bid mÃ©dio por dia (apenas executed)
-  const bidEvolutionData = (() => {
-    const map = new Map();
-    for (const l of logs) {
-      if (l.status !== 'executed' || !l.new_bid) continue;
-      const date = l.date || l.created_at?.slice(0, 10);
-      if (!date) continue;
-      const prev = map.get(date) || { date, bids: [], increases: 0, decreases: 0 };
-      prev.bids.push(l.new_bid);
-      if (l.direction === 'increase') prev.increases++;
-      else if (l.direction === 'decrease') prev.decreases++;
-      map.set(date, prev);
-    }
-    return Array.from(map.values())
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .slice(-30)
-      .map(d => ({
-        date: d.date.slice(5),
-        bid_medio: Number((d.bids.reduce((s, v) => s + v, 0) / d.bids.length).toFixed(2)),
-        aumentos: d.increases,
-        reducoes: d.decreases,
-        total: d.bids.length,
-      }));
-  })();
-
-  // GrÃ¡fico de confianÃ§a IA: distribuiÃ§Ã£o em faixas
-  const confidenceData = (() => {
-    const faixas = [
-      { label: '0â€“50%', min: 0, max: 50, count: 0 },
-      { label: '50â€“70%', min: 50, max: 70, count: 0 },
-      { label: '70â€“85%', min: 70, max: 85, count: 0 },
-      { label: '85â€“95%', min: 85, max: 95, count: 0 },
-      { label: '95â€“100%', min: 95, max: 100, count: 0 },
-    ];
-    for (const l of logs) {
-      const conf = (l.ai_confidence || 0) * 100;
-      if (conf === 0) continue;
-      for (const f of faixas) {
-        if (conf >= f.min && conf < f.max) { f.count++; break; }
-        if (conf === 100 && f.max === 100) { f.count++; break; }
-      }
-    }
-    return faixas.filter(f => f.count > 0);
-  })();
-
-  // Filtrar apenas as alteraÃ§Ãµes executadas para impacto em ACOS
-  const executedChanges = filtered.filter(l => l.status === 'executed' && l.direction !== 'unchanged');
-  const savingsEstimate = executedChanges.reduce((s, l) => {
-    const diff = (l.old_bid || 0) - (l.new_bid || 0);
-    return s + (diff > 0 ? diff : 0);
-  }, 0);
-  const increaseEstimate = executedChanges.reduce((s, l) => {
-    const diff = (l.new_bid || 0) - (l.old_bid || 0);
-    return s + (diff > 0 ? diff : 0);
-  }, 0);
-
-  const filterButtons = [
-    { key: 'all', label: 'Todos' },
-    { key: 'increase', label: 'â†‘ Aumentos', icon: TrendingUp },
-    { key: 'decrease', label: 'â†“ ReduÃ§Ãµes', icon: TrendingDown },
-    { key: 'unchanged', label: 'â€” iguais', icon: Minus },
-  ];
-
-  const statusFilterButtons = [
-    { key: 'all', label: 'Todos' },
-    { key: 'executed', label: 'âœ“ Executadas' },
-    { key: 'failed', label: 'âš  Falhas' },
-    { key: 'pending', label: 'âŒ› Pendentes' },
-    { key: 'skipped', label: 'â†· Ignoradas' },
-  ];
-
-  return (
-    <div className="p-6 space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-cyan/15 border border-cyan/20 flex items-center justify-center">
-            <FileText className="w-5 h-5 text-cyan" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white">Log de Bids</h1>
-            <p className="text-xs text-slate-400">{total} alteraÃ§Ãµes Â· {aumento} aumentos Â· {reducao} reduÃ§Ãµes</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={syncFromApi} disabled={syncing || loading || !account}
-            className="flex items-center gap-2 px-3 py-2 bg-cyan/10 border border-cyan/20 text-cyan hover:bg-cyan/20 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50">
-            <Download className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Sincronizando...' : 'Sincronizar via API'}
-          </button>
-          <button onClick={load} disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-surface-2 border border-surface-3 text-slate-300 hover:text-white text-sm rounded-lg transition-colors">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
-      {syncMsg && (
-        <div className={`px-4 py-3 rounded-xl border text-sm font-medium ${syncMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : 'bg-red-400/10 border-red-400/20 text-red-400'}`}>
-          {syncMsg.text}
-        </div>
-      )}
-
-      {/* Painel de alerta: bids nÃ£o atualizados hoje */}
-      {!loading && (
-        <div className={`rounded-xl border px-5 py-4 flex items-center justify-between gap-4 flex-wrap ${bidsUpdatedToday ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-amber-500/8 border-amber-500/30'}`}>
-          <div className="flex items-center gap-3">
-            {bidsUpdatedToday
-              ? <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-              : <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 animate-pulse" />}
-            <div>
-              <p className={`text-sm font-semibold ${bidsUpdatedToday ? 'text-emerald-300' : 'text-amber-300'}`}>
-                {bidsUpdatedToday ? 'Bids atualizados hoje' : 'Bids nÃ£o foram atualizados hoje'}
-              </p>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {bidsUpdatedToday
-                  ? `Ãšltima atualizaÃ§Ã£o: ${lastBidDate} â€” motor de bids executou normalmente.`
-                  : `Ãšltimo ajuste registrado: ${lastBidDate || 'nunca'}. O pipeline diÃ¡rio roda Ã s 06:30 BRT â€” execute manualmente se necessÃ¡rio.`}
-              </p>
-            </div>
-          </div>
-          {!bidsUpdatedToday && (
-            <div className="flex flex-col items-end gap-1">
-              <button
-                onClick={runBidEngines}
-                disabled={runningBidEngine || !account}
-                className="flex items-center gap-2 px-4 py-2 bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
-              >
-                {runningBidEngine ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                {runningBidEngine ? 'Executando...' : 'Executar Bid Engines Agora'}
-              </button>
-              {bidEngineMsg && (
-                <p className={`text-xs font-medium ${bidEngineMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {bidEngineMsg.text}
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Filtros */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-shrink-0 sm:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Pesquisar keyword, ASIN ou campanha..."
-              className="w-full pl-10 pr-4 py-2 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyan/50" />
-          </div>
-          <input type="date" value={filters.date} onChange={e => setFilters(p => ({ ...p, date: e.target.value }))}
-            className="px-3 py-2 bg-surface-1 border border-surface-2 rounded-lg text-sm text-slate-300 focus:outline-none focus:border-cyan/50 accent-cyan" />
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Filter className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-          {filterButtons.map(f => (
-            <button key={f.key} onClick={() => setFilters(p => ({ ...p, direction: f.key }))}
-              className={`flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${filters.direction === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
-              {f.label}
-            </button>
-          ))}
-          <span className="mx-1 w-px h-5 bg-surface-2" />
-          {statusFilterButtons.map(f => (
-            <button key={f.key} onClick={() => setFilters(p => ({ ...p, status: f.key }))}
-              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${filters.status === f.key ? 'bg-cyan/20 text-cyan border-cyan/30' : 'bg-surface-2 text-slate-500 border-surface-3 hover:text-slate-300'}`}>
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {error && <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 text-sm text-red-400">{error}</div>}
-
-      {loading ? (
-        <div className="flex items-center justify-center py-16"><Loader2 className="w-6 h-6 text-cyan animate-spin" /></div>
-      ) : (
-        <>
-          {/* KPIs */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {[
-              { label: 'Total AlteraÃ§Ãµes', value: total, color: 'text-white', sub: `${pctChange > 0 ? '+' : ''}${pctChange}%' direÃ§Ã£o` },
-              { label: 'Aumentos', value: aumento, color: 'text-emerald-400', icon: TrendingUp },
-              { label: 'ReduÃ§Ãµes', value: reducao, color: 'text-red-400', icon: TrendingDown },
-              { label: 'Falhas', value: erros, color: erros > 0 ? 'text-red-400' : 'text-emerald-400', icon: XCircle },
-            ].map(k => (
-              <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-                <p className="text-xs text-slate-500 mb-1">{k.label}</p>
-                <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
-                {k.sub && <p className="text-xs text-slate-500 mt-1">{k.sub}</p>}
-              </div>
-            ))}
-            {[
-              { label: 'Executadas', value: executed, color: 'text-emerald-400' },
-              { label: 'Aumento total (bid)', value: `R$${increaseEstimate.toFixed(2)}`, color: 'text-emerald-400' },
-              { label: 'ReduÃ§Ã£o total (bid)', value: `R$${savingsEstimate.toFixed(2)}`, color: 'text-red-400' },
-            ].map(k => (
-              <div key={k.label} className="bg-surface-1 border border-surface-2 rounded-xl p-4">
-                <p className="text-xs text-slate-500 mb-1">{k.label}</p>
-                <p className={`text-xl font-bold ${k.color}`}>{k.value}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* GrÃ¡ficos de tendÃªncia */}
-          {(trendData.length > 1 || bidEvolutionData.length > 1) && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-
-              {/* GrÃ¡fico 1: Volume de alteraÃ§Ãµes por dia */}
-              {trendData.length > 1 && (
-                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-white mb-1">Volume de Ajustes por Dia</h3>
-                  <p className="text-xs text-slate-500 mb-4">Aumentos vs. reduÃ§Ãµes de bid realizados pelo motor</p>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <BarChart data={trendData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-                      <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} width={24} />
-                      <Tooltip
-                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: '#94a3b8' }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 11, color: '#64748b' }} />
-                      <Bar dataKey="aumentos" name="Aumentos" fill="#10B981" radius={[3, 3, 0, 0]} stackId="a" />
-                      <Bar dataKey="reducoes" name="ReduÃ§Ãµes" fill="#EF4444" radius={[3, 3, 0, 0]} stackId="a" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-
-              {/* GrÃ¡fico 2: EvoluÃ§Ã£o do bid mÃ©dio (linha) */}
-              {bidEvolutionData.length > 1 && (
-                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-white mb-1">EvoluÃ§Ã£o do Bid MÃ©dio</h3>
-                  <p className="text-xs text-slate-500 mb-4">Bid mÃ©dio das alteraÃ§Ãµes executadas pelo Autopilot</p>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <AreaChart data={bidEvolutionData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="bidGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.25} />
-                          <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-                      <YAxis tick={{ fill: '#64748b', fontSize: 10 }} width={36} tickFormatter={v => `R$${v}`} />
-                      <Tooltip
-                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: '#94a3b8' }}
-                        formatter={(v, name) => [`R$${v}`, name]}
-                      />
-                      <Area type="monotone" dataKey="bid_medio" name="Bid MÃ©dio" stroke="#3B82F6" strokeWidth={2} fill="url(#bidGrad)" dot={{ r: 3, fill: '#3B82F6' }} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-
-              {/* GrÃ¡fico 3: Volume e confianÃ§a IA */}
-              {confidenceData.length > 0 && (
-                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-white mb-1">DistribuiÃ§Ã£o de ConfianÃ§a da IA</h3>
-                  <p className="text-xs text-slate-500 mb-4">Quantas decisÃµes foram tomadas por faixa de confianÃ§a</p>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <BarChart data={confidenceData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" horizontal={false} />
-                      <XAxis type="number" allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} />
-                      <YAxis type="category" dataKey="label" tick={{ fill: '#94a3b8', fontSize: 11 }} width={56} />
-                      <Tooltip
-                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: '#94a3b8' }}
-                      />
-                      <Bar dataKey="count" name="DecisÃµes" radius={[0, 4, 4, 0]}
-                        fill="#3B82F6"
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-
-              {/* GrÃ¡fico 4: Acumulado de Aumentos vs ReduÃ§Ãµes (linha) */}
-              {bidEvolutionData.length > 1 && (
-                <div className="bg-surface-1 border border-surface-2 rounded-xl p-5">
-                  <h3 className="text-sm font-semibold text-white mb-1">BalanÃ§o DiÃ¡rio de Ajustes</h3>
-                  <p className="text-xs text-slate-500 mb-4">Aumentos e reduÃ§Ãµes como linhas separadas por dia</p>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <LineChart data={bidEvolutionData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
-                      <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} />
-                      <YAxis allowDecimals={false} tick={{ fill: '#64748b', fontSize: 10 }} width={24} />
-                      <Tooltip
-                        contentStyle={{ background: '#111318', border: '1px solid #22263A', borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: '#94a3b8' }}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 11, color: '#64748b' }} />
-                      <ReferenceLine y={0} stroke="#22263A" />
-                      <Line type="monotone" dataKey="aumentos" name="Aumentos" stroke="#10B981" strokeWidth={2} dot={{ r: 3 }} />
-                      <Line type="monotone" dataKey="reducoes" name="ReduÃ§Ãµes" stroke="#EF4444" strokeWidth={2} dot={{ r: 3 }} />
-                      <Line type="monotone" dataKey="total" name="Total" stroke="#64748b" strokeWidth={1} strokeDasharray="4 2" dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-
-            </div>
-          )}
-
-          {/* Tabela */}
-          {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
-              <FileText className="w-12 h-12 text-slate-600" />
-              <p className="text-sm text-slate-400">{logs.length === 0 ? 'Sem logs. Use "Sincronizar via API" para detectar alteraÃ§Ãµes de bid, ou execute o Autopilot para gerar novas decisÃµes.' : 'Nenhum resultado com estes filtros.'}</p>
-            </div>
-          ) : (
-            <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-surface-2 bg-surface-2/40">
-                      {['Data', 'Keyword', 'ASIN', 'Bid Antes', 'Bid Depois', 'DiferenÃ§a', 'VariaÃ§Ã£o', 'DireÃ§Ã£o', 'Motivo', 'Fonte', 'Estado'].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map(l => {
-                      const isAu = l.direction === 'increase';
-                      const isDown = l.direction === 'decrease';
-                      const amount = (l.new_bid || 0) - (l.old_bid || 0);
-                      const pct = l.change_percent || ((l.old_bid && l.new_bid) ? ((l.new_bid - l.old_bid) / l.old_bid * 100) : 0);
-                      return (
-                        <tr key={l.id} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-                          <td className="px-4 py-3 text-xs text-slate-500 whitespace-nowrap">{l.date || l.created_at?.slice(0, 10) || 'â€”'}</td>
-                          <td className="px-4 py-3 text-xs text-white font-medium max-w-[180px]">
-                            <p className="truncate">{l.keyword || 'â€”'}</p>
-                            {l.campaign_name && <p className="text-[10px] text-slate-500 truncate">{l.campaign_name}</p>}
-                          </td>
-                          <td className="px-4 py-3 font-mono text-xs text-cyan">{l.asin || 'â€”'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-slate-400">R${(l.old_bid || 0).toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-white">R${(l.new_bid || 0).toFixed(2)}</td>
-                          <td className={`px-4 py-3 font-mono text-xs font-semibold ${isAu ? 'text-emerald-400' : isDown ? 'text-red-400' : 'text-slate-500'}`}>
-                            {isAu ? '+' : ''}R${Math.abs(amount).toFixed(2)}
-                          </td>
-                          <td className={`px-4 py-3 text-xs font-semibold ${isAu ? 'text-emerald-400' : isDown ? 'text-red-400' : 'text-slate-500'}`}>
-                            {isAu ? '+' : ''}{Number(pct).toFixed(1)}%
-                          </td>
-                          <td className="px-4 py-3">
-                            {isAu ? <TrendingUp className="w-4 h-4 text-emerald-400" /> : isDown ? <TrendingDown className="w-4 h-4 text-red-400" /> : <Minus className="w-4 h-4 text-slate-500" />}
-                          </td>
-                          <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={l.reason}>{l.reason || 'â€”'}</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
-                              l._source === 'autopilot' ? 'text-purple-400 bg-purple-400/10 border-purple-400/20' :
-                              l._source === 'history'   ? 'text-amber-400 bg-amber-400/10 border-amber-400/20' :
-                                                          'text-cyan bg-cyan/10 border-cyan/20'
-                            }`}>
-                              {l._source === 'autopilot' ? 'Autopilot' : l._source === 'history' ? 'HistÃ³rico' : 'API'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3"><StatusBadge status={l.status || 'pending'} size="xs" /></td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
+      // Unir e ordenawßOt¶‰žËkºwµçR†Æöræ7&VFVEöBÇÂÆöræ7&VFVEöFFRÇÂ’ævWEF–ÖR‚“°¢–b„çVÖ&W"æ—4f–æ—FR‡F–ÖW7F×’bbF–ÖW7F×â†Æ7D&–D6†ævT'”¶W—v÷&BævWB†¶W—v÷&D–B’ÇÂ’’°¢Æ7D&–D6†ævT'”¶W—v÷&Bç6WB†¶W—v÷&D–BÂF–ÖW7F×“°¢Ð¢Ð ¢6öç7B7F—fTÆW'Dw&÷W2ÒæWrÖÇ7G&–ærÂç•µÓâ‚“°¢f÷"†6öç7BÆW'Böb²ââæ7F—fTÆW'G2Âââæ6¶æ÷vÆVFvVDÆW'G5Ò’°¢6öç7B¶W’ÒÆW'D¶W’†ÆW'B“°¢–b‚7F—fTÆW'Dw&÷W2æ†2†¶W’’’7F—fTÆW'Dw&÷W2ç6WB†¶W’ÂµÒ“°¢7F—fTÆW'Dw&÷W2ævWB†¶W’’çW6‚†ÆW'B“°¢Ð¢6öç7B¶VWW$ÆW'D'”¶W—v÷&BÒæWrÖÇ7G&–ærÂç“â‚“°¢6öç7BÆW'EWFFW2ÒæWrÖÇ7G&–ærÂç“â‚“°¢f÷"†6öç7B¶¶W’ÂÆW'G5Òöb7F—fTÆW'Dw&÷W2’°¢ÆW'G2ç6÷'B‚†ÆVgBÂ&–v‡B’Óâ&÷uF–ÖR‡&–v‡B’Ò&÷uF–ÖR†ÆVgB’“°¢–b†¶W’’¶VWW$ÆW'D'”¶W—v÷&Bç6WB†¶W’ÂÆW'G5³Ò“°¢f÷"†6öç7BGWÆ–6FRöbÆW'G2ç6Æ–6Rƒ’’°¢ÆW'EWFFW2ç6WB†GWÆ–6FRæ–BÂ°¢–C¢GWÆ–6FRæ–BÀ¢7FGW3¢w&W6öÇfVBrÀ¢&W6öÇfVEöC¢æ÷t—6òÀ¢&W6öÇWF–öå÷&V6öã¢vGWÆ–6FUöæõö–×&W76–öç5öÆW'BrÀ¢WFFVEöC¢æ÷t—6òÀ¢Ò“°¢7VÖÖ'’æGWÆ–6FUöÆW'G5÷&W6öÇfVB²³°¢Ð¢Ð ¢6öç7BWfÇVFVD¶W—v÷&D–G2ÒæWr6WCÇ7G&–æsâ‚“°¢6öç7B&Vg&W6…Fö¶VâÒ66÷VçBæG5÷&Vg&W6…÷Fö¶VâÇÂFVæòæVçbævWB‚tE5õ$Te$U4…õDô´Târ’ÇÂrs°¢6öç7B&öf–ÆT–BÒ66÷VçBæG5÷&öf–ÆUö–BÇÂFVæòæVçbævWB‚tE5õ$ôd”ÄUô”Br’ÇÂrs° ¢f÷"†6öç7B¶¶W—v÷&D–BÂ¶W—v÷&EÒöb¶W—v÷&G4'”–B’°¢6öç7B¶W—v÷&DVæ&ÆVBÒÆ÷vW"†¶W—v÷&Bç7FFRÇÂ¶W—v÷&Bç7FGW2’ÓÓÒvVæ&ÆVBs°¢–b‚¶W—v÷&DVæ&ÆVBbb¶VWW$ÆW'D'”¶W—v÷&Bæ†2†¶W—v÷&D–B’’6öçF–çVS°¢WfÇVFVD¶W—v÷&D–G2æFB†¶W—v÷&D–B“°¢6öç7B¶VWW$ÆW'BÒ¶VWW$ÆW'D'”¶W—v÷&BævWB†¶W—v÷&D–B“°¢6öç7Bf—'7E6VVäBÒæWrFFR†¶W—v÷&Bæf—'7E÷6VVåöBÇÂ¶W—v÷&Bç7–æ6VEöBÇÂ¶W—v÷&Bæ7&VFVEöFFRÇÂ’ævWEF–ÖR‚“°¢–b†¶W—v÷&DVæ&ÆVBbbçVÖ&W"æ—4f–æ—FR†f—'7E6VVäB’bbf—'7E6VVäBãÒ7WFöfcC†‚’°¢–b†¶VWW$ÆW'B’°¢ÆW'EWFFW2ç6WB†¶VWW$ÆW'Bæ–BÂ°¢–C¢¶VWW$ÆW'Bæ–BÀ¢7FGW3¢w7FÆRrÀ¢&W6öÇWF–öå÷&V6öã¢v¶W—v÷&EövU÷VæFW%óC†‚rÀ¢FFög&W6†æW73¢wVæ¶æ÷vârÀ¢WFFVEöC¢æ÷t—6òÀ¢Ò“°¢7VÖÖ'’æÆW'G5÷7FÆVB²³°¢Ð¢6öçF–çVS°¢Ð ¢6öç7B6×–vä–BÒFW‡B†¶W—v÷&Bæ6×–våö–BÇÂ¶VWW$ÆW'Còæ6×–våö–B“°¢6öç7B6×–vâÒ6×–vç4'”–BævWB†6×–vä–B“°¢6öç7B6–âÒFW‡B†¶W—v÷&Bæ6–âÇÂ6×–vãòæ6–âÇÂ¶VWW$ÆW'Còæ6–â’çFõWW$66R‚“°¢6öç7B&öGV7BÒ&öGV7G4'”6–âævWB†6–â“°¢6öç7BV6öæöÖ–72ÒV6öæöÖ–74'”6–âævWB†6–â“°¢6öç7B6–væÂÒF&vWF–æu6–væÇ2ævWB†¶W—v÷&D–B“°¢6öç7B7W'&VçD&–BÒf–æ—FR†¶W—v÷&Bæ7W'&VçEö&–Bóò¶W—v÷&Bæ&–BÂÔ”åô$”B“°¢6öç7BFV6—6–öâÒ6Æ76–g”æô–×&W76–öä6Æ–'&F–öâ‡°¢¶W—v÷&DVæ&ÆVBÀ¢6×–vä¶æ÷vã¢6×–vâÀ¢6×–vå7FFS¢Æ÷vW"†6×–vãòç7FFRÇÂ6×–vãòç7FGW2ÇÂ6×–vãòæÖ¦öå÷7FGW2’À¢6×–vä÷W&F–öæÃ¢6×–vä—4÷W&F–öæÂ†6×–vâ’À¢&öGV7DVÆ–v–&–Æ—G“¢&öGV7DVÆ–v–&–Æ—G’‡&öGV7B’À¢7G'V7GW&U&VG“¢6×–vå7G'V7GW&U&VG’†6×–vâÂVæ&ÆVE&öGV7DG2’À¢V6öæöÖ–75&VG“¢6×–väV6öæöÖ–75&VG’†6×–vâÂV6öæöÖ–72Âæ÷rævWEF–ÖR‚’’À¢¶W—v÷&DÖWG&–4F—3¢6–væÃòæFFW2ç6—¦RÇÂÀ¢¶W—v÷&D–×&W76–öç3¢6–væÂò6–væÂæ–×&W76–öç2¢çVÆÂÀ¢&V6VçD&–D6†ævS¢æ÷rævWEF–ÖR‚’Ò†Æ7D&–D6†ævT'”¶W—v÷&BævWB†¶W—v÷&D–B’ÇÂ’Â$”Eô4ôôÄDõtåôÕ2À¢7W'&VçD&–BÀ¢Ö„&–C¢Ô…ô$”BÀ¢Ò“°¢7VÖÖ'’æ¶W—v÷&G5öæÇ—¦VB²³° ¢–b†FV6—6–öâæ7F–öâÓÓÒu5DÄUôäõôDDr’7VÖÖ'’æ¶W—v÷&G5ö†VÆEöæõöFF²³°¢–b†FV6—6–öâæ7F–öâÓÓÒu5DÄUôuT$E$”Âr’7VÖÖ'’æ¶W—v÷&G5ö†VÆEöwV&G&–Â²³°¢–b†FV6—6–öâæ7F–öâÓÓÒt„ôÄEô4ôäd•$ÔTEõ¤U$òr’7VÖÖ'’æ¶W—v÷&G5ö†VÆEö6öæf—&ÖVE÷¦W&ò²³° ¢6öç7BÆ–fV7–6ÆUWFFRÒFV6—6–öåFôÆW'EWFFR†¶VWW$ÆW'BÂFV6—6–öâÂæ÷t—6ò“°¢–b†Æ–fV7–6ÆUWFFR’°¢ÆW'EWFFW2ç6WB†Æ–fV7–6ÆUWFFRæ–BÂÆ–fV7–6ÆUWFFR“°¢–b†Æ–fV7–6ÆUWFFRç7FGW2ÓÓÒw&W6öÇfVBr’7VÖÖ'’æÆW'G5÷&W6öÇfVB²³°¢–b†Æ–fV7–6ÆUWFFRç7FGW2ÓÓÒw7FÆRr’7VÖÖ'’æÆW'G5÷7FÆVB²³°¢Ð¢–b‚6†÷VÆDÖ–çF–ä7F—fTæô–×&W76–öäÆW'B†FV6—6–öâæ7F–öâ’’6öçF–çVS° ¢ÆWB&W7VÇF–æt&–BÒ7W'&VçD&–C°¢–b†FV6—6–öâæ7F–öâÓÓÒt$ôõ5Eô4ôäd•$ÔTEõ¤U$òrbb&V6öæ6–ÆTöæÇ’’°¢–b‚&Vg&W6…Fö¶VâÇÂ&öf–ÆT–B’°¢7VÖÖ'’æW'&÷'2çW6‚†&ö÷7BG¶¶W—v÷&D–GÓ¢7&VFVæ6–—2Ö¦öâG2W6VçFW6“°¢ÒVÇ6R°¢6öç7B&W7VÇBÒv—BWFFT¶W—v÷&D&–B€¢&6SCBÀ¢66÷VçBÀ¢¶W—v÷&BÀ¢6–âÀ¢ÖF‚æÖ–â†7W'&VçD&–B²$ôõ5EôÔõTåBÂÔ…ô$”B’À¢&Vg&W6…Fö¶VâÀ¢&öf–ÆT–BÀ¢æ÷rÀ¢“°¢–b‡&W7VÇBæö²’°¢7VÖÖ'’æ¶W—v÷&G5ö&ö÷7FVB²³°¢&W7VÇF–æt&–BÒ&W7VÇBææWuö&–BÇÂ7W'&VçD&–C°¢v—BæWr&öÖ—6R‚‡&W6öÇfR’Óâ6WEF–ÖV÷WB‡&W6öÇfRÂ3’“°¢ÒVÇ6R°¢7VÖÖ'’æW'&÷'2çW6‚†&ö÷7BG¶¶W—v÷&D–GÓ¢G·&W7VÇBæW'&÷'Ö“°¢Ð¢Ð¢Ð ¢6öç7BÆW'DÖW76vRÒ¶W—v÷&B"G¶¶W—v÷&Bæ¶W—v÷&E÷FW‡BÇÂ¶W—v÷&Bæ¶W—v÷&BÇÂ¶W—v÷&D–GÒ"†&–BGVÃ¢"BG·&W7VÇF–æt&–BçFôf—†VBƒ"—Ò’FWfR¦W&ò–×&W76öW26öæf—&ÖFò÷"FF÷2F–&–÷2FRF&vWF–æræ2VÇF–Ö2C†‚æ°¢–b†¶VWW$ÆW'B’°¢ÆW'EWFFW2ç6WB†¶VWW$ÆW'Bæ–BÂ°¢–C¢¶VWW$ÆW'Bæ–BÀ¢7FGW3¢v7F—fRrÀ¢6WfW&—G“¢v†–v‚rÀ¢ÖW76vS¢ÆW'DÖW76vRÀ¢ÖWG&–5÷fÇVS¢À¢7W'&VçE÷fÇVS¢À¢FF÷6÷W&6S¢uF&vWF–ætÖWG&–74F–Ç’rÀ¢FFög&W6†æW73¢vg&W6‚rÀ¢Æ7EöFWFV7FVEöC¢æ÷t—6òÀ¢&W6öÇWF–öå÷&V6öã¢FV6—6–öâç&V6öâÀ¢WFFVEöC¢æ÷t—6òÀ¢Ò“°¢ÒVÇ6R°¢v—B&6SCBæ56W'f–6U&öÆRæVçF—F–W2äÆW'Bæ7&VFR‡°¢Ö¦öåö66÷VçEö–C¢66÷VçD–BÀ¢ÆW'E÷G—S¢væõö–×&W76–öç2rÀ¢ÆW'EöfÖ–Ç“¢v¶W—v÷&BrÀ¢6WfW&—G“¢v†–v‚rÀ¢F—FÆS¢t¶W—v÷&B6VÒ–×&W76öW2†C†‚†6öæf—&ÖFò’rÀ¢ÖW76vS¢ÆW'DÖW76vRÀ¢VçF—G•÷G—S¢v¶W—v÷&BrÀ¢VçF—G•ö–C¢¶W—v÷&Bæ–BÀ¢¶W—v÷&Eö–C¢¶W—v÷&D–BÀ¢6×–våö–C¢6×–vä–BÀ¢6–âÀ¢7W'&VçE÷fÇVS¢À¢ÖWG&–5÷fÇVS¢À¢F‡&W6†öÆE÷fÇVS¢À¢FF÷v–æF÷s¢sC†‚rÀ¢FF÷6÷W&6S¢uF&vWF–ætÖWG&–74F–Ç’rÀ¢FFög&W6†æW73¢vg&W6‚rÀ¢7FGW3¢v7F—fRrÀ¢FVGWÆ–6F–öåö¶W“¢G¶66÷VçD–GÓ£¦æõö–×&W76–öç3£¦¶W—v÷&C£¢G¶¶W—v÷&D–GÓ££C††À¢6÷W&6UögVæ7F–öã¢v6Æ–'&FT&–G4æô–×&W76–öç2rÀ¢f—'7EöFWFV7FVEöC¢æ÷t—6òÀ¢Æ7EöFWFV7FVEöC¢æ÷t—6òÀ¢7&VFVEöC¢æ÷t—6òÀ¢Ò“°¢7VÖÖ'’æÆW'G5ö7&VFVB²³°¢Ð¢Ð ¢f÷"†6öç7B¶¶W’ÂÆW'G5Òöb7F—fTÆW'Dw&÷W2’°¢–b†WfÇVFVD¶W—v÷&D–G2æ†2†¶W’’’6öçF–çVS°¢6öç7B¶VWW"ÒÆW'G2ç6÷'B‚†ÆVgBÂ&–v‡B’Óâ&÷uF–ÖR‡&–v‡B’Ò&÷uF–ÖR†ÆVgB’•³Ó°¢–b‚¶VWW"ÇÂÆW'EWFFW2æ†2†¶VWW"æ–B’’6öçF–çVS°¢ÆW'EWFFW2ç6WB†¶VWW"æ–BÂ°¢–C¢¶VWW"æ–BÀ¢7FGW3¢¶W’òw&W6öÇfVBr¢w7FÆRrÀ¢âââ†¶W’ò²&W6öÇfVEöC¢æ÷t—6òÒ¢·Ò’À¢&W6öÇWF–öå÷&V6öã¢¶W’òv¶W—v÷&Eöæ÷Eöf÷VæEö÷%öæ÷EöVæ&ÆVBr¢vÆW'E÷v—F†÷WEö¶W—v÷&Eö–FVçF—G’rÀ¢FFög&W6†æW73¢wVæ¶æ÷vârÀ¢WFFVEöC¢æ÷t—6òÀ¢Ò“°¢–b†¶W’’7VÖÖ'’æÆW'G5÷&W6öÇfVB²³°¢VÇ6R7VÖÖ'’æÆW'G5÷7FÆVB²³°¢Ð ¢v—BÇ”ÆW'EWFFW2†&6SCBÂ²ââæÆW'EWFFW2çfÇVW2‚•Ò“°¢7VÖÖ'’æ66÷VçG5÷&ö6W76VB²³°¢Ò6F6‚†66÷VçDW'&÷#¢ç’’°¢7VÖÖ'’æW'&÷'2çW6‚†6öçFG¶66÷VçBæ–GÓ¢G¶66÷VçDW'&÷"æÖW76vWÖ“°¢Ð¢Ð ¢&WGW&â&W7öç6Ræ§6öâ‡°¢ö³¢G'VRÀ¢'VÆS¢v6Æ–'&FUö&–G5öæõö–×&W76–öç5ö6öæf—&ÖVEóC†…÷c"rÀ¢&V6öæ6–ÆUööæÇ“¢&V6öæ6–ÆTöæÇ’À¢&ö÷7EöÖ÷VçC¢$ôõ5EôÔõTåBÀ¢Ö…ö&–C¢Ô…ô$”BÀ¢7VÖÖ'’À¢W†V7WFVEöC¢æ÷t—6òÀ¢Ò“°¢Ò6F6‚†W'&÷#¢ç’’°¢&WGW&â&W7öç6Ræ§6öâ‡²ö³¢fÇ6RÂW'&÷#¢W'&÷"æÖW76vRÒÂ²7FGW3¢SÒ“°¢Ð§Ò“° 

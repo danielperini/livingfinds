@@ -204,6 +204,7 @@ Deno.serve(async (req) => {
                 keyword_id: kw.keyword_id,
                 keyword: kw.keyword_text || kw.keyword || '',
                 campaign_id: kw.campaign_id || '',
+                asin: kw.asin || '',
                 old_bid: oldBid,
                 new_bid: newBid,
                 change_amount: parseFloat((newBid - oldBid).toFixed(2)),

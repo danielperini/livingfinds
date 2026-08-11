@@ -222,6 +222,8 @@ Deno.serve(async (req) => {
         amazon_account_id: aid,
         keyword_id: keywordId,
         campaign_id: action.campaign_id || payload.campaign_id || keyword?.campaign_id || '',
+        keyword: keyword?.keyword_text || keyword?.keyword || payload.keyword_text || payload.keyword || '',
+        asin: action.asin || payload.asin || keyword?.asin || '',
         old_bid: currentBid,
         new_bid: boundedBid,
         change_pct: currentBid > 0 ? roundMoney((boundedBid - currentBid) / currentBid * 100) : 0,

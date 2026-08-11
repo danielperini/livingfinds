@@ -4,8 +4,21 @@
  * Detecta mudanças feitas tanto pelo Autopilot quanto manualmente no console Amazon.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { buildCampaignAsinIndex } from '../../shared/adsAsinResolution.ts';
 
 const TOKEN_CACHE = {};
+
+async function loadAll(entity, filter, maxRows) {
+  const rows = [];
+  const pageSize = 5000;
+  for (let skip = 0; skip < maxRows; skip += pageSize) {
+    const page = await entity.filter(filter, '-updated_date', Math.min(pageSize, maxRows - skip), skip).catch(() => []);
+    if (!Array.isArray(page) || page.length === 0) break;
+    rows.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
 
 async function getAdsToken() {
   const c = TOKEN_CACHE['ads'];
@@ -96,16 +109,24 @@ Deno.serve(async (req) => {
     }
 
     // 2. Buscar keywords locais para comparar bid anterior
-    const localKws = await base44.asServiceRole.entities.Keyword.filter(
-      { amazon_account_id: amazonAccountId }, null, 2000
+    const localKws = await loadAll(
+      base44.asServiceRole.entities.Keyword,
+      { amazon_account_id: amazonAccountId },
+      60000,
     );
     const localKwMap = new Map(localKws.map(k => [k.keyword_id, k]));
 
     // 3. Buscar campanhas para enriquecer o log
-    const campaigns = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: amazonAccountId }, null, 500
-    );
-    const campMap = new Map(campaigns.map(c => [c.campaign_id, c]));
+    const [campaigns, productAds] = await Promise.all([
+      loadAll(base44.asServiceRole.entities.Campaign, { amazon_account_id: amazonAccountId }, 10000),
+      loadAll(base44.asServiceRole.entities.ProductAd, { amazon_account_id: amazonAccountId }, 20000),
+    ]);
+    const campMap = new Map();
+    for (const campaign of campaigns) {
+      if (campaign.campaign_id) campMap.set(String(campaign.campaign_id), campaign);
+      if (campaign.amazon_campaign_id) campMap.set(String(campaign.amazon_campaign_id), campaign);
+    }
+    const campaignAsinById = buildCampaignAsinIndex(campaigns, productAds, localKws);
 
     // 4. Detectar alterações de bid
     const logsToCreate = [];
@@ -117,18 +138,21 @@ Deno.serve(async (req) => {
       const newBid = apiKw.bid || 0;
       const local = localKwMap.get(kwId);
       const oldBid = local ? (local.current_bid || local.bid || 0) : null;
+      const campaignId = String(apiKw.campaignId);
+      const camp = campMap.get(campaignId);
+      const asin = campaignAsinById.get(campaignId) || local?.asin || camp?.asin || '';
 
       // Atualizar keyword local com bid atual da API
       if (local) {
-        kwsToUpdate.push({ id: local.id, bid: newBid, current_bid: newBid, synced_at: now });
+        kwsToUpdate.push({ id: local.id, asin, bid: newBid, current_bid: newBid, synced_at: now });
       } else {
         // Nova keyword encontrada na API - criar local
-        const camp = campMap.get(String(apiKw.campaignId));
         await base44.asServiceRole.entities.Keyword.create({
           amazon_account_id: amazonAccountId,
-          campaign_id: String(apiKw.campaignId),
+          campaign_id: campaignId,
           ad_group_id: String(apiKw.adGroupId),
           keyword_id: kwId,
+          asin,
           keyword_text: apiKw.keywordText || '',
           keyword: apiKw.keywordText || '',
           match_type: (apiKw.matchType || 'broad').toLowerCase(),
@@ -144,18 +168,17 @@ Deno.serve(async (req) => {
       if (oldBid === null || Math.abs(newBid - oldBid) < 0.01) continue;
 
       const direction = newBid > oldBid ? 'increase' : 'decrease';
-      const camp = campMap.get(String(apiKw.campaignId));
       const changePct = oldBid > 0 ? ((newBid - oldBid) / oldBid * 100) : 0;
 
       logsToCreate.push({
         amazon_account_id: amazonAccountId,
         date: today,
-        campaign_id: String(apiKw.campaignId),
+        campaign_id: campaignId,
         campaign_name: camp?.name || camp?.campaign_name || '',
         ad_group_id: String(apiKw.adGroupId),
         keyword_id: kwId,
         keyword: apiKw.keywordText || local?.keyword_text || local?.keyword || '',
-        asin: camp?.asin || local?.asin || '',
+        asin,
         old_bid: oldBid,
         new_bid: newBid,
         change_amount: Number((newBid - oldBid).toFixed(4)),
