@@ -100,24 +100,47 @@ export function getMotorActionBadge(item) {
  */
 export function getAmazonConfirmationStatus(item) {
   const decisionStatus = String(item?.status || '').toLowerCase();
+  const queueStatus = String(item?.queue_status || '').toLowerCase();
+  const confirmationStatus = String(item?.confirmation_status || '').toLowerCase();
+  const hasAmazonAttempt = Boolean(
+    item?.amazon_request_id || item?.amazon_response || item?.executed_at ||
+    item?.last_attempt_at || Number(item?.attempt_count || 0) > 0
+  );
 
-  // Estados terminais sem envio devem prevalecer sobre um confirmation_status
-  // antigo (por exemplo, "pending"). Caso contrário uma decisão ignorada ou
-  // bloqueada aparece falsamente como pendente na Amazon.
-  if (['skipped', 'rejected', 'cancelled', 'canceled', 'winner_protection_blocked'].includes(decisionStatus)) {
-    return { label: 'Não enviado à Amazon', tone: 'slate', symbol: '·' };
+  if (['cancelled', 'canceled', 'winner_protection_blocked'].includes(decisionStatus)) {
+    return { label: 'Cancelado pelo motor', tone: 'slate', symbol: '·' };
+  }
+  if (['skipped', 'rejected', 'superseded', 'expired'].includes(decisionStatus)) {
+    return { label: 'Impedido pelo motor', tone: 'slate', symbol: '·' };
   }
 
-  const status = String(item?.confirmation_status || decisionStatus || item?.queue_status || '').toLowerCase();
-
-  if (['confirmed', 'executed', 'completed', 'success'].includes(status)) {
+  if (confirmationStatus === 'confirmed' || ['executed', 'completed', 'success'].includes(decisionStatus)) {
     return { label: 'Confirmado na Amazon', tone: 'green', symbol: '✓' };
   }
-  if (['pending', 'proposed', 'scheduled', 'processing', 'queued', 'pending_approval'].includes(status)) {
-    return { label: 'Pendente na Amazon', tone: 'amber', symbol: '⏳' };
+  if (decisionStatus === 'pending_approval') {
+    return { label: 'Aguardando aprovação', tone: 'amber', symbol: '⏳' };
   }
-  if (['failed', 'failed_final', 'error', 'blocked', 'rolled_back'].includes(status)) {
-    return { label: 'Falhou na Amazon', tone: 'red', symbol: '✗' };
+  if (['executing', 'confirming'].includes(decisionStatus) || queueStatus === 'processing') {
+    return hasAmazonAttempt
+      ? { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' }
+      : { label: 'Enviando à Amazon', tone: 'amber', symbol: '⏳' };
+  }
+  if (confirmationStatus === 'pending' && hasAmazonAttempt) {
+    return { label: 'Aguardando confirmação', tone: 'amber', symbol: '⏳' };
+  }
+  if (decisionStatus === 'scheduled' || queueStatus === 'scheduled') {
+    return { label: 'Agendado na fila local', tone: 'amber', symbol: '⏳' };
+  }
+  if (['pending', 'proposed', 'approved'].includes(decisionStatus) || ['pending', 'queued'].includes(queueStatus)) {
+    return { label: 'Na fila local', tone: 'amber', symbol: '⏳' };
+  }
+  if (decisionStatus === 'blocked') {
+    return { label: 'Bloqueado pelo motor', tone: 'red', symbol: '✗' };
+  }
+  if (['failed', 'failed_final', 'error', 'rolled_back'].includes(decisionStatus) || queueStatus === 'failed') {
+    return hasAmazonAttempt
+      ? { label: 'Falha no envio à Amazon', tone: 'red', symbol: '✗' }
+      : { label: 'Falha antes do envio', tone: 'red', symbol: '✗' };
   }
   return { label: 'Sem confirmação', tone: 'slate', symbol: '·' };
 }

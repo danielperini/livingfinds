@@ -10,6 +10,7 @@
  * - Nunca repete uma decisão já executada
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 let tokenCache = {};
 
@@ -82,6 +83,7 @@ Deno.serve(async (req) => {
       }
     }
     if (!decisions.length) return Response.json({ ok: true, executed: 0, decisions_found: 0, log: ['No decisions to execute'] });
+    const bidPolicy = await loadConfiguredBidPolicy(base44, amazon_account_id || decisions[0]?.amazon_account_id);
 
     const results = [];
     const blockSizes = { update_bid: 50, update_budget: 20, pause_campaign: 10, enable_campaign: 10, negative_keyword: 10 };
@@ -101,7 +103,11 @@ Deno.serve(async (req) => {
       try {
         switch (action) {
           case 'update_bid':
-            result = await adsPut('/v2/sp/keywords', [{ keywordId: decision.entity_id, bid: decision.recommended_value || decision.current_value }]);
+            decision.recommended_value = Number(clampBidToConfiguredPolicy(
+              decision.recommended_value || decision.current_value,
+              bidPolicy,
+            ));
+            result = await adsPut('/v2/sp/keywords', [{ keywordId: decision.entity_id, bid: decision.recommended_value }]);
             break;
           case 'update_budget':
             result = await adsPut('/v2/sp/campaigns', [{ campaignId: decision.campaign_id || decision.entity_id, dailyBudget: decision.recommended_value || decision.current_value }]);

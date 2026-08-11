@@ -362,12 +362,12 @@ jobs:
               echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
             fi
 
-            echo '--- trava remota: reduzir bids inflacionados acima de R$1,00 ---'
+            echo '--- trava remota: reduzir bids acima do teto salvo em Configurações ---'
             docker compose -f server/docker-compose.yml exec -T app deno eval '
               const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
               const response = await fetch("http://127.0.0.1:8000/functions/bulkSetAllBids", {
                 method: "POST", headers: { "content-type": "application/json", "x-api-token": token },
-                body: JSON.stringify({ _service_role: true, bid: 1 })
+                body: JSON.stringify({ _service_role: true })
               });
               const data = await response.json().catch(() => ({}));
               console.log("BID_CEILING_HTTP=" + response.status + "|OK=" + data.ok + "|KEYWORDS=" + JSON.stringify(data.keywords || {}) + "|WINNER_EXCEPTIONS=" + JSON.stringify(data.winner_keyword_exceptions || {}) + "|AD_GROUPS=" + JSON.stringify(data.ad_groups || {}) + "|TARGETS=" + JSON.stringify(data.targets || {}));

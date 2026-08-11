@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 function evaluationDays(action: string) {
   if (['negative_exact', 'negative_keyword', 'apply_dayparting'].includes(action)) return 14;
@@ -124,6 +125,29 @@ Deno.serve(async (request) => {
       if (!['approved', 'executing'].includes(decision.status)) {
         results.push({ id, ok: false, skipped: true, reason: `status ${decision.status}` });
         continue;
+      }
+
+      if (['reduce_bid', 'increase_bid', 'update_bid', 'set_bid'].includes(decision.action)) {
+        const requestedTargetBid = Number(decision.value_after ?? decision.proposed_value);
+        if (Number.isFinite(requestedTargetBid) && requestedTargetBid > 0) {
+          const bidPolicy = await loadConfiguredBidPolicy(base44, decision.amazon_account_id);
+          const targetBid = Number(clampBidToConfiguredPolicy(requestedTargetBid, bidPolicy));
+          if (targetBid !== requestedTargetBid) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              value_after: targetBid,
+              proposed_value: targetBid,
+              settings_source: bidPolicy.source,
+              settings_snapshot: JSON.stringify({
+                configured_bid_ceiling: bidPolicy.ceiling,
+                configured_max_bid: bidPolicy.maxBid,
+                configured_max_cpc: bidPolicy.maxCpc,
+              }),
+              updated_at: new Date().toISOString(),
+            });
+            decision.value_after = targetBid;
+            decision.proposed_value = targetBid;
+          }
+        }
       }
 
       if (isSaleAbsenceOnlyCampaignPause(decision)) {

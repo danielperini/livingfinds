@@ -49,17 +49,34 @@ function actionKind(raw) {
   if (dt.includes('activ') || dt.includes('reactivat')) return 'activate';
   if (dt.includes('budget')) return 'budget';
   if (dt.includes('placement')) return 'placement';
-  if (dt.includes('bid') || dt.includes('negative') === false) return 'bid';
+  if (dt.includes('bid') || ['reduce_bid', 'increase_bid', 'update_bid', 'set_bid'].includes(String(raw?.action || '').toLowerCase())) return 'bid';
+  if (pickNum(raw, ['old_bid', 'bid_before', 'value_before', 'new_bid', 'bid_after', 'value_after']) != null) return 'bid';
   return 'other';
 }
 
-function buildObjective(kind, sub) {
+function wasPrevented(raw) {
+  return ['skipped', 'rejected', 'cancelled', 'canceled', 'superseded', 'blocked', 'expired']
+    .includes(String(raw?.status || '').toLowerCase());
+}
+
+function bidDirection(raw) {
+  const action = String(raw?.action || '').toLowerCase();
+  if (action.includes('increase')) return 'increase';
+  if (action.includes('reduce') || action.includes('decrease')) return 'decrease';
+  const oldV = pickNum(raw, ['old_bid', 'bid_before', 'value_before', 'current_value']);
+  const newV = pickNum(raw, ['new_bid', 'bid_after', 'value_after', 'proposed_value']);
+  if (oldV != null && newV != null) return newV > oldV ? 'increase' : newV < oldV ? 'decrease' : 'unchanged';
+  return 'adjust';
+}
+
+function buildObjective(kind, sub, raw) {
+  if (wasPrevented(raw)) return 'PROTEÇÃO: ação avaliada e impedida pelos guardrails do motor';
   const head = {
     pause: 'PROTEÇÃO',
     activate: 'CRESCIMENTO',
     budget: 'ALOCAÇÃO',
     placement: 'VISIBILIDADE',
-    bid: 'PROFITABILITY',
+    bid: bidDirection(raw) === 'increase' ? 'VISIBILIDADE' : 'RENTABILIDADE',
     other: 'OTIMIZAÇÃO',
   }[kind] || 'OTIMIZAÇÃO';
   const tail = {
@@ -67,7 +84,9 @@ function buildObjective(kind, sub) {
     activate: 'restaurar exposição do anúncio',
     budget: 'reequilibrar o orçamento da campanha',
     placement: 'ajustar a posição no leilão',
-    bid: 'reduzir desperdício mantendo a keyword ativa para aprendizado',
+    bid: bidDirection(raw) === 'increase'
+      ? 'recuperar entrega sem ultrapassar o limite definido em Configurações'
+      : 'reduzir desperdício mantendo a keyword ativa para aprendizado',
     other: 'refinar a operação do motor',
   }[kind] || 'refinar a operação do motor';
   return `${head}: ${sub || tail}`;
@@ -122,16 +141,18 @@ function buildRecommendedAction(raw) {
   const newV = pickNum(raw, ['new_bid', 'bid_after', 'value_after', 'proposed_value']);
   const chg = pickNum(raw, ['change_percent', 'change_pct', 'change_percent']);
   const dir = pickStr(raw, ['direction']);
-  const { verb } = dirVerb(dir, chg);
+  const inferredChange = chg ?? (oldV != null && newV != null ? newV - oldV : 0);
+  const { verb } = dirVerb(dir || bidDirection(raw), inferredChange);
+  const prefix = wasPrevented(raw) ? 'Ação avaliada e não executada — ' : '';
   if (kind === 'bid' && oldV != null && newV != null) {
     const pctTxt = chg != null ? ` ${Math.abs(Math.round(chg))}%` : '';
-    return `${verb} bid${pctTxt}: de ${fmtBRL(oldV)} para ${fmtBRL(newV)}`;
+    return `${prefix}${verb} bid${pctTxt}: de ${fmtBRL(oldV)} para ${fmtBRL(newV)}`;
   }
   if (kind === 'budget' && oldV != null && newV != null) {
     const pctTxt = chg != null ? ` ${Math.abs(Math.round(chg))}%` : '';
     return `Ajustar orçamento${pctTxt}: de ${fmtBRL(oldV)} para ${fmtBRL(newV)}`;
   }
-  if (kind === 'pause') return 'Pausar a campanha';
+  if (kind === 'pause') return wasPrevented(raw) ? 'Pausa avaliada e cancelada antes do envio' : 'Pausar a campanha';
   if (kind === 'activate') return 'Reativar a campanha';
   if (kind === 'placement') return `Ajustar placement: ${pickStr(raw, ['entity_name', 'rationale']) || 'top-of-search / other'}`;
   const act = pickStr(raw, ['action', 'decision_type']);
@@ -139,6 +160,7 @@ function buildRecommendedAction(raw) {
 }
 
 function buildMoment(raw) {
+  if (wasPrevented(raw)) return 'Cancelada antes do envio à Amazon';
   const block = pickStr(raw, ['block_name', 'stop_type', 'execution_mode', 'queue_window']);
   const scheduled = pickStr(raw, ['scheduled_for', 'execute_before', 'not_before']);
   if (block && /night|next_day|next morning|amanha/i.test(block)) return 'Início do próximo dia';
@@ -167,6 +189,10 @@ function buildWhyThis(raw) {
 
 function buildWhyNot(raw) {
   const kind = actionKind(raw);
+  if (wasPrevented(raw)) return 'A alteração não foi enviada porque uma regra de proteção teve prioridade sobre a ação sugerida.';
+  if (kind === 'bid' && bidDirection(raw) === 'increase') {
+    return 'Manter o lance preservaria a baixa entrega; aumentar além do teto violaria o limite salvo em Configurações.';
+  }
   return {
     pause: 'Uma redução gradual não conteria a perda a tempo; manter ativo prolongaria o desperdício; arquivar eliminaria todo o histórico acumulado.',
     activate: 'Aguardar prolongaria a perda de vendas num termo que já demonstrou relevância; reduzir o bid agora seria contraditório.',
@@ -179,13 +205,16 @@ function buildWhyNot(raw) {
 
 function buildExpectedOutcome(raw) {
   const kind = actionKind(raw);
+  if (wasPrevented(raw)) return 'Manter a campanha sem alteração e preservar o histórico enquanto a condição de proteção continuar válida.';
   const impact = pickNum(raw, ['expected_impact_pct', 'expected_impact_value']);
   const base = {
     pause: 'Interromper imediatamente a sangria de orçamento enquanto mantém o histórico para decisão futura.',
     activate: 'Restaurar impressões e capturar conversões com o termo já validado.',
     budget: 'Reenquadrar o gasto dentro do limite diário sem perder exposição nas faixas de pico.',
     placement: 'Maximizar retorno por impressão na posição mais eficiente do leilão.',
-    bid: 'Manter impressões e cliques a custo reduzido, possibilitando avaliação futura a frequência sustentável.',
+    bid: bidDirection(raw) === 'increase'
+      ? 'Recuperar impressões e cliques gradualmente, sem ultrapassar o teto configurado.'
+      : 'Manter impressões e cliques a custo reduzido, possibilitando avaliação futura a frequência sustentável.',
     other: 'Refinar a operação sem descartar o histórico de aprendizado.',
   }[kind] || null;
   if (impact != null && base) return `${base} (impacto estimado: ${Math.abs(Math.round(impact))}%).`;
@@ -206,7 +235,9 @@ function buildEvaluationDate(raw) {
 function buildSuccessCriteria(raw) {
   const kind = actionKind(raw);
   const tgt = pickNum(raw, ['target_acos', 'threshold_value']);
+  if (wasPrevented(raw)) return 'Nenhuma alteração confirmada na Amazon enquanto o guardrail permanecer ativo.';
   if (kind === 'bid') {
+    if (bidDirection(raw) === 'increase') return 'Retorno de impressões e cliques sem ultrapassar o CPC máximo configurado.';
     return `ACoS abaixo de ${Math.round(tgt || 60)}% após a redução, ou primeiros pedidos surgindo.`;
   }
   if (kind === 'pause') return 'Sem gasto residual até a reavaliação; histórico preservado para decisão de retomada.';
@@ -218,6 +249,8 @@ function buildSuccessCriteria(raw) {
 
 function buildRollbackCriteria(raw) {
   const kind = actionKind(raw);
+  if (wasPrevented(raw)) return 'Reavaliar somente quando os dados que ativaram a proteção mudarem.';
+  if (kind === 'bid' && bidDirection(raw) === 'increase') return 'Reduzir novamente se o gasto crescer sem conversão ou o CPC atingir o teto configurado.';
   if (kind === 'bid') return 'Reverter se impressões caírem > 80% (indicando bid abaixo do mínimo competitivo).';
   if (kind === 'pause') return 'Reativar quando o termo voltar a ter estoque / suporte de marketplace e sinais de demanda.';
   if (kind === 'activate') return 'Pausar novamente se nas primeiras 72h não houver nem cliques nem conversão.';
@@ -263,7 +296,7 @@ export default function DecisionColloquy({ raw }) {
   const data = useMemo(() => {
     if (!raw) return null;
     const kind = actionKind(raw);
-    const objective = buildObjective(kind, null);
+    const objective = buildObjective(kind, null, raw);
     const diagnosis = buildDiagnosis(raw);
     const evaluation = buildEvaluation(raw);
     const evidence = buildEvidence(raw);

@@ -1,10 +1,10 @@
 /**
- * bulkSetAllBids — reduz somente bids acima do teto informado.
- * Nunca aumenta um bid existente. Teto absoluto: R$1,00.
- * Payload: { amazon_account_id, bid? (default 1.00), _service_role? }
+ * bulkSetAllBids — reduz somente bids acima do teto salvo em Configurações.
+ * Nunca aumenta um bid existente e ignora tetos enviados no payload.
+ * Payload: { amazon_account_id, _service_role? }
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
-import { winnerBidEligibility } from '../../shared/winnerBidPolicy.ts';
+import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const tokenCache = {};
 
@@ -85,7 +85,6 @@ Deno.serve(async (req) => {
     const user = body._service_role === true ? { role: 'service' } : await base44.auth.me().catch(() => null);
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     let amazonAccountId = body.amazon_account_id;
-    const targetBid = Math.max(0.02, Math.min(1, typeof body.bid === 'number' ? body.bid : 1));
 
     if (!amazonAccountId) {
       const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 50);
@@ -94,20 +93,8 @@ Deno.serve(async (req) => {
     if (!amazonAccountId) return Response.json({ error: 'Nenhuma conta Amazon configurada' }, { status: 400 });
 
     const now = new Date().toISOString();
-    const [performanceRows, localKeywordRows] = await Promise.all([
-      base44.asServiceRole.entities.PerformanceSettings.filter(
-        { amazon_account_id: amazonAccountId }, '-updated_at', 10,
-      ).catch(() => []),
-      base44.asServiceRole.entities.Keyword.filter(
-        { amazon_account_id: amazonAccountId }, '-synced_at', 10000,
-      ).catch(() => []),
-    ]);
-    const targetAcos = Number(performanceRows[0]?.target_acos || 0);
-    const localKeywordById = new Map();
-    for (const row of localKeywordRows) {
-      const id = String(row.keyword_id || '');
-      if (id && !localKeywordById.has(id)) localKeywordById.set(id, row);
-    }
+    const bidPolicy = await loadConfiguredBidPolicy(base44, amazonAccountId);
+    const targetBid = bidPolicy.ceiling;
     let kwTotal = 0, kwOk = 0, kwFailed = 0;
     let agTotal = 0, agOk = 0, agFailed = 0;
     let targetTotal = 0, targetOk = 0, targetFailed = 0;
@@ -123,19 +110,15 @@ Deno.serve(async (req) => {
     }
 
     const allKeywords = kwRes.rows;
-    const keywordCeilings = allKeywords.map(kw => {
-      const keywordId = String(kw.keywordId || '');
-      const eligibility = winnerBidEligibility(localKeywordById.get(keywordId), targetAcos);
-      return { ...kw, keywordId, economicCeiling: eligibility.ceiling, winnerEligibility: eligibility };
-    });
-    const winnerExceptions = keywordCeilings.filter(kw => kw.winnerEligibility.eligible && Number(kw.bid) > targetBid && Number(kw.bid) <= kw.economicCeiling);
-    const kwList = keywordCeilings.filter(kw => Number(kw.bid) > kw.economicCeiling);
+    const kwList = allKeywords
+      .map(kw => ({ ...kw, keywordId: String(kw.keywordId || '') }))
+      .filter(kw => Number(kw.bid) > targetBid);
     kwTotal = kwList.length;
 
     // 2. Atualizar na Amazon API em batches de 100
     const kwBatches = chunk(kwList, 100);
     for (const batch of kwBatches) {
-      const payload = { keywords: batch.map(kw => ({ keywordId: kw.keywordId, bid: kw.economicCeiling })) };
+      const payload = { keywords: batch.map(kw => ({ keywordId: kw.keywordId, bid: targetBid })) };
       const r = await adsCall('PUT', '/sp/keywords', payload, 'application/vnd.spKeyword.v3+json');
       if (r.ok) {
         kwOk += batch.length;
@@ -152,7 +135,7 @@ Deno.serve(async (req) => {
     for (const keyword of correctedKeywords) {
       await base44.asServiceRole.entities.Keyword.updateMany(
         { amazon_account_id: amazonAccountId, keyword_id: String(keyword.keywordId) },
-        { $set: { bid: keyword.economicCeiling, current_bid: keyword.economicCeiling, synced_at: now } }
+        { $set: { bid: targetBid, current_bid: targetBid, synced_at: now } }
       ).catch(() => {});
     }
 
@@ -227,10 +210,10 @@ Deno.serve(async (req) => {
       entity_type: 'keyword',
       field_name: 'bid',
       old_value: 'various',
-      new_value: `${targetBid};winner_max=1.50`,
+      new_value: String(targetBid),
       source: 'USER',
       source_function: 'bulkSetAllBids',
-      reason: `Teto econômico R$${targetBid.toFixed(2)}; exceção até R$1,50 somente para keyword winner com vendas, ACoS real dentro da meta e métricas confirmadas nas últimas 72h`,
+      reason: `Teto R$${targetBid.toFixed(2)} carregado de ${bidPolicy.source}; sem exceção acima da configuração.`,
       status: kwFailed + agFailed + targetFailed === 0 ? 'executed' : 'failed',
       changed_at: now,
     }).catch(() => {});
@@ -238,18 +221,11 @@ Deno.serve(async (req) => {
     return Response.json({
       ok: kwFailed + agFailed + targetFailed === 0,
       target_bid: targetBid,
+      settings_source: bidPolicy.source,
+      configured_max_bid: bidPolicy.maxBid,
+      configured_max_cpc: bidPolicy.maxCpc,
       keywords: { total: kwTotal, ok: kwOk, failed: kwFailed },
-      winner_keyword_exceptions: {
-        preserved: winnerExceptions.length,
-        ceiling: 1.5,
-        target_acos: targetAcos,
-        items: winnerExceptions.slice(0, 100).map(kw => ({
-          keyword_id: kw.keywordId,
-          bid: Number(kw.bid),
-          acos: kw.winnerEligibility.acos,
-          orders: kw.winnerEligibility.orders,
-        })),
-      },
+      winner_keyword_exceptions: { preserved: 0, ceiling: targetBid },
       ad_groups: { total: agTotal, ok: agOk, failed: agFailed },
       targets: { total: targetTotal, ok: targetOk, failed: targetFailed },
       errors: errors.length > 0 ? errors : undefined,

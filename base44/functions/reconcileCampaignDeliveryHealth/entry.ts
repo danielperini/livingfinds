@@ -6,6 +6,7 @@ import {
 } from '../../shared/campaignDeliveryHealthPolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from '../../shared/profitGuardPolicy.ts';
+import { resolveConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const SOURCE = 'reconcileCampaignDeliveryHealth';
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -127,8 +128,9 @@ Deno.serve(async (request) => {
       ]);
       const campaigns = canonicalCampaigns(campaignRows);
       const settings = settingsRows[0] || {};
-      const minBid = Math.max(0.02, n(settings.min_bid || 0.2));
-      const maxBid = Math.max(minBid, n(settings.max_bid || 3));
+      const bidPolicy = resolveConfiguredBidPolicy(settings, 1);
+      const minBid = bidPolicy.minBid;
+      const maxBid = bidPolicy.ceiling;
       const increment = Math.max(0.01, n(settings.bid_increment || settings.allowed_increment || 0.1));
       const targetAcos = n(settings.target_acos || settings.acos_target || 15);
 
@@ -357,9 +359,9 @@ Deno.serve(async (request) => {
             const economicCap = bootstrap.safe_max_cpc;
             const hardCap = Math.min(maxBid, entityMaxBid, economicCap);
             const targetBid = nextConservativeBid(currentBid, hardCap, increment, minBid);
-            if (targetBid <= currentBid || currentBid >= economicCap) {
+            if (targetBid <= currentBid || currentBid >= hardCap) {
               action = 'PAUSE_AND_REPLACE';
-              actions.push({ campaign_id: campaignId, asin, action: 'NO_ECONOMIC_BID_HEADROOM', current_bid: currentBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
+              actions.push({ campaign_id: campaignId, asin, action: 'NO_ECONOMIC_BID_HEADROOM', current_bid: currentBid, safe_max_cpc: economicCap, configured_bid_ceiling: bidPolicy.ceiling, operating_acos: operatingAcos.target_acos });
               break;
             }
             const keywordId = entityId(bidEntity);
@@ -373,14 +375,14 @@ Deno.serve(async (request) => {
                 execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending', requires_approval: false,
                 approval_status: 'auto_approved', idempotency_key: key, conflict_group: `${accountId}|keyword|${keywordId}`,
                 source_function: SOURCE, model_version: 'campaign-delivery-health-v5.0-serving-profit-v19',
-                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, cancelled_bid_attempts: cancelledBidAttempts, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
+                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, cancelled_bid_attempts: cancelledBidAttempts, increment, min_bid: minBid, account_max_bid: bidPolicy.maxBid, configured_max_cpc: bidPolicy.maxCpc, configured_bid_ceiling: bidPolicy.ceiling, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
                 created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
               });
               if (reused) reusedDecisions++;
               const decisionId = String(decision?.id || '');
               if (decisionId && !['confirmed', 'executed', 'cancelled', 'rejected'].includes(String(decision?.status || '').toLowerCase())) queuedDecisionIds.add(decisionId);
             }
-            actions.push({ campaign_id: campaignId, asin, action: 'INCREASE_BID', keyword_id: keywordId, current_bid: currentBid, target_bid: targetBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
+            actions.push({ campaign_id: campaignId, asin, action: 'INCREASE_BID', keyword_id: keywordId, current_bid: currentBid, target_bid: targetBid, configured_bid_ceiling: bidPolicy.ceiling, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
             recoveryAsins.add(asin);
           }
           if (action !== 'PAUSE_AND_REPLACE') continue;

@@ -37,7 +37,17 @@ function deriveTitle(raw) {
   if (raw?.asin) return raw.asin;
   if (raw?.entity_name) return raw.entity_name;
   if (raw?.campaign_name) return raw.campaign_name;
+  if (raw?.keyword_id) return `Keyword ${raw.keyword_id}`;
+  if (raw?.campaign_id) return `Campanha ${raw.campaign_id}`;
+  if (raw?.entity_id) return `${raw?.entity_type === 'campaign' ? 'Campanha' : 'Entidade'} ${raw.entity_id}`;
   return 'Decisão do motor';
+}
+
+function historicalDedupeKey(item) {
+  const raw = item?.raw || {};
+  const status = String(raw.status || '').toLowerCase();
+  if (status !== 'cancelled' || raw.rule_key !== 'winner_protection_dedup') return null;
+  return [item.source, raw.rule_key, raw.amazon_account_id, raw.entity_id || raw.campaign_id, raw.asin, raw.action].join('|');
 }
 
 function toneBadge(tone) {
@@ -162,10 +172,18 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     const out = [];
     if (Array.isArray(decisions)) for (const d of decisions) out.push(normalizeDecision(d, 'decision'));
     if (Array.isArray(bidChanges)) for (const b of bidChanges) out.push(normalizeDecision(b, 'bidChange'));
-    return out.sort((a, b) => {
+    const sorted = out.sort((a, b) => {
       const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
       return tb - ta;
+    });
+    const seenHistoricalBlocks = new Set();
+    return sorted.filter(item => {
+      const key = historicalDedupeKey(item);
+      if (!key) return true;
+      if (seenHistoricalBlocks.has(key)) return false;
+      seenHistoricalBlocks.add(key);
+      return true;
     });
   }, [decisions, bidChanges]);
 

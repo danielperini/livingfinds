@@ -7,7 +7,7 @@ export function clampAmazonBid(value: unknown, ceiling = AMAZON_BID_CEILING_BRL)
   }
   const bid = Number(value);
   if (!Number.isFinite(bid) || bid <= 0) return value;
-  const safeCeiling = Math.min(AMAZON_WINNER_BID_CEILING_BRL, Math.max(0.02, Number(ceiling) || AMAZON_BID_CEILING_BRL));
+  const safeCeiling = Math.max(0.02, Number(ceiling) || AMAZON_BID_CEILING_BRL);
   return Math.round(Math.min(bid, safeCeiling) * 100) / 100;
 }
 
@@ -16,6 +16,7 @@ export function enforceBidCeilingOnPayload(
   method: string,
   payload: any,
   entityCeilings: Record<string, number> = {},
+  configuredCeiling = AMAZON_BID_CEILING_BRL,
 ): any {
   if (!['POST', 'PUT'].includes(String(method).toUpperCase()) || payload == null) return payload;
   const entityKey = path.includes('adGroups') ? 'adGroups'
@@ -28,9 +29,12 @@ export function enforceBidCeilingOnPayload(
     if (!item || typeof item !== 'object') return item;
     const result = { ...item };
     const entityId = String(result.keywordId || result.adGroupId || result.targetId || '');
-    const ceiling = entityId && Number(entityCeilings[entityId]) > 0
+    const accountCeiling = Math.max(0.02, Number(configuredCeiling) || AMAZON_BID_CEILING_BRL);
+    const entityCeiling = entityId && Number(entityCeilings[entityId]) > 0
       ? Number(entityCeilings[entityId])
-      : AMAZON_BID_CEILING_BRL;
+      : accountCeiling;
+    // Exceções econômicas de winner nunca podem ultrapassar a configuração da conta.
+    const ceiling = Math.min(accountCeiling, entityCeiling);
     if ('bid' in result) result.bid = clampAmazonBid(result.bid, ceiling);
     if ('defaultBid' in result) result.defaultBid = clampAmazonBid(result.defaultBid, ceiling);
     return result;

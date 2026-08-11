@@ -13,6 +13,7 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
 import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
+import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
@@ -206,11 +207,16 @@ Deno.serve(async (request) => {
     const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID') || null;
     const maxAttempts = Math.max(1, Math.min(5, Number(body.max_attempts || 3) || 3));
 
-    const winnerBid = await resolveWinnerKeywordCeilings(
-      base44, body.amazon_account_id, path, method, body.payload ?? null,
-    );
+    const isBidMutation = ['POST', 'PUT'].includes(method) &&
+      ['/sp/keywords', '/sp/adGroups', 'targets'].some((segment) => path.includes(segment));
+    const [winnerBid, configuredBid] = isBidMutation
+      ? await Promise.all([
+          resolveWinnerKeywordCeilings(base44, body.amazon_account_id, path, method, body.payload ?? null),
+          loadConfiguredBidPolicy(base44, body.amazon_account_id),
+        ])
+      : [{ ceilings: {}, evidence: [] }, { ceiling: undefined, source: null }];
     let guardedPayload = enforceBidCeilingOnPayload(
-      path, method, body.payload ?? null, winnerBid.ceilings,
+      path, method, body.payload ?? null, winnerBid.ceilings, configuredBid.ceiling,
     );
     if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
       const enabling = guardedPayload.campaigns.filter((item: any) =>
@@ -400,6 +406,8 @@ Deno.serve(async (request) => {
       errors: result.errors,
       multi_status_validated: result.status === 207,
       winner_bid_exceptions: winnerBid.evidence,
+      configured_bid_ceiling: configuredBid.ceiling,
+      settings_source: configuredBid.source,
       duration_ms: Date.now() - startedAt,
     });
   } catch (error: any) {

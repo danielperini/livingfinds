@@ -12,6 +12,7 @@
  * O orquestrador pode chamar múltiplas vezes até não restar mais keywords.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const FALLBACK_BID = 0.60;
 const MIN_BID = 0.40;
@@ -108,11 +109,10 @@ Deno.serve(async (req) => {
     const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
 
     // ── Carregar configurações ────────────────────────────────────────────
-    const perfList = await base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []);
-    const settings = perfList[0] || {};
-    const globalMaxBid = num(settings.max_bid || 5.0);
-    const globalMaxCpc = num(settings.max_cpc || 0);
-    const globalMinBid = num(settings.min_bid || MIN_BID);
+    const bidPolicy = await loadConfiguredBidPolicy(base44, aid);
+    const globalMaxBid = bidPolicy.ceiling;
+    const globalMaxCpc = bidPolicy.maxCpc || 0;
+    const globalMinBid = bidPolicy.minBid || MIN_BID;
 
     // Dados econômicos por ASIN para safe_max_cpc
     const econList = await base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 200).catch(() => []);
@@ -176,6 +176,11 @@ Deno.serve(async (req) => {
         }
         // else: sem sugestão → mantém FALLBACK_BID
       }
+      const effectiveCeiling = safeMaxCpc > 0 ? Math.min(bidPolicy.ceiling, safeMaxCpc) : bidPolicy.ceiling;
+      newBid = Number(clampBidToConfiguredPolicy(Math.min(newBid, effectiveCeiling), {
+        ...bidPolicy, ceiling: effectiveCeiling,
+      }));
+      if (newBid < FALLBACK_BID && bidSource === 'fallback_0.60') bidSource = 'fallback_limited_by_settings';
 
       // Aplicar na Amazon
       let success = false;
@@ -274,6 +279,8 @@ Deno.serve(async (req) => {
       skipped,
       has_amazon_access: hasAccess,
       fallback_bid: FALLBACK_BID,
+      configured_bid_ceiling: bidPolicy.ceiling,
+      settings_source: bidPolicy.source,
       duration_ms: Date.now() - t0,
       results,
     });

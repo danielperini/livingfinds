@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { clampBidToConfiguredPolicy, loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,8 +70,26 @@ async function checkIdempotency(base44: any, decision: any) {
 
 async function executeOne(base44: any, decision: any) {
   const accountId = decision.amazon_account_id;
-  const targetBid = Number(decision.value_after ?? decision.proposed_value);
-  if (!Number.isFinite(targetBid) || targetBid <= 0) throw new Error('Bid de destino inválido');
+  const requestedTargetBid = Number(decision.value_after ?? decision.proposed_value);
+  if (!Number.isFinite(requestedTargetBid) || requestedTargetBid <= 0) throw new Error('Bid de destino inválido');
+  const bidPolicy = await loadConfiguredBidPolicy(base44, accountId);
+  const targetBid = Number(clampBidToConfiguredPolicy(requestedTargetBid, bidPolicy));
+
+  if (targetBid !== requestedTargetBid) {
+    await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+      value_after: targetBid,
+      proposed_value: targetBid,
+      settings_source: bidPolicy.source,
+      settings_snapshot: JSON.stringify({
+        configured_bid_ceiling: bidPolicy.ceiling,
+        configured_max_bid: bidPolicy.maxBid,
+        configured_max_cpc: bidPolicy.maxCpc,
+      }),
+      updated_at: new Date().toISOString(),
+    });
+    decision.value_after = targetBid;
+    decision.proposed_value = targetBid;
+  }
 
   const keywordId = String(decision.keyword_id || (decision.entity_type === 'keyword' ? decision.entity_id : '') || '');
   let campaignId = String(decision.campaign_id || '');
@@ -206,6 +225,7 @@ async function executeOne(base44: any, decision: any) {
     ad_group_id: adGroupId,
     keyword_id: resolvedKeywordId,
     bid: targetBid,
+    configured_bid_ceiling: bidPolicy.ceiling,
     request_ids: [
       groupUpdate?.request_id || groupUpdate?.amazon_request_id,
       keywordUpdate?.request_id || keywordUpdate?.amazon_request_id,

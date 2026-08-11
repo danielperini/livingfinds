@@ -171,6 +171,9 @@ Deno.serve(async (req) => {
     // Auditoria de estados: valida estado local vs Amazon para todas as campanhas
     push('auditCampaignStateSync', 'audit_campaign_states');
 
+    // Trava final comum aos dois orquestradores: o teto sempre vem de Configurações.
+    push('bulkSetAllBids', 'amazon_bid_ceiling_final');
+
     // Backup: 1x/dia (já tem automação própria às 02:00, aqui é redundância de segurança)
     if (!backupDone || force) push('runBackupToDrive', 'daily_backup', { backup_type: 'daily_incremental' }, true);
     else skipped.push('daily_backup');

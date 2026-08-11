@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   Settings as SettingsIcon, CheckCircle, AlertTriangle, Loader2, Save,
-  ShieldAlert, ShieldCheck, WifiOff, ExternalLink, DollarSign, Package,
-  BarChart2, Key, Target, ChevronDown, ChevronRight, Eye, Palette, FlaskConical, Wifi,
+  ShieldAlert, ShieldCheck, ExternalLink, DollarSign, Package,
+  BarChart2, Key, Target, ChevronDown, ChevronRight, FlaskConical, Wifi,
 } from 'lucide-react';
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
@@ -508,6 +508,14 @@ export default function Settings() {
           <NumberInput label="Bid Máximo (R$)" value={goals.max_bid} onChange={v => setGoal('max_bid', v)} min={0.10} max={100} step={0.10} />
           <NumberInput label="Aumento Máx. de Bid (%)" value={goals.max_bid_increase_pct} onChange={v => setGoal('max_bid_increase_pct', v)} min={1} max={100} step={1} />
           <NumberInput label="Redução Máx. de Bid (%)" value={goals.max_bid_decrease_pct} onChange={v => setGoal('max_bid_decrease_pct', v)} min={1} max={100} step={1} />
+        </div>
+        <div className="mb-5 -mt-2 px-3 py-2 rounded-lg border border-sky-500/20 bg-sky-500/5 text-[11px] text-slate-400">
+          Teto efetivo enviado à Amazon: <strong className="text-sky-300 font-mono">
+            R${Math.min(
+              Number(goals.max_bid) || 1,
+              Number(goals.max_cpc) > 0 ? Number(goals.max_cpc) : Number(goals.max_bid) || 1,
+            ).toFixed(2)}
+          </strong>. O motor sempre usa o menor valor entre Bid Máximo e CPC Máximo ativo.
         </div>
 
         {/* Budget por campanha */}

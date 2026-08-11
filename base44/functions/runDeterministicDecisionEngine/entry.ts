@@ -43,6 +43,7 @@ import {
 import { resolveGoalPolicy } from '../../shared/goalPolicyResolver.ts';
 import { classifyExecutionPolicy } from '../../shared/decisionExecutionPolicy.ts';
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
+import { resolveConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HIERARQUIA CANÔNICA DE DECISÃO v7
@@ -808,10 +809,13 @@ Deno.serve(async (req) => {
       };
     }
 
-    // Guardrails econômicos absolutos do portfólio. Configuração pode ser
-    // mais conservadora, mas nunca ultrapassar estes limites.
-    settings.max_bid = Math.min(Number(settings.max_bid || FB.MAX_BID), FB.MAX_BID);
-    settings.min_bid = Math.min(Number(settings.min_bid || FB.MIN_BID), settings.max_bid);
+    // O teto de bid vem da fonte exibida em Configurações. CPC máximo, quando
+    // preenchido, é um segundo guardrail e prevalece se for mais conservador.
+    const configuredBid = resolveConfiguredBidPolicy(settings, FB.MAX_BID);
+    settings.configured_max_bid = configuredBid.maxBid;
+    settings.configured_max_cpc = configuredBid.maxCpc;
+    settings.max_bid = configuredBid.ceiling;
+    settings.min_bid = configuredBid.minBid;
     settings.max_bid_increase_pct = Math.min(
       Number(settings.max_bid_increase_pct || FB.MAX_INCREASE_PCT),
       FB.MAX_INCREASE_PCT,
@@ -917,7 +921,7 @@ Deno.serve(async (req) => {
 
     const [keywords, campaigns, products, metricsRaw, salesDailyRaw,
            termBankRaw, profitLearnings, recentExecs, productEconomicsRaw, targetingMetricsRaw,
-           unifiedAdsMetricsRaw
+           unifiedAdsMetricsRaw, winnerProtectionDecisions
     ] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 15000),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 5000),
@@ -930,6 +934,9 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
       base44.asServiceRole.entities.TargetingMetricsDaily.filter({ amazon_account_id: aid }, '-date', 5000).catch(() => []),
       base44.asServiceRole.entities.UnifiedAdsMetricsDaily.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
+      base44.asServiceRole.entities.OptimizationDecision.filter({
+        amazon_account_id: aid, rule_key: 'winner_protection_dedup',
+      }, '-created_at', 5000).catch(() => []),
     ]);
     // Relatórios de atribuição são revisados para a mesma chave natural. Bases
     // antigas podem conter duplicatas de sincronizações anteriores; usar apenas
@@ -1305,6 +1312,9 @@ Deno.serve(async (req) => {
       usedIdemKeys.add(key);
       usedIdemKeys.add(key.split('|window:')[0]);
     }
+    const protectedAuditKeys = new Set<string>(
+      winnerProtectionDecisions.map((decision: any) => String(decision.idempotency_key || '')).filter(Boolean),
+    );
     const lastExecByRuleEntity = new Map<string, any>();
     for (const ex of recentExecs) {
       const k = `${ex.rule_key || ex.action_type}|${ex.entity_id || ex.keyword_id}`;
@@ -1374,21 +1384,28 @@ Deno.serve(async (req) => {
             recent_sale_protection_hours: FB.RECENT_SALE_PROTECTION_HOURS,
           });
           if (wpResult.protected) {
-            base44.asServiceRole.entities.OptimizationDecision.create({
+            const campaignId = String(dup.campaign_id || dup.amazon_campaign_id || dup.id || '');
+            const protectionKey = `winner_protection_dedup|${aid}|${campaignId}|${wpResult.reason}`;
+            if (protectedAuditKeys.has(protectionKey)) continue;
+            protectedAuditKeys.add(protectionKey);
+            await base44.asServiceRole.entities.OptimizationDecision.create({
               amazon_account_id: aid,
               decision_type: 'pause',
               entity_type: 'campaign',
-              entity_id: dup.campaign_id || dup.amazon_campaign_id,
-              campaign_id: dup.campaign_id || dup.amazon_campaign_id,
+              entity_id: campaignId,
+              campaign_id: campaignId,
               asin,
               action: 'pause_campaign',
               status: 'cancelled',
+              queue_status: 'cancelled',
+              confirmation_required: false,
               rationale: `winner_protection_blocked (dedup): ${wpResult.reason}`,
               rule_key: 'winner_protection_dedup',
+              idempotency_key: protectionKey,
               risk: 'low',
               source_function: 'runDeterministicDecisionEngine_v8',
               created_at: now,
-            }).catch(() => {});
+            }).catch(() => null);
             continue;
           }
 
