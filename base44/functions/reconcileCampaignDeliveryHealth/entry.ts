@@ -119,7 +119,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, undefined, 5000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
-        base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: accountId }, '-date', 3).catch(() => []),
+        base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: accountId }, '-updated_at', 10).catch(() => []),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: accountId }, '-assessment_date', 5000).catch(() => []),
@@ -185,11 +185,14 @@ Deno.serve(async (request) => {
         metricsByAsin.set(asin, aggregate);
       }
       const today = new Date().toISOString().slice(0, 10);
-      const currentSpendController = spendControllers.find((row: any) => String(row.date || row.controller_date || '').slice(0, 10) === today);
+      const currentSpendController = spendControllers.find((row: any) =>
+        String(row.date || row.spend_date || row.controller_date || '').slice(0, 10) === today
+      );
       // Hard stop is intraday state. A controller from yesterday must not freeze today's
       // zero-delivery recovery; when today's controller exists, however, it remains absolute.
       const accountOutOfBudget = currentSpendController?.account_out_of_budget === true || currentSpendController?.hard_cap_reached === true;
-      const accountHardStop = spendControllers.some((r: any) => r.global_kill_switch === true || ['critical', 'cap_imminent', 'cap_reached'].includes(String(r.cap_status || '').toLowerCase()));
+      const accountHardStop = currentSpendController?.global_kill_switch === true ||
+        ['critical', 'cap_imminent', 'cap_reached'].includes(String(currentSpendController?.cap_status || '').toLowerCase());
       const actions: any[] = [];
       const repairCandidates: any[] = [];
       const queuedDecisionIds = new Set<string>();
