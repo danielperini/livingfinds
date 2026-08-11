@@ -23,6 +23,20 @@ async function loadAll(
   return rows;
 }
 
+async function loadKeywordLinks(entity: any, amazonAccountId: string, keywordIds: string[]): Promise<any[]> {
+  const rows: any[] = [];
+  for (let i = 0; i < keywordIds.length; i += 100) {
+    const ids = keywordIds.slice(i, i + 100);
+    const page = await entity.filter(
+      { amazon_account_id: amazonAccountId, keyword_id: { $in: ids } },
+      '-updated_date',
+      Math.max(500, ids.length * 5),
+    ).catch(() => []);
+    if (Array.isArray(page)) rows.push(...page);
+  }
+  return rows;
+}
+
 async function bulkUpdate(entity: any, rows: any[], dryRun: boolean): Promise<number> {
   if (dryRun || rows.length === 0) return 0;
   let updated = 0;
@@ -44,68 +58,80 @@ Deno.serve(async (req) => {
       if (!user) return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     }
 
+    const amazonAccountId = String(body.amazon_account_id || '').trim();
+    if (!amazonAccountId) return Response.json({ ok: false, error: 'amazon_account_id required' }, { status: 400 });
+
     const dryRun = body.dry_run !== false;
-    const maxKeywords = Math.min(Math.max(Number(body.max_keywords) || 60000, 1), 100000);
-    const maxLogs = Math.min(Math.max(Number(body.max_logs) || 20000, 1), 50000);
-    const accountIds = body.amazon_account_id
-      ? [String(body.amazon_account_id)]
-      : (await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 100))
-        .map((row: any) => String(row.id));
+    const scope = body.scope === 'keywords' ? 'keywords' : 'logs';
+    const skip = Math.max(Number(body.skip) || 0, 0);
+    const limitCap = scope === 'logs' ? 1000 : 5000;
+    const limit = Math.min(Math.max(Number(body.limit) || (scope === 'logs' ? 300 : 2000), 1), limitCap);
+    const filter = { amazon_account_id: amazonAccountId };
+    const [campaigns, productAds] = await Promise.all([
+      loadAll(base44.asServiceRole.entities.Campaign, filter, '-updated_date', 10000),
+      loadAll(base44.asServiceRole.entities.ProductAd, filter, '-updated_date', 20000),
+    ]);
 
-    const accounts: any[] = [];
-    for (const amazonAccountId of accountIds) {
-      const filter = { amazon_account_id: amazonAccountId };
-      const [campaigns, productAds, keywords, logs] = await Promise.all([
-        loadAll(base44.asServiceRole.entities.Campaign, filter, '-updated_date', 10000),
-        loadAll(base44.asServiceRole.entities.ProductAd, filter, '-updated_date', 20000),
-        loadAll(base44.asServiceRole.entities.Keyword, filter, '-updated_date', maxKeywords),
-        loadAll(base44.asServiceRole.entities.AdsBidChangeLog, filter, '-created_at', maxLogs),
-      ]);
-
-      const campaignAsinById = buildCampaignAsinIndex(campaigns, productAds, keywords);
-      const keywordUpdates: any[] = [];
+    if (scope === 'keywords') {
+      const keywords = await base44.asServiceRole.entities.Keyword.filter(filter, '-updated_date', limit, skip).catch(() => []);
+      const campaignAsinById = buildCampaignAsinIndex(campaigns, productAds);
+      const updates: any[] = [];
       for (const keyword of keywords) {
         if (normalizeAsin(keyword.asin)) continue;
         const asin = campaignAsinById.get(String(keyword.campaign_id || keyword.amazon_campaign_id || '').trim()) || '';
-        if (asin) keywordUpdates.push({ id: keyword.id, asin });
+        if (asin) updates.push({ id: keyword.id, asin });
       }
-
-      const keywordsWithBackfill = keywords.map((keyword) => {
-        if (normalizeAsin(keyword.asin)) return keyword;
-        const asin = campaignAsinById.get(String(keyword.campaign_id || keyword.amazon_campaign_id || '').trim()) || '';
-        return asin ? { ...keyword, asin } : keyword;
-      });
-      const keywordAsinById = buildKeywordAsinIndex(keywordsWithBackfill);
-      const logUpdates: any[] = [];
-      const unresolvedRecent: any[] = [];
-      for (const log of logs) {
-        if (normalizeAsin(log.asin)) continue;
-        const asin = resolveAdsAsin(log, keywordAsinById, campaignAsinById);
-        if (asin) {
-          logUpdates.push({ id: log.id, asin });
-        } else if (unresolvedRecent.length < 25) {
-          unresolvedRecent.push({
-            id: log.id,
-            created_at: log.created_at || log.created_date || '',
-            keyword_id: log.keyword_id || '',
-            keyword: log.keyword || log.keyword_text || '',
-            campaign_id: log.campaign_id || '',
-          });
-        }
-      }
-
-      const keywordRowsUpdated = await bulkUpdate(base44.asServiceRole.entities.Keyword, keywordUpdates, dryRun);
-      const logRowsUpdated = await bulkUpdate(base44.asServiceRole.entities.AdsBidChangeLog, logUpdates, dryRun);
-      accounts.push({
-        amazon_account_id: amazonAccountId,
-        scanned: { campaigns: campaigns.length, product_ads: productAds.length, keywords: keywords.length, logs: logs.length },
-        recoverable: { keywords: keywordUpdates.length, logs: logUpdates.length },
-        updated: { keywords: keywordRowsUpdated, logs: logRowsUpdated },
-        unresolved_recent: unresolvedRecent,
+      const updated = await bulkUpdate(base44.asServiceRole.entities.Keyword, updates, dryRun);
+      return Response.json({
+        ok: true,
+        dry_run: dryRun,
+        scope,
+        page: { skip, limit, scanned: keywords.length, has_more: keywords.length === limit },
+        recoverable: updates.length,
+        updated,
+        duration_ms: Date.now() - startedAt,
       });
     }
 
-    return Response.json({ ok: true, dry_run: dryRun, accounts, duration_ms: Date.now() - startedAt });
+    const logs = await base44.asServiceRole.entities.AdsBidChangeLog.filter(filter, '-created_at', limit, skip).catch(() => []);
+    const keywordIds = [...new Set(
+      logs
+        .filter((log: any) => !normalizeAsin(log.asin))
+        .map((log: any) => String(log.keyword_id || (log.entity_type === 'keyword' ? log.entity_id : '')).trim())
+        .filter(Boolean),
+    )];
+    const keywords = await loadKeywordLinks(base44.asServiceRole.entities.Keyword, amazonAccountId, keywordIds);
+    const campaignAsinById = buildCampaignAsinIndex(campaigns, productAds, keywords);
+    const keywordAsinById = buildKeywordAsinIndex(keywords);
+    const updates: any[] = [];
+    const unresolved: any[] = [];
+    for (const log of logs) {
+      if (normalizeAsin(log.asin)) continue;
+      const asin = resolveAdsAsin(log, keywordAsinById, campaignAsinById);
+      if (asin) {
+        updates.push({ id: log.id, asin });
+      } else if (unresolved.length < 25) {
+        unresolved.push({
+          id: log.id,
+          created_at: log.created_at || log.created_date || '',
+          keyword_id: log.keyword_id || '',
+          keyword: log.keyword || log.keyword_text || '',
+          campaign_id: log.campaign_id || '',
+        });
+      }
+    }
+    const updated = await bulkUpdate(base44.asServiceRole.entities.AdsBidChangeLog, updates, dryRun);
+    return Response.json({
+      ok: true,
+      dry_run: dryRun,
+      scope,
+      page: { skip, limit, scanned: logs.length, has_more: logs.length === limit },
+      supporting_keywords: keywords.length,
+      recoverable: updates.length,
+      updated,
+      unresolved,
+      duration_ms: Date.now() - startedAt,
+    });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error), duration_ms: Date.now() - startedAt }, { status: 500 });
   }
