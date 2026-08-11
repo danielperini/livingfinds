@@ -1,7 +1,14 @@
-// v2 — lógica de reparo inlinada (sem invoke intermediário para evitar 403 na cadeia asServiceRole)
+// v3 — reparo 1:1 com ativação de componentes existentes e bid econômico explícito.
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const upper = (value: unknown) => String(value || '').trim().toUpperCase();
+const numeric = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+
+function keywordFromCampaignName(value: unknown): string {
+  const parts = String(value || '').split('|').map((part) => part.trim());
+  return parts.length >= 5 ? parts.slice(4).join(' | ').replace(/\s+\+\d+\s*$/i, '').trim().slice(0, 80) : '';
+}
 
 function hourBR() {
   const p = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).formatToParts(new Date());
@@ -70,12 +77,15 @@ function createdId(r: any, group: string, field: string): string | null {
   return p?.[group]?.success?.[0]?.[field] || p?.success?.[0]?.[field] || p?.[group]?.[0]?.[field] || null;
 }
 
-async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: boolean; error?: string; details?: any }> {
+async function repairItem(b: any, item: any, bidCap: number): Promise<{ ok: boolean; complete: boolean; error?: string; details?: any }> {
   const accountId = item.amazon_account_id;
   const asin = String(item.asin || '').trim().toUpperCase();
   const campaignId = String(item.campaign_id || '').trim();
 
   if (!accountId || !asin || !campaignId) throw new Error(`Dados inválidos: accountId=${accountId} asin=${asin} campaignId=${campaignId}`);
+  const safeBidCap = Math.round(Math.max(0, numeric(bidCap)) * 100) / 100;
+  if (safeBidCap < 0.02) throw new Error('SAFE_BID_CAP_REQUIRED');
+  const repairBid = Math.max(0.02, Math.min(0.50, safeBidCap));
 
   const accounts = await b.asServiceRole.entities.AmazonAccount.filter({ id: accountId }, null, 1);
   const account = accounts[0];
@@ -89,8 +99,16 @@ async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: b
   const CT_PA = 'application/vnd.spProductAd.v3+json';
   const CT_KW = 'application/vnd.spKeyword.v3+json';
 
-  const products = await b.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_date', 1).catch(() => []);
+  const [products, localCampaigns] = await Promise.all([
+    b.asServiceRole.entities.Product.filter({ amazon_account_id: accountId, asin }, '-updated_date', 1).catch(() => []),
+    b.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, campaign_id: campaignId }, '-updated_date', 100).catch(() => []),
+  ]);
   const product = products[0] || {};
+  const localCampaign = localCampaigns[0] || {};
+  const productStock = numeric(product?.fba_inventory ?? product?.available_quantity, -1);
+  if (productStock === 0 || ['out_of_stock', 'not_buyable', 'offer_inactive'].includes(String(product?.ads_eligibility_status || product?.inventory_status || '').toLowerCase())) {
+    throw new Error('PRODUCT_NOT_ELIGIBLE_FOR_REPAIR');
+  }
 
   // Buscar ad groups EXACT na campanha
   const gr = await adsCall(base, token, clientId, profileId, 'POST', '/sp/adGroups/list', CT_AG, {
@@ -98,17 +116,25 @@ async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: b
     stateFilter: { include: ['ENABLED', 'PAUSED'] },
     maxResults: 100,
   });
-  let adGroups = list(gr, 'adGroups').filter((v: any) => String(v.name || '').toUpperCase().includes('EXACT'));
+  if (!gr.ok) throw new Error(gr?.errors?.[0]?.message || 'Falha ao listar ad groups');
+  let adGroups = list(gr, 'adGroups').filter((v: any) => upper(v.name).includes('EXACT'));
 
   // Se não houver ad group EXACT, criar
   if (!adGroups.length) {
     const cr = await adsCall(base, token, clientId, profileId, 'POST', '/sp/adGroups', CT_AG, {
-      adGroups: [{ name: `AG | EXACT | ${asin}`, campaignId, defaultBid: 0.5, state: 'ENABLED' }],
+      adGroups: [{ name: `AG | EXACT | ${asin}`, campaignId, defaultBid: repairBid, state: 'ENABLED' }],
     });
     const newId = createdId(cr, 'adGroups', 'adGroupId');
     if (!newId) throw new Error(cr?.errors?.[0]?.message || 'Falha ao criar ad group EXACT');
     adGroups = [{ adGroupId: newId, state: 'ENABLED' }];
     await wait(14000);
+  } else if (upper(adGroups[0].state) !== 'ENABLED') {
+    const enabledGroup = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/adGroups', CT_AG, {
+      adGroups: [{ adGroupId: String(adGroups[0].adGroupId), state: 'ENABLED', defaultBid: repairBid }],
+    });
+    if (!enabledGroup.ok && enabledGroup.status !== 207) throw new Error(enabledGroup?.errors?.[0]?.message || 'Falha ao ativar ad group EXACT');
+    adGroups[0].state = 'ENABLED';
+    await wait(3000);
   }
 
   const adGroupId = String(adGroups[0].adGroupId);
@@ -118,14 +144,25 @@ async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: b
     campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
     stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, maxResults: 100,
   });
-  const activeAds = list(par, 'productAds').filter((v: any) => String(v.state || '').toUpperCase() === 'ENABLED');
+  if (!par.ok) throw new Error(par?.errors?.[0]?.message || 'Falha ao listar product ads');
+  const remoteAds = list(par, 'productAds');
+  const activeAds = remoteAds.filter((v: any) => upper(v.state) === 'ENABLED');
 
   if (!activeAds.length) {
-    const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds', CT_PA, {
-      productAds: [{ campaignId, adGroupId, ...(product?.sku ? { sku: product.sku } : { asin }), state: 'ENABLED' }],
-    });
-    if (!created?.ok && created?.status !== 207) throw new Error(created?.errors?.[0]?.message || 'Falha ao criar product ad');
-    await wait(14000);
+    const pausedAd = remoteAds.find((v: any) => upper(v.state) === 'PAUSED');
+    if (pausedAd) {
+      const enabledAd = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/productAds', CT_PA, {
+        productAds: [{ adId: String(pausedAd.adId || pausedAd.productAdId), state: 'ENABLED' }],
+      });
+      if (!enabledAd.ok && enabledAd.status !== 207) throw new Error(enabledAd?.errors?.[0]?.message || 'Falha ao ativar product ad');
+      await wait(3000);
+    } else {
+      const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/productAds', CT_PA, {
+        productAds: [{ campaignId, adGroupId, ...(product?.sku ? { sku: product.sku } : { asin }), state: 'ENABLED' }],
+      });
+      if (!created?.ok && created?.status !== 207) throw new Error(created?.errors?.[0]?.message || 'Falha ao criar product ad');
+      await wait(14000);
+    }
   }
 
   // Verificar/criar keywords EXACT
@@ -133,26 +170,40 @@ async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: b
     campaignIdFilter: { include: [campaignId] }, adGroupIdFilter: { include: [adGroupId] },
     stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] }, matchTypeFilter: ['EXACT'], maxResults: 100,
   });
-  let activeKw = list(kr, 'keywords').filter((v: any) => String(v.state || '').toUpperCase() === 'ENABLED');
+  if (!kr.ok) throw new Error(kr?.errors?.[0]?.message || 'Falha ao listar keywords EXACT');
+  const remoteExact = list(kr, 'keywords').filter((v: any) => upper(v.matchType || v.match_type) === 'EXACT');
+  let activeKw = remoteExact.filter((v: any) => upper(v.state) === 'ENABLED');
 
   const addedKeywords: string[] = [];
   if (!activeKw.length) {
-    const terms = await b.asServiceRole.entities.TermBank.filter({ amazon_account_id: accountId, asin }, '-performance_score', 10).catch(() => []);
-    const candidates = terms.map((t: any) => String(t.term || '').trim()).filter(Boolean).slice(0, 4);
-    if (!candidates.length) {
-      // Usar primeiras 4 palavras do título, removendo caracteres especiais, max 80 chars
-      const rawName = String(product?.product_name || product?.display_name || asin);
-      const cleanName = rawName.replace(/[,;:!?@#$%^&*()+={}[\]|\\<>]/g, ' ').replace(/\s+/g, ' ').trim();
-      const shortName = cleanName.split(' ').slice(0, 4).join(' ').slice(0, 80);
-      candidates.push(shortName || asin);
-    }
-
-    for (const keyword of candidates) {
-      const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/keywords', CT_KW, {
-        keywords: [{ campaignId, adGroupId, keywordText: keyword, matchType: 'EXACT', state: 'ENABLED', bid: 0.5 }],
+    const pausedKeyword = remoteExact.find((v: any) => upper(v.state) === 'PAUSED');
+    if (pausedKeyword) {
+      const currentBid = Math.max(0.02, numeric(pausedKeyword.bid, repairBid));
+      const targetBid = Math.min(currentBid, safeBidCap);
+      const enabledKeyword = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/keywords', CT_KW, {
+        keywords: [{ keywordId: String(pausedKeyword.keywordId), state: 'ENABLED', bid: targetBid }],
       });
-      if (created?.ok || createdId(created, 'keywords', 'keywordId')) addedKeywords.push(keyword);
+      if (!enabledKeyword.ok && enabledKeyword.status !== 207) throw new Error(enabledKeyword?.errors?.[0]?.message || 'Falha ao ativar keyword EXACT');
+      await wait(3000);
+    } else {
+      const terms = await b.asServiceRole.entities.TermBank.filter({ amazon_account_id: accountId, asin, status: 'active' }, '-performance_score', 10).catch(() => []);
+      const keyword = keywordFromCampaignName(localCampaign.name || localCampaign.campaign_name) ||
+        terms.map((t: any) => String(t.term || '').trim()).find(Boolean) || '';
+      if (!keyword) throw new Error('NO_CONFIRMED_ONE_TO_ONE_KEYWORD');
+      const created = await adsCall(base, token, clientId, profileId, 'POST', '/sp/keywords', CT_KW, {
+        keywords: [{ campaignId, adGroupId, keywordText: keyword, matchType: 'EXACT', state: 'ENABLED', bid: repairBid }],
+      });
+      if (!created?.ok && !createdId(created, 'keywords', 'keywordId')) throw new Error(created?.errors?.[0]?.message || 'Falha ao criar keyword EXACT 1:1');
+      addedKeywords.push(keyword);
       await wait(14000);
+    }
+  } else {
+    const aboveCap = activeKw.filter((v: any) => numeric(v.bid) > safeBidCap + 0.0001);
+    for (const keyword of aboveCap) {
+      const reduced = await adsCall(base, token, clientId, profileId, 'PUT', '/sp/keywords', CT_KW, {
+        keywords: [{ keywordId: String(keyword.keywordId), state: 'ENABLED', bid: safeBidCap }],
+      });
+      if (!reduced.ok && reduced.status !== 207) throw new Error(reduced?.errors?.[0]?.message || 'Falha ao aplicar safe_max_cpc');
     }
   }
 
@@ -170,18 +221,65 @@ async function repairItem(b: any, item: any): Promise<{ ok: boolean; complete: b
 
   const complete = activeKw.length > 0 && finalAds.length > 0;
 
-  // Atualizar banco local
-  const local = await b.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId, campaign_id: campaignId }, '-updated_date', 1).catch(() => []);
-  if (local[0]) {
-    await b.asServiceRole.entities.Campaign.update(local[0].id, {
+  // Atualizar o espelho local somente depois da confirmação remota.
+  if (complete) {
+    const localGroups = await b.asServiceRole.entities.AdGroup.filter({ amazon_account_id: accountId, campaign_id: campaignId }, '-updated_date', 100).catch(() => []);
+    for (const localGroup of localGroups.filter((row: any) => String(row.ad_group_id || '') === adGroupId)) {
+      await b.asServiceRole.entities.AdGroup.update(localGroup.id, { state: 'enabled', status: 'enabled', synced_at: new Date().toISOString() }).catch(() => {});
+    }
+
+    for (const remoteKeyword of activeKw) {
+      const keywordId = String(remoteKeyword.keywordId || remoteKeyword.keyword_id || '');
+      if (!keywordId) continue;
+      const localKeywords = await b.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId, keyword_id: keywordId }, '-updated_date', 100).catch(() => []);
+      if (localKeywords.length) {
+        for (const localKeyword of localKeywords) {
+          await b.asServiceRole.entities.Keyword.update(localKeyword.id, {
+            state: 'enabled', status: 'enabled', current_bid: numeric(remoteKeyword.bid, repairBid), bid: numeric(remoteKeyword.bid, repairBid),
+            synced_at: new Date().toISOString(), last_seen_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      } else {
+        await b.asServiceRole.entities.Keyword.create({
+          amazon_account_id: accountId, campaign_id: campaignId, ad_group_id: adGroupId, keyword_id: keywordId, asin,
+          keyword: String(remoteKeyword.keywordText || remoteKeyword.keyword || keywordFromCampaignName(localCampaign.name || localCampaign.campaign_name)),
+          keyword_text: String(remoteKeyword.keywordText || remoteKeyword.keyword || keywordFromCampaignName(localCampaign.name || localCampaign.campaign_name)),
+          match_type: 'exact', state: 'enabled', status: 'enabled', current_bid: numeric(remoteKeyword.bid, repairBid), bid: numeric(remoteKeyword.bid, repairBid),
+          source: 'manual', synced_at: new Date().toISOString(), last_seen_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    }
+
+    const localAds = await b.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId, campaign_id: campaignId }, '-updated_date', 100).catch(() => []);
+    for (const remoteAd of finalAds) {
+      const productAdId = String(remoteAd.adId || remoteAd.productAdId || '');
+      const matchingLocal = localAds.filter((row: any) => String(row.product_ad_id || row.ad_id || '') === productAdId);
+      if (matchingLocal.length) {
+        for (const localAd of matchingLocal) {
+          await b.asServiceRole.entities.ProductAd.update(localAd.id, { state: 'enabled', status: 'enabled', synced_at: new Date().toISOString() }).catch(() => {});
+        }
+      } else if (productAdId) {
+        await b.asServiceRole.entities.ProductAd.create({
+          amazon_account_id: accountId, product_ad_id: productAdId, campaign_id: campaignId, ad_group_id: adGroupId,
+          asin, sku: product?.sku || null, state: 'enabled', status: 'enabled', synced_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    }
+  }
+
+  for (const local of localCampaigns) {
+    await b.asServiceRole.entities.Campaign.update(local.id, {
       is_incomplete: !complete,
+      completion_status: complete ? 'complete' : 'incomplete',
+      repair_status: complete ? 'repaired_confirmed' : 'failed',
+      repaired_at: complete ? new Date().toISOString() : null,
       keyword_count: activeKw.length,
       product_ad_count: finalAds.length,
       last_repair_error: complete ? null : 'Grupo EXACT sem keyword ou anúncio ativo após reparo',
     }).catch(() => {});
   }
 
-  return { ok: complete, complete, details: { adGroupId, active_keywords: activeKw.length, active_product_ads: finalAds.length, added_keywords: addedKeywords } };
+  return { ok: complete, complete, details: { adGroupId, active_keywords: activeKw.length, active_product_ads: finalAds.length, added_keywords: addedKeywords, safe_bid_cap: safeBidCap, repair_bid: repairBid } };
 }
 
 Deno.serve(async (req) => {
@@ -201,7 +299,16 @@ Deno.serve(async (req) => {
       status: 'scheduled',
     }, 'scheduled_at', 100).catch(() => []);
 
-    const rows = scheduled.filter(isDue).slice(0, 10);
+    const campaignIds = new Set((Array.isArray(body.campaign_ids) ? body.campaign_ids : []).map(String).filter(Boolean));
+    const maximumItems = Math.max(1, Math.min(10, Math.floor(numeric(body.max_items, 10))));
+    const bidCaps = body.repair_bid_caps && typeof body.repair_bid_caps === 'object' ? body.repair_bid_caps : {};
+    const uniqueByCampaign = new Map<string, any>();
+    for (const item of scheduled.filter(isDue)) {
+      const campaignId = String(item.campaign_id || '');
+      if (!campaignId || (campaignIds.size && !campaignIds.has(campaignId)) || uniqueByCampaign.has(campaignId)) continue;
+      uniqueByCampaign.set(campaignId, item);
+    }
+    const rows = [...uniqueByCampaign.values()].slice(0, maximumItems);
     const results: any[] = [];
 
     for (const item of rows) {
@@ -211,7 +318,7 @@ Deno.serve(async (req) => {
       });
 
       try {
-        const result = await repairItem(b, item);
+        const result = await repairItem(b, item, numeric(bidCaps[String(item.campaign_id || '')]));
         const retry = !result.complete && attempts < Number(item.max_attempts || 5);
 
         await b.asServiceRole.entities.KeywordRepairQueue.update(item.id, {
@@ -221,6 +328,21 @@ Deno.serve(async (req) => {
           completed_at: result.complete || !retry ? new Date().toISOString() : null,
           last_error: result.complete ? null : String(result.error || 'Incompleto após reparo').slice(0, 500),
         });
+
+        if (result.complete) {
+          const duplicates = await b.asServiceRole.entities.KeywordRepairQueue.filter({
+            amazon_account_id: item.amazon_account_id,
+            campaign_id: String(item.campaign_id || ''),
+            status: 'scheduled',
+          }, '-created_date', 100).catch(() => []);
+          for (const duplicate of duplicates) {
+            await b.asServiceRole.entities.KeywordRepairQueue.update(duplicate.id, {
+              status: 'completed',
+              completed_at: new Date().toISOString(),
+              last_error: null,
+            }).catch(() => {});
+          }
+        }
 
         results.push({ id: item.id, asin: item.asin, campaign_id: item.campaign_id, ok: result.complete, retry_scheduled: retry, ...result.details });
       } catch (e: any) {
@@ -239,7 +361,8 @@ Deno.serve(async (req) => {
     }
 
     return Response.json({
-      ok: true, hour, scheduled_found: scheduled.length,
+      ok: results.every((row) => row.ok), hour, scheduled_found: scheduled.length,
+      targeted_campaigns: campaignIds.size,
       overdue_processed: results.length, results,
     });
   } catch (e: any) {

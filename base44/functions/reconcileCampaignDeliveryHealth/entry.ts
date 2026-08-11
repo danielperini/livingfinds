@@ -1,5 +1,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { classifyCampaignDeliveryHealth, nextConservativeBid } from '../../shared/campaignDeliveryHealthPolicy.ts';
+import {
+  classifyCampaignDeliveryHealth,
+  evaluateZeroDeliveryBootstrap,
+  nextConservativeBid,
+} from '../../shared/campaignDeliveryHealthPolicy.ts';
 import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { economicsAreActionable, resolveOperatingAcos, resolveSafeMaxCpc } from '../../shared/profitGuardPolicy.ts';
 
@@ -11,6 +15,21 @@ const idOf = (c: any) => String(c.amazon_campaign_id || c.campaign_id || c.id ||
 const entityCampaignId = (row: any) => String(row.campaign_id || row.amazon_campaign_id || '');
 const entityId = (row: any) => String(row.keyword_id || row.ad_group_id || row.product_ad_id || row.id || '');
 const transitional = (v: unknown) => ['INSERTING', 'INCOMPLETE', 'CREATING', 'PENDING', 'DRAFT', 'PENDING_REVIEW'].includes(upper(v));
+const asinOf = (campaign: any) => upper(campaign.asin || campaign.advertised_asin || String(campaign.name || campaign.campaign_name || '').match(/B0[A-Z0-9]{8}/i)?.[0]);
+
+function canonicalCampaigns(rows: any[]): any[] {
+  const canonical = new Map<string, any>();
+  for (const row of rows) {
+    if (row?.api_missing === true || row?.excluded_from_dashboard === true || row?.archived === true) continue;
+    const campaignId = idOf(row);
+    if (!campaignId) continue;
+    const current = canonical.get(campaignId);
+    const timestamp = new Date(row.last_api_sync_at || row.last_sync_at || row.updated_date || row.updated_at || row.created_date || 0).getTime();
+    const currentTimestamp = new Date(current?.last_api_sync_at || current?.last_sync_at || current?.updated_date || current?.updated_at || current?.created_date || 0).getTime();
+    if (!current || timestamp >= currentTimestamp) canonical.set(campaignId, row);
+  }
+  return [...canonical.values()];
+}
 
 function confirmedReplacement(result: any): boolean {
   const data = result?.data || result || {};
@@ -79,6 +98,8 @@ Deno.serve(async (request) => {
     const deliveryLookbackDays = Math.max(1, Math.min(30, Math.floor(n(body.delivery_lookback_days) || 7)));
     const deliveryCutoff = new Date(Date.now() - (deliveryLookbackDays - 1) * 86400000).toISOString().slice(0, 10);
     const maxReplacementsPerRun = Math.max(0, Math.min(20, Math.floor(n(body.max_replacements_per_run) || 6)));
+    const maxStructureRepairsPerRun = Math.max(0, Math.min(5, Math.floor(n(body.max_structure_repairs_per_run) || 3)));
+    const maxBidRecoveriesPerRun = Math.max(0, Math.min(5, Math.floor(n(body.max_bid_recoveries_per_run) || 3)));
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
@@ -86,7 +107,7 @@ Deno.serve(async (request) => {
 
     for (const account of accounts) {
       const accountId = String(account.id);
-      const [campaigns, keywords, adGroups, productAds, products, metrics, prior, spendControllers, settingsRows, economics, assessments] = await Promise.all([
+      const [campaignRows, keywords, adGroups, productAds, products, metrics, prior, spendControllers, settingsRows, economics, assessments, repairQueueRows] = await Promise.all([
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
         base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: accountId }, '-created_at', 30000).catch(() => []),
@@ -98,7 +119,9 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: accountId }, '-assessment_date', 5000).catch(() => []),
+        base44.asServiceRole.entities.KeywordRepairQueue.filter({ amazon_account_id: accountId, status: 'scheduled' }, 'scheduled_at', 5000).catch(() => []),
       ]);
+      const campaigns = canonicalCampaigns(campaignRows);
       const settings = settingsRows[0] || {};
       const minBid = Math.max(0.02, n(settings.min_bid || 0.2));
       const maxBid = Math.max(minBid, n(settings.max_bid || 3));
@@ -144,10 +167,25 @@ Deno.serve(async (request) => {
         agg.spend += n(row.spend);
         metricsByCampaign.set(cid, agg);
       }
+      const metricsByAsin = new Map<string, any>();
+      for (const campaign of campaigns) {
+        const asin = asinOf(campaign);
+        const metric = metricsByCampaign.get(idOf(campaign));
+        if (!asin || !metric) continue;
+        const aggregate = metricsByAsin.get(asin) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
+        aggregate.impressions += n(metric.impressions);
+        aggregate.clicks += n(metric.clicks);
+        aggregate.orders += n(metric.orders);
+        aggregate.sales += n(metric.sales);
+        aggregate.spend += n(metric.spend);
+        metricsByAsin.set(asin, aggregate);
+      }
       const accountOutOfBudget = spendControllers.some((r: any) => r.account_out_of_budget === true || r.hard_cap_reached === true);
+      const accountHardStop = spendControllers.some((r: any) => r.global_kill_switch === true || ['critical', 'cap_imminent', 'cap_reached'].includes(String(r.cap_status || '').toLowerCase()));
       const actions: any[] = [];
-      const repairCampaignIds: string[] = [];
+      const repairCandidates: any[] = [];
       const queuedDecisionIds = new Set<string>();
+      const recoveryAsins = new Set<string>();
       let reusedDecisions = 0;
       let cancelledFalseStockDecisions = 0;
       let replacementsAttempted = 0;
@@ -164,7 +202,7 @@ Deno.serve(async (request) => {
 
         const campaignId = idOf(campaign);
         if (!campaignId) continue;
-        const asin = upper(campaign.asin || campaign.advertised_asin || String(campaign.name || '').match(/B0[A-Z0-9]{8}/i)?.[0]);
+        const asin = asinOf(campaign);
         const product = productByAsin.get(asin);
         const eligibility = productAdsEligibility(product);
         const econ = economicsByAsin.get(asin);
@@ -200,6 +238,29 @@ Deno.serve(async (request) => {
         const createdAt = new Date(campaign.created_at || campaign.created_date || Date.now()).getTime();
         const ageHours = Math.max(0, (Date.now() - createdAt) / 3600000);
         const m = metricsByCampaign.get(campaignId) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
+        const asinMetrics = metricsByAsin.get(asin) || { impressions: 0, clicks: 0, orders: 0, sales: 0, spend: 0 };
+        const operatingAcos = resolveOperatingAcos(econ, targetAcos);
+        const safeMaxCpc = n(assessment?.safe_max_cpc ?? econ?.safe_max_cpc) || n(resolveSafeMaxCpc({
+          economics: econ,
+          observedCvr: m.clicks > 0 ? m.orders / m.clicks : 0.05,
+          observedAov: m.orders > 0 ? m.sales / m.orders : n(econ?.average_sale_price ?? econ?.current_price),
+          operatingAcos: operatingAcos.target_acos,
+        }));
+        const bootstrap = evaluateZeroDeliveryBootstrap({
+          actionableEconomics: economicsAreActionable(econ, assessment),
+          safeMaxCpc,
+          breakEvenAcos: econ?.break_even_acos ?? assessment?.break_even_acos,
+          currentPrice: econ?.current_price ?? econ?.average_sale_price,
+          unitCost: econ?.unit_cost ?? assessment?.product_cost,
+          costSource: econ?.cost_source,
+          assessmentStatus: assessment?.economic_status,
+          asinSpend: asinMetrics.spend,
+          asinSales: asinMetrics.sales,
+          asinOrders: asinMetrics.orders,
+          inStock: eligibility.inStock,
+          accountOutOfBudget,
+          hardStop: accountHardStop,
+        });
         const priorEscalations = prior.filter((d: any) =>
           d.source_function === SOURCE && String(d.campaign_id || '') === campaignId && d.action === 'set_bid' &&
           !['failed', 'rejected', 'cancelled'].includes(String(d.status || ''))
@@ -214,9 +275,27 @@ Deno.serve(async (request) => {
           actions.push({ campaign_id: campaignId, asin, action: 'VERIFY_STOCK', reason: 'OUT_OF_STOCK_NOT_CONFIRMED_BY_FRESH_SP_API_EVIDENCE', stock: eligibility.stock, eligibility_reason: eligibility.reason, status_signals: eligibility.statusSignals });
           continue;
         }
+        if (['REPAIR_STRUCTURE', 'INCREASE_BID', 'PAUSE_AND_REPLACE'].includes(action) && !bootstrap.eligible) {
+          actions.push({
+            campaign_id: campaignId, asin, action: 'WAIT_PROFIT_GUARD', requested_action: action,
+            reason: bootstrap.reason, safe_max_cpc: bootstrap.safe_max_cpc,
+            asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap,
+            economics_source: bootstrap.economics_source,
+          });
+          continue;
+        }
         if (action === 'REPAIR_STRUCTURE') {
-          repairCampaignIds.push(campaignId);
-          actions.push({ campaign_id: campaignId, asin, action, age_hours: ageHours, state: upper(state), complete });
+          if (!manual) {
+            actions.push({ campaign_id: campaignId, asin, action: 'WAIT_AUTO_STRUCTURE_SYNC', age_hours: ageHours });
+            continue;
+          }
+          repairCandidates.push({ campaignId, asin, ageHours, safeMaxCpc: bootstrap.safe_max_cpc, bootstrap });
+          actions.push({
+            campaign_id: campaignId, asin, action: 'REPAIR_STRUCTURE_ELIGIBLE', age_hours: ageHours,
+            state: upper(state), complete, safe_max_cpc: bootstrap.safe_max_cpc,
+            remaining_spend_headroom: bootstrap.remaining_spend_headroom,
+            economics_source: bootstrap.economics_source,
+          });
           continue;
         }
         if (action === 'ARCHIVE_NO_PRODUCT' || action === 'ARCHIVE_OUT_OF_STOCK') {
@@ -236,26 +315,33 @@ Deno.serve(async (request) => {
         }
 
         if (action === 'INCREASE_BID') {
-          const bidEntities = campaignKeywords.filter((row: any) => active(row.state || row.status));
-          if (!bidEntities.length) {
-            repairCampaignIds.push(campaignId);
-            actions.push({ campaign_id: campaignId, asin, action: 'REPAIR_STRUCTURE', reason: 'NO_ACTIVE_BID_ENTITY' });
+          if (recoveryAsins.size >= maxBidRecoveriesPerRun || recoveryAsins.has(asin)) {
+            actions.push({ campaign_id: campaignId, asin, action: 'WAIT_BID_RECOVERY_CAP', maximum_per_run: maxBidRecoveriesPerRun });
             continue;
           }
-          const operatingAcos = resolveOperatingAcos(econ, targetAcos);
-          const observedCvr = m.clicks > 0 ? m.orders / m.clicks : 0;
-          const observedAov = m.orders > 0 ? m.sales / m.orders : 0;
-          const safeMaxCpc = economicsAreActionable(econ, assessment)
-            ? resolveSafeMaxCpc({ economics: econ, observedCvr, observedAov, operatingAcos: operatingAcos.target_acos })
-            : null;
+          const bidEntityMap = new Map<string, any>();
+          for (const row of campaignKeywords.filter((candidate: any) => active(candidate.state || candidate.status))) {
+            const keywordId = entityId(row);
+            if (!keywordId) continue;
+            const current = bidEntityMap.get(keywordId);
+            const timestamp = new Date(row.updated_date || row.synced_at || row.last_seen_at || row.created_date || 0).getTime();
+            const currentTimestamp = new Date(current?.updated_date || current?.synced_at || current?.last_seen_at || current?.created_date || 0).getTime();
+            if (!current || timestamp >= currentTimestamp) bidEntityMap.set(keywordId, row);
+          }
+          const bidEntities = [...bidEntityMap.values()].slice(0, 1);
+          if (!bidEntities.length) {
+            repairCandidates.push({ campaignId, asin, ageHours, safeMaxCpc: bootstrap.safe_max_cpc, bootstrap });
+            actions.push({ campaign_id: campaignId, asin, action: 'REPAIR_STRUCTURE_ELIGIBLE', reason: 'NO_ACTIVE_BID_ENTITY', safe_max_cpc: bootstrap.safe_max_cpc });
+            continue;
+          }
 
           for (const bidEntity of bidEntities) {
             const currentBid = n(bidEntity.bid ?? bidEntity.current_bid) || Math.max(minBid, manual ? 0.6 : 0.5);
             const entityMaxBid = n(bidEntity.max_bid || campaign.max_bid || maxBid) || maxBid;
-            const economicCap = safeMaxCpc && safeMaxCpc > 0 ? safeMaxCpc : null;
-            const hardCap = Math.min(maxBid, entityMaxBid, economicCap || maxBid);
+            const economicCap = bootstrap.safe_max_cpc;
+            const hardCap = Math.min(maxBid, entityMaxBid, economicCap);
             const targetBid = nextConservativeBid(currentBid, hardCap, increment, minBid);
-            if (targetBid <= currentBid || (economicCap && currentBid >= economicCap)) {
+            if (targetBid <= currentBid || currentBid >= economicCap) {
               action = 'PAUSE_AND_REPLACE';
               actions.push({ campaign_id: campaignId, asin, action: 'NO_ECONOMIC_BID_HEADROOM', current_bid: currentBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
               break;
@@ -270,8 +356,8 @@ Deno.serve(async (request) => {
                 rule_key: 'ZERO_DELIVERY_BID_ESCALATION', reason_code: 'ZERO_DELIVERY_BID_ESCALATION', status: 'approved', queue_status: 'pending',
                 execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending', requires_approval: false,
                 approval_status: 'auto_approved', idempotency_key: key, conflict_group: `${accountId}|keyword|${keywordId}`,
-                source_function: SOURCE, model_version: 'campaign-delivery-health-v4.0-serving-growth-v18',
-                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_actionable: economicsAreActionable(econ, assessment) }),
+                source_function: SOURCE, model_version: 'campaign-delivery-health-v5.0-serving-profit-v19',
+                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
                 created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
               });
               if (reused) reusedDecisions++;
@@ -279,6 +365,7 @@ Deno.serve(async (request) => {
               if (decisionId && !['confirmed', 'executed', 'cancelled', 'rejected'].includes(String(decision?.status || '').toLowerCase())) queuedDecisionIds.add(decisionId);
             }
             actions.push({ campaign_id: campaignId, asin, action: 'INCREASE_BID', keyword_id: keywordId, current_bid: currentBid, target_bid: targetBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos });
+            recoveryAsins.add(asin);
           }
           if (action !== 'PAUSE_AND_REPLACE') continue;
         }
@@ -336,7 +423,7 @@ Deno.serve(async (request) => {
               rule_key: 'ZERO_DELIVERY_REPLACE', reason_code: 'ZERO_DELIVERY_REPLACE', status: 'approved', queue_status: 'pending',
               execution_mode: 'STANDARD_QUEUE', requires_approval: false, approval_status: 'auto_approved', confirmation_required: true,
               confirmation_status: 'pending', idempotency_key: key, conflict_group: `${accountId}|campaign|${campaignId}`, source_function: SOURCE,
-              model_version: 'campaign-delivery-health-v4.0-serving-growth-v18',
+              model_version: 'campaign-delivery-health-v5.0-serving-profit-v19',
               data_used: JSON.stringify({ asin, old_term: currentTermText || null, replacement: replacementData }),
               created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
             });
@@ -356,13 +443,53 @@ Deno.serve(async (request) => {
         }
       }
 
-      const repair = repairCampaignIds.length && !dryRun
-        ? await base44.asServiceRole.functions.invoke('enforceCanonicalManualCampaigns', {
-            amazon_account_id: accountId, campaign_ids: [...new Set(repairCampaignIds)], force_repair: true, archive_if_unrepairable: true,
-            require_product_ad: true, require_active_exact_keyword: true, confirm_on_amazon: true, _service_role: true,
-            _canonical_orchestrator: 'runUnifiedDecisionEngine', trigger_type: 'campaign_delivery_health_immediate_repair',
-          }).catch((error: any) => ({ error: error?.message || String(error) }))
-        : null;
+      const selectedRepairCandidates: any[] = [];
+      const selectedRepairAsins = new Set<string>();
+      const selectedRepairCampaigns = new Set<string>();
+      for (const candidate of [...repairCandidates].sort((a, b) =>
+        n(b.bootstrap?.remaining_spend_headroom) - n(a.bootstrap?.remaining_spend_headroom) || b.ageHours - a.ageHours
+      )) {
+        if (selectedRepairCandidates.length >= maxStructureRepairsPerRun) break;
+        if (!candidate.campaignId || selectedRepairCampaigns.has(candidate.campaignId) || selectedRepairAsins.has(candidate.asin)) continue;
+        selectedRepairCandidates.push(candidate);
+        selectedRepairCampaigns.add(candidate.campaignId);
+        selectedRepairAsins.add(candidate.asin);
+      }
+
+      const repairBidCaps: Record<string, number> = {};
+      for (const candidate of selectedRepairCandidates) repairBidCaps[candidate.campaignId] = candidate.safeMaxCpc;
+      let repair: any = selectedRepairCandidates.length
+        ? { ok: true, dry_run: true, selected_campaigns: selectedRepairCandidates.map((row) => ({ campaign_id: row.campaignId, asin: row.asin, safe_max_cpc: row.safeMaxCpc })) }
+        : { ok: true, skipped: true, reason: repairCandidates.length ? 'STRUCTURE_REPAIR_RUN_CAP_ZERO' : 'NO_ELIGIBLE_STRUCTURE_REPAIR' };
+
+      if (selectedRepairCandidates.length && !dryRun) {
+        const scheduledCampaigns = new Set(repairQueueRows.map((row: any) => String(row.campaign_id || '')).filter(Boolean));
+        for (const candidate of selectedRepairCandidates) {
+          if (scheduledCampaigns.has(candidate.campaignId)) continue;
+          await base44.asServiceRole.entities.KeywordRepairQueue.create({
+            amazon_account_id: accountId,
+            asin: candidate.asin,
+            campaign_id: candidate.campaignId,
+            status: 'scheduled',
+            queue_hour: new Date().getUTCHours(),
+            queue_window: 'serving-profit-v19-immediate',
+            scheduled_at: new Date().toISOString(),
+            attempt_count: 0,
+            max_attempts: 5,
+          }).catch(() => {});
+        }
+        repair = await base44.asServiceRole.functions.invoke('processKeywordRepairQueue', {
+          amazon_account_id: accountId,
+          campaign_ids: selectedRepairCandidates.map((row) => row.campaignId),
+          repair_bid_caps: repairBidCaps,
+          max_items: selectedRepairCandidates.length,
+          force: true,
+          _service_role: true,
+          _canonical_orchestrator: 'runUnifiedDecisionEngine',
+          trigger_type: 'serving_profit_v19_immediate_structure_repair',
+        }).then((result: any) => result?.data || result || { ok: true })
+          .catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+      }
 
       const decisionIds = [...queuedDecisionIds];
       let execution: any = { ok: true, skipped: true };
@@ -373,17 +500,17 @@ Deno.serve(async (request) => {
       }
 
       await base44.asServiceRole.entities.SyncExecutionLog.create({
-        amazon_account_id: accountId, sync_type: 'campaign_delivery_health', status: execution?.ok === false || confirmation?.ok === false ? 'partial' : 'completed',
+        amazon_account_id: accountId, sync_type: 'campaign_delivery_health', status: repair?.ok === false || execution?.ok === false || confirmation?.ok === false ? 'partial' : 'completed',
         source_function: SOURCE, records_processed: campaigns.length, records_imported: actions.length,
-        message: `Serving v18 rotation: ${repairCampaignIds.length} reparos, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${replacementsConfirmed}/${replacementsAttempted} substituições 1:1 confirmadas.`,
-        result_summary: JSON.stringify({ actions: actions.slice(0, 200), replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, execution, confirmation }).slice(0, 12000),
+        message: `Serving profit v19: ${selectedRepairCandidates.length}/${repairCandidates.length} reparos econômicos selecionados, ${decisionIds.length} decisões, ${reusedDecisions} reutilizadas, ${cancelledFalseStockDecisions} falsos OOS cancelados, ${actions.filter((a) => a.action === 'INCREASE_BID').length} recoveries e ${replacementsConfirmed}/${replacementsAttempted} substituições 1:1 confirmadas.`,
+        result_summary: JSON.stringify({ actions: actions.slice(0, 200), structure_repair_candidates: repairCandidates.length, selected_structure_repairs: selectedRepairCandidates, repair, replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, execution, confirmation }).slice(0, 12000),
         started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       }).catch(() => {});
 
-      results.push({ amazon_account_id: accountId, campaigns_checked: campaigns.length, actions, repair, queued_decision_ids: decisionIds, execution, confirmation, reused_decisions: reusedDecisions, cancelled_false_stock_decisions: cancelledFalseStockDecisions, replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, max_replacements_per_run: maxReplacementsPerRun });
+      results.push({ amazon_account_id: accountId, campaigns_checked: campaigns.length, duplicate_campaign_rows_removed: campaignRows.length - campaigns.length, actions, repair, structure_repair_candidates: repairCandidates.length, selected_structure_repairs: selectedRepairCandidates, queued_decision_ids: decisionIds, execution, confirmation, reused_decisions: reusedDecisions, cancelled_false_stock_decisions: cancelledFalseStockDecisions, replacements_attempted: replacementsAttempted, replacements_confirmed: replacementsConfirmed, max_replacements_per_run: maxReplacementsPerRun, max_structure_repairs_per_run: maxStructureRepairsPerRun, max_bid_recoveries_per_run: maxBidRecoveriesPerRun });
     }
 
-    return Response.json({ ok: results.every((r) => r.execution?.ok !== false && r.confirmation?.ok !== false), dry_run: dryRun, policy_version: 'campaign-delivery-health-v4.0-serving-growth-v18', results });
+    return Response.json({ ok: results.every((r) => r.repair?.ok !== false && r.execution?.ok !== false && r.confirmation?.ok !== false), dry_run: dryRun, policy_version: 'campaign-delivery-health-v5.0-serving-profit-v19', results });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
