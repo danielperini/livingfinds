@@ -26,6 +26,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Test performance settings normalization
+        run: node --test src/lib/performanceSettingsNormalization.test.js
+
       - name: Typecheck
         run: npm run typecheck
         continue-on-error: true

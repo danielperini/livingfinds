@@ -11,7 +11,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'PiggyBank',
     daypartingNote: 'Dayparting com redução em horários ruins',
     values: {
-      target_acos: 10, max_acos: 15, target_roas: 5, target_tacos: 5, max_tacos: 10,
+      target_acos: 10, max_acos: 15, target_tacos: 5, max_tacos: 10,
       max_bid: 2, max_bid_increase_pct: 10, max_bid_decrease_pct: 25,
       dayparting_enabled: true, pacing_enabled: true, placement_optimization_enabled: true,
       top_of_search_limit: 20, impressions_goal_enabled: false, target_daily_impressions: 0,
@@ -23,7 +23,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'TrendingUp',
     daypartingNote: 'Dayparting com redução moderada',
     values: {
-      target_acos: 18, max_acos: 25, target_roas: 3, target_tacos: 8, max_tacos: 12,
+      target_acos: 18, max_acos: 25, target_tacos: 8, max_tacos: 12,
       max_bid: 3, max_bid_increase_pct: 20, max_bid_decrease_pct: 20,
       dayparting_enabled: true, pacing_enabled: true, placement_optimization_enabled: true,
       top_of_search_limit: 40, impressions_goal_enabled: false, target_daily_impressions: 0,
@@ -35,7 +35,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'Rocket',
     daypartingNote: 'Dayparting com pausas fora de pico',
     values: {
-      target_acos: 30, max_acos: 50, target_roas: 1.5, target_tacos: 15, max_tacos: 25,
+      target_acos: 30, max_acos: 50, target_tacos: 15, max_tacos: 25,
       max_bid: 4, max_bid_increase_pct: 30, max_bid_decrease_pct: 10,
       dayparting_enabled: true, pacing_enabled: true, placement_optimization_enabled: true,
       top_of_search_limit: 60, impressions_goal_enabled: true, target_daily_impressions: 5000,
@@ -47,7 +47,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'Shield',
     daypartingNote: 'Dayparting em manutenção, sem grandes cortes',
     values: {
-      target_acos: 12, max_acos: 18, target_roas: 4,
+      target_acos: 12, max_acos: 18,
       max_bid: 2.5, max_bid_increase_pct: 15, max_bid_decrease_pct: 15,
       dayparting_enabled: true, pacing_enabled: true, placement_optimization_enabled: true,
       top_of_search_limit: 50, impressions_goal_enabled: false,
@@ -59,7 +59,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'PackageX',
     daypartingNote: 'Dayparting desativado',
     values: {
-      target_acos: 40, max_acos: 70, target_roas: 1,
+      target_acos: 40, max_acos: 70,
       max_bid: 1.5, max_bid_increase_pct: 5, max_bid_decrease_pct: 10,
       dayparting_enabled: false, pacing_enabled: false, placement_optimization_enabled: true,
       top_of_search_limit: 30, rest_of_search_limit: 30, product_page_limit: 30,
@@ -72,7 +72,7 @@ export const OBJECTIVE_PRESETS = {
     icon: 'Wrench',
     daypartingNote: 'Dayparting com redução leve apenas',
     values: {
-      target_acos: 10, max_acos: 14, target_roas: 5,
+      target_acos: 10, max_acos: 14,
       max_bid_increase_pct: 5, max_bid_decrease_pct: 10,
       dayparting_enabled: true, pacing_enabled: true, placement_optimization_enabled: true,
       top_of_search_limit: 15, impressions_goal_enabled: false,
@@ -131,5 +131,9 @@ export function getCoherenceWarnings(goals) {
   if (obj === 'liquidation' && goals?.pacing_enabled) w.push('Pacing normalmente fica desativado em Liquidação.');
   if (obj === 'maintenance' && Number(goals?.max_bid_increase_pct || 0) > 10) w.push('Aumentos de bid acima de 10% são incomuns em Manutenção.');
   if (obj === 'aggressive_peak' && !goals?.dayparting_enabled) w.push('Agressivo em Pico depende do Dayparting ativo.');
+  if (Number(goals?.max_acos || 0) > 0 && Number(goals?.max_acos) < acos) w.push('ACoS máximo não pode ficar abaixo da meta de eficiência; será ajustado ao salvar.');
+  if (Number(goals?.max_tacos || 0) > 0 && Number(goals?.max_tacos) < Number(goals?.target_tacos || 0)) w.push('TACoS máximo não pode ficar abaixo do TACoS alvo; será ajustado ao salvar.');
+  if (Number(goals?.min_bid || 0) > Number(goals?.max_bid || 0)) w.push('Bid mínimo não pode superar o teto de lance; será ajustado ao salvar.');
+  if (Number(goals?.target_cpc || 0) > Number(goals?.max_bid || 0)) w.push('CPC alvo não pode superar o teto de lance; será ajustado ao salvar.');
   return w;
 }

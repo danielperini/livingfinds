@@ -20,6 +20,7 @@
  * - IA (auto optimization toggle)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { resolveConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
 
 // Defaults absolutos — usados somente se não houver configuração no banco
 const SYSTEM_DEFAULTS = {
@@ -27,7 +28,7 @@ const SYSTEM_DEFAULTS = {
   strategic_goal: 'profitability',
   target_acos: 10,
   max_acos: 15,
-  target_roas: 4,
+  target_roas: 10,
   target_tacos: 5,
   max_tacos: 10,
   daily_budget_cap: 56,
@@ -53,24 +54,43 @@ const SYSTEM_DEFAULTS = {
   ai_auto_optimization_enabled: false,
 };
 
+function resolveEfficiency(targetAcos: unknown, legacyTargetRoas: unknown) {
+  const acos = Number(targetAcos);
+  const roas = Number(legacyTargetRoas);
+  const canonicalAcos = Number.isFinite(acos) && acos > 0
+    ? acos
+    : Number.isFinite(roas) && roas > 0
+      ? 100 / roas
+      : SYSTEM_DEFAULTS.target_acos;
+  return {
+    targetAcos: Math.round(canonicalAcos * 100) / 100,
+    targetRoas: Math.round((100 / canonicalAcos) * 100) / 100,
+  };
+}
+
 function buildSettingsFromPerformanceSettings(ps: any) {
+  const efficiency = resolveEfficiency(ps.target_acos, ps.target_roas);
+  const bidPolicy = resolveConfiguredBidPolicy(
+    { ...ps, source: 'PerformanceSettings' },
+    SYSTEM_DEFAULTS.max_bid,
+  );
   return {
     primary_metric: ps.primary_goal || SYSTEM_DEFAULTS.primary_metric,
     strategic_goal: ps.objective || SYSTEM_DEFAULTS.strategic_goal,
-    target_acos: Number(ps.target_acos ?? SYSTEM_DEFAULTS.target_acos),
+    target_acos: efficiency.targetAcos,
     max_acos: Number(ps.max_acos ?? SYSTEM_DEFAULTS.max_acos),
-    target_roas: Number(ps.target_roas ?? SYSTEM_DEFAULTS.target_roas),
+    target_roas: efficiency.targetRoas,
     target_tacos: Number(ps.target_tacos ?? SYSTEM_DEFAULTS.target_tacos),
     max_tacos: Number(ps.max_tacos ?? SYSTEM_DEFAULTS.max_tacos),
     daily_budget_cap: Number(ps.daily_budget_limit ?? SYSTEM_DEFAULTS.daily_budget_cap),
     target_cpc: Number(ps.target_cpc ?? SYSTEM_DEFAULTS.target_cpc),
-    max_cpc: Number(ps.max_cpc ?? SYSTEM_DEFAULTS.max_cpc),
-    enforce_max_cpc: ps.max_cpc > 0,
+    max_cpc: bidPolicy.ceiling,
+    enforce_max_cpc: true,
     impressions_goal_enabled: Boolean(ps.impressions_goal_enabled ?? SYSTEM_DEFAULTS.impressions_goal_enabled),
     target_daily_impressions: Number(ps.target_daily_impressions ?? SYSTEM_DEFAULTS.target_daily_impressions),
     minimum_daily_impressions: Number(ps.min_daily_impressions ?? SYSTEM_DEFAULTS.minimum_daily_impressions),
-    min_bid: Number(ps.min_bid ?? SYSTEM_DEFAULTS.min_bid),
-    max_bid: Number(ps.max_bid ?? SYSTEM_DEFAULTS.max_bid),
+    min_bid: bidPolicy.minBid,
+    max_bid: bidPolicy.ceiling,
     max_bid_increase_percent: Number(ps.max_bid_increase_pct ?? SYSTEM_DEFAULTS.max_bid_increase_percent),
     max_bid_decrease_percent: Number(ps.max_bid_decrease_pct ?? SYSTEM_DEFAULTS.max_bid_decrease_percent),
     min_campaign_budget: Number(ps.minimum_campaign_budget ?? SYSTEM_DEFAULTS.min_campaign_budget),
@@ -88,23 +108,28 @@ function buildSettingsFromPerformanceSettings(ps: any) {
 }
 
 function buildSettingsFromAutopilotConfig(cfg: any) {
+  const efficiency = resolveEfficiency(cfg.target_acos, cfg.target_roas);
+  const bidPolicy = resolveConfiguredBidPolicy(
+    { ...cfg, source: 'AutopilotConfig' },
+    SYSTEM_DEFAULTS.max_bid,
+  );
   return {
     primary_metric: SYSTEM_DEFAULTS.primary_metric,
     strategic_goal: cfg.objective || SYSTEM_DEFAULTS.strategic_goal,
-    target_acos: Number(cfg.target_acos ?? SYSTEM_DEFAULTS.target_acos),
+    target_acos: efficiency.targetAcos,
     max_acos: Number(cfg.maximum_acos ?? SYSTEM_DEFAULTS.max_acos),
-    target_roas: Number(cfg.target_roas ?? SYSTEM_DEFAULTS.target_roas),
+    target_roas: efficiency.targetRoas,
     target_tacos: Number(cfg.target_tacos ?? SYSTEM_DEFAULTS.target_tacos),
     max_tacos: Number(cfg.maximum_tacos ?? SYSTEM_DEFAULTS.max_tacos),
     daily_budget_cap: Number(cfg.total_daily_budget ?? cfg.daily_budget_limit ?? SYSTEM_DEFAULTS.daily_budget_cap),
     target_cpc: Number(cfg.target_cpc ?? SYSTEM_DEFAULTS.target_cpc),
-    max_cpc: Number(cfg.maximum_cpc ?? SYSTEM_DEFAULTS.max_cpc),
-    enforce_max_cpc: Boolean(cfg.cpc_enforcement ?? SYSTEM_DEFAULTS.enforce_max_cpc),
+    max_cpc: bidPolicy.ceiling,
+    enforce_max_cpc: true,
     impressions_goal_enabled: Boolean(cfg.impressions_goal_enabled ?? SYSTEM_DEFAULTS.impressions_goal_enabled),
     target_daily_impressions: Number(cfg.target_daily_impressions ?? SYSTEM_DEFAULTS.target_daily_impressions),
     minimum_daily_impressions: Number(cfg.min_daily_impressions ?? SYSTEM_DEFAULTS.minimum_daily_impressions),
-    min_bid: Number(cfg.min_bid ?? SYSTEM_DEFAULTS.min_bid),
-    max_bid: Number(cfg.max_bid ?? SYSTEM_DEFAULTS.max_bid),
+    min_bid: bidPolicy.minBid,
+    max_bid: bidPolicy.ceiling,
     max_bid_increase_percent: Number(cfg.max_bid_increase_pct ?? SYSTEM_DEFAULTS.max_bid_increase_percent),
     max_bid_decrease_percent: Number(cfg.max_bid_decrease_pct ?? SYSTEM_DEFAULTS.max_bid_decrease_percent),
     min_campaign_budget: Number(cfg.minimum_stock_days ? 15 : SYSTEM_DEFAULTS.min_campaign_budget), // AutopilotConfig não tem campo direto

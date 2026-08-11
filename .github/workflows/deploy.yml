@@ -32,7 +32,7 @@ jobs:
         run: npm ci
 
       - name: Testar projeção probabilística de lucro
-        run: node --test src/lib/profitProjectionMath.test.js
+        run: node --test src/lib/profitProjectionMath.test.js src/lib/performanceSettingsNormalization.test.js
 
       - name: Build do frontend
         run: npm run build

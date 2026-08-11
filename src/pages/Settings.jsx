@@ -10,6 +10,11 @@ import AppearanceSelector from '@/components/settings/AppearanceSelector';
 import BackupPanel from '@/components/backup/BackupPanel';
 import ObjectiveSelector from '@/components/settings/ObjectiveSelector';
 import { OBJECTIVE_PRESETS, divergesFromPreset, getCoherenceWarnings } from '@/components/settings/objectivePresets';
+import {
+  normalizePerformanceSettings,
+  updateEfficiencyGoal,
+  updateUnifiedBidCeiling,
+} from '@/lib/performanceSettingsNormalization';
 
 
 const PERFORMANCE_DEFAULTS = {
@@ -17,12 +22,12 @@ const PERFORMANCE_DEFAULTS = {
   objective: 'profitability',
   target_acos: 10,
   max_acos: 15,
-  target_roas: 4,
+  target_roas: 10,
   target_tacos: 5,
   max_tacos: 10,
   daily_budget_limit: 80,
   target_cpc: 0,
-  max_cpc: 0,
+  max_cpc: 5.00,
   min_bid: 0.50,
   max_bid: 5.00,
   max_bid_increase_pct: 15,
@@ -89,12 +94,24 @@ export default function Settings() {
   const [todaySpend, setTodaySpend] = useState(null);
   const [justApplied, setJustApplied] = useState(false);
 
-  const setGoal = (key, val) => setGoals(p => ({ ...p, [key]: val }));
+  const setGoal = (key, val) => setGoals((previous) => {
+    if (key === 'target_acos' || key === 'target_roas') {
+      return updateEfficiencyGoal(previous, key, val);
+    }
+    if (key === 'max_bid' || key === 'max_cpc') {
+      return updateUnifiedBidCeiling(previous, val);
+    }
+    return { ...previous, [key]: val };
+  });
 
   const applyObjectivePreset = (key) => {
     const preset = OBJECTIVE_PRESETS[key];
     if (!preset?.values) return;
-    setGoals(p => ({ ...p, ...preset.values, objective: key }));
+    setGoals((previous) => {
+      const next = { ...previous, ...preset.values, objective: key };
+      if (preset.values.max_bid != null) next.max_cpc = preset.values.max_bid;
+      return normalizePerformanceSettings(next, PERFORMANCE_DEFAULTS);
+    });
     setJustApplied(true);
     setTimeout(() => setJustApplied(false), 1000);
   };
@@ -126,29 +143,29 @@ export default function Settings() {
       if (settings && settings.length) {
         const s = settings[0];
         setPerfSettings(s);
-        setGoals({ ...PERFORMANCE_DEFAULTS, ...s });
+        setGoals(normalizePerformanceSettings(s, PERFORMANCE_DEFAULTS));
       } else {
         // fallback: AutopilotConfig para migração
         const cfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: acc.id }).catch(() => []);
         if (cfgs.length) {
           const cfg = cfgs[0];
-          setGoals(p => ({
-            ...p,
-            target_acos: cfg.target_acos ?? p.target_acos,
-            max_acos: cfg.maximum_acos ?? p.max_acos,
-            target_roas: cfg.target_roas ?? p.target_roas,
-            target_tacos: cfg.target_tacos ?? p.target_tacos,
-            max_tacos: cfg.maximum_tacos ?? p.max_tacos,
-            daily_budget_limit: cfg.total_daily_budget ?? cfg.daily_budget_target ?? p.daily_budget_limit,
+          setGoals((previous) => normalizePerformanceSettings({
+            ...previous,
+            target_acos: cfg.target_acos ?? previous.target_acos,
+            max_acos: cfg.maximum_acos ?? previous.max_acos,
+            target_roas: cfg.target_roas ?? previous.target_roas,
+            target_tacos: cfg.target_tacos ?? previous.target_tacos,
+            max_tacos: cfg.maximum_tacos ?? previous.max_tacos,
+            daily_budget_limit: cfg.total_daily_budget ?? cfg.daily_budget_target ?? previous.daily_budget_limit,
             target_cpc: cfg.target_cpc ?? 0,
             max_cpc: cfg.maximum_cpc ?? 0,
-            min_bid: cfg.min_bid ?? p.min_bid,
-            max_bid: cfg.max_bid ?? p.max_bid,
-            max_bid_increase_pct: cfg.max_bid_increase_pct ?? p.max_bid_increase_pct,
-            max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? p.max_bid_decrease_pct,
-            objective: cfg.objective ?? p.objective,
+            min_bid: cfg.min_bid ?? previous.min_bid,
+            max_bid: cfg.max_bid ?? previous.max_bid,
+            max_bid_increase_pct: cfg.max_bid_increase_pct ?? previous.max_bid_increase_pct,
+            max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? previous.max_bid_decrease_pct,
+            objective: cfg.objective ?? previous.objective,
             ai_auto_optimization: cfg.ai_auto_optimization ?? false,
-          }));
+          }, PERFORMANCE_DEFAULTS));
         }
       }
     }
@@ -187,16 +204,18 @@ export default function Settings() {
     setGoalsSaving(true);
     try {
       const now = new Date().toISOString();
+      const canonicalGoals = normalizePerformanceSettings(goals, PERFORMANCE_DEFAULTS);
+      setGoals(canonicalGoals);
       // Serializar: campos elegíveis com valor 0 → null (motor os ignora)
-      const serializedGoals = { ...goals };
+      const serializedGoals = { ...canonicalGoals };
       for (const field of ZERO_IGNORED_FIELDS) {
         if (serializedGoals[field] === 0 || serializedGoals[field] === '0') {
           serializedGoals[field] = null;
         }
       }
       // Objetivo efetivo: se campos divergem do preset base → 'custom'
-      const baseObjective = goals.objective;
-      const effectiveObjective = divergesFromPreset(goals) ? 'custom' : baseObjective;
+      const baseObjective = canonicalGoals.objective;
+      const effectiveObjective = divergesFromPreset(canonicalGoals) ? 'custom' : baseObjective;
       serializedGoals.objective = effectiveObjective;
       serializedGoals.objective_base = effectiveObjective === 'custom' && baseObjective !== 'custom' ? baseObjective : null;
 
@@ -208,7 +227,7 @@ export default function Settings() {
         const TRACKED = ['target_acos','max_acos','target_roas','target_tacos','max_tacos','daily_budget_limit','target_cpc','max_cpc','min_bid','max_bid','max_bid_increase_pct','max_bid_decrease_pct','objective','primary_goal','dayparting_enabled','placement_optimization_enabled','top_of_search_limit','rest_of_search_limit','product_page_limit','ai_auto_optimization','minimum_campaign_budget','weekly_campaign_capacity'];
         for (const field of TRACKED) {
           const oldVal = perfSettings[field];
-          const newVal = goals[field];
+          const newVal = canonicalGoals[field];
           if (String(oldVal ?? '') !== String(newVal ?? '')) {
             changedFields.push({ field, old_value: oldVal ?? null, new_value: newVal ?? null });
           }
@@ -217,6 +236,7 @@ export default function Settings() {
 
       if (perfSettings) {
         await base44.entities.PerformanceSettings.update(perfSettings.id, payload);
+        setPerfSettings((previous) => ({ ...previous, ...payload }));
       } else {
         const created = await base44.entities.PerformanceSettings.create(payload);
         setPerfSettings(created);
@@ -229,7 +249,7 @@ export default function Settings() {
         changed_by_id: me?.id || '',
         changed_by_name: me?.full_name || '',
         changed_by_email: me?.email || '',
-        snapshot: { ...goals },
+        snapshot: { ...canonicalGoals },
         changed_fields: changedFields,
         changed_at: now,
       }).catch(() => {});
@@ -301,7 +321,7 @@ export default function Settings() {
         approval_status: 'auto_approved',
         autopilot_authorized: true,
         requires_approval: false,
-        rationale: `Metas atualizadas: ACoS=${goals.target_acos}%, ROAS=${goals.target_roas}x, Budget/dia=R$${goals.daily_budget_limit}. Motor recarregará os parâmetros na próxima janela.`,
+        rationale: `Metas atualizadas: ACoS=${canonicalGoals.target_acos}%, ROAS=${canonicalGoals.target_roas}x, teto de lance=R$${canonicalGoals.max_bid}, Budget/dia=R$${canonicalGoals.daily_budget_limit}. Motor recarregará os parâmetros na próxima janela.`,
         source_function: 'Settings.saveGoals',
         created_at: new Date().toISOString(),
       }).catch(() => {});
@@ -366,6 +386,7 @@ export default function Settings() {
     { value: 'growth', label: 'Crescimento com controle de eficiência' },
   ];
 
+  const efficiencyUsesRoas = goals.primary_goal === 'roas';
   const coherenceWarnings = getCoherenceWarnings(goals);
 
   return (
@@ -451,9 +472,26 @@ export default function Settings() {
         {/* Metas de eficiência */}
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Metas de Eficiência</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
-          <NumberInput label="ACoS Alvo (%)" hint="Meta primária de gasto/venda" value={goals.target_acos} onChange={v => setGoal('target_acos', v)} min={0} max={200} step={0.5} zeroMeansIgnored />
+          <NumberInput
+            label={efficiencyUsesRoas ? 'Meta de Eficiência — ROAS (x)' : 'Meta de Eficiência — ACoS (%)'}
+            hint={efficiencyUsesRoas ? 'Quanto maior, melhor o retorno' : 'Quanto menor, menor o gasto por venda'}
+            value={efficiencyUsesRoas ? goals.target_roas : goals.target_acos}
+            onChange={v => setGoal(efficiencyUsesRoas ? 'target_roas' : 'target_acos', v)}
+            min={0}
+            max={efficiencyUsesRoas ? 50 : 200}
+            step={efficiencyUsesRoas ? 0.1 : 0.5}
+            zeroMeansIgnored
+          />
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">
+              {efficiencyUsesRoas ? 'ACoS equivalente' : 'ROAS equivalente'}
+            </label>
+            <div className="h-[42px] flex items-center px-3 bg-surface-2 border border-surface-3 rounded-lg text-sm font-semibold text-emerald-400">
+              {efficiencyUsesRoas ? `${goals.target_acos}%` : `${goals.target_roas}x`}
+            </div>
+            <p className="text-[10px] text-slate-600 mt-1">Calculado automaticamente; não é outro parâmetro.</p>
+          </div>
           <NumberInput label="ACoS Máximo (%)" hint="Acima disso: corte de bid" value={goals.max_acos} onChange={v => setGoal('max_acos', v)} min={0} max={500} step={0.5} zeroMeansIgnored />
-          <NumberInput label="ROAS Alvo (x)" hint="Retorno mínimo sobre investimento" value={goals.target_roas} onChange={v => setGoal('target_roas', v)} min={0} max={50} step={0.1} zeroMeansIgnored />
           <NumberInput label="TACoS Alvo (%)" hint="Gasto / Vendas Totais" value={goals.target_tacos} onChange={v => setGoal('target_tacos', v)} min={0} max={100} step={0.5} zeroMeansIgnored />
           <NumberInput label="TACoS Máximo (%)" hint="Limite de risco de TACoS" value={goals.max_tacos} onChange={v => setGoal('max_tacos', v)} min={0} max={200} step={0.5} zeroMeansIgnored />
           <div>
@@ -471,18 +509,18 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* CPC */}
-        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Meta de CPC</p>
+        {/* Lances e CPC — um único teto operacional */}
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Lances e CPC</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
           <NumberInput label="CPC Alvo (R$)" hint="A IA ajusta bids para este CPC" value={goals.target_cpc} onChange={v => setGoal('target_cpc', v)} min={0} step={0.01} zeroMeansIgnored />
-          <NumberInput label="CPC Máximo (R$)" hint="Acima disso: bid reduzido" value={goals.max_cpc} onChange={v => setGoal('max_cpc', v)} min={0} step={0.01} zeroMeansIgnored />
-          <div className="flex flex-col justify-between">
-            <label className="block text-xs text-slate-400 mb-1.5">Enforçar CPC Máximo</label>
-            <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg border border-surface-3 h-[42px]">
-              <span className="text-xs text-slate-300">{goals.max_cpc > 0 ? 'Ativo' : 'Inativo'}</span>
-              <Toggle value={goals.max_cpc > 0} onChange={v => { if (!v) setGoal('max_cpc', 0); }} />
-            </div>
-            <p className="text-[10px] text-slate-600 mt-1">Ativo quando CPC Máximo {'>'} 0</p>
+          <NumberInput label="Teto Máximo de Lance/CPC (R$)" hint="Único limite enviado à Amazon" value={goals.max_bid} onChange={v => setGoal('max_bid', v)} min={0.10} max={100} step={0.10} />
+          <NumberInput label="Bid Mínimo (R$)" hint="Nunca ultrapassa o teto máximo" value={goals.min_bid} onChange={v => setGoal('min_bid', v)} min={0.02} max={10} step={0.01} />
+          <NumberInput label="Aumento Máx. de Bid (%)" value={goals.max_bid_increase_pct} onChange={v => setGoal('max_bid_increase_pct', v)} min={1} max={100} step={1} />
+          <NumberInput label="Redução Máx. de Bid (%)" value={goals.max_bid_decrease_pct} onChange={v => setGoal('max_bid_decrease_pct', v)} min={1} max={100} step={1} />
+          <div className="flex items-end">
+            <p className="w-full px-3 py-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 text-[11px] text-slate-400">
+              Teto ativo: <strong className="text-emerald-300 font-mono">R${Number(goals.max_bid).toFixed(2)}</strong>. Os campos legados são sincronizados automaticamente.
+            </p>
           </div>
         </div>
 
@@ -499,23 +537,6 @@ export default function Settings() {
           </div>
           <NumberInput label="Impressões Diárias Alvo" hint="Quantidade alvo por dia" value={goals.target_daily_impressions} onChange={v => setGoal('target_daily_impressions', v)} min={0} step={100} />
           <NumberInput label="Impressões Mínimas/Dia" hint="Alerta abaixo deste nível" value={goals.min_daily_impressions || 0} onChange={v => setGoal('min_daily_impressions', v)} min={0} step={100} />
-        </div>
-
-        {/* Controles de Bid */}
-        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Controles de Bid</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-          <NumberInput label="Bid Mínimo (R$)" value={goals.min_bid} onChange={v => setGoal('min_bid', v)} min={0.02} max={10} step={0.01} />
-          <NumberInput label="Bid Máximo (R$)" value={goals.max_bid} onChange={v => setGoal('max_bid', v)} min={0.10} max={100} step={0.10} />
-          <NumberInput label="Aumento Máx. de Bid (%)" value={goals.max_bid_increase_pct} onChange={v => setGoal('max_bid_increase_pct', v)} min={1} max={100} step={1} />
-          <NumberInput label="Redução Máx. de Bid (%)" value={goals.max_bid_decrease_pct} onChange={v => setGoal('max_bid_decrease_pct', v)} min={1} max={100} step={1} />
-        </div>
-        <div className="mb-5 -mt-2 px-3 py-2 rounded-lg border border-sky-500/20 bg-sky-500/5 text-[11px] text-slate-400">
-          Teto efetivo enviado à Amazon: <strong className="text-sky-300 font-mono">
-            R${Math.min(
-              Number(goals.max_bid) || 1,
-              Number(goals.max_cpc) > 0 ? Number(goals.max_cpc) : Number(goals.max_bid) || 1,
-            ).toFixed(2)}
-          </strong>. O motor sempre usa o menor valor entre Bid Máximo e CPC Máximo ativo.
         </div>
 
         {/* Budget por campanha */}
@@ -598,11 +619,11 @@ export default function Settings() {
         {/* Resumo de metas */}
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-4 bg-surface-2 rounded-lg border border-surface-3 mb-1">
           {[
-            { label: 'ACoS Alvo', raw: goals.target_acos, fmt: v => `${v}%`, color: 'text-cyan' },
+            { label: 'Eficiência', raw: goals.target_acos, fmt: v => `${v}% · ${goals.target_roas}x`, color: 'text-cyan' },
             { label: 'ACoS Máx.', raw: goals.max_acos, fmt: v => `${v}%`, color: 'text-red-400' },
-            { label: 'ROAS Alvo', raw: goals.target_roas, fmt: v => `${v}x`, color: 'text-emerald-400' },
             { label: 'TACoS Alvo', raw: goals.target_tacos, fmt: v => `${v}%`, color: 'text-amber-400' },
             { label: 'CPC Alvo', raw: goals.target_cpc, fmt: v => `R$${Number(v).toFixed(2)}`, color: 'text-violet-400' },
+            { label: 'Teto de Lance', raw: goals.max_bid, fmt: v => `R$${Number(v).toFixed(2)}`, color: 'text-emerald-400', noZeroCheck: true },
             { label: 'Budget/dia', raw: goals.daily_budget_limit, fmt: v => `R$${v}`, color: 'text-slate-300', noZeroCheck: true },
           ].map(({ label, raw, fmt, color, noZeroCheck }) => {
             const inactive = !noZeroCheck && (!raw || raw === 0);
