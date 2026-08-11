@@ -272,9 +272,14 @@ Deno.serve(async (request) => {
           accountOutOfBudget,
           hardStop: accountHardStop,
         });
-        const priorEscalations = prior.filter((d: any) =>
-          d.source_function === SOURCE && String(d.campaign_id || '') === campaignId && d.action === 'set_bid' &&
+        const campaignBidDecisions = prior.filter((d: any) =>
+          d.source_function === SOURCE && String(d.campaign_id || '') === campaignId && d.action === 'set_bid'
+        );
+        const priorEscalations = campaignBidDecisions.filter((d: any) =>
           !['failed', 'rejected', 'cancelled'].includes(String(d.status || ''))
+        ).length;
+        const cancelledBidAttempts = campaignBidDecisions.filter((d: any) =>
+          String(d.status || '').toLowerCase() === 'cancelled'
         ).length;
         let action = classifyCampaignDeliveryHealth({
           ageHours, ...m, complete, hasProduct: !!product, inStock: eligibility.inStock,
@@ -358,7 +363,7 @@ Deno.serve(async (request) => {
               break;
             }
             const keywordId = entityId(bidEntity);
-            const key = `${SOURCE}|${accountId}|${campaignId}|${keywordId}|${priorEscalations}`;
+            const key = `${SOURCE}|${accountId}|${campaignId}|${keywordId}|${priorEscalations}|retry:${cancelledBidAttempts}`;
             if (!dryRun) {
               const { decision, reused } = await createDecisionIdempotent(base44, {
                 amazon_account_id: accountId, decision_type: 'campaign_delivery_health', entity_type: 'keyword', entity_id: keywordId,
@@ -368,7 +373,7 @@ Deno.serve(async (request) => {
                 execution_mode: 'STANDARD_QUEUE', confirmation_required: true, confirmation_status: 'pending', requires_approval: false,
                 approval_status: 'auto_approved', idempotency_key: key, conflict_group: `${accountId}|keyword|${keywordId}`,
                 source_function: SOURCE, model_version: 'campaign-delivery-health-v5.0-serving-profit-v19',
-                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
+                data_used: JSON.stringify({ age_hours: ageHours, impressions: m.impressions, clicks: m.clicks, prior_escalations: priorEscalations, cancelled_bid_attempts: cancelledBidAttempts, increment, min_bid: minBid, account_max_bid: maxBid, safe_max_cpc: economicCap, operating_acos: operatingAcos.target_acos, economics_source: bootstrap.economics_source, asin_spend: bootstrap.asin_spend, asin_spend_cap: bootstrap.spend_cap }),
                 created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
               });
               if (reused) reusedDecisions++;
