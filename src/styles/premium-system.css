@@ -215,3 +215,139 @@
   opacity: .42;
   cursor: not-allowed;
 }
+
+/*
+ * Normalização transversal para tabelas legadas.
+ * Algumas páginas ainda aplicam fundos claros por classes utilitárias,
+ * seletores de componente ou style inline. Estes seletores permanecem
+ * limitados ao shell autenticado e não afetam Login/Register.
+ */
+.lf-app-shell .lf-workspace {
+  background: var(--premium-bg) !important;
+}
+
+.lf-app-shell .lf-workspace table,
+.lf-app-shell .lf-workspace table[class],
+.lf-app-shell .lf-workspace [role="table"],
+.lf-app-shell .lf-workspace [role="grid"],
+.lf-app-shell .lf-workspace .data-table,
+.lf-app-shell .lf-workspace .data-grid,
+.lf-app-shell .lf-workspace .rdt_Table,
+.lf-app-shell .lf-workspace .MuiDataGrid-root,
+.lf-app-shell .lf-workspace .ag-root,
+.lf-app-shell .lf-workspace .ag-root-wrapper {
+  background-color: var(--premium-surface) !important;
+  color: var(--premium-text) !important;
+  border-color: var(--premium-border) !important;
+}
+
+.lf-app-shell .lf-workspace table thead,
+.lf-app-shell .lf-workspace table thead tr,
+.lf-app-shell .lf-workspace table thead th,
+.lf-app-shell .lf-workspace [role="columnheader"],
+.lf-app-shell .lf-workspace .rdt_TableHead,
+.lf-app-shell .lf-workspace .rdt_TableHeadRow,
+.lf-app-shell .lf-workspace .MuiDataGrid-columnHeaders,
+.lf-app-shell .lf-workspace .ag-header {
+  background-color: #0B1224 !important;
+  color: #FFFFFF !important;
+  border-color: #24324F !important;
+}
+
+.lf-app-shell .lf-workspace table tbody,
+.lf-app-shell .lf-workspace table tbody tr,
+.lf-app-shell .lf-workspace table tbody td,
+.lf-app-shell .lf-workspace [role="rowgroup"],
+.lf-app-shell .lf-workspace [role="row"],
+.lf-app-shell .lf-workspace [role="cell"],
+.lf-app-shell .lf-workspace .rdt_TableBody,
+.lf-app-shell .lf-workspace .rdt_TableRow,
+.lf-app-shell .lf-workspace .rdt_TableCell,
+.lf-app-shell .lf-workspace .MuiDataGrid-row,
+.lf-app-shell .lf-workspace .MuiDataGrid-cell,
+.lf-app-shell .lf-workspace .ag-row,
+.lf-app-shell .lf-workspace .ag-cell {
+  background-color: #0B1224 !important;
+  color: #FFFFFF !important;
+  border-color: #24324F !important;
+}
+
+.lf-app-shell .lf-workspace table tbody tr:nth-child(even),
+.lf-app-shell .lf-workspace .rdt_TableRow:nth-child(even),
+.lf-app-shell .lf-workspace .MuiDataGrid-row:nth-child(even),
+.lf-app-shell .lf-workspace .ag-row-even {
+  background-color: #0D162A !important;
+}
+
+.lf-app-shell .lf-workspace table tbody tr:hover,
+.lf-app-shell .lf-workspace table tbody tr:hover td,
+.lf-app-shell .lf-workspace [role="row"]:hover,
+.lf-app-shell .lf-workspace [role="row"]:hover [role="cell"],
+.lf-app-shell .lf-workspace .rdt_TableRow:hover,
+.lf-app-shell .lf-workspace .MuiDataGrid-row:hover,
+.lf-app-shell .lf-workspace .ag-row-hover {
+  background-color: #13203A !important;
+  color: #FFFFFF !important;
+}
+
+.lf-app-shell .lf-workspace table :is(th, td) *,
+.lf-app-shell .lf-workspace [role="columnheader"] *,
+.lf-app-shell .lf-workspace [role="cell"] * {
+  border-color: inherit;
+}
+
+.lf-app-shell .lf-workspace table :is(th, td) :is(p, span, div, a, button):not(.text-emerald-400):not(.text-green-400):not(.text-red-400):not(.text-amber-400):not(.text-yellow-400):not(.text-blue-400):not(.text-cyan):not([class*="text-emerald"]):not([class*="text-green"]):not([class*="text-red"]):not([class*="text-amber"]):not([class*="text-yellow"]):not([class*="text-blue"]):not([class*="text-cyan"]) {
+  color: inherit;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) :is(.bg-white, .bg-gray-50, .bg-gray-100, .bg-slate-50, .bg-slate-100, .bg-zinc-50, .bg-neutral-50) {
+  background-color: var(--premium-surface) !important;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) :is(.text-black, .text-gray-600, .text-gray-700, .text-gray-800, .text-gray-900, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900, .text-zinc-700, .text-zinc-800, .text-zinc-900) {
+  color: var(--premium-text) !important;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) :is(.text-gray-400, .text-gray-500, .text-slate-400, .text-slate-500, .text-zinc-400, .text-zinc-500) {
+  color: var(--premium-muted) !important;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) :is(button, input, select, textarea) {
+  background-color: #0F1930 !important;
+  color: #FFFFFF !important;
+  border-color: #314264 !important;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) :is(button, input, select, textarea):hover {
+  background-color: #172642 !important;
+}
+
+.lf-app-shell .lf-workspace :is(table, [role="grid"], [role="table"]) svg {
+  color: currentColor;
+}
+
+/* Corrige wrappers claros ao redor de tabelas e grids sem escurecer cards sem tabela. */
+.lf-app-shell .lf-workspace :is(.overflow-auto, .overflow-x-auto, .overflow-y-auto):has(> table),
+.lf-app-shell .lf-workspace :is(.overflow-auto, .overflow-x-auto, .overflow-y-auto):has([role="grid"]),
+.lf-app-shell .lf-workspace :is(.rounded-lg, .rounded-xl, .rounded-2xl):has(> table),
+.lf-app-shell .lf-workspace :is(.rounded-lg, .rounded-xl, .rounded-2xl):has([role="grid"]) {
+  background-color: var(--premium-surface) !important;
+  border-color: var(--premium-border) !important;
+  color: var(--premium-text) !important;
+}
+
+/* Portais de DataGrid/modais/dropdowns renderizados fora do shell. */
+body:has(.lf-app-shell) [role="dialog"],
+body:has(.lf-app-shell) [role="menu"],
+body:has(.lf-app-shell) [role="listbox"],
+body:has(.lf-app-shell) [role="tooltip"] {
+  color-scheme: dark;
+}
+
+body:has(.lf-app-shell) [role="dialog"] :is(table, [role="grid"], [role="table"]),
+body:has(.lf-app-shell) [role="menu"],
+body:has(.lf-app-shell) [role="listbox"] {
+  background-color: var(--premium-surface, #0B1224) !important;
+  color: var(--premium-text, #FFFFFF) !important;
+  border-color: var(--premium-border, #24324F) !important;
+}
