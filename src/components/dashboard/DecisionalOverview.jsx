@@ -78,10 +78,15 @@ function AttentionPanel({ accountId }) {
     (async () => {
       try {
         const qs = accountId ? { amazon_account_id: accountId, status: 'active' } : { status: 'active' };
-        const rows = await base44.entities.Alert.filter(qs, '-created_date', 50).catch(() => []);
+        const [criticalRows, highRows] = await Promise.all([
+          base44.entities.Alert.filter({ ...qs, severity: 'critical' }, '-created_at', 50).catch(() => []),
+          base44.entities.Alert.filter({ ...qs, severity: 'high' }, '-created_at', 50).catch(() => []),
+        ]);
         if (!mounted) return;
-        const filtered = (rows || []).filter(a => ['high', 'critical'].includes(String(a?.severity || '').toLowerCase()));
-        setAlerts(filtered);
+        const byId = new Map(
+          [...criticalRows, ...highRows].map(alert => [alert.id, alert])
+        );
+        setAlerts([...byId.values()]);
       } catch {
         setAlerts([]);
       } finally {
