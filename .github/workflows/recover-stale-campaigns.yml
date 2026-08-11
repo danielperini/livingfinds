@@ -77,9 +77,9 @@ jobs:
                   force: true,
                   trigger_type: "post_deploy_stale_zero_delivery_recovery",
                 });
-                const healthEngine = String(health.engine || "");
-                if (!healthEngine.startsWith("campaign-delivery-health-v2.3-canonical-stock")) {
-                  throw new Error("Versão antiga da recuperação ainda carregada na VPS: " + (healthEngine || "desconhecida"));
+                const healthEngine = String(health.policy_version || health.engine || "");
+                if (healthEngine !== "campaign-delivery-health-v5.0-serving-profit-v19") {
+                  throw new Error("Versão inesperada da recuperação carregada na VPS: " + (healthEngine || "desconhecida"));
                 }
 
                 const recovery = await call("runIntradaySalesRecovery", {
