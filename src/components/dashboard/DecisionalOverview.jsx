@@ -28,7 +28,7 @@ function FreshnessSource({ label, timestamp }) {
   );
 }
 
-function AttentionCard({ alert }) {
+function AttentionCard({ alert, onResolve, resolving }) {
   const severity = String(alert?.severity || 'medium').toLowerCase();
   const tone = severity === 'critical' ? 'danger' : 'warning';
   const ring = severity === 'critical' ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50';
@@ -39,7 +39,19 @@ function AttentionCard({ alert }) {
       <div className="flex items-start gap-2">
         <Icon className={`w-4 h-4 ${iconColor} flex-shrink-0 mt-0.5`} />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-theme-primary">{alert?.title || 'Alerta'}</p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-semibold text-theme-primary">{alert?.title || 'Alerta'}</p>
+            <button
+              type="button"
+              onClick={() => onResolve?.(alert.id)}
+              disabled={resolving}
+              aria-label={`Resolver alerta ${alert?.title || ''}`}
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white/70 px-2 py-1 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+            >
+              {resolving ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+              Resolver
+            </button>
+          </div>
           {alert?.asin && <p className="text-[11px] font-mono text-[#0066CC] mt-0.5">{alert.asin}</p>}
           <p className="text-xs text-theme-secondary mt-1 leading-relaxed">{alert?.message || alert?.details || 'Verifique o detalhe do alerta.'}</p>
           {alert?.metric_name && (
@@ -57,6 +69,8 @@ function AttentionCard({ alert }) {
 function AttentionPanel({ accountId }) {
   const [alerts, setAlerts] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [resolvingId, setResolvingId] = useState(null);
+  const [resolveError, setResolveError] = useState('');
 
   useEffect(() => {
     let mounted = true;
@@ -77,6 +91,24 @@ function AttentionPanel({ accountId }) {
     return () => { mounted = false; };
   }, [accountId]);
 
+  const resolveAlert = async (alertId) => {
+    if (!alertId || resolvingId) return;
+    setResolvingId(alertId);
+    setResolveError('');
+    try {
+      await base44.entities.Alert.update(alertId, {
+        status: 'resolved',
+        resolved_at: new Date().toISOString(),
+        resolution_reason: 'manual_resolve',
+      });
+      setAlerts(current => (current || []).filter(alert => alert.id !== alertId));
+    } catch (error) {
+      setResolveError(error?.message || 'Não foi possível resolver o alerta.');
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-6">
@@ -96,9 +128,19 @@ function AttentionPanel({ accountId }) {
     );
   }
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-      {alerts.slice(0, 6).map(a => <AttentionCard key={a.id} alert={a} />)}
-    </div>
+    <>
+      {resolveError && <p className="mb-3 text-xs text-red-600">{resolveError}</p>}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {alerts.slice(0, 6).map(a => (
+          <AttentionCard
+            key={a.id}
+            alert={a}
+            onResolve={resolveAlert}
+            resolving={resolvingId === a.id}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 

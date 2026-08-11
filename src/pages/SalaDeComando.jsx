@@ -255,9 +255,10 @@ export default function SalaDeComando() {
       const aid = acc.id;
 
       const [
-        alertsData, kickoff, repair, keyword, logs, decs, runs,
+        alertsData, activeAlertsData, kickoff, repair, keyword, logs, decs, runs,
       ] = await Promise.all([
         base44.entities.Alert.filter({ amazon_account_id: aid }, '-created_at', 100),
+        base44.entities.Alert.filter({ amazon_account_id: aid, status: 'active' }, '-created_at', 200),
         base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
         base44.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
         base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 80),
@@ -266,7 +267,12 @@ export default function SalaDeComando() {
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 100),
       ]);
 
-      setAlerts(alertsData.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4)));
+      const alertsById = new Map(
+        [...activeAlertsData, ...alertsData].map(alert => [alert.id, alert])
+      );
+      setAlerts([...alertsById.values()].sort((a, b) =>
+        (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4)
+      ));
       setKickoffQueue(kickoff);
       setRepairQueue(repair);
       setKeywordQueue(keyword);

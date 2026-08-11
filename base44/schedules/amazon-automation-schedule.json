@@ -57,6 +57,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Manual bid parity reconciliation - daily 04:10 BRT",
+      "function": "reconcileManualBidParity",
+      "cron": "10 4 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
       "name": "Ads automation E2E health audit - every 15 minutes",
       "function": "auditAdsAutomationE2E",
       "cron": "13,28,43,58 * * * *",

@@ -7,8 +7,9 @@ import {
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
 
-const MAX_BATCH = 30;
+const MAX_BATCH = 12;
 const API_DELAY_MS = 400;
+const EXECUTION_DEADLINE_MS = 75_000;
 
 /**
  * HARD GUARD — assertSingleKeywordPerCampaign
@@ -115,11 +116,7 @@ Deno.serve(async (request) => {
     const approved = [...approvedRows, ...dueRetries];
 
     if (approved.length === 0) {
-      const parity = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
-        amazon_account_id: aid,
-        _service_role: true,
-      }).catch(() => null);
-      return Response.json({ ok: true, executed: 0, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
+      return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
     }
 
     const decisionKeywordIds = [...new Set(approved.map((decision: any) => String(decision.keyword_id || '')).filter(Boolean))];
@@ -260,11 +257,7 @@ Deno.serve(async (request) => {
       : approved;
 
     if (stillApproved.length === 0) {
-      const parity = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
-        amazon_account_id: aid,
-        _service_role: true,
-      }).catch(() => null);
-      return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, bid_parity: parity?.data || parity || null, duration_ms: Date.now() - t0 });
+      return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, duration_ms: Date.now() - t0 });
     }
 
     const toProcess = prioritize(stillApproved)
@@ -274,7 +267,7 @@ Deno.serve(async (request) => {
     let executed = 0, failed = 0, skipped = 0;
 
     for (const decision of toProcess) {
-      if (Date.now() - t0 > 90000) break;
+      if (Date.now() - t0 > EXECUTION_DEADLINE_MS) break;
 
       let lockOwnerId: string | null = null;
       try {
@@ -471,37 +464,29 @@ Deno.serve(async (request) => {
       if (toProcess.indexOf(decision) < toProcess.length - 1) await sleep(API_DELAY_MS);
     }
 
-    // Corrige também divergências históricas existentes em todas as campanhas manuais.
-    const parityResponse = await base44.asServiceRole.functions.invoke('reconcileManualBidParity', {
-      amazon_account_id: aid,
-      _service_role: true,
-    }).catch((e: any) => ({ data: { ok: false, error: e?.message } }));
-    const parity = parityResponse?.data || parityResponse || {};
-
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
       operation: 'ads_decision_execution',
       trigger_type: body._service_role ? 'automatic' : 'manual',
-      status: failed === 0 && parity?.ok !== false ? 'success' : executed > 0 ? 'warning' : 'error',
+      status: failed === 0 ? 'success' : executed > 0 ? 'warning' : 'error',
       execution_date: new Date().toISOString().slice(0, 10),
       started_at: new Date(t0).toISOString(),
       completed_at: new Date().toISOString(),
       duration_ms: Date.now() - t0,
       records_processed: executed,
-      error_message: failed > 0 ? `${failed} decisões falharam` : parity?.ok === false ? `Falha na reconciliação de bids: ${parity?.error || 'erro desconhecido'}` : null,
-      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas; ${Number(parity?.corrected || 0)} divergências de bid corrigidas`,
+      error_message: failed > 0 ? `${failed} decisões falharam` : null,
+      result_summary: `${executed} executadas, ${failed} com erro, ${skipped} agendadas, ${preAutoCancel} pré-canceladas`,
     }).catch(() => {});
 
     return Response.json({
       ok: true,
       pre_cancelled: preAutoCancel,
       total_approved: approved.length,
-      processed: toProcess.length,
+      processed: results.length,
       executed,
       failed,
       skipped,
-      remaining: Math.max(0, approved.length - MAX_BATCH),
-      bid_parity: parity,
+      remaining: Math.max(0, approved.length - results.length),
       duration_ms: Date.now() - t0,
       results: results.slice(0, 30),
     });

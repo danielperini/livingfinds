@@ -62,20 +62,45 @@ Deno.serve(async (req) => {
 
     // Indexar: última execução por operação
     const logByOp = new Map<string, any>();
-    const retriesCount = new Map<string, number>();
+    const retryKeysByOp = new Map<string, Set<string>>();
 
     for (const log of logsToday) {
       const op = log.operation;
       if (!logByOp.has(op) || new Date(log.started_at || 0) > new Date(logByOp.get(op).started_at || 0)) {
         logByOp.set(op, log);
       }
-      if ((log.trigger_type || '').includes('auto_retry')) {
-        retriesCount.set(op, (retriesCount.get(op) || 0) + 1);
+      const triggerType = String(log.trigger_type || '');
+      if (/^auto_retry_\d+$/.test(triggerType)) {
+        if (!retryKeysByOp.has(op)) retryKeysByOp.set(op, new Set());
+        retryKeysByOp.get(op)!.add(triggerType);
       }
     }
 
+    const activeHealthAlerts = await base44.asServiceRole.entities.Alert.filter(
+      { amazon_account_id: aid, status: 'active', source_function: 'runDailyHealthMonitor' },
+      '-created_at', 200
+    ).catch(() => []);
+    const resolvedHealthAlertIds = new Set<string>();
+    const resolveHealthAlertsFor = async (operation: string) => {
+      const prefix = `daily_health_fail_${operation}_`;
+      const matches = activeHealthAlerts.filter((alert: any) =>
+        !resolvedHealthAlertIds.has(String(alert.id)) &&
+        (String(alert.deduplication_key || '').startsWith(prefix) ||
+          String(alert.title || '').endsWith(`: ${operation}`))
+      );
+      for (const alert of matches) {
+        await base44.asServiceRole.entities.Alert.update(alert.id, {
+          status: 'resolved',
+          resolved_at: nowIso(),
+          resolution_reason: 'automation_recovered',
+        }).catch(() => {});
+        resolvedHealthAlertIds.add(String(alert.id));
+      }
+    };
+
     const report: any[] = [];
     const retried: string[] = [];
+    const retriedOk: string[] = [];
     const alreadyOk: string[] = [];
     const skippedMaxRetries: string[] = [];
 
@@ -85,12 +110,13 @@ Deno.serve(async (req) => {
 
       if (isSuccess) {
         alreadyOk.push(step.operation);
+        await resolveHealthAlertsFor(step.operation);
         report.push({ operation: step.operation, status: 'ok', last_run: lastLog.started_at });
         continue;
       }
 
       // Verificar limite de retries
-      const retriesDone = retriesCount.get(step.operation) || 0;
+      const retriesDone = retryKeysByOp.get(step.operation)?.size || 0;
       if (retriesDone >= MAX_RETRIES_PER_STEP) {
         skippedMaxRetries.push(step.operation);
         report.push({
@@ -100,7 +126,12 @@ Deno.serve(async (req) => {
           last_error: lastLog?.error_message?.slice(0, 200),
         });
         if (step.critical) {
-          await base44.asServiceRole.entities.Alert.create({
+          const deduplicationKey = `daily_health_fail_${step.operation}_${today}`;
+          const existingAlert = activeHealthAlerts.find((alert: any) =>
+            alert.deduplication_key === deduplicationKey &&
+            !resolvedHealthAlertIds.has(String(alert.id))
+          );
+          const alertData = {
             amazon_account_id: aid,
             alert_type: 'sync_error',
             alert_family: 'sync',
@@ -109,17 +140,25 @@ Deno.serve(async (req) => {
             title: `Automação falhou após ${MAX_RETRIES_PER_STEP} tentativas: ${step.operation}`,
             message: `A etapa "${step.operation}" falhou ${MAX_RETRIES_PER_STEP}x hoje (${today}). Último erro: ${lastLog?.error_message?.slice(0, 300) || 'desconhecido'}`,
             source_function: 'runDailyHealthMonitor',
-            first_detected_at: nowIso(),
             last_detected_at: nowIso(),
-            deduplication_key: `daily_health_fail_${step.operation}_${today}`,
-          }).catch(() => {});
+            deduplication_key: deduplicationKey,
+          };
+          if (existingAlert) {
+            await base44.asServiceRole.entities.Alert.update(existingAlert.id, alertData).catch(() => {});
+          } else {
+            const createdAlert = await base44.asServiceRole.entities.Alert.create({
+              ...alertData,
+              first_detected_at: nowIso(),
+            }).catch(() => null);
+            if (createdAlert) activeHealthAlerts.push(createdAlert);
+          }
         }
         continue;
       }
 
       // Retry automático com cadência controlada
       const logStart = nowIso();
-      await base44.asServiceRole.entities.SyncExecutionLog.create({
+      const retryLog = await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: aid,
         operation: step.operation,
         trigger_type: `auto_retry_${retriesDone + 1}`,
@@ -127,7 +166,7 @@ Deno.serve(async (req) => {
         execution_date: today,
         started_at: logStart,
         error_message: `Monitor: retry ${retriesDone + 1}/${MAX_RETRIES_PER_STEP} — ${lastLog ? `último status: ${lastLog.status}` : 'não executado hoje'}`,
-      }).catch(() => {});
+      }).catch(() => null);
 
       let retryOk = false;
       let retryError = '';
@@ -144,18 +183,29 @@ Deno.serve(async (req) => {
         retryError = e?.message || 'invoke failed';
       }
 
-      await base44.asServiceRole.entities.SyncExecutionLog.create({
-        amazon_account_id: aid,
-        operation: step.operation,
-        trigger_type: `auto_retry_${retriesDone + 1}`,
+      const completion = {
         status: retryOk ? 'success' : 'error',
-        execution_date: today,
-        started_at: logStart,
         completed_at: nowIso(),
-        error_message: retryOk ? undefined : retryError?.slice(0, 300),
-      }).catch(() => {});
+        error_message: retryOk ? null : retryError?.slice(0, 300),
+      };
+      if (retryLog?.id) {
+        await base44.asServiceRole.entities.SyncExecutionLog.update(retryLog.id, completion).catch(() => {});
+      } else {
+        await base44.asServiceRole.entities.SyncExecutionLog.create({
+          amazon_account_id: aid,
+          operation: step.operation,
+          trigger_type: `auto_retry_${retriesDone + 1}`,
+          execution_date: today,
+          started_at: logStart,
+          ...completion,
+        }).catch(() => {});
+      }
 
       retried.push(step.operation);
+      if (retryOk) {
+        retriedOk.push(step.operation);
+        await resolveHealthAlertsFor(step.operation);
+      }
       report.push({
         operation: step.operation,
         status: retryOk ? 'retried_ok' : 'retried_failed',
@@ -170,7 +220,7 @@ Deno.serve(async (req) => {
     // Resumo de saúde
     const allCriticalOk = REQUIRED_STEPS
       .filter(s => s.critical)
-      .every(s => alreadyOk.includes(s.operation) || retried.includes(s.operation));
+      .every(s => alreadyOk.includes(s.operation) || retriedOk.includes(s.operation));
 
     await base44.asServiceRole.entities.SyncExecutionLog.create({
       amazon_account_id: aid,
