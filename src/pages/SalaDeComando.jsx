@@ -220,6 +220,9 @@ export default function SalaDeComando() {
   const [running, setRunning] = useState({ kickoff: false, repair: false, keyword: false });
   const [retrying, setRetrying] = useState(null);
   const [queueFilter, setQueueFilter] = useState('all');
+  const [staleCleanup, setStaleCleanup] = useState(null);
+  const [checkingStaleQueue, setCheckingStaleQueue] = useState(null);
+  const [clearingStaleQueue, setClearingStaleQueue] = useState(null);
 
   // Histórico de Lances
   const [bidLogs, setBidLogs] = useState([]);
@@ -334,6 +337,41 @@ export default function SalaDeComando() {
     const done = items.filter(i => ['completed', 'cancelled', 'failed'].includes(i.status));
     await Promise.all(done.map(i => base44.entities[entityName].delete(i.id)));
     loadAll();
+  };
+  const brtDateKey = (value = new Date()) => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date(value));
+    const get = type => parts.find(part => part.type === type)?.value || '';
+    return `${get('year')}-${get('month')}-${get('day')}`;
+  };
+  const prepareStaleCleanup = async (queue) => {
+    if (!account || checkingStaleQueue || clearingStaleQueue) return;
+    setCheckingStaleQueue(queue.key);
+    try {
+      const scheduled = await base44.entities[queue.entity].filter(
+        { amazon_account_id: account.id, status: 'scheduled' }, '-scheduled_at', 5000
+      );
+      const today = brtDateKey();
+      const stale = scheduled.filter(item => item.scheduled_at && brtDateKey(item.scheduled_at) < today);
+      setStaleCleanup({ key: queue.key, entity: queue.entity, title: queue.title, items: stale });
+    } finally {
+      setCheckingStaleQueue(null);
+    }
+  };
+  const confirmStaleCleanup = async () => {
+    if (!staleCleanup?.items?.length || clearingStaleQueue) return;
+    setClearingStaleQueue(staleCleanup.key);
+    try {
+      for (let start = 0; start < staleCleanup.items.length; start += 10) {
+        const batch = staleCleanup.items.slice(start, start + 10);
+        await Promise.all(batch.map(item => base44.entities[staleCleanup.entity].delete(item.id)));
+      }
+      setStaleCleanup(null);
+      await loadAll();
+    } finally {
+      setClearingStaleQueue(null);
+    }
   };
 
   // ── Ações de Bid Log ──
@@ -1206,6 +1244,12 @@ export default function SalaDeComando() {
                             Limpar
                           </button>
                         )}
+                        {qScheduled > 0 && (
+                          <button onClick={() => prepareStaleCleanup(q)} disabled={checkingStaleQueue === q.key || Boolean(clearingStaleQueue)}
+                            className="text-[10px] text-amber-400 hover:text-amber-300 px-2 py-1 border border-amber-500/30 rounded-lg disabled:opacity-40">
+                            {checkingStaleQueue === q.key ? 'Conferindo...' : 'Limpar antigos'}
+                          </button>
+                        )}
                         <button onClick={() => runQueueNow(q.key, q.fn)} disabled={running[q.key] || qScheduled === 0}
                           className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-cyan/15 border border-cyan/30 text-cyan hover:bg-cyan/25 rounded-lg disabled:opacity-40 font-semibold">
                           {running[q.key] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
@@ -1213,6 +1257,28 @@ export default function SalaDeComando() {
                         </button>
                       </div>
                     </div>
+                    {staleCleanup?.key === q.key && (
+                      <div className="px-5 py-3 border-b border-amber-500/20 bg-amber-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <p className="text-xs text-slate-300">
+                          {staleCleanup.items.length > 0
+                            ? `Excluir permanentemente ${staleCleanup.items.length} agendamento${staleCleanup.items.length !== 1 ? 's' : ''} vencido${staleCleanup.items.length !== 1 ? 's' : ''} de ${q.title}?`
+                            : `Nenhum agendamento vencido encontrado em ${q.title}.`}
+                          <span className="block text-[10px] text-slate-500 mt-0.5">Itens processando, futuros e concluídos serão preservados.</span>
+                        </p>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button onClick={() => setStaleCleanup(null)} disabled={clearingStaleQueue === q.key}
+                            className="text-[10px] text-slate-400 hover:text-white px-2.5 py-1.5 border border-surface-3 rounded-lg disabled:opacity-40">
+                            {staleCleanup.items.length > 0 ? 'Cancelar' : 'Fechar'}
+                          </button>
+                          {staleCleanup.items.length > 0 && (
+                            <button onClick={confirmStaleCleanup} disabled={clearingStaleQueue === q.key}
+                              className="text-[10px] text-red-300 hover:text-red-200 px-2.5 py-1.5 bg-red-500/10 border border-red-500/30 rounded-lg disabled:opacity-40">
+                              {clearingStaleQueue === q.key ? 'Excluindo...' : `Excluir ${staleCleanup.items.length}`}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     {qFiltered.length === 0 ? (
                       <div className="py-8 text-center text-sm text-slate-500">Fila vazia</div>
                     ) : (
