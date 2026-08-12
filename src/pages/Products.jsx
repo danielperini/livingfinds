@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
+import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, RefreshCw, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
 import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
 import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
@@ -154,6 +154,7 @@ export default function Products({ externalRefreshTrigger }) {
   const { propagating: amazonPropagating, propagationResult: amazonResult, propagate: amazonPropagate } = useAmazonPropagation();
 
   const [priceQueryLoading, setPriceQueryLoading] = useState(false);
+  const [localRefreshing, setLocalRefreshing] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [kickoffStuckItems, setKickoffStuckItems] = useState(null);
   const [stuckQueueByAsin, setStuckQueueByAsin] = useState({});
@@ -357,8 +358,8 @@ export default function Products({ externalRefreshTrigger }) {
   }, [products, maxFbaByAsin]);
 
   const counters = useMemo(() => {
-    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active' && stockFreshness(p) === 'fresh').length;
-    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock' && stockFreshness(p) === 'fresh').length;
+    const activeOffers = visibleProducts.filter(p => offerStatus(p) === 'active').length;
+    const lowStock = visibleProducts.filter(p => offerStatus(p) === 'low_stock').length;
     const staleStock = visibleProducts.filter(p => stockFreshness(p) === 'stale').length;
     const activeAds = visibleProducts.filter(p => productHasCampaign(p) && isCampaignActiveFn(p)).length;
     const pausedAds = visibleProducts.filter(p => productHasCampaign(p) && !isCampaignActiveFn(p)).length;
@@ -545,42 +546,62 @@ export default function Products({ externalRefreshTrigger }) {
             </p>
           </div>
         </div>
-        {account && (
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
-            disabled={priceQueryLoading}
+            disabled={localRefreshing}
             onClick={async () => {
-              if (!account || priceQueryLoading) return;
-              setPriceQueryLoading(true);
-              setActionMsg({ type: 'info', text: 'Consultando preço do próximo produto ativo…' });
+              if (localRefreshing) return;
+              setLocalRefreshing(true);
               try {
-                const res = await base44.functions.invoke('refreshProductMarketPrice', {
-                  amazon_account_id: account.id,
-                  next_active: true,
-                  force: false,
-                });
-                const data = res?.data || res;
-                if (data?.cache_hit) {
-                  setActionMsg({ type: 'info', text: `Cache válido para ${data.asin}. ${data.message}` });
-                } else if (data?.ok && data?.status === 'success') {
-                  setActionMsg({ type: 'success', text: `✓ ${data.asin} · ${data.provider} · R$ ${data.average} · ${data.offer_count} ofertas` });
-                  await reloadProducts();
-                } else {
-                  setActionMsg({ type: 'error', text: data?.message || data?.error || 'Sem resultado' });
-                }
-              } catch (e) {
-                setActionMsg({ type: 'error', text: e?.message || 'Erro ao consultar preço' });
+                await reloadProducts();
               } finally {
-                setPriceQueryLoading(false);
-                setTimeout(() => setActionMsg(null), 12000);
+                setLocalRefreshing(false);
               }
             }}
-            className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            title="Recarregar dados do banco local (sem chamar a Amazon)"
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E5E7EB] text-[#0D1117] hover:bg-[#F8FAFC] text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
           >
-            {priceQueryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
-            Consultar próximo ativo
+            {localRefreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {localRefreshing ? 'Atualizando...' : 'Atualizar'}
           </button>
-        )}
+          {account && (
+            <button
+              type="button"
+              disabled={priceQueryLoading}
+              onClick={async () => {
+                if (!account || priceQueryLoading) return;
+                setPriceQueryLoading(true);
+                setActionMsg({ type: 'info', text: 'Consultando preço do próximo produto ativo…' });
+                try {
+                  const res = await base44.functions.invoke('refreshProductMarketPrice', {
+                    amazon_account_id: account.id,
+                    next_active: true,
+                    force: false,
+                  });
+                  const data = res?.data || res;
+                  if (data?.cache_hit) {
+                    setActionMsg({ type: 'info', text: `Cache válido para ${data.asin}. ${data.message}` });
+                  } else if (data?.ok && data?.status === 'success') {
+                    setActionMsg({ type: 'success', text: `✓ ${data.asin} · ${data.provider} · R$ ${data.average} · ${data.offer_count} ofertas` });
+                    await reloadProducts();
+                  } else {
+                    setActionMsg({ type: 'error', text: data?.message || data?.error || 'Sem resultado' });
+                  }
+                } catch (e) {
+                  setActionMsg({ type: 'error', text: e?.message || 'Erro ao consultar preço' });
+                } finally {
+                  setPriceQueryLoading(false);
+                  setTimeout(() => setActionMsg(null), 12000);
+                }
+              }}
+              className="flex items-center gap-2 px-3 py-2 bg-violet-500/15 border border-violet-500/30 text-violet-300 hover:bg-violet-500/25 text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {priceQueryLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TrendingUp className="w-3.5 h-3.5" />}
+              Consultar próximo ativo
+            </button>
+          )}
+        </div>
       </div>
 
       {actionMsg && (

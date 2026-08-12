@@ -9,7 +9,7 @@ import {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const STOCK_FRESH_HOURS = 24;
-const STOCK_WITH_CAMPAIGN_FRESH_HOURS = 6;
+const STOCK_WITH_CAMPAIGN_FRESH_HOURS = 24;
 
 export function isCampaignActiveFn(product) {
   return ['active', 'enabled'].includes(String(product?.campaign_status || '').toLowerCase());
