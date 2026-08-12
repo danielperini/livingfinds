@@ -52,12 +52,7 @@ function resolveOne(env: EnvReader, names: string[]): ResolvedCredential {
   for (const name of names) {
     const value = normalize(env(name));
     if (value) {
-      return {
-        value,
-        source: name,
-        fingerprint: shortCredentialHash(value),
-        configured: true,
-      };
+      return { value, source: name, fingerprint: shortCredentialHash(value), configured: true };
     }
   }
   return { value: '', source: null, fingerprint: null, configured: false };
@@ -73,14 +68,14 @@ export function adsBaseUrlForRegion(region: string | undefined): string {
 }
 
 export function resolveAmazonAdsCredentials(env: EnvReader = denoEnv): AmazonAdsCredentials {
-  const clientId = resolveOne(env, ['ADS_CLIENT_ID', 'AMAZON_LWA_CLIENT_ID']);
-  const clientSecret = resolveOne(env, ['ADS_CLIENT_SECRET', 'AMAZON_LWA_CLIENT_SECRET']);
+  // Ads usa exclusivamente o conjunto ADS_* para não misturar o app LWA da SP-API.
+  const clientId = resolveOne(env, ['ADS_CLIENT_ID']);
+  const clientSecret = resolveOne(env, ['ADS_CLIENT_SECRET']);
   const refreshToken = resolveOne(env, ['ADS_REFRESH_TOKEN']);
   const profileId = resolveOne(env, ['ADS_PROFILE_ID']);
   const accountId = resolveOne(env, ['ADS_ACCOUNT_ID']);
   const regionValue = resolveOne(env, ['ADS_REGION']);
   const region = regionValue.value || 'NA';
-
   return {
     clientId,
     clientSecret,
@@ -107,18 +102,12 @@ export function resolveAmazonSpCredentials(env: EnvReader = denoEnv): AmazonSpCr
 
 export function resolveAdsOAuthRedirectUri(env: EnvReader = denoEnv): string {
   const appBaseUrl = normalize(env('APP_BASE_URL')).replace(/\/+$/, '');
-  if (!appBaseUrl) {
-    throw new Error('APP_BASE_URL_REQUIRED: configure APP_BASE_URL para gerar a redirect_uri Amazon Ads');
-  }
+  if (!appBaseUrl) throw new Error('APP_BASE_URL_REQUIRED: configure APP_BASE_URL para gerar a redirect_uri Amazon Ads');
   return `${appBaseUrl}/amazon-ads-callback`;
 }
 
 export function credentialDiagnostic(credential: ResolvedCredential) {
-  return {
-    configured: credential.configured,
-    source: credential.source,
-    fingerprint: credential.fingerprint,
-  };
+  return { configured: credential.configured, source: credential.source, fingerprint: credential.fingerprint };
 }
 
 export function logCredentialSelection(label: string, credential: ResolvedCredential) {
