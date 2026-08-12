@@ -26,11 +26,6 @@ export default function SettingsIntegrated() {
           ).catch(() => []);
           if (active) setEnabled(settings?.[0]?.dayparting_enabled !== false);
 
-          await base44.functions.invoke('syncDaypartingConfiguration', {
-            amazon_account_id: current.id,
-            bootstrap_default_rules: true,
-            force_holidays: true,
-          }).catch(() => null);
         }
       } finally {
         if (active) setLoading(false);

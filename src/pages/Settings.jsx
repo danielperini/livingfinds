@@ -46,6 +46,10 @@ const PERFORMANCE_DEFAULTS = {
   weekly_campaign_capacity: 10,
   target_coverage_hours: 24,
   ai_auto_optimization: false,
+  ai_mode: 'SHADOW',
+  protection_confidence_threshold: 85,
+  expansion_confidence_threshold: 95,
+  policy_version: 1,
 };
 
 function Toggle({ value, onChange }) {
@@ -93,6 +97,7 @@ export default function Settings() {
   const [goalsSaved, setGoalsSaved] = useState(false);
   const [todaySpend, setTodaySpend] = useState(null);
   const [justApplied, setJustApplied] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const setGoal = (key, val) => setGoals((previous) => {
     if (key === 'target_acos' || key === 'target_roas') {
@@ -165,6 +170,7 @@ export default function Settings() {
             max_bid_decrease_pct: cfg.max_bid_decrease_pct ?? previous.max_bid_decrease_pct,
             objective: cfg.objective ?? previous.objective,
             ai_auto_optimization: cfg.ai_auto_optimization ?? false,
+            ai_mode: cfg.ai_auto_optimization ? 'LOW_RISK_AUTO' : 'SHADOW',
           }, PERFORMANCE_DEFAULTS));
         }
       }
@@ -218,13 +224,15 @@ export default function Settings() {
       const effectiveObjective = divergesFromPreset(canonicalGoals) ? 'custom' : baseObjective;
       serializedGoals.objective = effectiveObjective;
       serializedGoals.objective_base = effectiveObjective === 'custom' && baseObjective !== 'custom' ? baseObjective : null;
+      serializedGoals.ai_auto_optimization = canonicalGoals.ai_mode === 'LOW_RISK_AUTO';
+      serializedGoals.policy_version = Number(perfSettings?.policy_version || 0) + 1;
 
       const payload = { ...serializedGoals, amazon_account_id: account.id, updated_at: now };
 
       // Detectar campos alterados para o histórico
       const changedFields = [];
       if (perfSettings) {
-        const TRACKED = ['target_acos','max_acos','target_roas','target_tacos','max_tacos','daily_budget_limit','target_cpc','max_cpc','min_bid','max_bid','max_bid_increase_pct','max_bid_decrease_pct','objective','primary_goal','dayparting_enabled','placement_optimization_enabled','top_of_search_limit','rest_of_search_limit','product_page_limit','ai_auto_optimization','minimum_campaign_budget','weekly_campaign_capacity'];
+        const TRACKED = ['target_acos','max_acos','target_roas','target_tacos','max_tacos','daily_budget_limit','target_cpc','max_cpc','min_bid','max_bid','max_bid_increase_pct','max_bid_decrease_pct','objective','primary_goal','dayparting_enabled','placement_optimization_enabled','top_of_search_limit','rest_of_search_limit','product_page_limit','ai_mode','protection_confidence_threshold','expansion_confidence_threshold','minimum_campaign_budget','weekly_campaign_capacity'];
         for (const field of TRACKED) {
           const oldVal = perfSettings[field];
           const newVal = canonicalGoals[field];
@@ -241,6 +249,7 @@ export default function Settings() {
         const created = await base44.entities.PerformanceSettings.create(payload);
         setPerfSettings(created);
       }
+      setGoals((previous) => ({ ...previous, policy_version: serializedGoals.policy_version }));
 
       // Gravar snapshot no histórico (sempre, mesmo sem diff detectado — primeiro save)
       const me = user || await base44.auth.me();
@@ -252,79 +261,12 @@ export default function Settings() {
         snapshot: { ...canonicalGoals },
         changed_fields: changedFields,
         changed_at: now,
+        snapshot_date: now.slice(0, 10),
+        policy_version: serializedGoals.policy_version,
+        propagation_status: 'pending_engine_cycle',
       }).catch(() => {});
-      // Sincronizar com AutopilotConfig para compatibilidade com o motor existente
-      const apCfgs = await base44.entities.AutopilotConfig.filter({ amazon_account_id: account.id });
-      const apPayload = {
-        target_acos: serializedGoals.target_acos,
-        maximum_acos: serializedGoals.max_acos,
-        target_roas: serializedGoals.target_roas,
-        target_tacos: serializedGoals.target_tacos,
-        maximum_tacos: serializedGoals.max_tacos,
-        total_daily_budget: serializedGoals.daily_budget_limit,
-        daily_budget_limit: serializedGoals.daily_budget_limit,
-        min_bid: serializedGoals.min_bid,
-        max_bid: serializedGoals.max_bid,
-        max_bid_increase_pct: serializedGoals.max_bid_increase_pct,
-        max_bid_decrease_pct: serializedGoals.max_bid_decrease_pct,
-        target_cpc: serializedGoals.target_cpc,
-        maximum_cpc: serializedGoals.max_cpc,
-        cpc_enforcement: (serializedGoals.max_cpc ?? 0) > 0,
-        objective: serializedGoals.objective,
-        impressions_goal_enabled: serializedGoals.impressions_goal_enabled,
-        target_daily_impressions: serializedGoals.target_daily_impressions,
-        top_of_search_limit: serializedGoals.top_of_search_limit,
-        rest_of_search_limit: serializedGoals.rest_of_search_limit,
-        product_page_limit: serializedGoals.product_page_limit,
-        ...(baseObjective === 'flex_stock' ? { auto_reduce_low_stock: true, auto_pause_zero_stock: true } : {}),
-        ai_auto_optimization: serializedGoals.ai_auto_optimization,
-        dayparting_enabled: serializedGoals.dayparting_enabled,
-        placement_optimization_enabled: serializedGoals.placement_optimization_enabled,
-      };
-      if (apCfgs.length) {
-        await base44.entities.AutopilotConfig.update(apCfgs[0].id, apPayload);
-      } else {
-        await base44.entities.AutopilotConfig.create({ amazon_account_id: account.id, ...apPayload });
-      }
       setGoalsSaved(true);
       setTimeout(() => setGoalsSaved(false), 4000);
-
-      // ── Propagação canônica: budgets, budget mínimo, placements e cap diário
-      //    em uma única chamada backend com log em SyncExecutionLog ──
-      base44.functions.invoke('propagateCanonicalSettings', {
-        amazon_account_id: account.id,
-        trigger: 'settings_updated',
-      }).then(res => {
-        const d = res?.data;
-        if (d?.ok) {
-          // Budget confirmado pela Amazon — atualizar feedback visual
-          setGoalsSaved(true);
-          setTimeout(() => setGoalsSaved(false), 6000);
-        }
-      }).catch(() => {});
-
-      // ── Pós-save: disparar motor imediatamente + enfileirar recalibração ──
-      // 1. Motor relê os novos parâmetros e gera decisões atualizadas agora
-      base44.functions.invoke('runUnifiedDecisionEngine', {
-        amazon_account_id: account.id,
-        trigger: 'settings_updated',
-        force: true,
-      }).catch(() => {});
-
-      // 2. Enfileirar na OptimizationDecision para a próxima janela de execução
-      base44.entities.OptimizationDecision.create({
-        amazon_account_id: account.id,
-        decision_type: 'bid_change',
-        entity_type: 'account',
-        action: 'reload_settings',
-        status: 'approved',
-        approval_status: 'auto_approved',
-        autopilot_authorized: true,
-        requires_approval: false,
-        rationale: `Metas atualizadas: ACoS=${canonicalGoals.target_acos}%, ROAS=${canonicalGoals.target_roas}x, teto de lance=R$${canonicalGoals.max_bid}, Budget/dia=R$${canonicalGoals.daily_budget_limit}. Motor recarregará os parâmetros na próxima janela.`,
-        source_function: 'Settings.saveGoals',
-        created_at: new Date().toISOString(),
-      }).catch(() => {});
 
     } catch (err) {
       alert(`Erro ao salvar metas: ${err.message}`);
@@ -388,6 +330,8 @@ export default function Settings() {
 
   const efficiencyUsesRoas = goals.primary_goal === 'roas';
   const coherenceWarnings = getCoherenceWarnings(goals);
+  const maximumPlacement = Math.max(Number(goals.top_of_search_limit || 0), Number(goals.rest_of_search_limit || 0), Number(goals.product_page_limit || 0));
+  const effectiveBidCeiling = Number(goals.max_bid || 0) * (1 + maximumPlacement / 100);
 
   return (
     <div className="p-6 space-y-6 max-w-3xl animate-fade-in">
@@ -399,6 +343,24 @@ export default function Settings() {
           <h1 className="text-lg font-bold text-white">Configurações</h1>
           <p className="text-xs text-slate-500">Fonte única de metas e parâmetros do motor de decisão</p>
         </div>
+      </div>
+
+      <div className="bg-cyan/5 border border-cyan/20 rounded-xl p-5">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-cyan/70">Política ativa · v{Number(goals.policy_version || perfSettings?.policy_version || 1)}</p>
+            <h2 className="text-sm font-semibold text-white">Resumo da política do motor</h2>
+          </div>
+          <span className="text-[10px] px-2 py-1 rounded-full border border-emerald-500/30 text-emerald-300 bg-emerald-500/10">PerformanceSettings canônico</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+          <div><p className="text-slate-500">Objetivo</p><p className="text-white font-medium">{goals.objective}</p></div>
+          <div><p className="text-slate-500">ACoS / ROAS</p><p className="text-white font-medium">{goals.target_acos}% / {goals.target_roas}x</p></div>
+          <div><p className="text-slate-500">Capital diário</p><p className="text-white font-medium">R${Number(goals.daily_budget_limit).toFixed(2)}</p></div>
+          <div><p className="text-slate-500">Lance absoluto</p><p className="text-white font-medium">R${Number(goals.max_bid).toFixed(2)}</p></div>
+          <div><p className="text-slate-500">IA</p><p className="text-white font-medium">{goals.ai_mode}</p></div>
+        </div>
+        <p className="text-[10px] text-slate-500 mt-3">Salvar versiona a política. O motor a lê na próxima janela operacional; esta tela não executa decisões nem altera a Amazon ao ser aberta.</p>
       </div>
 
       {/* Status da Conta */}
@@ -416,7 +378,7 @@ export default function Settings() {
 
       {/* Dados básicos da conta */}
       <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
-        <h2 className="text-sm font-semibold text-white mb-5">Dados da Conta</h2>
+        <h2 className="text-sm font-semibold text-white mb-5">Amazon &amp; Dados</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {[
             { key: 'seller_name', label: 'Nome do Seller', placeholder: 'Ex: Minha Loja' },
@@ -443,7 +405,7 @@ export default function Settings() {
       <div className={`bg-surface-1 border border-surface-2 rounded-xl p-6 ${justApplied ? 'animate-pulse' : ''}`}>
         <div className="flex items-center gap-2 mb-1">
           <Target className="w-4 h-4 text-cyan" />
-          <h2 className="text-sm font-semibold text-white">Metas de Performance</h2>
+          <h2 className="text-sm font-semibold text-white">Estratégia</h2>
           <span className="text-[10px] text-cyan/60 bg-cyan/10 border border-cyan/20 px-1.5 py-0.5 rounded-full ml-1">Fonte única do motor</span>
         </div>
         <p className="text-xs text-slate-500 mb-5">Todos os cálculos e decisões de bid usam estes valores. Dashboard e Campanhas apenas leem.</p>
@@ -510,20 +472,25 @@ export default function Settings() {
         </div>
 
         {/* Lances e CPC — um único teto operacional */}
-        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Lances e CPC</p>
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Capital &amp; Ads · Lances e CPC</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
           <NumberInput label="CPC Alvo (R$)" hint="A IA ajusta bids para este CPC" value={goals.target_cpc} onChange={v => setGoal('target_cpc', v)} min={0} step={0.01} zeroMeansIgnored />
-          <NumberInput label="Teto Máximo de Lance/CPC (R$)" hint="Único limite enviado à Amazon" value={goals.max_bid} onChange={v => setGoal('max_bid', v)} min={0.10} max={100} step={0.10} />
+          <NumberInput label="Limite global absoluto de lance (R$)" hint="Guardrail canônico antes dos ajustes de placement" value={goals.max_bid} onChange={v => setGoal('max_bid', v)} min={0.10} max={100} step={0.10} />
           <NumberInput label="Bid Mínimo (R$)" hint="Nunca ultrapassa o teto máximo" value={goals.min_bid} onChange={v => setGoal('min_bid', v)} min={0.02} max={10} step={0.01} />
           <NumberInput label="Aumento Máx. de Bid (%)" value={goals.max_bid_increase_pct} onChange={v => setGoal('max_bid_increase_pct', v)} min={1} max={100} step={1} />
           <NumberInput label="Redução Máx. de Bid (%)" value={goals.max_bid_decrease_pct} onChange={v => setGoal('max_bid_decrease_pct', v)} min={1} max={100} step={1} />
           <div className="flex items-end">
             <p className="w-full px-3 py-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 text-[11px] text-slate-400">
-              Teto ativo: <strong className="text-emerald-300 font-mono">R${Number(goals.max_bid).toFixed(2)}</strong>. Os campos legados são sincronizados automaticamente.
+              Limite base: <strong className="text-emerald-300 font-mono">R${Number(goals.max_bid).toFixed(2)}</strong>. Campos legados são apenas compatibilidade de leitura.
             </p>
           </div>
         </div>
 
+        <button type="button" onClick={() => setAdvancedOpen(value => !value)} className="w-full flex items-center justify-between px-3 py-2 mb-4 rounded-lg bg-surface-2 border border-surface-3 text-xs text-slate-300">
+          <span>Parâmetros avançados de capital, alcance e placement</span>
+          {advancedOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
+        {advancedOpen && <div className="p-4 mb-5 rounded-xl border border-surface-3 bg-surface-2/30">
         {/* Impressões diárias */}
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Impressões Diárias</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-5">
@@ -597,23 +564,36 @@ export default function Settings() {
           <>
             <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-3">Limites de Placement (%)</p>
             <div className="grid grid-cols-3 gap-4 mb-4">
-              <NumberInput label="Top of Search Máx." value={goals.top_of_search_limit} onChange={v => setGoal('top_of_search_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
-              <NumberInput label="Rest of Search Máx." value={goals.rest_of_search_limit} onChange={v => setGoal('rest_of_search_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
-              <NumberInput label="Product Pages Máx." value={goals.product_page_limit} onChange={v => setGoal('product_page_limit', v)} min={0} max={900} step={5} zeroMeansIgnored />
+              <NumberInput label="Top of Search Máx." value={goals.top_of_search_limit} onChange={v => setGoal('top_of_search_limit', v)} min={0} max={200} step={5} zeroMeansIgnored />
+              <NumberInput label="Rest of Search Máx." value={goals.rest_of_search_limit} onChange={v => setGoal('rest_of_search_limit', v)} min={0} max={200} step={5} zeroMeansIgnored />
+              <NumberInput label="Product Pages Máx." value={goals.product_page_limit} onChange={v => setGoal('product_page_limit', v)} min={0} max={200} step={5} zeroMeansIgnored />
+            </div>
+            <div className={`mb-4 p-3 rounded-lg border ${maximumPlacement > 100 ? 'border-amber-500/30 bg-amber-500/10' : 'border-emerald-500/20 bg-emerald-500/5'}`}>
+              <p className="text-xs text-slate-300">Lance efetivo máximo antes da estratégia dinâmica: <strong className="text-white">R${effectiveBidCeiling.toFixed(2)}</strong></p>
+              <p className="text-[10px] text-slate-500 mt-1">Calculado: limite global × (1 + maior placement). Ajustes acima de 100% exigem atenção.</p>
             </div>
           </>
         )}
+        </div>}
 
-        {/* Otimização IA automática */}
-        <div className="flex items-center justify-between p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5">
+        <div className="p-4 bg-surface-2 rounded-lg border border-surface-3 mb-5 space-y-4">
           <div>
-            <p className="text-sm font-medium text-white">Otimização Automática com IA</p>
-            <p className="text-xs text-slate-500 mt-0.5">Quando ativo, o motor executa decisões sem revisão manual.</p>
-            {goals.ai_auto_optimization && (
-              <p className="text-xs text-amber-400 mt-1 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Modo automático ativo — decisões sem revisão.</p>
-            )}
+            <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Automação &amp; IA</p>
+            <p className="text-xs text-slate-500 mt-1">A IA recomenda dentro dos guardrails; só o modo de baixo risco autoriza execução automática elegível.</p>
           </div>
-          <Toggle value={goals.ai_auto_optimization} onChange={v => setGoal('ai_auto_optimization', v)} />
+          <select value={goals.ai_mode} onChange={e => setGoal('ai_mode', e.target.value)} className="w-full px-3 py-2.5 bg-surface-1 border border-surface-3 rounded-lg text-sm text-white">
+            <option value="SHADOW">SHADOW — observa e audita, sem recomendar</option>
+            <option value="ADVISORY">ADVISORY — recomenda, exige aprovação</option>
+            <option value="LOW_RISK_AUTO">LOW_RISK_AUTO — automatiza somente baixo risco</option>
+          </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <NumberInput label="Confiança mínima · proteção (%)" hint="Redução de lance e contenção de risco" value={goals.protection_confidence_threshold} onChange={v => setGoal('protection_confidence_threshold', v)} min={50} max={100} step={1} />
+            <NumberInput label="Confiança mínima · expansão (%)" hint="Aumento de lance exige evidência superior" value={goals.expansion_confidence_threshold} onChange={v => setGoal('expansion_confidence_threshold', v)} min={50} max={100} step={1} />
+          </div>
+          <div className="p-3 rounded-lg border border-violet-500/20 bg-violet-500/5">
+            <p className="text-xs font-medium text-violet-300">Auditor de configuração · shadow</p>
+            <p className="text-[10px] text-slate-400 mt-1">{maximumPlacement > 100 ? 'Atenção: placement acima de 100% amplia significativamente o lance efetivo.' : 'Guardrails de placement coerentes.'} Proteção {goals.protection_confidence_threshold}% · expansão {goals.expansion_confidence_threshold}%.</p>
+          </div>
         </div>
 
         {/* Resumo de metas */}
@@ -665,10 +645,15 @@ export default function Settings() {
           {goalsSaved && (
             <span className="inline-flex items-center gap-1 text-xs text-emerald-400 animate-fade-in">
               <Wifi className="w-3.5 h-3.5" />
-              Orçamento sincronizado na Amazon
+              Política v{Number(goals.policy_version || perfSettings?.policy_version || 1)} salva · aplicação pendente do próximo ciclo do motor
             </span>
           )}
         </div>
+      </div>
+
+      <div>
+        <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Sistema</p>
+        <p className="text-xs text-slate-600 mt-1">Backup, aparência e diagnósticos locais da aplicação.</p>
       </div>
 
       {/* ─── BACKUP ─── */}

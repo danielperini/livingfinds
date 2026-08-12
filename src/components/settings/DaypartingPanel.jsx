@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { base44 } from '@/api/base44Client';
 import {
   CalendarClock, ChevronDown, ChevronUp, Loader2, Pencil, Plus,
-  Power, Save, Trash2, Zap,
+  Power, RefreshCw, Save, Trash2, Zap,
 } from 'lucide-react';
 
 const DAYS = [
@@ -118,6 +118,7 @@ export default function DaypartingPanel({ account, enabled = true }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [mutatingRuleId, setMutatingRuleId] = useState(null);
   const [message, setMessage] = useState('');
 
@@ -189,6 +190,21 @@ export default function DaypartingPanel({ account, enabled = true }) {
       amazon_account_id: account.id,
       force_holidays: forceHolidays,
     });
+  };
+
+  const syncNow = async () => {
+    if (!account?.id || syncing) return;
+    setSyncing(true);
+    setMessage('');
+    try {
+      await syncConfiguration(true);
+      await load();
+      setMessage('Dayparting sincronizado por solicitação explícita.');
+    } catch (error) {
+      setMessage(`Falha ao sincronizar: ${error.message}`);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const save = async () => {
@@ -326,6 +342,10 @@ export default function DaypartingPanel({ account, enabled = true }) {
         <div className="flex flex-wrap gap-2">
           <button onClick={startNewRule} disabled={!account} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-cyan text-white text-xs font-semibold disabled:opacity-50">
             <Plus className="w-3.5 h-3.5" />Adicionar nova regra
+          </button>
+          <button onClick={syncNow} disabled={!account || syncing} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-surface-3 text-slate-300 text-xs font-semibold disabled:opacity-50">
+            {syncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Sincronizar agora
           </button>
           <button onClick={runImmediate} disabled={!account || running} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold disabled:opacity-50">
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}

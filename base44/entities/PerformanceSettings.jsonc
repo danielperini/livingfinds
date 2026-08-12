@@ -194,6 +194,26 @@
       "type": "boolean",
       "default": false
     },
+    "ai_mode": {
+      "type": "string",
+      "enum": ["SHADOW", "ADVISORY", "LOW_RISK_AUTO"],
+      "default": "SHADOW",
+      "description": "Modo canônico da IA. ai_auto_optimization é mantido apenas como compatibilidade de leitura."
+    },
+    "protection_confidence_threshold": {
+      "type": "number",
+      "default": 85,
+      "description": "Confiança mínima (%) para ações defensivas, como reduzir lance."
+    },
+    "expansion_confidence_threshold": {
+      "type": "number",
+      "default": 95,
+      "description": "Confiança mínima (%) para ações de expansão, como aumentar lance."
+    },
+    "policy_version": {
+      "type": "number",
+      "default": 1
+    },
     "updated_at": {
       "type": "string",
       "format": "date-time"

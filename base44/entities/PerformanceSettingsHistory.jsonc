@@ -66,6 +66,14 @@
     "changed_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "policy_version": {
+      "type": "number"
+    },
+    "propagation_status": {
+      "type": "string",
+      "enum": ["pending_engine_cycle", "applied", "failed"],
+      "default": "pending_engine_cycle"
     }
   },
   "required": [
