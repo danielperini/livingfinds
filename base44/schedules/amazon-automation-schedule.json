@@ -46,7 +46,7 @@
     },
     {
       "name": "Canonical decision executor - every 15 minutes",
-      "function": "executeApprovedDecisionQueue",
+      "function": "executeApprovedDecisionQueueWithAuthGuard",
       "cron": "6,21,36,51 * * * *",
       "payload": { "_service_role": true, "max_decisions": 25 }
     },
