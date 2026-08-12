@@ -33,14 +33,14 @@
     },
     {
       "name": "Unified marketplace decision engine - every 15 minutes",
-      "function": "runUnifiedDecisionEngine",
+      "function": "runUnifiedDecisionEngineWithAuthGuard",
       "cron": "4,19,34,49 * * * *",
       "run_on_startup": true,
       "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
       "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
-      "function": "runUnifiedDecisionEngine",
+      "function": "runUnifiedDecisionEngineWithAuthGuard",
       "cron": "25 1 * * *",
       "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
     },
