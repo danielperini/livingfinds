@@ -1,9 +1,9 @@
 /**
- * amazonAdsCommand v8 — Gateway centralizado Amazon Ads.
+ * amazonAdsCommand v9 — Gateway centralizado Amazon Ads.
  *
- * Mantém os guardrails econômicos e de pausa existentes. A alteração desta versão
- * é exclusivamente de autenticação/configuração: credenciais passam pelo resolvedor
- * canônico e falhas de autorização retornam código explícito.
+ * Mantém os guardrails econômicos e de pausa existentes. Credenciais passam pelo
+ * resolvedor canônico. O token manager nunca retorna token em JSON; este gateway
+ * lê o access token persistido via service-role somente em memória.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
@@ -17,16 +17,11 @@ import {
 } from '../../shared/amazonCredentials.ts';
 
 const ALLOWED_PATHS = [
-  '/sp/campaigns', '/sp/campaigns/list',
-  '/sp/adGroups', '/sp/adGroups/list',
-  '/sp/productAds', '/sp/productAds/list',
-  '/sp/keywords', '/sp/keywords/list',
+  '/sp/campaigns', '/sp/campaigns/list', '/sp/adGroups', '/sp/adGroups/list',
+  '/sp/productAds', '/sp/productAds/list', '/sp/keywords', '/sp/keywords/list',
   '/v2/sp/campaigns', '/v2/sp/adGroups', '/v2/sp/keywords', '/v2/sp/negativeKeywords',
-  '/sp/negativeKeywords', '/sp/negativeKeywords/list',
-  '/sp/targets', '/sp/targets/list', '/v2/sp/targets',
-  '/adsApi/v1/create/targets',
-  '/v2/profiles',
-  '/reporting/reports',
+  '/sp/negativeKeywords', '/sp/negativeKeywords/list', '/sp/targets', '/sp/targets/list',
+  '/v2/sp/targets', '/adsApi/v1/create/targets', '/v2/profiles', '/reporting/reports',
 ];
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 const SUCCESS_CODES = new Set(['SUCCESS', 'CREATED', 'UPDATED', 'OK', 'ACCEPTED', '200', '201', '202', '204']);
@@ -53,7 +48,6 @@ function collectAmazonItemErrors(payload: any): any[] {
     }
     if (value != null) errors.push(normalizeAmazonError(value, fallbackCode));
   };
-
   add(payload.errors, 'AMAZON_ERRORS');
   add(payload.error, 'AMAZON_ERROR');
   for (const root of roots) {
@@ -81,7 +75,6 @@ function collectAmazonItemErrors(payload: any): any[] {
       }
     }
   }
-
   const unique = new Map<string, any>();
   for (const error of errors) {
     const key = `${error.code}|${error.message}|${error.index ?? ''}`;
@@ -90,21 +83,7 @@ function collectAmazonItemErrors(payload: any): any[] {
   return [...unique.values()];
 }
 
-async function callAmazonApi(
-  url: string,
-  method: string,
-  headers: Record<string, string>,
-  payload: any,
-  maxAttempts = 3,
-): Promise<{
-  ok: boolean;
-  status: number;
-  payload: any;
-  errors: any[];
-  request_id: string | null;
-  retry_after?: string | null;
-  rate_limit?: string | null;
-}> {
+async function callAmazonApi(url: string, method: string, headers: Record<string, string>, payload: any, maxAttempts = 3) {
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   let lastResult: any = null;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -117,7 +96,6 @@ async function callAmazonApi(
         signal: controller.signal,
         body: payload == null || method === 'GET' ? undefined : JSON.stringify(payload),
       }).finally(() => clearTimeout(timeout));
-
       const text = await response.text().catch(() => '');
       let parsed: any = null;
       try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
@@ -126,12 +104,9 @@ async function callAmazonApi(
       const ok = httpOk && itemErrors.length === 0;
       const retryable = [500, 502, 503].includes(response.status);
       const requestId = response.headers.get('x-amzn-RequestId') || response.headers.get('x-amz-request-id') || null;
-      const errors = ok
-        ? []
-        : itemErrors.length
-          ? itemErrors
-          : [{ code: String(response.status), message: text.slice(0, 1000) || `Amazon HTTP ${response.status}` }];
-
+      const errors = ok ? [] : itemErrors.length
+        ? itemErrors
+        : [{ code: String(response.status), message: text.slice(0, 1000) || `Amazon HTTP ${response.status}` }];
       lastResult = {
         ok,
         status: response.status,
@@ -145,13 +120,7 @@ async function callAmazonApi(
       console.log(`[adsCommand] ${response.status} retryable — tentativa ${attempt + 1}/${maxAttempts}`);
       await wait(Math.min(1000 * Math.pow(2, attempt), 15000));
     } catch (error: any) {
-      lastResult = {
-        ok: false,
-        status: 0,
-        payload: null,
-        request_id: null,
-        errors: [{ code: 'NETWORK_ERROR', message: error?.message || String(error) }],
-      };
+      lastResult = { ok: false, status: 0, payload: null, request_id: null, errors: [{ code: 'NETWORK_ERROR', message: error?.message || String(error) }] };
       if (attempt === maxAttempts - 1) break;
       await wait(Math.min(2000 * Math.pow(2, attempt), 15000));
     }
@@ -165,9 +134,7 @@ Deno.serve(async (request) => {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
-    if (!body.amazon_account_id || !body.path) {
-      return Response.json({ ok: false, error: 'amazon_account_id e path obrigatórios' }, { status: 400 });
-    }
+    if (!body.amazon_account_id || !body.path) return Response.json({ ok: false, error: 'amazon_account_id e path obrigatórios' }, { status: 400 });
 
     const method = String(body.method || 'GET').toUpperCase();
     const path = String(body.path || '');
@@ -182,9 +149,7 @@ Deno.serve(async (request) => {
 
     const credentials = resolveAmazonAdsCredentials();
     const profileId = body.profile_id || account.ads_profile_id || credentials.profileId.value;
-    if (!profileId && path !== '/v2/profiles') {
-      return Response.json({ ok: false, error: 'ads_profile_id não configurado' }, { status: 400 });
-    }
+    if (!profileId && path !== '/v2/profiles') return Response.json({ ok: false, error: 'ads_profile_id não configurado' }, { status: 400 });
     const clientId = credentials.clientId.value;
     if (!clientId) return Response.json({ ok: false, error: 'ADS_CLIENT_ID não configurado na fonte canônica' }, { status: 500 });
 
@@ -192,22 +157,17 @@ Deno.serve(async (request) => {
     const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || credentials.accountId.value || null;
     const maxAttempts = Math.max(1, Math.min(5, Number(body.max_attempts || 3) || 3));
 
-    const isBidMutation = ['POST', 'PUT'].includes(method) &&
-      ['/sp/keywords', '/sp/adGroups', 'targets'].some((segment) => path.includes(segment));
+    const isBidMutation = ['POST', 'PUT'].includes(method) && ['/sp/keywords', '/sp/adGroups', 'targets'].some((segment) => path.includes(segment));
     const [winnerBid, configuredBid] = isBidMutation
       ? await Promise.all([
           resolveWinnerKeywordCeilings(base44, body.amazon_account_id, path, method, body.payload ?? null),
           loadConfiguredBidPolicy(base44, body.amazon_account_id),
         ])
       : [{ ceilings: {}, evidence: [] }, { ceiling: undefined, source: null }];
-    let guardedPayload = enforceBidCeilingOnPayload(
-      path, method, body.payload ?? null, winnerBid.ceilings, configuredBid.ceiling,
-    );
+    let guardedPayload = enforceBidCeilingOnPayload(path, method, body.payload ?? null, winnerBid.ceilings, configuredBid.ceiling);
 
     if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
-      const enabling = guardedPayload.campaigns.filter((item: any) =>
-        String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId
-      );
+      const enabling = guardedPayload.campaigns.filter((item: any) => String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId);
       if (enabling.length > 0) {
         const [localCampaigns, products] = await Promise.all([
           base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: body.amazon_account_id }, null, 3000).catch(() => []),
@@ -216,16 +176,12 @@ Deno.serve(async (request) => {
         const blockedIds = new Set<string>();
         for (const item of enabling) {
           const local = localCampaigns.find((campaign: any) =>
-            String(campaign.campaign_id || '') === String(item.campaignId) ||
-            String(campaign.amazon_campaign_id || '') === String(item.campaignId)
+            String(campaign.campaign_id || '') === String(item.campaignId) || String(campaign.amazon_campaign_id || '') === String(item.campaignId)
           ) || { campaign_id: String(item.campaignId) };
           if (findPauseLockedProduct(products, local)) blockedIds.add(String(item.campaignId));
         }
         if (blockedIds.size > 0) {
-          guardedPayload = {
-            ...guardedPayload,
-            campaigns: guardedPayload.campaigns.filter((item: any) => !blockedIds.has(String(item?.campaignId))),
-          };
+          guardedPayload = { ...guardedPayload, campaigns: guardedPayload.campaigns.filter((item: any) => !blockedIds.has(String(item?.campaignId))) };
           if (guardedPayload.campaigns.length === 0) {
             return Response.json({
               ok: false,
@@ -247,22 +203,35 @@ Deno.serve(async (request) => {
         _service_role: true,
         triggered_by: 'amazonAdsCommand',
       });
-      const token = tokenResponse?.data || tokenResponse || {};
-      if (!token.ok || !token.access_token) {
-        const reauth = token.requires_reauthorization === true || token.error_type === ADS_TOKEN_REVOKED_REAUTH_REQUIRED;
+      const tokenState = tokenResponse?.data || tokenResponse || {};
+      if (!tokenState.ok || tokenState.token_available !== true) {
+        const reauth = tokenState.requires_reauthorization === true || tokenState.error_type === ADS_TOKEN_REVOKED_REAUTH_REQUIRED;
         throw {
           tokenError: true,
-          error_type: reauth ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (token.error_type || 'token_unavailable'),
-          amazon_error_code: token.amazon_error_code,
-          message: token.message || 'Falha ao obter token Amazon Ads',
+          error_type: reauth ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (tokenState.error_type || 'token_unavailable'),
+          amazon_error_code: tokenState.amazon_error_code,
+          message: tokenState.message || 'Falha ao preparar token Amazon Ads',
           requires_reauthorization: reauth,
-          credentials_error: token.credentials_error,
-          retryable: token.retryable,
+          credentials_error: tokenState.credentials_error,
+          retryable: tokenState.retryable,
+        };
+      }
+
+      const freshAccounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1).catch(() => []);
+      const accessToken = String(freshAccounts[0]?.ads_access_token || '').trim();
+      if (!accessToken) {
+        throw {
+          tokenError: true,
+          error_type: 'ADS_ACCESS_TOKEN_STORE_EMPTY',
+          message: 'Token manager confirmou disponibilidade, mas o access token não foi encontrado no armazenamento interno.',
+          requires_reauthorization: false,
+          credentials_error: false,
+          retryable: true,
         };
       }
 
       const headers: Record<string, string> = {
-        Authorization: `Bearer ${token.access_token}`,
+        Authorization: `Bearer ${accessToken}`,
         'Amazon-Advertising-API-ClientId': clientId,
         'Content-Type': body.content_type || 'application/json',
         Accept: body.accept || body.content_type || 'application/json',
@@ -272,9 +241,7 @@ Deno.serve(async (request) => {
       return headers;
     }
 
-    const tokenExpiresAt = account.ads_access_token_expires_at
-      ? new Date(account.ads_access_token_expires_at).getTime()
-      : 0;
+    const tokenExpiresAt = account.ads_access_token_expires_at ? new Date(account.ads_access_token_expires_at).getTime() : 0;
     if (tokenExpiresAt > 0 && tokenExpiresAt - Date.now() < 10 * 60 * 1000) {
       await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
         amazon_account_id: body.amazon_account_id,
@@ -286,7 +253,6 @@ Deno.serve(async (request) => {
 
     let headers = await buildHeaders(false);
     let result = await callAmazonApi(url, method, headers, guardedPayload, maxAttempts);
-
     if (result.status === 401 || result.status === 403) {
       try {
         headers = await buildHeaders(true);
@@ -381,11 +347,7 @@ Deno.serve(async (request) => {
         completed_at: new Date().toISOString(),
         records_processed: 0,
         error_message: String(result.errors?.[0]?.message || `Amazon HTTP ${result.status}`).slice(0, 1000),
-        result_summary: JSON.stringify({
-          status: result.status,
-          request_id: result.request_id,
-          item_errors: result.errors,
-        }).slice(0, 4000),
+        result_summary: JSON.stringify({ status: result.status, request_id: result.request_id, item_errors: result.errors }).slice(0, 4000),
       }).catch(() => {});
     }
 
@@ -413,9 +375,6 @@ Deno.serve(async (request) => {
         retryable: error.retryable,
       }, { status: error.credentials_error ? 400 : 401 });
     }
-    return Response.json({
-      ok: false,
-      error: error?.message?.slice(0, 500) || 'Erro no comando Amazon Ads',
-    }, { status: 500 });
+    return Response.json({ ok: false, error: error?.message?.slice(0, 500) || 'Erro no comando Amazon Ads' }, { status: 500 });
   }
 });
