@@ -8,8 +8,7 @@ import {
 import StatusBadge from '@/components/ui/StatusBadge';
 import AppearanceSelector from '@/components/settings/AppearanceSelector';
 import BackupPanel from '@/components/backup/BackupPanel';
-import ObjectiveSelector from '@/components/settings/ObjectiveSelector';
-import { OBJECTIVE_PRESETS, divergesFromPreset, getCoherenceWarnings } from '@/components/settings/objectivePresets';
+import { divergesFromPreset, getCoherenceWarnings } from '@/components/settings/objectivePresets';
 import {
   normalizePerformanceSettings,
   updateEfficiencyGoal,
@@ -96,7 +95,6 @@ export default function Settings() {
   const [goalsSaving, setGoalsSaving] = useState(false);
   const [goalsSaved, setGoalsSaved] = useState(false);
   const [todaySpend, setTodaySpend] = useState(null);
-  const [justApplied, setJustApplied] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const setGoal = (key, val) => setGoals((previous) => {
@@ -108,18 +106,6 @@ export default function Settings() {
     }
     return { ...previous, [key]: val };
   });
-
-  const applyObjectivePreset = (key) => {
-    const preset = OBJECTIVE_PRESETS[key];
-    if (!preset?.values) return;
-    setGoals((previous) => {
-      const next = { ...previous, ...preset.values, objective: key };
-      if (preset.values.max_bid != null) next.max_cpc = preset.values.max_bid;
-      return normalizePerformanceSettings(next, PERFORMANCE_DEFAULTS);
-    });
-    setJustApplied(true);
-    setTimeout(() => setJustApplied(false), 1000);
-  };
 
   useEffect(() => {
     async function load() {
@@ -402,7 +388,7 @@ export default function Settings() {
       </div>
 
       {/* ─── METAS DE PERFORMANCE (Fonte Única) ─── */}
-      <div className={`bg-surface-1 border border-surface-2 rounded-xl p-6 ${justApplied ? 'animate-pulse' : ''}`}>
+      <div className="bg-surface-1 border border-surface-2 rounded-xl p-6">
         <div className="flex items-center gap-2 mb-1">
           <Target className="w-4 h-4 text-cyan" />
           <h2 className="text-sm font-semibold text-white">Estratégia</h2>
@@ -420,15 +406,6 @@ export default function Settings() {
             </select>
             <p className="text-[10px] text-slate-600 mt-1">A IA prioriza esta métrica. Demais servem como limites de segurança.</p>
           </div>
-        </div>
-
-        {/* Objetivo estratégico — cards com presets */}
-        <div className="mb-5">
-          <ObjectiveSelector
-            objective={goals.objective}
-            isCustomized={divergesFromPreset(goals)}
-            onApply={applyObjectivePreset}
-          />
         </div>
 
         {/* Metas de eficiência */}
