@@ -1,86 +1,88 @@
 /**
- * adsHelpers — Funções partilhadas para autenticação e chamadas à Amazon Ads API
- * Usado por todas as funções de sync via base44.functions.invoke('adsHelpers', ...)
- * NÃO é chamado directamente — serve como utilitário interno.
+ * adsHelpers — utilitário legado para chamadas Amazon Ads.
+ * Credenciais passam exclusivamente pelo resolvedor canônico.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { adsBaseUrlForRegion, resolveAmazonAdsCredentials } from '../../shared/amazonCredentials.ts';
 
-const tokenCache = {};
+const tokenCache: Record<string, { access_token: string; expires_at: number }> = {};
 
 export async function getAdsToken() {
-  const cached = tokenCache['ads'];
+  const cached = tokenCache.ads;
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
+
+  const credentials = resolveAmazonAdsCredentials();
+  if (!credentials.clientId.value || !credentials.clientSecret.value || !credentials.refreshToken.value) {
+    throw new Error('Credenciais Amazon Ads ausentes na fonte canônica');
+  }
+
   const params = new URLSearchParams({
     grant_type: 'refresh_token',
-    refresh_token: Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
+    refresh_token: credentials.refreshToken.value,
+    client_id: credentials.clientId.value,
+    client_secret: credentials.clientSecret.value,
   });
-  let attempt = 0;
-  while (attempt < 3) {
-    attempt++;
+
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
     const res = await fetch('https://api.amazon.com/auth/o2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
     });
     if (res.status === 429 || res.status >= 500) {
-      await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, Math.pow(2, attempt) * 500));
       continue;
     }
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error_description || 'Token refresh failed');
-    tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
-    return data.access_token;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.access_token) {
+      throw new Error(String(data?.error_description || data?.error || 'Token refresh failed'));
+    }
+    tokenCache.ads = {
+      access_token: String(data.access_token),
+      expires_at: Date.now() + (Math.max(120, Number(data.expires_in || 3600) - 60) * 1000),
+    };
+    return tokenCache.ads.access_token;
   }
   throw new Error('Token refresh failed after 3 attempts');
 }
 
 export function getAdsBaseUrl() {
-  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase().trim();
-  if (r.includes('EU') || r.includes('EUROP')) return 'https://advertising-api-eu.amazon.com';
-  if (r.includes('FE') || r.includes('JAPAN') || r.includes('ASIA')) return 'https://advertising-api-fe.amazon.com';
-  return 'https://advertising-api.amazon.com';
+  return adsBaseUrlForRegion(resolveAmazonAdsCredentials().region);
 }
 
-export async function adsCall(method, path, body, contentType = 'application/json', profileId?: string) {
+export async function adsCall(method: string, path: string, body: any, contentType = 'application/json', profileId?: string) {
   const token = await getAdsToken();
-  const scope = profileId || String(Deno.env.get('ADS_PROFILE_ID'));
-  
-  if (!scope) {
-    throw new Error('profileId não informado. Perfil Amazon Ads é obrigatório.');
-  }
-  
-  const opts = {
+  const credentials = resolveAmazonAdsCredentials();
+  const scope = profileId || credentials.profileId.value;
+  if (!scope) throw new Error('profileId não informado. Perfil Amazon Ads é obrigatório.');
+  if (!credentials.clientId.value) throw new Error('ADS_CLIENT_ID ausente na fonte canônica.');
+
+  const opts: RequestInit = {
     method: method || 'GET',
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+      Authorization: `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': credentials.clientId.value,
       'Amazon-Advertising-API-Scope': scope,
       'Content-Type': contentType,
-      'Accept': contentType,
+      Accept: contentType,
     },
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(`${getAdsBaseUrl()}${path}`, opts);
   const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  let data: any;
+  try { data = JSON.parse(text); } catch { data = { raw: text.slice(0, 500) }; }
   if (!res.ok) throw new Error(`ADS ${res.status} ${path}: ${JSON.stringify(data).slice(0, 300)}`);
   return data;
 }
 
-// Paginação completa de campanhas (evita limite de 500 registros por query)
-export async function loadAllCampaigns(base44, amazonAccountId) {
-  const allCampaigns = [];
+export async function loadAllCampaigns(base44: any, amazonAccountId: string) {
+  const allCampaigns: any[] = [];
   let offset = 0;
   const pageSize = 200;
   while (true) {
     const page = await base44.asServiceRole.entities.Campaign.filter(
-      { amazon_account_id: amazonAccountId },
-      '-created_date',
-      pageSize,
-      offset
+      { amazon_account_id: amazonAccountId }, '-created_date', pageSize, offset,
     );
     allCampaigns.push(...page);
     if (page.length < pageSize) break;
@@ -89,7 +91,4 @@ export async function loadAllCampaigns(base44, amazonAccountId) {
   return allCampaigns;
 }
 
-// Endpoint handler obrigatório
-Deno.serve(async (req) => {
-  return Response.json({ ok: true, message: 'adsHelpers — internal utility module' });
-});
+Deno.serve(async (_req) => Response.json({ ok: true, message: 'adsHelpers — internal utility module' }));
