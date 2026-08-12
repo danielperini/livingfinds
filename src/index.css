@@ -135,11 +135,63 @@ input, select, textarea {
 input::placeholder,
 textarea::placeholder { color: var(--input-placeholder); }
 
-/* Tabelas */
-thead tr { background-color: var(--table-header-bg); }
-thead th { color: var(--table-header-text); }
-tbody tr { color: var(--table-row-text); }
+/* ═══════════════════════════════════════════════════════════════════════════
+   TABELAS — padrão SaaS Enterprise (estilo Stripe)
+   Tipografia maior, espaçamento generoso, divisores sutis.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+thead tr {
+  background-color: var(--table-header-bg);
+}
+
+thead th {
+  color: var(--table-header-text) !important;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+  padding: 14px 20px !important;
+  border-bottom: 1px solid var(--table-border);
+}
+
+tbody tr {
+  background-color: var(--table-row-bg);
+  color: var(--table-row-text);
+  transition: background-color 120ms ease;
+}
+
+tbody tr:not(:last-child) {
+  border-bottom: 1px solid var(--table-border);
+}
+
+tbody td {
+  padding: 16px 20px !important;
+  font-size: 15px;
+  color: var(--table-row-text);
+  vertical-align: middle;
+}
+
 tbody tr:hover { background-color: var(--table-row-hover); }
+
+/* Colunas numéricas: alinhamento tabular consistente */
+tbody td .tabular-nums,
+tbody td.tabular-nums { font-variant-numeric: tabular-nums; }
+
+/* Células de checkbox / ações compactas mantêm padding menor */
+thead th:first-child,
+tbody td:first-child { padding-left: 20px; }
+thead th:last-child,
+tbody td:last-child { padding-right: 20px; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
