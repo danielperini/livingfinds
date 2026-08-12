@@ -5,6 +5,7 @@ import {
   resolveAmazonSpCredentials,
   resolveAdsOAuthRedirectUri,
   shortCredentialHash,
+  validAmazonAdsRefreshToken,
 } from './amazonCredentials.ts';
 
 function env(values: Record<string, string | undefined>) {
@@ -56,6 +57,17 @@ Deno.test('Ads usa ADS_* como fonte canônica e região NA aponta para endpoint 
   assertEquals(adsBaseUrlForRegion('FE'), 'https://advertising-api-fe.amazon.com');
 });
 
+Deno.test('Ads nunca reaproveita o aplicativo LWA da SP-API como fallback', () => {
+  const credentials = resolveAmazonAdsCredentials(env({
+    AMAZON_LWA_CLIENT_ID: 'sp-client-only',
+    AMAZON_LWA_CLIENT_SECRET: 'sp-secret-only',
+    AMAZON_SP_REFRESH_TOKEN: 'sp-refresh-only',
+  }));
+  assertEquals(credentials.clientId.configured, false);
+  assertEquals(credentials.clientSecret.configured, false);
+  assertEquals(credentials.refreshToken.configured, false);
+});
+
 Deno.test('redirect URI depende exclusivamente de APP_BASE_URL', () => {
   assertEquals(
     resolveAdsOAuthRedirectUri(env({ APP_BASE_URL: 'https://livingfinds.example/' })),
@@ -70,4 +82,9 @@ Deno.test('fingerprint não expõe o valor original', () => {
   assertNotEquals(hash, secret);
   assertEquals(hash?.startsWith('fnv1a:'), true);
   assertEquals(hash?.includes('Atzr'), false);
+});
+
+Deno.test('validação de formato de refresh token Ads não aceita valores curtos', () => {
+  assertEquals(validAmazonAdsRefreshToken('Atzr|curto'), false);
+  assertEquals(validAmazonAdsRefreshToken(`Atzr|${'x'.repeat(60)}`), true);
 });
