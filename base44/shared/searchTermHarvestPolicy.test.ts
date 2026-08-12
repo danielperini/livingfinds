@@ -52,6 +52,8 @@ Deno.test('agrega o mesmo termo vindo de vaga e complementos sem duplicar campan
   if (result.length !== 1) throw new Error('termo duplicado');
   if (result[0].sameSkuOrders !== 2 || Math.abs(result[0].spend - 2.86) > 0.001) throw new Error('agregação incorreta');
   if (result[0].sources.length !== 2) throw new Error('fontes de segmentação não preservadas');
+  if (!result[0].termFamilyKey) throw new Error('família do termo não foi atribuída');
+  if (result[0].rawVariants.length !== 2) throw new Error('variantes brutas não foram preservadas');
 });
 
 Deno.test('bid inicial nunca ultrapassa o CPC econômico seguro', () => {
@@ -64,6 +66,7 @@ Deno.test('bid inicial nunca ultrapassa o CPC econômico seguro', () => {
 Deno.test('uma venda do mesmo SKU é elegível, mas venda halo não é', () => {
   const base = {
     asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox 15l', normalizedTerm: 'lixeira inox 15l',
+    termFamilyKey: 'lixeira inox 15l', rawVariants: ['lixeira inox 15l'],
     impressions: 10, clicks: 1, spend: 0.5, totalOrders: 1, totalSales: 203.8,
     sameSkuOrders: 1, sameSkuSales: 203.8, haloOrders: 0, haloSales: 0, latestDate: '2026-07-31',
     sourceRows: [], sources: [], attributionVerified: true, skuResolutionVerified: true,
