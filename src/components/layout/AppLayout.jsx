@@ -169,7 +169,7 @@ export default function AppLayout() {
           <button type="button" className="relative w-10 h-10 flex items-center justify-center rounded-lg border border-[#E5E7EB] bg-white text-[#6B7280] hover:text-[#0D1117] hover:bg-[#F5F6F8]" aria-label="Notificações" title="Notificações">
             <Bell className="w-[18px] h-[18px]" />
           </button>
-          <Link to="/sala-de-comando" className="flex items-center gap-2 px-3.5 h-10 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-sm font-semibold whitespace-nowrap transition-colors text-[hsl(var(--card))]">
+          <Link to="/sala-de-comando" className="flex items-center gap-2 px-3.5 h-10 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-sm font-semibold whitespace-nowrap transition-colors text-[hsl(var(--destructive-foreground))]">
             <Bot className="w-4 h-4" />
             <span className="hidden sm:inline">Central de Decisões</span>
           </Link>
