@@ -2,169 +2,58 @@
   "name": "SearchTermPromotion",
   "type": "object",
   "properties": {
-    "amazon_account_id": {
-      "type": "string"
-    },
-    "asin": {
-      "type": "string"
-    },
-    "sku": {
-      "type": "string"
-    },
-    "source_campaign_id": {
-      "type": "string"
-    },
-    "source_ad_group_id": {
-      "type": "string"
-    },
-    "source_search_term": {
-      "type": "string"
-    },
-    "normalized_search_term": {
-      "type": "string"
-    },
-    "orders": {
-      "type": "number",
-      "default": 0
-    },
-    "same_sku_orders": {
-      "type": "number",
-      "default": 0
-    },
-    "same_sku_sales": {
-      "type": "number",
-      "default": 0
-    },
-    "halo_orders": {
-      "type": "number",
-      "default": 0
-    },
-    "halo_sales": {
-      "type": "number",
-      "default": 0
-    },
-    "same_sku_attribution_verified": {
-      "type": "boolean",
-      "default": false
-    },
-    "source_paths": {
-      "type": "array",
-      "items": {
-        "type": "object"
-      }
-    },
-    "units_sold": {
-      "type": "number",
-      "default": 0
-    },
-    "sales": {
-      "type": "number",
-      "default": 0
-    },
-    "spend": {
-      "type": "number",
-      "default": 0
-    },
-    "clicks": {
-      "type": "number",
-      "default": 0
-    },
-    "average_cpc": {
-      "type": "number",
-      "default": 0
-    },
-    "acos": {
-      "type": "number",
-      "default": 0
-    },
-    "roas": {
-      "type": "number",
-      "default": 0
-    },
-    "target_bid": {
-      "type": "number",
-      "default": 0.5
-    },
-    "destination_campaign_id": {
-      "type": "string"
-    },
-    "destination_campaign_name": {
-      "type": "string"
-    },
-    "destination_ad_group_id": {
-      "type": "string"
-    },
-    "destination_ad_id": {
-      "type": "string"
-    },
-    "destination_keyword_id": {
-      "type": "string"
-    },
-    "negative_keyword_id": {
-      "type": "string"
-    },
+    "amazon_account_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "source_campaign_id": { "type": "string" },
+    "source_ad_group_id": { "type": "string" },
+    "source_search_term": { "type": "string" },
+    "normalized_search_term": { "type": "string" },
+    "term_family_key": { "type": "string" },
+    "intent_cluster": { "type": "string" },
+    "raw_variants": { "type": "array", "items": { "type": "string" } },
+    "maturity_stage": { "type": "string", "enum": ["DISCOVERED", "QUALIFIED", "MANUAL_CLUSTERED", "PROVEN", "WINNER", "ISOLATED", "TEMPORAL_LEARNING", "DAYPART_OPTIMIZED", "DECLINING", "COOLDOWN", "RETEST", "REJECTED", "ARCHIVED"], "default": "DISCOVERED" },
+    "lifecycle_transition": { "type": "string" },
+    "winner_isolation_requested": { "type": "boolean", "default": false },
+    "winner_isolation_confirmed": { "type": "boolean", "default": false },
+    "cluster_max_exact": { "type": "number", "default": 5 },
+    "ai_analysis_triggers": { "type": "array", "items": { "type": "string" } },
+    "orders": { "type": "number", "default": 0 },
+    "same_sku_orders": { "type": "number", "default": 0 },
+    "same_sku_sales": { "type": "number", "default": 0 },
+    "halo_orders": { "type": "number", "default": 0 },
+    "halo_sales": { "type": "number", "default": 0 },
+    "same_sku_attribution_verified": { "type": "boolean", "default": false },
+    "source_paths": { "type": "array", "items": { "type": "object" } },
+    "units_sold": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "average_cpc": { "type": "number", "default": 0 },
+    "acos": { "type": "number", "default": 0 },
+    "roas": { "type": "number", "default": 0 },
+    "target_bid": { "type": "number", "default": 0.5 },
+    "destination_campaign_id": { "type": "string" },
+    "destination_campaign_name": { "type": "string" },
+    "destination_ad_group_id": { "type": "string" },
+    "destination_ad_id": { "type": "string" },
+    "destination_keyword_id": { "type": "string" },
+    "negative_keyword_id": { "type": "string" },
     "promotion_status": {
       "type": "string",
-      "enum": [
-        "identified",
-        "validated",
-        "campaign_creating",
-        "campaign_created",
-        "ad_group_created",
-        "product_ad_created",
-        "keyword_created",
-        "enabling",
-        "manual_active",
-        "negative_creating",
-        "negative_created",
-        "completed",
-        "repair_required",
-        "failed_retryable",
-        "failed_permanent"
-      ],
+      "enum": ["identified", "validated", "campaign_creating", "campaign_created", "ad_group_created", "product_ad_created", "keyword_created", "enabling", "manual_active", "negative_creating", "negative_created", "completed", "repair_required", "failed_retryable", "failed_permanent"],
       "default": "identified"
     },
-    "completion_status": {
-      "type": "string"
-    },
-    "idempotency_key": {
-      "type": "string"
-    },
-    "last_error": {
-      "type": "string"
-    },
-    "retry_count": {
-      "type": "number",
-      "default": 0
-    },
-    "ai_validated": {
-      "type": "boolean",
-      "default": false
-    },
-    "ai_relevance_check": {
-      "type": "string"
-    },
-    "created_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "updated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "completed_at": {
-      "type": "string",
-      "format": "date-time"
-    },
-    "next_retry_at": {
-      "type": "string",
-      "format": "date-time"
-    }
+    "completion_status": { "type": "string" },
+    "idempotency_key": { "type": "string" },
+    "last_error": { "type": "string" },
+    "retry_count": { "type": "number", "default": 0 },
+    "ai_validated": { "type": "boolean", "default": false },
+    "ai_relevance_check": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "next_retry_at": { "type": "string", "format": "date-time" }
   },
-  "required": [
-    "amazon_account_id",
-    "source_campaign_id",
-    "asin",
-    "source_search_term"
-  ]
+  "required": ["amazon_account_id", "source_campaign_id", "asin", "source_search_term"]
 }
