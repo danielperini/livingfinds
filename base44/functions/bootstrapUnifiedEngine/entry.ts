@@ -1,11 +1,17 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { waitUntil } from 'base44:runtime';
 
 const PHASES = [
-  { key: 'classify', fn: 'classifyMarketplaceCampaignJourneys' },
-  { key: 'reactivate', fn: 'reactivatePausedWithStock' },
-  { key: 'lifecycle', fn: 'runCanonicalCampaignLifecycleLayer' },
-  { key: 'budget', fn: 'runEconomicBudgetBalancer' },
-  { key: 'orchestrator', fn: 'runDailyMasterOrchestrator' },
+  { key: 'classify', fn: 'classifyMarketplaceCampaignJourneys', payload: { _service_role: true }, background: true },
+  { key: 'reactivate', fn: 'reactivatePausedWithStock', payload: { _service_role: true } },
+  {
+    key: 'lifecycle',
+    fn: 'runUnifiedDecisionEngine',
+    payload: { bootstrap: true, force_campaign_lifecycle: true, dry_run: false, _service_role: true },
+    background: true,
+  },
+  { key: 'budget', fn: 'runEconomicBudgetBalancer', payload: { _service_role: true } },
+  { key: 'orchestrator', fn: 'runDailyMasterOrchestrator', payload: { _service_role: true }, background: true },
 ];
 
 export default async function (req: Request): Promise<Response> {
@@ -51,8 +57,16 @@ export default async function (req: Request): Promise<Response> {
         continue;
       }
       const phaseStart = Date.now();
+      const payload = { amazon_account_id: accountId, ...(phase.payload || {}) };
+
+      if (phase.background) {
+        waitUntil(base44.asServiceRole.functions.invoke(phase.fn, payload).catch(() => null));
+        results.push({ phase: phase.key, function: phase.fn, status: 'dispatched' });
+        continue;
+      }
+
       try {
-        const res = await base44.asServiceRole.functions.invoke(phase.fn, { amazon_account_id: accountId });
+        const res = await base44.asServiceRole.functions.invoke(phase.fn, payload);
         const data = res?.data ?? res;
         results.push({
           phase: phase.key,
