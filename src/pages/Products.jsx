@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, RefreshCw, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
+import { ChevronDown, ChevronUp, Filter, Loader2, Package, Pause, Search, X, TrendingUp, CheckSquare, Square } from 'lucide-react';
 import { useAmazonPropagation } from '@/hooks/useAmazonPropagation';
 import KickoffModal from '@/components/products/KickoffModal';
 import KickoffWithQueueCleanModal from '@/components/products/KickoffWithQueueCleanModal';
@@ -154,7 +154,6 @@ export default function Products({ externalRefreshTrigger }) {
   const { propagating: amazonPropagating, propagationResult: amazonResult, propagate: amazonPropagate } = useAmazonPropagation();
 
   const [priceQueryLoading, setPriceQueryLoading] = useState(false);
-  const [localRefreshing, setLocalRefreshing] = useState(false);
   const [kickoffProduct, setKickoffProduct] = useState(null);
   const [kickoffStuckItems, setKickoffStuckItems] = useState(null);
   const [stuckQueueByAsin, setStuckQueueByAsin] = useState({});
@@ -547,24 +546,6 @@ export default function Products({ externalRefreshTrigger }) {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            disabled={localRefreshing}
-            onClick={async () => {
-              if (localRefreshing) return;
-              setLocalRefreshing(true);
-              try {
-                await reloadProducts();
-              } finally {
-                setLocalRefreshing(false);
-              }
-            }}
-            title="Recarregar dados do banco local (sem chamar a Amazon)"
-            className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E5E7EB] text-[#0D1117] hover:bg-[#F8FAFC] text-sm font-semibold rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
-          >
-            {localRefreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-            {localRefreshing ? 'Atualizando...' : 'Atualizar'}
-          </button>
           {account && (
             <button
               type="button"
