@@ -1,22 +1,20 @@
 /**
- * amazonSpApiCallback — endpoint público de callback OAuth SP-API
- * Recebe: spapi_oauth_code, state, selling_partner_id
- * Troca o código por tokens, armazena refresh_token no backend, redireciona para /integracoes/amazon
+ * amazonSpApiCallback — callback OAuth SP-API legado.
+ * Usa credenciais canônicas e nunca imprime/retorna tokens ou authorization codes.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { resolveAmazonSpCredentials, shortCredentialHash } from '../../shared/amazonCredentials.ts';
+import { safeOverallStatusAfterSpSuccess } from '../../shared/amazonAuthStatus.ts';
 
-// Estados usados (em memória por instância — suficiente para evitar replay no mesmo deploy)
-// Para produção crítica considere persistir em entidade
 const usedStates = new Set<string>();
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-
-  // Suporta GET (redirect da Amazon) e POST (chamada programática)
   let spCode: string | null = null;
   let state: string | null = null;
   let sellingPartnerId: string | null = null;
-  let appBaseUrl = Deno.env.get('APP_BASE_URL') || '';
+  const appBaseUrl = String(Deno.env.get('APP_BASE_URL') || '').replace(/\/+$/, '');
+  if (!appBaseUrl) return Response.json({ ok: false, error: 'APP_BASE_URL_REQUIRED' }, { status: 500 });
 
   if (req.method === 'GET') {
     spCode = url.searchParams.get('spapi_oauth_code');
@@ -28,112 +26,74 @@ Deno.serve(async (req) => {
       spCode = body.spapi_oauth_code || body.code;
       state = body.state;
       sellingPartnerId = body.selling_partner_id;
-      appBaseUrl = body.app_base_url || appBaseUrl;
     } catch {
       return Response.json({ error: 'Body inválido' }, { status: 400 });
     }
   }
 
-  const redirectBase = appBaseUrl || 'https://app.base44.com';
-  const redirectSuccess = `${redirectBase}/integracoes/amazon?status=success&seller=${sellingPartnerId || ''}`;
-  const redirectError = (msg: string) =>
-    `${redirectBase}/integracoes/amazon?status=error&msg=${encodeURIComponent(msg)}`;
+  const redirectSuccess = `${appBaseUrl}/integracoes/amazon?status=success&seller=${encodeURIComponent(sellingPartnerId || '')}`;
+  const redirectError = (msg: string) => `${appBaseUrl}/integracoes/amazon?status=error&msg=${encodeURIComponent(msg)}`;
+  const fail = (msg: string, status = 400) => req.method === 'GET'
+    ? Response.redirect(redirectError(msg), 302)
+    : Response.json({ ok: false, error: msg }, { status });
 
-  // Validar parâmetros
-  if (!spCode) {
-    if (req.method === 'GET') return Response.redirect(redirectError('Código de autorização ausente'), 302);
-    return Response.json({ error: 'spapi_oauth_code ausente' }, { status: 400 });
-  }
-
-  // Validar state (deve existir e não ter sido usado antes)
-  if (!state) {
-    if (req.method === 'GET') return Response.redirect(redirectError('State ausente'), 302);
-    return Response.json({ error: 'state ausente' }, { status: 400 });
-  }
-  if (!state.startsWith('livingfinds')) {
-    if (req.method === 'GET') return Response.redirect(redirectError('State inválido'), 302);
-    return Response.json({ error: 'State inválido' }, { status: 400 });
-  }
-  if (usedStates.has(state)) {
-    if (req.method === 'GET') return Response.redirect(redirectError('State já utilizado (replay negado)'), 302);
-    return Response.json({ error: 'State já utilizado' }, { status: 409 });
-  }
+  if (!spCode) return fail('Código de autorização ausente');
+  if (!state) return fail('State ausente');
+  if (!state.startsWith('livingfinds')) return fail('State inválido');
+  if (usedStates.has(state)) return fail('State já utilizado (replay negado)', 409);
   usedStates.add(state);
 
-  // Trocar código por tokens
-  const clientId = Deno.env.get('SP_CLIENT_ID') || '';
-  const clientSecret = Deno.env.get('SP_CLIENT_SECRET') || '';
+  const credentials = resolveAmazonSpCredentials();
+  if (!credentials.clientId.value || !credentials.clientSecret.value) return fail('Credenciais SP-API LWA não configuradas', 500);
 
-  if (!clientId || !clientSecret) {
-    const msg = 'SP_CLIENT_ID ou SP_CLIENT_SECRET não configurados';
-    if (req.method === 'GET') return Response.redirect(redirectError(msg), 302);
-    return Response.json({ error: msg }, { status: 500 });
-  }
-
-  let tokenData: Record<string, unknown>;
+  let refreshToken = '';
   try {
-    const params = new URLSearchParams({
-      grant_type: 'authorization_code',
-      code: spCode,
-      client_id: clientId,
-      client_secret: clientSecret,
-    });
     const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: params.toString(),
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: spCode,
+        client_id: credentials.clientId.value,
+        client_secret: credentials.clientSecret.value,
+      }).toString(),
     });
-    tokenData = await tokenRes.json() as Record<string, unknown>;
+    const tokenData = await tokenRes.json().catch(() => ({}));
     if (!tokenRes.ok) {
-      const errMsg = (tokenData.error_description as string) || (tokenData.error as string) || 'Token exchange falhou';
-      console.error('[spApiCallback] Token error:', errMsg, tokenData);
-      if (req.method === 'GET') return Response.redirect(redirectError(errMsg), 302);
-      return Response.json({ error: errMsg }, { status: 400 });
+      const code = String(tokenData?.error || `http_${tokenRes.status}`);
+      console.error(`[spApiCallback] token exchange falhou: code=${code} http=${tokenRes.status}`);
+      return fail(String(tokenData?.error_description || tokenData?.error || 'Token exchange falhou'));
     }
-  } catch (e) {
-    const errMsg = `Erro na troca de token: ${(e as Error).message}`;
-    console.error('[spApiCallback]', errMsg);
-    if (req.method === 'GET') return Response.redirect(redirectError(errMsg), 302);
-    return Response.json({ error: errMsg }, { status: 500 });
+    refreshToken = String(tokenData?.refresh_token || '').trim();
+    if (!refreshToken) return fail('Amazon não retornou refresh token SP-API');
+  } catch (error: any) {
+    console.error(`[spApiCallback] token exchange network error: ${error?.message || String(error)}`);
+    return fail('Erro de rede na troca de token', 500);
   }
 
-  const refreshToken = tokenData.refresh_token as string;
-  const accessToken = tokenData.access_token as string;
-
-  // Persistir no backend: atualiza AmazonAccount com o selling_partner_id e sinaliza conexão OK
-  // O refresh token é salvo apenas no secret SP_REFRESH_TOKEN via log — nunca exposto ao frontend
-  // Aqui registamos o sucesso na entidade AmazonAccount (sem o token em si)
   try {
     const base44 = createClientFromRequest(req);
-    // Tenta encontrar conta existente pelo seller_id ou pega a primeira
-    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter(
-      sellingPartnerId ? { seller_id: sellingPartnerId } : {}
-    );
-    const account = accounts[0] || (await base44.asServiceRole.entities.AmazonAccount.list())[0];
+    const accounts = sellingPartnerId
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ seller_id: sellingPartnerId }, null, 1)
+      : await base44.asServiceRole.entities.AmazonAccount.list('-updated_date', 1);
+    const account = accounts[0] || null;
     if (account) {
       await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
         seller_id: sellingPartnerId || account.seller_id,
-        status: 'connected',
-        error_message: null,
+        status: safeOverallStatusAfterSpSuccess(account),
         last_sync_at: new Date().toISOString(),
       });
+      console.warn(`[spApiCallback] SP_REFRESH_TOKEN_SECRET_UPDATE_REQUIRED account=${account.id} hash=${shortCredentialHash(refreshToken)}`);
     }
-    // Log seguro — refresh token apenas nos logs do servidor, nunca retornado ao cliente
-    console.log(`[spApiCallback] ✅ Autorizado! seller=${sellingPartnerId} | refresh_token_preview=${refreshToken?.slice(0, 20)}...`);
-    console.log(`[spApiCallback] REFRESH_TOKEN_FULL=${refreshToken}`);
-  } catch (dbErr) {
-    console.warn('[spApiCallback] DB update falhou (não crítico):', (dbErr as Error).message);
+  } catch (error: any) {
+    console.warn(`[spApiCallback] DB update falhou: ${error?.message || String(error)}`);
   }
 
-  // Redirecionar sem expor tokens
-  if (req.method === 'GET') {
-    return Response.redirect(redirectSuccess, 302);
-  }
-
-  // Resposta para chamadas POST (programáticas) — token apenas no log, não no body
+  if (req.method === 'GET') return Response.redirect(redirectSuccess, 302);
   return Response.json({
     ok: true,
     selling_partner_id: sellingPartnerId,
-    message: 'Autorização concluída. Refresh token registado nos logs do servidor.',
+    message: 'Autorização concluída. Atualize AMAZON_SP_REFRESH_TOKEN por canal seguro; nenhum token foi exposto no retorno ou logs.',
+    refresh_token_fingerprint: shortCredentialHash(refreshToken),
   });
 });

@@ -33,20 +33,20 @@
     },
     {
       "name": "Unified marketplace decision engine - every 15 minutes",
-      "function": "runUnifiedDecisionEngine",
+      "function": "runUnifiedDecisionEngineWithAuthGuard",
       "cron": "4,19,34,49 * * * *",
       "run_on_startup": true,
       "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
       "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
-      "function": "runUnifiedDecisionEngine",
+      "function": "runUnifiedDecisionEngineWithAuthGuard",
       "cron": "25 1 * * *",
       "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
     },
     {
       "name": "Canonical decision executor - every 15 minutes",
-      "function": "executeApprovedDecisionQueue",
+      "function": "executeApprovedDecisionQueueWithAuthGuard",
       "cron": "6,21,36,51 * * * *",
       "payload": { "_service_role": true, "max_decisions": 25 }
     },
@@ -70,15 +70,15 @@
     },
     {
       "name": "Canonical dayparting - hourly after intraday metrics",
-      "function": "runCanonicalDaypartingEngine",
+      "function": "runAdsAutomationWithAuthGuard",
       "cron": "12 * * * *",
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
+      "payload": { "_service_role": true, "target_function": "runCanonicalDaypartingEngine", "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
     },
     {
       "name": "Serving campaign growth v18 - every 3 hours",
-      "function": "runServingCampaignGrowthObjective",
+      "function": "runAdsAutomationWithAuthGuard",
       "cron": "14 */3 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "serving_campaign_growth_target_pct": 40, "trigger_type": "scheduler_serving_growth_v18" }
+      "payload": { "_service_role": true, "target_function": "runServingCampaignGrowthObjective", "dry_run": false, "serving_campaign_growth_target_pct": 40, "trigger_type": "scheduler_serving_growth_v18" }
     },
     {
       "name": "Repricing transport queue - every 5 minutes",

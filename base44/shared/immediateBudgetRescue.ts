@@ -41,7 +41,7 @@ export async function runImmediateBudgetRescue(ctx: RescueContext): Promise<Resc
     aid, now, today, correlationId, base44,
     campaigns, campWindowMetrics, acosByAsin, productMap, campaignAsinMap,
     authorizedEligibleAsins, settings, dataFreshness,
-    usedIdemKeys, entityChangedThisCycle, account, stats,
+    usedIdemKeys, entityChangedThisCycle, stats,
   } = ctx;
 
   const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -86,35 +86,8 @@ export async function runImmediateBudgetRescue(ctx: RescueContext): Promise<Resc
     return { cycleStats, executedDecisions };
   }
 
-  // ── Token Amazon Ads ───────────────────────────────────────────────────────
-  const adsClientId = Deno.env.get('ADS_CLIENT_ID') || '';
-  const adsClientSecret = Deno.env.get('ADS_CLIENT_SECRET') || '';
-  const adsRegion = Deno.env.get('ADS_REGION') || 'na';
-  const endpointMap: Record<string, string> = {
-    na: 'https://advertising-api.amazon.com',
-    eu: 'https://advertising-api-eu.amazon.com',
-    fe: 'https://advertising-api-fe.amazon.com',
-  };
-  const adsEndpoint = endpointMap[adsRegion] || endpointMap.na;
-  const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
-  const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '';
-
-  let adsAccessToken: string | null = null;
-  if (refreshToken && adsClientId && profileId) {
-    try {
-      const tokenRes = await fetch('https://api.amazon.com/auth/o2/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-          client_id: adsClientId,
-          client_secret: adsClientSecret,
-        }).toString(),
-      });
-      if (tokenRes.ok) adsAccessToken = (await tokenRes.json()).access_token;
-    } catch {}
-  }
+  // Autenticação e endpoint são responsabilidade exclusiva do amazonAdsCommand.
+  // Nenhuma regra econômica abaixo depende da origem da credencial.
 
   // ── Cooldown 24h: buscar decisões RESCUE recentes ─────────────────────────
   const cutoff24h = new Date(Date.now() - 24 * 3600000).toISOString();
@@ -294,7 +267,7 @@ export async function runImmediateBudgetRescue(ctx: RescueContext): Promise<Resc
       reallocation_sources: reallocationSources,
     });
 
-    // Chamada Amazon Ads API
+    // Chamada Amazon Ads API via gateway canônico. Mantém exatamente o payload v3.
     const amazonCampaignId = camp.campaign_id || camp.amazon_campaign_id;
     let amazonCallOk = false;
     let amazonRequestId: string | null = null;
@@ -306,41 +279,54 @@ export async function runImmediateBudgetRescue(ctx: RescueContext): Promise<Resc
       // Já está no valor desejado — idempotência API
       amazonCallOk = true;
       amazonRequestId = 'idempotent_no_change';
-    } else if (adsAccessToken && amazonCampaignId) {
+    } else if (amazonCampaignId) {
       try {
-        const res = await fetch(`${adsEndpoint}/sp/campaigns`, {
+        const commandResponse = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+          _service_role: true,
+          amazon_account_id: aid,
+          path: '/sp/campaigns',
           method: 'PUT',
-          headers: {
-            'Amazon-Advertising-API-ClientId': adsClientId,
-            'Amazon-Advertising-API-Scope': profileId,
-            'Authorization': `Bearer ${adsAccessToken}`,
-            'Content-Type': 'application/vnd.spCampaign.v3+json',
-            'Accept': 'application/vnd.spCampaign.v3+json',
+          operation: 'IMMEDIATE_BUDGET_RESCUE',
+          content_type: 'application/vnd.spCampaign.v3+json',
+          accept: 'application/vnd.spCampaign.v3+json',
+          payload: {
+            campaigns: [{
+              campaignId: amazonCampaignId,
+              budget: { budget: newBudget, budgetType: 'DAILY' },
+            }],
           },
-          body: JSON.stringify({ campaigns: [{ campaignId: amazonCampaignId, budget: { budget: newBudget, budgetType: 'DAILY' } }] }),
         });
-        amazonHttpStatus = res.status;
-        const resData = res.ok ? await res.json().catch(() => ({})) : {};
-        amazonRequestId = resData?.requestId || res.headers?.get?.('x-amz-requestid') || null;
+        const commandData = commandResponse?.data || commandResponse || {};
+        amazonHttpStatus = Number(commandData.status || 0) || (commandData.ok === true ? 200 : null);
+        amazonRequestId = commandData.request_id || null;
 
-        if (res.ok) {
-          const successIds = (resData?.campaigns?.success || []).map((s: any) => s.campaignId);
-          amazonCallOk = successIds.includes(amazonCampaignId) || (resData?.campaigns?.success || []).length > 0;
-          if (!amazonCallOk) {
-            const errEntry = (resData?.campaigns?.error || []).find((e: any) => e.campaignId === amazonCampaignId);
-            amazonError = errEntry?.message || 'sem_sucesso_confirmado';
+        if (commandData.ok === true) {
+          const successes = commandData.payload?.campaigns?.success;
+          if (Array.isArray(successes)) {
+            const successIds = successes.map((s: any) => String(s?.campaignId || ''));
+            amazonCallOk = successIds.includes(String(amazonCampaignId)) || successes.length > 0;
+            if (!amazonCallOk) amazonError = 'sem_sucesso_confirmado';
+          } else {
+            // O gateway já classificou HTTP + erros por item; payloads sem lista de success
+            // são aceitos somente quando ele confirmou ok=true.
+            amazonCallOk = true;
           }
-        } else if (res.status === 409) {
-          amazonCallOk = true; // idempotente
+        } else if (amazonHttpStatus === 409) {
+          amazonCallOk = true; // preserva semântica idempotente anterior
           amazonError = '409_idempotent';
         } else {
-          amazonError = `HTTP_${res.status}`;
+          amazonError = String(
+            commandData.error_type ||
+            commandData.errors?.[0]?.message ||
+            commandData.message ||
+            (amazonHttpStatus ? `HTTP_${amazonHttpStatus}` : 'amazon_command_failed')
+          );
         }
       } catch (err: any) {
-        amazonError = err.message || 'fetch_error';
+        amazonError = err?.message || 'amazon_command_error';
       }
     } else {
-      amazonError = 'no_ads_token';
+      amazonError = 'missing_campaign_id';
     }
 
     const durationMs = Date.now() - callStartAt;

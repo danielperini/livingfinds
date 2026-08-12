@@ -49,7 +49,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run Amazon Ads policy unit tests
+      - name: Run Amazon Ads policy and auth unit tests
         run: |
           deno test --node-modules-dir=auto \
             base44/shared/portfolioBudgetPacing.test.ts \
@@ -57,16 +57,85 @@ jobs:
             base44/shared/amazonBidCeiling.test.ts \
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
-            base44/shared/servingCampaignGrowthPolicy.test.ts
+            base44/shared/servingCampaignGrowthPolicy.test.ts \
+            base44/shared/amazonCredentials.test.ts \
+            base44/shared/amazonAuthStatus.test.ts
 
       - name: Check changed TypeScript modules
+        shell: bash
         run: |
-          deno check --node-modules-dir=auto \
-            base44/shared/portfolioBudgetMath.ts \
-            base44/shared/portfolioBudgetActions.ts \
-            base44/shared/portfolioBudgetPacing.ts \
-            base44/shared/amazonBidCeiling.ts \
-            base44/shared/configuredBidPolicy.ts \
-            base44/shared/servingCampaignGrowthPolicy.ts \
-            base44/functions/runServingCampaignGrowthObjective/entry.ts \
+          set -u
+          files=(
+            base44/shared/portfolioBudgetMath.ts
+            base44/shared/portfolioBudgetActions.ts
+            base44/shared/portfolioBudgetPacing.ts
+            base44/shared/amazonBidCeiling.ts
+            base44/shared/configuredBidPolicy.ts
+            base44/shared/searchTermHarvestPolicy.ts
+            base44/shared/servingCampaignGrowthPolicy.ts
+            base44/shared/amazonCredentials.ts
+            base44/shared/amazonAuthStatus.ts
+            base44/shared/immediateBudgetRescue.ts
+            base44/functions/testAuthHealth/entry.ts
+            base44/functions/testSpApiAuth/entry.ts
+            base44/functions/getLWAAccessToken/entry.ts
+            base44/functions/getOAuthSetupInfo/entry.ts
+            base44/functions/amazonAdsTokenManager/entry.ts
+            base44/functions/amazonAdsProxy/entry.ts
+            base44/functions/amazonAdsCommand/entry.ts
+            base44/functions/adsHelpers/entry.ts
+            base44/functions/exchangeAmazonAdsCode/entry.ts
+            base44/functions/saveAdsRefreshToken/entry.ts
+            base44/functions/amazonAuthCallback/entry.ts
+            base44/functions/amazonSpApiCallback/entry.ts
+            base44/functions/runUnifiedDecisionEngineWithAuthGuard/entry.ts
+            base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts
+            base44/functions/runAdsAutomationWithAuthGuard/entry.ts
+            base44/functions/checkSpApiConnection/entry.ts
             server/src/scheduler.ts
+          )
+          failed=0
+          echo '## Deno check por módulo' >> "$GITHUB_STEP_SUMMARY"
+          for file in "${files[@]}"; do
+            output="$(deno check --node-modules-dir=auto "$file" 2>&1)"
+            rc=$?
+            if [[ $rc -eq 0 ]]; then
+              echo "- ✅ $file" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ❌ $file" >> "$GITHUB_STEP_SUMMARY"
+              compact="$(printf '%s' "$output" | tr '\r\n' '  ' | sed 's/%/%25/g; s/::/%3A%3A/g' | cut -c1-3500)"
+              echo "::error file=${file}::${compact}"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Enforce canonical Amazon credential reads
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          patterns='(ADS_CLIENT_ID|ADS_CLIENT_SECRET|ADS_REFRESH_TOKEN|ADS_PROFILE_ID|ADS_ACCOUNT_ID|ADS_REGION|AMAZON_LWA_CLIENT_ID|AMAZON_LWA_CLIENT_SECRET|AMAZON_SP_REFRESH_TOKEN|SP_CLIENT_ID|SP_CLIENT_SECRET|SP_REFRESH_TOKEN)'
+          violations="$({
+            grep -RInE "Deno\.env\.get\(['\"]${patterns}" base44 server/src --include='*.ts' --include='*.js' --include='*.jsx' || true
+            grep -RInE "process\.env\.${patterns}" base44 server/src --include='*.ts' --include='*.js' --include='*.jsx' || true
+          } | grep -v '^base44/shared/amazonCredentials.ts:' || true)"
+          if [[ -n "$violations" ]]; then
+            echo 'Amazon credential reads found outside base44/shared/amazonCredentials.ts:'
+            while IFS= read -r violation; do
+              [[ -z "$violation" ]] && continue
+              file="${violation%%:*}"
+              rest="${violation#*:}"
+              line="${rest%%:*}"
+              message="${rest#*:}"
+              echo "$violation"
+              echo "::error file=${file},line=${line}::Direct Amazon credential env read must use base44/shared/amazonCredentials.ts — ${message}"
+            done <<< "$violations"
+            exit 1
+          fi
+          echo 'OK: Amazon credential env reads are centralized.'
+
+      - name: Validate secret-safe VPS Ads token sync script
+        if: always()
+        shell: bash
+        run: bash -n server/scripts/sync-ads-refresh-token-env.sh

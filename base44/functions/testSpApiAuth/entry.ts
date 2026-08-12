@@ -1,47 +1,48 @@
 /**
- * testSpApiAuth — diagnóstico completo de autenticação SP-API
- * Testa: LWA token, SP-API authorization, marketplace, endpoint access
+ * testSpApiAuth — diagnóstico real de autenticação SP-API.
+ * AMAZON_LWA_* / AMAZON_SP_REFRESH_TOKEN são canônicos; SP_* são aliases legados.
+ * Nenhum token/secret é retornado ou logado.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { credentialDiagnostic, resolveAmazonSpCredentials } from '../../shared/amazonCredentials.ts';
+import { safeOverallStatusAfterSpSuccess } from '../../shared/amazonAuthStatus.ts';
 
 const LWA_TOKEN_URL = 'https://api.amazon.com/auth/o2/token';
+const SP_BASE_NA = 'https://sellingpartnerapi-na.amazon.com';
+const BR_MARKETPLACE_ID = 'A2Q3Y263D00KWC';
 
-function maskSecret(s) {
-  if (!s) return 'NÃO CONFIGURADO';
-  if (s.length <= 12) return s.slice(0, 4) + '***';
-  return s.slice(0, 8) + '...' + s.slice(-4);
-}
-
-function mapLwaError(error) {
-  const map = {
-    invalid_client: 'Cliente LWA inválido. Verifique o AMAZON_LWA_CLIENT_ID e AMAZON_LWA_CLIENT_SECRET.',
+function mapLwaError(error: string) {
+  const map: Record<string, string> = {
+    invalid_client: 'Cliente LWA inválido. Verifique a fonte canônica AMAZON_LWA_CLIENT_ID / AMAZON_LWA_CLIENT_SECRET.',
     invalid_grant: 'Refresh token inválido, expirado, revogado ou pertencente a outro aplicativo.',
     invalid_request: 'Pedido de token incompleto ou com formato incorreto.',
     unauthorized_client: 'Aplicativo não autorizado para esse fluxo.',
     temporarily_unavailable: 'Serviço Amazon temporariamente indisponível.',
   };
-  return map[error] || `Erro desconhecido: ${error}`;
+  return map[error] || `Erro Amazon LWA: ${error}`;
 }
 
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
-    const user = await base44.auth.me();
+    const user = await base44.auth.me().catch(() => null);
     if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const lwaClientId = Deno.env.get('AMAZON_LWA_CLIENT_ID') || '';
-    const lwaClientSecret = Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '';
-    const spRefreshToken = Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || '';
-    const spAppId = Deno.env.get('AMAZON_SP_APP_ID') || '';
-    const marketplaceId = Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
+    const credentials = resolveAmazonSpCredentials();
+    const lwaClientId = credentials.clientId.value;
+    const lwaClientSecret = credentials.clientSecret.value;
+    const spRefreshToken = credentials.refreshToken.value;
+    const marketplaceId = credentials.marketplaceId.value || BR_MARKETPLACE_ID;
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.filter({ user_id: user.id }, '-updated_date', 1).catch(() => [] as any[]);
+    const account = accounts[0] || null;
 
-    const results = {
+    const results: any = {
       timestamp: new Date().toISOString(),
       credentials: {
-        sp_app_id: maskSecret(spAppId),
-        lwa_client_id: maskSecret(lwaClientId),
-        lwa_client_secret: lwaClientSecret ? 'configurado' : 'ausente',
-        sp_refresh_token: spRefreshToken ? 'configurado' : 'ausente',
+        sp_app_id: credentialDiagnostic(credentials.appId),
+        lwa_client_id: credentialDiagnostic(credentials.clientId),
+        lwa_client_secret: credentialDiagnostic(credentials.clientSecret),
+        sp_refresh_token: credentialDiagnostic(credentials.refreshToken),
         marketplace_id: marketplaceId,
       },
       tests: {
@@ -50,128 +51,117 @@ Deno.serve(async (req) => {
         marketplace_configuration: { status: 'NOT_RUN', message: '' },
         endpoint_access: { status: 'NOT_RUN', message: '' },
       },
-      access_token_preview: null,
       error_detail: null,
     };
 
-    // Validação básica de formato
     if (lwaClientId.startsWith('amzn1.sp.solution')) {
       results.tests.lwa_authentication = {
         status: 'FAILED',
-        message: 'AMAZON_LWA_CLIENT_ID contém um App ID (amzn1.sp.solution...) em vez do LWA Client ID (amzn1.application-oa2-client...). Corrija o secret.',
+        message: `${credentials.clientId.source || 'LWA client id'} contém App ID em vez de LWA Client ID.`,
       };
       return Response.json(results);
     }
-    if (!lwaClientId) {
-      results.tests.lwa_authentication = { status: 'FAILED', message: 'AMAZON_LWA_CLIENT_ID não configurado.' };
-      return Response.json(results);
-    }
-    if (!lwaClientSecret) {
-      results.tests.lwa_authentication = { status: 'FAILED', message: 'AMAZON_LWA_CLIENT_SECRET não configurado.' };
-      return Response.json(results);
-    }
-    if (!spRefreshToken) {
-      results.tests.lwa_authentication = { status: 'FAILED', message: 'AMAZON_SP_REFRESH_TOKEN não configurado. Autorize a conta no Seller Central.' };
+    if (!lwaClientId || !lwaClientSecret || !spRefreshToken) {
+      results.tests.lwa_authentication = {
+        status: 'FAILED',
+        message: 'Credenciais SP-API incompletas. Configure AMAZON_LWA_CLIENT_ID, AMAZON_LWA_CLIENT_SECRET e AMAZON_SP_REFRESH_TOKEN.',
+      };
       return Response.json(results);
     }
 
-    // TEST 1: LWA token
-    let accessToken = null;
+    let accessToken = '';
     try {
-      const body = new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: spRefreshToken,
-        client_id: lwaClientId,
-        client_secret: lwaClientSecret,
-      });
       const res = await fetch(LWA_TOKEN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: body.toString(),
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: spRefreshToken,
+          client_id: lwaClientId,
+          client_secret: lwaClientSecret,
+        }).toString(),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const errMsg = mapLwaError(data.error);
+        const code = String(data?.error || `http_${res.status}`);
+        const errMsg = mapLwaError(code);
         results.tests.lwa_authentication = {
           status: 'FAILED',
           message: errMsg,
-          detail: { error: data.error, description: data.error_description, http_status: res.status },
+          detail: { error: code, description: data?.error_description, http_status: res.status },
         };
-        results.error_detail = { statusCode: res.status, amazonError: data.error, amazonErrorDescription: data.error_description };
-        await base44.asServiceRole.entities.AmazonAccount.updateMany(
-          {},
-          { $set: { error_message: `LWA falhou: ${errMsg}`, status: 'error' } }
-        ).catch(() => {});
+        results.error_detail = { statusCode: res.status, amazonError: code, amazonErrorDescription: data?.error_description };
+        if (account) {
+          await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
+            error_message: `SP LWA falhou: ${errMsg}`,
+            status: safeOverallStatusAfterSpSuccess(account) === 'error' ? 'error' : (account.status || 'pending'),
+          }).catch(() => {});
+        }
         return Response.json(results);
       }
-      accessToken = data.access_token;
-      results.tests.lwa_authentication = { status: 'PASSED', message: `Token obtido. Expira em ${data.expires_in}s.` };
-      results.access_token_preview = maskSecret(accessToken);
-    } catch (e) {
-      results.tests.lwa_authentication = { status: 'FAILED', message: `Erro de rede: ${e.message}` };
+      accessToken = String(data?.access_token || '');
+      if (!accessToken) throw new Error('Amazon LWA não retornou access_token');
+      results.tests.lwa_authentication = { status: 'PASSED', message: `Token obtido e mantido somente em memória. Expira em ${Number(data?.expires_in || 0)}s.` };
+    } catch (error: any) {
+      results.tests.lwa_authentication = { status: 'FAILED', message: `Erro de rede: ${error?.message || String(error)}` };
       return Response.json(results);
     }
 
-    // TEST 2: SP-API authorization — marketplaceParticipations
-    const spBase = 'https://sellingpartnerapi-na.amazon.com';
-    let sellerId = null;
+    let sellerId: string | null = null;
     try {
-      const res = await fetch(`${spBase}/sellers/v1/marketplaceParticipations`, {
+      const res = await fetch(`${SP_BASE_NA}/sellers/v1/marketplaceParticipations`, {
         headers: { 'x-amz-access-token': accessToken, 'User-Agent': 'LivingFinds/1.0' },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         results.tests.sp_api_authorization = {
           status: 'FAILED',
-          message: `SP-API retornou HTTP ${res.status}: ${data.errors?.[0]?.message || JSON.stringify(data).slice(0, 200)}`,
+          message: `SP-API retornou HTTP ${res.status}: ${data?.errors?.[0]?.message || 'falha de autorização'}`,
         };
       } else {
-        const participation = data.payload?.[0];
+        const participations = Array.isArray(data?.payload) ? data.payload : [];
+        const participation = participations.find((row: any) => row?.marketplace?.id === marketplaceId) || participations[0];
         sellerId = participation?.seller?.sellerId || null;
-        results.tests.sp_api_authorization = { status: 'PASSED', message: `Seller ID: ${sellerId || 'obtido'}` };
-        if (sellerId) {
-          await base44.asServiceRole.entities.AmazonAccount.updateMany(
-            {},
-            { $set: { seller_id: sellerId, status: 'connected', error_message: null } }
-          ).catch(() => {});
+        results.tests.sp_api_authorization = { status: 'PASSED', message: `SP-API autorizada${sellerId ? ` para seller ${sellerId}` : ''}.` };
+        if (account) {
+          await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
+            ...(sellerId ? { seller_id: sellerId } : {}),
+            status: safeOverallStatusAfterSpSuccess(account),
+            error_message: safeOverallStatusAfterSpSuccess(account) === 'connected' ? null : account.error_message,
+          }).catch(() => {});
         }
       }
-    } catch (e) {
-      results.tests.sp_api_authorization = { status: 'FAILED', message: `Erro: ${e.message}` };
+    } catch (error: any) {
+      results.tests.sp_api_authorization = { status: 'FAILED', message: `Erro: ${error?.message || String(error)}` };
     }
 
-    // TEST 3: Marketplace
     if (results.tests.sp_api_authorization.status === 'PASSED') {
-      results.tests.marketplace_configuration = {
-        status: 'PASSED',
-        message: `Marketplace ID: ${marketplaceId} (Brasil)`,
-      };
+      results.tests.marketplace_configuration = { status: 'PASSED', message: `Marketplace ID: ${marketplaceId} (Brasil)` };
     } else {
       results.tests.marketplace_configuration = { status: 'SKIPPED', message: 'SP-API authorization falhou' };
     }
 
-    // TEST 4: Catalog endpoint
     if (accessToken && results.tests.sp_api_authorization.status === 'PASSED') {
       try {
-        const res = await fetch(`${spBase}/catalog/2022-04-01/items?marketplaceIds=${marketplaceId}&keywords=test&pageSize=1`, {
+        const res = await fetch(`${SP_BASE_NA}/catalog/2022-04-01/items?marketplaceIds=${encodeURIComponent(marketplaceId)}&keywords=test&pageSize=1`, {
           headers: { 'x-amz-access-token': accessToken, 'User-Agent': 'LivingFinds/1.0' },
         });
         if (res.ok || res.status === 400) {
           results.tests.endpoint_access = { status: 'PASSED', message: `Catalog API acessível (HTTP ${res.status})` };
         } else {
-          const d = await res.json().catch(() => ({}));
+          const data = await res.json().catch(() => ({}));
           results.tests.endpoint_access = {
             status: res.status === 403 ? 'FAILED' : 'PASSED',
-            message: `HTTP ${res.status}: ${d.errors?.[0]?.message || 'resposta recebida'}`,
+            message: `HTTP ${res.status}: ${data?.errors?.[0]?.message || 'resposta recebida'}`,
           };
         }
-      } catch (e) {
-        results.tests.endpoint_access = { status: 'FAILED', message: e.message };
+      } catch (error: any) {
+        results.tests.endpoint_access = { status: 'FAILED', message: error?.message || String(error) };
       }
     }
 
     return Response.json(results);
-  } catch (error) {
-    return Response.json({ error: error.message }, { status: 500 });
+  } catch (error: any) {
+    return Response.json({ error: error?.message || String(error) }, { status: 500 });
   }
 });
