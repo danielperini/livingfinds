@@ -1,55 +1,62 @@
 /**
- * getLWAAccessToken — Ponte compatível com funções legadas
- *
- * Para chamadas com amazon_account_id: delega ao amazonAdsTokenManager (renovação automática).
- * Para chamadas sem account_id: usa credenciais dos Secrets (fallback legado).
+ * getLWAAccessToken — ponte compatível com funções legadas.
+ * Ads com amazon_account_id delega ao amazonAdsTokenManager.
+ * Fallback legado usa apenas o resolvedor canônico de credenciais.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import {
+  ADS_TOKEN_REVOKED_REAUTH_REQUIRED,
+  resolveAmazonAdsCredentials,
+  resolveAmazonSpCredentials,
+} from '../../shared/amazonCredentials.ts';
 
-// Cache em memória para fallback legado (secrets)
 const legacyCache: Map<string, { access_token: string; expires_at: number }> = new Map();
 
-async function fetchTokenFromSecrets(service: 'ads' | 'sp'): Promise<string> {
+async function fetchTokenFromCredentials(service: 'ads' | 'sp'): Promise<string> {
   const cacheKey = `legacy_${service}`;
   const cached = legacyCache.get(cacheKey);
   if (cached && cached.expires_at > Date.now()) return cached.access_token;
 
-  const clientId = service === 'ads'
-    ? (Deno.env.get('ADS_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CLIENT_ID') || '')
-    : (Deno.env.get('SP_CLIENT_ID') || Deno.env.get('AMAZON_LWA_CLIENT_ID') || '');
-  const clientSecret = service === 'ads'
-    ? (Deno.env.get('ADS_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '')
-    : (Deno.env.get('SP_CLIENT_SECRET') || Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || '');
-  const refreshToken = service === 'ads'
-    ? (Deno.env.get('ADS_REFRESH_TOKEN') || '')
-    : (Deno.env.get('SP_REFRESH_TOKEN') || Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || '');
+  const credentials = service === 'ads' ? resolveAmazonAdsCredentials() : resolveAmazonSpCredentials();
+  const clientId = credentials.clientId.value;
+  const clientSecret = credentials.clientSecret.value;
+  const refreshToken = credentials.refreshToken.value;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    throw { code: 'missing_credentials', message: `Credenciais ${service} ausentes nos Secrets`, status: 400 };
+    throw { code: 'missing_credentials', message: `Credenciais ${service} ausentes na fonte canônica`, status: 400 };
   }
 
   const res = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }),
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
   });
-
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.access_token) {
-    const isInvalidGrant = data.error === 'invalid_grant' || data.error === 'unauthorized_client';
-    throw { code: data.error || 'token_error', message: data.error_description || `HTTP ${res.status}`, status: res.status, needs_reauth: isInvalidGrant };
+  if (!res.ok || !data?.access_token) {
+    const needsReauth = ['invalid_grant', 'unauthorized_client', 'access_denied'].includes(String(data?.error || ''));
+    throw {
+      code: needsReauth && service === 'ads' ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (data?.error || 'token_error'),
+      amazon_error_code: data?.error || null,
+      message: data?.error_description || `Amazon LWA HTTP ${res.status}`,
+      status: res.status,
+      needs_reauth: needsReauth,
+    };
   }
 
-  const expiresAt = Date.now() + ((data.expires_in || 3600) - 60) * 1000;
-  legacyCache.set(cacheKey, { access_token: data.access_token, expires_at: expiresAt });
-  return data.access_token;
+  const expiresAt = Date.now() + (Math.max(120, Number(data.expires_in || 3600) - 60) * 1000);
+  legacyCache.set(cacheKey, { access_token: String(data.access_token), expires_at: expiresAt });
+  return String(data.access_token);
 }
 
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
-
     const isServiceRole = body._service_role === true;
     if (!isServiceRole) {
       const user = await base44.auth.me().catch(() => null);
@@ -58,34 +65,32 @@ Deno.serve(async (req) => {
 
     const service = String(body.token_type || body.service || 'ads').toLowerCase() as 'ads' | 'sp';
     const accountId = body.amazon_account_id || null;
+    if (!['ads', 'sp'].includes(service)) return Response.json({ error: 'service deve ser ads ou sp' }, { status: 400 });
 
-    if (!['ads', 'sp'].includes(service)) {
-      return Response.json({ error: 'service deve ser ads ou sp' }, { status: 400 });
-    }
-
-    // ── Caminho preferencial: delegar ao manager (com renovação automática) ──
     if (service === 'ads' && accountId) {
-      const res = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
+      const response = await base44.asServiceRole.functions.invoke('amazonAdsTokenManager', {
         amazon_account_id: accountId,
-        force_refresh: body.force_refresh || false,
+        force_refresh: body.force_refresh === true,
         _service_role: true,
       });
-      const d = res?.data || res || {};
+      const data = response?.data || response || {};
+      const reauthRequired = data.requires_reauthorization === true;
       return Response.json({
-        ok: d.ok,
+        ok: data.ok === true,
         service,
-        status: d.ok ? 'active' : 'error',
-        ...(isServiceRole && d.ok ? { access_token: d.access_token } : {}),
-        expires_at: d.expires_at,
-        from_cache: d.from_cache,
-        error_type: d.error_type,
-        requires_reauthorization: d.requires_reauthorization,
-        message: d.message,
-      });
+        status: data.ok ? 'active' : 'error',
+        // Access token só transita entre funções internas de service-role; nunca para frontend.
+        ...(isServiceRole && data.ok ? { access_token: data.access_token } : {}),
+        expires_at: data.expires_at,
+        from_cache: data.from_cache,
+        error_type: reauthRequired ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : data.error_type,
+        amazon_error_code: data.amazon_error_code,
+        requires_reauthorization: reauthRequired,
+        message: data.message,
+      }, { status: reauthRequired ? 401 : 200 });
     }
 
-    // ── Fallback legado: usar Secrets ─────────────────────────────────────────
-    const token = await fetchTokenFromSecrets(service);
+    const token = await fetchTokenFromCredentials(service);
     const cached = legacyCache.get(`legacy_${service}`);
     return Response.json({
       ok: true,
@@ -93,15 +98,15 @@ Deno.serve(async (req) => {
       status: 'active',
       ...(isServiceRole ? { access_token: token } : {}),
       expires_in: cached ? Math.floor((cached.expires_at - Date.now()) / 1000) : null,
-      source: 'legacy_secrets',
+      source: 'canonical_credentials',
     });
-
   } catch (error: any) {
     return Response.json({
       ok: false,
-      error_code: error.code || 'unknown',
-      error: error.message || 'Internal error',
-      needs_reauth: error.needs_reauth === true,
-    }, { status: error.status || 500 });
+      error_code: error?.code || 'unknown',
+      amazon_error_code: error?.amazon_error_code || null,
+      error: error?.message || 'Internal error',
+      needs_reauth: error?.needs_reauth === true,
+    }, { status: error?.status || 500 });
   }
 });
