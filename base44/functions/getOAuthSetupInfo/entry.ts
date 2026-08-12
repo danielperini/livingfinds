@@ -91,7 +91,6 @@ Deno.serve(async (req) => {
     let profilesError: string | null = null;
     let profilesErrorCode: string | null = null;
     let expectedProfileValidated = false;
-
     if (accessToken) {
       try {
         const response = await fetch(`${adsBaseUrlForRegion(region)}/v2/profiles`, {
@@ -122,8 +121,6 @@ Deno.serve(async (req) => {
       }
     }
 
-    // A UI usa este resultado vivo. Corrigir também o estado persistido para não
-    // continuar exibindo um campo legado "connected" contraditório.
     if (account) {
       const now = new Date().toISOString();
       let patch: any = {
@@ -132,7 +129,6 @@ Deno.serve(async (req) => {
         ads_token_source_conflict: tokenConflict,
         ads_active_token_source: dbTokenValid ? 'database' : (envTokenValid ? 'environment_fallback' : 'missing'),
       };
-
       if (tokenStatus !== 'valid') {
         const failure = classifyLwaFailure(tokenErrorCode || undefined, tokenHttpStatus || undefined);
         patch = {
@@ -179,6 +175,16 @@ Deno.serve(async (req) => {
     }
 
     const effectiveTokenStatus = tokenStatus === 'valid' && expectedProfileValidated ? 'valid' : (tokenStatus === 'valid' ? 'invalid' : tokenStatus);
+    const activeRefreshFingerprint = shortCredentialHash(refreshToken);
+    const safeClientLabel = credentials.clientId.configured
+      ? `${credentials.clientId.source || 'ADS_CLIENT_ID'} · ${credentials.clientId.fingerprint || 'hash-indisponível'}`
+      : null;
+    const safeRefreshLabel = refreshToken
+      ? `${tokenSource || 'configured'} · ${activeRefreshFingerprint || 'hash-indisponível'}`
+      : null;
+    const safeEnvLabel = envTokenValid
+      ? `${credentials.refreshToken.source || 'ADS_REFRESH_TOKEN'} · ${credentials.refreshToken.fingerprint || 'hash-indisponível'}`
+      : null;
 
     return Response.json({
       ok: true,
@@ -191,6 +197,10 @@ Deno.serve(async (req) => {
           source: dbTokenValid ? 'database' : null,
           fingerprint: shortCredentialHash(entityRefreshToken),
         },
+        // Compatibilidade de UI: são labels source+fingerprint, não previews de secrets.
+        client_id_preview: safeClientLabel,
+        refresh_token_preview: safeRefreshLabel,
+        env_token_preview: safeEnvLabel,
         profile_id: expectedProfileId || null,
         region,
         ads_base_url: adsBaseUrlForRegion(region),
