@@ -71,9 +71,11 @@ jobs:
             base44/shared/portfolioBudgetPacing.ts
             base44/shared/amazonBidCeiling.ts
             base44/shared/configuredBidPolicy.ts
+            base44/shared/searchTermHarvestPolicy.ts
             base44/shared/servingCampaignGrowthPolicy.ts
             base44/shared/amazonCredentials.ts
             base44/shared/amazonAuthStatus.ts
+            base44/shared/immediateBudgetRescue.ts
             base44/functions/testAuthHealth/entry.ts
             base44/functions/testSpApiAuth/entry.ts
             base44/functions/getLWAAccessToken/entry.ts
