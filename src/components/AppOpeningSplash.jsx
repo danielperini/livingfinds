@@ -198,7 +198,7 @@ export default function AppOpeningSplash({ onComplete }) {
         zIndex: 9999,
         opacity,
         transition,
-        background: '#0B1120',
+        background: '#FFFFFF',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -212,27 +212,27 @@ export default function AppOpeningSplash({ onComplete }) {
 
         {/* Saudação */}
         <div className="space-y-1">
-          <h1 className="text-4xl font-bold text-white">
+          <h1 className="text-4xl font-bold text-[#0D1117]">
             {greeting}{firstName ? `, ${firstName}` : ''}
           </h1>
-          <p className="text-base text-slate-300">
+          <p className="text-base text-[#4B5563]">
             Atualizando os dados mais recentes da sua conta Amazon
           </p>
         </div>
 
         {/* Nome da conta */}
         {accountName && (
-          <div className="px-4 py-2 rounded-xl bg-surface-1 border border-surface-2">
-            <p className="text-[11px] text-slate-500 mb-0.5">Conta</p>
-            <p className="text-sm font-semibold text-white">{accountName}</p>
+          <div className="px-4 py-2 rounded-xl bg-white border border-[#E5E7EB]" style={{ boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+            <p className="text-[11px] text-[#6B7280] mb-0.5">Conta</p>
+            <p className="text-sm font-semibold text-[#0D1117]">{accountName}</p>
           </div>
         )}
 
         {/* Barra de progresso */}
         <div className="w-full space-y-2" aria-label={stepLabel}>
-          <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
+          <div className="h-1.5 bg-[#E5E7EB] rounded-full overflow-hidden">
             <div
-              className="h-full bg-cyan rounded-full"
+              className="h-full bg-[#2563EB] rounded-full"
               style={{
                 width: `${progress}%`,
                 transition: 'width 0.6s ease-out',

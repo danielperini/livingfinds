@@ -122,12 +122,12 @@ function SortTh({ label, colKey, colSort, onSort, className = '' }) {
   const desc = active && colSort?.direction === 'desc';
   return (
     <th
-      className={`px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap cursor-pointer select-none hover:text-slate-100 transition-colors ${className}`}
+      className={`px-4 py-3 text-left text-[13px] font-semibold text-[#6B7280] uppercase tracking-wide whitespace-nowrap cursor-pointer select-none hover:text-[#0D1117] transition-colors ${className}`}
       onClick={() => onSort(colKey)}
     >
       <span className="inline-flex items-center gap-1">
         {label}
-        <span className={active ? 'text-cyan' : 'text-slate-500'}>
+        <span className={active ? 'text-[#2563EB]' : 'text-[#9CA3AF]'}>
           {desc ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
         </span>
       </span>
@@ -723,27 +723,18 @@ export default function Products({ externalRefreshTrigger }) {
           <div className="overflow-x-auto">
             <table className="w-full text-base">
               <thead>
-                <tr className="border-b border-surface-2 bg-surface-2/40">
+                <tr className="border-b border-[#E5E7EB] bg-[#F8FAFC]">
                   <th className="px-3 py-3 w-10">
                     <button type="button" onClick={toggleSelectAll}
                       className={`p-0.5 rounded transition-colors ${selectedIds.size === paginated.length && paginated.length > 0 ? 'text-cyan' : 'text-slate-400 hover:text-slate-200'}`}>
                       {selectedIds.size === paginated.length && paginated.length > 0 ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
                   </th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Produto</th>
-                  <SortTh label="Custo/un." colKey="unit_cost" colSort={colSort} onSort={handleColSort} />
+                  <th className="px-4 py-3 text-left text-[13px] font-semibold text-[#6B7280] uppercase tracking-wide whitespace-nowrap">Produto</th>
                   <SortTh label="Estoque" colKey="stock" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="Status Ads" colKey="ads_status" colSort={colSort} onSort={handleColSort} />
-                  <SortTh label="Vendas 30d" colKey="sales" colSort={colSort} onSort={handleColSort} />
-                  <SortTh label="Spend 30d" colKey="spend" colSort={colSort} onSort={handleColSort} />
                   <SortTh label="ACoS" colKey="acos" colSort={colSort} onSort={handleColSort} />
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Units 30d</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">
-                    <span title="Média, mínimo e máximo das ofertas públicas encontradas para este mesmo ASIN no marketplace atual.">
-                      Preço Amazon ℹ
-                    </span>
-                  </th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300 uppercase tracking-wider whitespace-nowrap">Ações</th>
+                  <th className="px-4 py-3 text-left text-[13px] font-semibold text-[#6B7280] uppercase tracking-wide whitespace-nowrap">Ação</th>
                 </tr>
               </thead>
               <tbody>

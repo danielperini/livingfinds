@@ -5,218 +5,63 @@
 @tailwind utilities;
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   TOKENS DE TEMA — controlam todo o visual do app por data-theme no <html>
+   LIVINGFINDS — DESIGN SYSTEM CLARO (SaaS Enterprise)
+   Tema único e fixo. Sem variantes dark/beige/monochrome.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ESCURO (padrão) */
-:root,
-[data-theme="dark"] {
-  --app-bg:          #0B1120;
-  --surface-1-color: #111827;
-  --surface-2-color: #172033;
-  --surface-3-color: #1E2A40;
-  --text-primary:    #F8FAFC;
-  --text-secondary:  #E2E8F0;
-  --text-muted:      #B6C2D6;
-  --border-color:    #2A3754;
-  --border-strong:   #3F517A;
-  --accent-color:    #60A5FA;
-  --danger-color:    #F87171;
-  --warning-color:   #FBBF24;
-  --success-color:   #34D399;
-  --input-bg:        #0F172A;
-  --input-text:      #F8FAFC;
-  --input-border:    #334155;
-  --input-placeholder: #94A3B8;
-  --chart-grid:      #1E2A40;
-  --chart-axis:      #94A3B8;
-  --chart-label:     #CBD5E1;
-  --tooltip-bg:      #111827;
-  --tooltip-border:  #263244;
-  --tooltip-text:    #F8FAFC;
-  --table-header-bg: #0F172A;
-  --table-header-text: #CBD5E1;
-  --table-row-bg:    transparent;
-  --table-row-text:  #F8FAFC;
-  --table-row-hover: #172033;
-  --table-border:    #263244;
-  --badge-success-bg:   rgba(16,185,129,0.15);
-  --badge-success-text: #6EE7B7;
-  --badge-warning-bg:   rgba(245,158,11,0.15);
-  --badge-warning-text: #FCD34D;
-  --badge-danger-bg:    rgba(239,68,68,0.15);
-  --badge-danger-text:  #FCA5A5;
-  --badge-info-bg:      rgba(59,130,246,0.15);
-  --badge-info-text:    #93C5FD;
-  --badge-neutral-bg:   rgba(100,116,139,0.2);
-  --badge-neutral-text: #CBD5E1;
-  --modal-bg:        #111827;
-  --modal-border:    #263244;
-  --modal-text:      #F8FAFC;
-  --overlay-bg:      rgba(0,0,0,0.65);
-  --sidebar-bg-color:    #0D111E;
-  --sidebar-border-color: #1A2235;
-  --header-bg:       #111827;
-}
-
-/* CLARO — Clean Light Pro (padrão visual do redesign) */
-html[data-theme="light"] {
-  --app-bg:            #FFFFFF;
-  --surface-1-color:   #FFFFFF;
-  --surface-2-color:   #F8FAFC;
-  --surface-3-color:   #F1F5F9;
-  --text-primary:      #0F172A;
-  --text-secondary:    #334155;
-  --text-muted:        #64748B;
-  --border-color:      #E2E8F0;
-  --border-strong:     #CBD5E1;
-  --accent-color:      #1A8A44;
-  --accent-blue:        #0066CC;
-  --danger-color:      #DC2626;
-  --warning-color:     #D97706;
-  --success-color:    #16A34A;
-  --input-bg:         #FFFFFF;
-  --input-text:       #0F172A;
-  --input-border:     #E2E8F0;
-  --input-placeholder: #94A3B8;
-  --chart-grid:       #E2E8F0;
-  --chart-axis:       #64748B;
-  --chart-label:      #334155;
-  --tooltip-bg:       #FFFFFF;
-  --tooltip-border:   #E2E8F0;
-  --tooltip-text:     #0F172A;
-  --table-header-bg:  #F8FAFC;
-  --table-header-text: #475569;
-  --table-row-bg:     #FFFFFF;
-  --table-row-text:   #0F172A;
-  --table-row-hover:  #F8FAFC;
-  --table-border:     #E2E8F0;
-  --badge-success-bg:   #DCFCE7;
-  --badge-success-text: #166534;
-  --badge-warning-bg:   #FEF3C7;
-  --badge-warning-text: #92400E;
-  --badge-danger-bg:    #FEE2E2;
-  --badge-danger-text:  #991B1B;
-  --badge-info-bg:      #E0EDFF;
-  --badge-info-text:    #0066CC;
-  --badge-neutral-bg:   #F1F5F9;
-  --badge-neutral-text: #475569;
-  --modal-bg:         #FFFFFF;
-  --modal-border:     #E2E8F0;
-  --modal-text:       #0F172A;
-  --overlay-bg:       rgba(15,23,42,0.28);
-  --sidebar-bg-color:    #FFFFFF;
-  --sidebar-border-color: #E2E8F0;
-  --header-bg:        #FFFFFF;
-}
-
-/* BEGE */
-[data-theme="beige"] {
-  --app-bg:          #FFF9EF;
-  --surface-1-color: #FFFCF7;
-  --surface-2-color: #F8F0E3;
-  --surface-3-color: #EEE2D0;
-  --text-primary:    #2C1F0E;
-  --text-secondary:  #5C4A32;
-  --text-muted:      #7A6550;
-  --border-color:    #C8C0B0;
-  --border-strong:   #A89880;
-  --accent-color:    #7C5C34;
-  --danger-color:    #B91C1C;
-  --warning-color:   #B45309;
-  --success-color:   #15803D;
-  --input-bg:        #FFFCF7;
-  --input-text:      #2C1F0E;
-  --input-border:    #C8C0B0;
-  --input-placeholder: #7A6550;
-  --chart-grid:      #D6CFC3;
-  --chart-axis:      #7A6550;
-  --chart-label:     #5C4A32;
-  --tooltip-bg:      #F5F0E8;
-  --tooltip-border:  #C8C0B0;
-  --tooltip-text:    #2C1F0E;
-  --table-header-bg: #F8F0E3;
-  --table-header-text: #5C4A32;
-  --table-row-bg:    #FFFCF7;
-  --table-row-text:  #2C1F0E;
-  --table-row-hover: #E3DDD2;
-  --table-border:    #C8C0B0;
-  --badge-success-bg:   #D1FAE5;
-  --badge-success-text: #14532D;
-  --badge-warning-bg:   #FEF3C7;
-  --badge-warning-text: #78350F;
-  --badge-danger-bg:    #FEE2E2;
-  --badge-danger-text:  #7F1D1D;
-  --badge-info-bg:      rgba(124,92,52,0.15);
-  --badge-info-text:    #7C5C34;
-  --badge-neutral-bg:   #D6CFC3;
-  --badge-neutral-text: #5C4A32;
-  --modal-bg:        #FFFCF7;
-  --modal-border:    #C8C0B0;
-  --modal-text:      #2C1F0E;
-  --overlay-bg:      rgba(0,0,0,0.35);
-  --sidebar-bg-color:    #FFFCF7;
-  --sidebar-border-color: #C8C0B0;
-  --header-bg:       #FFFCF7;
-}
-
-/* PRETO E BRANCO */
-[data-theme="monochrome"] {
-  --app-bg:          #FFFFFF;
+:root {
+  --app-bg:          #F5F6F8;
   --surface-1-color: #FFFFFF;
-  --surface-2-color: #F5F5F5;
-  --surface-3-color: #E5E5E5;
-  --text-primary:    #0A0A0A;
-  --text-secondary:  #404040;
-  --text-muted:      #606060;
-  --border-color:    #CCCCCC;
-  --border-strong:   #999999;
+  --surface-2-color: #F8FAFC;
+  --surface-3-color: #F1F5F9;
+  --text-primary:    #0D1117;
+  --text-secondary:  #4B5563;
+  --text-muted:      #6B7280;
+  --border-color:    #E5E7EB;
+  --border-strong:   #D1D5DB;
   --accent-color:    #2563EB;
   --danger-color:    #DC2626;
-  --warning-color:   #D97706;
-  --success-color:   #16A34A;
+  --warning-color:   #B45309;
+  --success-color:   #15803D;
   --input-bg:        #FFFFFF;
-  --input-text:      #0A0A0A;
-  --input-border:    #CCCCCC;
-  --input-placeholder: #606060;
-  --chart-grid:      #E8E8E8;
-  --chart-axis:      #606060;
-  --chart-label:     #404040;
+  --input-text:      #0D1117;
+  --input-border:    #E5E7EB;
+  --input-placeholder: #9CA3AF;
+  --chart-grid:      #E5E7EB;
+  --chart-axis:      #6B7280;
+  --chart-label:     #4B5563;
   --tooltip-bg:      #FFFFFF;
-  --tooltip-border:  #CCCCCC;
-  --tooltip-text:    #0A0A0A;
-  --table-header-bg: #E8E8E8;
-  --table-header-text: #404040;
+  --tooltip-border:  #E5E7EB;
+  --tooltip-text:    #0D1117;
+  --table-header-bg: #F8FAFC;
+  --table-header-text: #6B7280;
   --table-row-bg:    #FFFFFF;
-  --table-row-text:  #0A0A0A;
-  --table-row-hover: #E8E8E8;
-  --table-border:    #CCCCCC;
-  --badge-success-bg:   #E8E8E8;
-  --badge-success-text: #0A0A0A;
-  --badge-warning-bg:   #D4D4D4;
-  --badge-warning-text: #0A0A0A;
-  --badge-danger-bg:    #D4D4D4;
-  --badge-danger-text:  #0A0A0A;
-  --badge-info-bg:      #E8E8E8;
-  --badge-info-text:    #0A0A0A;
-  --badge-neutral-bg:   #E8E8E8;
-  --badge-neutral-text: #404040;
+  --table-row-text:  #0D1117;
+  --table-row-hover: #F8FAFC;
+  --table-border:    #E5E7EB;
+  --badge-success-bg:   #DCFCE7;
+  --badge-success-text: #15803D;
+  --badge-warning-bg:   #FEF3C7;
+  --badge-warning-text: #B45309;
+  --badge-danger-bg:    #FEE2E2;
+  --badge-danger-text:  #991B1B;
+  --badge-info-bg:      #EFF6FF;
+  --badge-info-text:    #1D4ED8;
+  --badge-neutral-bg:   #F1F5F9;
+  --badge-neutral-text: #4B5563;
   --modal-bg:        #FFFFFF;
-  --modal-border:    #CCCCCC;
-  --modal-text:      #0A0A0A;
-  --overlay-bg:      rgba(0,0,0,0.35);
+  --modal-border:    #E5E7EB;
+  --modal-text:      #0D1117;
+  --overlay-bg:      rgba(15,23,42,0.32);
   --sidebar-bg-color:    #FFFFFF;
-  --sidebar-border-color: #CCCCCC;
+  --sidebar-border-color: #E5E7EB;
   --header-bg:       #FFFFFF;
 }
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   BASE GLOBAL — aplica tokens ao body e elementos raiz
-   ═══════════════════════════════════════════════════════════════════════════ */
 
 html {
   background-color: var(--app-bg);
   color: var(--text-primary);
+  color-scheme: light;
 }
 
 body {
@@ -230,257 +75,130 @@ body {
   color: var(--text-primary);
 }
 
-[data-theme="light"],
-[data-theme="beige"],
-[data-theme="monochrome"] {
-  color-scheme: light;
-}
-
-/*
- * O popup de <select> nativo do Windows pode manter o fundo claro mesmo no
- * tema escuro. Defina as cores das opções explicitamente para não renderizar
- * texto claro sobre branco, preservando o campo fechado no tema da aplicação.
- */
-[data-theme="dark"] .lf-workspace select option {
-  background-color: #f8fafc !important;
-  color: #0f172a !important;
-}
-
-[data-theme="dark"] .lf-workspace select option:disabled {
-  color: #64748b !important;
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
-   OVERRIDES DE CLASSES TAILWIND — todos os temas não-escuros
+   REMAP GLOBAL — classes utilitárias escuras herdadas do tema anterior
+   passam a renderizar cores claras equivalentes, garantindo consistência
+   em todas as páginas sem reescrever cada componente.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* Aplicar para temas claro, bege e monocromático */
-[data-theme="light"],
-[data-theme="beige"],
-[data-theme="monochrome"] {
+/* Backgrounds hardcoded escuros → superfícies claras */
+.bg-canvas,
+.bg-\[\#0A0B0F\],
+.bg-\[\#0B1120\],
+.bg-\[\#0D0F14\],
+.bg-\[\#0D111E\],
+.bg-\[\#0B0D14\],
+.bg-\[\#0f0d1a\] { background-color: var(--app-bg) !important; }
 
-  /* Backgrounds */
-  .bg-canvas,
-  .bg-\[\#0A0B0F\],
-  .bg-\[\#0B1120\],
-  .bg-\[\#0D0F14\],
-  .bg-\[\#0D111E\],
-  .bg-\[\#0B0D14\],
-  .bg-\[\#0f0d1a\] { background-color: var(--app-bg) !important; }
+.bg-\[\#111318\],
+.bg-\[\#111827\] { background-color: var(--surface-1-color) !important; }
 
-  .bg-surface-1,
-  .bg-\[\#111318\],
-  .bg-\[\#111827\] { background-color: var(--surface-1-color) !important; }
+.bg-\[\#1A1D26\],
+.bg-\[\#172033\] { background-color: var(--surface-2-color) !important; }
 
-  .bg-surface-2,
-  .bg-\[\#1A1D26\],
-  .bg-\[\#172033\] { background-color: var(--surface-2-color) !important; }
+.bg-\[\#22263A\],
+.bg-\[\#1E2A40\] { background-color: var(--surface-3-color) !important; }
 
-  .bg-surface-3,
-  .bg-\[\#22263A\],
-  .bg-\[\#1E2A40\] { background-color: var(--surface-3-color) !important; }
+/* Textos claros → escala de cinza escura */
+.text-white,
+.text-slate-50,
+.text-slate-100 { color: var(--text-primary) !important; }
+.text-slate-200,
+.text-slate-300 { color: var(--text-secondary) !important; }
+.text-slate-400,
+.text-slate-500,
+.text-slate-600 { color: var(--text-muted) !important; }
 
-  /* Textos — remapear branco/slate claro para texto escuro */
-  .text-white { color: var(--text-primary) !important; }
-  .text-slate-50  { color: var(--text-primary) !important; }
-  .text-slate-100 { color: var(--text-primary) !important; }
-  .text-slate-200 { color: var(--text-secondary) !important; }
-  .text-slate-300 { color: var(--text-secondary) !important; }
-  .text-slate-400 { color: var(--text-muted) !important; }
-  .text-slate-500 { color: var(--text-muted) !important; }
-  .text-slate-600 { color: var(--text-muted) !important; }
+/* Cores semânticas de tom claro (feitas p/ fundo escuro) → tons legíveis em fundo claro */
+.text-cyan,
+.text-cyan-400,
+.text-cyan-300 { color: var(--accent-color) !important; }
+.text-emerald-400,
+.text-emerald-300 { color: var(--success-color) !important; }
+.text-amber-400,
+.text-amber-300 { color: var(--warning-color) !important; }
+.text-red-400,
+.text-red-300 { color: #991B1B !important; }
+.text-violet-300,
+.text-violet-400 { color: #6D28D9 !important; }
 
-  /* Bordas */
-  .border-surface-2 { border-color: var(--border-color) !important; }
-  .border-surface-3 { border-color: var(--border-strong) !important; }
-  .border-\[\#1A1D26\],
-  .border-\[\#263244\] { border-color: var(--border-color) !important; }
+/* Bordas escuras → borda clara padrão */
+.border-\[\#1A1D26\],
+.border-\[\#263244\] { border-color: var(--border-color) !important; }
 
-  /* Inputs e selects */
-  input,
-  select,
-  textarea {
-    background-color: var(--input-bg) !important;
-    color: var(--input-text) !important;
-    border-color: var(--input-border) !important;
-  }
-  input::placeholder,
-  textarea::placeholder { color: var(--input-placeholder) !important; }
-
-  /* Sidebar */
-  aside {
-    background-color: var(--sidebar-bg-color) !important;
-    border-color: var(--sidebar-border-color) !important;
-  }
-
-  /* Header */
-  header {
-    background-color: var(--header-bg) !important;
-    border-color: var(--border-color) !important;
-  }
-
-  /* Accent / cyan */
-  .text-cyan,
-  .text-cyan-400,
-  .text-cyan-300 { color: var(--accent-color) !important; }
-  .bg-cyan { background-color: var(--accent-color) !important; }
-  .border-cyan { border-color: var(--accent-color) !important; }
-  .bg-cyan\/10,
-  .bg-cyan\/15,
-  .bg-cyan\/20 { background-color: color-mix(in srgb, var(--accent-color) 12%, transparent) !important; }
-
-  /* Tabelas */
-  thead tr { background-color: var(--table-header-bg) !important; }
-  thead th { color: var(--table-header-text) !important; }
-  tbody tr { background-color: var(--table-row-bg) !important; color: var(--table-row-text) !important; }
-  tbody tr:hover { background-color: var(--table-row-hover) !important; }
-  td { color: var(--table-row-text) !important; }
-
-  /* Scrollbar */
-  ::-webkit-scrollbar-track { background: var(--surface-2-color); }
-  ::-webkit-scrollbar-thumb { background: var(--border-strong); }
+/* Inputs e selects */
+input, select, textarea {
+  background-color: var(--input-bg);
+  color: var(--input-text);
+  border-color: var(--input-border);
 }
+input::placeholder,
+textarea::placeholder { color: var(--input-placeholder); }
+
+/* Tabelas */
+thead tr { background-color: var(--table-header-bg); }
+thead th { color: var(--table-header-text); }
+tbody tr { color: var(--table-row-text); }
+tbody tr:hover { background-color: var(--table-row-hover); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 9999px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   CLEAN LIGHT PRO — overrides das classes lf-* (premium CSS hardcoded dark).
-   Aplicam somente no tema claro, garantindo que a sidebar, o shell e os
-   botões sigam os tokens do Clean Light Pro sem reescrever o CSS premium.
-   ═══════════════════════════════════════════════════════════════════════════ */
-html[data-theme="light"] { background-color: #FFFFFF !important; color: #0F172A !important; }
-html[data-theme="light"] body { background-color: #FFFFFF !important; color: #0F172A !important; }
-html[data-theme="light"] #root { background-color: #FFFFFF !important; }
-html[data-theme="light"] .lf-app-shell { background-color: #FFFFFF !important; color: #0F172A !important; }
-html[data-theme="light"] .lf-sidebar { background-color: #FFFFFF !important; border-color: #E2E8F0 !important; }
-html[data-theme="light"] .lf-topbar { background-color: #FFFFFF !important; border-color: #E2E8F0 !important; }
-html[data-theme="light"] .lf-workspace { background-color: #FFFFFF !important; }
-html[data-theme="light"] .lf-search { background-color: #F8FAFC !important; border-color: #E2E8F0 !important; color: #64748B !important; }
-html[data-theme="light"] .lf-icon-button { color: #64748B !important; border-color: #E2E8F0 !important; background-color: transparent !important; }
-html[data-theme="light"] .lf-icon-button:hover { color: #0F172A !important; background-color: #F8FAFC !important; }
-html[data-theme="light"] .lf-nav-link { color: #475569 !important; border-radius: 0.5rem; }
-html[data-theme="light"] .lf-nav-link:hover { background-color: #F1F5F9 !important; color: #0F172A !important; }
-html[data-theme="light"] .lf-nav-link-active,
-html[data-theme="light"] .lf-nav-link-active:hover { background-color: #DCFCE7 !important; color: #1A8A44 !important; }
-html[data-theme="light"] .lf-primary-button { background-color: #1A8A44 !important; color: #ffffff !important; border: none !important; }
-html[data-theme="light"] .lf-primary-button:hover { background-color: #0F5C2E !important; }
-html[data-theme="light"] h1, html[data-theme="light"] h2, html[data-theme="light"] h3 { color: #0F172A !important; }
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   TOKENS SHADCN / RADIX — mantidos para componentes UI da lib
+   TOKENS SHADCN / RADIX — tema claro
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @layer base {
   :root {
-    --background: 240 10% 4%;
-    --foreground: 210 40% 98%;
-    --card: 240 8% 7%;
-    --card-foreground: 210 40% 98%;
-    --popover: 240 8% 7%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217 91% 60%;
+    --background: 220 20% 97%;
+    --foreground: 216 28% 7%;
+    --card: 0 0% 100%;
+    --card-foreground: 216 28% 7%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 28% 7%;
+    --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 6% 12%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 240 6% 12%;
-    --muted-foreground: 215 20% 55%;
-    --accent: 240 6% 16%;
-    --accent-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 216 28% 7%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 214 100% 97%;
+    --accent-foreground: 224 76% 48%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 240 6% 16%;
-    --input: 240 6% 16%;
-    --ring: 217 91% 60%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 221 83% 53%;
     --radius: 0.75rem;
     --font-heading: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
     --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
-    --canvas: #0B1120;
-    --surface-1: #111827;
-    --surface-2: #172033;
-    --surface-3: #1E2A40;
-    --cyan: #3B82F6;
-    --cyan-dim: #1E3A8A;
-    --green: #10B981;
-    --amber: #F59E0B;
-    --red: #EF4444;
-    --sidebar-bg: #0D111E;
-    --sidebar-border: #1A2235;
+    --canvas: #F5F6F8;
+    --surface-1: #FFFFFF;
+    --surface-2: #F8FAFC;
+    --surface-3: #F1F5F9;
+    --cyan: #2563EB;
+    --cyan-dim: #DBEAFE;
+    --green: #15803D;
+    --amber: #B45309;
+    --red: #DC2626;
+    --sidebar-bg: #FFFFFF;
+    --sidebar-border: #E5E7EB;
   }
-}
-
-html[data-theme="light"] {
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
-  --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 211 100% 40%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 210 40% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 210 40% 96%;
-  --muted-foreground: 215 16% 47%;
-  --accent: 146 64% 96%;
-  --accent-foreground: 146 64% 22%;
-  --destructive: 0 84% 60%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 211 100% 40%;
-}
-
-[data-theme="beige"] {
-  --background: 39 100% 97%;
-  --foreground: 34 52% 11%;
-  --card: 40 100% 98%;
-  --card-foreground: 34 52% 11%;
-  --popover: 40 100% 98%;
-  --popover-foreground: 34 52% 11%;
-  --primary: 34 41% 35%;
-  --primary-foreground: 40 100% 98%;
-  --secondary: 37 55% 93%;
-  --secondary-foreground: 34 52% 18%;
-  --muted: 37 55% 93%;
-  --muted-foreground: 32 21% 40%;
-  --accent: 36 47% 88%;
-  --accent-foreground: 34 52% 18%;
-  --destructive: 0 72% 42%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 35 28% 76%;
-  --input: 35 28% 76%;
-  --ring: 34 41% 35%;
-}
-
-[data-theme="monochrome"] {
-  --background: 0 0% 100%;
-  --foreground: 0 0% 4%;
-  --card: 0 0% 100%;
-  --card-foreground: 0 0% 4%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 4%;
-  --primary: 221 83% 53%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 0 0% 96%;
-  --secondary-foreground: 0 0% 10%;
-  --muted: 0 0% 96%;
-  --muted-foreground: 0 0% 38%;
-  --accent: 0 0% 91%;
-  --accent-foreground: 0 0% 10%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 80%;
-  --input: 0 0% 80%;
-  --ring: 221 83% 53%;
 }
 
 @layer base {
   * { @apply border-border outline-ring/50; }
-  html { font-size: 17px; }
+  html { font-size: 15px; }
   body {
     @apply font-body;
-    font-size: 16px;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
   }
-  h1, h2, h3, h4, h5 { @apply font-heading; }
+  h1, h2, h3, h4, h5 { @apply font-heading; color: var(--text-primary); }
+  input, select, textarea { font-size: 16px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -495,51 +213,42 @@ html[data-theme="light"] {
   .metric-positive { color: var(--success-color); }
   .metric-negative { color: var(--danger-color); }
   .metric-neutral { color: var(--text-muted); }
-  .glow-cyan { box-shadow: 0 0 20px color-mix(in srgb, var(--accent-color) 20%, transparent); }
-  .glow-green { box-shadow: 0 0 20px color-mix(in srgb, var(--success-color) 20%, transparent); }
+  .glow-cyan { box-shadow: none; }
+  .glow-green { box-shadow: none; }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 9999px; }
 
-  /* Badge semânticos — usam tokens do tema */
-  .badge-success {
-    background-color: var(--badge-success-bg);
-    color: var(--badge-success-text);
-  }
-  .badge-warning {
-    background-color: var(--badge-warning-bg);
-    color: var(--badge-warning-text);
-  }
-  .badge-danger {
-    background-color: var(--badge-danger-bg);
-    color: var(--badge-danger-text);
-  }
-  .badge-info {
-    background-color: var(--badge-info-bg);
-    color: var(--badge-info-text);
-  }
-  .badge-neutral {
-    background-color: var(--badge-neutral-bg);
-    color: var(--badge-neutral-text);
-  }
+  .badge-success { background-color: var(--badge-success-bg); color: var(--badge-success-text); }
+  .badge-warning { background-color: var(--badge-warning-bg); color: var(--badge-warning-text); }
+  .badge-danger  { background-color: var(--badge-danger-bg);  color: var(--badge-danger-text); }
+  .badge-info    { background-color: var(--badge-info-bg);    color: var(--badge-info-text); }
+  .badge-neutral { background-color: var(--badge-neutral-bg); color: var(--badge-neutral-text); }
 
-  /* Theme-aware text tokens */
   .text-theme-primary { color: var(--text-primary); }
   .text-theme-secondary { color: var(--text-secondary); }
   .text-theme-muted { color: var(--text-muted); }
 
-  /* Theme-aware bg tokens */
   .bg-theme { background-color: var(--app-bg); }
   .bg-theme-card { background-color: var(--surface-1-color); }
   .bg-theme-card-2 { background-color: var(--surface-2-color); }
+
+  /* Card padrão SaaS */
+  .lf-card {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   CSS BUTTON/BADGE OVERRIDES GLOBAIS — garantir nunca texto=fundo
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* Cards escuros herdados: garantir borda + sombra sutil consistente */
+.bg-surface-1 {
+  border-color: var(--border-color);
+}
 
-/* Recharts — adaptar ao tema */
-.recharts-cartesian-axis-tick-value { fill: var(--chart-label) !important; }
+/* Recharts — tema claro */
+.recharts-cartesian-axis-tick-value { fill: var(--chart-label) !important; font-size: 12px; }
 .recharts-cartesian-grid line { stroke: var(--chart-grid) !important; }
 .recharts-tooltip-wrapper .recharts-default-tooltip {
   background-color: var(--tooltip-bg) !important;
@@ -549,21 +258,7 @@ html[data-theme="light"] {
 .recharts-default-tooltip .recharts-tooltip-label { color: var(--tooltip-text) !important; }
 .recharts-legend-item-text { color: var(--chart-label) !important; }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   DIALOG / MODAL SHADCN — tema-aware
-   ═══════════════════════════════════════════════════════════════════════════ */
-
+/* Dialog / modal shadcn */
 [data-radix-dialog-overlay] {
   background-color: var(--overlay-bg) !important;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   CSS OVERRIDES LEGADOS (manter compatibilidade)
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-button[title="Criar campanha para este produto"] { font-size: 0; }
-button[title="Criar campanha para este produto"]::after {
-  content: "Realizar Kick-off";
-  font-size: 0.75rem;
-  line-height: 1rem;
 }

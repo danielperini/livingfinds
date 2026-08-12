@@ -26,13 +26,13 @@ module.exports = {
           '1': 'hsl(var(--chart-1))', '2': 'hsl(var(--chart-2))', '3': 'hsl(var(--chart-3))',
           '4': 'hsl(var(--chart-4))', '5': 'hsl(var(--chart-5))'
         },
-        canvas: '#0A0B0F',
+        canvas: '#F5F6F8',
         surface: {
-          1: '#111318',
-          2: '#1A1D26',
-          3: '#22263A',
+          1: '#FFFFFF',
+          2: '#F8FAFC',
+          3: '#F1F5F9',
         },
-        cyan: { DEFAULT: '#3B82F6', dim: '#1E3A8A', ice: '#7DD3FC' },
+        cyan: { DEFAULT: '#2563EB', dim: '#DBEAFE', ice: '#1D4ED8' },
         amazon: { DEFAULT: '#1A8A44', light: '#DCFCE7', deep: '#0F5C2E' },
         azure: { DEFAULT: '#0066CC', light: '#E0EDFF' },
         green: { DEFAULT: '#10B981', forest: '#065F46', pale: '#D1FAE5' },
