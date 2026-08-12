@@ -98,6 +98,7 @@ jobs:
               echo "- ✅ $file" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- ❌ $file" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error file=${file}::deno check failed for ${file}"
               failed=1
             fi
           done
@@ -115,7 +116,15 @@ jobs:
           } | grep -v '^base44/shared/amazonCredentials.ts:' || true)"
           if [[ -n "$violations" ]]; then
             echo 'Amazon credential reads found outside base44/shared/amazonCredentials.ts:'
-            echo "$violations"
+            while IFS= read -r violation; do
+              [[ -z "$violation" ]] && continue
+              file="${violation%%:*}"
+              rest="${violation#*:}"
+              line="${rest%%:*}"
+              message="${rest#*:}"
+              echo "$violation"
+              echo "::error file=${file},line=${line}::Direct Amazon credential env read must use base44/shared/amazonCredentials.ts — ${message}"
+            done <<< "$violations"
             exit 1
           fi
           echo 'OK: Amazon credential env reads are centralized.'
