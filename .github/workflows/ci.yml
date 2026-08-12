@@ -62,34 +62,49 @@ jobs:
             base44/shared/amazonAuthStatus.test.ts
 
       - name: Check changed TypeScript modules
+        shell: bash
         run: |
-          deno check --node-modules-dir=auto \
-            base44/shared/portfolioBudgetMath.ts \
-            base44/shared/portfolioBudgetActions.ts \
-            base44/shared/portfolioBudgetPacing.ts \
-            base44/shared/amazonBidCeiling.ts \
-            base44/shared/configuredBidPolicy.ts \
-            base44/shared/servingCampaignGrowthPolicy.ts \
-            base44/shared/amazonCredentials.ts \
-            base44/shared/amazonAuthStatus.ts \
-            base44/functions/testAuthHealth/entry.ts \
-            base44/functions/testSpApiAuth/entry.ts \
-            base44/functions/getLWAAccessToken/entry.ts \
-            base44/functions/getOAuthSetupInfo/entry.ts \
-            base44/functions/amazonAdsTokenManager/entry.ts \
-            base44/functions/amazonAdsProxy/entry.ts \
-            base44/functions/amazonAdsCommand/entry.ts \
-            base44/functions/adsHelpers/entry.ts \
-            base44/functions/exchangeAmazonAdsCode/entry.ts \
-            base44/functions/saveAdsRefreshToken/entry.ts \
-            base44/functions/amazonAuthCallback/entry.ts \
-            base44/functions/amazonSpApiCallback/entry.ts \
-            base44/functions/runUnifiedDecisionEngineWithAuthGuard/entry.ts \
-            base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts \
-            base44/functions/runAdsAutomationWithAuthGuard/entry.ts \
+          set -u
+          files=(
+            base44/shared/portfolioBudgetMath.ts
+            base44/shared/portfolioBudgetActions.ts
+            base44/shared/portfolioBudgetPacing.ts
+            base44/shared/amazonBidCeiling.ts
+            base44/shared/configuredBidPolicy.ts
+            base44/shared/servingCampaignGrowthPolicy.ts
+            base44/shared/amazonCredentials.ts
+            base44/shared/amazonAuthStatus.ts
+            base44/functions/testAuthHealth/entry.ts
+            base44/functions/testSpApiAuth/entry.ts
+            base44/functions/getLWAAccessToken/entry.ts
+            base44/functions/getOAuthSetupInfo/entry.ts
+            base44/functions/amazonAdsTokenManager/entry.ts
+            base44/functions/amazonAdsProxy/entry.ts
+            base44/functions/amazonAdsCommand/entry.ts
+            base44/functions/adsHelpers/entry.ts
+            base44/functions/exchangeAmazonAdsCode/entry.ts
+            base44/functions/saveAdsRefreshToken/entry.ts
+            base44/functions/amazonAuthCallback/entry.ts
+            base44/functions/amazonSpApiCallback/entry.ts
+            base44/functions/runUnifiedDecisionEngineWithAuthGuard/entry.ts
+            base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts
+            base44/functions/runAdsAutomationWithAuthGuard/entry.ts
             server/src/scheduler.ts
+          )
+          failed=0
+          echo '## Deno check por módulo' >> "$GITHUB_STEP_SUMMARY"
+          for file in "${files[@]}"; do
+            if deno check --node-modules-dir=auto "$file"; then
+              echo "- ✅ $file" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- ❌ $file" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
       - name: Enforce canonical Amazon credential reads
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -106,5 +121,6 @@ jobs:
           echo 'OK: Amazon credential env reads are centralized.'
 
       - name: Validate secret-safe VPS Ads token sync script
+        if: always()
         shell: bash
         run: bash -n server/scripts/sync-ads-refresh-token-env.sh
