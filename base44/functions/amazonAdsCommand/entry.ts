@@ -1,19 +1,20 @@
 /**
- * amazonAdsCommand v7 — Gateway centralizado Amazon Ads
+ * amazonAdsCommand v8 — Gateway centralizado Amazon Ads.
  *
- * Garantias:
- * - token gerenciado por AmazonAccount/amazonAdsTokenManager;
- * - retry exponencial para falhas transitórias;
- * - tratamento explícito de 429, 504 e 524;
- * - bloqueio central de reativação de produto pausado;
- * - validação item a item de respostas HTTP 207;
- * - resposta normalizada com request_id e erros auditáveis.
+ * Mantém os guardrails econômicos e de pausa existentes. A alteração desta versão
+ * é exclusivamente de autenticação/configuração: credenciais passam pelo resolvedor
+ * canônico e falhas de autorização retornam código explícito.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import { findPauseLockedProduct } from '../../shared/productCampaignPauseGuard.ts';
 import { enforceBidCeilingOnPayload } from '../../shared/amazonBidCeiling.ts';
 import { resolveWinnerKeywordCeilings } from '../../shared/winnerBidPolicy.ts';
 import { loadConfiguredBidPolicy } from '../../shared/configuredBidPolicy.ts';
+import {
+  ADS_TOKEN_REVOKED_REAUTH_REQUIRED,
+  adsBaseUrlForRegion,
+  resolveAmazonAdsCredentials,
+} from '../../shared/amazonCredentials.ts';
 
 const ALLOWED_PATHS = [
   '/sp/campaigns', '/sp/campaigns/list',
@@ -30,13 +31,6 @@ const ALLOWED_PATHS = [
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE']);
 const SUCCESS_CODES = new Set(['SUCCESS', 'CREATED', 'UPDATED', 'OK', 'ACCEPTED', '200', '201', '202', '204']);
 
-function adsBase(region: string | undefined): string {
-  const normalized = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (normalized.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (normalized.includes('FE')) return 'https://advertising-api-fe.amazon.com';
-  return 'https://advertising-api.amazon.com';
-}
-
 function normalizeAmazonError(value: any, fallbackCode = 'AMAZON_ITEM_ERROR'): any {
   if (typeof value === 'string') return { code: fallbackCode, message: value };
   if (!value || typeof value !== 'object') return { code: fallbackCode, message: String(value || fallbackCode) };
@@ -52,7 +46,6 @@ function collectAmazonItemErrors(payload: any): any[] {
   if (!payload || typeof payload !== 'object') return [];
   const errors: any[] = [];
   const roots = ['campaigns', 'adGroups', 'productAds', 'keywords', 'negativeKeywords', 'targets', 'items'];
-
   const add = (value: any, fallbackCode?: string) => {
     if (Array.isArray(value)) {
       for (const item of value) add(item, fallbackCode);
@@ -63,11 +56,9 @@ function collectAmazonItemErrors(payload: any): any[] {
 
   add(payload.errors, 'AMAZON_ERRORS');
   add(payload.error, 'AMAZON_ERROR');
-
   for (const root of roots) {
     const container = payload[root];
     if (!container) continue;
-
     if (Array.isArray(container)) {
       for (const item of container) {
         if (!item || typeof item !== 'object') continue;
@@ -77,7 +68,6 @@ function collectAmazonItemErrors(payload: any): any[] {
       }
       continue;
     }
-
     if (typeof container === 'object') {
       add(container.errors, `${root.toUpperCase()}_ERRORS`);
       add(container.error, `${root.toUpperCase()}_ERROR`);
@@ -117,8 +107,7 @@ async function callAmazonApi(
 }> {
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
   let lastResult: any = null;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
@@ -132,7 +121,6 @@ async function callAmazonApi(
       const text = await response.text().catch(() => '');
       let parsed: any = null;
       try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = { raw: text }; }
-
       const httpOk = response.status >= 200 && response.status < 300;
       const itemErrors = httpOk ? collectAmazonItemErrors(parsed) : [];
       const ok = httpOk && itemErrors.length === 0;
@@ -153,7 +141,6 @@ async function callAmazonApi(
         rate_limit: response.headers.get('x-amzn-RateLimit-Limit'),
         errors,
       };
-
       if (ok || itemErrors.length > 0 || !retryable || attempt === maxAttempts - 1) break;
       console.log(`[adsCommand] ${response.status} retryable — tentativa ${attempt + 1}/${maxAttempts}`);
       await wait(Math.min(1000 * Math.pow(2, attempt), 15000));
@@ -169,7 +156,6 @@ async function callAmazonApi(
       await wait(Math.min(2000 * Math.pow(2, attempt), 15000));
     }
   }
-
   return lastResult;
 }
 
@@ -178,7 +164,6 @@ Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
-
     if (!body._service_role) return Response.json({ ok: false, error: 'Uso interno' }, { status: 403 });
     if (!body.amazon_account_id || !body.path) {
       return Response.json({ ok: false, error: 'amazon_account_id e path obrigatórios' }, { status: 400 });
@@ -186,9 +171,7 @@ Deno.serve(async (request) => {
 
     const method = String(body.method || 'GET').toUpperCase();
     const path = String(body.path || '');
-    if (!ALLOWED_METHODS.has(method)) {
-      return Response.json({ ok: false, error: 'Método não permitido' }, { status: 400 });
-    }
+    if (!ALLOWED_METHODS.has(method)) return Response.json({ ok: false, error: 'Método não permitido' }, { status: 400 });
     if (!ALLOWED_PATHS.some((allowed) => path === allowed || path.startsWith(`${allowed}?`) || path.startsWith(`${allowed}/`))) {
       return Response.json({ ok: false, error: 'Endpoint Ads não permitido' }, { status: 403 });
     }
@@ -197,14 +180,16 @@ Deno.serve(async (request) => {
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Conta Amazon não encontrada' }, { status: 404 });
 
-    const profileId = body.profile_id || account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+    const credentials = resolveAmazonAdsCredentials();
+    const profileId = body.profile_id || account.ads_profile_id || credentials.profileId.value;
     if (!profileId && path !== '/v2/profiles') {
       return Response.json({ ok: false, error: 'ads_profile_id não configurado' }, { status: 400 });
     }
+    const clientId = credentials.clientId.value;
+    if (!clientId) return Response.json({ ok: false, error: 'ADS_CLIENT_ID não configurado na fonte canônica' }, { status: 500 });
 
-    const url = `${adsBase(account.region)}${path}`;
-    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
-    const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || Deno.env.get('ADS_ACCOUNT_ID') || null;
+    const url = `${adsBaseUrlForRegion(String(account.region || credentials.region || 'NA'))}${path}`;
+    const adsAccountId = body.ads_account_id || account.ads_account_id || account.advertiser_account_id || credentials.accountId.value || null;
     const maxAttempts = Math.max(1, Math.min(5, Number(body.max_attempts || 3) || 3));
 
     const isBidMutation = ['POST', 'PUT'].includes(method) &&
@@ -218,6 +203,7 @@ Deno.serve(async (request) => {
     let guardedPayload = enforceBidCeilingOnPayload(
       path, method, body.payload ?? null, winnerBid.ceilings, configuredBid.ceiling,
     );
+
     if (path === '/sp/campaigns' && ['PUT', 'POST'].includes(method) && Array.isArray(guardedPayload?.campaigns)) {
       const enabling = guardedPayload.campaigns.filter((item: any) =>
         String(item?.state || '').toUpperCase() === 'ENABLED' && item?.campaignId
@@ -259,15 +245,17 @@ Deno.serve(async (request) => {
         amazon_account_id: body.amazon_account_id,
         force_refresh: forceRefresh,
         _service_role: true,
+        triggered_by: 'amazonAdsCommand',
       });
       const token = tokenResponse?.data || tokenResponse || {};
       if (!token.ok || !token.access_token) {
+        const reauth = token.requires_reauthorization === true || token.error_type === ADS_TOKEN_REVOKED_REAUTH_REQUIRED;
         throw {
           tokenError: true,
-          error_type: token.error_type || 'token_unavailable',
+          error_type: reauth ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (token.error_type || 'token_unavailable'),
           amazon_error_code: token.amazon_error_code,
           message: token.message || 'Falha ao obter token Amazon Ads',
-          requires_reauthorization: token.requires_reauthorization,
+          requires_reauthorization: reauth,
           credentials_error: token.credentials_error,
           retryable: token.retryable,
         };
@@ -292,6 +280,7 @@ Deno.serve(async (request) => {
         amazon_account_id: body.amazon_account_id,
         force_refresh: true,
         _service_role: true,
+        triggered_by: 'amazonAdsCommand_proactive_refresh',
       }).catch(() => {});
     }
 
@@ -306,6 +295,7 @@ Deno.serve(async (request) => {
           await base44.asServiceRole.entities.AmazonAccount.update(account.id, {
             ads_token_status: 'revoked',
             ads_requires_reauth: true,
+            ads_credentials_error: false,
             ads_token_last_error: `401/403 após refresh em ${method} ${path}`,
             status: 'error',
             error_message: 'Reautorização necessária: Amazon Ads retornou 401/403 após refresh do token.',
@@ -313,10 +303,11 @@ Deno.serve(async (request) => {
           return Response.json({
             ok: false,
             status: result.status,
-            error: 'token_invalid_after_refresh',
+            error: ADS_TOKEN_REVOKED_REAUTH_REQUIRED,
+            error_type: ADS_TOKEN_REVOKED_REAUTH_REQUIRED,
             requires_reauthorization: true,
-            message: 'Sua autorização Amazon expirou ou foi revogada. Clique em Reconectar Amazon para continuar.',
-          });
+            message: 'Sua autorização Amazon Ads expirou ou foi revogada. Reautorize em /amazon-oauth-setup.',
+          }, { status: 401 });
         }
       } catch (tokenError: any) {
         if (tokenError.tokenError) {
