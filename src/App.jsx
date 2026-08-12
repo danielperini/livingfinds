@@ -54,6 +54,7 @@ import KeywordMLDashboard from '@/pages/KeywordMLDashboard';
 import SalaDeComandoPremium from '@/pages/SalaDeComandoPremium';
 import SalaDeComandoLegacy from '@/pages/SalaDeComando';
 import KickoffQueueMonitor from '@/pages/KickoffQueueMonitor';
+import TermIntelligence from '@/pages/TermIntelligence';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError } = useAuth();
@@ -155,6 +156,7 @@ const AuthenticatedApp = () => {
             <Route path="/sala-de-comando" element={<SalaDeComandoPremium />} />
             <Route path="/sala-de-comando/legacy" element={<SalaDeComandoLegacy />} />
             <Route path="/kickoff-monitor" element={<KickoffQueueMonitor />} />
+            <Route path="/term-intelligence" element={<TermIntelligence />} />
             <Route path="/strategy-engine" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />
             <Route path="/prelecao-semanal" element={<Navigate to="/sala-de-comando/legacy?tab=prelecao" replace />} />
             <Route path="/strategy-engine-legacy" element={<Navigate to="/sala-de-comando/legacy?tab=estrategias" replace />} />

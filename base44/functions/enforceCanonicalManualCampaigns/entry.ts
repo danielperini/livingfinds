@@ -16,6 +16,22 @@
  * 5. Negativar cada termo na campanha AUTO do mesmo ASIN (fire-and-forget)
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.38';
+import { MAX_EXACT_PER_CLUSTER, normalizePtBr, canCluster } from '../../shared/termIntelligence.ts';
+
+/** Validação contextual (Term Intelligence): clusters coerentes com até 5 Exact
+ *  são estruturas válidas e não devem ser fragmentados pela regra 1:1 legada. */
+function isValidCluster(exactKws: any[]): boolean {
+  const terms = exactKws
+    .map((k: any) => normalizePtBr(k.keyword_text || k.keyword || ''))
+    .filter(Boolean);
+  if (terms.length < 2 || terms.length > MAX_EXACT_PER_CLUSTER) return false;
+  for (let i = 0; i < terms.length; i++) {
+    for (let j = i + 1; j < terms.length; j++) {
+      if (!canCluster(terms[i], terms[j]).allowed) return false;
+    }
+  }
+  return true;
+}
 
 const INITIAL_BID    = 0.50;
 const MIN_BUDGET     = 9.00;
@@ -375,6 +391,11 @@ Deno.serve(async (request) => {
       return true;
     });
 
+    // Term Intelligence: quando ativo, clusters coerentes (2..5 Exact) são válidos
+    const tiFlags = await base44.asServiceRole.entities.FeatureFlag
+      .filter({ key: 'term_intelligence_execution_enabled' }, '-updated_at', 1).catch(() => []);
+    const clusterPolicyActive = tiFlags[0]?.enabled === true;
+
     const multiKeywordCampaigns: any[] = [];
     const auditViaApi: any[] = []; // campanhas suspeitas que precisam verificação na Amazon API
 
@@ -390,6 +411,9 @@ Deno.serve(async (request) => {
       // (padrão +N no nome OU keyword_count > 1 OU 2+ keywords no banco)
       const hasMkEvidence = exactKws.length >= 2 || hasMultiKeywordSuffix(campaignName) || (c.keyword_count || 0) > 1;
       if (isPaused && !hasMkEvidence) continue;
+
+      // Cluster válido sob a nova política: manter estrutura intacta
+      if (clusterPolicyActive && isValidCluster(exactKws)) continue;
 
       // Detecção 1: banco local tem 2+ keywords EXACT
       if (exactKws.length >= 2) {

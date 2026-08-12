@@ -1,0 +1,148 @@
+{
+  "name": "TermIntelligenceAction",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "term": {
+      "type": "string"
+    },
+    "normalized_term": {
+      "type": "string"
+    },
+    "term_family_key": {
+      "type": "string"
+    },
+    "intent_cluster": {
+      "type": "string"
+    },
+    "classification": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "number",
+      "default": 7
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "current_state": {
+      "type": "string"
+    },
+    "desired_state": {
+      "type": "string"
+    },
+    "old_state": {
+      "type": "string"
+    },
+    "new_state": {
+      "type": "string"
+    },
+    "candidate_bid": {
+      "type": "number"
+    },
+    "safe_cpc": {
+      "type": "number"
+    },
+    "previous_campaign_id": {
+      "type": "string"
+    },
+    "previous_keyword_id": {
+      "type": "string"
+    },
+    "previous_bid": {
+      "type": "number"
+    },
+    "previous_status": {
+      "type": "string"
+    },
+    "previous_cluster": {
+      "type": "string"
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": [
+        "PLANNED",
+        "REQUESTED",
+        "SENT",
+        "AMAZON_CONFIRMED",
+        "FAILED",
+        "SKIPPED",
+        "BLOCKED"
+      ],
+      "default": "PLANNED"
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": true
+    },
+    "amazon_endpoint": {
+      "type": "string"
+    },
+    "http_status": {
+      "type": "number"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "amazon_request_id": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "retry_count": {
+      "type": "number",
+      "default": 0
+    },
+    "confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "run_id",
+    "asin",
+    "action"
+  ]
+}
