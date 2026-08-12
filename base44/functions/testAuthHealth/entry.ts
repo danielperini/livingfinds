@@ -114,12 +114,12 @@ Deno.serve(async (req) => {
       fetchToken(spCredentials.clientId.value, spCredentials.clientSecret.value, spCredentials.refreshToken.value),
     ]);
 
-    const adsToken = adsTokenSettled.status === 'fulfilled'
+    const adsToken: TokenResult = adsTokenSettled.status === 'fulfilled'
       ? adsTokenSettled.value
-      : { ok: false, error: (adsTokenSettled as PromiseRejectedResult).reason?.message, errorCode: 'exception' };
-    const spToken = spTokenSettled.status === 'fulfilled'
+      : { ok: false, error: String(adsTokenSettled.reason?.message || adsTokenSettled.reason || 'Falha inesperada Ads'), errorCode: 'exception' };
+    const spToken: TokenResult = spTokenSettled.status === 'fulfilled'
       ? spTokenSettled.value
-      : { ok: false, error: (spTokenSettled as PromiseRejectedResult).reason?.message, errorCode: 'exception' };
+      : { ok: false, error: String(spTokenSettled.reason?.message || spTokenSettled.reason || 'Falha inesperada SP'), errorCode: 'exception' };
 
     let adsProfile = { ok: false, errorCode: 'ADS_TOKEN_UNAVAILABLE', message: 'Token Ads indisponível', httpStatus: 0, profilesCount: 0 } as any;
     if (adsToken.ok && adsToken.accessToken) {
