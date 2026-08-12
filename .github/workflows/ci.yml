@@ -49,7 +49,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Run Amazon Ads policy unit tests
+      - name: Run Amazon Ads policy and auth unit tests
         run: |
           deno test --node-modules-dir=auto \
             base44/shared/portfolioBudgetPacing.test.ts \
@@ -57,7 +57,9 @@ jobs:
             base44/shared/amazonBidCeiling.test.ts \
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
-            base44/shared/servingCampaignGrowthPolicy.test.ts
+            base44/shared/servingCampaignGrowthPolicy.test.ts \
+            base44/shared/amazonCredentials.test.ts \
+            base44/shared/amazonAuthStatus.test.ts
 
       - name: Check changed TypeScript modules
         run: |
@@ -68,5 +70,15 @@ jobs:
             base44/shared/amazonBidCeiling.ts \
             base44/shared/configuredBidPolicy.ts \
             base44/shared/servingCampaignGrowthPolicy.ts \
-            base44/functions/runServingCampaignGrowthObjective/entry.ts \
+            base44/shared/amazonCredentials.ts \
+            base44/shared/amazonAuthStatus.ts \
+            base44/functions/testAuthHealth/entry.ts \
+            base44/functions/testSpApiAuth/entry.ts \
+            base44/functions/getLWAAccessToken/entry.ts \
+            base44/functions/amazonAdsTokenManager/entry.ts \
+            base44/functions/amazonAdsProxy/entry.ts \
+            base44/functions/exchangeAmazonAdsCode/entry.ts \
+            base44/functions/saveAdsRefreshToken/entry.ts \
+            base44/functions/runUnifiedDecisionEngineWithAuthGuard/entry.ts \
+            base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts \
             server/src/scheduler.ts
