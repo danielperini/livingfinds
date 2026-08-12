@@ -88,3 +88,23 @@ jobs:
             base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts \
             base44/functions/runAdsAutomationWithAuthGuard/entry.ts \
             server/src/scheduler.ts
+
+      - name: Enforce canonical Amazon credential reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          patterns='(ADS_CLIENT_ID|ADS_CLIENT_SECRET|ADS_REFRESH_TOKEN|ADS_PROFILE_ID|ADS_ACCOUNT_ID|ADS_REGION|AMAZON_LWA_CLIENT_ID|AMAZON_LWA_CLIENT_SECRET|AMAZON_SP_REFRESH_TOKEN|SP_CLIENT_ID|SP_CLIENT_SECRET|SP_REFRESH_TOKEN)'
+          violations="$({
+            grep -RInE "Deno\.env\.get\(['\"]${patterns}" base44 server/src --include='*.ts' --include='*.js' --include='*.jsx' || true
+            grep -RInE "process\.env\.${patterns}" base44 server/src --include='*.ts' --include='*.js' --include='*.jsx' || true
+          } | grep -v '^base44/shared/amazonCredentials.ts:' || true)"
+          if [[ -n "$violations" ]]; then
+            echo 'Amazon credential reads found outside base44/shared/amazonCredentials.ts:'
+            echo "$violations"
+            exit 1
+          fi
+          echo 'OK: Amazon credential env reads are centralized.'
+
+      - name: Validate secret-safe VPS Ads token sync script
+        shell: bash
+        run: bash -n server/scripts/sync-ads-refresh-token-env.sh
