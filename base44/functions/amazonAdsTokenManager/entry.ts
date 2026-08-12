@@ -1,13 +1,15 @@
 /**
- * amazonAdsTokenManager v9 — fonte única de access token Amazon Ads.
+ * amazonAdsTokenManager v10 — fonte canônica de autenticação Amazon Ads.
  *
- * Hierarquia:
+ * O access token é persistido em AmazonAccount e nunca é incluído na resposta HTTP.
+ * Gateways internos invocam este manager para garantir frescor/validade e depois
+ * leem ads_access_token via service-role diretamente do banco.
+ *
+ * Hierarquia do refresh token:
  * 1. AmazonAccount.ads_refresh_token (DB, canônico em runtime após OAuth)
- * 2. ADS_REFRESH_TOKEN do ambiente apenas quando o banco não possui token.
+ * 2. ADS_REFRESH_TOKEN apenas quando o banco não possui token.
  *
- * Um token existente no DB que seja revogado NUNCA cai silenciosamente para ENV.
- * A divergência DB x ENV é registrada por flag/fingerprint, sem revelar valores.
- * Todo refresh bem-sucedido valida /v2/profiles antes de marcar a conta connected.
+ * Token existente no DB que esteja revogado NUNCA cai silenciosamente para ENV.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import {
@@ -44,7 +46,7 @@ async function logEvent(base44: any, accountId: string, status: string, summary:
   const now = new Date().toISOString();
   await base44.asServiceRole.entities.SyncExecutionLog.create({
     amazon_account_id: accountId,
-    operation: 'amazon_ads:token_manager_v9',
+    operation: 'amazon_ads:token_manager_v10',
     status,
     trigger_type: 'automatic',
     started_at: now,
@@ -65,7 +67,6 @@ async function requestAccessToken(refreshToken: string, clientId: string, client
       retryable: false,
     };
   }
-
   const response = await fetch('https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -105,9 +106,7 @@ async function requestAccessToken(refreshToken: string, clientId: string, client
 }
 
 async function validateExpectedProfile(accessToken: string, clientId: string, region: string, expectedProfileId: string) {
-  if (!expectedProfileId) {
-    return { ok: false, code: 'ADS_PROFILE_ID_MISSING', status: 0, message: 'ads_profile_id não configurado', count: 0 };
-  }
+  if (!expectedProfileId) return { ok: false, code: 'ADS_PROFILE_ID_MISSING', status: 0, message: 'ads_profile_id não configurado', count: 0 };
   try {
     const response = await fetch(`${adsBaseUrlForRegion(region)}/v2/profiles`, {
       headers: {
@@ -151,7 +150,6 @@ Deno.serve(async (req) => {
   let base44: any = null;
   let accountId = '';
   let lockOwned = false;
-
   try {
     base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
@@ -159,7 +157,6 @@ Deno.serve(async (req) => {
 
     accountId = String(body.amazon_account_id || '');
     if (!accountId) return Response.json({ ok: false, error_type: 'missing_account_id', error: 'amazon_account_id obrigatório' }, { status: 400 });
-
     let account = await readAccount(base44, accountId);
     if (!account) return Response.json({ ok: false, error_type: 'account_not_found', error: 'Conta Amazon não encontrada' }, { status: 404 });
 
@@ -179,7 +176,7 @@ Deno.serve(async (req) => {
     }).catch(() => {});
 
     if (tokenConflict) {
-      console.warn(`[TokenManager v9] DB/ENV divergem: db_hash=${shortCredentialHash(dbRefreshToken)} env_hash=${shortCredentialHash(envRefreshToken)}; DB permanece canônico.`);
+      console.warn(`[TokenManager v10] DB/ENV divergem: db_hash=${shortCredentialHash(dbRefreshToken)} env_hash=${shortCredentialHash(envRefreshToken)}; DB permanece canônico.`);
     }
 
     if (!refreshToken) {
@@ -201,7 +198,6 @@ Deno.serve(async (req) => {
       }, { status: 401 });
     }
 
-    // Um estado revogado conhecido nunca é mascarado por access token em cache.
     if (account.ads_requires_reauth === true || String(account.ads_token_status || '') === 'revoked') {
       return Response.json({
         ok: false,
@@ -221,7 +217,7 @@ Deno.serve(async (req) => {
       if (msUntilExpiry > PROACTIVE_REFRESH_THRESHOLD_MS) {
         return Response.json({
           ok: true,
-          access_token: account.ads_access_token,
+          token_available: true,
           expires_at: account.ads_access_token_expires_at,
           from_cache: true,
           source: 'database_access_token_cache',
@@ -240,7 +236,7 @@ Deno.serve(async (req) => {
         if (validAccessToken(account, 60_000)) {
           return Response.json({
             ok: true,
-            access_token: account.ads_access_token,
+            token_available: true,
             expires_at: account.ads_access_token_expires_at,
             from_cache: true,
             source: 'database_after_concurrent_wait',
@@ -299,7 +295,6 @@ Deno.serve(async (req) => {
         active_token_source: activeTokenSource,
         token_source_conflict: tokenConflict,
       });
-
       const explicitCode = failure.requiresReauth ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (refreshError?.error_type || 'token_refresh_failed');
       return Response.json({
         ok: false,
@@ -320,13 +315,7 @@ Deno.serve(async (req) => {
 
     const expectedProfileId = String(account.ads_profile_id || credentials.profileId.value || '');
     const region = String(account.region || credentials.region || 'NA');
-    const profileValidation = await validateExpectedProfile(
-      tokenResult.access_token,
-      credentials.clientId.value,
-      region,
-      expectedProfileId,
-    );
-
+    const profileValidation = await validateExpectedProfile(tokenResult.access_token, credentials.clientId.value, region, expectedProfileId);
     if (!profileValidation.ok) {
       await releaseLock(base44, accountId);
       lockOwned = false;
@@ -399,7 +388,7 @@ Deno.serve(async (req) => {
 
     return Response.json({
       ok: true,
-      access_token: tokenResult.access_token,
+      token_available: true,
       expires_at: expiresAt,
       from_cache: false,
       source: 'lwa_refresh',
