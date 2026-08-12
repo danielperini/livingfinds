@@ -655,23 +655,24 @@ export default function Settings() {
           <div className="px-6 pb-6 space-y-4 border-t border-surface-2">
             <p className="text-xs text-slate-500 mt-4">Configuradas em Base44 → Settings → Environment Variables. Nunca expostas aqui por segurança.</p>
 
-            {/* Status rápido sem valores sensíveis */}
+            {/* Status rápido — identificadores mascarados */}
             <div className="grid grid-cols-2 gap-3">
               {[
-                { label: 'Ads Profile ID', value: account?.ads_profile_id, icon: BarChart2 },
-                { label: 'Marketplace ID', value: account?.marketplace_id, icon: Package },
-                { label: 'Região', value: account?.region || 'NA', icon: Key },
-                { label: 'Moeda', value: `${account?.currency_code || 'BRL'} (${account?.currency_symbol || 'R$'})`, icon: DollarSign },
-              ].map(({ label, value, icon: Icon }) => (
+                { label: 'Ads Profile ID', icon: BarChart2 },
+                { label: 'Marketplace ID', icon: Package },
+                { label: 'Região', icon: Key },
+                { label: 'Moeda', icon: DollarSign },
+              ].map(({ label, icon: Icon }) => (
                 <div key={label} className="bg-surface-2 rounded-lg p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     <Icon className="w-3 h-3 text-slate-500" />
                     <p className="text-[10px] text-slate-500">{label}</p>
                   </div>
-                  <p className="text-xs font-mono text-slate-200 truncate">{value || '—'}</p>
+                  <p className="text-xs font-mono text-slate-400">•••••••• <span className="not-italic text-[10px] text-slate-500">oculto</span></p>
                 </div>
               ))}
             </div>
+            <p className="text-[10px] text-slate-500">Identificadores ocultos por segurança. Os valores válidos são os do ambiente de produção.</p>
 
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${account?.status === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
