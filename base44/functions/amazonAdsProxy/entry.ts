@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
         triggered_by: 'amazonAdsProxy',
       });
       const data = response?.data || response || {};
-      if (data?.ok !== true || !data?.access_token) {
+      if (data?.ok !== true || data?.token_available !== true) {
         const reauth = data?.requires_reauthorization === true || data?.error_type === ADS_TOKEN_REVOKED_REAUTH_REQUIRED;
         throw {
           code: reauth ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : (data?.error_type || 'ads_token_unavailable'),
@@ -41,7 +41,10 @@ Deno.serve(async (req) => {
           status: reauth ? 401 : 503,
         };
       }
-      return String(data.access_token);
+      const freshAccounts = await base44.asServiceRole.entities.AmazonAccount.filter({ id: account.id }, null, 1).catch(() => [] as any[]);
+      const accessToken = String(freshAccounts[0]?.ads_access_token || '').trim();
+      if (!accessToken) throw { code: 'ADS_ACCESS_TOKEN_STORE_EMPTY', message: 'Access token não encontrado no armazenamento interno.', status: 503 };
+      return accessToken;
     };
 
     const adsRequest = async (path: string, method = 'GET', requestBody: any = null) => {
@@ -60,7 +63,6 @@ Deno.serve(async (req) => {
           headers,
           body: requestBody ? JSON.stringify(requestBody) : undefined,
         });
-
         if ((response.status === 401 || response.status === 403) && attempt === 1) {
           token = await getAdsToken(true);
           continue;
@@ -98,31 +100,15 @@ Deno.serve(async (req) => {
     const { action, payload } = body;
     let result: any;
     switch (action) {
-      case 'getProfiles':
-        result = await adsRequest('/v2/profiles');
-        break;
-      case 'getCampaigns':
-        result = await adsRequest('/v2/sp/campaigns?stateFilter=enabled,paused&count=100');
-        break;
-      case 'getAdGroups':
-        result = await adsRequest(`/v2/sp/adGroups?campaignIdFilter=${encodeURIComponent(payload?.campaign_id || '')}&count=100`);
-        break;
-      case 'getKeywords':
-        result = await adsRequest(`/v2/sp/keywords?adGroupIdFilter=${encodeURIComponent(payload?.ad_group_id || '')}&count=500`);
-        break;
-      case 'updateCampaign':
-        result = await adsRequest('/v2/sp/campaigns', 'PUT', [payload]);
-        break;
-      case 'updateKeyword':
-        result = await adsRequest('/v2/sp/keywords', 'PUT', [payload]);
-        break;
-      case 'updateBid':
-        result = await adsRequest('/v2/sp/keywords', 'PUT', [{ keywordId: payload?.keyword_id, bid: payload?.bid }]);
-        break;
-      default:
-        return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
+      case 'getProfiles': result = await adsRequest('/v2/profiles'); break;
+      case 'getCampaigns': result = await adsRequest('/v2/sp/campaigns?stateFilter=enabled,paused&count=100'); break;
+      case 'getAdGroups': result = await adsRequest(`/v2/sp/adGroups?campaignIdFilter=${encodeURIComponent(payload?.campaign_id || '')}&count=100`); break;
+      case 'getKeywords': result = await adsRequest(`/v2/sp/keywords?adGroupIdFilter=${encodeURIComponent(payload?.ad_group_id || '')}&count=500`); break;
+      case 'updateCampaign': result = await adsRequest('/v2/sp/campaigns', 'PUT', [payload]); break;
+      case 'updateKeyword': result = await adsRequest('/v2/sp/keywords', 'PUT', [payload]); break;
+      case 'updateBid': result = await adsRequest('/v2/sp/keywords', 'PUT', [{ keywordId: payload?.keyword_id, bid: payload?.bid }]); break;
+      default: return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
-
     return Response.json({ ok: true, data: result });
   } catch (error: any) {
     return Response.json({ ok: false, error_code: error?.code || 'unknown', message: error?.message || 'Internal error' }, { status: error?.status || 500 });
