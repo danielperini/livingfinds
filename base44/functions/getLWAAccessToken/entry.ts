@@ -1,7 +1,8 @@
 /**
- * getLWAAccessToken — ponte compatível com funções legadas.
- * Ads com amazon_account_id delega ao amazonAdsTokenManager.
- * Fallback legado usa apenas o resolvedor canônico de credenciais.
+ * getLWAAccessToken — rota de compatibilidade sem exposição de token.
+ *
+ * Mantém /functions/getLWAAccessToken existente, mas retorna somente estado,
+ * expiração e erros. Nenhum access/refresh token entra no Response JSON.
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 import {
@@ -10,18 +11,19 @@ import {
   resolveAmazonSpCredentials,
 } from '../../shared/amazonCredentials.ts';
 
-const legacyCache: Map<string, { access_token: string; expires_at: number }> = new Map();
+const validationCache: Map<string, { expires_at: number }> = new Map();
 
-async function fetchTokenFromCredentials(service: 'ads' | 'sp'): Promise<string> {
+async function validateTokenFromCredentials(service: 'ads' | 'sp') {
   const cacheKey = `legacy_${service}`;
-  const cached = legacyCache.get(cacheKey);
-  if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  const cached = validationCache.get(cacheKey);
+  if (cached && cached.expires_at > Date.now()) {
+    return { ok: true, token_available: true, expires_at: cached.expires_at, from_cache: true };
+  }
 
   const credentials = service === 'ads' ? resolveAmazonAdsCredentials() : resolveAmazonSpCredentials();
   const clientId = credentials.clientId.value;
   const clientSecret = credentials.clientSecret.value;
   const refreshToken = credentials.refreshToken.value;
-
   if (!clientId || !clientSecret || !refreshToken) {
     throw { code: 'missing_credentials', message: `Credenciais ${service} ausentes na fonte canônica`, status: 400 };
   }
@@ -48,17 +50,17 @@ async function fetchTokenFromCredentials(service: 'ads' | 'sp'): Promise<string>
     };
   }
 
+  // O access token existe apenas nesta stack frame e é descartado sem log/retorno.
   const expiresAt = Date.now() + (Math.max(120, Number(data.expires_in || 3600) - 60) * 1000);
-  legacyCache.set(cacheKey, { access_token: String(data.access_token), expires_at: expiresAt });
-  return String(data.access_token);
+  validationCache.set(cacheKey, { expires_at: expiresAt });
+  return { ok: true, token_available: true, expires_at: expiresAt, from_cache: false };
 }
 
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
-    const isServiceRole = body._service_role === true;
-    if (!isServiceRole) {
+    if (body._service_role !== true) {
       const user = await base44.auth.me().catch(() => null);
       if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -74,13 +76,12 @@ Deno.serve(async (req) => {
         _service_role: true,
       });
       const data = response?.data || response || {};
-      const reauthRequired = data.requires_reauthorization === true;
+      const reauthRequired = data.requires_reauthorization === true || data.error_type === ADS_TOKEN_REVOKED_REAUTH_REQUIRED;
       return Response.json({
         ok: data.ok === true,
         service,
         status: data.ok ? 'active' : 'error',
-        // Access token só transita entre funções internas de service-role; nunca para frontend.
-        ...(isServiceRole && data.ok ? { access_token: data.access_token } : {}),
+        token_available: data.token_available === true,
         expires_at: data.expires_at,
         from_cache: data.from_cache,
         error_type: reauthRequired ? ADS_TOKEN_REVOKED_REAUTH_REQUIRED : data.error_type,
@@ -90,14 +91,14 @@ Deno.serve(async (req) => {
       }, { status: reauthRequired ? 401 : 200 });
     }
 
-    const token = await fetchTokenFromCredentials(service);
-    const cached = legacyCache.get(`legacy_${service}`);
+    const state = await validateTokenFromCredentials(service);
     return Response.json({
       ok: true,
       service,
       status: 'active',
-      ...(isServiceRole ? { access_token: token } : {}),
-      expires_in: cached ? Math.floor((cached.expires_at - Date.now()) / 1000) : null,
+      token_available: state.token_available,
+      expires_at: state.expires_at,
+      from_cache: state.from_cache,
       source: 'canonical_credentials',
     });
   } catch (error: any) {
