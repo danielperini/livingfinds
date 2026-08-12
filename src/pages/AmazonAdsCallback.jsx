@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { base44 } from '@/api/base44Client';
-import { appParams } from '@/lib/app-params';
 import { CheckCircle, XCircle, Loader2, Zap } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -8,7 +7,7 @@ export default function AmazonAdsCallback() {
   const [status, setStatus] = useState('loading');
   const [message, setMessage] = useState('');
   const [details, setDetails] = useState(null);
-  const [rawError, setRawError] = useState(null);
+  const [safeError, setSafeError] = useState(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -16,54 +15,53 @@ export default function AmazonAdsCallback() {
     const error = params.get('error');
     const errorDescription = params.get('error_description');
 
-    // Debug: mostrar URL completo recebido
-    console.log('[AmazonCallback] URL completo:', window.location.href);
-    console.log('[AmazonCallback] Params:', Object.fromEntries(params.entries()));
-
     if (error) {
       setStatus('error');
       setMessage(`Erro na autorização Amazon Ads: ${errorDescription || error}`);
-      setRawError({ full_url: window.location.href, all_params: Object.fromEntries(params.entries()) });
+      setSafeError({ error, error_description: errorDescription || null });
       return;
     }
 
     if (!code) {
       setStatus('error');
-      setMessage('Parâmetro "code" não encontrado na URL. Tente novamente o fluxo OAuth.');
-      setRawError({ full_url: window.location.href, all_params: Object.fromEntries(params.entries()) });
+      setMessage('Parâmetro "code" não encontrado. Inicie novamente o fluxo OAuth.');
+      setSafeError({ error: 'missing_authorization_code' });
       return;
     }
 
     (async () => {
-      // Recuperar code pendente do sessionStorage (se veio do redirect pós-login)
-      const pendingCode = sessionStorage.getItem('amazon_ads_pending_code');
-      const finalCode = code || pendingCode;
-      if (pendingCode) sessionStorage.removeItem('amazon_ads_pending_code');
-
       try {
-        // Usar SDK autenticado — garante token de usuário e URL correta
-        // base44.functions.invoke retorna { data: { ... } } — extrair .data
-        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code: finalCode });
+        // O authorization code fica somente em memória durante a troca e nunca é logado.
+        const res = await base44.functions.invoke('exchangeAmazonAdsCode', { code });
         const data = res?.data ?? res;
-
         if (!data?.ok) {
           setStatus('error');
-          setMessage(data?.error_description || data?.error || 'Falha ao processar autorização.');
-          setRawError(data);
+          setMessage(data?.error_description || data?.message || data?.error || 'Falha ao processar autorização.');
+          setSafeError({
+            error: data?.error || null,
+            amazon_error_code: data?.amazon_error_code || null,
+            amazon_status: data?.amazon_status || null,
+            token_persisted: data?.token_persisted,
+          });
           return;
         }
 
         setStatus('success');
         setMessage(data.message || 'Amazon Ads conectada com sucesso.');
-        setDetails(data);
-        // Redireciona para a página de setup após 3 segundos com flag de reconexão
+        setDetails({
+          profiles_count: data.profiles_count || 0,
+          profile: data.profile || null,
+          account_updated: data.account_updated === true,
+          environment_update_required: data.environment_update_required === true,
+          environment_warning: data.environment_warning || null,
+        });
         setTimeout(() => {
           window.location.href = '/amazon-oauth-setup?reconnected=1';
         }, 3000);
       } catch (e) {
         setStatus('error');
-        setMessage(e.message || 'Erro ao conectar com a Amazon Ads.');
-        setRawError({ message: e.message });
+        setMessage(e?.message || 'Erro ao conectar com a Amazon Ads.');
+        setSafeError({ error: 'callback_exchange_failed' });
       }
     })();
   }, []);
@@ -71,7 +69,6 @@ export default function AmazonAdsCallback() {
   return (
     <div className="min-h-screen bg-[#0A0B0F] flex items-center justify-center p-6">
       <div className="w-full max-w-md">
-        {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8">
           <div className="w-8 h-8 rounded-lg bg-cyan flex items-center justify-center">
             <Zap className="w-4 h-4 text-white" />
@@ -84,7 +81,7 @@ export default function AmazonAdsCallback() {
             <>
               <Loader2 className="w-12 h-12 text-cyan animate-spin mx-auto mb-4" />
               <h1 className="text-lg font-semibold text-white mb-2">Processando autorização...</h1>
-              <p className="text-sm text-slate-400">Aguarde enquanto conectamos sua conta Amazon Ads.</p>
+              <p className="text-sm text-slate-400">Validando token e profile Amazon Ads.</p>
             </>
           )}
 
@@ -93,39 +90,18 @@ export default function AmazonAdsCallback() {
               <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-4" />
               <h1 className="text-lg font-semibold text-white mb-2">Amazon Ads conectada com sucesso.</h1>
               <p className="text-sm text-slate-400 mb-6">{message}</p>
-
               {details && (
-                <div className="text-left bg-[#0A0B0F] border border-[#1A1D26] rounded-xl p-4 mb-6 space-y-3">
-                  {details.refresh_token_preview && (
-                    <div>
-                      <p className="text-xs text-slate-500 mb-0.5">Refresh Token (mascarado)</p>
-                      <p className="text-xs font-mono text-slate-300">{details.refresh_token_preview}</p>
-                    </div>
-                  )}
-                  {details.profiles_count > 0 && (
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">{details.profiles_count} profile(s) encontrado(s)</p>
-                      <div className="space-y-1">
-                        {details.profiles?.map((p, i) => (
-                          <div key={i} className="flex items-center justify-between text-xs">
-                            <span className="text-slate-300">{p.name || `Profile ${i + 1}`}</span>
-                            <span className="text-slate-500">{p.marketplace} · {p.type}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {details.account_updated && (
-                    <p className="text-xs text-emerald-400">✓ Token salvo na conta Amazon</p>
+                <div className="text-left bg-[#0A0B0F] border border-[#1A1D26] rounded-xl p-4 mb-6 space-y-2">
+                  <p className="text-xs text-slate-400">Profiles encontrados: <span className="text-slate-200">{details.profiles_count}</span></p>
+                  {details.profile?.profileId && <p className="text-xs text-slate-400">Profile validado: <span className="text-slate-200 font-mono">{details.profile.profileId}</span></p>}
+                  {details.account_updated && <p className="text-xs text-emerald-400">✓ Token salvo no banco após validação real</p>}
+                  {details.environment_update_required && (
+                    <p className="text-xs text-amber-300">⚠ {details.environment_warning || 'Atualize ADS_REFRESH_TOKEN no ambiente da VPS.'}</p>
                   )}
                 </div>
               )}
-
-              <Link
-                to="/diagnostico"
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan/10 border border-cyan/30 text-cyan rounded-lg text-sm font-medium hover:bg-cyan/20 transition-colors"
-              >
-                Ir para Diagnóstico
+              <Link to="/amazon-oauth-setup" className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan/10 border border-cyan/30 text-cyan rounded-lg text-sm font-medium hover:bg-cyan/20 transition-colors">
+                Verificar estado da conexão
               </Link>
             </>
           )}
@@ -135,27 +111,18 @@ export default function AmazonAdsCallback() {
               <XCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
               <h1 className="text-lg font-semibold text-white mb-2">Erro na autorização Amazon Ads</h1>
               <p className="text-sm text-red-300 mb-4 break-words">{message}</p>
-
-              {rawError && (
+              {safeError && (
                 <div className="text-left bg-[#0A0B0F] border border-red-500/20 rounded-xl p-3 mb-6">
-                  <p className="text-xs text-slate-500 mb-1">Detalhe do erro:</p>
-                  {rawError.amazon_status && <p className="text-xs text-slate-400">HTTP {rawError.amazon_status}</p>}
-                  {rawError.error && <p className="text-xs text-slate-400">error: {rawError.error}</p>}
-                  {rawError.error_description && <p className="text-xs text-slate-400">description: {rawError.error_description}</p>}
-                  {rawError.message && <p className="text-xs text-slate-400">message: {rawError.message}</p>}
-                  {rawError.full_url && <p className="text-xs text-slate-400 break-all mt-1">url: {rawError.full_url}</p>}
-                  {rawError.all_params && <p className="text-xs text-slate-400 font-mono mt-1">{JSON.stringify(rawError.all_params)}</p>}
+                  {safeError.amazon_status && <p className="text-xs text-slate-400">HTTP {safeError.amazon_status}</p>}
+                  {safeError.error && <p className="text-xs text-slate-400">erro: {safeError.error}</p>}
+                  {safeError.amazon_error_code && <p className="text-xs text-slate-400">Amazon: {safeError.amazon_error_code}</p>}
+                  {safeError.token_persisted === false && <p className="text-xs text-emerald-400 mt-1">O token anterior foi preservado.</p>}
                 </div>
               )}
-
               <p className="text-xs text-amber-400/80 mb-4 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                ⚠️ O código OAuth expira em segundos — inicie um novo fluxo.
+                O código OAuth é de uso único. Inicie um novo fluxo para tentar novamente.
               </p>
-
-              <Link
-                to="/amazon-oauth-setup"
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan/10 border border-cyan/30 text-cyan rounded-lg text-sm font-medium hover:bg-cyan/20 transition-colors"
-              >
+              <Link to="/amazon-oauth-setup" className="inline-flex items-center gap-2 px-5 py-2.5 bg-cyan/10 border border-cyan/30 text-cyan rounded-lg text-sm font-medium hover:bg-cyan/20 transition-colors">
                 Tentar novamente →
               </Link>
             </>
