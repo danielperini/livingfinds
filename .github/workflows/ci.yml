@@ -89,16 +89,20 @@ jobs:
             base44/functions/runUnifiedDecisionEngineWithAuthGuard/entry.ts
             base44/functions/executeApprovedDecisionQueueWithAuthGuard/entry.ts
             base44/functions/runAdsAutomationWithAuthGuard/entry.ts
+            base44/functions/checkSpApiConnection/entry.ts
             server/src/scheduler.ts
           )
           failed=0
           echo '## Deno check por módulo' >> "$GITHUB_STEP_SUMMARY"
           for file in "${files[@]}"; do
-            if deno check --node-modules-dir=auto "$file"; then
+            output="$(deno check --node-modules-dir=auto "$file" 2>&1)"
+            rc=$?
+            if [[ $rc -eq 0 ]]; then
               echo "- ✅ $file" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- ❌ $file" >> "$GITHUB_STEP_SUMMARY"
-              echo "::error file=${file}::deno check failed for ${file}"
+              compact="$(printf '%s' "$output" | tr '\r\n' '  ' | sed 's/%/%25/g; s/::/%3A%3A/g' | cut -c1-3500)"
+              echo "::error file=${file}::${compact}"
               failed=1
             fi
           done
