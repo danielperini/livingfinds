@@ -126,6 +126,28 @@ body {
 .border-\[\#1A1D26\],
 .border-\[\#263244\] { border-color: var(--border-color) !important; }
 
+/* Superfícies translúcidas herdadas do tema escuro (bg-white/[0.03], bg-black/10, border-white/10) */
+[class*="bg-white/["], [class*="bg-white/1"], [class*="bg-white/0"] { background-color: var(--surface-1-color) !important; }
+[class*="bg-black/"] { background-color: var(--surface-2-color) !important; }
+[class*="border-white/"] { border-color: var(--border-color) !important; }
+
+/* Tons pastéis (feitos para fundo escuro) → versões legíveis em fundo claro,
+   incluindo variantes com opacidade como text-red-300/70 */
+[class*="text-red-200"], [class*="text-red-300"], [class*="text-red-400"] { color: #B91C1C !important; }
+[class*="text-orange-200"], [class*="text-orange-300"] { color: #C2410C !important; }
+[class*="text-amber-200"], [class*="text-amber-300"], [class*="text-yellow-300"] { color: #B45309 !important; }
+[class*="text-emerald-200"], [class*="text-emerald-300"], [class*="text-green-300"] { color: #15803D !important; }
+[class*="text-blue-200"], [class*="text-blue-300"], [class*="text-sky-300"], [class*="text-cyan-300"] { color: #1D4ED8 !important; }
+[class*="text-violet-200"], [class*="text-violet-300"], [class*="text-purple-300"] { color: #6D28D9 !important; }
+
+/* Exceção: texto branco sobre superfícies sólidas coloridas permanece branco */
+.bg-\[\#2563EB\] .text-white,
+.bg-blue-500 .text-white, .bg-blue-600 .text-white,
+.bg-emerald-500 .text-white, .bg-emerald-600 .text-white,
+.bg-red-500 .text-white, .bg-red-600 .text-white,
+.bg-amber-500 .text-white, .bg-amber-600 .text-white,
+button.bg-blue-500, button.bg-blue-600, button.bg-emerald-600, button.bg-red-600 { color: #FFFFFF !important; }
+
 /* Inputs e selects */
 input, select, textarea {
   background-color: var(--input-bg);

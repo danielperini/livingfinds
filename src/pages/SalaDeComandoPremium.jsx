@@ -298,8 +298,8 @@ export default function SalaDeComandoPremium() {
     <div className="p-4 md:p-6 space-y-5 animate-fade-in max-w-[1680px] mx-auto">
       {account ? <TokenExpiredBanner accountId={account.id} /> : null}
 
-      <section className="rounded-3xl border border-white/[0.08] bg-gradient-to-br from-[#111b31] via-[#0c1426] to-[#0a1020] p-5 md:p-7 overflow-hidden relative">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(85,116,255,0.16),transparent_34%)] pointer-events-none" />
+      <section className="rounded-3xl border border-[#E5E7EB] bg-white p-5 md:p-7 overflow-hidden relative">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_0%,rgba(37,99,235,0.07),transparent_38%)] pointer-events-none" />
         <div className="relative flex flex-col xl:flex-row xl:items-center justify-between gap-5">
           <div>
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.14em] text-blue-300">
