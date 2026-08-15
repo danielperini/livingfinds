@@ -9,6 +9,7 @@ import {
 } from '@/lib/motorLabels';
 
 const PAGE_SIZE = 10;
+const CURRENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function fmtDateKey(iso) {
   if (!iso) return null;
@@ -167,6 +168,7 @@ function AccordionItem({ item, isOpen, onToggle }) {
 export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) {
   const [page, setPage] = useState(1);
   const [openSet, setOpenSet] = useState(() => new Set());
+  const [showHistory, setShowHistory] = useState(false);
 
   const merged = useMemo(() => {
     const out = [];
@@ -187,12 +189,19 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     });
   }, [decisions, bidChanges]);
 
-  const totalItems = merged.length;
+  // O card é operacional: por padrão não mistura decisões antigas com o que o
+  // motor está fazendo agora. O histórico continua disponível sob demanda.
+  const recent = useMemo(() => merged.filter((item) => {
+    const timestamp = new Date(item.timestamp || 0).getTime();
+    return Number.isFinite(timestamp) && timestamp >= Date.now() - CURRENT_WINDOW_MS;
+  }), [merged]);
+  const visibleItems = showHistory ? merged : recent;
+  const totalItems = visibleItems.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
 
   const pageItems = useMemo(() => {
-    const slice = merged.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+    const slice = visibleItems.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
     const m = new Map();
     for (const it of slice) {
       const k = fmtDateKey(it.timestamp) || 'Sem data';
@@ -200,7 +209,7 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
       m.get(k).push(it);
     }
     return Array.from(m.entries());
-  }, [merged, safePage]);
+  }, [visibleItems, safePage]);
 
   const toggle = (id) => {
     setOpenSet(prev => {
@@ -217,18 +226,39 @@ export default function MotorDecisionFeed({ decisions, bidChanges, accountId }) 
     setPage(next);
   };
 
+  const toggleHistory = () => {
+    setShowHistory((current) => !current);
+    setPage(1);
+    setOpenSet(new Set());
+  };
+
   if (totalItems === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 text-center">
         <Bot className="w-7 h-7 text-theme-muted mb-2" />
-        <p className="text-sm text-theme-secondary font-medium">Motor em repouso</p>
-        <p className="text-xs text-theme-muted mt-1">Nenhuma ação automática registrada recentemente.</p>
+        <p className="text-sm text-theme-secondary font-medium">Motor em repouso nas últimas 24h</p>
+        <p className="text-xs text-theme-muted mt-1">Nenhuma decisão nova exige execução agora. Bloqueios antigos ficam no histórico.</p>
+        {merged.length > 0 && (
+          <button type="button" onClick={toggleHistory} className="mt-3 text-xs font-semibold text-blue-600 hover:text-blue-700">
+            Ver histórico ({merged.length})
+          </button>
+        )}
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <p className="text-[11px] text-theme-muted">
+          {showHistory ? `Histórico completo: ${merged.length} registros.` : `Atividade operacional das últimas 24h: ${recent.length} registro(s).`}
+        </p>
+        {merged.length > recent.length && (
+          <button type="button" onClick={toggleHistory} className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 whitespace-nowrap">
+            {showHistory ? 'Voltar ao agora' : `Ver histórico (${merged.length})`}
+          </button>
+        )}
+      </div>
       {pageItems.map(([dateKey, items]) => (
         <div key={dateKey}>
           <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-theme-muted px-1 mb-1.5">{dateKey}</p>

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { base44 } from '@/api/base44Client';
 import {
-  Activity, AlertTriangle, Bot, CheckCircle2, Clock3, DollarSign,
+  Activity, AlertTriangle, Bot, CheckCircle2, Clock3,
   ExternalLink, Loader2, RefreshCw, Rocket, ServerCog, ShieldCheck,
-  Sparkles, Terminal, Wrench, XCircle,
+  Sparkles, Wrench, XCircle,
 } from 'lucide-react';
 import TokenExpiredBanner from '@/components/amazon/TokenExpiredBanner';
 
@@ -31,6 +31,15 @@ function formatDate(value) {
   return date.toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
   });
+}
+
+function queueTimestamp(item) {
+  return item?.updated_at || item?.updated_date || item?.completed_at || item?.started_at || item?.scheduled_at || item?.created_at || item?.created_date || null;
+}
+
+function isWithinHours(value, hours) {
+  const timestamp = new Date(value || 0).getTime();
+  return Number.isFinite(timestamp) && timestamp >= Date.now() - hours * 60 * 60 * 1000;
 }
 
 function MetricCard({ label, value, detail, tone = 'default', icon: Icon }) {
@@ -112,16 +121,22 @@ export default function SalaDeComandoPremium() {
     const allQueue = [...data.kickoff, ...data.repair, ...data.keyword];
     const activeAlerts = data.alerts.filter(item => item.status === 'active');
     const urgentAlerts = activeAlerts.filter(item => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()));
-    const failedQueue = allQueue.filter(item => item.status === 'failed');
-    const pendingQueue = allQueue.filter(item => ['scheduled', 'processing'].includes(item.status));
+    const failedQueue = allQueue.filter(item => item.status === 'failed' && isWithinHours(queueTimestamp(item), 24));
+    const pendingQueue = allQueue.filter(item => ['scheduled', 'processing'].includes(item.status) && isWithinHours(queueTimestamp(item), 2));
+    const historicalQueue = allQueue.filter(item =>
+      (['scheduled', 'processing'].includes(item.status) && !isWithinHours(queueTimestamp(item), 2)) ||
+      (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24))
+    );
     const pendingDecisions = data.decisions.filter(item => item.status === 'pending');
     const executedToday = data.decisions.filter(item => {
       const date = String(item.executed_at || item.updated_date || item.created_at || '').slice(0, 10);
       return item.status === 'executed' && date === new Date().toISOString().slice(0, 10);
     });
-    const lastSync = data.syncRuns[0] || null;
+    const lastSync = [...data.syncRuns].sort((left, right) =>
+      new Date(right.completed_at || right.started_at || right.created_date || 0) - new Date(left.completed_at || left.started_at || left.created_date || 0)
+    )[0] || null;
     const healthOk = failedQueue.length === 0 && urgentAlerts.length === 0 && lastSync?.status === 'success';
-    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, pendingDecisions, executedToday, lastSync, healthOk };
+    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk };
   }, [data]);
 
   const priorityItems = useMemo(() => {
@@ -207,7 +222,7 @@ export default function SalaDeComandoPremium() {
               <div className="mt-3">
                 <StatusLine label="Conta Amazon" status={account?.status} detail={account?.profile_name || account?.name || 'Conta vinculada'} />
                 <StatusLine label="Última sincronização" status={summary.lastSync?.status} detail={formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)} />
-                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento · ${summary.failedQueue.length} falhas`} />
+                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento · ${summary.failedQueue.length} falhas${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
               </div>
             </div>
             <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-blue-500/10 to-violet-500/5 p-5">
@@ -231,7 +246,8 @@ export default function SalaDeComandoPremium() {
         description: 'Acompanhe processamento, retries, backoff e erros reais sem misturar com decisões pendentes.',
         stats: [
           ['Em andamento', summary.pendingQueue.length],
-          ['Falhas', summary.failedQueue.length],
+          ['Falhas recentes', summary.failedQueue.length],
+          ['Histórico', summary.historicalQueue.length],
           ['Concluídos', summary.allQueue.filter(item => item.status === 'completed').length],
         ],
       },
@@ -282,7 +298,7 @@ export default function SalaDeComandoPremium() {
             Abrir painel operacional <ExternalLink className="w-3.5 h-3.5" />
           </Link>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-8">
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-8">
           {config.stats.map(([label, value]) => (
             <div key={label} className="rounded-xl border border-white/[0.07] bg-black/10 p-4">
               <p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p>
@@ -325,7 +341,7 @@ export default function SalaDeComandoPremium() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="prioridades e aprovações" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
-        <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
+        <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
         <MetricCard label="Aprovação humana" value={summary.pendingDecisions.length} detail="aguardando decisão" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.lastSync?.status || 'sem sync'} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
