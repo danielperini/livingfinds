@@ -26,6 +26,13 @@ function pickNum(raw, keys) {
   }
   return null;
 }
+
+function fmtConfidence(value) {
+  if (value == null || value === '') return null;
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) return null;
+  return `${Math.round(confidence <= 1 ? confidence * 100 : confidence)}%`;
+}
 function pickStr(raw, keys) {
   for (const k of keys) {
     const v = raw?.[k];
@@ -131,7 +138,7 @@ function buildEvidence(raw) {
   add('ROAS', (() => { const r = pickNum(raw, ['roas', 'roas_before']); return r != null ? `${r.toFixed(2)}x` : null; })());
   add('Maturidade', pickStr(raw, ['maturity', 'attribution_confidence', 'decision_confidence_level'])?.toUpperCase?.() || null);
   const conf = pickNum(raw, ['confidence', 'ai_confidence', 'decision_confidence_level']);
-  add('Confiança', conf != null ? `${Math.round(conf)}%` : null);
+  add('Confiança', fmtConfidence(conf));
   return cells.filter(c => c.value != null);
 }
 
@@ -189,7 +196,12 @@ function buildWhyThis(raw) {
 
 function buildWhyNot(raw) {
   const kind = actionKind(raw);
-  if (wasPrevented(raw)) return 'A alteração não foi enviada porque uma regra de proteção teve prioridade sobre a ação sugerida.';
+  if (wasPrevented(raw)) {
+    const cause = pickStr(raw, ['error_message', 'execution_error', 'confirmation_error', 'rejection_reason']);
+    return cause
+      ? `A alteração não foi enviada. Motivo confirmado pelo motor: ${cause}`
+      : 'A alteração não foi enviada porque uma regra de proteção teve prioridade sobre a ação sugerida.';
+  }
   if (kind === 'bid' && bidDirection(raw) === 'increase') {
     return 'Manter o lance preservaria a baixa entrega; aumentar além do teto violaria o limite salvo em Configurações.';
   }
@@ -345,7 +357,7 @@ export default function DecisionColloquy({ raw }) {
       )}
       {data.risk && (data.conf != null) ? (
         <Row icon={ShieldCheck} label="Risco & confiança" tone={data.risk === 'low' ? 'emerald' : data.risk === 'high' || data.risk === 'critical' ? 'rose' : 'amber'}>
-          {RISK_LETTER[data.risk] || data.risk}. Confiança: {Math.round(data.conf)}%
+          {RISK_LETTER[data.risk] || data.risk}. Confiança: {fmtConfidence(data.conf)}
         </Row>
       ) : null}
       {data.expected && (

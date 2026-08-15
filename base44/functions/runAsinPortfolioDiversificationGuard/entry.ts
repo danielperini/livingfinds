@@ -8,6 +8,7 @@ const lower = (value: unknown) => String(value || '').trim().toLowerCase();
 const active = (value: unknown) => ['enabled', 'active'].includes(lower(value));
 const campaignIdOf = (row: any) => String(row.amazon_campaign_id || row.campaign_id || row.id || '');
 const roundMoney = (value: number) => Math.round(value * 100) / 100;
+const snapshotIsActive = (value: unknown) => !['inactive', 'closed', 'not_found', 'error', 'suppressed'].includes(lower(value));
 
 function brtDate(): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
@@ -49,13 +50,16 @@ Deno.serve(async (request) => {
 
     for (const account of accounts) {
       const accountId = String(account.id);
-      const [settingsRows, campaigns, productAds, products, intradayRows, priorDecisions] = await Promise.all([
+      const [settingsRows, campaigns, productAds, products, intradayRows, priorDecisions, canonicalSnapshots] = await Promise.all([
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.ProductAd.filter({ amazon_account_id: accountId }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.IntradaySpendSnapshot.filter({ amazon_account_id: accountId, spend_date: today }, '-observed_at', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
+        body.snapshot_run_id
+          ? base44.asServiceRole.entities.RepricingSnapshot.filter({ amazon_account_id: accountId, run_id: body.snapshot_run_id }, '-created_at', 10000).catch(() => [])
+          : base44.asServiceRole.entities.RepricingSnapshot.filter({ amazon_account_id: accountId }, '-created_at', 10000).catch(() => []),
       ]);
 
       const settings = settingsRows[0] || {};
@@ -66,8 +70,22 @@ Deno.serve(async (request) => {
       const maxWinnerShare = Math.min(0.45, Math.max(maxAsinShare, finite(settings.max_winner_asin_spend_share, 0.35)));
       const minCampaignBudget = Math.max(5, finite(settings.minimum_campaign_budget, 5));
       const maxCampaignBudget = Math.max(minCampaignBudget, finite(settings.maximum_campaign_budget, 100));
+      const minEconomicConfidence = Math.min(1, Math.max(0.5, finite(settings.unified_min_economic_confidence, 90) / 100));
       const latest = latestByCampaign(intradayRows);
       const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
+      const snapshotFor = (product: any, asin: string) => canonicalSnapshots.find((snapshot: any) =>
+        (product?.sku && upper(snapshot.sku) === upper(product.sku)) || upper(snapshot.asin) === asin
+      ) || null;
+      const snapshotBlockers = (snapshot: any, increase: boolean): string[] => {
+        if (!snapshot?.id) return ['SNAPSHOT_REQUIRED'];
+        const blockers: string[] = [];
+        if (snapshot.data_fresh !== true || !snapshot.ads_data_fresh_at || !snapshot.sp_api_data_fresh_at || !snapshot.economics_data_fresh_at) blockers.push('STALE_DATA');
+        if (!snapshotIsActive(snapshot.listing_status) || !snapshotIsActive(snapshot.offer_status) || snapshot.buyable !== true || finite(snapshot.inventory_available) <= 0) blockers.push('PRODUCT_NOT_ELIGIBLE');
+        if (upper(snapshot.economic_state) === 'ECONOMICS_PENDING') blockers.push('ECONOMICS_INCOMPLETE');
+        if (finite(snapshot.economic_confidence) < minEconomicConfidence) blockers.push('LOW_ECONOMIC_CONFIDENCE');
+        if (increase && finite(snapshot.stock_coverage_days, 999) < 14) blockers.push('LOW_STOCK_BUDGET_INCREASE');
+        return blockers;
+      };
 
       const campaignRows = campaigns.filter((campaign: any) => active(campaign.state || campaign.status) && upper(campaign.campaign_type || 'SP') === 'SP');
       const portfolio = new Map<string, any>();
@@ -127,6 +145,7 @@ Deno.serve(async (request) => {
         const campaignId = campaignIdOf(campaign);
         const currentBudget = finite(campaign.daily_budget || campaign.budget);
         if (currentBudget <= 0) continue;
+        const snapshot = snapshotFor(row.product, row.asin);
 
         let targetBudget = currentBudget;
         let action = '';
@@ -148,8 +167,19 @@ Deno.serve(async (request) => {
 
         const key = `ASIN_DIVERSIFY|${accountId}|${row.asin}|${campaignId}|${action}|${today}|${targetBudget.toFixed(2)}`;
         if (priorDecisions.some((decision: any) => decision.idempotency_key === key && !['failed', 'cancelled', 'rejected', 'skipped'].includes(String(decision.status || '')))) continue;
+        const blockers = snapshotBlockers(snapshot, action === 'increase_budget');
+        if (blockers.length > 0) {
+          observations.push({
+            asin: row.asin,
+            campaign_id: campaignId,
+            action,
+            status: 'DEFERRED_UNTIL_CANONICAL_SNAPSHOT',
+            blockers,
+          });
+          continue;
+        }
         if (body.dry_run === true) {
-          decisions.push({ asin: row.asin, campaign_id: campaignId, action, current_budget: currentBudget, target_budget: targetBudget, dry_run: true });
+          decisions.push({ asin: row.asin, campaign_id: campaignId, action, current_budget: currentBudget, target_budget: targetBudget, snapshot_id: snapshot.id, dry_run: true });
           continue;
         }
 
@@ -160,8 +190,14 @@ Deno.serve(async (request) => {
           entity_id: campaignId,
           campaign_id: campaignId,
           campaign_name: campaign.name || campaign.campaign_name || null,
+          asin: row.asin,
+          sku: row.product?.sku || snapshot.sku || null,
           action,
-          canonical_action_type: 'CAMPAIGN_BUDGET_CHANGE',
+          canonical_action_type: 'BUDGET_CHANGE',
+          snapshot_id: snapshot.id,
+          snapshot_key: snapshot.snapshot_key || null,
+          marketplace_id: account.marketplace_id || null,
+          profile_id: account.ads_profile_id || null,
           rationale: underExposed
             ? `ASIN ${row.asin} ativo e com estoque recebeu ${(currentShare * 100).toFixed(1)}% do gasto, abaixo do piso exploratório ${(floorShare * 100).toFixed(1)}%. Aumento limitado a 10% para gerar oportunidade de aprendizado sem romper ACoS/MER.`
             : `ASIN ${row.asin} concentrou ${(currentShare * 100).toFixed(1)}% do gasto, acima do teto ${(shareCap * 100).toFixed(1)}%, sem proteção econômica suficiente. Redução libera capital para outros ASINs ativos com estoque.`,
@@ -169,6 +205,13 @@ Deno.serve(async (request) => {
           reason_code: reasonCode,
           value_before: currentBudget,
           value_after: targetBudget,
+          current_value: currentBudget,
+          proposed_value: targetBudget,
+          change_pct: roundMoney(((targetBudget - currentBudget) / currentBudget) * 100),
+          account_daily_budget_limit: accountBudget,
+          account_daily_spend: roundMoney(totalSpend),
+          remaining_account_budget: roundMoney(Math.max(0, accountBudget - totalSpend)),
+          expected_impact_value: roundMoney(Math.max(0, targetBudget - currentBudget)),
           confidence: underExposed ? 0.82 : 0.94,
           risk: underExposed ? 'low' : 'medium',
           requires_approval: false,
@@ -179,12 +222,31 @@ Deno.serve(async (request) => {
           execution_mode: 'STANDARD_QUEUE',
           confirmation_required: true,
           confirmation_status: 'pending',
+          data_scope_validated: true,
+          data_scope_status: 'VALID',
           requires_fresh_data: true,
           maximum_data_age_minutes: 45,
+          metric_window: today,
+          decision_window: String(snapshot.decision_window || `portfolio_${today}`),
+          data_window_start: today,
+          data_window_end: today,
+          precondition_snapshot: JSON.stringify({
+            snapshot_id: snapshot.id,
+            snapshot_key: snapshot.snapshot_key,
+            data_fresh: snapshot.data_fresh,
+            listing_status: snapshot.listing_status,
+            offer_status: snapshot.offer_status,
+            buyable: snapshot.buyable,
+            inventory_available: snapshot.inventory_available,
+            economic_confidence: snapshot.economic_confidence,
+          }),
+          rollback_plan: JSON.stringify({ action: 'set_budget', campaign_id: campaignId, value: currentBudget, reason: 'portfolio_budget_rollback' }),
+          lock_key: `portfolio_budget|${accountId}|${campaignId}|${today}`,
+          max_attempts: 3,
           idempotency_key: key,
           conflict_group: `${accountId}|campaign|${campaignId}`,
           source_function: SOURCE,
-          data_used: JSON.stringify({ asin: row.asin, total_spend: totalSpend, asin_spend: row.spend, asin_sales: row.sales, asin_orders: row.orders, asin_acos: acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, exploration_pool_share: explorationPoolShare, target_acos: targetAcos, product_eligibility: 'active_and_in_stock' }),
+          data_used: JSON.stringify({ asin: row.asin, total_spend: totalSpend, asin_spend: row.spend, asin_sales: row.sales, asin_orders: row.orders, asin_acos: acos, current_share: currentShare, floor_share: floorShare, cap_share: shareCap, exploration_pool_share: explorationPoolShare, target_acos: targetAcos, product_eligibility: 'active_and_in_stock', snapshot_id: snapshot.id, snapshot_key: snapshot.snapshot_key }),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
