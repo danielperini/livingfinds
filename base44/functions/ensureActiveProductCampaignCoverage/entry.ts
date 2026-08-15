@@ -66,6 +66,7 @@ Deno.serve(async (req) => {
       let catalogSync: any = null;
       let offerSync: any = null;
       let stockGuard: any = null;
+      let campaignStateSync: any = null;
       if (!dryRun && !fastMode) {
         catalogSync = dataOf(await base44.asServiceRole.functions.invoke('syncProductCatalogV2', {
           _service_role: true, amazon_account_id: accountId,
@@ -83,6 +84,12 @@ Deno.serve(async (req) => {
         stockGuard = dataOf(await base44.asServiceRole.functions.invoke('autoStockCampaignGuard', {
           _service_role: true, amazon_account_id: accountId,
           low_stock_pause_threshold: 1,
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
+        // A desduplicacao precisa partir da fotografia remota mais recente;
+        // caso contrario uma AUTO criada/alterada fora do app pode escapar do
+        // limite de uma campanha por ASIN.
+        campaignStateSync = dataOf(await base44.asServiceRole.functions.invoke('syncAdsCampaignStatesV2', {
+          _service_role: true, amazon_account_id: accountId,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
           _service_role: true, amazon_account_id: accountId, dry_run: false,
@@ -127,7 +134,7 @@ Deno.serve(async (req) => {
             const state = String(c.state || c.status || '').toUpperCase();
             return c.archived !== true && state !== 'ARCHIVED' && (targeting === 'AUTO' || name.includes('AUTO'));
           });
-          rows.push({ sku, asin, action: autos.length ? (String(autos[0].state || autos[0].status).toUpperCase() === 'ENABLED' ? 'existing_enabled' : 'would_reactivate') : 'would_create', auto_campaigns: autos.length });
+          rows.push({ sku, asin, action: autos.length ? (String(autos[0].state || autos[0].status).toUpperCase() === 'ENABLED' ? 'existing_enabled' : 'would_reactivate') : 'would_create', auto_campaigns: autos.length, exact_one_auto_after_reconciliation: autos.length === 1 });
           continue;
         }
 
@@ -138,6 +145,7 @@ Deno.serve(async (req) => {
             asin,
             sku,
             product_name: product.product_name || product.title || product.name || '',
+            launch_at_minimum: true,
           }));
           rows.push({ sku, asin, ok: created.ok !== false, action: created.action_label || (created.already_exists ? 'existing_enabled' : 'created'), campaign_id: created.campaign_id || null, error: created.error || null });
         } catch (error: any) {
@@ -148,7 +156,15 @@ Deno.serve(async (req) => {
       let repair: any = null;
       let harvest: any = null;
       let profitProtection: any = null;
+      let finalAutoReconciliation: any = null;
       if (!dryRun && !fastMode) {
+        // Cria/reativa pode ter revelado uma duplicidade remota durante a
+        // conciliacao. Executar uma segunda vez, limitada aos ASINs tratados,
+        // confirma o teto de exatamente uma AUTO antes dos reparos e harvest.
+        finalAutoReconciliation = dataOf(await base44.asServiceRole.functions.invoke('deduplicateAutoCampaignsByAsin', {
+          _service_role: true, amazon_account_id: accountId, dry_run: false,
+          asins: [...seenAsins],
+        }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
         repair = dataOf(await base44.asServiceRole.functions.invoke('repairIncompleteAutoCampaigns', {
           _service_role: true, amazon_account_id: accountId, asins: limitedEligible.map((p: any) => p.asin),
         }).catch((error: any) => ({ data: { ok: false, error: error?.message } })));
@@ -181,6 +197,7 @@ Deno.serve(async (req) => {
         failed: rows.filter((r: any) => r.ok === false).length,
         rows, repair, harvest, profit_protection: profitProtection,
         catalog_sync: catalogSync, offer_sync: offerSync, stock_guard: stockGuard,
+        campaign_state_sync: campaignStateSync, final_auto_reconciliation: finalAutoReconciliation,
       });
     }
 

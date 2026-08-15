@@ -61,7 +61,10 @@ Deno.serve(async (req) => {
         const autos = linked.filter((c: any) => String(c.targetingType || '').toUpperCase() === 'AUTO');
         const manuals = linked.filter((c: any) => String(c.targetingType || '').toUpperCase() === 'MANUAL');
         results.push({ sku, asin, auto_active: autos.length, manual_active: manuals.length,
-          compliant: autos.length >= 1 && manuals.length >= floor,
+          // AUTO e intencionalmente 1: uma segunda AUTO disputa os mesmos
+          // termos de descoberta e infla gasto. O verificador deve expor tanto
+          // ausencia quanto duplicidade como divergencia operacional.
+          compliant: autos.length === 1 && manuals.length >= floor,
           auto_campaign_ids: autos.map((c: any) => String(c.campaignId)),
           manual_campaign_ids: manuals.map((c: any) => String(c.campaignId)) });
       }

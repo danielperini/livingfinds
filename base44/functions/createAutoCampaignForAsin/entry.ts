@@ -177,7 +177,15 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id, asin }, '-assessment_date', 1).catch(() => []),
     ]);
     const goalSettings = { ...(earlyAutopilotRows[0] || {}), ...(performanceRows[0] || {}) };
-    const initialBid = proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
+    // AUTO e a camada de descoberta do funil. Ela sempre nasce no piso
+    // configurado e so e elevada posteriormente pelo motor, quando houver
+    // entrega e evidencia economica. Assim uma criacao/reconciliacao nunca
+    // introduz um CPC alto por conta propria.
+    const configuredMinimumBid = Math.max(0.02, Number(goalSettings?.min_bid || 0.10));
+    const launchAtMinimum = body.launch_at_minimum !== false;
+    const initialBid = launchAtMinimum
+      ? Math.round(configuredMinimumBid * 100) / 100
+      : proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
 
     const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
     const autoCampaign = existingCampaigns.find((c: any) => {
@@ -214,22 +222,10 @@ Deno.serve(async (req) => {
         is_operational: true, archived: false,
         synced_at: new Date().toISOString(), last_sync_at: new Date().toISOString(),
       });
-      const existingGroups = await base44.asServiceRole.entities.AdGroup.filter({
-        amazon_account_id, campaign_id: String(effectiveCampaignId),
-      }, null, 100).catch(() => []);
-      for (const group of existingGroups) {
-        const adGroupId = String(group.ad_group_id || '');
-        if (!adGroupId || Math.abs(Number(group.default_bid || group.bid || 0) - initialBid) < 0.01) continue;
-        const adjusted = await adsRequestWithDetails(
-          'PUT', '/sp/adGroups', { adGroups: [{ adGroupId, defaultBid: initialBid }] },
-          refreshToken, String(profileId), 'application/vnd.spAdGroup.v3+json'
-        );
-        if ([200, 201, 207].includes(adjusted.status)) {
-          await base44.asServiceRole.entities.AdGroup.update(group.id, {
-            default_bid: initialBid, bid: initialBid, synced_at: new Date().toISOString(),
-          }).catch(() => {});
-        }
-      }
+      // Nao redefinir o lance de uma AUTO existente. O mesmo endpoint e
+      // chamado a cada ciclo de cobertura; rebaixar o Ad Group ao piso aqui
+      // apagaria a evolucao gradual feita por bid/dayparting e esconderia o
+      // efeito das decisoes economicas anteriores.
       const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
       for (const product of linkedProducts) {
         await base44.asServiceRole.entities.Product.update(product.id, {
@@ -244,6 +240,7 @@ Deno.serve(async (req) => {
         already_exists: true,
         reactivated: true,
         action_label: 'reactivated',
+        launch_bid_policy: launchAtMinimum ? 'configured_minimum' : 'proportional_override',
         proportional_bid: initialBid,
       });
     }
