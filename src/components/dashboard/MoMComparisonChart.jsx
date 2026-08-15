@@ -36,7 +36,7 @@ const CustomTooltip = ({ active, payload, label, activeMetric }) => {
   );
 };
 
-function RevenueTooltip({ active, payload, label, unit = 'brl' }) {
+function ComparisonTooltip({ active, payload, label, unit = 'brl' }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-[#10182B] border border-surface-2 rounded-lg p-3 text-xs shadow-xl">
@@ -44,7 +44,7 @@ function RevenueTooltip({ active, payload, label, unit = 'brl' }) {
       {payload.map((point) => (
         <div key={point.dataKey} className="flex items-center justify-between gap-4 mb-1 last:mb-0">
           <span className="flex items-center gap-2 text-slate-300"><span className="w-2 h-2 rounded-full" style={{ background: point.color }} />{point.name}</span>
-          <strong className="text-white">{point.value == null ? '—' : unit === 'units' ? `${Number(point.value).toLocaleString('pt-BR')} unid.` : fmtBRL(point.value)}</strong>
+          <strong className="text-white">{point.value == null ? '—' : unit === 'units' ? `${Number(point.value).toLocaleString('pt-BR')} unid.` : unit === 'impressions' ? Number(point.value).toLocaleString('pt-BR') : fmtBRL(point.value)}</strong>
         </div>
       ))}
     </div>
@@ -145,6 +145,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         prevOrders:  inPrevRange ? (prevAds?.orders ?? null) : null,
         curAcos:     inCurRange  ? curAcos   : null,
         prevAcos:    inPrevRange ? prevAcos  : null,
+        curImpressions: inCurRange ? (curAds?.impressions ?? null) : null,
+        prevImpressions: inPrevRange ? (prevAds?.impressions ?? null) : null,
       });
     }
     return points;
@@ -331,32 +333,32 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         </ResponsiveContainer>
       )}
 
-      {/* Rodapé informativo */}
-      <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="daily-revenue-comparison">
+      {/* Volume de tráfego separado das curvas financeiras do dashboard. */}
+      <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="daily-impressions-comparison">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>
-            <h3 id="daily-revenue-comparison" className="text-sm font-semibold text-slate-200">Faturamento real por dia</h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">Comparação direta por dia do mês · Finance Events SP-API e relatórios consolidados.</p>
+            <h3 id="daily-impressions-comparison" className="text-sm font-semibold text-slate-200">Impressões por dia</h3>
+            <p className="text-[10px] text-slate-500 mt-0.5">Comparação direta do alcance Ads por dia do mês, sem misturar volume com valores em R$.</p>
           </div>
-          <span className="text-[10px] text-orange-300 bg-orange-400/10 border border-orange-400/20 rounded-full px-2 py-1 whitespace-nowrap">Faturamento</span>
+          <span className="text-[10px] text-violet-200 bg-violet-400/10 border border-violet-400/20 rounded-full px-2 py-1 whitespace-nowrap">Alcance Ads</span>
         </div>
-        {chartData.some((point) => point.curRevenue != null || point.prevRevenue != null) ? (
+        {chartData.some((point) => point.curImpressions != null || point.prevImpressions != null) ? (
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={3}>
               <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
               <XAxis dataKey="day" tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false}
                 label={{ value: 'Dia do mês', position: 'insideBottomRight', offset: -4, fontSize: 9, fill: '#94A3B8' }} />
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={50}
-                tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
-              <Tooltip content={<RevenueTooltip />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
+                tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(0)}k` : value.toFixed(0)} />
+              <Tooltip content={<ComparisonTooltip unit="impressions" />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
               <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
-              <Bar dataKey="prevRevenue" name={prevMonthLabel} fill="#FB923C55" radius={[4, 4, 0, 0]} maxBarSize={20} />
-              <Bar dataKey="curRevenue" name={`${curMonthLabel} (atual)`} fill="#FB923C" radius={[4, 4, 0, 0]} maxBarSize={20} />
+              <Bar dataKey="prevImpressions" name={prevMonthLabel} fill="#8B5CF655" radius={[4, 4, 0, 0]} maxBarSize={20} />
+              <Bar dataKey="curImpressions" name={`${curMonthLabel} (atual)`} fill="#8B5CF6" radius={[4, 4, 0, 0]} maxBarSize={20} />
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
           <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">
-            Sem faturamento real diário suficiente para a comparação.
+            Sem impressões diárias suficientes para a comparação.
           </div>
         )}
       </section>
@@ -377,7 +379,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
                 label={{ value: 'Dia do mês', position: 'insideBottomRight', offset: -4, fontSize: 9, fill: '#94A3B8' }} />
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={54}
                 tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
-              <Tooltip content={<RevenueTooltip />} cursor={{ stroke: 'rgba(91,108,255,.45)', strokeDasharray: '3 3' }} />
+              <Tooltip content={<ComparisonTooltip />} cursor={{ stroke: 'rgba(91,108,255,.45)', strokeDasharray: '3 3' }} />
               <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
               <Line type="monotone" dataKey="prevCumulative" name={`${prevMonthLabel} acumulado`} stroke="#FB923C88" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
               <Line type="monotone" dataKey="curCumulative" name={`${curMonthLabel} acumulado`} stroke="#FB923C" strokeWidth={2.8} dot={false} connectNulls={false} />
@@ -433,7 +435,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <XAxis dataKey="label" tick={{ fontSize: rollingPeriod > 30 ? 8 : 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} interval={rollingPeriod > 30 ? Math.ceil(rollingPeriod / 12) : 0} />
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={56}
                 tickFormatter={(value) => rollingMetric === 'units' ? value.toFixed(0) : (value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`)} />
-              <Tooltip content={<RevenueTooltip unit={rollingMetric === 'units' ? 'units' : 'brl'} />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
+              <Tooltip content={<ComparisonTooltip unit={rollingMetric === 'units' ? 'units' : 'brl'} />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
               <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
               <Bar dataKey="previous" name="Período anterior" fill={rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
               <Bar dataKey="current" name={`Últimos ${rollingPeriod} dias`} fill={rollingMetric === 'units' ? '#4DA3FF' : '#FB923C'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />

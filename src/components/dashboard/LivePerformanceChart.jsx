@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Area, Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
+  Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
@@ -67,7 +67,6 @@ function brDateTime(value) {
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload || {};
-  const number = (value) => value == null ? '—' : Number(value).toLocaleString('pt-BR');
   return (
     <div className="rounded-lg p-3 text-xs shadow-xl min-w-56" style={{ backgroundColor: 'var(--tooltip-bg)', border: '1px solid var(--tooltip-border)', color: 'var(--tooltip-text)' }}>
       <div className="flex items-center justify-between gap-3 mb-2"><strong>{label}</strong><span className="text-[10px] opacity-70">{row.sourceLabel}</span></div>
@@ -75,9 +74,6 @@ function ChartTooltip({ active, payload, label }) {
         <p className="flex justify-between gap-4"><span className="opacity-70">Gasto Ads</span><strong>{row.gasto == null ? '—' : fmtBRL(row.gasto)}</strong></p>
         <p className="flex justify-between gap-4"><span className="opacity-70">Vendas Ads</span><strong>{row.vendasAds == null ? '—' : fmtBRL(row.vendasAds)}</strong></p>
         <p className="flex justify-between gap-4"><span className="opacity-70">Faturamento real</span><strong>{row.faturamentoReal == null ? '—' : fmtBRL(row.faturamentoReal)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="opacity-70">Impressões</span><strong>{number(row.impressoes)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="opacity-70">Cliques</span><strong>{number(row.cliques)}</strong></p>
-        <p className="flex justify-between gap-4"><span className="opacity-70">Alterações IA</span><strong>{number(row.alteracoes || 0)}</strong></p>
       </div>
     </div>
   );
@@ -328,12 +324,7 @@ export default function LivePerformanceChart() {
           <CartesianGrid strokeDasharray="3 3" stroke="#1A1D26" />
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
           <YAxis yAxisId="brl" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} width={48} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
-          <YAxis yAxisId="volume" orientation="right" tick={{ fontSize: 11, fill: '#475569' }} axisLine={false} tickLine={false} width={42} tickFormatter={(value) => value >= 1000 ? `${Math.round(value / 1000)}k` : value} />
-          <YAxis yAxisId="actions" orientation="right" hide />
           <Tooltip content={<ChartTooltip />} />
-          <Bar yAxisId="volume" dataKey="impressoes" name="Impressões" fill="#8B5CF6" opacity={0.28} />
-          <Bar yAxisId="volume" dataKey="cliques" name="Cliques" fill="#38BDF8" opacity={0.65} />
-          <Bar yAxisId="actions" dataKey="alteracoes" name="Alterações IA" fill="#F59E0B" opacity={0.75} />
           <Area yAxisId="brl" type="monotone" dataKey="vendasAds" name="Vendas Ads" stroke="#10B981" fill="url(#liveSales)" strokeWidth={2} dot={false} connectNulls={false} />
           <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto Ads" stroke="#3B82F6" fill="url(#liveSpend)" strokeWidth={2} dot={false} connectNulls={false} />
           <Line yAxisId="brl" type="monotone" dataKey="faturamentoReal" name="Faturamento real" stroke="#FB923C" strokeWidth={2.2} dot={false} connectNulls={false} />

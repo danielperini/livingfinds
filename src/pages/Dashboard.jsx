@@ -301,11 +301,22 @@ export default function Dashboard() {
     enabled: !!account?.id,
   });
 
-  // Último sync para subtexto do header
+  // A atividade intradiária registrada pelo scheduler tem precedência sobre o
+  // `last_sync_at` da conta, que representa apenas a sincronização completa e
+  // pode ficar horas atrás mesmo quando o motor está operando normalmente.
   const lastSyncInfo = useMemo(() => {
-    if (account?.last_sync_at) return { at: account.last_sync_at };
-    const last = syncRuns.find(r => r.status === 'success' || r.status === 'skipped_limit');
-    return last ? { at: last.completed_at || last.started_at } : null;
+    const successfulRuns = [...syncRuns]
+      .filter((run) => ['success', 'skipped_limit'].includes(String(run.status || '').toLowerCase()))
+      .sort((left, right) => new Date(right.completed_at || right.started_at || right.created_date || 0) - new Date(left.completed_at || left.started_at || left.created_date || 0));
+    const last = successfulRuns[0];
+    if (last) {
+      return {
+        at: last.completed_at || last.started_at || last.created_date,
+        intervalMinutes: 15,
+        source: 'atividade intradiária do motor',
+      };
+    }
+    return account?.last_sync_at ? { at: account.last_sync_at, intervalMinutes: 24 * 60, source: 'sincronização completa' } : null;
   }, [account, syncRuns]);
 
   // ─── Cálculos com período fechado ─────────────────────────────────────────
@@ -721,7 +732,7 @@ export default function Dashboard() {
   const nextSyncLabel = useMemo(() => {
     if (!lastSyncInfo) return null;
     const syncDate = new Date(lastSyncInfo.at);
-    const nextSync = new Date(syncDate.getTime() + 24 * 3600000);
+    const nextSync = new Date(syncDate.getTime() + (lastSyncInfo.intervalMinutes || 24 * 60) * 60_000);
     const diffMs = nextSync.getTime() - Date.now();
     const diffH = Math.floor(diffMs / 3600000);
     const diffM = Math.floor((diffMs % 3600000) / 60000);
@@ -808,15 +819,12 @@ export default function Dashboard() {
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan inline-block" />Gasto: {fmtBRL(kpis.spend)}</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Vendas Ads: {fmtBRL(kpis.sales)}</span>
           {hasSalesDailyData ? <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400 inline-block" />Fat. Real: {fmtBRL(realSalesKpis.revenue)}</span> : null}
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-violet-400/60 inline-block" />Impr.: {kpis.impressions.toLocaleString('pt-BR')}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-400/80 inline-block" />Cliques: {kpis.clicks.toLocaleString('pt-BR')}</span>
-          {totalChanges > 0 ? (<span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Alt. IA: {totalChanges}</span>) : null}
           </div>
         </div>
         <p className="text-[10px] text-slate-500 mb-2">
           <span>Todo o histórico disponível · Vendas Ads = atribuição Amazon</span>
           {hasSalesDailyData ? <span> · <span className="text-orange-400/80">curva laranja = faturamento real (SP-API)</span></span> : null}
-          <span>{' · '}barras roxas = impressões · barras azuis = cliques · barras âmbar = alterações da IA</span>
+          <span>{' · '}curvas: gasto (azul), vendas Ads (verde) e faturamento real (laranja)</span>
           {(() => {
             if (!lastAvailableAdsDate) return null;
             const yesterday = getYesterday();
@@ -877,18 +885,7 @@ export default function Dashboard() {
               {/* Eixo esquerdo: R$ (gasto, vendas, faturamento) */}
               <YAxis yAxisId="brl" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={42}
                 tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
-              {/* Eixo direito: impressões e alterações IA (escalas diferentes — impressões domina) */}
-              <YAxis yAxisId="impr" orientation="right" tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={36}
-                tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v.toFixed(0)} />
-              <YAxis yAxisId="ai" orientation="right" hide />
-              <YAxis yAxisId="clicks" orientation="right" hide />
               <Tooltip content={<ChartTooltip consolidatedChart={consolidatedChart} />} />
-              {/* Impressões: barras roxas (eixo direito) */}
-              <Bar yAxisId="impr" dataKey="impressões" name="Impressões" fill="#8B5CF6" opacity={0.3} radius={[1, 1, 0, 0]} />
-              {/* Cliques: barras azul-céu (eixo próprio) */}
-              <Bar yAxisId="clicks" dataKey="cliques" name="Cliques" fill="#38BDF8" opacity={0.6} radius={[1, 1, 0, 0]} />
-              {/* Alterações da IA: barras âmbar (eixo ai — escala própria) */}
-              <Bar yAxisId="ai" dataKey="alterações IA" name="Alterações IA" fill="#F59E0B" opacity={0.7} radius={[2, 2, 0, 0]} />
               {/* Linhas de valor em R$ */}
               <Area yAxisId="brl" type="monotone" dataKey="vendas ads" name="Vendas Ads" stroke="#10B981" fill="url(#gVendas)" strokeWidth={2} dot={false} />
               <Area yAxisId="brl" type="monotone" dataKey="gasto" name="Gasto" stroke="#3B82F6" fill="url(#gGasto)" strokeWidth={2} dot={false} />

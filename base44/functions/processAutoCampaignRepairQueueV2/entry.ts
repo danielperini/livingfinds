@@ -200,7 +200,11 @@ Deno.serve(async (request) => {
 
     const hour = Number.isFinite(Number(body.hour)) ? Number(body.hour) : hourBR();
     const forceRun = body.force === true;
-    if (!forceRun && ![0, 1, 2, 3, 13].includes(hour)) {
+    // O agendador canônico processa somente um item por ciclo. Ele pode rodar
+    // durante o dia porque o próprio limite unitário protege a quota Amazon;
+    // restringir a janela deixava reparos agendados acumularem por dias.
+    const schedulerRun = body._service_role === true;
+    if (!forceRun && !schedulerRun && ![0, 1, 2, 3, 13].includes(hour)) {
       return Response.json({ ok: true, skipped: true, hour, reason: 'Fora da janela Amazon' });
     }
 
