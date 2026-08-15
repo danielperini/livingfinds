@@ -32,7 +32,12 @@ Deno.serve(async (request) => {
     const baselineAt = baseline?.baseline_at || new Date().toISOString();
     const elapsedHours = Math.max(0, (Date.now() - new Date(baselineAt).getTime()) / 3_600_000);
     const multiplier = elapsedHours >= 96 ? 2 : elapsedHours >= 48 ? 1.4 : elapsedHours >= 12 ? 1.2 : 1;
-    const target = baselineCount > 0 ? Math.ceil(baselineCount * multiplier) : 0;
+    // Bootstrap: uma base zerada não pode tornar a meta zerada. Sem este piso,
+    // o motor não procurava a primeira manual rentável e só reagia depois de
+    // uma campanha já existir. O piso continua seguro: apenas enfileira quando
+    // TermBank/harvest/Campaign Factory encontrarem termo com evidência real.
+    const bootstrapRequired = baselineCount === 0 && productive.length === 0;
+    const target = baselineCount > 0 ? Math.ceil(baselineCount * multiplier) : 1;
     const gap = Math.max(0, target - productive.length);
     let queued = 0;
     if (gap > 0 && body.dry_run !== true) {
@@ -50,7 +55,7 @@ Deno.serve(async (request) => {
       }).catch(() => null);
       queued = n(result?.data?.reports?.[0]?.scheduled || result?.reports?.[0]?.scheduled);
     }
-    const snapshot = { amazon_account_id: aid, baseline_productive_manuals: baselineCount, current_productive_manuals: productive.length, target_productive_manuals: target, target_multiplier: multiplier, elapsed_hours: Number(elapsedHours.toFixed(2)), growth_gap: gap, safe_campaigns_queued: queued, status: gap === 0 ? 'on_track' : queued ? 'safe_candidates_queued' : 'awaiting_proven_candidates', baseline_at: baselineAt, checked_at: new Date().toISOString(), details: { sources: ['Amazon Ads search terms from AUTO', 'Amazon Ads search terms from MANUAL', 'TermBank', 'KeywordBank / Campaign Factory'], policy: '20pct_12h_40pct_48h_100pct_96h; only profitable manual campaigns count; Campaign Factory safety limits prevail' } };
+    const snapshot = { amazon_account_id: aid, baseline_productive_manuals: baselineCount, current_productive_manuals: productive.length, target_productive_manuals: target, target_multiplier: multiplier, elapsed_hours: Number(elapsedHours.toFixed(2)), growth_gap: gap, safe_campaigns_queued: queued, status: gap === 0 ? 'on_track' : queued ? 'safe_candidates_queued' : bootstrapRequired ? 'bootstrap_awaiting_proven_candidates' : 'awaiting_proven_candidates', baseline_at: baselineAt, checked_at: new Date().toISOString(), details: { sources: ['Amazon Ads search terms from AUTO', 'Amazon Ads search terms from MANUAL', 'TermBank', 'KeywordBank / Campaign Factory'], policy: 'bootstrap_floor_1; 20pct_12h_40pct_48h_100pct_96h; only profitable manual campaigns count; Campaign Factory safety limits prevail', bootstrap_required: bootstrapRequired } };
     await base44.asServiceRole.entities.ManualGrowthObjectiveSnapshot.create(snapshot);
     reports.push(snapshot);
   }
