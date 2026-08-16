@@ -16,6 +16,13 @@ function brtHour(now = new Date()): number {
   return Number(hour) % 24;
 }
 
+function brtMinute(now = new Date()): number {
+  const minute = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Sao_Paulo', minute: '2-digit', hour12: false,
+  }).format(now);
+  return Number(minute);
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -27,8 +34,15 @@ Deno.serve(async (request) => {
     const dailyClose = body.daily_close === true;
     const dryRun = body.dry_run === true;
     const correlationId = body.correlation_id || crypto.randomUUID();
-    const currentHour = brtHour(body.now ? new Date(body.now) : new Date());
-    const lifecycleWindow = dailyClose || body.bootstrap === true || body.force_campaign_lifecycle === true || currentHour % 3 === 0;
+    const engineNow = body.now ? new Date(body.now) : new Date();
+    const currentHour = brtHour(engineNow);
+    const currentMinute = brtMinute(engineNow);
+    // The scheduler runs every 15 minutes. A 3-hour lifecycle must have one
+    // owner and one execution slot, not four executions throughout hour 00/03/….
+    const lifecycleWindow = dailyClose || body.bootstrap === true || body.force_campaign_lifecycle === true
+      || (currentHour % 3 === 0 && currentMinute < 15);
+    // Dayparting is evaluated hourly after the first intraday data window.
+    const daypartWindow = dailyClose || body.bootstrap === true || body.force_dayparting === true || currentMinute < 15;
     // Meta de portfólio: ampliar em 40% a quantidade de campanhas que realmente
     // entregam (impressões/cliques/gasto), nunca a mera contagem de campanhas criadas.
     // É uma meta subordinada aos guardrails econômicos, estoque e confirmação Amazon.
@@ -151,24 +165,24 @@ Deno.serve(async (request) => {
           max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
         });
 
-    const daypartConfiguration = body.skip_scheduled_daypart === true
+    const daypartConfiguration = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
       : await invoke(base44, 'syncDaypartingConfiguration', {
           ...common,
           bootstrap_default_rules: body.bootstrap === true,
         });
-    const daypartBudgetRestore = body.skip_scheduled_daypart === true
+    const daypartBudgetRestore = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
       : await invoke(base44, 'reconcileDaypartCampaignBudgets', {
           ...common,
           now: body.now || null,
         });
-    const scheduledCampaignState = body.skip_scheduled_daypart === true
+    const scheduledCampaignState = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueCanonicalCampaignDaypartState', {
           ...common, now: body.now || null,
         });
-    const scheduledBidDaypart = body.skip_scheduled_daypart === true
+    const scheduledBidDaypart = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }
       : await invoke(base44, 'queueScheduledAdsDaypartTest', {
           ...common,
@@ -197,7 +211,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v19-profitable-serving-recovery',
+      engine_version: 'unified-v20-single-owner-orchestration',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -260,6 +274,7 @@ Deno.serve(async (request) => {
         due: lifecycleWindow,
         interval_hours: 3,
         brt_hour: currentHour,
+        brt_minute: currentMinute,
         schedule_owner: 'runUnifiedDecisionEngine',
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
         serving_growth_stage: 'runServingCampaignGrowthObjective',
@@ -271,6 +286,8 @@ Deno.serve(async (request) => {
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
       },
       dayparting: {
+        due: daypartWindow,
+        interval_hours: 1,
         source_of_truth: 'AmazonScheduledRule',
         live_when_not_dry_run: true,
         confirmation_required: true,

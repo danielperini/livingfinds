@@ -75,18 +75,6 @@
       "payload": { "_service_role": true, "trigger_type": "scheduler_e2e_audit" }
     },
     {
-      "name": "Canonical dayparting - hourly after intraday metrics",
-      "function": "runCanonicalDaypartingEngine",
-      "cron": "12 * * * *",
-      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_hourly_dayparting" }
-    },
-    {
-      "name": "Serving campaign growth v18 - every 3 hours",
-      "function": "runServingCampaignGrowthObjective",
-      "cron": "14 */3 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "serving_campaign_growth_target_pct": 40, "trigger_type": "scheduler_serving_growth_v18" }
-    },
-    {
       "name": "Repricing transport queue - every 5 minutes",
       "function": "runAutomaticRepricing",
       "cron": "*/5 * * * *",
