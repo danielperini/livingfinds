@@ -650,6 +650,9 @@ Deno.serve(async (request) => {
         const rollbackPlan = isBudget
           ? JSON.stringify({ action: 'set_budget', value: valueBefore })
           : JSON.stringify({ action: 'set_bid', value: valueBefore, paired_ad_group: canonicalBid?.requiresPairedAdGroup === true });
+        const protectiveBidReduction = action === 'reduce_bid' &&
+          /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/i
+            .test(String(adjustment.rule || adjustment.reason || ''));
         const governance = evaluateDecisionGovernance({
           actionType: action,
           entityType,
@@ -691,7 +694,11 @@ Deno.serve(async (request) => {
           absoluteBidIncreasePct: 0.20,
           maxBidReductionPct: 0.20,
           minPredictionConfidence: finite(rawConfig.unified_min_prediction_confidence, 90) / 100,
-          minEconomicConfidence: finite(rawConfig.unified_min_economic_confidence, 90) / 100,
+          // Defensive cuts have direct spend/margin evidence.  Requiring the
+          // same 90% model confidence as a growth action delays loss control.
+          minEconomicConfidence: protectiveBidReduction
+            ? 0.60
+            : finite(rawConfig.unified_min_economic_confidence, 90) / 100,
         });
         if (!governance.allowed) {
           blocked.push({

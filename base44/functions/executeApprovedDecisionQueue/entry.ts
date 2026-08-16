@@ -312,12 +312,19 @@ Deno.serve(async (request) => {
             amazon_account_id: aid,
             entity_id: decision.entity_id,
           }, '-executed_at', 10).catch(() => []);
+          const protectiveBidReduction = String(decision.action || '').toLowerCase().includes('reduce') &&
+            /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/i
+              .test(String(decision.reason_code || decision.rule_key || decision.rationale || ''));
+          const cooldownHours = protectiveBidReduction ? 2 : 6;
           const executorCooldownActive = priorEntityDecisions.some((prior: any) => {
             if (String(prior.id || '') === String(decision.id || '')) return false;
             const isBid = /bid/i.test(String(prior.canonical_action_type || prior.action || prior.decision_type || ''));
             const changedAt = new Date(String(prior.executed_at || prior.approved_at || prior.created_at || 0)).getTime();
-            return isBid && Number.isFinite(changedAt) && changedAt >= Date.now() - 48 * 3600000 &&
-              !['failed', 'cancelled', 'rejected', 'skipped', 'blocked'].includes(String(prior.status || ''));
+            // Only a confirmed Amazon write starts cooldown.  An approved,
+            // skipped or queued proposal must not lock an entity for 48h.
+            const applied = String(prior.status || '') === 'executed' ||
+              String(prior.confirmation_status || '') === 'confirmed';
+            return isBid && applied && Number.isFinite(changedAt) && changedAt >= Date.now() - cooldownHours * 3600000;
           });
           const confidenceRaw = Number(decision.confidence || 0);
           const governance = evaluateDecisionGovernance({
@@ -359,6 +366,7 @@ Deno.serve(async (request) => {
             defensive: snapshot?.risk_state === 'LOSS_CONFIRMED',
             parentAsin: snapshot?.parent_asin === true,
             rollbackPlan: decision.rollback_plan,
+            minEconomicConfidence: protectiveBidReduction ? 0.60 : 0.90,
           });
           if (!governance.allowed) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {

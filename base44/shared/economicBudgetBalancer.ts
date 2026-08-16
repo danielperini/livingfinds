@@ -191,8 +191,12 @@ export function resolveEconomicBalancerConfig(raw: Record<string, unknown> = {})
     learningWindowHours: clamp(finite(raw.learning_window_hours, 48), 48, 72),
     metricsFreshMinutes: clamp(finite(raw.economic_metrics_fresh_minutes, 30), 10, 180),
     decisionWindowMinutes: clamp(finite(raw.economic_decision_window_minutes, 15), 10, 60),
-    cooldownHours: clamp(finite(raw.economic_cooldown_hours, 48), 48, 72),
-    lowVolumeCooldownHours: clamp(finite(raw.low_volume_cooldown_hours, 48), 48, 168),
+    // The UI exposes 6h / 24h defaults.  The former 48h lower bound silently
+    // overrode those settings and made the engine appear to decide, then block
+    // itself for two days.  Keep a short safety floor while honouring the
+    // configured economic observation window.
+    cooldownHours: clamp(finite(raw.economic_cooldown_hours, 6), 2, 72),
+    lowVolumeCooldownHours: clamp(finite(raw.low_volume_cooldown_hours, 24), 6, 168),
     maxChangesPerCycle: clamp(Math.floor(finite(raw.max_changes_per_cycle, 20)), 1, 100),
     maxChangesPerHour: clamp(Math.floor(finite(raw.max_changes_per_hour, 40)), 1, 200),
   };

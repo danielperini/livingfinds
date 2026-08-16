@@ -25,8 +25,9 @@ const impressionsNoClick = buildCanonicalBidDecision({ ...baseBid, impressions: 
 assert.equal(impressionsNoClick.action, 'DECREASE_SOFT');
 
 const firstNoSale = buildCanonicalBidDecision({ ...baseBid, impressions: 1000, clicks: 20, spend: 16, spendShare: 0.28 });
-assert.equal(firstNoSale.action, 'DECREASE_SOFT');
-assert.ok(firstNoSale.changePct >= -0.06);
+assert.equal(firstNoSale.action, 'DECREASE_STRONG');
+assert.equal(firstNoSale.reasonCode, 'EARLY_ECONOMIC_LOSS_GUARD');
+assert.ok(firstNoSale.changePct >= -0.21);
 
 const repeatedNoSale = buildCanonicalBidDecision({ ...baseBid, impressions: 3000, clicks: 40, spend: 35, spendShare: 0.50, priorReductionCount: 2 });
 assert.equal(repeatedNoSale.action, 'DECREASE_STRONG');
@@ -47,6 +48,15 @@ const blockedPause = evaluateDecisionGovernance({
 });
 assert.equal(blockedPause.allowed, false);
 assert.ok(blockedPause.blockers.some((blocker) => blocker.code === 'NO_SALE_PAUSE_BLOCKED'));
+
+const protectiveReduction = evaluateDecisionGovernance({
+  actionType: 'reduce_bid', entityType: 'keyword', snapshotId: 'snap-guard',
+  currentValue: 0.80, proposedValue: 0.64, reasonCode: 'EARLY_ECONOMIC_LOSS_GUARD',
+  confidence: 0.97, dataFresh: true, productEligible: true, listingActive: true,
+  offerActive: true, buyable: true, inStock: true, economicsComplete: true,
+  economicConfidence: 0.65, rollbackPlan: 'restore_bid',
+});
+assert.equal(protectiveReduction.allowed, true);
 
 const priceBelowFloor = evaluateDecisionGovernance({
   actionType: 'decrease_price', entityType: 'product_price', snapshotId: 'snap-2',

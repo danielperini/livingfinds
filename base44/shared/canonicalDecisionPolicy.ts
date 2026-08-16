@@ -171,6 +171,17 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
   if (!input.economicsComplete || input.safeMaxCpc <= 0) return block('ECONOMICS_INCOMPLETE', 'Economia ou CPC seguro indisponível.');
   if (input.cooldownActive) return block('COOLDOWN_ACTIVE', 'Já houve alteração na janela de cooldown.');
   if (input.winnerProtected) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU e lucro protegem a entidade até a próxima janela.', 99, 12);
+  // A recently created entity may still spend enough to violate its economic
+  // test budget.  Learning never authorizes an unlimited loss: cut the bid
+  // before the normal 48h observation hold when that hard evidence exists.
+  const exceededNoSaleTest = input.sameSkuOrders <= 0 && input.clicks >= 3 &&
+    input.maxSpendWithoutSale > 0 && input.spend >= input.maxSpendWithoutSale;
+  if (exceededNoSaleTest) {
+    return bidResult(input, posterior, 'DECREASE_STRONG', -0.20,
+      'EARLY_ECONOMIC_LOSS_GUARD',
+      'Gasto sem venda já excedeu o orçamento econômico de teste; reduzir bid imediatamente sem pausar a campanha.',
+      97, 6);
+  }
   if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas reservadas para observação; somente risco financeiro crítico pode usar rota defensiva separada.', 98, 48);
 
   if (input.impressions <= 0 && input.clicks <= 0) {
@@ -221,6 +232,14 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   const isPrice = action.includes('price') || input.entityType === 'product_price';
   const isIncrease = action.includes('increase') || (Number(input.proposedValue) > Number(input.currentValue));
   const isDecrease = action.includes('decrease') || (Number(input.proposedValue) < Number(input.currentValue));
+  const reason = lower(`${input.reasonCode || ''} ${input.reason || ''}`);
+  // A reduction supported by a confirmed loss is not a speculative growth
+  // experiment.  It may act with a lower (but still material) confidence
+  // threshold, while all hard data, stock, margin and execution guards remain
+  // mandatory.  Growth actions keep the stricter configured threshold.
+  const protectiveBidReduction = isBid && isDecrease &&
+    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/.test(reason);
+  const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveBidReduction ? 0.60 : 0.90));
 
   if (input.accountKillSwitch) add('P1', 'ACCOUNT_KILL_SWITCH', 'Kill switch da conta está ativo.');
   const cap = Number(input.accountDailyCap || 0);
@@ -230,13 +249,12 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   if (!input.dataFresh || input.adsDataFresh === false || input.spApiDataFresh === false || input.economicsDataFresh === false) add('P2', 'STALE_DATA', 'Uma ou mais fontes obrigatórias estão vencidas.');
   if (!input.productEligible || !input.listingActive || !input.offerActive || !input.buyable || !input.inStock) add('P3', 'PRODUCT_NOT_ELIGIBLE', 'Produto, listing, oferta, Buy Box ou estoque bloqueiam a ação.');
   if (!input.economicsComplete) add('P4', 'ECONOMICS_INCOMPLETE', 'Custos, taxas ou margem não estão confirmados.');
-  if (Number(input.economicConfidence || 0) < Number(input.minEconomicConfidence ?? 0.90)) add('P4', 'LOW_ECONOMIC_CONFIDENCE', 'Confiança econômica abaixo do mínimo.');
+  if (Number(input.economicConfidence || 0) < economicConfidenceFloor) add('P4', 'LOW_ECONOMIC_CONFIDENCE', `Confiança econômica abaixo do mínimo de ${Math.round(economicConfidenceFloor * 100)}%.`);
   if (input.winnerProtected && input.sameSkuOrders && (isPause || (isBid && isDecrease))) add('P5', 'WINNER_PROTECTED', 'Winner confirmado por venda same-SKU está protegido.');
   if (input.winnerProtected && !input.sameSkuOrders && Number(input.haloOrders || 0) > 0) add('P5', 'HALO_NOT_WINNER_PROOF', 'Venda halo não protege o SKU anunciado.');
   if (input.cooldownActive) add('P6', 'COOLDOWN_ACTIVE', 'Entidade já foi alterada na janela de cooldown.');
   if (isPause && Number(input.campaignPauseShare || 0) > 0.50) add('P1', 'BATCH_PAUSE_BLOCKED_50', 'Mais de 50% das campanhas nunca pode ser pausado em lote.');
   else if (isPause && Number(input.campaignPauseShare || 0) > 0.30 && !input.explicitBatchAuthorization) add('P1', 'BATCH_PAUSE_REQUIRES_AUTH', 'Mais de 30% de pausas exige autorização explícita.');
-  const reason = lower(`${input.reasonCode || ''} ${input.reason || ''}`);
   if (isPause && /zero.*(sale|venda|conversion|convers)|sem venda|no.?conversion/.test(reason) && !/structural|estrutural|out.?of.?stock|sem estoque|invalid|duplic/.test(reason)) add('P7', 'NO_SALE_PAUSE_BLOCKED', 'Ausência de venda isolada nunca pausa campanha.');
 
   if (isBid && input.currentValue && input.proposedValue) {

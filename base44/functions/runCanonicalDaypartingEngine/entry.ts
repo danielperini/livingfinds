@@ -22,6 +22,22 @@ const r2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) *
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
 
+// Cumulative pacing curve for an account whose morning conversion is weaker.
+// It reserves budget for the afternoon/evening without changing the account's
+// daily cap. Learned hourly data can still classify an exceptional morning
+// slot as strong; this curve only prevents front-loading when data is absent
+// or spend is already ahead of the economically planned trajectory.
+function plannedBudgetShare(hour: number) {
+  if (hour < 7) return 0.04;
+  if (hour < 10) return 0.16;
+  if (hour < 12) return 0.26;
+  if (hour < 14) return 0.38;
+  if (hour < 17) return 0.50;
+  if (hour < 19) return 0.66;
+  if (hour < 22) return 0.86;
+  return 1;
+}
+
 function brtClock() {
   const now = new Date();
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -224,7 +240,12 @@ function chooseMultiplier(params: {
   maxDecreasePct: number;
 }) {
   const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, maxIncreasePct, maxDecreasePct } = params;
-  if (!slot.mature || slot.classification === 'COLLECTING_DATA') return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base.' };
+  if (!slot.mature || slot.classification === 'COLLECTING_DATA') {
+    if (pacing === 'morning_reserve' && !winner) {
+      return { multiplier: 0.85, reason: 'Pacing matinal: reserva de orçamento para faixas posteriores até haver evidência horária.' };
+    }
+    return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base.' };
+  }
 
   const maxUpMultiplier = 1 + Math.max(0, Math.min(50, maxIncreasePct)) / 100;
   const minDownMultiplier = Math.max(0.50, 1 - Math.max(0, Math.min(50, maxDecreasePct)) / 100);
@@ -235,7 +256,7 @@ function chooseMultiplier(params: {
     if (nativeCompensationMultiplier !== null) {
       return { multiplier: Math.max(minDownMultiplier, Math.min(1, nativeCompensationMultiplier)), reason: 'Compensação local: regra Amazon não pôde ser pausada diante de um guardrail.' };
     }
-    if (pacing === 'overpacing' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado por pacing ou proteção de lucro.' };
+    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado por pacing ou proteção de lucro.' };
     if (nativeCovered) return { multiplier: 1, reason: 'Regra Amazon aplicável cobre esta campanha e esta janela; manter/restaurar bid-base local.' };
 
     const desired = slot.classification === 'ELITE_TIME'
@@ -247,12 +268,15 @@ function chooseMultiplier(params: {
     };
   }
 
-  if (slot.classification === 'NORMAL_TIME') return { multiplier: 1, reason: 'NORMAL: manter/restaurar bid-base.' };
+  if (slot.classification === 'NORMAL_TIME') {
+    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.85, reason: 'NORMAL matinal: reduzir 15% para preservar verba do período de maior conversão.' };
+    return { multiplier: 1, reason: 'NORMAL: manter/restaurar bid-base.' };
+  }
   if (winner) return { multiplier: 1, reason: 'Entidade vencedora protegida contra redução horária.' };
   if (!sampleMature) return { multiplier: 1, reason: 'Redução bloqueada por amostra insuficiente.' };
 
   if (slot.classification === 'WEAK_TIME') {
-    const desired = orders === 0 || (acos !== null && acos > targetAcos * 1.20) || pacing === 'overpacing' ? 0.75 : 1;
+    const desired = orders === 0 || (acos !== null && acos > targetAcos * 1.20) || pacing === 'overpacing' || pacing === 'morning_reserve' ? 0.75 : 1;
     return { multiplier: Math.max(desired, minDownMultiplier), reason: desired < 1 ? 'WEAK com desperdício/overpacing: redução intermediária.' : 'WEAK com conversão protegida.' };
   }
 
@@ -386,7 +410,12 @@ Deno.serve(async (request) => {
         amazon_writes_blocked: true,
       });
     }
-    const pacing = String(controller.spend_pacing || (dailyCap > 0 && confirmedSpend > dailyCap * ((clock.hour + 1) / 24) * 1.20 ? 'overpacing' : 'on_track'));
+    const plannedSpendByNow = dailyCap > 0 ? dailyCap * plannedBudgetShare(clock.hour) : 0;
+    const morningReserve = clock.hour >= 7 && clock.hour < 12 && dailyCap > 0 &&
+      confirmedSpend > plannedSpendByNow * 1.10;
+    const pacing = morningReserve
+      ? 'morning_reserve'
+      : String(controller.spend_pacing || (dailyCap > 0 && confirmedSpend > plannedSpendByNow * 1.10 ? 'overpacing' : 'on_track'));
 
     const productByAsin = new Map(products.map((product: any) => [String(product.asin || ''), product]));
     const economicsByAsin = new Map(economics.map((economic: any) => [String(economic.asin || ''), economic]));
@@ -814,6 +843,8 @@ Deno.serve(async (request) => {
       pacing,
       confirmed_spend_today: r2(confirmedSpend),
       daily_cap: dailyCap,
+      planned_spend_by_now: r2(plannedSpendByNow),
+      planned_budget_share: plannedBudgetShare(clock.hour),
       executed,
       restored,
       skipped,
