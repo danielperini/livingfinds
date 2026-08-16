@@ -22,6 +22,20 @@ const hourBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Ameri
 const minuteBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', minute: '2-digit' }).format(new Date()));
 const daysAgo = (days: number) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
 
+function minimumMarginRate(settings: any): number {
+  const raw = n(settings?.minimum_net_margin_pct ?? settings?.minimum_margin_pct ?? 15, 15);
+  // Margin protection is never relaxed below the operational minimum of 15%.
+  return clamp(raw > 1 ? raw / 100 : raw, 0.15, 0.80);
+}
+
+function maximumAdsSpendPerOrder(economics: any, product: any, minMarginRate: number): number {
+  const price = n(economics?.current_price ?? economics?.average_sale_price ?? product?.amazon_price ?? product?.price);
+  const contributionBeforeAds = n(economics?.contribution_margin_amount ?? economics?.profit_before_ads);
+  // contributionBeforeAds already includes product, FBA and referral costs.
+  if (price > 0 && contributionBeforeAds > 0) return Math.max(0, contributionBeforeAds - price * minMarginRate);
+  return Math.max(0, n(product?.maximum_ad_spend_per_order ?? economics?.maximum_profitable_ad_spend));
+}
+
 function median(values: number[]) {
   const sorted = values.filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
   if (!sorted.length) return 0;
@@ -101,6 +115,7 @@ Deno.serve(async (request) => {
       const minCampaignBudget = Math.max(5, n(settings.minimum_campaign_budget, 5));
       const maxCampaignBudget = Math.max(minCampaignBudget, n(settings.maximum_campaign_budget, 100));
       const maxBid = Math.max(MIN_BID, n(settings.max_bid, 3));
+      const minMarginRate = minimumMarginRate(settings);
       const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
       const econByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
       const latest = latestByCampaign(intradayRows);
@@ -171,11 +186,14 @@ Deno.serve(async (request) => {
         const safeAcos = breakEvenAcos > 0 ? Math.min(targetAcos, breakEvenAcos * 0.75) : targetAcos;
         const profitAfterAds = n(econ.profit_after_ads ?? product?.profit_after_ads, 0);
         const budget = n(campaign.daily_budget || campaign.budget, 0);
-        const drySpend = todayM.orders === 0 && todayM.spend >= Math.max(5, n(product?.maximum_ad_spend_per_order, 5));
+        const maximumAdsPerOrder = maximumAdsSpendPerOrder(econ, product, minMarginRate);
+        const adsSpendPerOrder = todayM.orders > 0 ? todayM.spend / todayM.orders : todayM.spend;
+        const drySpend = todayM.orders === 0 && todayM.spend >= Math.max(2.5, maximumAdsPerOrder || 5);
+        const marginCapBreached = maximumAdsPerOrder > 0 && adsSpendPerOrder > maximumAdsPerOrder * 1.02;
         const inefficientToday = todayAcos !== null && todayAcos > Math.max(safeAcos * 1.5, safeAcos + 5);
 
-        if (drySpend || inefficientToday) {
-          losers.push({ campaign, id, asin, todayM, todayAcos, safeAcos, budget, product });
+        if (drySpend || marginCapBreached || inefficientToday) {
+          losers.push({ campaign, id, asin, todayM, todayAcos, safeAcos, budget, product, econ, maximumAdsPerOrder, adsSpendPerOrder, marginCapBreached });
           continue;
         }
         const historicalWinner = hist.orders >= 2 && hist.sales > hist.spend && histAcos !== null && histAcos <= safeAcos && profitAfterAds > 0;
@@ -204,8 +222,39 @@ Deno.serve(async (request) => {
       if (recoveryActive && body.dry_run !== true) {
         for (const loser of losers.slice(0, 5)) {
           if (queued.length >= MAX_ACTIONS) break;
+          // Margin breach is the fastest protection: lower the responsible
+          // keyword bids in the same 15-minute cycle before reducing budget.
+          if (loser.marginCapBreached) {
+            const bidFactor = clamp(loser.maximumAdsPerOrder / Math.max(loser.adsSpendPerOrder, 0.01), 0.45, 0.75);
+            const loserKeywords = keywords
+              .filter((kw: any) => active(kw) && s(kw.campaign_id || kw.amazon_campaign_id) === loser.id)
+              .sort((a: any, b: any) => n(b.spend) - n(a.spend))
+              .slice(0, 3);
+            for (const kw of loserKeywords) {
+              if (queued.length >= MAX_ACTIONS) break;
+              const keywordId = s(kw.keyword_id || kw.id);
+              const currentBid = n(kw.current_bid ?? kw.bid);
+              const nextBid = r2(Math.max(MIN_BID, Math.min(maxBid, currentBid * bidFactor, n(loser.econ.safe_max_cpc, maxBid))));
+              const key = `MARGIN_CAP|${aid}|${keywordId}|${hourKey}|${nextBid.toFixed(2)}`;
+              if (!keywordId || currentBid <= 0 || nextBid >= currentBid - 0.009 || activeKeys.has(key)) continue;
+              const decision = await createDecision({
+                entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
+                keyword_text: kw.keyword_text || kw.keyword || null, campaign_id: loser.id,
+                campaign_name: loser.campaign.name || loser.campaign.campaign_name || null,
+                ad_group_id: kw.ad_group_id || null, asin: loser.asin, sku: loser.product?.sku || null,
+                action: 'reduce_bid', canonical_action_type: 'KEYWORD_BID_CHANGE',
+                rationale: `MARGEM: Ads por pedido R$ ${loser.adsSpendPerOrder.toFixed(2)} excede o teto R$ ${loser.maximumAdsPerOrder.toFixed(2)} para preservar ${(minMarginRate * 100).toFixed(0)}% de margem líquida. Bid reduzido antes do orçamento.`,
+                rule_key: 'INTRADAY_MARGIN_CAP_REDUCE_BID', reason_code: 'INTRADAY_MARGIN_CAP_REDUCE_BID',
+                value_before: currentBid, value_after: nextBid, current_value: currentBid, proposed_value: nextBid,
+                target_acos: loser.safeAcos, confidence: 0.97, risk: 'low',
+                idempotency_key: key, conflict_group: `${aid}|keyword|${keywordId}`,
+                data_used: JSON.stringify({ ads_spend_per_order: loser.adsSpendPerOrder, maximum_ads_spend_per_order: loser.maximumAdsPerOrder, min_margin_pct: minMarginRate * 100, today_orders: loser.todayM.orders, today_spend: loser.todayM.spend }),
+              });
+              queued.push({ decision_id: decision.id, action: 'reduce_bid', campaign_id: loser.id, keyword_id: keywordId, asin: loser.asin, before: currentBid, after: nextBid });
+            }
+          }
           if (loser.budget <= minCampaignBudget) continue;
-          const pct = loser.todayM.spend >= 10 ? 0.20 : 0.15;
+          const pct = loser.marginCapBreached ? 0.40 : loser.todayM.spend >= 10 ? 0.20 : 0.15;
           const nextBudget = r2(Math.max(minCampaignBudget, loser.budget * (1 - pct)));
           if (nextBudget >= loser.budget - 0.01) continue;
           const key = `SALES_RECOVERY|${aid}|${loser.id}|REDUCE_BUDGET|${hourKey}|${nextBudget.toFixed(2)}`;
@@ -215,11 +264,13 @@ Deno.serve(async (request) => {
             campaign_name: loser.campaign.name || loser.campaign.campaign_name || null,
             asin: loser.asin, sku: loser.product?.sku || null,
             action: 'reduce_budget', canonical_action_type: 'CAMPAIGN_BUDGET_CHANGE',
-            rationale: `RECOVERY: campanha improdutiva cede budget. Hoje gasto R$ ${loser.todayM.spend.toFixed(2)}, pedidos ${loser.todayM.orders}, vendas R$ ${loser.todayM.sales.toFixed(2)}.`,
+            rationale: loser.marginCapBreached
+              ? `MARGEM: Ads por pedido R$ ${loser.adsSpendPerOrder.toFixed(2)} acima do teto R$ ${loser.maximumAdsPerOrder.toFixed(2)}; budget reduzido após bids.`
+              : `RECOVERY: campanha improdutiva cede budget. Hoje gasto R$ ${loser.todayM.spend.toFixed(2)}, pedidos ${loser.todayM.orders}, vendas R$ ${loser.todayM.sales.toFixed(2)}.`,
             rule_key: 'INTRADAY_SALES_RECOVERY_REALLOCATE_FROM_LOSER', reason_code: 'INTRADAY_SALES_RECOVERY_REALLOCATE_FROM_LOSER',
             value_before: loser.budget, value_after: nextBudget, confidence: 0.93, risk: 'medium',
             idempotency_key: key, conflict_group: `${aid}|campaign|${loser.id}`,
-            data_used: JSON.stringify({ revenue_today: revenueToday, sales_source: todaySales?.source || null, expected_floor: expectedFloor, tacos, campaign_spend: loser.todayM.spend, campaign_orders: loser.todayM.orders }),
+            data_used: JSON.stringify({ revenue_today: revenueToday, sales_source: todaySales?.source || null, expected_floor: expectedFloor, tacos, campaign_spend: loser.todayM.spend, campaign_orders: loser.todayM.orders, ads_spend_per_order: loser.adsSpendPerOrder, maximum_ads_spend_per_order: loser.maximumAdsPerOrder }),
           });
           freedBudget += loser.budget - nextBudget;
           queued.push({ decision_id: decision.id, action: 'reduce_budget', campaign_id: loser.id, asin: loser.asin, before: loser.budget, after: nextBudget });
