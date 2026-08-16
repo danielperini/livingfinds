@@ -29,13 +29,20 @@ const active = (value: any) => ['enabled', 'active'].includes(norm(value));
 // or spend is already ahead of the economically planned trajectory.
 function plannedBudgetShare(hour: number) {
   if (hour < 7) return 0.04;
-  if (hour < 10) return 0.16;
-  if (hour < 12) return 0.26;
-  if (hour < 14) return 0.38;
-  if (hour < 17) return 0.50;
-  if (hour < 19) return 0.66;
+  // Reserve enough capital for exploration in the two conversion windows
+  // requested by the business, while still retaining the majority for the
+  // afternoon/evening when the account historically needs protection.
+  if (hour < 10) return 0.22;
+  if (hour < 12) return 0.34;
+  if (hour < 14) return 0.45;
+  if (hour < 17) return 0.55;
+  if (hour < 19) return 0.68;
   if (hour < 22) return 0.86;
   return 1;
+}
+
+function isDemandProbeWindow(hour: number) {
+  return (hour >= 7 && hour < 10) || (hour >= 11 && hour < 14);
 }
 
 function brtClock() {
@@ -236,13 +243,19 @@ function chooseMultiplier(params: {
   acos: number | null;
   targetAcos: number;
   economicRisk: boolean;
+  hour: number;
+  explorationEligible: boolean;
   maxIncreasePct: number;
   maxDecreasePct: number;
 }) {
-  const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, maxIncreasePct, maxDecreasePct } = params;
+  const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, hour, explorationEligible, maxIncreasePct, maxDecreasePct } = params;
   if (!slot.mature || slot.classification === 'COLLECTING_DATA') {
     if (pacing === 'morning_reserve' && !winner) {
       return { multiplier: 0.85, reason: 'Pacing matinal: reserva de orçamento para faixas posteriores até haver evidência horária.' };
+    }
+    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
+      const probe = winner ? 1.08 : 1.03;
+      return { multiplier: probe, reason: `Janela de demanda ${hour < 10 ? 'início da manhã' : 'pré-almoço'}: teste controlado de ${Math.round((probe - 1) * 100)}% com CPC econômico.` };
     }
     return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base.' };
   }
@@ -270,6 +283,10 @@ function chooseMultiplier(params: {
 
   if (slot.classification === 'NORMAL_TIME') {
     if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.85, reason: 'NORMAL matinal: reduzir 15% para preservar verba do período de maior conversão.' };
+    if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
+      const probe = winner ? 1.06 : 1.02;
+      return { multiplier: probe, reason: `NORMAL com entrega saudável no ${hour < 10 ? 'início da manhã' : 'pré-almoço'}: exploração econômica de ${Math.round((probe - 1) * 100)}%.` };
+    }
     return { multiplier: 1, reason: 'NORMAL: manter/restaurar bid-base.' };
   }
   if (winner) return { multiplier: 1, reason: 'Entidade vencedora protegida contra redução horária.' };
@@ -466,6 +483,13 @@ Deno.serve(async (request) => {
         Number(economic.profit_after_ads_3d || 0) < 0 ||
         (breakEvenAcos !== null && cm.acos !== null && cm.acos >= breakEvenAcos * 0.95);
       const sampleMature = cm.impressions >= MIN_REDUCTION_IMPRESSIONS && cm.clicks >= MIN_REDUCTION_CLICKS && cm.spend >= MIN_REDUCTION_SPEND;
+      // Minimum evidence for exploration: safe CPC plus either a profitable
+      // conversion or delivered traffic not yet above the risk ACoS. This is
+      // deliberately smaller than the scale threshold, so the engine learns
+      // morning/lunch demand without committing meaningful budget blindly.
+      const explorationEligible = safeMaxCpc > 0 && !economicRisk && (
+        winner || (cm.clicks >= 2 && (cm.acos === null || cm.acos <= targetAcos * 1.25))
+      );
 
       const groups = adGroups.filter((group: any) => String(group.campaign_id || '') === cid && active(group.state || group.status));
       const campaignBaseBids: number[] = [];
@@ -567,6 +591,8 @@ Deno.serve(async (request) => {
             acos: cm.acos,
             targetAcos,
             economicRisk,
+            hour: clock.hour,
+            explorationEligible,
             maxIncreasePct,
             maxDecreasePct,
           });
