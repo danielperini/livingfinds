@@ -39,6 +39,14 @@ assert.notEqual(haloOnly.reasonCode, 'WINNER_PROTECTED');
 const profitable = buildCanonicalBidDecision({ ...baseBid, impressions: 2000, clicks: 80, sameSkuOrders: 8, spend: 40, acos: 15, profitAfterAds: 60 });
 assert.equal(profitable.action, 'INCREASE');
 
+const expensiveWinner = buildCanonicalBidDecision({
+  ...baseBid, ageHours: 96, impressions: 2000, clicks: 80, sameSkuOrders: 8,
+  spend: 48, acos: 48, targetAcos: 15, breakEvenAcos: 60, profitAfterAds: 10,
+  winnerProtected: true,
+});
+assert.equal(expensiveWinner.action, 'DECREASE_SOFT');
+assert.equal(expensiveWinner.reasonCode, 'ABOVE_TARGET_BELOW_BREAK_EVEN');
+
 const blockedPause = evaluateDecisionGovernance({
   actionType: 'pause_campaign', entityType: 'campaign', snapshotId: 'snap-1',
   reasonCode: 'zero_sales', reason: 'sem venda', confidence: 0.95,
@@ -57,6 +65,16 @@ const protectiveReduction = evaluateDecisionGovernance({
   economicConfidence: 0.65, rollbackPlan: 'restore_bid',
 });
 assert.equal(protectiveReduction.allowed, true);
+
+const expensiveWinnerReduction = evaluateDecisionGovernance({
+  actionType: 'reduce_bid', entityType: 'keyword', snapshotId: 'snap-expensive-winner',
+  currentValue: 0.80, proposedValue: 0.76, reasonCode: 'ABOVE_TARGET_BELOW_BREAK_EVEN',
+  confidence: 0.92, dataFresh: true, productEligible: true, listingActive: true,
+  offerActive: true, buyable: true, inStock: true, economicsComplete: true,
+  economicConfidence: 0.65, winnerProtected: true, sameSkuOrders: 8,
+  profitAfterAds: 10, currentAcos: 48, targetAcos: 15, rollbackPlan: 'restore_bid',
+});
+assert.equal(expensiveWinnerReduction.allowed, true);
 
 const intradayEvidenceReduction = evaluateDecisionGovernance({
   actionType: 'reduce_budget', entityType: 'campaign', verifiedEvidenceId: 'intraday:verified',

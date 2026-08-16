@@ -174,7 +174,12 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
   if (!input.inStock) return block('OUT_OF_STOCK', 'Produto sem estoque vendável confirmado.');
   if (!input.economicsComplete || input.safeMaxCpc <= 0) return block('ECONOMICS_INCOMPLETE', 'Economia ou CPC seguro indisponível.');
   if (input.cooldownActive) return block('COOLDOWN_ACTIVE', 'Já houve alteração na janela de cooldown.');
-  if (input.winnerProtected) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU e lucro protegem a entidade até a próxima janela.', 99, 12);
+  // Winner protection prevents an indiscriminate pause, not a correction of
+  // an already expensive winner. ACoS above target or loss must reach the
+  // bid-reduction branch below so profitable sales do not become paid losses.
+  const winnerWithinEconomicGuardrail = input.winnerProtected && input.profitAfterAds >= 0 &&
+    (input.acos === null || input.targetAcos === null || input.acos <= input.targetAcos);
+  if (winnerWithinEconomicGuardrail) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU lucrativa e dentro da meta protege a entidade até a próxima janela.', 99, 12);
   // A recently created entity may still spend enough to violate its economic
   // test budget.  Learning never authorizes an unlimited loss: cut the bid
   // before the normal 48h observation hold when that hard evidence exists.
@@ -254,7 +259,10 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   if (!input.productEligible || !input.listingActive || !input.offerActive || !input.buyable || !input.inStock) add('P3', 'PRODUCT_NOT_ELIGIBLE', 'Produto, listing, oferta, Buy Box ou estoque bloqueiam a ação.');
   if (!input.economicsComplete) add('P4', 'ECONOMICS_INCOMPLETE', 'Custos, taxas ou margem não estão confirmados.');
   if (Number(input.economicConfidence || 0) < economicConfidenceFloor) add('P4', 'LOW_ECONOMIC_CONFIDENCE', `Confiança econômica abaixo do mínimo de ${Math.round(economicConfidenceFloor * 100)}%.`);
-  if (input.winnerProtected && input.sameSkuOrders && (isPause || (isBid && isDecrease))) add('P5', 'WINNER_PROTECTED', 'Winner confirmado por venda same-SKU está protegido.');
+  const winnerWithinEconomicGuardrail = input.winnerProtected && Number(input.sameSkuOrders || 0) > 0 &&
+    Number(input.profitAfterAds || 0) >= 0 &&
+    (input.currentAcos === null || input.targetAcos === null || Number(input.currentAcos) <= Number(input.targetAcos));
+  if (winnerWithinEconomicGuardrail && (isPause || (isBid && isDecrease))) add('P5', 'WINNER_PROTECTED', 'Winner lucrativo dentro da meta está protegido contra pausa e corte indevido.');
   if (input.winnerProtected && !input.sameSkuOrders && Number(input.haloOrders || 0) > 0) add('P5', 'HALO_NOT_WINNER_PROOF', 'Venda halo não protege o SKU anunciado.');
   if (input.cooldownActive) add('P6', 'COOLDOWN_ACTIVE', 'Entidade já foi alterada na janela de cooldown.');
   if (isPause && Number(input.campaignPauseShare || 0) > 0.50) add('P1', 'BATCH_PAUSE_BLOCKED_50', 'Mais de 50% das campanhas nunca pode ser pausado em lote.');
