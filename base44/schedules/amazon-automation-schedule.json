@@ -32,6 +32,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Operational queue reconciliation - every 2 hours",
+      "function": "reconcileOperationalQueues",
+      "cron": "17 */2 * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_queue_reconciliation" }
+    },
+    {
       "name": "Closed-day Amazon reports request - 00:01 BRT",
       "function": "ensureDailyReportsCurrent",
       "cron": "1 0 * * *",

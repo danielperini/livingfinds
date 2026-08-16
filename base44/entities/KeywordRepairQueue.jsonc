@@ -11,6 +11,11 @@
     "queue_window": { "type": "string" },
     "scheduled_at": { "type": "string" },
     "attempt_count": { "type": "number", "default": 0 },
-    "last_error": { "type": "string" }
+    "max_attempts": { "type": "number", "default": 5 },
+    "last_error": { "type": "string" },
+    "error_code": { "type": "string" },
+    "retryable": { "type": "boolean", "default": false },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" }
   }
 }

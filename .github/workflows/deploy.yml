@@ -100,6 +100,19 @@ jobs:
             echo "\$functions_json" | grep -q 'importProductEconomics'
             echo "\$functions_json" | grep -q 'enrollStockedProductsInRepricing'
             echo "\$functions_json" | grep -q 'scrapeAmazonKeywords'
+            echo "\$functions_json" | grep -q 'reconcileOperationalQueues'
+            echo '--- reconciliando estados operacionais de fila sem mutação Amazon ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/reconcileOperationalQueues", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, dry_run: false, trigger_type: "deploy_queue_reconciliation" })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("QUEUE_RECONCILIATION_HTTP=" + response.status + "|OK=" + data.ok + "|TOTALS=" + JSON.stringify(data.totals || {}));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "queue reconciliation failed");
+            ' </dev/null
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" != "true" ]; then
               echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
               exit 0

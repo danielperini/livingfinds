@@ -42,6 +42,23 @@ function isWithinHours(value, hours) {
   return Number.isFinite(timestamp) && timestamp >= Date.now() - hours * 60 * 60 * 1000;
 }
 
+const RETRYABLE_QUEUE_ERROR = /(\b429\b|rate.?limit|throttl|timeout|timed.?out|network|temporar|\b502\b|\b503\b|\b504\b|\b524\b|connection reset|circuit.?open)/i;
+
+function isRetryableQueueFailure(item) {
+  const attempts = Number(item?.attempt_count || 0);
+  const maxAttempts = Math.max(1, Number(item?.max_attempts || 5));
+  return attempts < maxAttempts && (item?.retryable === true || RETRYABLE_QUEUE_ERROR.test(String(item?.last_error || item?.error_code || '')));
+}
+
+function isSafetyBlockedQueue(item, product) {
+  if (['waiting_stock', 'cancelled'].includes(String(item?.status || '').toLowerCase())) return true;
+  const scope = String(product?.ads_scope_status || '').toLowerCase();
+  if (['not_authorized', 'manual_block', 'mapping_conflict'].includes(scope)) return true;
+  if (!product) return false;
+  const stock = Number(product.fulfillable_quantity ?? product.available_quantity ?? product.inventory_quantity ?? product.stock ?? product.fba_inventory);
+  return Number.isFinite(stock) && stock <= 0;
+}
+
 function MetricCard({ label, value, detail, tone = 'default', icon: Icon }) {
   const toneClass = {
     default: 'border-white/10 bg-white/[0.035] text-white',
@@ -120,13 +137,22 @@ export default function SalaDeComandoPremium() {
 
   const summary = useMemo(() => {
     const allQueue = [...data.kickoff, ...data.repair, ...data.keyword];
+    const productByAsin = new Map(data.products.map(product => [String(product.asin || '').toUpperCase(), product]));
+    const queueProduct = (item) => productByAsin.get(String(item?.asin || '').toUpperCase());
     const activeAlerts = data.alerts.filter(item => item.status === 'active');
     const urgentAlerts = activeAlerts.filter(item => ['critical', 'high'].includes(String(item.severity || '').toLowerCase()));
-    const failedQueue = allQueue.filter(item => item.status === 'failed' && isWithinHours(queueTimestamp(item), 24));
-    const pendingQueue = allQueue.filter(item => ['scheduled', 'processing'].includes(item.status) && isWithinHours(queueTimestamp(item), 2));
+    const safetyBlockedQueue = allQueue.filter(item => isSafetyBlockedQueue(item, queueProduct(item)));
+    const retryingQueue = allQueue.filter(item => item.status === 'failed' && isRetryableQueueFailure(item));
+    const failedQueue = allQueue.filter(item =>
+      item.status === 'failed' && isWithinHours(queueTimestamp(item), 24) &&
+      !isSafetyBlockedQueue(item, queueProduct(item)) && !isRetryableQueueFailure(item)
+    );
+    const pendingQueue = allQueue.filter(item =>
+      (['scheduled', 'processing'].includes(item.status) && isWithinHours(queueTimestamp(item), 2)) || retryingQueue.includes(item)
+    );
     const historicalQueue = allQueue.filter(item =>
       (['scheduled', 'processing'].includes(item.status) && !isWithinHours(queueTimestamp(item), 2)) ||
-      (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24))
+      (item.status === 'failed' && !isWithinHours(queueTimestamp(item), 24) && !retryingQueue.includes(item))
     );
     const pendingDecisions = data.decisions.filter(item => item.status === 'pending');
     const executedToday = data.decisions.filter(item => {
@@ -143,7 +169,7 @@ export default function SalaDeComandoPremium() {
       urgentAlerts.length ? `${urgentAlerts.length} alerta(s) crítico(s)` : null,
     ].filter(Boolean);
     const healthOk = healthReasons.length === 0;
-    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
+    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, retryingQueue, safetyBlockedQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
   }, [data]);
 
   const priorityItems = useMemo(() => {
@@ -236,7 +262,7 @@ export default function SalaDeComandoPremium() {
               <div className="mt-3">
                 <StatusLine label="Conta Amazon" status={account?.status} detail={account?.profile_name || account?.name || 'Conta vinculada'} />
                 <StatusLine label="Última sincronização" status={summary.syncHealthy ? 'success' : summary.lastSync?.status} detail={summary.healthReasons[0] || formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)} />
-                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento · ${summary.failedQueue.length} falhas${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
+                <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento/recuperação · ${summary.failedQueue.length} falhas executáveis${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} bloqueio(s) de segurança` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
               </div>
             </div>
             <div className="rounded-2xl border border-white/[0.08] bg-gradient-to-br from-blue-500/10 to-violet-500/5 p-5">
@@ -259,8 +285,8 @@ export default function SalaDeComandoPremium() {
         title: 'Fila e execução',
         description: 'Acompanhe processamento, retries, backoff e erros reais sem misturar com decisões pendentes.',
         stats: [
-          ['Em andamento', summary.pendingQueue.length],
-          ['Falhas recentes', summary.failedQueue.length],
+          ['Em andamento/recuperação', summary.pendingQueue.length],
+          ['Falhas executáveis', summary.failedQueue.length],
           ['Histórico', summary.historicalQueue.length],
           ['Concluídos', summary.allQueue.filter(item => item.status === 'completed').length],
         ],
@@ -355,7 +381,7 @@ export default function SalaDeComandoPremium() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <MetricCard label="Ação imediata" value={summary.urgentAlerts.length + summary.pendingDecisions.length} detail="prioridades e aprovações" tone={summary.urgentAlerts.length > 0 ? 'danger' : 'info'} icon={AlertTriangle} />
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
-        <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
+        <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento/recuperação${summary.safetyBlockedQueue.length ? ` · ${summary.safetyBlockedQueue.length} protegidos` : ''}${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
         <MetricCard label="Aprovação humana" value={summary.pendingDecisions.length} detail="aguardando decisão" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
         <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
