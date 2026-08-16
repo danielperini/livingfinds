@@ -14,6 +14,24 @@ import ProductRow, {
 } from '@/components/products/ProductRow';
 
 const PAGE_SIZE = 20;
+const PRODUCT_CACHE_KEY = 'livingfinds.products.last-confirmed.v1';
+
+function readProductCache() {
+  try {
+    const cached = JSON.parse(window.localStorage.getItem(PRODUCT_CACHE_KEY) || 'null');
+    return cached && Array.isArray(cached.products) ? cached : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeProductCache(payload) {
+  try {
+    window.localStorage.setItem(PRODUCT_CACHE_KEY, JSON.stringify({ ...payload, savedAt: new Date().toISOString() }));
+  } catch {
+    // Cache is an availability aid only; quota/privacy errors must not block the screen.
+  }
+}
 
 const DATE_FIELDS = ['created_date', 'created_at', 'first_seen_at', 'imported_at', 'updated_date', 'last_sync_at'];
 
@@ -140,6 +158,7 @@ export default function Products({ externalRefreshTrigger }) {
   const [account, setAccount] = useState(null);  // primary (for actions)
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [staleData, setStaleData] = useState(null);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -202,21 +221,33 @@ export default function Products({ externalRefreshTrigger }) {
   // ── MULTI-ACCOUNT LOAD ────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
+    const cached = readProductCache();
+    if (cached?.products?.length && products.length === 0) {
+      setProducts(cached.products);
+      setAccounts(cached.accounts || []);
+      setAccount(cached.account || null);
+      setStaleData(cached.savedAt || 'dados locais');
+    }
     try {
       const me = await base44.auth.me();
       let accs = await base44.entities.AmazonAccount.filter({ user_id: me.id });
       if (!accs.length) accs = await base44.entities.AmazonAccount.list();
-      if (!accs.length) { setProducts([]); return; }
+      if (!accs.length) {
+        if (!cached?.products?.length && products.length === 0) setActionMsg({ type: 'error', text: 'Nenhuma conta Amazon foi encontrada.' });
+        return { currentAccount: cached?.account || null };
+      }
 
       setAccounts(accs);
       const primaryAccount = accs[0];
       setAccount(primaryAccount);
 
       // Fetch products from ALL accounts in parallel
-      const allResults = await Promise.all(
-        accs.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))
+      const productResults = await Promise.allSettled(
+        accs.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500))
       );
-      const allProducts = allResults.flat();
+      const productFailures = productResults.filter(result => result.status === 'rejected');
+      const allProducts = productResults.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+      if (!allProducts.length && productFailures.length) throw new Error('Catálogo indisponível temporariamente (a última base confirmada foi preservada).');
 
       const allEconomics = await Promise.all(
         accs.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => []))
@@ -247,6 +278,8 @@ export default function Products({ externalRefreshTrigger }) {
       }));
 
       setProducts(enriched);
+      writeProductCache({ products: enriched, accounts: accs, account: primaryAccount });
+      setStaleData(productFailures.length ? 'parcialmente atualizado' : null);
 
       // Enrich names in background for products without names
       const needsEnrich = allProducts.filter(p => !p.product_name?.trim() && !p.display_name?.trim());
@@ -259,24 +292,40 @@ export default function Products({ externalRefreshTrigger }) {
 
       return { currentAccount: primaryAccount };
     } catch (error) {
-      setActionMsg({ type: 'error', text: error?.message || 'Erro ao carregar produtos.' });
+      const message = error?.message || 'Erro ao carregar produtos.';
+      if (cached?.products?.length || products.length) {
+        setStaleData(cached?.savedAt || 'última leitura válida');
+        setActionMsg({ type: 'error', text: `${message} Exibindo os últimos dados confirmados; nenhuma informação foi zerada.` });
+      } else {
+        setActionMsg({ type: 'error', text: message });
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [products.length]);
 
   const reloadProducts = useCallback(async () => {
     if (!accounts.length) { await load(); return; }
-    const [allResults, allEconomics] = await Promise.all([
-      Promise.all(accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500).catch(() => []))),
-      Promise.all(accounts.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000).catch(() => []))),
+    const [productResults, economicsResults] = await Promise.all([
+      Promise.allSettled(accounts.map(acc => base44.entities.Product.filter({ amazon_account_id: acc.id }, '-created_date', 500))),
+      Promise.allSettled(accounts.map(acc => base44.entities.ProductEconomics.filter({ amazon_account_id: acc.id }, '-updated_at', 5000))),
     ]);
+    const allResults = productResults.filter(result => result.status === 'fulfilled').map(result => result.value);
+    const allEconomics = economicsResults.filter(result => result.status === 'fulfilled').map(result => result.value);
+    if (!allResults.flat().length && productResults.some(result => result.status === 'rejected')) {
+      setStaleData('última leitura válida');
+      setActionMsg({ type: 'error', text: 'Catálogo indisponível temporariamente. Os dados confirmados continuam visíveis.' });
+      return;
+    }
     const economicsByAccountSku = new Map(allEconomics.flat().map(item => [`${item.amazon_account_id}:${String(item.sku || '').trim().toUpperCase()}`, item]));
-    setProducts(allResults.flat().map(product => ({
+    const enriched = allResults.flat().map(product => ({
       ...product,
       _economics: economicsByAccountSku.get(`${product.amazon_account_id}:${String(product.sku || '').trim().toUpperCase()}`) || null,
-    })));
-  }, [accounts, load]);
+    }));
+    setProducts(enriched);
+    writeProductCache({ products: enriched, accounts, account });
+    setStaleData(productResults.some(result => result.status === 'rejected') ? 'parcialmente atualizado' : null);
+  }, [accounts, account, load]);
 
   const loadStuckQueue = useCallback(async (accountId) => {
     if (!accountId) return;
@@ -588,6 +637,11 @@ export default function Products({ externalRefreshTrigger }) {
       {actionMsg && (
         <div className={`px-4 py-3 rounded-xl border text-base font-medium ${actionMsg.type === 'success' ? 'bg-emerald-400/10 border-emerald-400/20 text-emerald-300' : actionMsg.type === 'error' ? 'bg-red-400/10 border-red-400/20 text-red-300' : 'bg-cyan/10 border-cyan/20 text-cyan'}`}>
           {actionMsg.text}
+        </div>
+      )}
+      {staleData && (
+        <div className="px-4 py-2.5 rounded-xl border border-amber-400/20 bg-amber-400/10 text-sm text-amber-800">
+          Atualização temporariamente degradada. Exibindo a última base confirmada ({staleData}); o próximo ciclo tentará sincronizar novamente.
         </div>
       )}
 

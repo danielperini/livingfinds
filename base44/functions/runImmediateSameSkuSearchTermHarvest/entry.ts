@@ -145,7 +145,7 @@ Deno.serve(async (request) => {
     for (const account of accounts) {
       const aid = account.id;
       const now = new Date().toISOString();
-      const [searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank] = await Promise.all([
+      const [searchTerms, campaigns, products, economics, assessments, settingsRows, keywords, promotions, termBank, keywordBank] = await Promise.all([
         loadPaged(base44.asServiceRole.entities.SearchTerm, { amazon_account_id: aid }, '-date', 20000),
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
@@ -155,6 +155,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.SearchTermPromotion.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
         base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: aid }, '-updated_at', 10000).catch(() => []),
+        base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: aid }, '-last_updated_at', 10000).catch(() => []),
       ]);
 
       const campaignById = new Map<string, any>();
@@ -177,13 +178,21 @@ Deno.serve(async (request) => {
       const budget = Math.max(5, Math.min(15, numberValue(settings.minimum_campaign_budget, 5)));
 
       const exactKeys = new Set<string>();
+      const exactDestinationByKey = new Map<string, any>();
       for (const keyword of keywords) {
         if (String(keyword.state || keyword.status || '').toLowerCase() === 'archived') continue;
         if (String(keyword.match_type || '').toLowerCase() !== 'exact') continue;
         const campaign = campaignById.get(String(keyword.campaign_id || ''));
         const asin = String(keyword.asin || campaign?.asin || '').toUpperCase();
         const term = normalizeSearchTerm(keyword.keyword_text || keyword.keyword);
-        if (asin && term) exactKeys.add(`${asin}|${term}`);
+        if (asin && term) {
+          const key = `${asin}|${term}`;
+          exactKeys.add(key);
+          exactDestinationByKey.set(key, {
+            campaignId: String(keyword.campaign_id || campaign?.campaign_id || campaign?.amazon_campaign_id || ''),
+            keywordId: String(keyword.keyword_id || keyword.id || ''),
+          });
+        }
       }
 
       const promotionByKey = new Map<string, any>();
@@ -195,6 +204,11 @@ Deno.serve(async (request) => {
       for (const row of termBank) {
         const key = `${String(row.asin || '').toUpperCase()}|${normalizeSearchTerm(row.term_normalized || row.term)}`;
         if (key !== '|') termBankByKey.set(key, row);
+      }
+      const keywordBankByKey = new Map<string, any>();
+      for (const row of keywordBank) {
+        const key = `${String(row.asin || '').toUpperCase()}|${normalizeSearchTerm(row.normalized_keyword || row.keyword)}`;
+        if (key !== '|') keywordBankByKey.set(key, row);
       }
 
       const sourceCampaignId = String(body.source_campaign_id || '');
@@ -256,6 +270,7 @@ Deno.serve(async (request) => {
           : aggregate.sameSkuOrders > 0 ? 'learning'
           : 'new';
         const existingBank = termBankByKey.get(key);
+        const existingExact = exactDestinationByKey.get(key);
         const bankRecord = {
           amazon_account_id: aid,
           term: aggregate.term,
@@ -275,12 +290,13 @@ Deno.serve(async (request) => {
           created_from: 'runImmediateSameSkuSearchTermHarvest',
           term_type: aggregate.normalizedTerm.split(' ').length >= 3 ? 'long_tail' : 'mid_tail',
           status: 'active',
-          promotion_status: existingBank?.promotion_status === 'promoted_to_manual'
+          promotion_status: existingExact || existingBank?.promotion_status === 'promoted_to_manual'
             ? 'promoted_to_manual'
             : evaluation.eligible ? 'kickoff_candidate' : 'pending',
           confidence: aggregate.attributionVerified && aggregate.skuResolutionVerified ? 95 : 35,
-          campaign_id: existingBank?.campaign_id || aggregate.sources[0]?.campaignId || '',
-          amazon_campaign_id: existingBank?.amazon_campaign_id || aggregate.sources[0]?.campaignId || '',
+          campaign_id: existingExact?.campaignId || existingBank?.campaign_id || aggregate.sources[0]?.campaignId || '',
+          amazon_campaign_id: existingExact?.campaignId || existingBank?.amazon_campaign_id || aggregate.sources[0]?.campaignId || '',
+          keyword_id: existingExact?.keywordId || existingBank?.keyword_id || '',
           impressions: aggregate.impressions,
           clicks: aggregate.clicks,
           spend: Number(aggregate.spend.toFixed(4)),
@@ -319,6 +335,23 @@ Deno.serve(async (request) => {
             if (created) {
               termBankByKey.set(key, created);
               bankCreated++;
+            }
+          }
+          // A Manual Exact já confirmada não pode continuar exibida como
+          // "No Bank"/Harvest Ready. Atualize somente o vínculo operacional;
+          // métricas e histórico do termo permanecem intactos.
+          if (existingExact) {
+            const keywordBankRow = keywordBankByKey.get(key);
+            if (keywordBankRow?.id) {
+              await base44.asServiceRole.entities.KeywordBank.update(keywordBankRow.id, {
+                lifecycle_status: 'HARVESTED',
+                harvest_candidate: false,
+                harvest_action: 'CREATE_EXACT',
+                harvest_executed_at: now,
+                last_decision: 'manual_exact_already_active_reconciled',
+                last_decision_at: now,
+                last_updated_at: now,
+              }).catch(() => null);
             }
           }
         }

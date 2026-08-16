@@ -85,7 +85,7 @@ export default function SalaDeComandoPremium() {
   const [loading, setLoading] = useState(true);
   const [verTodasPrioridades, setVerTodasPrioridades] = useState(false);
   const [data, setData] = useState({
-    alerts: [], decisions: [], kickoff: [], repair: [], keyword: [], syncRuns: [], bidLogs: [],
+    alerts: [], decisions: [], kickoff: [], repair: [], keyword: [], syncRuns: [], bidLogs: [], products: [],
   });
 
   const load = useCallback(async () => {
@@ -100,7 +100,7 @@ export default function SalaDeComandoPremium() {
       if (!current) return;
 
       const aid = current.id;
-      const [alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs] = await Promise.all([
+      const [alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products] = await Promise.all([
         base44.entities.Alert.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
         base44.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 100).catch(() => []),
         base44.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
@@ -108,8 +108,9 @@ export default function SalaDeComandoPremium() {
         base44.entities.KeywordRepairQueue.filter({ amazon_account_id: aid }, '-scheduled_at', 100).catch(() => []),
         base44.entities.SyncExecutionLog.filter({ amazon_account_id: aid }, '-started_at', 100).catch(() => []),
         base44.entities.AdsBidChangeLog.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
+        base44.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 500).catch(() => []),
       ]);
-      setData({ alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs });
+      setData({ alerts, decisions, kickoff, repair, keyword, syncRuns, bidLogs, products });
     } finally {
       setLoading(false);
     }
@@ -135,18 +136,31 @@ export default function SalaDeComandoPremium() {
     const lastSync = [...data.syncRuns].sort((left, right) =>
       new Date(right.completed_at || right.started_at || right.created_date || 0) - new Date(left.completed_at || left.started_at || left.created_date || 0)
     )[0] || null;
-    const healthOk = failedQueue.length === 0 && urgentAlerts.length === 0 && lastSync?.status === 'success';
-    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk };
+    const syncHealthy = ['success', 'completed', 'ok'].includes(String(lastSync?.status || '').toLowerCase());
+    const healthReasons = [
+      !lastSync ? 'sem sincronização registrada' : !syncHealthy ? `última sincronização: ${lastSync.status || 'status desconhecido'}` : null,
+      failedQueue.length ? `${failedQueue.length} falha(s) recente(s) na fila` : null,
+      urgentAlerts.length ? `${urgentAlerts.length} alerta(s) crítico(s)` : null,
+    ].filter(Boolean);
+    const healthOk = healthReasons.length === 0;
+    return { allQueue, activeAlerts, urgentAlerts, failedQueue, pendingQueue, historicalQueue, pendingDecisions, executedToday, lastSync, healthOk, healthReasons, syncHealthy };
   }, [data]);
 
   const priorityItems = useMemo(() => {
+    const productByAsin = new Map(data.products.map(product => [String(product.asin || '').toUpperCase(), product]));
+    const withProduct = (item) => {
+      const asin = String(item.asin || '').toUpperCase();
+      const product = productByAsin.get(asin);
+      const title = product?.product_name || product?.display_name || product?.title || '';
+      return [asin || item.campaign_name || item.alert_type || 'Motor de alertas', title].filter(Boolean).join(' · ');
+    };
     const alerts = summary.activeAlerts.slice(0, 30).map(item => ({
       id: `alert-${item.id}`,
       type: 'Alerta',
       title: item.title || item.message || item.alert_type || 'Alerta operacional',
       detail: item.recommendation || item.description || item.message || 'Revisar condição detectada pelo motor.',
       tone: ['critical', 'high'].includes(String(item.severity || '').toLowerCase()) ? 'danger' : 'warning',
-      meta: item.asin || item.campaign_name || item.alert_type || 'Motor de alertas',
+      meta: withProduct(item),
     }));
     const decisions = summary.pendingDecisions.slice(0, 30).map(item => ({
       id: `decision-${item.id}`,
@@ -154,10 +168,10 @@ export default function SalaDeComandoPremium() {
       title: item.title || item.action || item.decision_type || 'Decisão pendente',
       detail: item.rationale || item.reason || 'Aguardando avaliação ou execução.',
       tone: 'info',
-      meta: item.asin || item.keyword_text || item.campaign_name || 'Motor de decisões',
+      meta: withProduct(item),
     }));
     return [...alerts, ...decisions];
-  }, [summary]);
+  }, [summary, data.products]);
 
   const visiblePriorities = verTodasPrioridades ? priorityItems : priorityItems.slice(0, 5);
 
@@ -221,7 +235,7 @@ export default function SalaDeComandoPremium() {
               <h2 className="text-sm font-semibold text-white">Saúde operacional</h2>
               <div className="mt-3">
                 <StatusLine label="Conta Amazon" status={account?.status} detail={account?.profile_name || account?.name || 'Conta vinculada'} />
-                <StatusLine label="Última sincronização" status={summary.lastSync?.status} detail={formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)} />
+                <StatusLine label="Última sincronização" status={summary.syncHealthy ? 'success' : summary.lastSync?.status} detail={summary.healthReasons[0] || formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)} />
                 <StatusLine label="Fila operacional" status={summary.failedQueue.length === 0 ? 'ok' : 'warning'} detail={`${summary.pendingQueue.length} em andamento · ${summary.failedQueue.length} falhas${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} />
               </div>
             </div>
@@ -329,7 +343,7 @@ export default function SalaDeComandoPremium() {
               <p className={`text-xs font-semibold ${summary.healthOk ? 'text-emerald-300' : 'text-amber-300'}`}>
                 {summary.healthOk ? 'Operação estável' : 'Atenção necessária'}
               </p>
-              <p className="text-[10px] text-slate-500 mt-0.5">Sync: {formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{summary.healthOk ? `Sync: ${formatDate(summary.lastSync?.started_at || summary.lastSync?.created_date)}` : summary.healthReasons.join(' · ')}</p>
             </div>
             <button type="button" onClick={load} disabled={loading} className="inline-flex items-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3.5 py-2.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.07] disabled:opacity-50">
               {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} Atualizar
@@ -343,7 +357,7 @@ export default function SalaDeComandoPremium() {
         <MetricCard label="Executadas hoje" value={summary.executedToday.length} detail="decisões concluídas" tone="success" icon={CheckCircle2} />
         <MetricCard label="Fila com erro" value={summary.failedQueue.length} detail={`${summary.pendingQueue.length} em processamento${summary.historicalQueue.length ? ` · ${summary.historicalQueue.length} histórico(s)` : ''}`} tone={summary.failedQueue.length > 0 ? 'danger' : 'default'} icon={XCircle} />
         <MetricCard label="Aprovação humana" value={summary.pendingDecisions.length} detail="aguardando decisão" tone={summary.pendingDecisions.length > 0 ? 'warning' : 'default'} icon={Clock3} />
-        <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.lastSync?.status || 'sem sync'} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
+        <MetricCard label="Saúde do sistema" value={summary.healthOk ? 'Estável' : 'Atenção'} detail={summary.healthOk ? 'sincronização e fila operacionais' : summary.healthReasons.join(' · ')} tone={summary.healthOk ? 'success' : 'warning'} icon={Activity} />
       </div>
 
       <div className="rounded-2xl border border-white/[0.08] bg-white/[0.025] p-1.5 overflow-x-auto">

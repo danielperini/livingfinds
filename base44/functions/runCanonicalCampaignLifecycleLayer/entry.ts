@@ -85,7 +85,11 @@ Deno.serve(async (request) => {
       const harvesting = await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
         ...common,
         lookback_days: 65,
-        minimum_orders: 2,
+        // A primeira venda same-SKU comprovada cria um teste EXACT de 72h com
+        // bid econômico. Duas vendas continuam sendo sinal de escala, não uma
+        // barreira para descobrir cedo termos lucrativos.
+        minimum_orders: 1,
+        initial_exact_test_hours: 72,
         maximum_orders_for_initial_promotion: 3,
         target_acos: targetAcos,
         target_acos_source: 'PerformanceSettings',
@@ -99,6 +103,15 @@ Deno.serve(async (request) => {
         require_stock: true,
         require_active_product: true,
         eligible_asins: eligibleAsins,
+      });
+
+      // Fecha a jornada de promoções já criadas antes de considerar novos
+      // vencedores. Isso impede Harvest Ready/No Bank de virarem fila eterna:
+      // campanha, ad group, Product Ad, keyword e negativa são retomados de
+      // forma idempotente e os vínculos locais são reconciliados.
+      const promotionReconciliation = await invoke(base44, 'completeIncompleteWeeklyPromotions', {
+        ...common,
+        max_promotions: 20,
       });
 
       const autoDedup = await invoke(base44, 'deduplicateAutoCampaignsByAsin', {
@@ -274,7 +287,7 @@ Deno.serve(async (request) => {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: accountId,
         sync_type: 'canonical_campaign_lifecycle',
-        status: [kickoff, harvesting, autoDedup, wasteGuard, manualBidGuard, budget].some((stage: any) => stage?.ok === false) ? 'partial' : 'completed',
+        status: [kickoff, harvesting, promotionReconciliation, autoDedup, wasteGuard, manualBidGuard, budget].some((stage: any) => stage?.ok === false) ? 'partial' : 'completed',
         source_function: 'runCanonicalCampaignLifecycleLayer',
         records_processed: campaigns.length,
         records_imported: retirementDecisions.length,
@@ -287,7 +300,7 @@ Deno.serve(async (request) => {
         amazon_account_id: accountId,
         settings: { target_acos: targetAcos, global_budget: globalBudget, min_bid: minBid, max_bid: maxBid, increment, max_spend_without_sale: maxSpendWithoutSale },
         product_eligibility: { active_in_stock_asins: eligibleAsins.length, policy: 'active_and_in_stock_only' },
-        stages: { kickoff, harvesting, autoDedup, wasteGuard, manualBidGuard, budget },
+        stages: { kickoff, harvesting, promotionReconciliation, autoDedup, wasteGuard, manualBidGuard, budget },
         retirement_decisions: retirementDecisions,
       });
     }

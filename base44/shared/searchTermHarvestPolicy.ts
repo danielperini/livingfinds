@@ -97,7 +97,10 @@ export function canonicalSearchTermFamily(value: unknown): string {
 }
 
 export function isAsinSearchTerm(value: unknown): boolean {
-  return /^B0[A-Z0-9]{8}$/i.test(String(value || '').trim());
+  // Product targets can use any 10-character ASIN, not only the current B0…
+  // generation. They are targets, never customer search queries, and must not
+  // become Manual Exact keywords (e.g. b07y44flcx).
+  return /^[A-Z0-9]{10}$/i.test(String(value || '').trim());
 }
 
 function firstPresent(row: any, fields: string[]): { present: boolean; value: number; field: string } {

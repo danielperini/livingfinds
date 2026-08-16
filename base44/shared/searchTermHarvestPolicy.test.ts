@@ -2,6 +2,7 @@ import {
   aggregateSearchTerms,
   calculateSafeHarvestBid,
   evaluateHarvestCandidate,
+  isAsinSearchTerm,
   normalizeSearchTerm,
   resolveSameSkuAttribution,
 } from './searchTermHarvestPolicy.ts';
@@ -75,4 +76,10 @@ Deno.test('uma venda do mesmo SKU é elegível, mas venda halo não é', () => {
   if (!eligible.eligible) throw new Error(`venda deveria promover: ${eligible.reason}`);
   const halo = evaluateHarvestCandidate({ aggregate: { ...base, sameSkuOrders: 0, sameSkuSales: 0, haloOrders: 1, haloSales: 203.8 }, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.45, alreadyExact: false, alreadyPromoted: false });
   if (halo.eligible || halo.reason !== 'no_same_sku_sale') throw new Error('venda halo não pode promover');
+});
+
+Deno.test('não promove ASIN/target de dez caracteres como keyword', () => {
+  if (!isAsinSearchTerm('b07y44flcx')) throw new Error('ASIN legado não identificado');
+  if (!isAsinSearchTerm('B0FN4RCXY2')) throw new Error('ASIN atual não identificado');
+  if (isAsinSearchTerm('lixeira auto')) throw new Error('consulta normal foi bloqueada');
 });

@@ -1,6 +1,9 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const normalizeTerm = (value: unknown) => String(value || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().trim().replace(/\s+/g, ' ');
 
 function adsBase(region: string | undefined) {
   const v = String(region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
@@ -90,7 +93,7 @@ Deno.serve(async (req) => {
       && (p.retry_count || 0) < 5
     ).slice(0, maxPromotions);
 
-    const stats = { repaired: 0, negatives_created: 0, failed: 0, skipped: 0 };
+    const stats = { repaired: 0, negatives_created: 0, relinked: 0, failed: 0, skipped: 0 };
 
     for (const promo of toRepair) {
       try {
@@ -167,7 +170,8 @@ Deno.serve(async (req) => {
         }
 
         // Step: create negative if missing and campaign is complete
-        if (!promo.negative_keyword_id && promo.source_campaign_id) {
+        let negativeKeywordId = String(promo.negative_keyword_id || '');
+        if (!negativeKeywordId && promo.source_campaign_id) {
           const negR = await adsCall('POST', '/sp/negativeKeywords', {
             negativeKeywords: [{
               campaignId: String(promo.source_campaign_id),
@@ -178,9 +182,11 @@ Deno.serve(async (req) => {
             }],
           }, 'application/vnd.spNegativeKeyword.v3+json');
           const negKwId = firstId(negR, 'negativeKeywords', 'keywordId') || firstId(negR, 'negativeKeywords', 'negativeKeywordId');
+          if (!negKwId) throw new Error('Amazon não confirmou a negativa da origem');
+          negativeKeywordId = String(negKwId);
           await base44.asServiceRole.entities.SearchTermPromotion.update(promo.id, {
             promotion_status: 'completed',
-            negative_keyword_id: negKwId ? String(negKwId) : null,
+            negative_keyword_id: negativeKeywordId,
             completion_status: 'complete',
             completed_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -193,6 +199,61 @@ Deno.serve(async (req) => {
             completed_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           });
+        }
+
+        // Do not leave a completed Amazon promotion as "No Bank" locally.
+        // The link is rebuilt from its immutable ASIN + normalized exact term;
+        // no historical term or campaign is deleted during reconciliation.
+        const completed = !promo.source_campaign_id || Boolean(negativeKeywordId);
+        const now = new Date().toISOString();
+        if (campaignId && keywordId) {
+          const [banks, keywordBanks, searchTerms] = await Promise.all([
+            base44.asServiceRole.entities.TermBank.filter({ amazon_account_id: accountId, asin }, '-updated_at', 5000).catch(() => []),
+            base44.asServiceRole.entities.KeywordBank.filter({ amazon_account_id: accountId, asin }, '-last_updated_at', 5000).catch(() => []),
+            base44.asServiceRole.entities.SearchTerm.filter({ amazon_account_id: accountId }, '-date', 10000).catch(() => []),
+          ]);
+          const bank = banks.find((row: any) => normalizeTerm(row.term_normalized || row.term) === normalizeTerm(norm));
+          if (bank?.id) {
+            await base44.asServiceRole.entities.TermBank.update(bank.id, {
+              promotion_status: completed ? 'promoted_to_manual' : 'pending',
+              classification: completed ? 'winner' : bank.classification,
+              campaign_id: String(campaignId),
+              amazon_campaign_id: String(campaignId),
+              keyword_id: String(keywordId),
+              bid_current: bid,
+              updated_at: now,
+            });
+          }
+          const keywordBank = keywordBanks.find((row: any) => normalizeTerm(row.normalized_keyword || row.keyword) === normalizeTerm(norm));
+          if (keywordBank?.id) {
+            await base44.asServiceRole.entities.KeywordBank.update(keywordBank.id, {
+              lifecycle_status: completed ? 'HARVESTED' : 'VALIDATING',
+              harvest_candidate: !completed,
+              harvest_action: completed ? 'CREATE_EXACT' : 'WAIT',
+              harvest_executed_at: completed ? now : null,
+              last_decision: completed ? 'manual_exact_active_source_negative_confirmed' : 'manual_exact_negative_pending',
+              last_decision_at: now,
+              last_campaign_created_at: now,
+              last_updated_at: now,
+            });
+          }
+          await Promise.all(searchTerms
+            .filter((row: any) => String(row.advertised_asin || row.asin || '').toUpperCase() === String(asin || '').toUpperCase()
+              && normalizeTerm(row.search_term || row.query) === normalizeTerm(norm))
+            .map((row: any) => base44.asServiceRole.entities.SearchTerm.update(row.id, {
+              promoted_to_manual: true,
+              promoted_at: now,
+              manual_campaign_id: String(campaignId),
+              manual_ad_group_id: String(adGroupId || ''),
+              manual_keyword_id: String(keywordId),
+              manual_keyword_state: 'enabled',
+              negated_in_source: Boolean(negativeKeywordId),
+              negated_at: negativeKeywordId ? now : null,
+              classification: completed ? 'PROMOTED_EXACT' : 'PROMOTION_REPAIR_PENDING',
+              last_action: 'promotion_reconciled',
+              last_action_at: now,
+            }).catch(() => null)));
+          stats.relinked++;
         }
 
         stats.repaired++;
