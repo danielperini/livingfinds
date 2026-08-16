@@ -56,6 +56,16 @@ function isEntityNotFound(payload: any): boolean {
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
+function parseJson(value: any) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(String(value)); } catch { return {}; }
+}
+
+function present(...values: any[]) {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
 function prioritize(decisions: any[]): any[] {
   const order: Record<string, number> = {
     pause_campaign: 0, pause_keyword: 1,
@@ -308,6 +318,11 @@ Deno.serve(async (request) => {
           snapshot = rows[0] || null;
         }
         if (isCanonical) {
+          const evidence = parseJson(decision.data_used);
+          const admission = evidence?.admission || {};
+          const trustedIntradayEvidence = ['runEconomicBudgetBalancer', 'runIntradaySalesRecovery'].includes(String(decision.source_function || '')) &&
+            admission.verified === true && admission.observed_at &&
+            Date.now() - new Date(String(admission.observed_at)).getTime() <= Number(decision.maximum_data_age_minutes || 45) * 60000;
           const priorEntityDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
             amazon_account_id: aid,
             entity_id: decision.entity_id,
@@ -333,32 +348,33 @@ Deno.serve(async (request) => {
             currentValue: decision.value_before ?? decision.current_value,
             proposedValue: decision.value_after ?? decision.proposed_value,
             snapshotId: decision.snapshot_id,
+            verifiedEvidenceId: trustedIntradayEvidence ? String(decision.idempotency_key || decision.id) : null,
             reasonCode: decision.reason_code || decision.rule_key,
             reason: decision.rationale,
             confidence: confidenceRaw > 1 ? confidenceRaw / 100 : confidenceRaw,
-            predictionConfidence: snapshot?.prediction_confidence,
-            economicConfidence: snapshot?.economic_confidence,
-            dataFresh: snapshot?.data_fresh === true,
-            adsDataFresh: snapshot?.ads_data_fresh_at != null,
-            spApiDataFresh: snapshot?.sp_api_data_fresh_at != null,
-            economicsDataFresh: snapshot?.economics_data_fresh_at != null,
-            productEligible: !['NOT_ELIGIBLE', 'OUT_OF_STOCK', 'NOT_BUYABLE', 'PRODUCT_INACTIVE'].includes(String(snapshot?.product_state || '')),
-            listingActive: !['inactive', 'not_found', 'error'].includes(String(snapshot?.listing_status || '').toLowerCase()),
-            offerActive: !['inactive', 'closed', 'not_found'].includes(String(snapshot?.offer_status || '').toLowerCase()),
-            buyable: snapshot?.buyable === true,
-            inStock: Number(snapshot?.inventory_available || 0) > 0,
-            stockCoverageDays: snapshot?.stock_coverage_days,
-            economicsComplete: snapshot?.economic_state !== 'ECONOMICS_PENDING',
-            profitAfterAds: snapshot?.profit_after_ads,
-            marginRate: snapshot?.margin_rate,
-            currentAcos: snapshot?.current_acos,
-            targetAcos: snapshot?.target_acos,
-            safeMaxCpc: snapshot?.safe_max_cpc,
-            economicFloor: snapshot?.economic_floor,
-            competitionFresh: snapshot?.data_fresh === true,
-            winnerProtected: snapshot?.winner_protected === true,
-            sameSkuOrders: snapshot?.same_sku_orders,
-            haloOrders: snapshot?.halo_orders,
+            predictionConfidence: present(snapshot?.prediction_confidence, admission.prediction_confidence),
+            economicConfidence: present(snapshot?.economic_confidence, admission.economic_confidence),
+            dataFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence && admission.data_fresh === true),
+            adsDataFresh: snapshot?.ads_data_fresh_at != null || (trustedIntradayEvidence && admission.ads_data_fresh === true),
+            spApiDataFresh: snapshot?.sp_api_data_fresh_at != null || (trustedIntradayEvidence && admission.sp_api_data_fresh === true),
+            economicsDataFresh: snapshot?.economics_data_fresh_at != null || (trustedIntradayEvidence && admission.economics_data_fresh === true),
+            productEligible: !['NOT_ELIGIBLE', 'OUT_OF_STOCK', 'NOT_BUYABLE', 'PRODUCT_INACTIVE'].includes(String(present(snapshot?.product_state, admission.product_state) || '')),
+            listingActive: !['inactive', 'not_found', 'error'].includes(String(present(snapshot?.listing_status, admission.listing_status) || '').toLowerCase()),
+            offerActive: !['inactive', 'closed', 'not_found'].includes(String(present(snapshot?.offer_status, admission.offer_status) || '').toLowerCase()),
+            buyable: snapshot?.buyable === true || (trustedIntradayEvidence && admission.buyable === true),
+            inStock: Number(present(snapshot?.inventory_available, admission.inventory_available, decision.stock_qty) || 0) > 0,
+            stockCoverageDays: present(snapshot?.stock_coverage_days, admission.stock_coverage_days, decision.stock_coverage_days),
+            economicsComplete: snapshot?.economic_state !== 'ECONOMICS_PENDING' && (snapshot || trustedIntradayEvidence ? admission.economics_complete !== false : false),
+            profitAfterAds: present(snapshot?.profit_after_ads, admission.profit_after_ads, decision.profit_after_ads_total),
+            marginRate: present(snapshot?.margin_rate, admission.margin_rate),
+            currentAcos: present(snapshot?.current_acos, admission.current_acos, decision.current_acos),
+            targetAcos: present(snapshot?.target_acos, admission.target_acos, decision.target_acos),
+            safeMaxCpc: present(snapshot?.safe_max_cpc, admission.safe_max_cpc, decision.maximum_economic_cpc),
+            economicFloor: present(snapshot?.economic_floor, admission.economic_floor),
+            competitionFresh: snapshot?.data_fresh === true || (trustedIntradayEvidence && admission.ads_data_fresh === true),
+            winnerProtected: snapshot?.winner_protected === true || admission.winner_protected === true,
+            sameSkuOrders: present(snapshot?.same_sku_orders, admission.same_sku_orders),
+            haloOrders: present(snapshot?.halo_orders, admission.halo_orders),
             cooldownActive: executorCooldownActive,
             accountDailyCap: decision.account_daily_budget_limit,
             accountSpend: decision.account_daily_spend,

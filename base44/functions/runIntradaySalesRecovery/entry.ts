@@ -21,6 +21,10 @@ const todayBrt = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao
 const hourBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }).format(new Date())) % 24;
 const minuteBrt = () => Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', minute: '2-digit' }).format(new Date()));
 const daysAgo = (days: number) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+const confidence01 = (value: unknown) => {
+  const raw = n(value, 0);
+  return raw > 1 ? raw / 100 : raw;
+};
 
 function minimumMarginRate(settings: any): number {
   const raw = n(settings?.minimum_net_margin_pct ?? settings?.minimum_margin_pct ?? 15, 15);
@@ -41,6 +45,11 @@ function median(values: number[]) {
   if (!sorted.length) return 0;
   const m = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+}
+
+function freshWithin(value: unknown, minutes: number) {
+  const timestamp = new Date(String(value || '')).getTime();
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= minutes * 60000;
 }
 
 function targetMer(settings: any) {
@@ -119,6 +128,8 @@ Deno.serve(async (request) => {
       const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
       const econByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
       const latest = latestByCampaign(intradayRows);
+      const newestIntradayAt = intradayRows.reduce((latestAt: number, row: any) => Math.max(latestAt, new Date(String(row.observed_at || row.updated_at || row.created_at || 0)).getTime()), 0);
+      const intradayDataFresh = newestIntradayAt > 0 && Date.now() - newestIntradayAt <= FRESHNESS_MINUTES * 60000;
 
       // Mesma fonte de verdade do Dashboard: nunca somar account_total + product rollup e nunca ignorar gross_revenue.
       const canonicalSales = canonicalAccountSalesByDate(salesRows);
@@ -154,7 +165,7 @@ Deno.serve(async (request) => {
       // day. From 07:00 onward, use fresh intraday evidence to diagnose weak
       // morning delivery rather than waiting until 10:00 to cut waste or
       // recover economically safe campaigns.
-      const recoveryActive = hour >= 7 && hour <= 21 && baselineRevenue > 0 && expectedFloor > 0 && revenueToday < expectedFloor && spendToday > 0;
+      const recoveryActive = intradayDataFresh && hour >= 7 && hour <= 21 && baselineRevenue > 0 && expectedFloor > 0 && revenueToday < expectedFloor && spendToday > 0;
       const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.20, merTarget * 4);
 
       const histByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
@@ -182,6 +193,9 @@ Deno.serve(async (request) => {
         const eligibility = productAdsEligibility(product);
         if (!id || !asin || !eligibility.eligible) continue;
         const econ = econByAsin.get(asin) || {};
+        const economicConfidence = confidence01(econ.final_economic_confidence ?? econ.economic_data_confidence ?? econ.confidence);
+        const spApiDataFresh = freshWithin(product?.last_confirmed_at || product?.last_synced_at || product?.updated_at, 24 * 60);
+        const economicsDataFresh = freshWithin(econ?.calculated_at || econ?.updated_at || econ?.created_at, 24 * 60);
         const todayM = todayByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
         const hist = histByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
         const histAcos = hist.sales > 0 ? hist.spend / hist.sales * 100 : null;
@@ -191,18 +205,36 @@ Deno.serve(async (request) => {
         const profitAfterAds = n(econ.profit_after_ads ?? product?.profit_after_ads, 0);
         const budget = n(campaign.daily_budget || campaign.budget, 0);
         const maximumAdsPerOrder = maximumAdsSpendPerOrder(econ, product, minMarginRate);
+        const admission = {
+          product_state: 'ACTIVE',
+          listing_status: String(product?.listing_status || product?.status || 'active'),
+          offer_status: String(product?.offer_status || product?.status || 'active'),
+          buyable: product?.listing_buyable !== false,
+          inventory_available: eligibility.stock,
+          stock_coverage_days: product?.stock_coverage_days ?? product?.inventory_coverage_days ?? null,
+          sp_api_data_fresh: spApiDataFresh,
+          economics_data_fresh: economicsDataFresh,
+          economics_complete: maximumAdsPerOrder > 0 && n(econ.safe_max_cpc ?? econ.maximum_economic_cpc) > 0,
+          economic_confidence: economicConfidence,
+          safe_max_cpc: n(econ.safe_max_cpc ?? econ.maximum_economic_cpc),
+          target_acos: safeAcos,
+          current_acos: todayAcos,
+          profit_after_ads: profitAfterAds,
+          same_sku_orders: todayM.orders,
+          winner_protected: false,
+        };
         const adsSpendPerOrder = todayM.orders > 0 ? todayM.spend / todayM.orders : todayM.spend;
         const drySpend = todayM.orders === 0 && todayM.spend >= Math.max(2.5, maximumAdsPerOrder || 5);
         const marginCapBreached = maximumAdsPerOrder > 0 && adsSpendPerOrder > maximumAdsPerOrder * 1.02;
         const inefficientToday = todayAcos !== null && todayAcos > Math.max(safeAcos * 1.5, safeAcos + 5);
 
         if (drySpend || marginCapBreached || inefficientToday) {
-          losers.push({ campaign, id, asin, todayM, todayAcos, safeAcos, budget, product, econ, maximumAdsPerOrder, adsSpendPerOrder, marginCapBreached });
+          losers.push({ campaign, id, asin, todayM, todayAcos, safeAcos, budget, product, econ, economicConfidence, admission, maximumAdsPerOrder, adsSpendPerOrder, marginCapBreached });
           continue;
         }
         const historicalWinner = hist.orders >= 2 && hist.sales > hist.spend && histAcos !== null && histAcos <= safeAcos && profitAfterAds > 0;
         const todayWinner = todayM.orders >= 1 && todayM.sales > todayM.spend && todayAcos !== null && todayAcos <= safeAcos * 1.20 && profitAfterAds > 0;
-        if (historicalWinner || todayWinner) winners.push({ campaign, id, asin, todayM, hist, histAcos, todayAcos, safeAcos, budget, product, todayWinner });
+        if (historicalWinner || todayWinner) winners.push({ campaign, id, asin, todayM, hist, histAcos, todayAcos, safeAcos, budget, product, econ, economicConfidence, admission: { ...admission, winner_protected: true }, todayWinner });
       }
 
       losers.sort((a, b) => (b.todayM.spend - b.todayM.sales) - (a.todayM.spend - a.todayM.sales));
@@ -210,22 +242,49 @@ Deno.serve(async (request) => {
 
       const queued: any[] = [];
       let freedBudget = 0;
-      const createDecision = async (data: any) => base44.asServiceRole.entities.OptimizationDecision.create({
-        ...data,
-        amazon_account_id: aid,
-        decision_type: 'intraday_sales_recovery',
-        status: 'approved', queue_status: 'pending', priority_class: 'P1', execution_mode: 'EXECUTE_NOW',
-        execute_before: new Date(Date.now() + FRESHNESS_MINUTES * 60000).toISOString(),
-        requires_fresh_data: true, maximum_data_age_minutes: FRESHNESS_MINUTES,
-        confirmation_required: true, confirmation_status: 'pending',
-        requires_approval: false, approval_status: 'auto_approved_deterministic',
-        source_function: SOURCE, model_version: 'sales-recovery-v1.1-canonical-sales',
-        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      });
+      const createDecision = async (data: any) => {
+        const { admission = {}, ...decisionData } = data;
+        let evidence: any = {};
+        try { evidence = JSON.parse(String(decisionData.data_used || '{}')); } catch { evidence = {}; }
+        const rollbackPlan = decisionData.rollback_plan || JSON.stringify({
+          action: String(decisionData.action || '').includes('budget') ? 'set_budget' : 'set_bid',
+          value: decisionData.value_before ?? decisionData.current_value ?? null,
+        });
+        return base44.asServiceRole.entities.OptimizationDecision.create({
+          ...decisionData,
+          amazon_account_id: aid,
+          decision_type: 'intraday_sales_recovery',
+          status: 'approved', queue_status: 'pending', priority_class: 'P1', execution_mode: 'EXECUTE_NOW',
+          execute_before: new Date(Date.now() + FRESHNESS_MINUTES * 60000).toISOString(),
+          requires_fresh_data: true, maximum_data_age_minutes: FRESHNESS_MINUTES,
+          confirmation_required: true, confirmation_status: 'pending',
+          requires_approval: false, approval_status: 'auto_approved_deterministic',
+          data_scope_validated: true, data_scope_status: 'VALID', data_window_end: today,
+          rollback_plan: rollbackPlan,
+          data_used: JSON.stringify({
+            ...evidence,
+            admission: {
+              verified: true,
+              observed_at: new Date(newestIntradayAt).toISOString(),
+              data_fresh: intradayDataFresh,
+              ads_data_fresh: intradayDataFresh,
+              sp_api_data_fresh: admission.sp_api_data_fresh === true,
+              economics_data_fresh: admission.economics_data_fresh === true,
+              economics_complete: admission.economics_complete === true,
+              ...admission,
+            },
+          }),
+          source_function: SOURCE, model_version: 'sales-recovery-v1.2-admission-evidence',
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        });
+      };
 
       if (recoveryActive && body.dry_run !== true) {
         for (const loser of losers.slice(0, 5)) {
           if (queued.length >= MAX_ACTIONS) break;
+          // Protection can use 60% economic confidence, but only when the
+          // same run confirmed inventory, listing and economic inputs.
+          if (loser.economicConfidence < 0.60 || !loser.admission.sp_api_data_fresh || !loser.admission.economics_data_fresh || !loser.admission.economics_complete) continue;
           // Margin breach is the fastest protection: lower the responsible
           // keyword bids in the same 15-minute cycle before reducing budget.
           if (loser.marginCapBreached) {
@@ -242,6 +301,7 @@ Deno.serve(async (request) => {
               const key = `MARGIN_CAP|${aid}|${keywordId}|${hourKey}|${nextBid.toFixed(2)}`;
               if (!keywordId || currentBid <= 0 || nextBid >= currentBid - 0.009 || activeKeys.has(key)) continue;
               const decision = await createDecision({
+                admission: loser.admission,
                 entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
                 keyword_text: kw.keyword_text || kw.keyword || null, campaign_id: loser.id,
                 campaign_name: loser.campaign.name || loser.campaign.campaign_name || null,
@@ -264,6 +324,7 @@ Deno.serve(async (request) => {
           const key = `SALES_RECOVERY|${aid}|${loser.id}|REDUCE_BUDGET|${hourKey}|${nextBudget.toFixed(2)}`;
           if (activeKeys.has(key)) continue;
           const decision = await createDecision({
+            admission: loser.admission,
             entity_type: 'campaign', entity_id: loser.id, campaign_id: loser.id,
             campaign_name: loser.campaign.name || loser.campaign.campaign_name || null,
             asin: loser.asin, sku: loser.product?.sku || null,
@@ -283,6 +344,10 @@ Deno.serve(async (request) => {
         if (growthAllowed && freedBudget > 0) {
           for (const winner of winners.slice(0, 5)) {
             if (queued.length >= MAX_ACTIONS) break;
+            // Expansion remains stricter than protection: it needs a mature
+            // economic packet so it will pass the executor without relying on
+            // a later optimistic interpretation of the data.
+            if (winner.economicConfidence < 0.90 || !winner.admission.sp_api_data_fresh || !winner.admission.economics_data_fresh || !winner.admission.economics_complete) continue;
             const kw = keywords.filter((k: any) => active(k) && s(k.campaign_id || k.amazon_campaign_id) === winner.id)
               .filter((k: any) => {
                 const orders = n(k.orders ?? k.purchases), sales = n(k.sales), spend = n(k.spend);
@@ -298,6 +363,7 @@ Deno.serve(async (request) => {
               const key = `SALES_RECOVERY|${aid}|${keywordId}|INCREASE_BID|${hourKey}|${nextBid.toFixed(2)}`;
               if (keywordId && currentBid > 0 && nextBid > currentBid + 0.009 && !activeKeys.has(key)) {
                 const decision = await createDecision({
+                  admission: winner.admission,
                   entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
                   keyword_text: kw.keyword_text || kw.keyword || null, campaign_id: winner.id,
                   campaign_name: winner.campaign.name || winner.campaign.campaign_name || null,
@@ -321,6 +387,7 @@ Deno.serve(async (request) => {
             const key = `SALES_RECOVERY|${aid}|${winner.id}|INCREASE_BUDGET|${hourKey}|${nextBudget.toFixed(2)}`;
             if (nextBudget <= winner.budget + 0.01 || activeKeys.has(key)) continue;
             const decision = await createDecision({
+              admission: winner.admission,
               entity_type: 'campaign', entity_id: winner.id, campaign_id: winner.id,
               campaign_name: winner.campaign.name || winner.campaign.campaign_name || null,
               asin: winner.asin, sku: winner.product?.sku || null,

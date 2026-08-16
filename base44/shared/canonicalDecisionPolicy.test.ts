@@ -58,6 +58,16 @@ const protectiveReduction = evaluateDecisionGovernance({
 });
 assert.equal(protectiveReduction.allowed, true);
 
+const intradayEvidenceReduction = evaluateDecisionGovernance({
+  actionType: 'reduce_budget', entityType: 'campaign', verifiedEvidenceId: 'intraday:verified',
+  currentValue: 15, proposedValue: 12, reasonCode: 'INTRADAY_MARGIN_CAP_REDUCE_BID',
+  confidence: 0.93, dataFresh: true, adsDataFresh: true, spApiDataFresh: true,
+  economicsDataFresh: true, productEligible: true, listingActive: true,
+  offerActive: true, buyable: true, inStock: true, economicsComplete: true,
+  economicConfidence: 0.65, rollbackPlan: 'restore_budget',
+});
+assert.equal(intradayEvidenceReduction.allowed, true);
+
 const priceBelowFloor = evaluateDecisionGovernance({
   actionType: 'decrease_price', entityType: 'product_price', snapshotId: 'snap-2',
   currentValue: 100, proposedValue: 70, economicFloor: 80, confidence: 0.95,

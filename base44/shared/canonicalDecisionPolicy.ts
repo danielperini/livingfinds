@@ -62,6 +62,10 @@ export type GovernanceInput = {
   currentValue?: number | null;
   proposedValue?: number | null;
   snapshotId?: string | null;
+  // Some intraday actions are based on a freshly confirmed Ads snapshot and
+  // inventory/economics read in the same run.  This immutable evidence receipt
+  // is accepted only by trusted producers and never replaces data freshness.
+  verifiedEvidenceId?: string | null;
   reasonCode?: string | null;
   reason?: string | null;
   confidence: number;
@@ -237,15 +241,15 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   // experiment.  It may act with a lower (but still material) confidence
   // threshold, while all hard data, stock, margin and execution guards remain
   // mandatory.  Growth actions keep the stricter configured threshold.
-  const protectiveBidReduction = isBid && isDecrease &&
+  const protectiveEconomicReduction = (isBid || isBudget) && isDecrease &&
     /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/.test(reason);
-  const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveBidReduction ? 0.60 : 0.90));
+  const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveEconomicReduction ? 0.60 : 0.90));
 
   if (input.accountKillSwitch) add('P1', 'ACCOUNT_KILL_SWITCH', 'Kill switch da conta está ativo.');
   const cap = Number(input.accountDailyCap || 0);
   const committed = Number(input.accountSpend || 0) + Number(input.reservedPendingSpend || 0) + Number(input.proposedSpendImpact || 0);
   if ((isIncrease || isBudget) && cap > 0 && committed > cap) add('P1', 'ACCOUNT_DAILY_CAP', 'Gasto real, pendente e proposto ultrapassa o teto diário.');
-  if (!input.snapshotId) add('P2', 'SNAPSHOT_REQUIRED', 'Toda decisão deve referenciar o snapshot canônico.');
+  if (!input.snapshotId && !input.verifiedEvidenceId) add('P2', 'SNAPSHOT_REQUIRED', 'Toda decisão deve referenciar um snapshot canônico ou evidência intradiária verificada.');
   if (!input.dataFresh || input.adsDataFresh === false || input.spApiDataFresh === false || input.economicsDataFresh === false) add('P2', 'STALE_DATA', 'Uma ou mais fontes obrigatórias estão vencidas.');
   if (!input.productEligible || !input.listingActive || !input.offerActive || !input.buyable || !input.inStock) add('P3', 'PRODUCT_NOT_ELIGIBLE', 'Produto, listing, oferta, Buy Box ou estoque bloqueiam a ação.');
   if (!input.economicsComplete) add('P4', 'ECONOMICS_INCOMPLETE', 'Custos, taxas ou margem não estão confirmados.');
