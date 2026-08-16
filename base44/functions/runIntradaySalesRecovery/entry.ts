@@ -282,12 +282,12 @@ Deno.serve(async (request) => {
         }
       }
 
-      let servingGrowth: any = { ok: true, skipped: true };
-      if (growthAllowed && revenueRatio < 0.40 && body.dry_run !== true) {
-        servingGrowth = await base44.asServiceRole.functions.invoke('runServingCampaignGrowthObjective', {
-          amazon_account_id: aid, _service_role: true, dry_run: false, trigger_type: 'intraday_sales_recovery',
-        }).then((result: any) => result?.data || result || { ok: true }).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
-      }
+      // Growth is owned exclusively by runUnifiedDecisionEngine. Recovery may
+      // recommend expansion from today's evidence, but never invokes a second
+      // campaign-growth pass with an independent correlation/idempotency scope.
+      const servingGrowth = growthAllowed && revenueRatio < 0.40
+        ? { ok: true, recommended: true, owner: 'runUnifiedDecisionEngine', reason: 'revenue_below_intraday_floor' }
+        : { ok: true, skipped: true, owner: 'runUnifiedDecisionEngine' };
 
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: aid, sync_type: 'intraday_sales_recovery', status: 'completed', source_function: SOURCE,

@@ -134,7 +134,8 @@ Deno.serve(async (request) => {
           snapshot_run_id: snapshotRunId, daily_close: false,
         });
 
-    const servingGrowth = body.skip_serving_campaign_growth === true || !lifecycleWindow
+    const growthRecommendedByToday = salesRecovery?.serving_growth?.recommended === true;
+    const servingGrowth = body.skip_serving_campaign_growth === true || (!lifecycleWindow && !growthRecommendedByToday)
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runServingCampaignGrowthObjective', {
           ...common,
@@ -143,7 +144,7 @@ Deno.serve(async (request) => {
           max_auto_budget_expansions: body.max_auto_budget_expansions ?? 2,
           max_new_exact_per_run: body.max_new_exact_per_run ?? 2,
           delivery_lookback_days: 7,
-          trigger_type: dailyClose ? 'unified_daily_serving_growth_v18' : 'unified_intraday_serving_growth_v18',
+          trigger_type: dailyClose ? 'unified_daily_serving_growth_v18' : growthRecommendedByToday ? 'unified_intraday_growth_recommendation' : 'unified_intraday_serving_growth_v18',
         });
     const servingGrowthReport = Array.isArray(servingGrowth?.reports) ? servingGrowth.reports[0] : null;
     const servingGrowthGap = Math.max(0, Number(servingGrowthReport?.growth_gap || 0));
@@ -278,6 +279,7 @@ Deno.serve(async (request) => {
         schedule_owner: 'runUnifiedDecisionEngine',
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
         serving_growth_stage: 'runServingCampaignGrowthObjective',
+        today_evidence_requested_growth: growthRecommendedByToday,
       },
       asin_portfolio: {
         automatic: true,
