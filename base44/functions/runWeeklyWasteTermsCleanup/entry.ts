@@ -67,6 +67,10 @@ Deno.serve(async (req) => {
     const dailyGuard = body.mode === 'daily_guard';
     const CUTOFF_DAYS = dailyGuard ? 3 : 21;
     const allowCampaignPause = body.allow_campaign_pause === true;
+    // A rotina canônica reduz o lance primeiro pelo guardrail econômico.
+    // Negativar é uma ação posterior, explícita e auditável; assim a Auto
+    // continua descobrindo demanda e a Manual não perde um termo recuperável.
+    const applyNegativeTerms = body.apply_negative_terms === true;
 
     const cutoffDate = new Date(Date.now() - CUTOFF_DAYS * 86400000).toISOString().slice(0, 10);
     // Janela de atribuição segura: não tomar decisão sobre dados recentes
@@ -151,6 +155,7 @@ Deno.serve(async (req) => {
 
     const stats = {
       waste_terms_found: wasteTerms.length,
+      negative_candidates: 0,
       negatives_created: 0,
       negatives_skipped: 0,
       campaigns_analyzed: 0,
@@ -169,6 +174,12 @@ Deno.serve(async (req) => {
     for (const t of wasteTerms) {
       const negKey = `${t.campaign_id}|${t.normalized_term}`;
       if (alreadyNegated.has(negKey)) { stats.negatives_skipped++; continue; }
+
+      stats.negative_candidates++;
+      if (!applyNegativeTerms) {
+        negativeActions.push({ term: t.normalized_term, campaign_id: t.campaign_id, spend: t.spend, action: 'observe_after_bid_reduction' });
+        continue;
+      }
 
       negBatch.push({
         campaignId: t.campaign_id,
@@ -319,7 +330,11 @@ Deno.serve(async (req) => {
       stats,
       negative_actions: negativeActions.slice(0, 100),
       pause_actions: pauseActions,
-      config_used: { maxAcos, minSpendForDecision, cutoff_days: CUTOFF_DAYS, daily_guard: dailyGuard, campaign_pause_enabled: allowCampaignPause },
+      config_used: {
+        maxAcos, minSpendForDecision, cutoff_days: CUTOFF_DAYS, daily_guard: dailyGuard,
+        campaign_pause_enabled: allowCampaignPause, negative_terms_applied: applyNegativeTerms,
+        policy: 'reduzir_bid_primeiro; negativar_somente_com_chamada_explicita',
+      },
       ran_at: new Date().toISOString(),
     });
   } catch (err: any) {

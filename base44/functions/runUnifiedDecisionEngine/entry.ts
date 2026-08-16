@@ -241,6 +241,8 @@ Deno.serve(async (request) => {
         bayesian_cvr_guard: true,
         mer_tacos_guardrail: true,
         protects_profitable_winners: true,
+        protection_scope: 'termo_ou_target_responsável; não bloqueia crescimento de outros ASINs elegíveis',
+        action_order: 'reduzir_bid_ao_cpc_econômico → observar → negativar/pausar_entidade_específica_somente_com_evidência',
         execution_owner: 'executeApprovedDecisionQueue',
         confirmation_required: true,
       },
@@ -281,6 +283,7 @@ Deno.serve(async (request) => {
         serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
         serving_growth_stage: 'runServingCampaignGrowthObjective',
         today_evidence_requested_growth: growthRecommendedByToday,
+        growth_contract: 'Auto de descoberta, Harvest Auto/Manual→Exact e expansão só para estoque, economia e entrega confirmados; perda local não bloqueia vencedores independentes.',
       },
       asin_portfolio: {
         automatic: true,

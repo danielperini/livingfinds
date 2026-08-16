@@ -126,6 +126,7 @@ Deno.serve(async (request) => {
         lookback_hours: 48,
         max_term_words: 3,
         allow_campaign_pause: false,
+        apply_negative_terms: false,
         max_spend_without_sale: maxSpendWithoutSale,
         negative_match_type: 'NEGATIVE_EXACT',
         include_auto: true,
