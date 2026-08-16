@@ -150,7 +150,11 @@ Deno.serve(async (request) => {
       }
 
       const tacos = revenueToday > 0 ? spendToday / revenueToday : null;
-      const recoveryActive = hour >= 10 && hour <= 21 && baselineRevenue > 0 && expectedFloor > 0 && revenueToday < expectedFloor && spendToday > 0;
+      // The 06:04 unified lifecycle restores eligible coverage for the new
+      // day. From 07:00 onward, use fresh intraday evidence to diagnose weak
+      // morning delivery rather than waiting until 10:00 to cut waste or
+      // recover economically safe campaigns.
+      const recoveryActive = hour >= 7 && hour <= 21 && baselineRevenue > 0 && expectedFloor > 0 && revenueToday < expectedFloor && spendToday > 0;
       const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.20, merTarget * 4);
 
       const histByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
