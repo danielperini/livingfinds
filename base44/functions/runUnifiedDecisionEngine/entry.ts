@@ -171,6 +171,7 @@ Deno.serve(async (request) => {
       : await invoke(base44, 'syncDaypartingConfiguration', {
           ...common,
           bootstrap_default_rules: body.bootstrap === true,
+          migrate_canonical_rules: body.bootstrap === true || body.migrate_daypart_rules === true,
         });
     const daypartBudgetRestore = body.skip_scheduled_daypart === true || !daypartWindow
       ? { ok: true, skipped: true }

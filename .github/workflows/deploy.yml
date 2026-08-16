@@ -113,6 +113,18 @@ jobs:
               console.log("QUEUE_RECONCILIATION_HTTP=" + response.status + "|OK=" + data.ok + "|TOTALS=" + JSON.stringify(data.totals || {}));
               if (!response.ok || data.ok === false) throw new Error(data.error || "queue reconciliation failed");
             ' </dev/null
+            echo '--- migrando dayparting para regras canônicas apenas de bid ---'
+            docker compose -f server/docker-compose.yml exec -T app deno eval '
+              const token = Deno.env.get("API_TOKEN") || Deno.env.get("ADMIN_PASSWORD") || "";
+              const response = await fetch("http://127.0.0.1:8000/functions/syncDaypartingConfiguration", {
+                method: "POST",
+                headers: { "content-type": "application/json", "x-api-token": token },
+                body: JSON.stringify({ _service_role: true, bootstrap_default_rules: true, migrate_canonical_rules: true })
+              });
+              const data = await response.json().catch(() => ({}));
+              console.log("DAYPART_MIGRATION_HTTP=" + response.status + "|OK=" + data.ok + "|DATA=" + JSON.stringify(data.results || []).slice(0, 4000));
+              if (!response.ok || data.ok === false) throw new Error(data.error || "daypart migration failed");
+            ' </dev/null
             if [ "${RUN_POST_DEPLOY_AMAZON_AUTOMATION}" != "true" ]; then
               echo '--- rotinas Amazon pós-deploy ignoradas; exigem workflow_dispatch explícito ---'
               exit 0
@@ -302,7 +314,7 @@ jobs:
               await callOptional("runMotorImediato", { force: false });
               await callOptional("syncUnifiedAdsReportsHourly", { days: 14, force: true });
               await call("rebuildHourlyMetricsFromReports", { full: true, lookback_days: 30 });
-              await call("runCanonicalDaypartingEngine", { trigger: "deploy_retroactive_hourly_rebuild" });
+              await call("syncDaypartingConfiguration", { bootstrap_default_rules: true, migrate_canonical_rules: true });
             ' </dev/null
 
             echo '--- proteção econômica por SKU ---'

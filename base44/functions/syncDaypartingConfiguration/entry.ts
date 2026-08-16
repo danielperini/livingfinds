@@ -6,7 +6,7 @@ const WEEKEND = ['SATURDAY', 'SUNDAY'];
 
 const CANONICAL_RULES = [
   {
-    rule_name: 'Dias úteis · reduzir bids para 50% à noite',
+    rule_name: 'Dias úteis · reduzir bids para 50% na madrugada',
     action_type: 'BID_PERCENT',
     start_time: '23:59',
     end_time: '03:00',
@@ -15,23 +15,23 @@ const CANONICAL_RULES = [
     holiday_mode: 'IGNORE',
     weekend_holiday_group: false,
     targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor: bids em 50% entre 23:59 e 03:00 nos dias úteis.',
+    reason: 'Dayparting conservador por bid: mantém as campanhas ativas e reduz o lance entre 23:59 e 03:00.',
   },
   {
-    rule_name: 'Dias úteis · pausar campanhas entre 03:00 e 05:00',
-    action_type: 'PAUSE_CAMPAIGN',
+    rule_name: 'Dias úteis · reduzir bids para 35% no vale da madrugada',
+    action_type: 'BID_PERCENT',
     start_time: '03:00',
     end_time: '05:00',
-    adjustment_value: 0,
+    adjustment_value: -65,
     days_of_week: WEEKDAYS,
     holiday_mode: 'IGNORE',
     weekend_holiday_group: false,
     targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor: pausa temporária de campanhas nos dias úteis.',
+    reason: 'Dayparting conservador por bid: não pausa campanhas por horário; preserva descoberta de baixo custo entre 03:00 e 05:00.',
   },
   {
-    rule_name: 'Dias úteis · reativar campanhas e restaurar bids às 05:00',
-    action_type: 'ENABLE_CAMPAIGN',
+    rule_name: 'Dias úteis · restaurar bids base às 05:00',
+    action_type: 'BID_PERCENT',
     start_time: '05:00',
     end_time: '05:05',
     adjustment_value: 0,
@@ -39,43 +39,31 @@ const CANONICAL_RULES = [
     holiday_mode: 'IGNORE',
     weekend_holiday_group: false,
     targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor: reativa apenas campanhas pausadas pelo ciclo e restaura o baseline.',
+    reason: 'Restaura somente o lance-base às 05:00; campanhas permanecem operacionais.',
   },
   {
-    rule_name: 'Dias úteis · reduzir bids em 60% entre 15:00 e 17:00',
+    rule_name: 'Dias úteis · reduzir bids em 25% entre 15:00 e 19:00',
     action_type: 'BID_PERCENT',
     start_time: '15:00',
-    end_time: '17:00',
-    adjustment_value: -60,
+    end_time: '19:00',
+    adjustment_value: -25,
     days_of_week: WEEKDAYS,
     holiday_mode: 'IGNORE',
     weekend_holiday_group: false,
     targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor: bids em 40% do baseline entre 15:00 e 17:00.',
+    reason: 'Redução moderada e reversível de bids no vale de conversão; não pausa Auto nem Manual.',
   },
   {
-    rule_name: 'Dias úteis · pausar automáticas entre 15:00 e 17:00',
-    action_type: 'PAUSE_CAMPAIGN',
-    start_time: '15:00',
-    end_time: '17:00',
+    rule_name: 'Dias úteis · restaurar bids base às 19:00',
+    action_type: 'BID_PERCENT',
+    start_time: '19:00',
+    end_time: '19:05',
     adjustment_value: 0,
     days_of_week: WEEKDAYS,
     holiday_mode: 'IGNORE',
     weekend_holiday_group: false,
-    targeting_types: ['AUTO'],
-    reason: 'Regra canônica já executada pelo motor: pausa somente campanhas automáticas nessa janela.',
-  },
-  {
-    rule_name: 'Dias úteis · restaurar bids e automáticas às 17:00',
-    action_type: 'ENABLE_CAMPAIGN',
-    start_time: '17:00',
-    end_time: '17:05',
-    adjustment_value: 0,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: ['AUTO'],
-    reason: 'Regra canônica já executada pelo motor: restaura bids ao baseline e reativa automáticas pausadas pelo ciclo.',
+    targeting_types: [],
+    reason: 'Restaura bids base após a janela de menor conversão, sem reativação porque não houve pausa por horário.',
   },
   {
     rule_name: 'Sábado, domingo e feriados · bids em 50% de 23:59 a 05:00',
@@ -121,7 +109,7 @@ async function bootstrapCanonicalRules(base44: any, account: any, existingRules:
       : [...rule.days_of_week].sort().join(',');
     const idempotencyKey = [
       account.id,
-      'canonical-v1',
+      'canonical-v2-bid-only',
       rule.action_type,
       rule.start_time,
       rule.end_time,
@@ -151,7 +139,7 @@ async function bootstrapCanonicalRules(base44: any, account: any, existingRules:
       fallback_mode: 'app_managed_only',
       native_api_supported: false,
       idempotency_key: idempotencyKey,
-      engine_version: 'canonical-daypart-bootstrap-v1',
+      engine_version: 'canonical-daypart-bootstrap-v2-bid-only',
       created_at: now,
       updated_at: now,
     });
@@ -160,6 +148,23 @@ async function bootstrapCanonicalRules(base44: any, account: any, existingRules:
   }
 
   return created;
+}
+
+async function archiveLegacyCanonicalRules(base44: any, rules: any[]) {
+  const legacy = rules.filter((rule: any) => {
+    const key = String(rule.idempotency_key || '');
+    const engine = String(rule.engine_version || '');
+    return key.includes('|canonical-v1|') || engine === 'canonical-daypart-bootstrap-v1';
+  });
+  for (const rule of legacy) {
+    await base44.asServiceRole.entities.AmazonScheduledRule.update(rule.id, {
+      status: 'archived',
+      association_status: 'retired_by_unified_engine',
+      last_error: 'Regra canônica legada aposentada: a versão bid-only substituiu janelas de pausa e ajustes contraditórios.',
+      updated_at: new Date().toISOString(),
+    }).catch(() => {});
+  }
+  return legacy.length;
 }
 
 Deno.serve(async (request) => {
@@ -177,8 +182,11 @@ Deno.serve(async (request) => {
 
     for (const account of accounts) {
       let rules = await base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: account.id }, '-updated_at', 500).catch(() => []);
+      const legacyPauseRulesArchived = body.migrate_canonical_rules === true || body.bootstrap_default_rules === true
+        ? await archiveLegacyCanonicalRules(base44, rules)
+        : 0;
       let bootstrapped: string[] = [];
-      if (body.bootstrap_default_rules === true && !rules.some((rule: any) => rule.status !== 'archived')) {
+      if (body.bootstrap_default_rules === true) {
         bootstrapped = await bootstrapCanonicalRules(base44, account, rules);
         rules = await base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: account.id }, '-updated_at', 500).catch(() => []);
       }
@@ -214,6 +222,7 @@ Deno.serve(async (request) => {
         amazon_account_id: account.id,
         rules: active.length,
         bootstrapped: bootstrapped.length,
+        legacy_canonical_rules_archived: legacyPauseRulesArchived,
         holidays: holidays.length,
         holiday_error: holidayError,
       });
@@ -224,7 +233,7 @@ Deno.serve(async (request) => {
         source_function: SOURCE,
         records_processed: active.length,
         records_imported: holidays.length + bootstrapped.length,
-        message: holidayError || `${active.length} regras sincronizadas; ${bootstrapped.length} regras canônicas materializadas`,
+        message: holidayError || `${active.length} regras sincronizadas; ${bootstrapped.length} regras canônicas materializadas; ${legacyPauseRulesArchived} regras canônicas legadas aposentadas`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});

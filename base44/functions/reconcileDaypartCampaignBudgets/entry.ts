@@ -181,9 +181,13 @@ Deno.serve(async (request) => {
         actions.push({ campaign_id: campaignId, action: 'RESTORE_BUDGET', current_budget: currentBudget, target_budget: policy.targetBudget, dry_run: dryRun });
       }
 
-      let execution: any = { skipped: true, reason: dryRun ? 'DRY_RUN' : 'NO_NEW_DECISIONS' };
-      let confirmation: any = { skipped: true };
-      if (!dryRun && queuedIds.length) {
+      // O motor unificado é o único dono da execução. Esta etapa apenas cria
+      // decisões idempotentes; o executor/confirmador canônicos dos minutos
+      // seguintes aplicam e verificam a alteração na Amazon.
+      const deferToCanonicalExecutor = body._canonical_orchestrator === 'runUnifiedDecisionEngine';
+      let execution: any = { skipped: true, reason: dryRun ? 'DRY_RUN' : deferToCanonicalExecutor ? 'CANONICAL_EXECUTOR_OWNS_EXECUTION' : 'NO_NEW_DECISIONS' };
+      let confirmation: any = { skipped: true, reason: deferToCanonicalExecutor ? 'CANONICAL_CONFIRMATION_OWNS_CONFIRMATION' : 'NO_NEW_DECISIONS' };
+      if (!dryRun && queuedIds.length && !deferToCanonicalExecutor) {
         const executed = await base44.asServiceRole.functions.invoke('executeApprovedDecisionQueue', {
           amazon_account_id: accountId, _service_role: true,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
