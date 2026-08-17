@@ -43,7 +43,7 @@ Deno.serve(async (request) => {
       if (!user) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta conectada' }, { status: 404 });

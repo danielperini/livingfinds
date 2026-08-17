@@ -4,7 +4,7 @@ const SOURCE = 'syncDaypartingConfiguration';
 const WEEKDAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const WEEKEND = ['SATURDAY', 'SUNDAY'];
 
-const CANONICAL_RULES = [];
+const CANONICAL_RULES: any[] = [];
 
 async function fetchBrazilHolidays(year: number): Promise<string[]> {
   const response = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`, { signal: AbortSignal.timeout(12000) });
@@ -111,7 +111,7 @@ Deno.serve(async (request) => {
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
     const year = Number(body.year || new Date().getFullYear());
     const results: any[] = [];

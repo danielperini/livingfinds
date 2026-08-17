@@ -351,7 +351,7 @@ Deno.serve(async (request) => {
     }
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 1);
     const account = accounts[0];
     if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon Ads conectada' }, { status: 404 });
@@ -377,16 +377,16 @@ Deno.serve(async (request) => {
     }
 
     const [configs, performance, controllers, campaigns, products, economics, adGroups, keywords, productTargets, patterns, decisions, nativeRules, intradaySnapshots, todayMetrics] = await Promise.all([
-      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: aid, spend_date: clock.date }, null, 1).catch(() => []),
-      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 1000).catch(() => []),
-      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 1000).catch(() => []),
-      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, null, 1000).catch(() => []),
-      base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: aid }, null, 3000).catch(() => []),
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, undefined, 1).catch(() => []),
+      base44.asServiceRole.entities.AccountDailySpendController.filter({ amazon_account_id: aid, spend_date: clock.date }, undefined, 1).catch(() => []),
+      base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
+      base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, undefined, 1000).catch(() => []),
+      base44.asServiceRole.entities.AdGroup.filter({ amazon_account_id: aid }, undefined, 3000).catch(() => []),
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 10000).catch(() => []),
       base44.asServiceRole.entities.ProductTarget.filter({ amazon_account_id: aid }, '-spend', 10000).catch(() => []),
-      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, null, 2000).catch(() => []),
+      base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, undefined, 2000).catch(() => []),
       base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 5000).catch(() => []),
       base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
       base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
