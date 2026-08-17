@@ -182,7 +182,25 @@ Deno.serve(async (request) => {
         result_summary: `retry=${reconciliation.retried}; stale_recuperada=${reconciliation.stale_recovered}; aguardando_estoque=${reconciliation.waiting_stock}; escopo=${reconciliation.cancelled_scope}; campanha_inativa=${reconciliation.cancelled_inactive_campaign}; terminais=${reconciliation.terminal}; intactas=${reconciliation.untouched}`,
       }).catch(() => {});
     }
-    return Response.json({ ok: true, dry_run: dryRun, totals, accounts: byAccount, policy: { stale_processing_minutes: STALE_PROCESSING_MINUTES, stale_scheduled_hours: STALE_SCHEDULED_HOURS } });
+
+    const historyPrune = body.skip_history_prune === true
+      ? { ok: true, skipped: true }
+      : await base44.asServiceRole.functions.invoke('pruneMotorDecisionHistory', {
+          amazon_account_id: body.amazon_account_id || null,
+          _service_role: true,
+          dry_run: dryRun,
+          max_delete: body.max_history_delete || 1000,
+          trigger_type: body.trigger_type || 'operational_queue_reconciliation',
+        }).then((r: any) => r?.data || r).catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+
+    return Response.json({
+      ok: historyPrune?.ok !== false,
+      dry_run: dryRun,
+      totals,
+      accounts: byAccount,
+      history_prune: historyPrune,
+      policy: { stale_processing_minutes: STALE_PROCESSING_MINUTES, stale_scheduled_hours: STALE_SCHEDULED_HOURS, motor_history: 'preserve open or effective decisions for active products only' },
+    });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
