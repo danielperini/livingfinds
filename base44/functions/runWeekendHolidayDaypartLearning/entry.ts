@@ -27,6 +27,13 @@ function isWeekendDate(value: string) {
   return dow === 0 || dow === 6;
 }
 
+async function fetchBrazilHolidays(year: number): Promise<string[]> {
+  const response = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`, { signal: AbortSignal.timeout(12000) });
+  if (!response.ok) return [];
+  const rows = await response.json().catch(() => []);
+  return [...new Set((Array.isArray(rows) ? rows : []).map((row: any) => String(row.date || '')).filter(Boolean))];
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -51,6 +58,7 @@ Deno.serve(async (request) => {
 
     const holidayDates = new Set<string>();
     for (const rule of rules) for (const date of Array.isArray(rule.holiday_dates) ? rule.holiday_dates : []) holidayDates.add(String(date));
+    for (const date of await fetchBrazilHolidays(Number(clock.date.slice(0, 4)))) holidayDates.add(date);
     const activePeriod = clock.dayOfWeek === 0 || clock.dayOfWeek === 6 || holidayDates.has(clock.date);
     if (!activePeriod) return Response.json({ ok: true, skipped: true, reason: 'not_weekend_or_holiday', current_date: clock.date });
 
@@ -59,7 +67,8 @@ Deno.serve(async (request) => {
     const weekend = aggregate(history.filter((row: any) => isWeekendDate(String(row.date || '')) || holidayDates.has(String(row.date || ''))));
     const weekday = aggregate(history.filter((row: any) => !isWeekendDate(String(row.date || '')) && !holidayDates.has(String(row.date || ''))));
     const perf = settings[0] || {};
-    const targetAcos = Number(perf.target_acos || 15);
+    const targetAcos = Number(perf.target_acos || 0);
+    if (!(targetAcos > 0)) return Response.json({ ok: true, skipped: true, reason: 'missing_target_acos_source_of_truth' });
     const revenueDrop = weekday.salesPerDay > 0 ? 1 - weekend.salesPerDay / weekday.salesPerDay : 0;
     const impressionDrop = weekday.impressionsPerDay > 0 ? 1 - weekend.impressionsPerDay / weekday.impressionsPerDay : 0;
     const cvrRetention = weekday.cvr > 0 ? weekend.cvr / weekday.cvr : 1;
