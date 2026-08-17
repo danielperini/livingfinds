@@ -75,6 +75,13 @@ jobs:
       - name: Check canonical weekly review
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
 
+      - name: Check canonical economy-first dayparting
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/functions/runCanonicalDaypartingEngine/entry.ts \
+            base44/functions/runWeekendHolidayDaypartLearning/entry.ts \
+            base44/functions/syncDaypartingConfiguration/entry.ts
+
       - name: Check existing decision modules
         run: |
           deno check --node-modules-dir=auto \
