@@ -57,7 +57,8 @@ jobs:
             base44/shared/amazonBidCeiling.test.ts \
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
-            base44/shared/servingCampaignGrowthPolicy.test.ts
+            base44/shared/servingCampaignGrowthPolicy.test.ts \
+            base44/shared/economicEvidencePolicy.test.ts
 
       - name: Check changed TypeScript modules
         run: |
@@ -68,5 +69,10 @@ jobs:
             base44/shared/amazonBidCeiling.ts \
             base44/shared/configuredBidPolicy.ts \
             base44/shared/servingCampaignGrowthPolicy.ts \
+            base44/shared/economicEvidencePolicy.ts \
+            base44/functions/runEconomicEvidenceDecisionPolicy/entry.ts \
+            base44/functions/reconcileEconomicEvidenceDecisions/entry.ts \
+            base44/functions/runCanonicalDecisionCycle/entry.ts \
+            base44/functions/runCanonicalWeeklyDecisionReview/entry.ts \
             base44/functions/runServingCampaignGrowthObjective/entry.ts \
             server/src/scheduler.ts
