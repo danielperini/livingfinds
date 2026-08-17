@@ -1,7 +1,7 @@
 /**
  * Scheduler self-hosted do LivingFinds.
  *
- * Lê base44/schedules/amazon-automation-schedule.json e executa crons no timezone
+ * Lê runtime/schedules/amazon-automation-schedule.json e executa crons no timezone
  * configurado. Cada função/conta possui lock em memória para impedir sobreposição
  * quando uma execução ultrapassa o próximo disparo.
  */
@@ -14,7 +14,7 @@ type Job = { name: string; function: string; cron: string; payload?: Record<stri
 
 function schedulesFile(): string {
   return Deno.env.get('SCHEDULES_FILE') ??
-    join(import.meta.dirname!, '..', '..', 'base44', 'schedules', 'amazon-automation-schedule.json');
+    join(import.meta.dirname!, '..', '..', 'runtime', 'schedules', 'amazon-automation-schedule.json');
 }
 
 function matchField(field: string, value: number): boolean {
@@ -127,33 +127,29 @@ export async function startScheduler(): Promise<void> {
     }
   };
 
-  // O matcher aceita somente cron de cinco campos e deduplica cada janela de minuto.
   setInterval(tick, 30_000);
   tick();
-  // Estudos marcados podem popular dados assim que uma nova versão sobe,
-  // sem aguardar a próxima janela cron. O motor interno mantém seu lock por conta.
+
   const runStartupJob = (job: Job, attempt = 1) => {
-      const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
-      const jobKey = `${job.function}|${accountScope}`;
-      if (runningJobs.has(jobKey)) {
-        if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
-        else console.error(`[scheduler] startup '${job.name}' abandonado após ${attempt} tentativas por sobreposição`);
-        return;
-      }
-      runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
-      console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
-      service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
-        .then((response) => {
-          const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
-          console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status} locked=${locked}`);
-          if (locked && attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
-        })
-        .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
-        .finally(() => runningJobs.delete(jobKey));
+    const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
+    const jobKey = `${job.function}|${accountScope}`;
+    if (runningJobs.has(jobKey)) {
+      if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+      else console.error(`[scheduler] startup '${job.name}' abandonado após ${attempt} tentativas por sobreposição`);
+      return;
+    }
+    runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
+    console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
+    service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
+      .then((response) => {
+        const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
+        console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status} locked=${locked}`);
+        if (locked && attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+      })
+      .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
+      .finally(() => runningJobs.delete(jobKey));
   };
-  // Jobs de bootstrap costumam acessar as mesmas contas, campanhas e produtos.
-  // Dispará-los todos no mesmo segundo aumenta 429, contenção no banco e leituras
-  // de estado intermediário. Preservamos todos, mas em uma fila escalonada.
+
   const startupJobs = jobs.filter((item) => item.run_on_startup === true);
   startupJobs.forEach((job, index) => {
     setTimeout(() => runStartupJob(job), 1_000 + index * 30_000);
