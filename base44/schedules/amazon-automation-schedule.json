@@ -117,10 +117,16 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "Weekly deterministic rule review - Sunday 03:00 BRT",
+      "name": "Weekly GPT supervisor of deterministic rules - Sunday 21:00 BRT",
       "function": "runWeeklyClaudeRuleReview",
-      "cron": "0 3 * * 0",
+      "cron": "0 21 * * 0",
       "payload": { "_service_role": true }
+    },
+    {
+      "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
+      "function": "runWeeklyMotorPrelection",
+      "cron": "0 22 * * 0",
+      "payload": { "_service_role": true, "dry_run": false }
     }
   ]
 }

@@ -43,6 +43,7 @@ Deno.serve(async (req) => {
     const suggestions = await base44.functions.invoke('suggestProductKeywordsWithAI', {
       amazon_account_id,
       asin,
+      force_ai: true,
     }).catch(() => null);
     const all = [...(suggestions?.data?.long_tail || []), ...(suggestions?.data?.medium_tail || [])]
       .filter((s) => s?.status === 'suggested' && s?.id);

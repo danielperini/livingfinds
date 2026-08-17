@@ -1,9 +1,9 @@
 /**
  * runWeeklyClaudeRuleReview — Módulo A: Analista Semanal com Claude
  *
- * Executado uma vez por semana (domingo 03:00 BRT).
- * Claude NÃO executa ações — apenas propõe regras determinísticas estruturadas.
- * O motor diário (runDeterministicDecisionEngine) NÃO chama Claude.
+ * Executado uma vez por semana (domingo 21:00 BRT).
+ * GPT supervisiona o motor e propõe regras determinísticas estruturadas.
+ * Regras novas só entram em shadow após validação e backtest.
  *
  * Fluxo:
  * 1. Lock distribuído (impede execução dupla)
@@ -481,7 +481,8 @@ Deno.serve(async (req) => {
     });
 
     // ── Coleta de dataset ──────────────────────────────────────────────────
-    const [keywords, campaigns, products, metrics90d, searchTerms, existingRules, recentExecutions, performanceRows] = await Promise.all([
+    const [keywords, campaigns, products, metrics90d, searchTerms, existingRules, recentExecutions, performanceRows,
+      optimizationDecisions, kickoffQueue, repairQueue, actionQueue, bidHistory] = await Promise.all([
       base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-spend', 500),
       base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-spend', 200),
       base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 100),
@@ -490,6 +491,11 @@ Deno.serve(async (req) => {
       base44.asServiceRole.entities.DecisionRule.filter({ amazon_account_id: aid, status: 'active' }),
       base44.asServiceRole.entities.RuleExecution.filter({ amazon_account_id: aid }, '-created_date', 200),
       base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 500).catch(() => []),
+      base44.asServiceRole.entities.ProductKickoffQueue.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
+      base44.asServiceRole.entities.AutoCampaignRepairQueue.filter({ amazon_account_id: aid }, '-created_at', 200).catch(() => []),
+      base44.asServiceRole.entities.AmazonActionQueue.filter({ amazon_account_id: aid }, '-created_at', 300).catch(() => []),
+      base44.asServiceRole.entities.CampaignBidHistory.filter({ amazon_account_id: aid }, '-created_at', 300).catch(() => []),
     ]);
 
     const metrics30d = metrics90d.filter(m => m.date >= daysAgo(30));
@@ -538,6 +544,21 @@ Deno.serve(async (req) => {
       .filter(c => c.state === 'enabled' || c.status === 'enabled')
       .reduce((s, c) => s + (c.daily_budget || 0), 0);
 
+    const cutoff7dIso = new Date(Date.now() - 7 * 86400000).toISOString();
+    const recentByDate = (rows) => rows.filter(row => String(row.created_at || row.created_date || row.updated_at || '') >= cutoff7dIso);
+    const recentDecisions = recentByDate(optimizationDecisions);
+    const recentBidChanges = recentByDate(bidHistory);
+    const zeroDeliveryCampaigns = campaigns.filter(c =>
+      (c.state === 'enabled' || c.status === 'enabled') &&
+      Number(c.impressions || 0) === 0 && Number(c.clicks || 0) === 0 && Number(c.spend || 0) === 0
+    );
+    const summarizeStatuses = (rows) => rows.reduce((acc, row) => {
+      const status = String(row.status || row.queue_status || 'unknown').toLowerCase();
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {});
+    const blockedDecisions = recentDecisions.filter(d => ['blocked', 'failed', 'failed_final', 'cancelled', 'skipped'].includes(String(d.status || '').toLowerCase()));
+
     const dataset = {
       account: { marketplace: account.marketplace_id, country: account.country_code, currency: account.currency_code },
       aggregates: { last_7d: agg7d, last_30d: agg30d, last_90d: agg90d }, central_goals: centralGoals,
@@ -557,6 +578,37 @@ Deno.serve(async (req) => {
         failed: recentExecutions.filter(e => e.status === 'failed').length,
         rolled_back: recentExecutions.filter(e => e.status === 'rolled_back').length,
       },
+      weekly_supervision: {
+        spend_control: {
+          spend_7d: agg7d.spend,
+          average_daily_spend_7d: agg7d.spend / 7,
+          configured_daily_budget: performance.daily_budget_limit || null,
+          active_campaign_budget_sum: totalActiveBudget,
+        },
+        decisions_7d: {
+          total: recentDecisions.length,
+          blocked_or_failed: blockedDecisions.length,
+          blocked_rate: recentDecisions.length ? blockedDecisions.length / recentDecisions.length : 0,
+          statuses: summarizeStatuses(recentDecisions),
+          failure_reasons: blockedDecisions.slice(0, 30).map(d => d.reason_code || d.execution_error || d.error_message || d.status),
+        },
+        zero_delivery_campaigns: {
+          total: zeroDeliveryCampaigns.length,
+          sample: zeroDeliveryCampaigns.slice(0, 40).map(c => ({ campaign_id: c.campaign_id, asin: c.asin, name: c.name || c.campaign_name, state: c.state || c.status })),
+        },
+        bid_adjustments_7d: {
+          total: recentBidChanges.length,
+          sample: recentBidChanges.slice(0, 40).map(b => ({ campaign_id: b.campaign_id, old_bid: b.previous_bid, new_bid: b.new_bid, change_type: b.change_type, reason: b.reason })),
+        },
+        kickoff_queue: summarizeStatuses(kickoffQueue),
+        repair_queue: summarizeStatuses(repairQueue),
+        amazon_action_queue: summarizeStatuses(actionQueue),
+        stuck_items: {
+          kickoff_processing: kickoffQueue.filter(q => q.status === 'processing' && String(q.started_at || '') < cutoff7dIso).length,
+          repair_processing: repairQueue.filter(q => q.status === 'processing' && String(q.started_at || '') < cutoff7dIso).length,
+          actions_running: actionQueue.filter(q => ['running', 'processing', 'submitted'].includes(String(q.status || '').toLowerCase()) && String(q.started_at || q.created_at || '') < cutoff7dIso).length,
+        },
+      },
     };
 
     const dataHash = String(JSON.stringify(dataset).length) + '_' + agg30d.spend.toFixed(0);
@@ -566,7 +618,14 @@ Deno.serve(async (req) => {
     if (!openaiKey) return Response.json({ ok: false, error: 'OPENAI_API_KEY não configurada.' }, { status: 500 });
 
     const systemPrompt = `Você é o analisador semanal de regras determinísticas do Living Finds Amazon Ads.
-PAPEL: analisar dados de performance, avaliar regras vigentes, propor regras determinísticas estruturadas.
+PAPEL: atuar como supervisor semanal do motor determinístico, avaliar sua qualidade e propor regras estruturadas econômicas.
+OBJETIVOS OBRIGATÓRIOS:
+- Verificar gasto excessivo contra orçamento e retorno real.
+- Medir excesso de decisões bloqueadas/falhas e corrigir causas por regras melhores, nunca contornando guardrails.
+- Verificar campanhas ativas com entrega zerada e recomendar reparo, substituição ou encerramento com evidência.
+- Verificar se ajustes de bid estão ocorrendo, se melhoram ACoS/ROAS e se respeitam limites.
+- Verificar execução de kickoff, filas travadas e falhas recorrentes.
+- Criar somente regras reutilizáveis que economizem chamadas futuras de IA; cálculos rotineiros permanecem determinísticos.
 RESTRIÇÕES:
 - Responda SOMENTE em JSON válido com o schema fornecido.
 - Não gere código TypeScript executável.

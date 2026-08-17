@@ -73,6 +73,7 @@ Deno.serve(async (req) => {
       asin,
       product_id: fresh.id,
       _service_role: true,
+      force_ai: true,
     }).catch((error:any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const suggestionResult = suggestionResponse?.data || suggestionResponse || {};
 

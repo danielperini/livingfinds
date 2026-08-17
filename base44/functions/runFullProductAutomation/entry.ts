@@ -445,6 +445,7 @@ Deno.serve(async (req) => {
             asin,
             product_id: product.id,
             _service_role: true,
+            force_ai: true,
           }).catch(() => {});
 
           // Buscar sugestões salvas no banco (a função agora persiste e não retorna arrays diretos)
