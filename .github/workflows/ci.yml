@@ -57,9 +57,25 @@ jobs:
             base44/shared/amazonBidCeiling.test.ts \
             base44/shared/configuredBidPolicy.test.ts \
             base44/shared/searchTermHarvestPolicy.test.ts \
-            base44/shared/servingCampaignGrowthPolicy.test.ts
+            base44/shared/servingCampaignGrowthPolicy.test.ts \
+            base44/shared/economicEvidencePolicy.test.ts
 
-      - name: Check changed TypeScript modules
+      - name: Check economic evidence policy
+        run: deno check --node-modules-dir=auto base44/shared/economicEvidencePolicy.ts
+
+      - name: Check economic evidence evaluator
+        run: deno check --node-modules-dir=auto base44/functions/runEconomicEvidenceDecisionPolicy/entry.ts
+
+      - name: Check evidence reconciliation
+        run: deno check --node-modules-dir=auto base44/functions/reconcileEconomicEvidenceDecisions/entry.ts
+
+      - name: Check canonical decision cycle
+        run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
+
+      - name: Check canonical weekly review
+        run: deno check --node-modules-dir=auto base44/functions/runCanonicalWeeklyDecisionReview/entry.ts
+
+      - name: Check existing decision modules
         run: |
           deno check --node-modules-dir=auto \
             base44/shared/portfolioBudgetMath.ts \

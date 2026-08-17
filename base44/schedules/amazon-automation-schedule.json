@@ -44,15 +44,15 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "Unified marketplace decision engine - every 15 minutes",
-      "function": "runUnifiedDecisionEngine",
+      "name": "Canonical marketplace decision cycle - every 15 minutes",
+      "function": "runCanonicalDecisionCycle",
       "cron": "4,19,34,49 * * * *",
       "run_on_startup": true,
       "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
     },
     {
-      "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
-      "function": "runUnifiedDecisionEngine",
+      "name": "Canonical daily close, bootstrap-aware audit and repricing - 01:25 BRT",
+      "function": "runCanonicalDecisionCycle",
       "cron": "25 1 * * *",
       "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
     },
@@ -123,8 +123,8 @@
       "payload": { "_service_role": true }
     },
     {
-      "name": "Weekly GPT supervisor of deterministic rules - Sunday 21:00 BRT",
-      "function": "runWeeklyGptRuleReview",
+      "name": "Canonical weekly GPT supervisor - Sunday 21:00 BRT",
+      "function": "runCanonicalWeeklyDecisionReview",
       "cron": "0 21 * * 0",
       "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor" }
     },
