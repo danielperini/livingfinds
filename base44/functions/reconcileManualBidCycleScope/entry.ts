@@ -1,8 +1,10 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 
 const BID_ACTIONS = new Set(['reduce_bid', 'increase_bid', 'update_bid', 'set_bid']);
 const OPEN_DECISION_STATUSES = new Set(['pending', 'approved', 'scheduled', 'executing', 'failed']);
 const ACTIVE_STATES = new Set(['enabled', 'active']);
+const EXPLICIT_SCOPE_BLOCKS = new Set(['not_authorized', 'manual_block', 'mapping_conflict']);
 
 function norm(value: any) {
   return String(value || '').toLowerCase().trim();
@@ -10,16 +12,6 @@ function norm(value: any) {
 
 function isActive(value: any) {
   return ACTIVE_STATES.has(norm(value));
-}
-
-function qty(product: any) {
-  return Number(
-    product?.fba_inventory
-    ?? product?.available_quantity
-    ?? product?.fulfillable_quantity
-    ?? product?.stock
-    ?? 0
-  );
 }
 
 function campaignId(row: any) {
@@ -37,14 +29,14 @@ function isManual(campaign: any) {
 }
 
 function productBlockReason(product: any) {
-  if (!product) return 'product_missing';
-  const status = norm(product.status || product.product_status || product.listing_status);
-  if (['inactive', 'archived', 'deleted', 'suppressed'].includes(status)) return `product_${status}`;
-  if (norm(product.inventory_status) === 'out_of_stock' || qty(product) <= 0) return 'out_of_stock';
-  const scope = norm(product.ads_scope_status);
-  if (scope && scope !== 'authorized') return `ads_scope_${scope}`;
-  const eligibility = norm(product.ads_eligibility_status);
-  if (eligibility && eligibility !== 'eligible') return `ads_eligibility_${eligibility}`;
+  const eligibility = productAdsEligibility(product);
+  if (!eligibility.eligible) return eligibility.reason.toLowerCase();
+
+  // Preserve only explicit operator/integration scope blocks here. Historical
+  // derived statuses must not create a second eligibility engine that can
+  // contradict the canonical productAdsEligibility helper.
+  const scope = norm(product?.ads_scope_status);
+  if (EXPLICIT_SCOPE_BLOCKS.has(scope)) return `ads_scope_${scope}`;
   return null;
 }
 
@@ -87,7 +79,7 @@ Deno.serve(async (request) => {
       const id = campaignId(campaign);
       if (id) campaignById.set(id, campaign);
     }
-    const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin), p]));
+    const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [String(p.asin).trim().toUpperCase(), p]));
     const keywordById = new Map<string, any>();
     const enabledKeywordsByGroup = new Map<string, any[]>();
     for (const keyword of keywords) {
@@ -104,7 +96,7 @@ Deno.serve(async (request) => {
       if (!campaign) return 'campaign_missing';
       if (!isActive(campaign.state || campaign.status)) return `campaign_${norm(campaign.state || campaign.status) || 'inactive'}`;
       if (!isManual(campaign)) return 'campaign_not_manual';
-      const asin = String(asinHint || keyword?.asin || campaign.asin || '');
+      const asin = String(asinHint || keyword?.asin || campaign.asin || '').trim().toUpperCase();
       if (!asin) return 'asin_missing';
       const productReason = productBlockReason(productByAsin.get(asin));
       if (productReason) return productReason;
@@ -132,7 +124,7 @@ Deno.serve(async (request) => {
         continue;
       }
 
-      const nextStatus = reason === 'out_of_stock' ? 'paused_no_stock' : 'paused_external';
+      const nextStatus = reason === 'product_out_of_stock' ? 'paused_no_stock' : 'paused_external';
       if (lifecycle.status !== nextStatus || lifecycle.last_action !== 'removed_from_manual_bid_cycle') {
         await base44.asServiceRole.entities.ManualCampaignBidLifecycle.update(lifecycle.id, {
           status: nextStatus,
@@ -188,7 +180,7 @@ Deno.serve(async (request) => {
       stale_bid_decisions_cancelled: decisionsCancelled,
       lifecycle_results: lifecycleResults.slice(0, 500),
       cancelled_decisions: decisionResults.slice(0, 500),
-      policy: 'manual_bid_cycle_active_campaign_active_product_in_stock_exact_single_keyword_only',
+      policy: 'canonical_product_ads_eligibility_plus_explicit_scope_block_active_manual_exact_single_keyword',
       history_preserved: true,
       executed_at: now,
     });
