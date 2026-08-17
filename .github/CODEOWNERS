@@ -1,0 +1,9 @@
+# Backend/runtime de produção self-hosted na Hostinger VPS.
+/server/ @danielperini
+/base44/functions/ @danielperini
+/base44/entities/ @danielperini
+/base44/shared/ @danielperini
+/base44/schedules/ @danielperini
+
+# Frontend permanece aberto a contribuições de IA/colaboradores.
+# /src/ e /public/ intencionalmente não têm owner obrigatório aqui.
