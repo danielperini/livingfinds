@@ -12,7 +12,7 @@ import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
  * - pacing, lucro, safe CPC e limite transitório podem pausar a regra nativa;
  * - dry-run não persiste nada.
  */
-const ENGINE_VERSION = 'canonical-dayparting-v3-reviewed';
+const ENGINE_VERSION = 'canonical-dayparting-v4-economy-first';
 const MIN_REDUCTION_IMPRESSIONS = 200;
 const MIN_REDUCTION_CLICKS = 10;
 const MIN_REDUCTION_SPEND = 12;
@@ -102,12 +102,21 @@ function isCanonicalAudit(row: any) {
     String(row?.rule_version || '').startsWith('canonical-dayparting');
 }
 
+function isDayAggregatePattern(row: any) {
+  const granularity = String(row?.granularity || row?.metric_granularity || '').toUpperCase();
+  const label = String(row?.slot_label || '').toLowerCase();
+  if (granularity === 'DAY' || label.endsWith('_dia')) return true;
+  // Compatibilidade com os 7 agregados históricos *_dia que foram gravados
+  // como hour=0 sem ASIN/campaign_id. Eles são contexto diário, não 00:00.
+  return Number(row?.hour) === 0 && !row?.asin && !row?.campaign_id && Number(row?.occurrences || 0) > 24;
+}
+
 function resolveSlot(decisions: any[], patterns: any[], controller: any, dayOfWeek: number, hour: number) {
   const learnedDecision = decisions
     .filter((row) => Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour && !isCanonicalAudit(row))
     .sort((a, b) => timestamp(b) - timestamp(a))[0] || null;
   const pattern = patterns
-    .filter((row) => Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour)
+    .filter((row) => Number(row.day_of_week) === dayOfWeek && Number(row.hour) === hour && !isDayAggregatePattern(row))
     .sort((a, b) => timestamp(b) - timestamp(a))[0] || null;
 
   if (learnedDecision && (!pattern || timestamp(learnedDecision) >= timestamp(pattern))) {
@@ -249,59 +258,57 @@ function chooseMultiplier(params: {
   maxDecreasePct: number;
 }) {
   const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, hour, explorationEligible, maxIncreasePct, maxDecreasePct } = params;
+  const maxUpMultiplier = Math.min(1.20, 1 + Math.max(0, Math.min(50, maxIncreasePct)) / 100);
+  const minDownMultiplier = Math.max(0.50, 1 - Math.max(0, Math.min(50, maxDecreasePct)) / 100);
+  const profitable = sampleMature && orders > 0 && acos !== null && acos <= targetAcos;
+  const exceptional = sampleMature && orders >= 2 && acos !== null && acos <= targetAcos * 0.80;
+
+  // Economy first: sem maturidade, nenhum PEAK estatístico autoriza escala.
   if (!slot.mature || slot.classification === 'COLLECTING_DATA') {
-    if (pacing === 'morning_reserve' && !winner) {
-      return { multiplier: 0.85, reason: 'Pacing matinal: reserva de orçamento para faixas posteriores até haver evidência horária.' };
-    }
+    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.90, reason: 'Pacing matinal com evidência horária insuficiente: contenção leve e reversível.' };
     if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
-      const probe = winner ? 1.08 : 1.03;
-      return { multiplier: probe, reason: `Janela de demanda ${hour < 10 ? 'início da manhã' : 'pré-almoço'}: teste controlado de ${Math.round((probe - 1) * 100)}% com CPC econômico.` };
+      const probe = winner ? 1.05 : 1.02;
+      return { multiplier: Math.min(probe, maxUpMultiplier), reason: `Exploração econômica controlada de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}% em janela de demanda, sem tratar peak_score como autorização.` };
     }
     return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base.' };
   }
 
-  const maxUpMultiplier = 1 + Math.max(0, Math.min(50, maxIncreasePct)) / 100;
-  const minDownMultiplier = Math.max(0.50, 1 - Math.max(0, Math.min(50, maxDecreasePct)) / 100);
-  const profitable = orders > 0 && acos !== null && acos <= targetAcos;
-  const exceptional = orders >= 2 && acos !== null && acos <= targetAcos * 0.80;
-
   if (slot.classification === 'ELITE_TIME' || slot.classification === 'STRONG_TIME') {
-    if (nativeCompensationMultiplier !== null) {
-      return { multiplier: Math.max(minDownMultiplier, Math.min(1, nativeCompensationMultiplier)), reason: 'Compensação local: regra Amazon não pôde ser pausada diante de um guardrail.' };
-    }
-    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado por pacing ou proteção de lucro.' };
-    if (nativeCovered) return { multiplier: 1, reason: 'Regra Amazon aplicável cobre esta campanha e esta janela; manter/restaurar bid-base local.' };
+    if (nativeCompensationMultiplier !== null) return { multiplier: Math.max(minDownMultiplier, Math.min(1, nativeCompensationMultiplier)), reason: 'Compensação local: regra Amazon não pôde ser pausada diante de guardrail.' };
+    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Peak estatístico sem autorização econômica: aumento bloqueado por pacing/proteção de lucro.' };
+    if (nativeCovered) return { multiplier: 1, reason: 'Regra Amazon aplicável cobre a janela; manter/restaurar bid-base local.' };
+    if (!sampleMature || !profitable) return { multiplier: 1, reason: `${slot.classification} é apenas sinal de oportunidade; sem evidência econômica madura, manter baseline.` };
 
     const desired = slot.classification === 'ELITE_TIME'
-      ? exceptional ? 1.50 : profitable ? 1.25 : 1
-      : exceptional ? 1.25 : profitable ? 1.15 : 1;
-    return {
-      multiplier: Math.min(desired, maxUpMultiplier),
-      reason: desired > 1 ? `${slot.classification} rentável; aumento local limitado a ${r2((Math.min(desired, maxUpMultiplier) - 1) * 100)}%.` : `${slot.classification} sem evidência econômica suficiente.`,
-    };
+      ? exceptional ? 1.20 : 1.10
+      : exceptional ? 1.15 : 1.10;
+    const multiplier = Math.min(desired, maxUpMultiplier);
+    return { multiplier, reason: `${slot.classification} + economia madura: SCALE controlado em +${r2((multiplier - 1) * 100)}%.` };
   }
 
   if (slot.classification === 'NORMAL_TIME') {
-    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.85, reason: 'NORMAL matinal: reduzir 15% para preservar verba do período de maior conversão.' };
+    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.90, reason: 'NORMAL matinal: contenção leve para preservar verba posterior.' };
     if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
-      const probe = winner ? 1.06 : 1.02;
-      return { multiplier: probe, reason: `NORMAL com entrega saudável no ${hour < 10 ? 'início da manhã' : 'pré-almoço'}: exploração econômica de ${Math.round((probe - 1) * 100)}%.` };
+      const probe = winner ? 1.05 : 1.02;
+      return { multiplier: Math.min(probe, maxUpMultiplier), reason: `NORMAL com exploração econômica de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}%.` };
     }
     return { multiplier: 1, reason: 'NORMAL: manter/restaurar bid-base.' };
   }
+
   if (winner) return { multiplier: 1, reason: 'Entidade vencedora protegida contra redução horária.' };
   if (!sampleMature) return { multiplier: 1, reason: 'Redução bloqueada por amostra insuficiente.' };
 
   if (slot.classification === 'WEAK_TIME') {
-    const desired = orders === 0 || (acos !== null && acos > targetAcos * 1.20) || pacing === 'overpacing' || pacing === 'morning_reserve' ? 0.75 : 1;
-    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired < 1 ? 'WEAK com desperdício/overpacing: redução intermediária.' : 'WEAK com conversão protegida.' };
+    const materiallyAboveTarget = acos !== null && acos > targetAcos * 1.20;
+    const desired = economicRisk ? 0.85 : (orders === 0 || materiallyAboveTarget || pacing === 'overpacing' || pacing === 'morning_reserve') ? 0.90 : 1;
+    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired < 1 ? 'WEAK com evidência madura: contenção leve/moderada, sem corte cego.' : 'WEAK com economia protegida.' };
   }
 
   if (slot.classification === 'LOSS_TIME') {
-    const desired = orders === 0 && (acos === null || acos > targetAcos * 1.20) ? 0.50
-      : acos !== null && acos > targetAcos ? 0.75
-      : 1;
-    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired === 0.50 ? 'LOSS sem conversão rentável: redução máxima permitida.' : desired === 0.75 ? 'LOSS acima da meta: redução intermediária.' : 'LOSS, mas com conversão/ACoS protegido.' };
+    const severeLoss = economicRisk && orders === 0;
+    const aboveTarget = acos !== null && acos > targetAcos;
+    const desired = severeLoss ? 0.75 : aboveTarget || orders === 0 ? 0.85 : 1;
+    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired === 0.75 ? 'LOSS + risco econômico maduro: contenção forte.' : desired === 0.85 ? 'LOSS maduro: redução moderada e reversível.' : 'LOSS estatístico, mas economia/conversão protegida.' };
   }
 
   return { multiplier: 1, reason: 'Sem ajuste aplicável.' };
@@ -322,7 +329,7 @@ async function logBid(base44: any, data: any) {
     bid_after: data.bid_after,
     old_bid: data.bid_before,
     new_bid: data.bid_after,
-    change_pct: data.base_bid > 0 ? r2(((data.bid_after - data.base_bid) / data.base_bid) * 100) : 0,
+    change_pct: data.bid_before > 0 ? r2(((data.bid_after - data.bid_before) / data.bid_before) * 100) : 0,
     direction: data.bid_after > data.bid_before ? 'increase' : data.bid_after < data.bid_before ? 'decrease' : 'restore',
     action: data.bid_after > data.bid_before ? 'bid_increase' : data.bid_after < data.bid_before ? 'bid_decrease' : 'bid_restore',
     reason: data.reason,
@@ -639,7 +646,8 @@ Deno.serve(async (request) => {
             bid_floor: floor,
             bid_cap: cap,
             proposed_bid: targetBid,
-            bid_change_pct: baseBid > 0 ? r2(((targetBid - baseBid) / baseBid) * 100) : 0,
+            bid_change_pct: currentBid > 0 ? r2(((targetBid - currentBid) / currentBid) * 100) : 0,
+            bid_change_vs_baseline_pct: baseBid > 0 ? r2(((targetBid - baseBid) / baseBid) * 100) : 0,
             bid_multiplier: choice.multiplier,
             envelope_min_multiplier: 0.50,
             envelope_max_multiplier: 1.50,

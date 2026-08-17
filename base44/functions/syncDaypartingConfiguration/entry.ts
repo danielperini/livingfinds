@@ -4,92 +4,7 @@ const SOURCE = 'syncDaypartingConfiguration';
 const WEEKDAYS = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const WEEKEND = ['SATURDAY', 'SUNDAY'];
 
-const CANONICAL_RULES = [
-  {
-    rule_name: 'Dias úteis · reduzir bids para 50% na madrugada',
-    action_type: 'BID_PERCENT',
-    start_time: '23:59',
-    end_time: '03:00',
-    adjustment_value: -50,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: [],
-    reason: 'Dayparting conservador por bid: mantém as campanhas ativas e reduz o lance entre 23:59 e 03:00.',
-  },
-  {
-    rule_name: 'Dias úteis · reduzir bids para 35% no vale da madrugada',
-    action_type: 'BID_PERCENT',
-    start_time: '03:00',
-    end_time: '05:00',
-    adjustment_value: -65,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: [],
-    reason: 'Dayparting conservador por bid: não pausa campanhas por horário; preserva descoberta de baixo custo entre 03:00 e 05:00.',
-  },
-  {
-    rule_name: 'Dias úteis · restaurar bids base às 05:00',
-    action_type: 'BID_PERCENT',
-    start_time: '05:00',
-    end_time: '05:05',
-    adjustment_value: 0,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: [],
-    reason: 'Restaura somente o lance-base às 05:00; campanhas permanecem operacionais.',
-  },
-  {
-    rule_name: 'Dias úteis · reduzir bids em 25% entre 15:00 e 19:00',
-    action_type: 'BID_PERCENT',
-    start_time: '15:00',
-    end_time: '19:00',
-    adjustment_value: -25,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: [],
-    reason: 'Redução moderada e reversível de bids no vale de conversão; não pausa Auto nem Manual.',
-  },
-  {
-    rule_name: 'Dias úteis · restaurar bids base às 19:00',
-    action_type: 'BID_PERCENT',
-    start_time: '19:00',
-    end_time: '19:05',
-    adjustment_value: 0,
-    days_of_week: WEEKDAYS,
-    holiday_mode: 'IGNORE',
-    weekend_holiday_group: false,
-    targeting_types: [],
-    reason: 'Restaura bids base após a janela de menor conversão, sem reativação porque não houve pausa por horário.',
-  },
-  {
-    rule_name: 'Sábado, domingo e feriados · bids em 50% de 23:59 a 05:00',
-    action_type: 'BID_PERCENT',
-    start_time: '23:59',
-    end_time: '05:00',
-    adjustment_value: -50,
-    days_of_week: WEEKEND,
-    holiday_mode: 'WEEKEND_POLICY',
-    weekend_holiday_group: true,
-    targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor para sábado, domingo e feriados, sem pausa de campanha.',
-  },
-  {
-    rule_name: 'Sábado, domingo e feriados · restaurar bids às 05:00',
-    action_type: 'BID_PERCENT',
-    start_time: '05:00',
-    end_time: '05:05',
-    adjustment_value: 0,
-    days_of_week: WEEKEND,
-    holiday_mode: 'WEEKEND_POLICY',
-    weekend_holiday_group: true,
-    targeting_types: [],
-    reason: 'Regra canônica já executada pelo motor: restaura o baseline sem pausar campanhas.',
-  },
-];
+const CANONICAL_RULES = [];
 
 async function fetchBrazilHolidays(year: number): Promise<string[]> {
   const response = await fetch(`https://brasilapi.com.br/api/feriados/v1/${year}`, { signal: AbortSignal.timeout(12000) });
@@ -167,6 +82,27 @@ async function archiveLegacyCanonicalRules(base44: any, rules: any[]) {
   return legacy.length;
 }
 
+async function archiveFixedScheduledDaypartRules(base44: any, rules: any[]) {
+  const candidates = rules.filter((rule: any) => {
+    if (['archived', 'failed'].includes(String(rule.status || ''))) return false;
+    const engine = String(rule.engine_version || '');
+    const name = String(rule.rule_name || '');
+    return engine === 'canonical-daypart-bootstrap-v2-bid-only' ||
+      engine === 'canonical-daypart-bootstrap-v1' ||
+      name.startsWith('Dias úteis ·') || rule.weekend_holiday_group === true;
+  });
+  for (const rule of candidates) {
+    await base44.asServiceRole.entities.AmazonScheduledRule.update(rule.id, {
+      status: 'archived',
+      association_status: 'retired_by_canonical_economy_first',
+      last_error: 'Regra horária fixa aposentada: dayparting passa a ser decidido por economia + evidência + pacing no motor canônico.',
+      updated_at: new Date().toISOString(),
+    }).catch(() => {});
+    rule.status = 'archived';
+  }
+  return candidates.length;
+}
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -182,6 +118,7 @@ Deno.serve(async (request) => {
 
     for (const account of accounts) {
       let rules = await base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: account.id }, '-updated_at', 500).catch(() => []);
+      const fixedScheduledRulesArchived = await archiveFixedScheduledDaypartRules(base44, rules);
       const legacyPauseRulesArchived = body.migrate_canonical_rules === true || body.bootstrap_default_rules === true
         ? await archiveLegacyCanonicalRules(base44, rules)
         : 0;
@@ -223,6 +160,7 @@ Deno.serve(async (request) => {
         rules: active.length,
         bootstrapped: bootstrapped.length,
         legacy_canonical_rules_archived: legacyPauseRulesArchived,
+        fixed_scheduled_rules_archived: fixedScheduledRulesArchived,
         holidays: holidays.length,
         holiday_error: holidayError,
       });
@@ -233,7 +171,7 @@ Deno.serve(async (request) => {
         source_function: SOURCE,
         records_processed: active.length,
         records_imported: holidays.length + bootstrapped.length,
-        message: holidayError || `${active.length} regras sincronizadas; ${bootstrapped.length} regras canônicas materializadas; ${legacyPauseRulesArchived} regras canônicas legadas aposentadas`,
+        message: holidayError || `${active.length} regras sincronizadas; ${fixedScheduledRulesArchived} regras horárias fixas aposentadas; motor economy-first é a autoridade de bid`,
         started_at: new Date().toISOString(),
         completed_at: new Date().toISOString(),
       }).catch(() => {});
