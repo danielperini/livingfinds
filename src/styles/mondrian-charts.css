@@ -1,0 +1,48 @@
+:root {
+  --mondrian-blue: #0057B8;
+  --mondrian-red: #D7261E;
+  --mondrian-yellow: #F2C300;
+  --mondrian-black: #111111;
+  --mondrian-paper: #F7F5EF;
+  --chart-grid: rgba(17, 17, 17, 0.14);
+  --chart-axis: #111111;
+  --chart-label: #111111;
+}
+
+/* Mondrian-inspired chart language: primary colors, black structure, paper surface. */
+.recharts-wrapper .recharts-cartesian-grid line {
+  stroke: var(--chart-grid) !important;
+}
+.recharts-wrapper .recharts-cartesian-axis line,
+.recharts-wrapper .recharts-cartesian-axis-tick-line {
+  stroke: var(--mondrian-black) !important;
+}
+.recharts-wrapper .recharts-cartesian-axis-tick-value,
+.recharts-wrapper .recharts-label {
+  fill: var(--mondrian-black) !important;
+}
+.recharts-default-tooltip {
+  background: var(--mondrian-paper) !important;
+  border: 2px solid var(--mondrian-black) !important;
+  color: var(--mondrian-black) !important;
+}
+
+/* Stable series ordering for Recharts without changing semantic data. */
+.recharts-line:nth-of-type(1) .recharts-line-curve,
+.recharts-area:nth-of-type(1) .recharts-area-curve { stroke: var(--mondrian-blue) !important; }
+.recharts-line:nth-of-type(2) .recharts-line-curve,
+.recharts-area:nth-of-type(2) .recharts-area-curve { stroke: var(--mondrian-red) !important; }
+.recharts-line:nth-of-type(3) .recharts-line-curve,
+.recharts-area:nth-of-type(3) .recharts-area-curve { stroke: var(--mondrian-yellow) !important; }
+.recharts-line:nth-of-type(4) .recharts-line-curve,
+.recharts-area:nth-of-type(4) .recharts-area-curve { stroke: var(--mondrian-black) !important; }
+
+.recharts-bar-rectangle:nth-of-type(4n+1) path { fill: var(--mondrian-blue) !important; }
+.recharts-bar-rectangle:nth-of-type(4n+2) path { fill: var(--mondrian-red) !important; }
+.recharts-bar-rectangle:nth-of-type(4n+3) path { fill: var(--mondrian-yellow) !important; }
+.recharts-bar-rectangle:nth-of-type(4n) path { fill: var(--mondrian-black) !important; }
+
+.recharts-legend-item:nth-child(4n+1) .recharts-legend-icon { fill: var(--mondrian-blue) !important; stroke: var(--mondrian-blue) !important; }
+.recharts-legend-item:nth-child(4n+2) .recharts-legend-icon { fill: var(--mondrian-red) !important; stroke: var(--mondrian-red) !important; }
+.recharts-legend-item:nth-child(4n+3) .recharts-legend-icon { fill: var(--mondrian-yellow) !important; stroke: var(--mondrian-yellow) !important; }
+.recharts-legend-item:nth-child(4n) .recharts-legend-icon { fill: var(--mondrian-black) !important; stroke: var(--mondrian-black) !important; }
