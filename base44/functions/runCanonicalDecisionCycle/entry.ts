@@ -12,10 +12,9 @@ Deno.serve(async(request)=>{
     const authenticated=await base44.auth.isAuthenticated().catch(()=>false);
     if(!authenticated&&!body._service_role)return Response.json({ok:false,error:'Não autorizado'},{status:401});
     const correlationId=body.correlation_id||crypto.randomUUID();
+    const cycleStartedAt=new Date().toISOString();
     const common={...body,_service_role:true,correlation_id:correlationId};
 
-    // A mesma política econômica/evidência é a porta de entrada de toda avaliação.
-    // Ela não executa Amazon: classifica zonas, confiança e alternativa contextual.
     const economicEvidence=await invoke(base44,'runEconomicEvidenceDecisionPolicy',{
       ...common,
       dry_run:body.dry_run===true,
@@ -23,23 +22,37 @@ Deno.serve(async(request)=>{
       max_candidates:body.max_economic_evidence_candidates??100,
     });
 
-    // O motor unificado continua sendo o único proprietário de decisões operacionais.
     const engine=await invoke(base44,'runUnifiedDecisionEngine',{
       ...common,
       economic_evidence_policy_run:economicEvidence,
       _canonical_orchestrator:'runCanonicalDecisionCycle',
     });
 
+    // Antes do executor canônico, a mesma evidência econômica reconcilia as
+    // decisões aprovadas: bloqueia terminal sem evidência, bloqueia crescimento
+    // em zona de perda e suaviza reduções mais agressivas que a evidência suporta.
+    const reconciliation=body.dry_run===true
+      ? {ok:true,skipped:true,reason:'dry_run'}
+      : await invoke(base44,'reconcileEconomicEvidenceDecisions',{
+          amazon_account_id:body.amazon_account_id||null,
+          _service_role:true,
+          since:cycleStartedAt,
+          correlation_id:correlationId,
+          trigger_type:'canonical_pre_execution_reconciliation',
+        });
+
     return Response.json({
-      ok:economicEvidence?.ok!==false&&engine?.ok!==false,
+      ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false,
       engine:'canonical-decision-cycle',
       engine_version:'canonical-v21-economic-evidence',
       correlation_id:correlationId,
       economic_evidence:economicEvidence,
       unified_engine:engine,
+      pre_execution_reconciliation:reconciliation,
       execution_owner:'executeApprovedDecisionQueue',
       confirmation_owner:'confirmExecutedDecisions',
       duplicate_executor:false,
+      decision_contract:'evidence -> unified decision -> evidence reconciliation -> canonical queue -> Amazon confirmation',
     });
   }catch(error:any){return Response.json({ok:false,error:error?.message||String(error)},{status:500})}
 });
