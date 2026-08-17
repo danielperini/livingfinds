@@ -1,0 +1,64 @@
+/* Mondrian chart palette: primary red, blue, yellow, black and off-white.
+   Presentation attributes from Recharts are intentionally overridden here so
+   all current and future charts inherit the same visual language without
+   duplicating hex values in every component. */
+:root {
+  --chart-mondrian-blue: #0057B8;
+  --chart-mondrian-red: #D7261E;
+  --chart-mondrian-yellow: #F2C300;
+  --chart-mondrian-black: #111111;
+  --chart-mondrian-offwhite: #F7F5EF;
+  --chart-mondrian-muted: #8A8A84;
+  --chart-mondrian-grid: rgba(247, 245, 239, 0.14);
+}
+
+.recharts-cartesian-grid line {
+  stroke: var(--chart-mondrian-grid) !important;
+}
+
+.recharts-cartesian-axis-tick text,
+.recharts-label,
+.recharts-legend-item-text {
+  fill: var(--chart-mondrian-offwhite) !important;
+  color: var(--chart-mondrian-offwhite) !important;
+}
+
+/* Lines are assigned in Mondrian order. Previous-period dashed lines keep the
+   same semantic color but lighter opacity, so comparison remains readable. */
+.recharts-line:nth-of-type(1) .recharts-line-curve { stroke: var(--chart-mondrian-blue) !important; }
+.recharts-line:nth-of-type(2) .recharts-line-curve { stroke: var(--chart-mondrian-red) !important; }
+.recharts-line:nth-of-type(3) .recharts-line-curve { stroke: var(--chart-mondrian-yellow) !important; }
+.recharts-line:nth-of-type(4) .recharts-line-curve { stroke: var(--chart-mondrian-offwhite) !important; }
+.recharts-line:nth-of-type(5) .recharts-line-curve { stroke: var(--chart-mondrian-black) !important; }
+
+.recharts-line:nth-of-type(odd) .recharts-line-curve[stroke-dasharray] {
+  opacity: 0.52;
+}
+
+/* Bar series: blue, red, yellow, off-white, black. */
+.recharts-bar-rectangle:nth-of-type(5n + 1) path,
+.recharts-bar:nth-of-type(1) path { fill: var(--chart-mondrian-blue) !important; }
+.recharts-bar-rectangle:nth-of-type(5n + 2) path,
+.recharts-bar:nth-of-type(2) path { fill: var(--chart-mondrian-red) !important; }
+.recharts-bar-rectangle:nth-of-type(5n + 3) path,
+.recharts-bar:nth-of-type(3) path { fill: var(--chart-mondrian-yellow) !important; }
+.recharts-bar-rectangle:nth-of-type(5n + 4) path,
+.recharts-bar:nth-of-type(4) path { fill: var(--chart-mondrian-offwhite) !important; }
+.recharts-bar-rectangle:nth-of-type(5n) path,
+.recharts-bar:nth-of-type(5) path { fill: var(--chart-mondrian-black) !important; }
+
+/* Area/pie/scatter fallback ordering. */
+.recharts-area:nth-of-type(1) .recharts-area-area,
+.recharts-pie-sector:nth-of-type(5n + 1) path,
+.recharts-scatter-symbol:nth-of-type(5n + 1) { fill: var(--chart-mondrian-blue) !important; }
+.recharts-area:nth-of-type(2) .recharts-area-area,
+.recharts-pie-sector:nth-of-type(5n + 2) path,
+.recharts-scatter-symbol:nth-of-type(5n + 2) { fill: var(--chart-mondrian-red) !important; }
+.recharts-area:nth-of-type(3) .recharts-area-area,
+.recharts-pie-sector:nth-of-type(5n + 3) path,
+.recharts-scatter-symbol:nth-of-type(5n + 3) { fill: var(--chart-mondrian-yellow) !important; }
+
+.recharts-tooltip-cursor {
+  stroke: var(--chart-mondrian-yellow) !important;
+  fill: rgba(242, 195, 0, 0.08) !important;
+}
