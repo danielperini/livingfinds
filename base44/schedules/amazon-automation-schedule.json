@@ -99,6 +99,12 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Weekend/holiday daypart learning - daily 06:10 BRT",
+      "function": "runWeekendHolidayDaypartLearning",
+      "cron": "10 6 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_weekend_holiday_learning" }
+    },
+    {
       "name": "Amazon data consistency reconciliation - daily after close",
       "function": "auditAmazonDataConsistency",
       "cron": "10 2 * * *",
@@ -118,9 +124,9 @@
     },
     {
       "name": "Weekly GPT supervisor of deterministic rules - Sunday 21:00 BRT",
-      "function": "runWeeklyClaudeRuleReview",
+      "function": "runWeeklyGptRuleReview",
       "cron": "0 21 * * 0",
-      "payload": { "_service_role": true }
+      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor" }
     },
     {
       "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
