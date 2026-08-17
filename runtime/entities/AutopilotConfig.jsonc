@@ -1,0 +1,499 @@
+{
+  "name": "AutopilotConfig",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "autonomy_level": {
+      "type": "number",
+      "default": 2
+    },
+    "objective": {
+      "type": "string",
+      "enum": [
+        "launch",
+        "growth",
+        "profitability",
+        "defense",
+        "liquidation",
+        "maintenance",
+        "aggressive_peak",
+        "flex_stock",
+        "custom"
+      ],
+      "default": "profitability"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 10
+    },
+    "acos_target": {
+      "type": "number",
+      "default": 10
+    },
+    "maximum_acos": {
+      "type": "number",
+      "default": 15
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "roas_target": {
+      "type": "number",
+      "default": 4
+    },
+    "maximum_tacos": {
+      "type": "number",
+      "default": 10
+    },
+    "target_tacos": {
+      "type": "number",
+      "default": 5,
+      "description": "TACoS alvo \u2014 meta da IA"
+    },
+    "target_cpc": {
+      "type": "number",
+      "default": 0,
+      "description": "CPC alvo em R$"
+    },
+    "maximum_cpc": {
+      "type": "number",
+      "default": 0,
+      "description": "CPC m\u00e1ximo tolerado"
+    },
+    "cpc_enforcement": {
+      "type": "boolean",
+      "default": false
+    },
+    "daily_budget_target": {
+      "type": "number",
+      "default": 0
+    },
+    "daily_budget_locked": {
+      "type": "boolean",
+      "default": false
+    },
+    "daily_budget_source": {
+      "type": "string",
+      "enum": [
+        "ai_suggestion",
+        "manager_fixed",
+        "auto"
+      ],
+      "default": "auto"
+    },
+    "total_daily_budget": {
+      "type": "number",
+      "default": 80
+    },
+    "daily_budget_limit": {
+      "type": "number",
+      "default": 80,
+      "description": "Limite di\u00e1rio geral de risco \u2014 fonte oficial do motor"
+    },
+    "maximum_campaign_budget": {
+      "type": "number",
+      "default": 100
+    },
+    "ai_budget_priority_mode": {
+      "type": "string",
+      "enum": [
+        "acos_first",
+        "roas_first",
+        "tacos_first",
+        "budget_first",
+        "cpc_first"
+      ],
+      "default": "acos_first"
+    },
+    "ai_daily_budget_target": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_budget_enforcement": {
+      "type": "boolean",
+      "default": false
+    },
+    "max_bid_increase_pct": {
+      "type": "number",
+      "default": 6
+    },
+    "max_bid_decrease_pct": {
+      "type": "number",
+      "default": 12
+    },
+    "max_budget_increase_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "max_budget_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "strict_bid_envelope": {
+      "type": "boolean",
+      "default": true,
+      "description": "Mant\u00e9m o bid hor\u00e1rio entre 0,50x e 1,50x do bid-base. Quando ativo, a estrat\u00e9gia Amazon permanece fixa."
+    },
+    "daypart_absolute_min_bid": {
+      "type": "number",
+      "default": 0.02,
+      "description": "Piso t\u00e9cnico exclusivo do dayparting. N\u00e3o reutiliza o min_bid de lan\u00e7amento."
+    },
+    "amazon_native_schedule_rules_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Permite criar Schedule Bid Rules nativas para incrementos STRONG/ELITE."
+    },
+    "native_rules_sync_frequency_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "target_daily_impressions": {
+      "type": "number",
+      "default": 0,
+      "description": "Meta de impress\u00f5es di\u00e1rias. 0 = desativada."
+    },
+    "min_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_goal_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Ativa meta de impress\u00f5es di\u00e1rias"
+    },
+    "min_clicks_for_decision": {
+      "type": "number",
+      "default": 8
+    },
+    "min_spend_for_decision": {
+      "type": "number",
+      "default": 5
+    },
+    "min_orders_for_scale": {
+      "type": "number",
+      "default": 2
+    },
+    "min_days_for_dayparting": {
+      "type": "number",
+      "default": 30
+    },
+    "min_clicks_per_time_block": {
+      "type": "number",
+      "default": 20
+    },
+    "min_orders_per_time_block": {
+      "type": "number",
+      "default": 2
+    },
+    "cooldown_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "cooldown_increase_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "cooldown_structural_days": {
+      "type": "number",
+      "default": 7
+    },
+    "attribution_safety_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "minimum_complete_data_days": {
+      "type": "number",
+      "default": 3
+    },
+    "harvest_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "harvest_after_orders": {
+      "type": "number",
+      "default": 1
+    },
+    "aggressive_harvesting": {
+      "type": "boolean",
+      "default": false
+    },
+    "negative_after_manual_delivery": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_pause_zero_stock": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_reduce_low_stock": {
+      "type": "boolean",
+      "default": true
+    },
+    "minimum_stock_units": {
+      "type": "number",
+      "default": 5
+    },
+    "minimum_stock_days": {
+      "type": "number",
+      "default": 7
+    },
+    "placement_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "dayparting_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "budget_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "economic_budget_balancer_enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Feature flag por conta. Quando desligada, o balanceador somente permite dry-run."
+    },
+    "unified_marketplace_decision_engine_v1": {
+      "type": "boolean",
+      "default": false,
+      "description": "Feature flag canônica por conta. Desligada mantém todo o motor unificado em dry-run."
+    },
+    "unified_engine_dry_run": {
+      "type": "boolean",
+      "default": true
+    },
+    "unified_rollout_phase": {
+      "type": "string",
+      "enum": ["dry_run", "single_account", "bids_only", "campaigns", "budget", "repricing", "full"],
+      "default": "dry_run"
+    },
+    "unified_max_actions_per_cycle": { "type": "number", "default": 5 },
+    "unified_max_bid_actions_per_cycle": { "type": "number", "default": 5 },
+    "unified_max_campaign_actions_per_cycle": { "type": "number", "default": 0 },
+    "unified_max_price_actions_per_cycle": { "type": "number", "default": 0 },
+    "unified_max_daily_spend": { "type": "number", "default": 80 },
+    "unified_max_price_change_pct": { "type": "number", "default": 2 },
+    "unified_min_prediction_confidence": { "type": "number", "default": 90 },
+    "unified_min_economic_confidence": { "type": "number", "default": 90 },
+    "max_campaign_spend_share": {
+      "type": "number",
+      "default": 25,
+      "description": "Participacao maxima recomendada de uma campanha no gasto diario, em percentual."
+    },
+    "max_auto_discovery_share": {
+      "type": "number",
+      "default": 30,
+      "description": "Teto de participacao da descoberta automatica no gasto diario, em percentual."
+    },
+    "overshare_warning_threshold": {
+      "type": "number",
+      "default": 25
+    },
+    "overshare_reduction_threshold": {
+      "type": "number",
+      "default": 35
+    },
+    "auto_discovery_target_share": {
+      "type": "number",
+      "default": 25
+    },
+    "manual_learning_target_share": {
+      "type": "number",
+      "default": 35
+    },
+    "winner_target_share": {
+      "type": "number",
+      "default": 40
+    },
+    "guarded_target_share": {
+      "type": "number",
+      "default": 10
+    },
+    "zero_impression_bid_increase_pct": {
+      "type": "number",
+      "default": 5
+    },
+    "no_click_bid_increase_pct": {
+      "type": "number",
+      "default": 2.5
+    },
+    "no_click_bid_reduction_pct": {
+      "type": "number",
+      "default": 3
+    },
+    "click_reduction_soft_pct": {
+      "type": "number",
+      "default": 6
+    },
+    "click_reduction_medium_pct": {
+      "type": "number",
+      "default": 10
+    },
+    "click_reduction_strong_pct": {
+      "type": "number",
+      "default": 12
+    },
+    "click_reduction_soft_start": {
+      "type": "number",
+      "default": 5
+    },
+    "click_reduction_medium_start": {
+      "type": "number",
+      "default": 16
+    },
+    "click_reduction_strong_start": {
+      "type": "number",
+      "default": 26
+    },
+    "max_spend_without_sale": {
+      "type": "number",
+      "default": 0,
+      "description": "0 usa margem por pedido multiplicada por test_tolerance_factor."
+    },
+    "test_tolerance_factor": {
+      "type": "number",
+      "default": 1.25
+    },
+    "maximum_impressions_without_click": {
+      "type": "number",
+      "default": 100
+    },
+    "learning_observe_hours": {
+      "type": "number",
+      "default": 6
+    },
+    "learning_window_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "economic_metrics_fresh_minutes": {
+      "type": "number",
+      "default": 30
+    },
+    "economic_decision_window_minutes": {
+      "type": "number",
+      "default": 15
+    },
+    "economic_cooldown_hours": {
+      "type": "number",
+      "default": 6
+    },
+    "low_volume_cooldown_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "max_changes_per_cycle": {
+      "type": "number",
+      "default": 20
+    },
+    "max_changes_per_hour": {
+      "type": "number",
+      "default": 40
+    },
+    "search_term_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "bid_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_create_manual_exact": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_apply_low_risk": {
+      "type": "boolean",
+      "default": true
+    },
+    "require_approval_medium_risk": {
+      "type": "boolean",
+      "default": true
+    },
+    "require_approval_high_risk": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_apply_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "approval_required": {
+      "type": "boolean",
+      "default": true
+    },
+    "emergency_pause_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "learning_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "ai_auto_optimization": {
+      "type": "boolean",
+      "default": false
+    },
+    "top_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "rest_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "product_page_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "marketplace_timezone": {
+      "type": "string",
+      "default": "America/Sao_Paulo"
+    },
+    "currency_code": {
+      "type": "string",
+      "default": "BRL"
+    },
+    "currency_symbol": {
+      "type": "string",
+      "default": "R$"
+    },
+    "ai_suggested_daily_budget": {
+      "type": "number"
+    },
+    "ai_budget_reasoning": {
+      "type": "string"
+    },
+    "ai_budget_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_budget_generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ai_budget_breakdown": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

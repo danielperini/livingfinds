@@ -1,0 +1,106 @@
+{
+  "name": "KeywordReplacementLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "old_keyword": {
+      "type": "string"
+    },
+    "old_keyword_id": {
+      "type": "string"
+    },
+    "old_keyword_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "old_keyword_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "old_keyword_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "old_keyword_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "new_keyword": {
+      "type": "string"
+    },
+    "new_keyword_id": {
+      "type": "string"
+    },
+    "new_keyword_source": {
+      "type": "string",
+      "enum": [
+        "term_bank",
+        "amazon_suggestion",
+        "amazon_api",
+        "auto_campaign",
+        "manual"
+      ],
+      "default": "term_bank"
+    },
+    "new_keyword_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "replacement_reason": {
+      "type": "string"
+    },
+    "replacement_count": {
+      "type": "number",
+      "default": 1
+    },
+    "replacement_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "created",
+        "confirmed",
+        "failed",
+        "waiting_auto_search_terms"
+      ],
+      "default": "pending"
+    },
+    "autopilot_decision_id": {
+      "type": "string"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "old_keyword",
+    "replacement_reason"
+  ]
+}

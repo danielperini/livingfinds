@@ -1,0 +1,114 @@
+{
+  "name": "AutopilotDecision",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "update_bid",
+        "update_budget",
+        "pause_keyword",
+        "negative_keyword",
+        "pause_campaign",
+        "enable_campaign",
+        "no_action",
+        "pause_ad_group"
+      ]
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "keyword",
+        "asin"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "entity_name": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "number"
+    },
+    "new_value": {
+      "type": "number"
+    },
+    "change_pct": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "executed",
+        "failed",
+        "skipped"
+      ],
+      "default": "pending"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "execution_response": {
+      "type": "string"
+    },
+    "impact_1d": {
+      "type": "number"
+    },
+    "impact_3d": {
+      "type": "number"
+    },
+    "impact_7d": {
+      "type": "number"
+    },
+    "acos_before": {
+      "type": "number"
+    },
+    "acos_after": {
+      "type": "number"
+    },
+    "spend_before": {
+      "type": "number"
+    },
+    "spend_after": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "action",
+    "entity_type",
+    "status"
+  ]
+}

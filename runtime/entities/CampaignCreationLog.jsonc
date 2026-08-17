@@ -1,0 +1,118 @@
+{
+  "name": "CampaignCreationLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "operation_type": {
+      "type": "string",
+      "enum": [
+        "create_campaign",
+        "create_ad_group",
+        "create_product_ad",
+        "create_keyword",
+        "update_bid",
+        "update_placement",
+        "pause_entity",
+        "enable_entity",
+        "rollback"
+      ]
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "product_ad",
+        "keyword"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "old_bid": {
+      "type": "number"
+    },
+    "new_bid": {
+      "type": "number"
+    },
+    "old_placement_top": {
+      "type": "number"
+    },
+    "new_placement_top": {
+      "type": "number"
+    },
+    "old_placement_rest": {
+      "type": "number"
+    },
+    "new_placement_rest": {
+      "type": "number"
+    },
+    "old_placement_product": {
+      "type": "number"
+    },
+    "new_placement_product": {
+      "type": "number"
+    },
+    "rule_applied": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failed",
+        "pending",
+        "rolled_back"
+      ]
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "user_id",
+    "operation_type",
+    "entity_type",
+    "status"
+  ]
+}

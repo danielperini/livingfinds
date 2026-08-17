@@ -1,0 +1,52 @@
+{
+  "name": "IntradayReportJob",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "ads_profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "report_date": { "type": "string", "format": "date" },
+    "report_type": { "type": "string", "default": "spCampaigns" },
+    "report_id": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "requested",
+        "polling",
+        "ready",
+        "downloaded",
+        "persisted",
+        "rate_limited",
+        "failed"
+      ]
+    },
+    "stage": {
+      "type": "string",
+      "enum": ["request", "poll", "download", "persist"]
+    },
+    "attempts": { "type": "number", "default": 0 },
+    "request_payload": { "type": "object" },
+    "download_url": { "type": "string" },
+    "raw_payload": { "type": ["array", "null"], "items": { "type": "object" } },
+    "row_count": { "type": "number", "default": 0 },
+    "records_persisted": { "type": "number", "default": 0 },
+    "amazon_request_id": { "type": "string" },
+    "last_http_status": { "type": "number" },
+    "last_error": { "type": "string" },
+    "next_retry_at": { "type": "string", "format": "date-time" },
+    "requested_at": { "type": "string", "format": "date-time" },
+    "polled_at": { "type": "string", "format": "date-time" },
+    "ready_at": { "type": "string", "format": "date-time" },
+    "downloaded_at": { "type": "string", "format": "date-time" },
+    "persisted_at": { "type": "string", "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_date",
+    "report_type",
+    "status",
+    "stage"
+  ]
+}

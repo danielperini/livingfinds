@@ -1,0 +1,137 @@
+{
+  "name": "ProductProfitabilityLearning",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "average_price": {
+      "type": "number",
+      "default": 0
+    },
+    "average_unit_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "units_sold": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_revenue": {
+      "type": "number",
+      "default": 0
+    },
+    "revenue_share_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_margin_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "ads_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "mpa_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "profitability_status": {
+      "type": "string",
+      "enum": [
+        "strong_profit",
+        "healthy_profit",
+        "low_profit",
+        "break_even",
+        "post_ads_loss",
+        "gross_loss",
+        "blocked_for_ads"
+      ],
+      "default": "healthy_profit"
+    },
+    "performance_class": {
+      "type": "string",
+      "enum": [
+        "scale_cautiously",
+        "maintain_optimize",
+        "reduce_ads",
+        "block_increase",
+        "pause_ads_review"
+      ],
+      "default": "maintain_optimize"
+    },
+    "decision_recommendation": {
+      "type": "string"
+    },
+    "learning_note": {
+      "type": "string"
+    },
+    "ads_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "bid_increase_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "budget_increase_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "top_of_search_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "calculated",
+        "benchmark_import"
+      ],
+      "default": "manual"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "sku"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "SyncRun",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "operation": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "success",
+        "error",
+        "partial"
+      ]
+    },
+    "records_received": {
+      "type": "number",
+      "default": 0
+    },
+    "records_upserted": {
+      "type": "number",
+      "default": 0
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "error_code": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "operation",
+    "status"
+  ]
+}

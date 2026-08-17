@@ -1,0 +1,60 @@
+{
+  "name": "NegativeKeywordSuggestion",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "applied"
+      ],
+      "default": "pending"
+    },
+    "applied_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_text"
+  ]
+}

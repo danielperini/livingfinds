@@ -1,0 +1,133 @@
+{
+  "name": "AdsAiDecisio",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "keyword",
+        "product",
+        "ad_group",
+        "ad",
+        "search_term"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "current_value": {
+      "type": "number"
+    },
+    "recommended_value": {
+      "type": "number"
+    },
+    "delta": {
+      "type": "number"
+    },
+    "delta_percent": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "confidence_score": {
+      "type": "number"
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "rejected",
+        "scheduled",
+        "executed",
+        "failed",
+        "skipped"
+      ],
+      "default": "pending"
+    },
+    "scheduled_execution_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "simulated": {
+      "type": "boolean",
+      "default": false
+    },
+    "evidence_report": {
+      "type": "string"
+    },
+    "rule_applied": {
+      "type": "string"
+    },
+    "model_used": {
+      "type": "string"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "action",
+    "status"
+  ]
+}

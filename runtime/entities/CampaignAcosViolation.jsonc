@@ -1,0 +1,151 @@
+{
+  "name": "CampaignAcosViolation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "campaign_type": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "consecutive_violations": {
+      "type": "number",
+      "default": 0
+    },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "phase1",
+        "phase2",
+        "paused",
+        "recovered"
+      ],
+      "description": "Fase atual do protocolo Protect-Then-Pause"
+    },
+    "phase1_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase2_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "phase1_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "phase2_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "optimization_attempted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "optimization_cooldown_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bids_reduced": {
+      "type": "boolean",
+      "default": false
+    },
+    "dayparting_evaluated": {
+      "type": "boolean",
+      "default": false
+    },
+    "gpt_phase2_recommendation": {
+      "type": "string",
+      "enum": [
+        "bid_adjustment_sufficient",
+        "dayparting_recommended",
+        "pause_recommended"
+      ],
+      "description": "Recomenda\u00e7\u00e3o do GPT-4o na Fase 2"
+    },
+    "gpt_phase2_rationale": {
+      "type": "string"
+    },
+    "acos_cycle_1": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_cycle_2": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_cycle_3": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_1": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_2": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_cycle_3": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 25
+    },
+    "maximum_acos": {
+      "type": "number",
+      "default": 45
+    },
+    "last_violation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_violation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "paused_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "pause_reason": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "watching",
+        "optimizing",
+        "optimizing_phase1",
+        "optimizing_phase2",
+        "warning",
+        "paused",
+        "recovered",
+        "exempt"
+      ],
+      "default": "watching"
+    },
+    "reset_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id"
+  ]
+}

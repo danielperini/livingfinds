@@ -1,0 +1,488 @@
+/**
+ * createAutoCampaignForAsin — Cria campanha Sponsored Products AUTO para um ASIN.
+ * Com reconciliação, idempotência, tratamento de HTTP 207 e parser tolerante.
+ */
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+import { proportionalActivationBid } from '../../shared/activationBidPolicy.ts';
+
+const tokenCache = {};
+
+async function getAdsToken(refreshToken) {
+  const cached = tokenCache['ads'];
+  if (cached && cached.expires_at > Date.now()) return cached.access_token;
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: Deno.env.get('ADS_CLIENT_ID'),
+    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
+  });
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error_description || data.error || 'Token failed');
+  tokenCache['ads'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
+  return data.access_token;
+}
+
+function getAdsBaseUrl() {
+  const r = (Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
+  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+  return 'https://advertising-api.amazon.com';
+}
+
+async function adsRequestWithDetails(method, path, body, refreshToken, profileId, contentType = 'application/json') {
+  const token = await getAdsToken(refreshToken);
+  const res = await fetch(`${getAdsBaseUrl()}${path}`, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+      'Amazon-Advertising-API-Scope': String(profileId),
+      'Content-Type': contentType,
+      'Accept': contentType,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  return { status: res.status, data, headers: { requestId: res.headers.get('x-amzn-requestid') || '' } };
+}
+
+function extractCampaignId(result) {
+  if (!result) return null;
+  const paths = [
+    () => result.campaignId,
+    () => result.campaigns?.[0]?.campaignId,
+    () => result.campaigns?.success?.[0]?.campaignId,
+    () => result.success?.[0]?.campaignId,
+    () => result.successes?.[0]?.campaignId,
+    () => result.data?.campaignId,
+    () => result.data?.campaigns?.[0]?.campaignId,
+    () => result.result?.campaignId,
+    () => result.results?.[0]?.campaignId,
+    () => Array.isArray(result) ? result[0]?.campaignId : null,
+  ];
+  for (const fn of paths) {
+    try {
+      const val = fn();
+      if (val) return String(val);
+    } catch {}
+  }
+  return null;
+}
+
+function extractCampaignError(result) {
+  if (!result) return null;
+  const errPaths = [
+    () => result.errors?.[0],
+    () => result.error,
+    () => result.failures?.[0],
+    () => result.failure,
+    () => result.invalid,
+    () => result.campaigns?.error?.[0],
+    () => result.campaigns?.failures?.[0],
+  ];
+  for (const fn of errPaths) {
+    try {
+      const val = fn();
+      if (val) return val;
+    } catch {}
+  }
+  return null;
+}
+
+function extractAdGroupId(result) {
+  if (!result) return null;
+  const paths = [
+    () => result.adGroupId,
+    () => result.adGroups?.[0]?.adGroupId,
+    () => result.adGroups?.success?.[0]?.adGroupId,
+    () => result.success?.[0]?.adGroupId,
+    () => result.data?.adGroupId,
+    () => result.data?.adGroups?.[0]?.adGroupId,
+  ];
+  for (const fn of paths) {
+    try {
+      const val = fn();
+      if (val) return String(val);
+    } catch {}
+  }
+  return null;
+}
+
+async function reconcileCampaign(token, profileId, campaignName, asin) {
+  try {
+    let nextToken = undefined;
+    for (let page = 0; page < 20; page++) {
+      const res = await fetch(`${getAdsBaseUrl()}/sp/campaigns/list`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
+          'Amazon-Advertising-API-Scope': String(profileId),
+          'Content-Type': 'application/vnd.spCampaign.v3+json',
+          'Accept': 'application/vnd.spCampaign.v3+json',
+        },
+        body: JSON.stringify({
+          stateFilter: { include: ['ENABLED', 'PAUSED', 'ARCHIVED'] },
+          maxResults: 100,
+          ...(nextToken ? { nextToken } : {}),
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      const campaigns = data?.campaigns || [];
+      const found = campaigns.find(c =>
+        String(c.state || '').toUpperCase() !== 'ARCHIVED' && (
+          c.name === campaignName ||
+          (c.name?.includes('AUTO') && c.name?.includes(asin))
+        )
+      );
+      if (found?.campaignId) return String(found.campaignId);
+      nextToken = data?.nextToken;
+      if (!nextToken) break;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+Deno.serve(async (req) => {
+  try {
+    const base44 = createClientFromRequest(req);
+    const body = await req.json().catch(() => ({}));
+    if (body._service_role !== true) {
+      const user = await base44.auth.me().catch(() => null);
+      if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const { amazon_account_id, asin, sku, product_name } = body;
+    if (!amazon_account_id || !asin) return Response.json({ error: 'amazon_account_id and asin required' }, { status: 400 });
+
+    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
+    if (!account) return Response.json({ ok: false, error: 'AmazonAccount não encontrada' });
+    
+    const refreshToken = account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN');
+    if (!refreshToken) return Response.json({ ok: false, error: 'Sem refresh_token. Conecte o Amazon Ads primeiro.' });
+    
+    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
+    if (!profileId) return Response.json({ ok: false, error: 'ads_profile_id não configurado' });
+
+    const [performanceRows, earlyAutopilotRows, economicRows, assessmentRows] = await Promise.all([
+      base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id, asin }, '-updated_at', 1).catch(() => []),
+      base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id, asin }, '-assessment_date', 1).catch(() => []),
+    ]);
+    const goalSettings = { ...(earlyAutopilotRows[0] || {}), ...(performanceRows[0] || {}) };
+    // AUTO e a camada de descoberta do funil. Ela sempre nasce no piso
+    // configurado e so e elevada posteriormente pelo motor, quando houver
+    // entrega e evidencia economica. Assim uma criacao/reconciliacao nunca
+    // introduz um CPC alto por conta propria.
+    const configuredMinimumBid = Math.max(0.02, Number(goalSettings?.min_bid || 0.10));
+    const launchAtMinimum = body.launch_at_minimum !== false;
+    const initialBid = launchAtMinimum
+      ? Math.round(configuredMinimumBid * 100) / 100
+      : proportionalActivationBid(goalSettings, economicRows[0], assessmentRows[0]);
+
+    const existingCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, asin });
+    const autoCampaign = existingCampaigns.find((c: any) => {
+      const targeting = String(c.targeting_type || '').toUpperCase();
+      const name = String(c.name || c.campaign_name || '').toUpperCase();
+      const state = String(c.state || c.status || '').toUpperCase();
+      return c.archived !== true && state !== 'ARCHIVED'
+        && !name.includes('MANUAL')
+        && (name.includes('AUTO') || (targeting === 'AUTO' && !name.includes('EXACT')));
+    });
+    if (autoCampaign) {
+      // O estado confirmado pela sincronização atual tem precedência. Um
+      // amazon_status legado nunca pode bloquear a cobertura AUTO do SKU.
+      const state = String(autoCampaign.state || autoCampaign.status || autoCampaign.amazon_status || '').toUpperCase();
+      const effectiveCampaignId = autoCampaign.campaign_id || autoCampaign.amazon_campaign_id;
+      if (!effectiveCampaignId) return Response.json({ ok: false, error: 'Campanha AUTO local sem ID Amazon' });
+      // Sempre reafirmar ENABLED na Amazon. Estado local nunca substitui a
+      // confirmacao remota e PUT ENABLED e idempotente.
+      const enabled = await adsRequestWithDetails(
+        'PUT', '/sp/campaigns',
+        { campaigns: [{ campaignId: String(effectiveCampaignId), state: 'ENABLED' }] },
+        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+      );
+      const enabledError = extractCampaignError(enabled.data);
+      if (![200, 201, 207].includes(enabled.status) || enabledError) {
+        return Response.json({
+          ok: false, error: `Falha ao reativar AUTO ${effectiveCampaignId}`,
+          http_status: enabled.status, amazon_error: enabledError,
+          request_id: enabled.headers?.requestId || '',
+        });
+      }
+      await base44.asServiceRole.entities.Campaign.update(autoCampaign.id, {
+        state: 'enabled', status: 'enabled', amazon_status: 'enabled',
+        is_operational: true, archived: false,
+        synced_at: new Date().toISOString(), last_sync_at: new Date().toISOString(),
+      });
+      // Nao redefinir o lance de uma AUTO existente. O mesmo endpoint e
+      // chamado a cada ciclo de cobertura; rebaixar o Ad Group ao piso aqui
+      // apagaria a evolucao gradual feita por bid/dayparting e esconderia o
+      // efeito das decisoes economicas anteriores.
+      const linkedProducts = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
+      for (const product of linkedProducts) {
+        await base44.asServiceRole.entities.Product.update(product.id, {
+          has_campaign: true, campaign_status: 'active', linked_campaign_id: effectiveCampaignId,
+        }).catch(() => {});
+      }
+      return Response.json({
+        ok: true,
+        campaign_id: effectiveCampaignId,
+        campaign_name: autoCampaign.name || autoCampaign.campaign_name,
+        daily_budget: autoCampaign.daily_budget,
+        already_exists: true,
+        reactivated: true,
+        action_label: 'reactivated',
+        launch_bid_policy: launchAtMinimum ? 'configured_minimum' : 'proportional_override',
+        proportional_bid: initialBid,
+      });
+    }
+
+    // Usar AutopilotConfig como fonte principal de budget (mais atualizado que BudgetRule)
+    const autopilotConfigs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id });
+    const autopilotConfig = autopilotConfigs[0] || null;
+
+    const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id });
+    const currentTotalBudget = activeCampaigns
+      .filter(c => c.state === 'enabled' && c.archived !== true)
+      .reduce((sum, c) => sum + (c.daily_budget || 0), 0);
+
+    // total_daily_budget: AutopilotConfig > BudgetRule > fallback generoso (500)
+    const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
+    const budgetRule = budgetRules[0] || {};
+    const totalDailyBudget =
+      autopilotConfig?.total_daily_budget ||
+      autopilotConfig?.daily_budget_limit ||
+      budgetRule.total_daily_budget ||
+      500;
+    const maxPerCampaign = autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20;
+
+    const availableBudget = totalDailyBudget - currentTotalBudget;
+    // Sempre criar com pelo menos R$ 5,00 — nunca bloquear por budget
+    const campaignBudget = Math.max(
+      Math.min(Math.max(availableBudget * 0.1, 5), maxPerCampaign),
+      5
+    );
+
+    const campaignName = `AUTO | ${asin} | ${new Date().toISOString().slice(0, 10)}`;
+    const today = new Date().toISOString().slice(0, 10);
+
+    const token = await getAdsToken(refreshToken);
+    const existingCampaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+    
+    let campaignResult;
+    let campaignId = existingCampaignId;
+
+    // Reconcile encontra campanhas que existem na Amazon mesmo quando o banco
+    // local perdeu o vinculo. Nesse caminho tambem precisamos reativar a
+    // campanha; antes ela era apenas importada localmente e permanecia PAUSED.
+    if (campaignId) {
+      const enabled = await adsRequestWithDetails(
+        'PUT', '/sp/campaigns',
+        { campaigns: [{ campaignId: String(campaignId), state: 'ENABLED' }] },
+        refreshToken, String(profileId), 'application/vnd.spCampaign.v3+json'
+      );
+      const enabledError = extractCampaignError(enabled.data);
+      if (![200, 201, 207].includes(enabled.status) || enabledError) {
+        return Response.json({
+          ok: false,
+          error: `Falha ao reativar AUTO reconciliada ${campaignId}`,
+          http_status: enabled.status,
+          amazon_error: enabledError,
+          request_id: enabled.headers?.requestId || '',
+        });
+      }
+    }
+    
+    if (!campaignId) {
+      const campaignPayload = {
+        campaigns: [{
+          name: campaignName,
+          targetingType: 'AUTO',
+          state: 'ENABLED',
+          budget: { budgetType: 'DAILY', budget: campaignBudget },
+          startDate: today,
+        }],
+      };
+
+      try {
+        campaignResult = await adsRequestWithDetails('POST', '/sp/campaigns', campaignPayload, refreshToken, profileId, 'application/vnd.spCampaign.v3+json');
+      } catch (e) {
+        return Response.json({ ok: false, error: `Falha ao criar campanha: ${e.message}` });
+      }
+
+      const responseData = campaignResult.data;
+      campaignId = extractCampaignId(responseData);
+
+      if (!campaignId && [200, 201, 207].includes(campaignResult.status)) {
+        for (let attempt = 0; attempt < 4 && !campaignId; attempt++) {
+          if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 750 * attempt));
+          campaignId = await reconcileCampaign(token, profileId, campaignName, asin);
+        }
+      }
+
+      if (!campaignId) {
+        const errorDetail = extractCampaignError(responseData);
+        return Response.json({ 
+          ok: false, 
+          error: 'Amazon Ads não retornou campaignId',
+          http_status: campaignResult.status,
+          request_id: campaignResult.headers.requestId,
+          amazon_error: errorDetail ? (errorDetail.code || errorDetail.description || JSON.stringify(errorDetail)) : null,
+          response_sample: JSON.stringify(responseData).slice(0, 500),
+        });
+      }
+    } else {
+      campaignResult = { status: 200, data: { campaignId }, headers: { requestId: '' } };
+    }
+
+    let adGroupId = '';
+    try {
+      const adGroupPayload = {
+        adGroups: [{
+          name: `AdGroup | ${asin}`,
+          campaignId,
+          defaultBid: initialBid,
+          state: 'ENABLED',
+        }],
+      };
+      const adGroupResult = await adsRequestWithDetails('POST', '/sp/adGroups', adGroupPayload, refreshToken, profileId, 'application/vnd.spAdGroup.v3+json');
+      adGroupId = String(adGroupResult.data?.adGroups?.success?.[0]?.adGroupId || adGroupResult.data?.success?.[0]?.adGroupId || '');
+    } catch (e) {
+      console.warn('AdGroup creation failed:', e.message);
+    }
+
+    let productAdId = '';
+    if (adGroupId) {
+      try {
+        const adPayload = {
+          productAds: [{
+            campaignId,
+            adGroupId,
+            asin,
+            sku: sku || undefined,
+            state: 'ENABLED',
+          }],
+        };
+        const adResult = await adsRequestWithDetails('POST', '/sp/productAds', adPayload, refreshToken, profileId, 'application/vnd.spProductAd.v3+json');
+        productAdId = String(
+          adResult.data?.productAds?.success?.[0]?.adId || 
+          adResult.data?.success?.[0]?.adId || 
+          adResult.data?.adId || 
+          ''
+        );
+        if (!productAdId && [200, 201, 207].includes(adResult.status)) {
+          console.warn(`ProductAd criado mas adId não extraído. Status: ${adResult.status}`);
+        }
+      } catch (e) {
+        console.error('ProductAd creation failed:', e.message);
+      }
+    }
+
+    const now = new Date().toISOString();
+
+    const existingLocal = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id, campaign_id: campaignId });
+    const campaignRecord = {
+      amazon_account_id,
+      campaign_id: campaignId,
+      asin,
+      name: campaignName,
+      campaign_name: campaignName,
+      campaign_type: 'SP',
+      targeting_type: 'AUTO',
+      state: 'enabled',
+      status: 'enabled',
+      amazon_status: 'enabled',
+      is_operational: true,
+      archived: false,
+      daily_budget: campaignBudget,
+      start_date: today,
+      created_by_app: true,
+      launch_phase: 'new',
+      days_running: 0,
+      created_at: now,
+      synced_at: now,
+      last_sync_at: now,
+      currency_code: account.currency_code || 'BRL',
+      marketplace_id: account.marketplace_id || 'A2Q3Y263D00KWC',
+      profile_id: String(profileId),
+    };
+    const savedCampaign = existingLocal.length > 0
+      ? await base44.asServiceRole.entities.Campaign.update(existingLocal[0].id, campaignRecord)
+      : await base44.asServiceRole.entities.Campaign.create(campaignRecord);
+
+    if (adGroupId) {
+      await base44.asServiceRole.entities.AdGroup.create({
+        amazon_account_id,
+        campaign_id: campaignId,
+        ad_group_id: adGroupId,
+        ad_group_name: `AdGroup | ${asin}`,
+        name: `AdGroup | ${asin}`,
+        default_bid: initialBid,
+        state: 'enabled',
+        status: 'enabled',
+        synced_at: now,
+      });
+    }
+
+    if (productAdId) {
+      await base44.asServiceRole.entities.ProductAd.create({
+        amazon_account_id,
+        campaign_id: campaignId,
+        ad_group_id: adGroupId,
+        ad_id: productAdId,
+        asin,
+        sku: sku || null,
+        state: 'enabled',
+        status: 'enabled',
+        synced_at: now,
+      }).catch(() => {});
+    }
+
+    const products = await base44.asServiceRole.entities.Product.filter({ amazon_account_id, asin });
+    if (products.length > 0) {
+      await base44.asServiceRole.entities.Product.update(products[0].id, {
+        has_campaign: true,
+        campaign_status: 'active',
+        linked_campaign_id: campaignId,
+        auto_campaign_created_at: now,
+      });
+    }
+
+    await base44.asServiceRole.entities.LearningEvent.create({
+      amazon_account_id,
+      event_type: 'campaign_created',
+      entity_type: 'campaign',
+      entity_id: campaignId,
+      observation: `Campanha AUTO vinculada para ASIN ${asin}: "${campaignName}" — Budget: R$ ${campaignBudget.toFixed(2).replace('.', ',')}/dia`,
+      recorded_at: now,
+    });
+
+    return Response.json({
+      ok: true,
+      campaign_id: campaignId,
+      ad_group_id: adGroupId,
+      product_ad_id: productAdId || null,
+      campaign_name: campaignName,
+      daily_budget: campaignBudget,
+      initial_bid: initialBid,
+      http_status: campaignResult.status,
+      request_id: campaignResult.headers.requestId,
+      ad_confirmed: !!adGroupId,
+      product_ad_confirmed: !!productAdId,
+      already_exists: !!existingCampaignId,
+      currency_code: account.currency_code || 'BRL',
+      action_label: existingCampaignId ? 'reactivated' : 'created',
+    });
+
+  } catch (error) {
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  }
+});

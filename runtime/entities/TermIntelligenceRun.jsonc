@@ -1,0 +1,106 @@
+{
+  "name": "TermIntelligenceRun",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "lookback_days": {
+      "type": "number",
+      "default": 15
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": true
+    },
+    "asin_scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "planned",
+        "executed",
+        "partial",
+        "failed"
+      ],
+      "default": "running"
+    },
+    "phase": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "asins_scanned": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_scanned": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_scanned": {
+      "type": "number",
+      "default": 0
+    },
+    "actions_planned": {
+      "type": "number",
+      "default": 0
+    },
+    "actions_executed": {
+      "type": "number",
+      "default": 0
+    },
+    "clusters_created": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_added": {
+      "type": "number",
+      "default": 0
+    },
+    "winners_isolated": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_paused": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_archived": {
+      "type": "number",
+      "default": 0
+    },
+    "duplicates_prevented": {
+      "type": "number",
+      "default": 0
+    },
+    "failures": {
+      "type": "number",
+      "default": 0
+    },
+    "summary": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "run_id"
+  ]
+}

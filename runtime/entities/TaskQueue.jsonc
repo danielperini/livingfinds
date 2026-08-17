@@ -1,0 +1,68 @@
+{
+  "name": "TaskQueue",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "task_name": {
+      "type": "string"
+    },
+    "function_name": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "priority": {
+      "type": "number",
+      "default": 5
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "running",
+        "success",
+        "failed",
+        "skipped"
+      ],
+      "default": "pending"
+    },
+    "scheduled_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "result_summary": {
+      "type": "string"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "attempt_count": {
+      "type": "number",
+      "default": 0
+    },
+    "max_attempts": {
+      "type": "number",
+      "default": 1
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "task_name",
+    "function_name",
+    "scheduled_date"
+  ]
+}

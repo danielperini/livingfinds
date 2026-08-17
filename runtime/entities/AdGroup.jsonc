@@ -1,0 +1,179 @@
+{
+  "name": "AdGroup",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "default_bid": {
+      "type": "number",
+      "default": 0.25
+    },
+    "daypart_base_bid": {
+      "type": "number",
+      "description": "Bid-base do ad group. Ajustes temporários sempre partem deste valor."
+    },
+    "daypart_bid_floor": {
+      "type": "number",
+      "description": "Piso canônico: max(min_bid configurado, daypart_base_bid × 0,50)."
+    },
+    "daypart_bid_cap": {
+      "type": "number",
+      "description": "Teto canônico: min(max_bid/safe_max_cpc, daypart_base_bid × 1,50)."
+    },
+    "daypart_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "daypart_multiplier": {
+      "type": "number",
+      "default": 1
+    },
+    "daypart_last_slot": {
+      "type": "string"
+    },
+    "daypart_last_adjusted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "daypart_last_restored_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "group_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "product_targeting",
+        "category",
+        "brand",
+        "defense"
+      ],
+      "default": "exact"
+    },
+    "primary_asin": {
+      "type": "string"
+    },
+    "primary_sku": {
+      "type": "string"
+    },
+    "product_category": {
+      "type": "string"
+    },
+    "strategy_phase": {
+      "type": "string",
+      "enum": [
+        "new",
+        "discovery",
+        "learning",
+        "validated",
+        "winner",
+        "inefficient",
+        "deficit",
+        "paused",
+        "blocked"
+      ],
+      "default": "new"
+    },
+    "bidding_strategy": {
+      "type": "string",
+      "enum": [
+        "dynamic_down_only",
+        "dynamic_up_down",
+        "fixed"
+      ],
+      "default": "dynamic_down_only"
+    },
+    "placement_top_search": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_rest_search": {
+      "type": "number",
+      "default": 0
+    },
+    "placement_product_pages": {
+      "type": "number",
+      "default": 0
+    },
+    "is_variation_group": {
+      "type": "boolean",
+      "default": false
+    },
+    "variation_asins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_by_app": {
+      "type": "boolean",
+      "default": false
+    },
+    "naming_standard": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "ad_group_id"
+  ]
+}

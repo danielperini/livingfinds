@@ -1,0 +1,106 @@
+{
+  "name": "ListingSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "product_type": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "bullets": {
+      "type": "string",
+      "description": "JSON array serializado"
+    },
+    "description": {
+      "type": "string"
+    },
+    "organic_terms": {
+      "type": "string",
+      "description": "JSON serializado"
+    },
+    "attributes": {
+      "type": "string",
+      "description": "JSON serializado do attributes object"
+    },
+    "images": {
+      "type": "string",
+      "description": "JSON array de imagens"
+    },
+    "price": {
+      "type": "number"
+    },
+    "offer_data": {
+      "type": "string",
+      "description": "JSON com dados da oferta"
+    },
+    "schema_fields": {
+      "type": "string",
+      "description": "JSON com campos dispon\u00edveis do Product Type"
+    },
+    "required_fields": {
+      "type": "string",
+      "description": "JSON array de campos obrigat\u00f3rios"
+    },
+    "missing_fields": {
+      "type": "string",
+      "description": "JSON array de campos ausentes"
+    },
+    "amazon_issues": {
+      "type": "string",
+      "description": "JSON array de issues Amazon"
+    },
+    "a_plus_content_reference": {
+      "type": "string"
+    },
+    "sync_source": {
+      "type": "string",
+      "enum": [
+        "sp_api",
+        "manual",
+        "fallback"
+      ],
+      "default": "sp_api"
+    },
+    "sync_status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "partial",
+        "error",
+        "pending"
+      ],
+      "default": "pending"
+    },
+    "sync_error": {
+      "type": "string"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin"
+  ]
+}

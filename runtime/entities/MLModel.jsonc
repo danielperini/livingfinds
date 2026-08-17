@@ -1,0 +1,161 @@
+{
+  "name": "MLModel",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "model_version": {
+      "type": "number",
+      "default": 1
+    },
+    "trained_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "training_samples": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence_score": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 25
+    },
+    "max_acos": {
+      "type": "number",
+      "default": 40
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.1
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "max_bid_increase_pct": {
+      "type": "number",
+      "default": 15
+    },
+    "max_bid_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "max_budget_increase_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "max_budget_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "min_clicks_for_decision": {
+      "type": "number",
+      "default": 8
+    },
+    "min_spend_for_decision": {
+      "type": "number",
+      "default": 5
+    },
+    "min_orders_for_scale": {
+      "type": "number",
+      "default": 2
+    },
+    "cooldown_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "cooldown_increase_hours": {
+      "type": "number",
+      "default": 72
+    },
+    "harvest_after_orders": {
+      "type": "number",
+      "default": 1
+    },
+    "bid_winner_increase_pct": {
+      "type": "number",
+      "default": 5
+    },
+    "bid_strong_winner_increase_pct": {
+      "type": "number",
+      "default": 10
+    },
+    "bid_wasting_reduce_pct": {
+      "type": "number",
+      "default": 15
+    },
+    "bid_high_acos_formula_weight": {
+      "type": "number",
+      "default": 1.0
+    },
+    "budget_utilization_threshold": {
+      "type": "number",
+      "default": 90
+    },
+    "param_changes_applied": {
+      "type": "number",
+      "default": 0
+    },
+    "last_param_update_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_param_update_reason": {
+      "type": "string"
+    },
+    "avg_positive_outcome_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_bid_increase_roi": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_bid_decrease_roi": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_harvest_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_negative_keyword_savings": {
+      "type": "number",
+      "default": 0
+    },
+    "medium_tail_min_words": {
+      "type": "number",
+      "default": 2
+    },
+    "medium_tail_max_words": {
+      "type": "number",
+      "default": 3
+    },
+    "long_tail_min_words": {
+      "type": "number",
+      "default": 4
+    },
+    "long_tail_confidence_boost": {
+      "type": "number",
+      "default": 0.05
+    },
+    "feature_importances": {
+      "type": "string"
+    },
+    "training_log": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

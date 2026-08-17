@@ -1,0 +1,74 @@
+{
+  "name": "ListingEnhancementHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "field_name": {
+      "type": "string"
+    },
+    "value_before": {
+      "type": "string"
+    },
+    "value_after": {
+      "type": "string"
+    },
+    "proposal_id": {
+      "type": "string"
+    },
+    "snapshot_id": {
+      "type": "string"
+    },
+    "submitted_by": {
+      "type": "string"
+    },
+    "submitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amazon_status": {
+      "type": "string"
+    },
+    "amazon_issues": {
+      "type": "string"
+    },
+    "confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rollback_status": {
+      "type": "string",
+      "enum": [
+        "none",
+        "eligible",
+        "in_progress",
+        "completed",
+        "failed",
+        "ineligible"
+      ],
+      "default": "none"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "field_name"
+  ]
+}

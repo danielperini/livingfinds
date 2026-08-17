@@ -1,0 +1,74 @@
+{
+  "name": "AmazonAdsReportCapability",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string"
+    },
+    "report_type_id": {
+      "type": "string"
+    },
+    "ad_product": {
+      "type": "string"
+    },
+    "group_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "supported",
+        "unsupported",
+        "unknown",
+        "error"
+      ],
+      "default": "unknown"
+    },
+    "http_status": {
+      "type": "number"
+    },
+    "amazon_error_code": {
+      "type": "string"
+    },
+    "amazon_error_message": {
+      "type": "string"
+    },
+    "tested_payload": {
+      "type": "string"
+    },
+    "tested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_success_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_failure_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fallback_report_type": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_type_id"
+  ]
+}

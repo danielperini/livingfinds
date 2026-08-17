@@ -1,0 +1,69 @@
+{
+  "name": "AutopilotRun",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed"
+      ],
+      "default": "running"
+    },
+    "trigger": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "scheduled",
+        "auto"
+      ],
+      "default": "manual"
+    },
+    "campaigns_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "keywords_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_generated": {
+      "type": "number",
+      "default": 0
+    },
+    "decisions_auto_applied": {
+      "type": "number",
+      "default": 0
+    },
+    "total_spend_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_acos": {
+      "type": "number"
+    },
+    "alerts_generated": {
+      "type": "number",
+      "default": 0
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "status"
+  ]
+}

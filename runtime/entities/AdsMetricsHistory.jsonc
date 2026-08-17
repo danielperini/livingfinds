@@ -1,0 +1,122 @@
+{
+  "name": "AdsMetricsHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "search_term": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "auto"
+      ]
+    },
+    "advertised_asin": {
+      "type": "string"
+    },
+    "advertised_sku": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string",
+      "enum": [
+        "searchTerms",
+        "campaigns",
+        "products"
+      ]
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_1d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_1d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "roas_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "unique_key": {
+      "type": "string"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "report_type",
+    "unique_key"
+  ]
+}

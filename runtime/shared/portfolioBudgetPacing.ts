@@ -1,0 +1,483 @@
+import {
+  brtClock,
+  DEFAULT_DAILY_CAP,
+  buildCampaignProfiles,
+  buildPacingCurve,
+  clamp,
+  expectedFraction,
+  pacingClassification,
+  parseArray,
+  positive,
+  productStock,
+  r2,
+  resolveDailyCap,
+  readConfirmedTodaySpend,
+} from './portfolioBudgetMath.ts';
+import {
+  acquireControllerLock,
+  capStatus,
+  controllerLockActive,
+  nextDayAt,
+  releaseControllerLock,
+  setCampaignState,
+  upsertDailyController,
+  writePacingAudit,
+} from './portfolioBudgetActions.ts';
+
+const MAX_PAUSES = 6;
+const MAX_HARD_CAP_PAUSES = 25;
+const MAX_RESUMES = 8;
+
+function priorClosedDate(date: string, daysAgo: number) {
+  const value = new Date(`${date}T12:00:00-03:00`);
+  value.setDate(value.getDate() - daysAgo);
+  return value.toISOString().slice(0, 10);
+}
+
+function calculateEffectiveCap(params: { performance: any; products: any[]; economics: any[]; metrics: any[]; today: string }) {
+  const { performance, products, economics, metrics, today } = params;
+  const configured = positive(performance?.daily_budget_limit, DEFAULT_DAILY_CAP);
+  const resourceSharePct = clamp(positive(performance?.ads_resource_share_cap_pct, 5), 0, 100);
+  const validDates = Array.from({ length: 7 }, (_, index) => priorClosedDate(today, index + 1));
+  const salesByDate = new Map(validDates.map((date) => [date, 0]));
+  const rowsByDate = new Map(validDates.map((date) => [date, 0]));
+  for (const row of metrics) {
+    const date = String(row?.date || '');
+    if (!salesByDate.has(date)) continue;
+    salesByDate.set(date, Number(salesByDate.get(date) || 0) + Number(row?.sales || 0));
+    rowsByDate.set(date, Number(rowsByDate.get(date) || 0) + 1);
+  }
+  const validSalesDays = validDates.filter((date) => Number(rowsByDate.get(date) || 0) > 0);
+  const projectedRevenue = validSalesDays.length >= 3
+    ? r2(validSalesDays.reduce((sum, date) => sum + Number(salesByDate.get(date) || 0), 0) / validSalesDays.length)
+    : 0;
+  const resourceCap = projectedRevenue > 0 ? r2(projectedRevenue * resourceSharePct / 100) : 0;
+  const stockByAsin = new Map(products.map((product: any) => [String(product?.asin || ''), productStock(product)]));
+  const eligibleEconomics = economics.filter((economic: any) => {
+    const stock = Number(stockByAsin.get(String(economic?.asin || '')) || 0);
+    const margin = Number(economic?.contribution_margin_percent ?? economic?.current_margin_pct ?? 0);
+    return stock > 0 && Number(economic?.safe_max_cpc || 0) > 0 && margin >= 15 &&
+      !['missing_cost', 'missing_price', 'missing_fees', 'invalid', 'stale'].includes(String(economic?.economics_status || '').toLowerCase());
+  });
+  const acosLimit = eligibleEconomics.length
+    ? Math.min(Number(performance?.target_acos || 0) || 100, ...eligibleEconomics.map((economic: any) => Number(economic?.target_acos || economic?.break_even_acos || 100)))
+    : 0;
+  const economicCap = projectedRevenue > 0 && acosLimit > 0 ? r2(projectedRevenue * acosLimit / 100) : 0;
+  const cap = r2(Math.min(configured, resourceCap || configured, economicCap || configured));
+  return {
+    configured, resourceSharePct, projectedRevenue, validSalesDays: validSalesDays.length,
+    resourceCap, economicCap, cap, confidence: validSalesDays.length >= 5 ? 'high' : validSalesDays.length >= 3 ? 'medium' : 'low',
+    basis: 'amazon_sales_projection_7d', eligibleEconomics: eligibleEconomics.length,
+  };
+}
+
+export async function runPortfolioBudgetPacing(base44: any, account: any, body: any = {}) {
+  const startedAt = Date.now();
+  const clock = brtClock();
+  const runId = String(body.run_id || crypto.randomUUID());
+  const dryRun = body.dry_run === true;
+  const accountId = String(account?.id || '');
+  if (!accountId) return { ok: false, error: 'AmazonAccount inválida' };
+
+  const [performanceRows, configRows, controllerRows, campaigns, products, economics, patterns, snapshots, closedMetrics] = await Promise.all([
+    base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
+    base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: accountId }, '-updated_at', 1).catch(() => []),
+    base44.asServiceRole.entities.AccountDailySpendController.filter(
+      { amazon_account_id: accountId, spend_date: clock.date }, '-updated_at', 1,
+    ).catch(() => []),
+    base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
+    base44.asServiceRole.entities.Product.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
+    base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: accountId }, null, 3000).catch(() => []),
+    base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: accountId }, null, 5000).catch(() => []),
+    base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
+      { amazon_account_id: accountId, spend_date: clock.date }, '-observed_at', 10000,
+    ).catch(() => []),
+    base44.asServiceRole.entities.CampaignMetricsDaily.filter(
+      { amazon_account_id: accountId }, '-date', 10000,
+    ).catch(() => []),
+  ]);
+
+  const performance = performanceRows[0] || {};
+  const config = configRows[0] || {};
+  if (performance?.pacing_enabled === false || performance?.intraday_pacing_enabled === false || config?.budget_optimization_enabled === false) {
+    return { ok: true, skipped: true, reason: 'Pacing de orçamento desabilitado', amazon_account_id: accountId };
+  }
+
+  const existingController = controllerRows[0] || {};
+  const capCalculation = calculateEffectiveCap({ performance, products, economics, metrics: closedMetrics, today: clock.date });
+  // O teto configurado pelo usuário nunca é sobrescrito: este valor é somente
+  // o teto operacional deste ciclo e é recalculado a partir de dados reais.
+  const dailyCap = capCalculation.cap;
+  const dailyCapSource = 'PerformanceSettings.daily_budget_limit+economic_pacing';
+  const controller = await upsertDailyController(base44, {
+    accountId,
+    marketplaceId: account?.marketplace_id || account?.marketplace || null,
+    date: clock.date,
+    cap: dailyCap,
+    capSource: dailyCapSource,
+    timezone: String(config?.marketplace_timezone || account?.timezone || 'America/Sao_Paulo'),
+    now: clock.iso,
+    dryRun,
+  });
+
+  if (controller?.global_kill_switch === true) {
+    return { ok: true, skipped: true, reason: 'Kill Switch global ativo', daily_cap: dailyCap };
+  }
+  if (!dryRun && controllerLockActive(controller, runId)) {
+    return { ok: true, skipped: true, reason: 'Outro ciclo de pacing está em execução', lock_until: controller.pacing_lock_until };
+  }
+  if (!dryRun && controller?.id) await acquireControllerLock(base44, controller, runId, clock.iso);
+
+  try {
+    const targetAcos = positive(performance?.target_acos, config?.target_acos, 15);
+    const curve = buildPacingCurve(patterns, clock.dayOfWeek);
+    const expectedPct = expectedFraction(curve.weights, clock.minuteOfDay);
+    const expectedSpend = r2(Math.max(2, dailyCap * expectedPct));
+    const intraday = readConfirmedTodaySpend({
+      snapshots,
+      dailyMetrics: closedMetrics,
+      spendDate: clock.date,
+      nowMs: Date.now(),
+    });
+    const closedDayDate = new Date(`${clock.date}T12:00:00-03:00`);
+    closedDayDate.setDate(closedDayDate.getDate() - 1);
+    const closedDate = closedDayDate.toISOString().slice(0, 10);
+    const historyStartDate = new Date(`${closedDate}T12:00:00-03:00`);
+    historyStartDate.setDate(historyStartDate.getDate() - 29);
+    const historyStart = historyStartDate.toISOString().slice(0, 10);
+    const historicalRows = closedMetrics.filter((row: any) =>
+      String(row.date || '') >= historyStart && String(row.date || '') <= closedDate
+    );
+    const historicalWindow = historicalRows.reduce((sum: any, row: any) => ({
+      spend: sum.spend + Number(row.spend || 0),
+      sales: sum.sales + Number(row.sales || 0),
+      orders: sum.orders + Number(row.orders || 0),
+    }), { spend: 0, sales: 0, orders: 0 });
+    const closedDayWindow = historicalRows.filter((row: any) => String(row.date || '') === closedDate)
+      .reduce((sum: any, row: any) => ({
+        spend: sum.spend + Number(row.spend || 0),
+        sales: sum.sales + Number(row.sales || 0),
+        orders: sum.orders + Number(row.orders || 0),
+      }), { spend: 0, sales: 0, orders: 0 });
+    const metricWindows = {
+      historical_30d_spend: r2(historicalWindow.spend),
+      historical_30d_sales: r2(historicalWindow.sales),
+      historical_30d_orders: historicalWindow.orders,
+      closed_day_date: closedDate,
+      closed_day_spend: r2(closedDayWindow.spend),
+      closed_day_sales: r2(closedDayWindow.sales),
+      closed_day_orders: closedDayWindow.orders,
+      metric_windows_version: 'v1-separated',
+    };
+    const profiles = buildCampaignProfiles(campaigns, products, economics, intraday.campaignRows, targetAcos);
+    const activeProfiles = profiles.filter((profile: any) =>
+      profile.active && profile.stock > 0 && profile.campaignId &&
+      String(profile.campaign?.campaign_type || 'SP').toUpperCase() === 'SP',
+    );
+    const temporaryPaused = profiles.filter((profile: any) =>
+      profile.paused && profile.temporaryPause && profile.stock > 0 && profile.campaignId,
+    );
+
+    const actions: any[] = [];
+    let actionsExecuted = 0;
+    const pausedIds = new Set<string>(parseArray(controller?.campaigns_paused_today).map(String));
+    const windowKey = `${clock.hour}-${Math.floor(clock.minute / 30)}`;
+
+    // Pausas de pacing nunca atravessam o dia sem tentativa de retomada.
+    const previousDayPaused = temporaryPaused
+      .filter((profile: any) => {
+        const date = String(profile.campaign?.pacing_pause_date || '');
+        return date && date < clock.date;
+      })
+      .sort((a: any, b: any) => b.priorityScore - a.priorityScore)
+      .slice(0, MAX_RESUMES);
+    for (const profile of previousDayPaused) {
+      const result = await setCampaignState(base44, {
+        accountId, profile, state: 'ENABLED', reason: 'PACING_NEW_DAY_AUTO_RESUME',
+        date: clock.date, now: clock.iso, dryRun, windowKey,
+      });
+      actions.push(result);
+      if (result.ok && !result.dry_run) {
+        actionsExecuted++;
+        pausedIds.delete(profile.campaignId);
+      }
+    }
+
+    // Sem gasto real do dia, o motor não usa Campaign.spend/current_spend como substituto.
+    if (!intraday.available) {
+      if (!dryRun && controller?.id) {
+        await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
+          confirmed_spend: intraday.confirmedSpend,
+          ...metricWindows,
+          estimated_pending_spend: intraday.estimatedPendingSpend,
+          projected_total_spend: intraday.estimatedCurrentSpend,
+          remaining_spend: r2(Math.max(0, dailyCap - intraday.estimatedCurrentSpend)),
+          spend_pacing: 'unknown',
+          intraday_metrics_status: intraday.status,
+          intraday_metric_source: intraday.source,
+          intraday_metrics_observed_at: intraday.capturedAt,
+          intraday_source: intraday.source,
+          intraday_captured_at: intraday.capturedAt,
+          intraday_freshness_seconds: intraday.freshnessSeconds,
+          data_confidence: intraday.confidence,
+          target_spend_by_now: expectedSpend,
+          pacing_error_value: r2(intraday.confirmedSpend - expectedSpend),
+          pacing_error_pct: expectedSpend > 0 ? r2((intraday.confirmedSpend - expectedSpend) / expectedSpend * 100) : 0,
+          pacing_engine_version: 'v2-confirmed-today',
+          expected_spend_by_now: expectedSpend,
+          expected_spend_pct: r2(expectedPct * 100),
+          pacing_curve: JSON.stringify(curve.curve),
+          pacing_curve_source: curve.source,
+          campaigns_paused_today: [...pausedIds],
+          last_pacing_action_summary: JSON.stringify({ actions, blocked: 'intraday_metrics_unavailable' }).slice(0, 4000),
+          last_pacing_check_at: clock.iso,
+          updated_at: clock.iso,
+        }).catch(() => {});
+      }
+      return {
+        ok: true,
+        skipped: true,
+        reason: intraday.status === 'stale'
+          ? 'Métricas intradiárias antigas; escritas Amazon bloqueadas'
+          : 'Sem métricas intradiárias reais; escritas Amazon bloqueadas',
+        amazon_account_id: accountId,
+        daily_cap: dailyCap,
+        daily_cap_source: dailyCapSource,
+        metrics_status: intraday.status,
+        metrics_observed_at: intraday.capturedAt,
+        expected_spend_by_now: expectedSpend,
+        actions_executed: actionsExecuted,
+        actions,
+        duration_ms: Date.now() - startedAt,
+      };
+    }
+
+    const estimatedSpend = intraday.estimatedCurrentSpend;
+    const elapsedHours = Math.max(0.5, clock.hour + clock.minute / 60);
+    const velocity = intraday.velocityPerHour || estimatedSpend / elapsedHours;
+    const projectedEod = r2(estimatedSpend + velocity * Math.max(0, 24 - elapsedHours));
+    const safetyBuffer = r2(Math.max(dailyCap * 0.03, intraday.estimatedPendingSpend, 2));
+    const effectiveCap = r2(Math.max(0, dailyCap - safetyBuffer));
+    const pacingRatio = expectedSpend > 0 ? estimatedSpend / expectedSpend : 1;
+    const classification = pacingClassification(pacingRatio, estimatedSpend, effectiveCap, projectedEod, dailyCap);
+    const remaining = r2(Math.max(0, dailyCap - estimatedSpend));
+    const nextCheckpointMinute = Math.min(24 * 60, (Math.floor(clock.minuteOfDay / 30) + 1) * 30);
+    const nextCheckpointSpend = r2(dailyCap * expectedFraction(curve.weights, nextCheckpointMinute));
+    const pacingError = r2(estimatedSpend - expectedSpend);
+    const pacingErrorPct = expectedSpend > 0 ? r2(pacingError / expectedSpend * 100) : 0;
+    const reservedForStrongHours = r2(dailyCap * curve.weights.slice(clock.hour + 1)
+      .filter((weight) => weight >= Math.max(...curve.weights) * 0.75)
+      .reduce((sum, weight) => sum + weight, 0));
+    const currentHourWeight = curve.weights[clock.hour] || 0;
+    const futureMaxWeight = Math.max(0, ...curve.weights.slice(clock.hour + 1));
+    const currentWindowStrong = currentHourWeight >= Math.max(...curve.weights) * 0.75;
+    const futureStrongerWindow = futureMaxWeight > currentHourWeight * 1.20;
+
+    if (classification === 'underpacing' && remaining > Math.max(5, dailyCap * 0.10)) {
+      const resumeCandidates = temporaryPaused
+        .filter((profile: any) => !previousDayPaused.includes(profile))
+        .sort((a: any, b: any) => b.priorityScore - a.priorityScore)
+        .slice(0, MAX_RESUMES);
+      for (const profile of resumeCandidates) {
+        const result = await setCampaignState(base44, {
+          accountId, profile, state: 'ENABLED', reason: 'PACING_UNDERSPEND_RESUME',
+          date: clock.date, now: clock.iso, dryRun, windowKey,
+        });
+        actions.push(result);
+        if (result.ok && !result.dry_run) {
+          actionsExecuted++;
+          pausedIds.delete(profile.campaignId);
+        }
+      }
+    }
+
+    const hardCap = classification === 'critical_overpacing';
+    const overpacing = classification === 'overpacing' || hardCap;
+    if (hardCap) {
+      // AUTO Ã© a campanha de descoberta/continuidade por SKU. Pacing jamais a
+      // pausa por desempenho: termos ruins sÃ£o tratados por bid/negativa exata.
+      const normalCandidates = activeProfiles
+        .filter((profile: any) => !profile.protected && String(profile.campaign?.targeting_type || '').toUpperCase() !== 'AUTO')
+        .sort((a: any, b: any) => b.wasteScore - a.wasteScore || b.todaySpend - a.todaySpend);
+      const candidates = normalCandidates;
+      const limit = MAX_HARD_CAP_PAUSES;
+      const reasonCode = 'PACING_CRITICAL_OVERPACING_TEMP_STOP';
+      const activeByAsin = new Map<string, number>();
+      activeProfiles.forEach((profile: any) => activeByAsin.set(profile.asin, (activeByAsin.get(profile.asin) || 0) + 1));
+      let selected = 0;
+      for (const profile of candidates) {
+        if (selected >= limit) break;
+        const countForAsin = activeByAsin.get(profile.asin) || 0;
+        if (countForAsin <= 1 || profile.protected) continue;
+        const reason = `${reasonCode}: pacing ${r2(pacingRatio)}x, gasto estimado R$ ${estimatedSpend.toFixed(2)}, ` +
+          `esperado R$ ${expectedSpend.toFixed(2)}, projeção R$ ${projectedEod.toFixed(2)}, teto R$ ${dailyCap.toFixed(2)}`;
+        const result = await setCampaignState(base44, {
+          accountId, profile, state: 'PAUSED', reason, date: clock.date, now: clock.iso, dryRun,
+          resumeAfter: hardCap ? nextDayAt(0) : new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+          windowKey,
+        });
+        actions.push(result);
+        if (result.ok) {
+          selected++;
+          if (!result.dry_run) {
+            actionsExecuted++;
+            pausedIds.add(profile.campaignId);
+            activeByAsin.set(profile.asin, Math.max(0, countForAsin - 1));
+          }
+        }
+      }
+    }
+
+    // Bids continuam no motor canônico de dayparting; este retorno limita o escopo.
+    let bidIncreasePct = 0;
+    if (classification === 'underpacing' && !futureStrongerWindow) {
+      bidIncreasePct = pacingRatio < 0.60 ? 15 : pacingRatio < 0.75 ? 10 : 5;
+    }
+    bidIncreasePct = Math.min(
+      bidIncreasePct,
+      clamp(positive(performance?.max_bid_increase_pct, config?.max_bid_increase_pct, 15), 0, 20),
+    );
+    const bidScope = (classification === 'underpacing'
+      ? activeProfiles.filter((profile: any) => profile.protected && !profile.economicRisk)
+        .sort((a: any, b: any) => b.priorityScore - a.priorityScore)
+      : overpacing
+        ? activeProfiles.filter((profile: any) => !profile.protected && profile.todaySpend > 0)
+          .sort((a: any, b: any) => b.wasteScore - a.wasteScore)
+        : activeProfiles.filter((profile: any) => profile.protected && currentWindowStrong)
+          .sort((a: any, b: any) => b.priorityScore - a.priorityScore)
+    ).slice(0, 20);
+    const eligibleAsins = [...new Set(bidScope.map((profile: any) => profile.asin).filter(Boolean))];
+    const allowBidActions = !hardCap && eligibleAsins.length > 0 &&
+      (classification !== 'underpacing' || bidIncreasePct > 0);
+    const status = capStatus(dailyCap > 0 ? estimatedSpend / dailyCap : 0);
+    const summary = {
+      classification, daily_cap: dailyCap, cap_calculation: capCalculation, confirmed_spend: intraday.confirmedSpend,
+      metric_windows: metricWindows,
+      estimated_pending_spend: intraday.estimatedPendingSpend, estimated_current_spend: estimatedSpend,
+      expected_spend_by_now: expectedSpend, projected_eod: projectedEod, pacing_ratio: r2(pacingRatio),
+      actions, bid_scope_asins: eligibleAsins, bid_increase_pct: bidIncreasePct,
+    };
+
+    if (!dryRun && controller?.id) {
+      await base44.asServiceRole.entities.AccountDailySpendController.update(controller.id, {
+        user_daily_spend_cap: controller.user_daily_spend_cap || dailyCap,
+        effective_daily_spend_cap: dailyCap,
+        ads_resource_share_cap_pct: capCalculation.resourceSharePct,
+        ads_resource_basis: capCalculation.basis,
+        resource_cap: capCalculation.resourceCap,
+        economic_daily_spend_cap: capCalculation.economicCap,
+        pacing_daily_target: dailyCap,
+        protected_future_hours_budget: reservedForStrongHours,
+        intraday_pacing_enabled: performance?.intraday_pacing_enabled !== false,
+        min_intraday_data_confidence: performance?.min_intraday_data_confidence || 'medium',
+        cap_calculation_source: capCalculation.basis,
+        cap_calculation_period_days: capCalculation.validSalesDays,
+        cap_calculation_confidence: capCalculation.confidence,
+        daily_cap_source: dailyCapSource,
+        confirmed_spend: intraday.confirmedSpend,
+        ...metricWindows,
+        estimated_pending_spend: intraday.estimatedPendingSpend,
+        projected_total_spend: estimatedSpend,
+        projected_end_of_day_spend: projectedEod,
+        remaining_spend: remaining,
+        cap_status: status,
+      spend_pacing: classification === 'critical_overpacing' ? 'overpacing' : classification,
+        pacing_ratio: r2(pacingRatio),
+        current_hour_brt: clock.hour,
+        expected_spend_by_now: expectedSpend,
+        expected_spend_pct: r2(expectedPct * 100),
+        spend_velocity_per_hour: r2(velocity),
+        time_to_cap_hours: velocity > 0 ? r2(Math.max(0, effectiveCap - estimatedSpend) / velocity) : 99,
+        safety_buffer: safetyBuffer,
+        hard_cap_triggered: hardCap,
+        intraday_metrics_status: intraday.status,
+        intraday_metric_source: intraday.source,
+        intraday_metrics_observed_at: intraday.capturedAt,
+        intraday_source: intraday.source,
+        intraday_captured_at: intraday.capturedAt,
+        intraday_freshness_seconds: intraday.freshnessSeconds,
+        data_confidence: intraday.confidence,
+        target_spend_by_now: expectedSpend,
+        target_spend_next_checkpoint: nextCheckpointSpend,
+        pacing_error_value: pacingError,
+        pacing_error_pct: pacingErrorPct,
+        reserved_for_strong_hours: reservedForStrongHours,
+        spend_available_now: r2(Math.max(0, nextCheckpointSpend - estimatedSpend)),
+        max_spend_until_next_checkpoint: r2(Math.max(0, nextCheckpointSpend - estimatedSpend - safetyBuffer)),
+        projected_overspend: r2(Math.max(0, projectedEod - dailyCap)),
+        projected_underspend: r2(Math.max(0, dailyCap - projectedEod)),
+        last_rebalance_at: actionsExecuted > 0 ? clock.iso : controller.last_rebalance_at || null,
+        next_rebalance_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        pacing_engine_version: 'v2-confirmed-today',
+        pacing_curve: JSON.stringify(curve.curve),
+        pacing_curve_source: curve.source,
+        hour_value_scores: JSON.stringify(Object.fromEntries(curve.weights.map((weight, hour) => [hour, r2(weight * 100)]))),
+        campaigns_paused_today: [...pausedIds],
+        campaigns_paused_count: pausedIds.size,
+        last_pacing_action_summary: JSON.stringify(summary).slice(0, 4000),
+        last_pacing_check_at: clock.iso,
+        last_action_at: actionsExecuted > 0 ? clock.iso : controller.last_action_at || null,
+        updated_at: clock.iso,
+      }).catch(() => {});
+    }
+
+    if (!dryRun) await writePacingAudit(base44, {
+      accountId,
+      decisionType: 'portfolio_daily_budget_pacing',
+      entityType: 'account',
+      campaignId: 'account',
+      action: classification,
+      before: intraday.confirmedSpend,
+      after: estimatedSpend,
+      reason: `Pacing ${classification}: estimado R$ ${estimatedSpend.toFixed(2)}, esperado R$ ${expectedSpend.toFixed(2)}, ` +
+        `projeção R$ ${projectedEod.toFixed(2)}, teto R$ ${dailyCap.toFixed(2)} (${dailyCapSource}).`,
+      risk: hardCap ? 'high' : overpacing ? 'medium' : 'low',
+      idempotencyKey: `${accountId}|portfolio_pacing_summary|${clock.date}|${clock.hour}|${Math.floor(clock.minute / 30)}`,
+      status: 'executed',
+      now: clock.iso,
+    });
+
+    return {
+      ok: true,
+      dry_run: dryRun,
+      engine: 'portfolio-daily-budget-pacing-v1',
+      amazon_account_id: accountId,
+      date_brt: clock.date,
+      hour_brt: clock.hour,
+      daily_cap: dailyCap, cap_calculation: capCalculation,
+      daily_cap_source: dailyCapSource,
+      confirmed_spend: intraday.confirmedSpend,
+      metric_windows: {
+        historical_30d: { start_date: historyStart, end_date: closedDate, spend: metricWindows.historical_30d_spend, sales: metricWindows.historical_30d_sales, orders: metricWindows.historical_30d_orders },
+        closed_day: { date: closedDate, spend: metricWindows.closed_day_spend, sales: metricWindows.closed_day_sales, orders: metricWindows.closed_day_orders },
+        intraday_confirmed: { date: clock.date, spend: intraday.confirmedSpend, observed_at: intraday.capturedAt, source: intraday.source },
+      },
+      estimated_pending_spend: intraday.estimatedPendingSpend,
+      estimated_current_spend: estimatedSpend,
+      remaining_spend: remaining,
+      expected_spend_by_now: expectedSpend,
+      expected_spend_pct: r2(expectedPct * 100),
+      projected_eod: projectedEod,
+      pacing_ratio: r2(pacingRatio),
+      spend_pacing: classification,
+      cap_status: status,
+      metrics_source: intraday.source,
+      metrics_observed_at: intraday.capturedAt,
+      metrics_age_minutes: intraday.ageMinutes,
+      pacing_curve_source: curve.source,
+      learned_hours: curve.matureHours,
+      actions_proposed: actions.length,
+      actions_executed: actionsExecuted,
+      actions,
+      allow_bid_actions: allowBidActions,
+      eligible_asins_for_bid_adjustment: eligibleAsins,
+      bid_increase_pct: bidIncreasePct,
+      bid_multiplier_override: bidIncreasePct > 0 ? r2(1 + bidIncreasePct / 100) : null,
+      current_window_strong: currentWindowStrong,
+      future_stronger_window: futureStrongerWindow,
+      duration_ms: Date.now() - startedAt,
+    };
+  } finally {
+    if (!dryRun && controller?.id) await releaseControllerLock(base44, controller);
+  }
+}

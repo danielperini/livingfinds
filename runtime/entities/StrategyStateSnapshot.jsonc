@@ -1,0 +1,70 @@
+{
+  "name": "StrategyStateSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "strategy_session_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "campaigns_snapshot": {
+      "type": "string",
+      "description": "JSON: campanhas, status, budgets, bids, placements, bidding_strategy"
+    },
+    "keywords_snapshot": {
+      "type": "string",
+      "description": "JSON: keywords, match_types, bids, estados"
+    },
+    "targets_snapshot": {
+      "type": "string",
+      "description": "JSON: product targets e negativas"
+    },
+    "performance_settings_snapshot": {
+      "type": "string",
+      "description": "JSON: ACoS alvo, ROAS, bids min/max, limites"
+    },
+    "autopilot_config_snapshot": {
+      "type": "string",
+      "description": "JSON: configura\u00e7\u00f5es do Autopilot"
+    },
+    "maturity_snapshot": {
+      "type": "string",
+      "description": "JSON: est\u00e1gios de matura\u00e7\u00e3o das campanhas"
+    },
+    "economic_snapshot": {
+      "type": "string",
+      "description": "JSON: safe_max_cpc, break_even_acos, margem"
+    },
+    "snapshot_valid": {
+      "type": "boolean",
+      "default": false
+    },
+    "snapshot_campaigns_count": {
+      "type": "number",
+      "default": 0
+    },
+    "snapshot_keywords_count": {
+      "type": "number",
+      "default": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "mode"
+  ]
+}

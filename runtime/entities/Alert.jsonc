@@ -1,0 +1,205 @@
+{
+  "name": "Alert",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "alert_type": {
+      "type": "string",
+      "enum": [
+        "high_acos",
+        "low_roas",
+        "budget_exhausted",
+        "no_impressions",
+        "out_of_stock",
+        "low_stock",
+        "critical_stock",
+        "token_expired",
+        "high_cpc",
+        "campaign_paused",
+        "rate_limit",
+        "sync_error",
+        "no_sales",
+        "spend_overpacing",
+        "daily_cap_reached",
+        "inventory_data_stale",
+        "bid_above_limit",
+        "competitor_brand_keyword_pending"
+      ]
+    },
+    "alert_family": {
+      "type": "string",
+      "enum": [
+        "inventory",
+        "performance",
+        "budget",
+        "token",
+        "sync",
+        "keyword",
+        "campaign"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "default": "medium"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "active",
+        "acknowledged",
+        "resolved",
+        "suppressed",
+        "stale"
+      ],
+      "default": "active"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "account",
+        "campaign",
+        "ad_group",
+        "keyword",
+        "product",
+        "product_target"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "term": {
+      "type": "string"
+    },
+    "normalized_term": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "details": {
+      "type": "string"
+    },
+    "metric_name": {
+      "type": "string"
+    },
+    "metric_value": {
+      "type": "number"
+    },
+    "threshold_value": {
+      "type": "number"
+    },
+    "comparison": {
+      "type": "string"
+    },
+    "data_window": {
+      "type": "string"
+    },
+    "data_source": {
+      "type": "string"
+    },
+    "data_freshness": {
+      "type": "string",
+      "enum": [
+        "fresh",
+        "stale",
+        "unknown"
+      ]
+    },
+    "deduplication_key": {
+      "type": "string"
+    },
+    "occurrence_count": {
+      "type": "number",
+      "default": 1
+    },
+    "first_detected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_detected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_notified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cooldown_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resolved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resolution_reason": {
+      "type": "string"
+    },
+    "acknowledged_by": {
+      "type": "string"
+    },
+    "acknowledged_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resolved_by": {
+      "type": "string"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "alert_type",
+    "title",
+    "message"
+  ]
+}

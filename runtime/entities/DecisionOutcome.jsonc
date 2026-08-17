@@ -1,0 +1,153 @@
+{
+  "name": "DecisionOutcome",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "execution_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "keyword",
+        "campaign",
+        "ad_group",
+        "search_term",
+        "product"
+      ]
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "target_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "decision_type": {
+      "type": "string"
+    },
+    "metric_trigger": {
+      "type": "string"
+    },
+    "old_value": {
+      "type": "number"
+    },
+    "new_value": {
+      "type": "number"
+    },
+    "expected_impact": {
+      "type": "string"
+    },
+    "expected_metric": {
+      "type": "string"
+    },
+    "expected_direction": {
+      "type": "string"
+    },
+    "confidence_before": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence_after": {
+      "type": "number",
+      "default": 0
+    },
+    "decision_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_due_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_window_hours": {
+      "type": "number",
+      "default": 168
+    },
+    "before_period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "before_period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "after_period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "after_period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "before_metrics_json": {
+      "type": "string"
+    },
+    "after_metrics_json": {
+      "type": "string"
+    },
+    "result_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "positive",
+        "neutral",
+        "negative",
+        "insufficient_data"
+      ],
+      "default": "pending"
+    },
+    "impact_score": {
+      "type": "number",
+      "default": 0
+    },
+    "success": {
+      "type": "boolean",
+      "default": false
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "decision_type"
+  ]
+}

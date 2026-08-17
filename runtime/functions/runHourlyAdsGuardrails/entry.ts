@@ -1,0 +1,399 @@
+/**
+ * runHourlyAdsGuardrails — Proteções operacionais executadas a cada hora.
+ *
+ * O que verifica:
+ *  - estoque zero → pausar campanha
+ *  - gasto anormal (> 200% do ritmo esperado) → alerta
+ *  - orçamento próximo do limite global → alerta
+ *  - orçamento esgotado antes do horário forte → alerta
+ *  - runs travados > 60 min → liberar
+ *  - sync travado > 30 min → liberar
+ *  - confirmar ações Amazon ainda não verificadas
+ *
+ * O que NÃO faz:
+ *  - recalcular estratégia completa
+ *  - aumentar bids
+ *  - negativar termos
+ *  - criar campanhas
+ */
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+// Guardrails são 100% locais — sem chamadas de API externa aqui.
+// Token e profiles são validados apenas no pipeline diário.
+
+Deno.serve(async (req) => {
+  const startTime = Date.now();
+  const base44 = createClientFromRequest(req);
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  // Hora em BRT (UTC-3) para cálculos de pacing diário
+  const brtHour = ((nowDate.getUTCHours() - 3 + 24) % 24);
+  // Data em BRT para o campo "today"
+  const brtDate = new Date(nowDate.getTime() - 3 * 3600000);
+  const today = brtDate.toISOString().slice(0, 10);
+  const currentHour = brtHour;
+
+  try {
+    const body = await req.json().catch(() => ({}));
+
+    // Resolver conta
+    let account = null;
+    const amazonAccountId = body.amazon_account_id;
+    if (amazonAccountId) {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ id: amazonAccountId });
+      account = accs[0] || null;
+    } else {
+      const accs = await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-created_date', 1);
+      account = accs[0] || null;
+    }
+    if (!account) return Response.json({ ok: true, skipped: true, reason: 'Nenhuma conta conectada' });
+
+    const aid = account.id;
+    const currencySymbol = account.currency_symbol || 'R$';
+
+    // Buscar configuração
+    const configs = await base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: aid });
+    const cfg = configs[0] || {};
+    if (cfg.enabled === false) return Response.json({ ok: true, skipped: true, reason: 'Autopilot desabilitado' });
+
+    // Limite diário global: prioridade AutopilotConfig > AmazonAccount.max_daily_budget_limit
+    const globalBudgetLimit = cfg.total_daily_budget || cfg.daily_budget_limit || account.max_daily_budget_limit || 0;
+    const actions = [];
+    const alerts = [];
+
+    // ── 0. TOKEN HEALTH CHECK ──────────────────────────────────────────────
+    // Verificar status do token ANTES dos guardrails operacionais
+    try {
+      const tokenStatus = account.ads_token_status || 'missing';
+      const expiresAt   = account.ads_access_token_expires_at
+        ? new Date(account.ads_access_token_expires_at).getTime()
+        : 0;
+      const remainingMs = expiresAt - Date.now();
+      const CRITICAL_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutos
+
+      const tokenCritical = (
+        tokenStatus === 'expired' ||
+        tokenStatus === 'revoked' ||
+        tokenStatus === 'missing' ||
+        tokenStatus === 'error' ||
+        !account.ads_access_token ||
+        remainingMs <= CRITICAL_THRESHOLD_MS
+      );
+
+      if (tokenCritical) {
+        // Tentar auto-renovação via watchdog
+        const refreshRes = await base44.asServiceRole.functions.invoke('refreshAmazonAdsTokenDailyOrHourly', {
+          _service_role: true,
+        }).catch((e: any) => ({ data: { ok: false, error: e.message } }));
+
+        const refreshData = refreshRes?.data || {};
+        const accountResult = refreshData?.results?.find((r: any) => r.account_id === aid);
+        const renewalOk = refreshData?.ok === true || accountResult?.ok === true;
+
+        if (!renewalOk) {
+          // Renovação falhou — criar alerta de token expirado (idempotente)
+          const existingTokenAlert = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            alert_type: 'token_expired',
+            status: 'active',
+          }, '-created_at', 1).catch(() => []);
+
+          if (existingTokenAlert.length === 0) {
+            await base44.asServiceRole.entities.Alert.create({
+              amazon_account_id: aid,
+              alert_type: 'token_expired',
+              severity: 'critical',
+              title: 'Token Amazon Ads expirado',
+              message: 'Token Amazon Ads expirado ou revogado. Acesse /amazon-oauth-setup para reconectar.',
+              entity_type: 'account',
+              status: 'active',
+              created_at: now,
+            }).catch(() => {});
+          }
+
+          // Marcar requires_reauth apenas se for revogação real
+          const requiresReauth = accountResult?.requires_reauthorization === true ||
+            tokenStatus === 'revoked' || tokenStatus === 'credentials_error';
+          if (requiresReauth) {
+            await base44.asServiceRole.entities.AmazonAccount.update(aid, {
+              ads_requires_reauth: true,
+              ads_token_status: 'revoked',
+              status: 'error',
+              error_message: 'Reautorização necessária. Acesse /amazon-oauth-setup.',
+            }).catch(() => {});
+          }
+
+          actions.push({ type: 'token_alert_created', token_status: tokenStatus, renewal_attempted: true, renewal_ok: false });
+        } else {
+          // Renovação bem-sucedida — limpar alertas de token
+          const tokenAlerts = await base44.asServiceRole.entities.Alert.filter({
+            amazon_account_id: aid,
+            status: 'active',
+          }, '-created_at', 10).catch(() => []);
+          for (const a of tokenAlerts) {
+            if (a.alert_type === 'token_expired' || a.alert_type === 'token_revoked') {
+              await base44.asServiceRole.entities.Alert.update(a.id, {
+                status: 'resolved',
+                resolved_at: now,
+              }).catch(() => {});
+            }
+          }
+          actions.push({ type: 'token_renewed', token_status: tokenStatus });
+        }
+      }
+    } catch { /* guardrail de token nunca bloqueia o restante */ }
+
+    // ── 1. Liberar locks travados ──────────────────────────────────────────
+    const stuckRuns = await base44.asServiceRole.entities.AutopilotRun.filter(
+      { amazon_account_id: aid, status: 'running' }, '-started_at', 5
+    );
+    for (const r of stuckRuns) {
+      const ageMin = (Date.now() - new Date(r.started_at).getTime()) / 60000;
+      if (ageMin > 60) {
+        await base44.asServiceRole.entities.AutopilotRun.update(r.id, {
+          status: 'failed',
+          completed_at: now,
+          error_message: `Hourly guardrail: lock liberado após ${Math.round(ageMin)} min`,
+        });
+        actions.push({ type: 'unlock_run', run_id: r.id, age_minutes: Math.round(ageMin) });
+      }
+    }
+
+    const stuckSyncs = await base44.asServiceRole.entities.SyncExecutionLog.filter(
+      { amazon_account_id: aid, status: 'started' }, '-started_at', 5
+    );
+    for (const s of stuckSyncs) {
+      const ageMin = (Date.now() - new Date(s.started_at).getTime()) / 60000;
+      if (ageMin > 30) {
+        await base44.asServiceRole.entities.SyncExecutionLog.update(s.id, {
+          status: 'error',
+          completed_at: now,
+          error_message: `Hourly guardrail: sync lock liberado após ${Math.round(ageMin)} min`,
+        });
+        actions.push({ type: 'unlock_sync', sync_id: s.id, age_minutes: Math.round(ageMin) });
+      }
+    }
+
+    // ── 2. Estoque zero → pausar ───────────────────────────────────────────
+    if (cfg.auto_pause_zero_stock !== false) {
+      const activeCampaigns = await base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: aid, state: 'enabled' }, null, 500
+      );
+      const products = await base44.asServiceRole.entities.Product.filter(
+        { amazon_account_id: aid, inventory_status: 'out_of_stock' }, null, 200
+      );
+      const oosByAsin = new Set(products.map(p => p.asin).filter(Boolean));
+
+      for (const c of activeCampaigns) {
+        if (!c.asin || !oosByAsin.has(c.asin)) continue;
+        // Respeitar flag ads_protected: só pausar se realmente sem estoque
+        if ((c as any).ads_protected === true) continue;
+
+        // Verificar se já existe decisão de pausa pendente/executada hoje
+        const existingPause = await base44.asServiceRole.entities.OptimizationDecision.filter({
+          amazon_account_id: aid,
+          campaign_id: c.campaign_id,
+          action: 'pause_campaign',
+          status: 'approved',
+        }, '-created_at', 1);
+        if (existingPause.length > 0) continue;
+
+        // Criar decisão de pausa de alta prioridade
+        await base44.asServiceRole.entities.OptimizationDecision.create({
+          amazon_account_id: aid,
+          decision_type: 'pause',
+          entity_type: 'campaign',
+          entity_id: c.campaign_id,
+          campaign_id: c.campaign_id,
+          asin: c.asin,
+          action: 'pause_campaign',
+          rationale: `GUARDRAIL HORÁRIO: Produto ${c.asin} com estoque zero. Pausar imediatamente para evitar gasto desnecessário.`,
+          data_used: `inventory_status=out_of_stock, detected_at=${now}`,
+          risk: 'low',
+          requires_approval: false,
+          status: 'approved',
+          confidence: 95,
+          country_code: account.country_code || 'BR',
+          currency_code: account.currency_code || 'BRL',
+          currency_symbol: currencySymbol,
+          idempotency_key: `${aid}|guardrail_pause|${c.campaign_id}|${today}`,
+          source_function: 'runHourlyAdsGuardrails',
+          created_at: now,
+          evaluation_due_at: null,
+        });
+        actions.push({ type: 'pause_oos_campaign', campaign_id: c.campaign_id, asin: c.asin });
+      }
+    }
+
+    // ── 3. Gasto anormal ───────────────────────────────────────────────────
+    // Ritmo esperado: (hora atual + 1) / 24 * budget diário
+    // Se gasto > 200% do ritmo esperado → alerta crítico
+    if (globalBudgetLimit > 0) {
+      const totalSpentToday = await base44.asServiceRole.entities.Campaign.filter(
+        { amazon_account_id: aid }, null, 500
+      );
+      // Usar apenas current_spend (gasto do dia corrente na Amazon).
+      // O campo `spend` é acumulado histórico (30d) e NÃO representa o gasto de hoje.
+      const totalSpend = totalSpentToday.reduce((s, c) => s + (c.current_spend || 0), 0);
+      const expectedRatio = (currentHour + 1) / 24;
+      const expectedSpend = globalBudgetLimit * expectedRatio;
+
+      if (totalSpend > expectedSpend * 2.0 && totalSpend > 10) {
+        // Verificar se já existe alerta de gasto anormal hoje
+        const existingAlert = await base44.asServiceRole.entities.Alert.filter({
+          amazon_account_id: aid,
+          alert_type: 'rate_limit',
+          status: 'active',
+        }, '-created_at', 1);
+
+        if (existingAlert.length === 0) {
+          await base44.asServiceRole.entities.Alert.create({
+            amazon_account_id: aid,
+            alert_type: 'rate_limit',
+            severity: 'critical',
+            title: 'Gasto anormal detectado',
+            message: `Gasto acumulado ${currencySymbol}${totalSpend.toFixed(2)} é ${((totalSpend / expectedSpend - 1) * 100).toFixed(0)}% acima do esperado para as ${currentHour}h. Limite global: ${currencySymbol}${globalBudgetLimit.toFixed(2)}/dia.`,
+            entity_type: 'account',
+            status: 'active',
+            current_value: totalSpend,
+            threshold_value: expectedSpend,
+            created_at: now,
+          });
+          alerts.push({ type: 'abnormal_spend', spend: totalSpend, expected: expectedSpend });
+        }
+      }
+
+      // Orçamento esgotado antes das 18h (horário local relevante)
+      // Horas fortes típicas: 18-22 BRT — já usa brtHour
+      const isBrazilPeakAhead = brtHour < 18; // BRT — ainda não chegou no pico
+      if (isBrazilPeakAhead && totalSpend > globalBudgetLimit * 0.90) {
+        await base44.asServiceRole.entities.Alert.create({
+          amazon_account_id: aid,
+          alert_type: 'budget_exhausted',
+          severity: 'high',
+          title: 'Orçamento próximo do limite antes do horário forte',
+          message: `${currencySymbol}${totalSpend.toFixed(2)} de ${currencySymbol}${globalBudgetLimit.toFixed(2)} gastos. Horário forte (18h–22h BRT) ainda não começou.`,
+          entity_type: 'account',
+          status: 'active',
+          current_value: totalSpend,
+          threshold_value: globalBudgetLimit,
+          created_at: now,
+        }).catch(() => {}); // silenciar se já existe
+        alerts.push({ type: 'budget_exhausted_before_peak', spend: totalSpend });
+      }
+    }
+
+    // ── 4. Despachar ações de bid programadas da janela atual ─────────────
+    // Invoca runScheduledBidAdjustments se há ações de dayparting para esta hora
+    try {
+      const windowEnd = new Date(Date.now() + 35 * 60 * 1000).toISOString();
+      const DAYPART_OPS = ['daypart_bid_increase', 'daypart_bid_decrease', 'daypart_bid_restore', 'keyword_bid_update', 'keyword_bid_restore'];
+      const pendingBids = await base44.asServiceRole.entities.AmazonActionQueue.filter(
+        { amazon_account_id: aid, status: 'approved' }, 'scheduled_at', 10
+      );
+      const hasDueActions = pendingBids.some((a: any) =>
+        DAYPART_OPS.includes(a.operation) && a.scheduled_at && a.scheduled_at <= windowEnd
+      );
+      if (hasDueActions) {
+        await base44.asServiceRole.functions.invoke('runScheduledBidAdjustments', { amazon_account_id: aid })
+          .catch((e: any) => actions.push({ type: 'scheduled_bid_dispatch_error', error: e.message }));
+        actions.push({ type: 'scheduled_bid_dispatch', hour: currentHour });
+      }
+    } catch {}
+
+    // ── 5. Budget Kill Switch & Pacing Cycle + Trava de limite por campanha ──
+    // Kill Switch: verifica se gasto atingiu Hard Cap (global)
+    try {
+      const killSwitchRes = await base44.asServiceRole.functions.invoke('runBudgetKillSwitch', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (killSwitchRes?.data?.kill_switch_activated) {
+        actions.push({ type: 'kill_switch_activated', campaigns_paused: killSwitchRes.data.campaigns_paused });
+      }
+    } catch {}
+
+    // Trava de limite por campanha + cap global com dados em tempo real
+    try {
+      const spendEnforceRes = await base44.asServiceRole.functions.invoke('enforceCampaignSpendLimits', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      const d = spendEnforceRes?.data;
+      if (d && (d.paused_by_campaign_limit > 0 || d.paused_by_global_limit > 0)) {
+        actions.push({
+          type: 'spend_limit_enforced',
+          paused_by_campaign_limit: d.paused_by_campaign_limit,
+          paused_by_global_limit: d.paused_by_global_limit,
+          global_cap_triggered: d.global_cap_triggered,
+        });
+      }
+    } catch {}
+
+    // Pacing Cycle: executa ajustes de underpacing/overpacing/daypart reserve
+    try {
+      const pacingRes = await base44.asServiceRole.functions.invoke('runIntraDayPacingCycle', {
+        amazon_account_id: aid,
+      }).catch(() => null);
+      if (pacingRes?.data?.actions_executed > 0) {
+        actions.push({ type: 'pacing_cycle', actions_executed: pacingRes.data.actions_executed, spend_pacing: pacingRes.data.spend_pacing });
+      }
+    } catch {}
+
+    // ── 6. Resolver alertas budget_exhausted com dados claramente históricos ─
+    try {
+      const activebudgetAlerts = await base44.asServiceRole.entities.Alert.filter({
+        amazon_account_id: aid,
+        alert_type: 'budget_exhausted',
+        status: 'active',
+      }, '-created_at', 20).catch(() => [] as any[]);
+
+      const staleThreshold48h = new Date(Date.now() - 48 * 3600000).toISOString();
+
+      for (const a of activebudgetAlerts) {
+        const currentVal = Number(a.current_value || 0);
+        const thresholdVal = Number(a.threshold_value || 0);
+        const isHistoricalData = thresholdVal > 0 && currentVal > thresholdVal * 3;
+        const isStale = a.created_at && a.created_at < staleThreshold48h;
+
+        if (isHistoricalData || isStale) {
+          await base44.asServiceRole.entities.Alert.update(a.id, {
+            status: 'resolved',
+            resolved_at: now,
+            resolution_reason: isHistoricalData
+              ? `false_positive_historical_data: current_value (${currentVal}) > threshold × 3 (${thresholdVal * 3})`
+              : 'auto_resolved_stale: alert active > 48h',
+          }).catch(() => {});
+          actions.push({ type: 'resolved_false_positive_budget_alert', alert_id: a.id, reason: isHistoricalData ? 'historical_data' : 'stale_48h' });
+        }
+      }
+    } catch {}
+
+    // ── 8. Ações Amazon não confirmadas ───────────────────────────────────
+    // Decisões executadas mas sem amazon_response válido nas últimas 4h
+    const unconfirmedCutoff = new Date(Date.now() - 4 * 3600000).toISOString();
+    const unconfirmed = await base44.asServiceRole.entities.OptimizationDecision.filter(
+      { amazon_account_id: aid, status: 'executing' }, '-executed_at', 20
+    );
+    for (const d of unconfirmed) {
+      if (d.executed_at && d.executed_at < unconfirmedCutoff) {
+        // Marcar como failed para reprocessamento
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          status: 'failed',
+          error_message: 'Timeout: sem confirmação Amazon após 4h',
+        });
+        actions.push({ type: 'timeout_executing_decision', decision_id: d.id });
+      }
+    }
+
+    return Response.json({
+      ok: true,
+      hour: currentHour,
+      actions_taken: actions.length,
+      alerts_generated: alerts.length,
+      actions,
+      alerts,
+      duration_ms: Date.now() - startTime,
+    });
+
+  } catch (error) {
+    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  }
+});

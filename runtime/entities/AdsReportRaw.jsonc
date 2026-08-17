@@ -1,0 +1,49 @@
+{
+  "name": "AdsReportRaw",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "report_type": {
+      "type": "string",
+      "enum": [
+        "searchTerms",
+        "campaigns",
+        "products"
+      ]
+    },
+    "report_id": {
+      "type": "string"
+    },
+    "report_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "period_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "period_end": {
+      "type": "string",
+      "format": "date"
+    },
+    "raw_data": {
+      "type": "object"
+    },
+    "processed": {
+      "type": "boolean",
+      "default": false
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_type",
+    "report_id",
+    "report_date"
+  ]
+}

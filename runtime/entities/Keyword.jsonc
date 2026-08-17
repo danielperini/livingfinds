@@ -1,0 +1,244 @@
+{
+  "name": "Keyword",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad"
+      ],
+      "default": "broad"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "current_bid": {
+      "type": "number",
+      "default": 0.25
+    },
+    "bid": {
+      "type": "number",
+      "default": 0.25
+    },
+    "suggested_bid": {
+      "type": "number"
+    },
+    "daypart_base_bid": {
+      "type": "number",
+      "description": "Bid-base imutável durante o bloco horário. Todo ajuste temporário parte dele, nunca do bid já ajustado."
+    },
+    "daypart_bid_floor": {
+      "type": "number",
+      "description": "Piso canônico: max(min_bid configurado, daypart_base_bid × 0,50)."
+    },
+    "daypart_bid_cap": {
+      "type": "number",
+      "description": "Teto canônico: min(max_bid/safe_max_cpc, daypart_base_bid × 1,50)."
+    },
+    "daypart_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "daypart_multiplier": {
+      "type": "number",
+      "default": 1
+    },
+    "daypart_last_slot": {
+      "type": "string"
+    },
+    "daypart_last_adjusted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "daypart_last_restored_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "search_term",
+        "suggested"
+      ],
+      "default": "manual"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "performance_confirmed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Última confirmação das métricas da keyword por relatório Amazon Ads; mudanças de bid não atualizam este campo."
+    },
+    "best_hour_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "best_hour_end": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "best_hour_roas": {
+      "type": "number"
+    },
+    "best_hour_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "best_hour_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "worst_hour_start": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "worst_hour_end": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 23
+    },
+    "worst_hour_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "worst_hour_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "hourly_action_suggestion": {
+      "type": "string",
+      "enum": [
+        "increase_peak",
+        "reduce_off_peak",
+        "maintain",
+        "insufficient_data"
+      ],
+      "default": "insufficient_data"
+    },
+    "hourly_data_mature": {
+      "type": "boolean",
+      "default": false
+    },
+    "zero_delivery_attempts": {
+      "type": "number",
+      "default": 0
+    },
+    "last_bid_rescue_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "suggested_bid_low": {
+      "type": "number"
+    },
+    "suggested_bid_mid": {
+      "type": "number"
+    },
+    "suggested_bid_high": {
+      "type": "number"
+    },
+    "suggested_bid_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "bootstrap_base_bid": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_id"
+  ]
+}

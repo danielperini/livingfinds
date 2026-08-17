@@ -1,0 +1,294 @@
+{
+  "name": "CampaignMaturityEvaluation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_maturity_stage_before": {
+      "type": "string",
+      "enum": [
+        "initial_learning",
+        "bid_discovery",
+        "term_collection",
+        "early_growth",
+        "mature",
+        "declining",
+        "harvest_exhausted",
+        "structural_issue",
+        "paused_by_autopilot",
+        "unknown"
+      ]
+    },
+    "campaign_maturity_stage_after": {
+      "type": "string",
+      "enum": [
+        "initial_learning",
+        "bid_discovery",
+        "term_collection",
+        "early_growth",
+        "mature",
+        "declining",
+        "harvest_exhausted",
+        "structural_issue",
+        "paused_by_autopilot",
+        "continue_observation",
+        "wait_for_attribution",
+        "unknown"
+      ]
+    },
+    "profitability_status_before": {
+      "type": "string",
+      "enum": [
+        "learning",
+        "growing",
+        "healthy",
+        "declining",
+        "spending_without_conversion",
+        "unprofitable",
+        "structural_issue",
+        "paused_by_autopilot",
+        "unknown"
+      ]
+    },
+    "profitability_status_after": {
+      "type": "string",
+      "enum": [
+        "learning",
+        "growing",
+        "healthy",
+        "declining",
+        "spending_without_conversion",
+        "unprofitable",
+        "structural_issue",
+        "paused_by_autopilot",
+        "continue_observation",
+        "wait_for_attribution",
+        "unknown"
+      ]
+    },
+    "evaluation_window_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_window_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_72h": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_72h": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_72h": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_72h": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_72h": {
+      "type": "number",
+      "default": 0
+    },
+    "last_conversion_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "hours_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_since_last_conversion": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "estimated_profit_per_order": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "max_allowed_spend_without_order": {
+      "type": "number",
+      "default": 0
+    },
+    "profitability_risk_score": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "maturity_score": {
+      "type": "number",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 100
+    },
+    "terms_audited": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_promoted": {
+      "type": "number",
+      "default": 0
+    },
+    "terms_pending_promotion": {
+      "type": "number",
+      "default": 0
+    },
+    "manual_campaigns_found": {
+      "type": "number",
+      "default": 0
+    },
+    "manual_campaigns_created": {
+      "type": "number",
+      "default": 0
+    },
+    "negative_coverage_ratio": {
+      "type": "number",
+      "default": 0
+    },
+    "attribution_data_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "search_terms_sync_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "term_audit_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "economic_loss_threshold_reached": {
+      "type": "boolean",
+      "default": false
+    },
+    "severe_loss_detected": {
+      "type": "boolean",
+      "default": false
+    },
+    "structural_issue_detected": {
+      "type": "boolean",
+      "default": false
+    },
+    "pending_manual_promotions": {
+      "type": "number",
+      "default": 0
+    },
+    "data_through": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "ai_assessment": {
+      "type": "string"
+    },
+    "deterministic_validation": {
+      "type": "string"
+    },
+    "final_decision": {
+      "type": "string"
+    },
+    "pause_reason": {
+      "type": "string"
+    },
+    "replacement_status": {
+      "type": "string",
+      "enum": [
+        "not_applicable",
+        "waiting_for_new_terms",
+        "in_progress",
+        "completed",
+        "failed"
+      ]
+    },
+    "structural_blocks": {
+      "type": "string"
+    },
+    "risk_multiplier_used": {
+      "type": "number",
+      "default": 1.0
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "campaign_id",
+    "campaign_maturity_stage_before"
+  ]
+}

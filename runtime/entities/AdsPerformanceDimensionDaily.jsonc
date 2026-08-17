@@ -1,0 +1,41 @@
+{
+  "name": "AdsPerformanceDimensionDaily",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "report_job_id": { "type": "string" },
+    "report_id": { "type": "string" },
+    "report_type_id": { "type": "string" },
+    "dimension": {
+      "type": "string",
+      "enum": ["targeting", "ad_group", "placement", "purchased_product", "impression_share", "other"]
+    },
+    "date": { "type": "string", "format": "date" },
+    "campaign_id": { "type": "string" },
+    "campaign_name": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "ad_group_name": { "type": "string" },
+    "keyword_id": { "type": "string" },
+    "keyword_text": { "type": "string" },
+    "targeting_id": { "type": "string" },
+    "targeting_expression": { "type": "string" },
+    "match_type": { "type": "string" },
+    "placement": { "type": "string" },
+    "advertised_asin": { "type": "string" },
+    "advertised_sku": { "type": "string" },
+    "purchased_asin": { "type": "string" },
+    "search_term": { "type": "string" },
+    "impression_share": { "type": "number", "default": 0 },
+    "impression_rank": { "type": "number", "default": 0 },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "orders": { "type": "number", "default": 0 },
+    "units": { "type": "number", "default": 0 },
+    "raw_data": { "type": "object" },
+    "unique_key": { "type": "string" },
+    "synced_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "report_type_id", "dimension", "date", "unique_key"]
+}

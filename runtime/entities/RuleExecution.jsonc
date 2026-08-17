@@ -1,0 +1,97 @@
+{
+  "name": "RuleExecution",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "correlation_id": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "rule_version": {
+      "type": "number"
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "action_type": {
+      "type": "string"
+    },
+    "value_before": {
+      "type": "number"
+    },
+    "value_after": {
+      "type": "number"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "scheduled",
+        "processing",
+        "completed",
+        "failed",
+        "retrying",
+        "cancelled",
+        "rolled_back"
+      ],
+      "default": "pending"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_message": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "metrics_before": {
+      "type": "string"
+    },
+    "metrics_after": {
+      "type": "string"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "neutral",
+        "negative",
+        "insufficient_data"
+      ]
+    },
+    "rollback_available": {
+      "type": "boolean",
+      "default": true
+    },
+    "rolled_back_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key",
+    "idempotency_key"
+  ]
+}

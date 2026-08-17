@@ -1,0 +1,274 @@
+{
+  "name": "UnifiedAdsMetricsDaily",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "ad_product": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "campaign_status": {
+      "type": "string"
+    },
+    "campaign_budget": {
+      "type": "number",
+      "default": 0
+    },
+    "campaign_budget_type": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "ad_group_status": {
+      "type": "string"
+    },
+    "advertised_product_id": {
+      "type": "string"
+    },
+    "advertised_sku": {
+      "type": "string"
+    },
+    "converted_product_id": {
+      "type": "string"
+    },
+    "converted_product_name": {
+      "type": "string"
+    },
+    "product_relevance": {
+      "type": "string"
+    },
+    "targeting": {
+      "type": "string"
+    },
+    "targeting_type": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string"
+    },
+    "search_term": {
+      "type": "string"
+    },
+    "placement": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string"
+    },
+    "currency": {
+      "type": "string",
+      "default": "BRL"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "invalid_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "invalid_impression_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "gross_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "invalid_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "invalid_click_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "cpm": {
+      "type": "number",
+      "default": 0
+    },
+    "cost": {
+      "type": "number",
+      "default": 0
+    },
+    "viewable_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "measurable_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "measurable_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "viewability_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "units_sold": {
+      "type": "number",
+      "default": 0
+    },
+    "purchase_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "click_purchase_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_per_purchase": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "promoted_purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "promoted_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "promoted_units_sold": {
+      "type": "number",
+      "default": 0
+    },
+    "promoted_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "promoted_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_units_sold": {
+      "type": "number",
+      "default": 0
+    },
+    "click_purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "click_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "click_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "view_purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "view_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "view_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "impression_share": {
+      "type": "number",
+      "default": 0
+    },
+    "impression_share_rank": {
+      "type": "number",
+      "default": 0
+    },
+    "top_of_search_impression_share": {
+      "type": "number",
+      "default": 0
+    },
+    "campaign_pacing_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "ad_group_pacing_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_at_risk": {
+      "type": "boolean",
+      "default": false
+    },
+    "projected_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "required_daily_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string",
+      "default": "unified_reports"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "campaign_id"
+  ]
+}

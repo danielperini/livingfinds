@@ -1,0 +1,225 @@
+{
+  "name": "PerformanceSettings",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "primary_goal": {
+      "type": "string",
+      "enum": [
+        "acos",
+        "roas",
+        "tacos",
+        "cpc",
+        "daily_impressions",
+        "budget_coverage",
+        "cost_per_order",
+        "growth"
+      ],
+      "default": "acos"
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 10
+    },
+    "max_acos": {
+      "type": "number",
+      "default": 15
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 4
+    },
+    "target_tacos": {
+      "type": "number",
+      "default": 5
+    },
+    "max_tacos": {
+      "type": "number",
+      "default": 10
+    },
+    "daily_budget_limit": {
+      "type": "number",
+      "default": 80,
+      "description": "Limite di\u00e1rio geral de risco em R$. Fonte oficial do motor."
+    },
+    "ads_resource_share_cap_pct": { "type": "number", "default": 5 },
+    "ads_resource_basis": { "type": "string", "default": "amazon_sales_projection_7d" },
+    "intraday_pacing_enabled": { "type": "boolean", "default": true },
+    "min_intraday_data_confidence": { "type": "string", "default": "medium" },
+    "low_value_hour_bid_reduction_pct": { "type": "number", "default": 15 },
+    "critical_pacing_bid_reduction_pct": { "type": "number", "default": 35 },
+    "suggested_daily_budget": {
+      "type": "number",
+      "default": 0,
+      "description": "Sugerido pelo c\u00e1lculo semanal."
+    },
+    "calculated_daily_budget": {
+      "type": "number",
+      "default": 0,
+      "description": "Resultado da f\u00f3rmula t\u00e9cnica."
+    },
+    "target_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "max_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc_intraday_override": {
+      "type": "number",
+      "default": 0,
+      "description": "Override tempor\u00e1rio de CPC gerado pelo motor intraday. 0 = sem override ativo. Zerado automaticamente \u00e0s 23:30 BRT pelo runEndOfDayCpcLearning."
+    },
+    "cpc_intraday_override_set_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando foi aplicado o \u00faltimo override intraday de CPC"
+    },
+    "cpc_intraday_override_checkpoint": {
+      "type": "string",
+      "description": "Qual checkpoint gerou o override atual: morning, afternoon, evening ou night"
+    },
+    "min_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "max_bid": {
+      "type": "number",
+      "default": 5.0
+    },
+    "max_bid_increase_pct": {
+      "type": "number",
+      "default": 15
+    },
+    "max_bid_decrease_pct": {
+      "type": "number",
+      "default": 20
+    },
+    "target_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "min_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "max_daily_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_goal_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "target_coverage_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "pacing_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "dayparting_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "placement_optimization_enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "first_page_exposure_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "top_of_search_limit": {
+      "type": "number",
+      "default": 0,
+      "description": "% m\u00e1ximo de ajuste ToS. 0 = sem ajuste."
+    },
+    "rest_of_search_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "product_page_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "minimum_campaign_budget": {
+      "type": "number",
+      "default": 15
+    },
+    "campaign_budget_increment": {
+      "type": "number",
+      "default": 5
+    },
+    "weekly_campaign_capacity": {
+      "type": "number",
+      "default": 10
+    },
+    "budget_formula_version": {
+      "type": "string",
+      "default": "v2"
+    },
+    "last_budget_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_budget_recalculation": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "objective": {
+      "type": "string",
+      "enum": [
+        "profitability",
+        "growth",
+        "launch",
+        "defense",
+        "liquidation",
+        "maintenance",
+        "aggressive_peak",
+        "flex_stock",
+        "custom"
+      ],
+      "default": "profitability"
+    },
+    "objective_base": {
+      "type": "string",
+      "description": "Objetivo base do preset quando objective=custom (ex: launch)."
+    },
+    "ai_auto_optimization": {
+      "type": "boolean",
+      "default": false
+    },
+    "ai_mode": {
+      "type": "string",
+      "enum": ["SHADOW", "ADVISORY", "LOW_RISK_AUTO"],
+      "default": "SHADOW",
+      "description": "Modo canônico da IA. ai_auto_optimization é mantido apenas como compatibilidade de leitura."
+    },
+    "protection_confidence_threshold": {
+      "type": "number",
+      "default": 85,
+      "description": "Confiança mínima (%) para ações defensivas, como reduzir lance."
+    },
+    "expansion_confidence_threshold": {
+      "type": "number",
+      "default": 95,
+      "description": "Confiança mínima (%) para ações de expansão, como aumentar lance."
+    },
+    "policy_version": {
+      "type": "number",
+      "default": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id"
+  ]
+}

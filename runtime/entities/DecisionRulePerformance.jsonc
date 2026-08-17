@@ -1,0 +1,73 @@
+{
+  "name": "DecisionRulePerformance",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "rule_id": {
+      "type": "string"
+    },
+    "rule_name": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "decision_type": {
+      "type": "string"
+    },
+    "times_used": {
+      "type": "number",
+      "default": 0
+    },
+    "success_count": {
+      "type": "number",
+      "default": 0
+    },
+    "failure_count": {
+      "type": "number",
+      "default": 0
+    },
+    "neutral_count": {
+      "type": "number",
+      "default": 0
+    },
+    "avg_impact_score": {
+      "type": "number",
+      "default": 0
+    },
+    "last_success_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_failure_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "confidence_adjustment": {
+      "type": "number",
+      "default": 0,
+      "description": "Ajuste acumulado no confidence score da regra. Positivo = regra boa. Negativo = regra ruim."
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "auto_disabled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "auto_disabled_reason": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key"
+  ]
+}

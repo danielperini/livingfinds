@@ -1,0 +1,81 @@
+{
+  "name": "ProductAd",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "product_ad_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "paused",
+        "archived"
+      ],
+      "default": "enabled"
+    },
+    "bid": {
+      "type": "number"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "product_ad_id"
+  ]
+}

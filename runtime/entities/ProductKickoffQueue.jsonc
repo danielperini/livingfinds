@@ -1,0 +1,49 @@
+{
+  "name": "ProductKickoffQueue",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "product_name": { "type": "string" },
+    "mode": { "type": "string", "enum": ["auto_plus_four", "manual_only"] },
+    "keyword": { "type": "string" },
+    "bid_initial": { "type": "number" },
+    "source": { "type": "string" },
+    "source_keyword_bank_id": { "type": "string" },
+    "source_score": { "type": "number" },
+    "selection_week": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "scheduled",
+        "processing",
+        "completed",
+        "failed",
+        "cancelled",
+        "waiting_stock",
+        "held_portfolio_saturation"
+      ],
+      "default": "scheduled"
+    },
+    "queue_hour": { "type": "number" },
+    "queue_window": { "type": "string" },
+    "scheduled_at": { "type": "string", "format": "date-time" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "max_attempts": { "type": "number", "default": 5 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "last_error": { "type": "string" },
+    "last_stage": { "type": "string" },
+    "error_code": { "type": "string" },
+    "amazon_request_id": { "type": "string" },
+    "retryable": { "type": "boolean", "default": false },
+    "last_attempt_at": { "type": "string", "format": "date-time" },
+    "hold_reason": { "type": "string" },
+    "held_at": { "type": "string", "format": "date-time" },
+    "waiting_stock_since": { "type": "string", "format": "date-time" },
+    "stock_quantity_at_wait": { "type": "number" },
+    "stock_restored_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "asin", "mode", "status", "queue_hour", "queue_window", "scheduled_at"]
+}

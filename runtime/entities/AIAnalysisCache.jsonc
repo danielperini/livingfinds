@@ -1,0 +1,84 @@
+{
+  "name": "AIAnalysisCache",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "analysis_type": {
+      "type": "string",
+      "enum": [
+        "keyword_relevance",
+        "keyword_analysis",
+        "campaign_strategy",
+        "daily_summary",
+        "decision_explanation",
+        "risk_analysis",
+        "search_term_intent"
+      ]
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "input_version": {
+      "type": "string"
+    },
+    "result_json": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "decision": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "tokens_used": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_estimate": {
+      "type": "number",
+      "default": 0
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_reused_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reuse_count": {
+      "type": "number",
+      "default": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "expired",
+        "invalidated"
+      ],
+      "default": "valid"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "entity_type",
+    "input_hash",
+    "analysis_type"
+  ]
+}

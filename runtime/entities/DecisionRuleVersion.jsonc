@@ -1,0 +1,90 @@
+{
+  "name": "DecisionRuleVersion",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "version_number": {
+      "type": "number"
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "data_hash": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validating",
+        "active",
+        "superseded",
+        "rolled_back"
+      ],
+      "default": "draft"
+    },
+    "activated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "superseded_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "previous_version_id": {
+      "type": "string"
+    },
+    "rules_created": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules_updated": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules_disabled": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules_unchanged": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "backtest_result": {
+      "type": "object"
+    },
+    "expected_impact": {
+      "type": "object"
+    },
+    "rollback_available": {
+      "type": "boolean",
+      "default": true
+    },
+    "justification": {
+      "type": "string"
+    },
+    "responsible": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "version_number"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "name": "UnifiedAdsPacingMetrics",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "budget_total": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_spent": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_at_risk": {
+      "type": "boolean",
+      "default": false
+    },
+    "projected_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "required_daily_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "campaign_pacing_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "ad_group_pacing_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "source": {
+      "type": "string",
+      "default": "unified_reports"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "campaign_id"
+  ]
+}

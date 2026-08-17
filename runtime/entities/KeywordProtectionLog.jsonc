@@ -1,0 +1,153 @@
+{
+  "name": "KeywordProtectionLog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "search_term": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad"
+      ]
+    },
+    "spend_accumulated": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_accumulated": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_accumulated": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_accumulated": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_before_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "economic_limit": {
+      "type": "number",
+      "default": 0
+    },
+    "tolerance_factor": {
+      "type": "number",
+      "default": 0.6
+    },
+    "limit_reached_pct": {
+      "type": "number",
+      "default": 0
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "moderate",
+        "high",
+        "critical"
+      ],
+      "default": "low"
+    },
+    "action_taken": {
+      "type": "string",
+      "enum": [
+        "maintain",
+        "reduce_bid",
+        "reduce_placement",
+        "limit_hours",
+        "pause",
+        "negative_exact",
+        "negative_phrase",
+        "block_recreation"
+      ],
+      "default": "maintain"
+    },
+    "bid_before": {
+      "type": "number"
+    },
+    "bid_after": {
+      "type": "number"
+    },
+    "placement_before": {
+      "type": "number"
+    },
+    "placement_after": {
+      "type": "number"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "relevance_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "days_analyzed": {
+      "type": "number",
+      "default": 0
+    },
+    "data_maturity": {
+      "type": "string",
+      "enum": [
+        "provisional",
+        "maturing",
+        "mature"
+      ],
+      "default": "provisional"
+    },
+    "can_reactivate": {
+      "type": "boolean",
+      "default": false
+    },
+    "reactivation_requirements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "keyword_id",
+    "keyword_text",
+    "action_taken",
+    "risk_level"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "AmazonDeferredCommand",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "function_name": { "type": "string" },
+    "payload_json": { "type": "string" },
+    "status": { "type": "string", "enum": ["scheduled", "processing", "completed", "failed", "cancelled"], "default": "scheduled" },
+    "queue_hour": { "type": "number" },
+    "queue_window": { "type": "string" },
+    "priority": { "type": "string", "enum": ["normal", "high", "emergency"], "default": "normal" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "max_attempts": { "type": "number", "default": 5 },
+    "scheduled_at": { "type": "string", "format": "date-time" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "last_error": { "type": "string" },
+    "source": { "type": "string" }
+  },
+  "required": ["function_name", "payload_json", "status", "queue_hour", "queue_window"]
+}

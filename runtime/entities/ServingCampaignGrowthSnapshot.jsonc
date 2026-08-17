@@ -1,0 +1,36 @@
+{
+  "name": "ServingCampaignGrowthSnapshot",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "metric": { "type": "string", "enum": ["SERVING_CAMPAIGNS"] },
+    "baseline_serving_campaigns": { "type": "number" },
+    "current_serving_campaigns": { "type": "number" },
+    "target_serving_campaigns": { "type": "number" },
+    "target_growth_pct": { "type": "number" },
+    "growth_gap": { "type": "number" },
+    "goal_met": { "type": "boolean", "default": false },
+    "existing_campaigns": { "type": "number" },
+    "active_campaigns": { "type": "number" },
+    "auto_serving_campaigns": { "type": "number" },
+    "manual_serving_campaigns": { "type": "number" },
+    "serving_learning_campaigns": { "type": "number" },
+    "serving_evaluable_campaigns": { "type": "number" },
+    "mature_zero_delivery_campaigns": { "type": "number" },
+    "discovery_budget_decisions": { "type": "number" },
+    "auto_exact_promotions": { "type": "number" },
+    "baseline_at": { "type": "string", "format": "date-time" },
+    "checked_at": { "type": "string", "format": "date-time" },
+    "details": { "type": "object" }
+  },
+  "required": [
+    "amazon_account_id",
+    "policy_version",
+    "metric",
+    "baseline_serving_campaigns",
+    "current_serving_campaigns",
+    "target_serving_campaigns",
+    "checked_at"
+  ]
+}

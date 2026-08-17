@@ -1,0 +1,467 @@
+/**
+ * runDailyFullReportPipeline — Pipeline completo de relatórios v3 (base definitiva)
+ *
+ * Arquitetura assíncrona:
+ *   1. Solicita todos os relatórios via requestAmazonAdsReportV3 (idempotente)
+ *   2. Retorna imediatamente — polling feito pela automação scheduledAmazonAdsReportPoll (10 min)
+ *   3. Cada job processado dispara downloadAndProcessAmazonAdsReportJob automaticamente
+ *   4. Dispara motor de decisão + budget usage em tempo real
+ *
+ * Relatórios v3 (base definitiva):
+ *   - spCampaigns       → CampaignMetricsDaily, Campaign
+ *   - spTargeting       → Keyword (filtro: expressionType=KEYWORD_BID)
+ *   - spSearchTerm      → SearchTerm
+ *   - spAdvertisedProduct → ProductAd
+ *
+ * Sem polling síncrono interno. Sem sleep de 30min.
+ */
+import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
+
+function getAdsBase(region: string) {
+  const r = (region || 'NA').toUpperCase();
+  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
+  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
+  return 'https://advertising-api.amazon.com';
+}
+
+function getSPBase(region: string) {
+  const r = (region || 'NA').toUpperCase();
+  if (r.includes('EU')) return 'https://sellingpartnerapi-eu.amazon.com';
+  if (r.includes('FE')) return 'https://sellingpartnerapi-fe.amazon.com';
+  return 'https://sellingpartnerapi-na.amazon.com';
+}
+
+function fmtDate(d: Date) { return d.toISOString().slice(0, 10); }
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+const BATCH = 100;
+const PAUSE = 150;
+
+async function bulkUpsert(entity: any, creates: any[], updates: any[]) {
+  for (let i = 0; i < creates.length; i += BATCH) {
+    await entity.bulkCreate(creates.slice(i, i + BATCH));
+    if (i + BATCH < creates.length) await sleep(PAUSE);
+  }
+  for (let i = 0; i < updates.length; i += BATCH) {
+    await entity.bulkUpdate(updates.slice(i, i + BATCH));
+    if (i + BATCH < updates.length) await sleep(PAUSE);
+  }
+}
+
+async function getAdsToken(account: any) {
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: account.ads_refresh_token || Deno.env.get('ADS_REFRESH_TOKEN') || '',
+    client_id: Deno.env.get('ADS_CLIENT_ID') || '',
+    client_secret: Deno.env.get('ADS_CLIENT_SECRET') || '',
+  });
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
+  });
+  const d = await res.json();
+  if (!res.ok) throw new Error(`ADS token: ${d.error_description || res.status}`);
+  return d.access_token as string;
+}
+
+async function getSPToken() {
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '',
+    client_id: Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '',
+    client_secret: Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '',
+  });
+  const res = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
+  });
+  const d = await res.json();
+  if (!res.ok) throw new Error(`SP-API token: ${d.error_description || res.status}`);
+  return d.access_token as string;
+}
+
+async function decompress(buf: ArrayBuffer): Promise<any[]> {
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  writer.write(new Uint8Array(buf));
+  writer.close();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((s, c) => s + c.length, 0);
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { merged.set(c, off); off += c.length; }
+  return JSON.parse(new TextDecoder().decode(merged));
+}
+
+// ── Configuração dos relatórios v3 (base definitiva) ─────────────────────────
+// keywords: spTargeting com filtro KEYWORD_BID (substitui spKeywords)
+// Isso inclui exact/phrase/broad keywords e exclui product targets automaticamente
+
+const REPORT_CONFIGS = [
+  {
+    key: 'campaigns',
+    reportTypeId: 'spCampaigns',
+    groupBy: ['campaign'],
+    columns: ['date','campaignId','campaignName','campaignStatus','campaignBudgetAmount',
+      'impressions','clicks','cost',
+      'purchases1d','purchases7d','purchases14d','purchases30d',
+      'sales1d','sales7d','sales14d','sales30d',
+      'acosClicks14d','roasClicks14d'],
+    filters: null,
+  },
+  // NOTA: spTargeting e spKeywords NÃO suportados no marketplace BR (A2Q3Y263D00KWC)
+  // Keywords são sincronizadas via Campaign Management API (SP Keywords List) na Fase 6
+  // O report spTargeting seria útil para métricas por keyword, mas no BR só retorna dados por adGroup
+  // Por isso, keyword-level performance é derivada de spSearchTerm (searchTerm+matchType)
+  {
+    key: 'searchTerms',
+    reportTypeId: 'spSearchTerm',
+    groupBy: ['searchTerm'],
+    columns: ['date','campaignId','campaignName','adGroupId','adGroupName',
+      'keywordId','keyword','matchType','searchTerm',
+      'impressions','clicks','cost',
+      'purchases7d','purchases14d','purchases30d',
+      'sales7d','sales14d','sales30d',
+      'acosClicks14d','roasClicks14d'],
+    filters: null,
+  },
+  {
+    key: 'products',
+    reportTypeId: 'spAdvertisedProduct',
+    groupBy: ['advertiser'],
+    columns: ['date','campaignId','campaignName','adGroupId','adGroupName',
+      'advertisedAsin','advertisedSku',
+      'impressions','clicks','cost',
+      'purchases14d','purchases30d','sales14d','sales30d'],
+    filters: null,
+  },
+].filter(Boolean) as any[];
+
+// ── Handler principal ─────────────────────────────────────────────────────────
+
+Deno.serve(async (req) => {
+  const startTime = Date.now();
+  const startedAt = new Date().toISOString();
+  const now = startedAt;
+  const summary: Record<string, any> = { phases: {} };
+
+  try {
+    const base44 = createClientFromRequest(req);
+    const body = await req.json().catch(() => ({}));
+    const forceSync = body.force === true;
+
+    // Resolver conta
+    const accounts = await base44.asServiceRole.entities.AmazonAccount.list('-created_date', 1);
+    const account = accounts[0];
+    if (!account) return Response.json({ ok: false, error: 'Nenhuma conta Amazon encontrada' });
+
+    const aid = account.id;
+    const profileId = account.ads_profile_id || Deno.env.get('ADS_PROFILE_ID') || '';
+    const clientId = Deno.env.get('ADS_CLIENT_ID') || '';
+    const marketplaceId = account.marketplace_id || Deno.env.get('AMAZON_MARKETPLACE_ID') || 'A2Q3Y263D00KWC';
+    const adsBase = getAdsBase(account.region || Deno.env.get('ADS_REGION') || 'NA');
+    const spBase = getSPBase(account.region || '');
+
+    // Guard TTL 23h
+    if (!forceSync && account.last_sync_at) {
+      const ageH = (Date.now() - new Date(account.last_sync_at).getTime()) / 3600000;
+      if (ageH < 23) {
+        return Response.json({ ok: true, skipped: true, reason: 'already_synced_today', age_hours: Math.round(ageH) });
+      }
+    }
+
+    // ── FASE 1: Solicitar todos os relatórios v3 (assíncrono, sem polling) ────
+    console.log('[Pipeline] Fase 1: solicitando relatórios v3...');
+
+    const endDate = new Date(); endDate.setDate(endDate.getDate() - 1);
+    const startDate = new Date(endDate); startDate.setDate(startDate.getDate() - 29);
+    const endDateStr = fmtDate(endDate);
+    const startDateStr = fmtDate(startDate);
+
+    // ── Delegar solicitação de relatórios ao requestAmazonAdsReportV3 (deduplication via idempotency_key)
+    const jobIds: Record<string, string> = {};
+    const reportResults: any[] = await Promise.all(REPORT_CONFIGS.map(async (rc) => {
+      try {
+        const res = await base44.asServiceRole.functions.invoke('requestAmazonAdsReportV3', {
+          amazon_account_id: aid,
+          report_type_id: rc.reportTypeId,
+          ad_product: 'SPONSORED_PRODUCTS',
+          time_unit: 'DAILY',
+          group_by: rc.groupBy,
+          columns: rc.columns,
+          filters: rc.filters || null,
+          start_date: startDateStr,
+          end_date: endDateStr,
+          report_name: `LivingFinds_${rc.key}_${endDateStr}`,
+          source_function: 'runDailyFullReportPipeline',
+        });
+
+        const d = res?.data ?? res;
+        if (d?.ok && d?.job_id) {
+          jobIds[rc.key] = d.job_id;
+          if (d.reused) {
+            // Registrar reutilização no SyncExecutionLog para rastreabilidade
+            await base44.asServiceRole.entities.SyncExecutionLog.create({
+              amazon_account_id: aid,
+              operation: `requestReport_${rc.key}`,
+              trigger_type: 'automatic',
+              status: 'skipped',
+              result_summary: `Job reutilizado: ${d.job_id} (status: ${d.status})`,
+              started_at: now,
+              completed_at: now,
+            }).catch(() => {});
+          }
+          return { key: rc.key, ok: true, job_id: d.job_id, reused: d.reused ?? false, status: d.status };
+        }
+        return { key: rc.key, ok: false, error: d?.error || 'Falha ao solicitar relatório' };
+      } catch (e: any) {
+        return { key: rc.key, ok: false, error: e.message };
+      }
+    }));
+
+    summary.phases.request = {
+      jobs: jobIds,
+      count: Object.keys(jobIds).length,
+      details: reportResults,
+    };
+    console.log(`[Pipeline] ${Object.keys(jobIds).length} relatórios solicitados. Polling assíncrono via automação scheduledAmazonAdsReportPoll.`);
+
+    // ── FASE 2: Budget Usage API — dados em tempo quase real ─────────────────
+    // Budget Usage API retorna consumo do dia atual sem esperar relatório
+    console.log('[Pipeline] Fase 2: Budget Usage API (tempo real)...');
+    const adsToken = await getAdsToken(account).catch(() => '');
+    try {
+      if (!adsToken) throw new Error('Token Ads indisponível para Budget Usage');
+      // Budget Usage API v3 (SP) — com fallback para campaigns list
+      const budgetApiHeaders = {
+        'Authorization': `Bearer ${adsToken}`,
+        'Amazon-Advertising-API-ClientId': clientId,
+        'Amazon-Advertising-API-Scope': profileId,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+
+      let budgetItems: any[] = [];
+      const budgetRes = await fetch(`${adsBase}/sp/campaigns/budget/usage`, {
+        method: 'POST', headers: budgetApiHeaders, body: JSON.stringify({}),
+      });
+
+      if (budgetRes.ok) {
+        const d = await budgetRes.json().catch(() => ({}));
+        budgetItems = d?.budgetUsageResults || d?.campaigns || [];
+      } else {
+        // Fallback: SP campaigns list v3
+        const listRes = await fetch(`${adsBase}/sp/campaigns/list`, {
+          method: 'POST',
+          headers: { ...budgetApiHeaders, 'Content-Type': 'application/vnd.spCampaign.v3+json', 'Accept': 'application/vnd.spCampaign.v3+json' },
+          body: JSON.stringify({ stateFilter: { include: ['ENABLED', 'PAUSED'] }, maxResults: 500 }),
+        });
+        if (listRes.ok) {
+          const listData = await listRes.json().catch(() => ({}));
+          budgetItems = (listData?.campaigns || []).map((c: any) => ({
+            campaignId: String(c.campaignId || ''),
+            budget: c.budget?.budget || c.dailyBudget || 0,
+            budgetUsage: 0,
+          }));
+        }
+      }
+
+      if (budgetItems.length > 0) {
+        const existingCamps = await base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, null, 5000).catch(() => []);
+        const campByAmazonId = new Map((existingCamps as any[]).map(c => [String(c.amazon_campaign_id || c.campaign_id), c]));
+        const budgetUpdates: any[] = [];
+        for (const item of budgetItems) {
+          const campId = String(item.campaignId || item.id || '');
+          const existing = campByAmazonId.get(campId);
+          if (!existing) continue;
+          const budget = Number(item.budget || item.budgetAmount || 0);
+          const spend = Number(item.budgetUsage || 0);
+          budgetUpdates.push({ id: existing.id, current_spend: spend, ...(budget > 0 ? { daily_budget: budget } : {}) });
+        }
+        if (budgetUpdates.length > 0) {
+          for (let i = 0; i < budgetUpdates.length; i += BATCH) {
+            await base44.asServiceRole.entities.Campaign.bulkUpdate(budgetUpdates.slice(i, i + BATCH)).catch(() => {});
+            if (i + BATCH < budgetUpdates.length) await sleep(PAUSE);
+          }
+        }
+        summary.phases.budget_usage = { campaigns: budgetItems.length, updated: budgetUpdates.length };
+      } else {
+        summary.phases.budget_usage = { skipped: true };
+      }
+    } catch (e: any) {
+      console.warn('[Pipeline] Budget Usage (não crítico):', e.message);
+      summary.phases.budget_usage = { error: e.message };
+    }
+
+    // ── FASE 3: Inventory FBA via SP-API ─────────────────────────────────────
+    try {
+      const spToken = await getSPToken();
+      const invRes = await fetch(
+        `${spBase}/fba/inventory/v1/summaries?granularityType=Marketplace&granularityId=${marketplaceId}&marketplaceIds=${marketplaceId}`,
+        { headers: { 'Authorization': `Bearer ${spToken}`, 'x-amz-access-token': spToken } }
+      );
+      if (invRes.ok) {
+        const invData = await invRes.json();
+        const summaries: any[] = invData?.payload?.inventorySummaries || [];
+        const existProds = await base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, null, 2000).catch(() => []);
+        const prodByAsin = new Map((existProds as any[]).map(p => [p.asin, p]));
+        const invCreates: any[] = [];
+        const invUpdates: any[] = [];
+        for (const s of summaries) {
+          const qty = s.inventoryDetails?.fulfillableQuantity ?? s.totalQuantity ?? 0;
+          const inventoryStatus = qty === 0 ? 'out_of_stock' : qty < 5 ? 'low_stock' : 'in_stock';
+          const record: any = {
+            fba_inventory: qty, inventory_status: inventoryStatus, last_sync_at: now,
+            reserved_inventory: s.inventoryDetails?.reservedQuantity?.totalReservedQuantity || 0,
+            inbound_inventory: (s.inventoryDetails?.inboundWorkingQuantity || 0) + (s.inventoryDetails?.inboundShippedQuantity || 0),
+          };
+          const existing = prodByAsin.get(s.asin);
+          if (existing) invUpdates.push({ id: existing.id, ...record });
+          else if (s.asin) invCreates.push({ amazon_account_id: aid, asin: s.asin, sku: s.sellerSku || '', product_name: s.productName || s.asin, status: 'active', ...record });
+        }
+        await bulkUpsert(base44.asServiceRole.entities.Product, invCreates, invUpdates);
+        summary.phases.inventory = { created: invCreates.length, updated: invUpdates.length };
+      }
+    } catch (e: any) { console.warn('[Pipeline] Inventário FBA (não crítico):', e.message); }
+
+    // ── FASE 3b: Relatório HOURLY por ASIN para HourlySalesPattern ───────────
+    // Não bloqueante — erro aqui não aborta o pipeline
+    console.log('[Pipeline] Fase 3b: relatório HOURLY por ASIN...');
+    try {
+      const hourlyRes = await base44.asServiceRole.functions.invoke('syncUnifiedAdsReportsHourly', {
+        amazon_account_id: aid,
+        days: 7,
+        _service_role: true,
+      }).catch((e: any) => ({ ok: false, error: e?.message }));
+      const hd = hourlyRes?.data ?? hourlyRes;
+      summary.phases.hourly_asin = {
+        ok: hd?.ok ?? false,
+        records_saved: hd?.records_saved ?? 0,
+        slots_computed: hd?.slots_computed ?? 0,
+        peak_elite: hd?.peak_elite ?? 0,
+        peak_strong: hd?.peak_strong ?? 0,
+        used_asin_group_by: hd?.used_asin_group_by ?? false,
+        dayparting_triggered: hd?.dayparting_triggered ?? false,
+        error: hd?.error || null,
+      };
+    } catch (e: any) {
+      console.warn('[Pipeline] Hourly ASIN (não crítico):', e.message);
+      summary.phases.hourly_asin = { error: e.message };
+    }
+
+    // ── FASE 4: Atualizar AmazonAccount ──────────────────────────────────────
+    await base44.asServiceRole.entities.AmazonAccount.update(aid, { last_sync_at: now, status: 'connected' }).catch(() => {});
+    await base44.asServiceRole.entities.SyncRun.create({
+      amazon_account_id: aid,
+      operation: 'runDailyFullReportPipeline',
+      status: 'success',
+      records_processed: Object.keys(jobIds).length,
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      duration_ms: Date.now() - startTime,
+    }).catch(() => {});
+
+    // ── FASE 5: Disparar motor de decisão ─────────────────────────────────────
+    console.log('[Pipeline] Fase 5: disparando motor de decisão...');
+    try {
+      await base44.asServiceRole.functions.invoke('runFullAccountOptimizationWithNewLogic', {
+        amazon_account_id: aid, trigger: 'after_report_sync', _service_role: true,
+      });
+      summary.phases.decision_engine = { triggered: true };
+    } catch (e: any) {
+      console.warn('[Pipeline] Motor de decisão (não crítico):', e.message);
+      summary.phases.decision_engine = { triggered: false, error: e.message };
+    }
+
+    // ── FASE 6: Sincronizar keywords via SP Keywords API (Campaign Management) ──
+    // No marketplace BR, spTargeting/spKeywords reports não retornam dados por keyword
+    // Usamos a Campaign Management API para listar keywords ativas com bids reais
+    console.log('[Pipeline] Fase 6: sincronizando keywords via Campaign Management API...');
+    try {
+      const kwHeaders = {
+        'Authorization': `Bearer ${adsToken}`,
+        'Amazon-Advertising-API-ClientId': clientId,
+        'Amazon-Advertising-API-Scope': profileId,
+        'Content-Type': 'application/vnd.spKeyword.v3+json',
+        'Accept': 'application/vnd.spKeyword.v3+json',
+      };
+
+      // Listar keywords ativas (SP Keywords API v3)
+      const kwRes = await fetch(`${adsBase}/sp/keywords/list`, {
+        method: 'POST',
+        headers: kwHeaders,
+        body: JSON.stringify({
+          stateFilter: { include: ['ENABLED', 'PAUSED'] },
+          maxResults: 1000,
+        }),
+      });
+
+      if (kwRes.ok) {
+        const kwData = await kwRes.json().catch(() => ({}));
+        const kwItems: any[] = kwData?.keywords || [];
+        const existingKws = await base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, null, 5000).catch(() => []);
+        const kwById = new Map((existingKws as any[]).map(k => [String(k.keyword_id), k]));
+
+        const kwCreates: any[] = [];
+        const kwUpdates: any[] = [];
+        const nowStr = new Date().toISOString();
+
+        for (const kw of kwItems) {
+          const kid = String(kw.keywordId || '');
+          if (!kid) continue;
+          const record = {
+            amazon_account_id: aid,
+            campaign_id: String(kw.campaignId || ''),
+            ad_group_id: String(kw.adGroupId || ''),
+            keyword_id: kid,
+            keyword_text: kw.keywordText || '',
+            match_type: (kw.matchType || '').toLowerCase(),
+            bid: Number(kw.bid?.value || kw.bid || 0),
+            state: (kw.state || 'enabled').toLowerCase(),
+            synced_at: nowStr,
+          };
+          const existing = kwById.get(kid);
+          if (existing) kwUpdates.push({ id: existing.id, ...record });
+          else kwCreates.push(record);
+        }
+
+        for (let i = 0; i < kwCreates.length; i += BATCH) {
+          await base44.asServiceRole.entities.Keyword.bulkCreate(kwCreates.slice(i, i + BATCH)).catch(() => {});
+          if (i + BATCH < kwCreates.length) await sleep(PAUSE);
+        }
+        for (let i = 0; i < kwUpdates.length; i += BATCH) {
+          await base44.asServiceRole.entities.Keyword.bulkUpdate(kwUpdates.slice(i, i + BATCH)).catch(() => {});
+          if (i + BATCH < kwUpdates.length) await sleep(PAUSE);
+        }
+        summary.phases.keywords_sync = { total: kwItems.length, created: kwCreates.length, updated: kwUpdates.length };
+        console.log(`[Pipeline] Keywords: ${kwCreates.length} criadas + ${kwUpdates.length} atualizadas`);
+      } else {
+        const kwErr = await kwRes.json().catch(() => ({}));
+        console.warn('[Pipeline] SP Keywords list fallback — HTTP', kwRes.status, JSON.stringify(kwErr).slice(0, 200));
+        summary.phases.keywords_sync = { skipped: true, http_status: kwRes.status };
+      }
+    } catch (e: any) {
+      console.warn('[Pipeline] Keywords sync (não crítico):', e.message);
+      summary.phases.keywords_sync = { error: e.message };
+    }
+
+    // ── FASE 7: Bids de estoque pendentes ─────────────────────────────────────
+    try {
+      const bidRes = await base44.asServiceRole.functions.invoke('executeStockBidRules', { amazon_account_id: aid });
+      summary.phases.stock_bid_execution = { executed: bidRes?.executed || 0, failed: bidRes?.failed || 0 };
+    } catch (e: any) {
+      summary.phases.stock_bid_execution = { triggered: false, error: e.message };
+    }
+
+    summary.duration_s = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log('[Pipeline] ✅ Concluído em', summary.duration_s, 's | relatórios em polling assíncrono');
+    return Response.json({ ok: true, async_reports: true, summary });
+
+  } catch (err: any) {
+    console.error('[runDailyFullReportPipeline]', err.message);
+    return Response.json({ ok: false, error: err.message, summary }, { status: 500 });
+  }
+});

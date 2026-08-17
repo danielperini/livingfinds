@@ -1,0 +1,42 @@
+{
+  "name": "RuleApproval",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "rule_key": {
+      "type": "string"
+    },
+    "review_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "reject",
+        "request_changes"
+      ]
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requires_manual_approval": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_key",
+    "action"
+  ]
+}

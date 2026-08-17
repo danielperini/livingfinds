@@ -1,0 +1,397 @@
+{
+  "name": "AccountDailySpendController",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "spend_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Data operacional no timezone da conta (BRT)"
+    },
+    "timezone": {
+      "type": "string",
+      "default": "America/Sao_Paulo"
+    },
+    "user_daily_spend_cap": {
+      "type": "number",
+      "default": 70
+    },
+    "ai_suggested_daily_spend_cap": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_suggestion_reason": {
+      "type": "string"
+    },
+    "ai_suggestion_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_suggestion_generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "effective_daily_spend_cap": {
+      "type": "number",
+      "default": 70
+    },
+    "resource_cap": { "type": "number", "default": 0 },
+    "economic_daily_spend_cap": { "type": "number", "default": 0 },
+    "pacing_daily_target": { "type": "number", "default": 0 },
+    "protected_future_hours_budget": { "type": "number", "default": 0 },
+    "ads_resource_share_cap_pct": { "type": "number", "default": 5 },
+    "ads_resource_basis": { "type": "string", "default": "amazon_sales_projection_7d" },
+    "intraday_pacing_enabled": { "type": "boolean", "default": true },
+    "min_intraday_data_confidence": { "type": "string", "default": "medium" },
+    "cap_calculation_source": { "type": "string" },
+    "cap_calculation_period_days": { "type": "number", "default": 0 },
+    "cap_calculation_confidence": { "type": "string", "default": "low" },
+    "updated_by": {
+      "type": "string"
+    },
+    "cap_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "confirmed_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "target_spend_by_now": { "type": "number", "default": 0 },
+    "target_spend_next_checkpoint": { "type": "number", "default": 0 },
+    "pacing_error_value": { "type": "number", "default": 0 },
+    "pacing_error_pct": { "type": "number", "default": 0 },
+    "intraday_source": { "type": "string" },
+    "intraday_captured_at": { "type": "string", "format": "date-time" },
+    "intraday_freshness_seconds": { "type": "number", "default": 0 },
+    "data_confidence": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "default": "low"
+    },
+    "reserved_for_strong_hours": { "type": "number", "default": 0 },
+    "spend_available_now": { "type": "number", "default": 0 },
+    "max_spend_until_next_checkpoint": { "type": "number", "default": 0 },
+    "projected_overspend": { "type": "number", "default": 0 },
+    "projected_underspend": { "type": "number", "default": 0 },
+    "last_rebalance_at": { "type": "string", "format": "date-time" },
+    "next_rebalance_at": { "type": "string", "format": "date-time" },
+    "pacing_engine_version": { "type": "string" },
+    "historical_30d_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto consolidado dos dias fechados anteriores; nunca usado como gasto de hoje"
+    },
+    "historical_30d_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_30d_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "closed_day_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "closed_day_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "metric_windows_version": {
+      "type": "string",
+      "default": "v1"
+    },
+    "estimated_pending_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "reserved_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "projected_total_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "remaining_spend": {
+      "type": "number",
+      "default": 70
+    },
+    "cap_status": {
+      "type": "string",
+      "enum": [
+        "safe",
+        "attention",
+        "critical",
+        "cap_imminent",
+        "cap_reached"
+      ],
+      "default": "safe"
+    },
+    "spend_pacing": {
+      "type": "string",
+      "enum": [
+        "underpacing",
+        "on_track",
+        "normal",
+        "overpacing",
+        "critical_overpacing",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "pacing_ratio": {
+      "type": "number",
+      "default": 0
+    },
+    "current_hour_brt": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_paused_today": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "campaigns_paused_count": {
+      "type": "number",
+      "default": 0
+    },
+    "pause_started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "resume_scheduled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_pause_reason": {
+      "type": "string",
+      "default": ""
+    },
+    "total_campaign_budget_nominal": {
+      "type": "number",
+      "default": 0
+    },
+    "campaigns_budget_limited_count": {
+      "type": "number",
+      "default": 0
+    },
+    "last_ads_sync_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_action_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_pacing_check_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "today_schedule": {
+      "type": "string",
+      "description": "JSON: hora -> {score, budget_share_pct, status, classification}"
+    },
+    "best_profit_window": {
+      "type": "string",
+      "description": "JSON: [{hour, score, classification}]"
+    },
+    "budget_mode": {
+      "type": "string",
+      "enum": [
+        "PROFIT_MAX",
+        "BALANCED",
+        "FULL_UTILIZATION"
+      ],
+      "default": "BALANCED"
+    },
+    "elite_reserve": {
+      "type": "number",
+      "default": 0
+    },
+    "affordable_active_hours": {
+      "type": "number",
+      "default": 0
+    },
+    "pacing_curve": {
+      "type": "string",
+      "description": "JSON: hour -> expected_cumulative_spend_pct"
+    },
+    "global_kill_switch": {
+      "type": "boolean",
+      "default": false
+    },
+    "global_stop_event_id": {
+      "type": "string"
+    },
+    "global_stop_snapshot": {
+      "type": "string"
+    },
+    "kill_switch_activated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "kill_switch_reason": {
+      "type": "string"
+    },
+    "projected_end_of_day_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "time_to_cap_hours": {
+      "type": "number",
+      "default": 0
+    },
+    "future_value_reserve": {
+      "type": "number",
+      "default": 0
+    },
+    "underpacing_alert": {
+      "type": "boolean",
+      "default": false
+    },
+    "overpacing_alert": {
+      "type": "boolean",
+      "default": false
+    },
+    "stop_type": {
+      "type": "string",
+      "enum": [
+        "DAILY_CAP_STOP",
+        "OVERPACING_TEMP_STOP",
+        "DAYPART_RESERVE_STOP",
+        "PROFIT_PROTECTION_STOP",
+        "STOCK_STOP",
+        "MANUAL_STOP"
+      ]
+    },
+    "spend_velocity_per_hour": {
+      "type": "number",
+      "default": 0
+    },
+    "safety_buffer": {
+      "type": "number",
+      "default": 0
+    },
+    "budget_insufficient_for_8h": {
+      "type": "boolean",
+      "default": false
+    },
+    "estimated_budget_for_8h": {
+      "type": "number",
+      "default": 0
+    },
+    "hour_value_scores": {
+      "type": "string",
+      "description": "JSON: hour -> score"
+    },
+    "last_pacing_engine_run_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_kill_switch_check_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "goal_alignment_status": {
+      "type": "string",
+      "enum": [
+        "ALIGNED",
+        "GOAL_TENSION",
+        "MISCONFIGURED",
+        "UNCHECKED"
+      ],
+      "default": "UNCHECKED",
+      "description": "Resultado do GOAL_ALIGNMENT_GUARD"
+    },
+    "goal_alignment_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "recency_protection_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "acos_14d_at_last_check": {
+      "type": "number",
+      "default": 0
+    },
+    "trend_classification": {
+      "type": "string",
+      "default": "INSUFFICIENT_DATA",
+      "description": "C\u00f3pia do PerformanceTrendSnapshot mais recente"
+    },
+    "checkpoint_morning_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 06h foi executado"
+    },
+    "checkpoint_morning_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 06h"
+    },
+    "checkpoint_afternoon_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 13h foi executado"
+    },
+    "checkpoint_afternoon_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 13h"
+    },
+    "checkpoint_evening_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 19h foi executado"
+    },
+    "checkpoint_evening_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 19h"
+    },
+    "checkpoint_night_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o checkpoint das 22h foi executado"
+    },
+    "checkpoint_night_spend": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto confirmado na leitura das 22h"
+    },
+    "scheduled_pause_hour": {
+      "type": "number",
+      "description": "Hora BRT calculada no checkpoint 22h para pausa de n\u00e3o-vencedoras (null se n\u00e3o necess\u00e1rio)"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "spend_date"
+  ]
+}

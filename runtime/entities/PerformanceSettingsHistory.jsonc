@@ -1,0 +1,83 @@
+{
+  "name": "PerformanceSettingsHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "snapshot_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "max_acos": {
+      "type": "number"
+    },
+    "target_roas": {
+      "type": "number"
+    },
+    "target_tacos": {
+      "type": "number"
+    },
+    "min_bid": {
+      "type": "number"
+    },
+    "max_bid": {
+      "type": "number"
+    },
+    "max_bid_increase_pct": {
+      "type": "number"
+    },
+    "max_bid_decrease_pct": {
+      "type": "number"
+    },
+    "daily_budget_limit": {
+      "type": "number"
+    },
+    "objective": {
+      "type": "string"
+    },
+    "snapshot_reason": {
+      "type": "string",
+      "default": "manual_settings_update"
+    },
+    "changed_by_id": {
+      "type": "string"
+    },
+    "changed_by_name": {
+      "type": "string"
+    },
+    "changed_by_email": {
+      "type": "string"
+    },
+    "snapshot": {
+      "type": "object",
+      "description": "C\u00f3pia completa dos valores salvos"
+    },
+    "changed_fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "description": "Lista de { field, old_value, new_value }"
+    },
+    "changed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policy_version": {
+      "type": "number"
+    },
+    "propagation_status": {
+      "type": "string",
+      "enum": ["pending_engine_cycle", "applied", "failed"],
+      "default": "pending_engine_cycle"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "snapshot_date"
+  ]
+}

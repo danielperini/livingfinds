@@ -1,0 +1,49 @@
+{
+  "name": "LearningEvent",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "observation": {
+      "type": "string"
+    },
+    "metric_before": {
+      "type": "number"
+    },
+    "metric_after": {
+      "type": "number"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "positive",
+        "negative",
+        "neutral"
+      ]
+    },
+    "confidence_delta": {
+      "type": "number"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "event_type"
+  ]
+}

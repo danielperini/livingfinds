@@ -1,0 +1,124 @@
+{
+  "name": "SeasonalityCalendar",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "weekend",
+        "holiday",
+        "pre_holiday",
+        "post_holiday",
+        "christmas",
+        "pre_christmas",
+        "black_friday",
+        "cyber_monday",
+        "fathers_day",
+        "mothers_day",
+        "childrens_day",
+        "valentines_day",
+        "new_year",
+        "back_to_school",
+        "vacation",
+        "payday_week",
+        "custom"
+      ]
+    },
+    "country": {
+      "type": "string",
+      "default": "BR"
+    },
+    "marketplace": {
+      "type": "string",
+      "default": "A2Q3Y263D00KWC"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "end_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "peak_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "pre_event_days": {
+      "type": "number",
+      "default": 0
+    },
+    "post_event_days": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_demand_level": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "moderate_peak",
+        "high_peak",
+        "very_high_peak",
+        "low_demand",
+        "uncertain"
+      ],
+      "default": "normal"
+    },
+    "expected_cpc_pressure": {
+      "type": "string",
+      "enum": [
+        "none",
+        "low",
+        "moderate",
+        "high",
+        "very_high"
+      ],
+      "default": "none"
+    },
+    "budget_multiplier_limit": {
+      "type": "number",
+      "default": 1.0
+    },
+    "bid_multiplier_limit": {
+      "type": "number",
+      "default": 1.0
+    },
+    "priority_categories": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "is_recurring_annual": {
+      "type": "boolean",
+      "default": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "name",
+    "event_type",
+    "start_date",
+    "end_date"
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "name": "MotorRuleChangeProposal",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "weekly_prelection_id": {
+      "type": "string"
+    },
+    "rule_name": {
+      "type": "string"
+    },
+    "current_rule": {
+      "type": "string"
+    },
+    "proposed_rule": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "affected_metric": {
+      "type": "string"
+    },
+    "expected_impact": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "proposed",
+        "approved",
+        "rejected",
+        "implemented",
+        "reverted"
+      ],
+      "default": "proposed"
+    },
+    "requires_manual_approval": {
+      "type": "boolean",
+      "default": true
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "implemented_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result_after_7d": {
+      "type": "object"
+    },
+    "result_after_14d": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "rule_name"
+  ]
+}

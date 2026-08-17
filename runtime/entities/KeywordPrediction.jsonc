@@ -1,0 +1,335 @@
+{
+  "name": "KeywordPrediction",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "EXACT",
+        "PHRASE",
+        "BROAD"
+      ],
+      "default": "EXACT"
+    },
+    "source": {
+      "type": "string"
+    },
+    "model_version": {
+      "type": "string"
+    },
+    "tail_type": {
+      "type": "string",
+      "enum": [
+        "short",
+        "medium",
+        "long"
+      ],
+      "default": "medium"
+    },
+    "tail_class_method": {
+      "type": "string",
+      "enum": [
+        "DEMAND_DATA",
+        "WORD_COUNT_FALLBACK"
+      ],
+      "default": "WORD_COUNT_FALLBACK",
+      "description": "M\u00e9todo usado para classificar a cauda: DEMAND_DATA quando h\u00e1 >=30 termos compar\u00e1veis, WORD_COUNT_FALLBACK caso contr\u00e1rio"
+    },
+    "tail_class_confidence": {
+      "type": "string",
+      "enum": [
+        "HIGH",
+        "MEDIUM",
+        "LOW"
+      ],
+      "default": "LOW",
+      "description": "Confian\u00e7a na classifica\u00e7\u00e3o de cauda"
+    },
+    "demand_percentile": {
+      "type": "number",
+      "default": 0,
+      "description": "Percentil de demanda (0-100) relativo aos termos compar\u00e1veis do mesmo marketplace/categoria"
+    },
+    "normalized_search_volume": {
+      "type": "number",
+      "default": 0,
+      "description": "Volume normalizado (impress\u00f5es acumuladas) usado para calcular o percentil"
+    },
+    "word_count": {
+      "type": "number",
+      "default": 0
+    },
+    "relevance_score": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_probability": {
+      "type": "number",
+      "default": 0
+    },
+    "keyword_quality_score": {
+      "type": "number",
+      "default": 0
+    },
+    "commercial_intent": {
+      "type": "string",
+      "description": "Classifica\u00e7\u00e3o de inten\u00e7\u00e3o: branded, competitor_branded, generic_category, product_specific, attribute_specific, problem_solution, compatibility, audience_specific, use_case, seasonal, informational, ambiguous, irrelevant"
+    },
+    "commercial_intent_score": {
+      "type": "number",
+      "default": 0,
+      "description": "Score 0-1 de inten\u00e7\u00e3o comercial derivado deterministicamente"
+    },
+    "specificity_score": {
+      "type": "number",
+      "default": 0,
+      "description": "Score 0-1 de especificidade da keyword (word_count + atributos determin\u00edsticos)"
+    },
+    "product_attribute_match_score": {
+      "type": "number",
+      "default": 0,
+      "description": "% de tokens da keyword presentes no t\u00edtulo + bullets + attrs do produto"
+    },
+    "evidence_level": {
+      "type": "string",
+      "enum": [
+        "NONE",
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ],
+      "default": "NONE",
+      "description": "N\u00edvel de evid\u00eancia baseado em dados reais. Cauda n\u00e3o influencia."
+    },
+    "acos_status": {
+      "type": "string",
+      "enum": [
+        "PROFITABLE",
+        "ACCEPTABLE",
+        "ABOVE_TARGET",
+        "NO_SALES",
+        "NO_DATA"
+      ],
+      "default": "NO_DATA",
+      "description": "Status do ACoS. NO_SALES quando sales=0 \u2014 nunca interpretar como boa performance."
+    },
+    "contradiction_flags": {
+      "type": "string",
+      "description": "JSON array de flags de contradi\u00e7\u00e3o detectadas (material_incompativel, cor_incompativel, tamanho_incompativel, publico_incompativel, finalidade_incompativel, marca_concorrente)"
+    },
+    "analysis_windows": {
+      "type": "string",
+      "description": "JSON com m\u00e9tricas por janela: 72h, 7d, 14d, 30d, 90d"
+    },
+    "protected_high_performance": {
+      "type": "boolean",
+      "default": false,
+      "description": "true quando a keyword est\u00e1 protegida por alta performance hist\u00f3rica confirmada"
+    },
+    "last_evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rule_version": {
+      "type": "string",
+      "description": "Vers\u00e3o do conjunto de regras que gerou esta predi\u00e7\u00e3o"
+    },
+    "expected_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "expected_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "data_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "recommended_bid": {
+      "type": "number",
+      "default": 0.5
+    },
+    "reason": {
+      "type": "string"
+    },
+    "recommended_action": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "candidate",
+        "scored",
+        "approved",
+        "experimental",
+        "rejected",
+        "created",
+        "monitoring",
+        "successful",
+        "underperforming",
+        "blocked",
+        "expired",
+        "duplicate"
+      ],
+      "default": "candidate"
+    },
+    "features_json": {
+      "type": "string"
+    },
+    "historical_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_acos": {
+      "type": "number",
+      "description": "null quando sales=0 \u2014 nunca zero positivo sem vendas"
+    },
+    "historical_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "negative_keyword_conflict": {
+      "type": "boolean",
+      "default": false
+    },
+    "duplicate_keyword": {
+      "type": "boolean",
+      "default": false
+    },
+    "policy_valid": {
+      "type": "boolean",
+      "default": true
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_keyword_id": {
+      "type": "string"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actual_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "actual_profit": {
+      "type": "number",
+      "default": 0
+    },
+    "prediction_error": {
+      "type": "number",
+      "default": 0
+    },
+    "outcome_status": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "keyword"
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "name": "StrategyExecutionLog",
+  "type": "object",
+  "properties": {
+    "strategy_id": {
+      "type": "string"
+    },
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "action_type": {
+      "type": "string"
+    },
+    "before_metrics": {
+      "type": "object"
+    },
+    "action_taken": {
+      "type": "object"
+    },
+    "after_metrics_24h": {
+      "type": "object"
+    },
+    "after_metrics_48h": {
+      "type": "object"
+    },
+    "after_metrics_7d": {
+      "type": "object"
+    },
+    "maturation_until": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "maturation_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "failure_reason": {
+      "type": "string"
+    },
+    "next_recommendation": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "maturing",
+        "evaluated",
+        "success",
+        "failed"
+      ],
+      "default": "pending"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "strategy_id",
+    "amazon_account_id",
+    "action_type"
+  ]
+}

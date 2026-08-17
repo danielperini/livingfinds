@@ -1,0 +1,260 @@
+{
+  "name": "KeywordSuggestion",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "EXACT",
+        "PHRASE",
+        "BROAD"
+      ],
+      "default": "exact"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "AMAZON_ADS_SUGGESTED_KEYWORD",
+        "AMAZON_ADS_SUGGESTED_TARGET",
+        "AMAZON_ADS_RECOMMENDATION",
+        "SEARCH_TERM_PERFORMANCE",
+        "BRAND_ANALYTICS",
+        "AUTOMATIC_SEARCH_TERM",
+        "MANUAL_SEARCH_TERM",
+        "CONVERTED_TERM_EXPANSION",
+        "USER",
+        "OPENAI_TITLE_ANALYSIS",
+        "CLAUDE_PRODUCT_ANALYSIS",
+        "AI_GENERATED",
+        "GPT_TITLE_ANALYSIS",
+        "PRODUCT_ANALYSIS"
+      ],
+      "default": "AMAZON_ADS_SUGGESTED_KEYWORD"
+    },
+    "source_asin": {
+      "type": "string"
+    },
+    "source_asin_type": {
+      "type": "string",
+      "enum": [
+        "own",
+        "competitor"
+      ],
+      "default": "own"
+    },
+    "target_type": {
+      "type": "string",
+      "enum": [
+        "keyword",
+        "product"
+      ],
+      "default": "keyword"
+    },
+    "target_asin": {
+      "type": "string"
+    },
+    "amazon_suggested_bid": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_min": {
+      "type": "number"
+    },
+    "amazon_suggested_bid_max": {
+      "type": "number"
+    },
+    "amazon_relevance_score": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_impression_estimate": {
+      "type": "number"
+    },
+    "amazon_click_estimate": {
+      "type": "number"
+    },
+    "amazon_order_estimate": {
+      "type": "number"
+    },
+    "amazon_raw_payload": {
+      "type": "string"
+    },
+    "ai_rank": {
+      "type": "number"
+    },
+    "ai_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "ai_reason": {
+      "type": "string"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "relevance_score": {
+      "type": "number",
+      "default": 0
+    },
+    "reason": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "medium"
+    },
+    "implementation_priority": {
+      "type": "string",
+      "enum": [
+        "immediate",
+        "next_window",
+        "hold"
+      ],
+      "default": "next_window"
+    },
+    "should_create_campaign": {
+      "type": "boolean",
+      "default": false
+    },
+    "recommended_bid": {
+      "type": "number"
+    },
+    "recommended_budget": {
+      "type": "number",
+      "default": 5
+    },
+    "recommended_match_type": {
+      "type": "string",
+      "default": "EXACT"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "suggested",
+        "ranked",
+        "approved",
+        "rejected",
+        "queued",
+        "creating",
+        "created",
+        "failed",
+        "duplicate",
+        "blocked",
+        "archived_by_policy",
+        "superseded"
+      ],
+      "default": "suggested"
+    },
+    "archive_reason": {
+      "type": "string"
+    },
+    "reactivation_blocked": {
+      "type": "boolean",
+      "default": false
+    },
+    "already_exists": {
+      "type": "boolean",
+      "default": false
+    },
+    "duplicate_of": {
+      "type": "string"
+    },
+    "source_search_term_id": {
+      "type": "string"
+    },
+    "source_campaign_id": {
+      "type": "string"
+    },
+    "created_campaign_id": {
+      "type": "string"
+    },
+    "created_keyword_id": {
+      "type": "string"
+    },
+    "amazon_campaign_id": {
+      "type": "string"
+    },
+    "block_reason": {
+      "type": "string"
+    },
+    "historical_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "historical_acos": {
+      "type": "number"
+    },
+    "historical_cpc": {
+      "type": "number"
+    },
+    "historical_ctr": {
+      "type": "number"
+    },
+    "historical_cvr": {
+      "type": "number"
+    },
+    "was_negated": {
+      "type": "boolean",
+      "default": false
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "keyword",
+    "source"
+  ]
+}

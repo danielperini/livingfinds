@@ -1,0 +1,114 @@
+{
+  "name": "AmazonReportCatalog",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "report_key": {
+      "type": "string"
+    },
+    "report_type_id": {
+      "type": "string"
+    },
+    "api_family": {
+      "type": "string",
+      "enum": [
+        "ads_v3",
+        "sp_api",
+        "marketing_stream",
+        "business_report"
+      ]
+    },
+    "ad_product": {
+      "type": "string"
+    },
+    "group_by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "time_unit": {
+      "type": "string",
+      "enum": [
+        "DAILY",
+        "SUMMARY",
+        "HOURLY"
+      ]
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_function": {
+      "type": "string"
+    },
+    "destination_entities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "freshness_hours": {
+      "type": "number",
+      "default": 24
+    },
+    "decision_uses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "implemented": {
+      "type": "boolean",
+      "default": false
+    },
+    "required": {
+      "type": "boolean",
+      "default": true
+    },
+    "duplicate_of": {
+      "type": "string"
+    },
+    "primary_source": {
+      "type": "boolean",
+      "default": true
+    },
+    "notes": {
+      "type": "string"
+    },
+    "last_requested_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_processed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "requested",
+        "processing",
+        "success",
+        "error",
+        "stale"
+      ]
+    },
+    "last_error": {
+      "type": "string"
+    },
+    "record_count_last": {
+      "type": "number",
+      "default": 0
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "report_key"
+  ]
+}

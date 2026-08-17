@@ -1,0 +1,520 @@
+{
+  "name": "ProductEconomics",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "normalized_sku": {
+      "type": "string"
+    },
+    "product_name": {
+      "type": "string"
+    },
+    "unit_cost": {
+      "type": "number",
+      "default": 0,
+      "description": "Custo unit\u00e1rio do produto (CMV)"
+    },
+    "inbound_freight_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "tax_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "logistics_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "packaging_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "other_variable_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "other_cost_description": {
+      "type": "string"
+    },
+    "total_variable_cost_per_unit": {
+      "type": "number",
+      "default": 0
+    },
+    "current_price": {
+      "type": "number",
+      "default": 0
+    },
+    "average_sale_price": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_fee_amount": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_fee_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "contribution_margin_amount": {
+      "type": "number",
+      "default": 0
+    },
+    "contribution_margin_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "target_roas": {
+      "type": "number",
+      "default": 0
+    },
+    "safe_max_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "maximum_profitable_ad_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_before_ads": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro bruto por unidade antes dos ADS (margem de contribui\u00e7\u00e3o)"
+    },
+    "profit_after_ads": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro bruto p\u00f3s-ADS: profit_before_ads - (ad_spend / orders). Zero = produto no limite."
+    },
+    "profit_after_ads_percent": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS como % do pre\u00e7o de venda"
+    },
+    "profit_after_ads_14d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 14d real de m\u00e9tricas"
+    },
+    "profit_after_ads_7d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 7d real"
+    },
+    "profit_after_ads_3d": {
+      "type": "number",
+      "default": 0,
+      "description": "Lucro p\u00f3s-ADS calculado sobre janela 3d (alerta r\u00e1pido)"
+    },
+    "profit_erosion_velocity": {
+      "type": "number",
+      "default": 0,
+      "description": "Taxa de eros\u00e3o: (profit_3d - profit_14d) / profit_14d. Negativo = evas\u00e3o acelerada."
+    },
+    "profit_erosion_alert": {
+      "type": "boolean",
+      "default": false,
+      "description": "True se eros\u00e3o > 30% em 3d vs 14d"
+    },
+    "ad_spend_per_order_14d": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto m\u00e9dio de ads por pedido nos \u00faltimos 14d"
+    },
+    "ad_spend_per_order_3d": {
+      "type": "number",
+      "default": 0,
+      "description": "Gasto m\u00e9dio de ads por pedido nos \u00faltimos 3d (detector de acelera\u00e7\u00e3o)"
+    },
+    "profit_protection_mode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "vigilant",
+        "defensive",
+        "paused"
+      ],
+      "default": "normal",
+      "description": "normal=saud\u00e1vel, vigilant=lucro reduzindo mas ainda positivo, defensive=bid reduzido aguardando estabiliza\u00e7\u00e3o, paused=lucro negativo"
+    },
+    "profit_protection_triggered_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "profit_protection_reason": {
+      "type": "string"
+    },
+    "economic_classification": {
+      "type": "string",
+      "enum": [
+        "highly_profitable",
+        "profitable",
+        "low_margin",
+        "break_even",
+        "unprofitable",
+        "no_sales",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "cost_source": {
+      "type": "string",
+      "default": "unknown"
+    },
+    "price_source": {
+      "type": "string",
+      "default": "unknown"
+    },
+    "fees_source": {
+      "type": "string",
+      "default": "unknown"
+    },
+    "economics_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "missing_cost",
+        "missing_price",
+        "missing_fees",
+        "invalid",
+        "stale"
+      ],
+      "default": "partial"
+    },
+    "product_link_status": {
+      "type": "string",
+      "enum": [
+        "linked",
+        "pending",
+        "conflict",
+        "not_found"
+      ],
+      "default": "pending"
+    },
+    "cost_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "price_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "fees_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "final_economic_confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "costs_confirmed_by_user": {
+      "type": "boolean",
+      "default": false,
+      "description": "Confirma que os custos unitários foram informados ou validados pelo usuário; sincronizações Amazon nunca alteram estes valores."
+    },
+    "amazon_fixed_fee": {
+      "type": "number"
+    },
+    "fba_fee": {
+      "type": "number"
+    },
+    "estimated_return_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "estimated_ads_cost_per_order": {
+      "type": "number"
+    },
+    "ads_cost_source": {
+      "type": "string"
+    },
+    "ads_cost_verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fees_verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "minimum_margin_pct": {
+      "type": "number",
+      "default": 15,
+      "minimum": 15
+    },
+    "target_margin_pct": {
+      "type": "number",
+      "default": 20,
+      "minimum": 15
+    },
+    "manual_min_price": {
+      "type": "number"
+    },
+    "manual_max_price": {
+      "type": "number"
+    },
+    "repricing_enabled": {
+      "type": "boolean",
+      "default": false
+    },
+    "repricing_requested": {
+      "type": "boolean",
+      "default": false,
+      "description": "Preferência persistente do usuário. A execução só é habilitada quando todos os dados econômicos reais estiverem completos."
+    },
+    "repricing_status": {
+      "type": "string",
+      "enum": [
+        "disabled",
+        "recommendation",
+        "eligible",
+        "pending",
+        "submitted",
+        "confirmed",
+        "blocked",
+        "failed"
+      ],
+      "default": "disabled"
+    },
+    "repricing_block_reason": {
+      "type": "string"
+    },
+    "minimum_profitable_price": {
+      "type": "number"
+    },
+    "target_margin_price": {
+      "type": "number"
+    },
+    "suggested_price": {
+      "type": "number"
+    },
+    "ideal_suggested_price": { "type": "number" },
+    "decision_confidence": { "type": "number", "minimum": 0, "maximum": 100 },
+    "confidence_components": { "type": "object" },
+    "missing_data": { "type": "array", "items": { "type": "string" } },
+    "confidence_reason": { "type": "string" },
+    "guarded_decision_status": {
+      "type": "string",
+      "enum": ["automatic_guarded", "recommendation_only", "insufficient_confidence", "limit_exhausted", "no_change"]
+    },
+    "price_change_used_24h": { "type": "number", "minimum": 0 },
+    "remaining_price_change_24h": { "type": "number", "minimum": 0 },
+    "last_observed_amazon_price": {
+      "type": "number"
+    },
+    "current_margin_pct": {
+      "type": "number"
+    },
+    "projected_margin_pct": {
+      "type": "number"
+    },
+    "projected_unit_profit": {
+      "type": "number"
+    },
+    "expected_daily_units": {
+      "type": "number"
+    },
+    "expected_daily_profit": {
+      "type": "number"
+    },
+    "economic_data_complete": {
+      "type": "boolean",
+      "default": false
+    },
+    "economic_data_updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_by": {
+      "type": "string"
+    },
+    "product_type": {
+      "type": "string"
+    },
+    "currency_code": {
+      "type": "string"
+    },
+    "seller_fulfillment_type": {
+      "type": "string"
+    },
+    "featured_offer_price": {
+      "type": "number"
+    },
+    "featured_offer_expected_price": {
+      "type": "number"
+    },
+    "competitor_median_price": {
+      "type": "number"
+    },
+    "competitor_offer_count": {
+      "type": "number",
+      "default": 0
+    },
+    "competitor_offers": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "competition_checked_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "competition_source": {
+      "type": "string"
+    },
+    "competitor_reference_prices": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Preços de referência agregados retornados pela Product Pricing API; não representam vendas de sellers."
+    },
+    "competitor_reference_price_average": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Média aritmética dos preços de referência válidos retornados pela Product Pricing API."
+    },
+    "external_competitor_price_average": { "type": "number", "minimum": 0 },
+    "external_competitor_price_minimum": { "type": "number", "minimum": 0 },
+    "external_competitor_price_maximum": { "type": "number", "minimum": 0 },
+    "external_competitor_count": { "type": "number", "minimum": 0, "default": 0 },
+    "external_competition_checked_at": { "type": "string", "format": "date-time" },
+    "external_competition_source": { "type": "string" },
+    "scrapingbee_competitor_price_average": { "type": "number", "minimum": 0, "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_competitor_price_minimum": { "type": "number", "minimum": 0, "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_competitor_price_maximum": { "type": "number", "minimum": 0, "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_competitor_count": { "type": "number", "minimum": 0, "default": 0, "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_competition_checked_at": { "type": "string", "format": "date-time", "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_competition_source": { "type": "string", "description": "Campo legado preservado para compatibilidade histórica." },
+    "scrapingbee_sales_estimate_average": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Média de volume comercial inferido dos similares; não representa vendas factuais de concorrentes."
+    },
+    "scrapingbee_sales_estimate_confidence": { "type": "string", "enum": ["low", "medium"] },
+    "scrapingbee_sales_estimate_source": { "type": "string", "enum": ["inferred"] },
+    "competitor_sales_estimate": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Estimativa opcional de força comercial do ASIN. Nunca é venda factual de um seller concorrente."
+    },
+    "competitor_sales_estimate_confidence": {
+      "type": "string",
+      "enum": ["low", "medium"],
+      "description": "Estimativas de concorrência nunca podem receber confiança alta."
+    },
+    "competitor_sales_estimate_source": {
+      "type": "string",
+      "enum": ["inferred"],
+      "description": "Proveniência obrigatória para qualquer estimativa comercial concorrente."
+    },
+    "elasticity": {
+      "type": "number"
+    },
+    "elasticity_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "elasticity_observations": {
+      "type": "number",
+      "default": 0
+    },
+    "last_repricing_decision_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_price_change_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_price_confirmed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "next_evaluation_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "decision_reason": {
+      "type": "string"
+    },
+    "decision_evidence": {
+      "type": "object"
+    },
+    "economic_conflict": {
+      "type": "boolean",
+      "default": false
+    },
+    "import_batch_id": {
+      "type": "string"
+    },
+    "imported_by": {
+      "type": "string"
+    },
+    "imported_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "analytics_import_source_file": { "type": "string" },
+    "analytics_import_snapshot_date": { "type": "string", "format": "date" },
+    "analytics_import_metrics": {
+      "type": "object",
+      "description": "Snapshot auditável informado pelo usuário; não substitui métricas canônicas SP-API/Ads."
+    },
+    "effective_from": {
+      "type": "string",
+      "format": "date"
+    },
+    "effective_to": {
+      "type": "string",
+      "format": "date"
+    },
+    "last_calculated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_prompted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "prompt_dismissed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "sku"
+  ]
+}

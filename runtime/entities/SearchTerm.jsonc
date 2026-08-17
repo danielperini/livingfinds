@@ -1,0 +1,344 @@
+{
+  "name": "SearchTerm",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "profile_id": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "campaign_name": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "ad_group_name": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "keyword_type": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad",
+        "auto"
+      ]
+    },
+    "search_term": {
+      "type": "string"
+    },
+    "normalized_search_term": {
+      "type": "string"
+    },
+    "advertised_asin": {
+      "type": "string"
+    },
+    "advertised_sku": {
+      "type": "string"
+    },
+    "sku_resolution_status": {
+      "type": "string",
+      "enum": [
+        "resolved_report",
+        "resolved_product_ad",
+        "resolved_campaign",
+        "resolved_name",
+        "ambiguous",
+        "missing"
+      ]
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_1d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_1d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "units_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_1d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_30d": {
+      "type": "number",
+      "default": 0
+    },
+    "total_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "total_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_attribution_verified": {
+      "type": "boolean",
+      "default": false
+    },
+    "attribution_window_days": {
+      "type": "number",
+      "default": 0
+    },
+    "attribution_source": {
+      "type": "string"
+    },
+    "report_job_id": {
+      "type": "string"
+    },
+    "report_id": {
+      "type": "string"
+    },
+    "acos_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "acos_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "roas_7d": {
+      "type": "number",
+      "default": 0
+    },
+    "roas_14d": {
+      "type": "number",
+      "default": 0
+    },
+    "conversion_rate": {
+      "type": "number",
+      "default": 0
+    },
+    "unique_key": {
+      "type": "string"
+    },
+    "synced_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "NEW",
+        "LEARNING",
+        "FIRST_SALE",
+        "WINNER",
+        "HIGH_ACOS",
+        "WASTING",
+        "IRRELEVANT",
+        "PROMOTED_EXACT",
+        "NEGATED",
+        "PAUSED",
+        "INSUFFICIENT_DATA"
+      ],
+      "default": "NEW"
+    },
+    "relevance_status": {
+      "type": "string",
+      "enum": [
+        "relevant",
+        "irrelevant",
+        "uncertain"
+      ],
+      "default": "uncertain"
+    },
+    "decision_status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "skipped",
+        "failed"
+      ]
+    },
+    "first_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "promoted_to_manual": {
+      "type": "boolean",
+      "default": false
+    },
+    "promoted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "manual_campaign_id": {
+      "type": "string"
+    },
+    "manual_ad_group_id": {
+      "type": "string"
+    },
+    "manual_keyword_id": {
+      "type": "string"
+    },
+    "manual_keyword_state": {
+      "type": "string"
+    },
+    "negated_in_source": {
+      "type": "boolean",
+      "default": false
+    },
+    "negated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_campaign_type": {
+      "type": "string"
+    },
+    "campaign_type": { "type": "string" },
+    "targeting_type": { "type": "string" },
+    "target_id": { "type": "string" },
+    "target_expression": { "type": "string" },
+    "source_type": { "type": "string", "enum": ["AUTO_SEARCH_TERM", "MANUAL_EXACT_SEARCH_TERM", "MANUAL_PHRASE_SEARCH_TERM", "MANUAL_BROAD_SEARCH_TERM", "PRODUCT_TARGETING_SEARCH_TERM"] },
+    "search_term_original": { "type": "string" },
+    "search_term_normalized": { "type": "string" },
+    "purchased_asin": { "type": "string" },
+    "purchased_sku": { "type": "string" },
+    "same_asin_order": { "type": "boolean", "default": false },
+    "halo_order": { "type": "boolean", "default": false },
+    "same_sku_units": { "type": "number", "default": 0 },
+    "halo_units": { "type": "number", "default": 0 },
+    "profit_after_ads": { "type": "number" },
+    "metrics_fresh_at": { "type": "string", "format": "date-time" },
+    "term_evidence_classification": { "type": "string", "enum": ["EXISTING_EXACT_TERM_EVIDENCE", "MANUAL_DISCOVERED_VARIATION", "CANDIDATE", "HALO_ONLY", "LEARNING"] },
+    "source_target_type": {
+      "type": "string"
+    },
+    "source_target_id": {
+      "type": "string"
+    },
+    "evaluation_count": {
+      "type": "number",
+      "default": 0
+    },
+    "last_evaluated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_action": {
+      "type": "string"
+    },
+    "last_action_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "performance_window": {
+      "type": "string"
+    },
+    "profit_estimate": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number"
+    },
+    "recommended_bid": {
+      "type": "number"
+    },
+    "maximum_profitable_cpc": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "unique_key"
+  ]
+}

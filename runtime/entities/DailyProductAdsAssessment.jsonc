@@ -1,0 +1,200 @@
+{
+  "name": "DailyProductAdsAssessment",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "marketplace_id": {
+      "type": "string"
+    },
+    "assessment_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "product_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "ads_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "real_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "units_real": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number"
+    },
+    "acos_status": {
+      "type": "string",
+      "enum": [
+        "below_target",
+        "at_target",
+        "slightly_above",
+        "above_break_even",
+        "no_sales",
+        "unavailable"
+      ],
+      "default": "unavailable"
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "tacos": {
+      "type": "number"
+    },
+    "tacos_data_partial": {
+      "type": "boolean",
+      "default": false
+    },
+    "average_order_value": {
+      "type": "number",
+      "default": 0
+    },
+    "revenue_per_click": {
+      "type": "number",
+      "default": 0
+    },
+    "cost_per_order": {
+      "type": "number",
+      "default": 0
+    },
+    "product_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "amazon_fees": {
+      "type": "number",
+      "default": 0
+    },
+    "estimated_taxes": {
+      "type": "number",
+      "default": 0
+    },
+    "logistics_cost": {
+      "type": "number",
+      "default": 0
+    },
+    "other_variable_costs": {
+      "type": "number",
+      "default": 0
+    },
+    "contribution_profit_before_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number"
+    },
+    "break_even_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "target_acos": {
+      "type": "number",
+      "default": 0
+    },
+    "maximum_profitable_cpa": {
+      "type": "number",
+      "default": 0
+    },
+    "safe_max_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "economic_status": {
+      "type": "string",
+      "enum": [
+        "profitable",
+        "low_profit",
+        "break_even",
+        "unprofitable",
+        "no_sales_with_spend",
+        "insufficient_data",
+        "stock_blocked",
+        "listing_blocked"
+      ],
+      "default": "insufficient_data"
+    },
+    "performance_status": {
+      "type": "string"
+    },
+    "data_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "stale",
+        "failed",
+        "reconciliation_pending"
+      ],
+      "default": "partial"
+    },
+    "confidence": {
+      "type": "number",
+      "default": 0
+    },
+    "recommended_action": {
+      "type": "string"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "idempotency_key": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "assessment_date",
+    "asin"
+  ]
+}

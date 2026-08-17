@@ -1,0 +1,150 @@
+{
+  "name": "KeywordLifecycle",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "ad_group_id": {
+      "type": "string"
+    },
+    "keyword_id": {
+      "type": "string"
+    },
+    "keyword_text": {
+      "type": "string"
+    },
+    "normalized_keyword": {
+      "type": "string"
+    },
+    "match_type": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "phrase",
+        "broad"
+      ],
+      "default": "exact"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "ai_generated",
+        "amazon_suggested",
+        "automatic_search_term",
+        "manual"
+      ],
+      "default": "ai_generated"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "experimental",
+        "learning",
+        "performing",
+        "no_delivery",
+        "paused",
+        "replaced",
+        "promoted",
+        "blocked"
+      ],
+      "default": "experimental"
+    },
+    "enabled_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_due_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "evaluation_done_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "orders": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "replacement_keyword_id": {
+      "type": "string"
+    },
+    "replacement_campaign_id": {
+      "type": "string"
+    },
+    "pause_reason": {
+      "type": "string"
+    },
+    "paused_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_search_term": {
+      "type": "string"
+    },
+    "source_auto_campaign_id": {
+      "type": "string"
+    },
+    "destination_manual_campaign_id": {
+      "type": "string"
+    },
+    "negative_created": {
+      "type": "boolean",
+      "default": false
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "keyword_text"
+  ]
+}

@@ -1,0 +1,229 @@
+{
+  "name": "OptimizationDecision",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "correlation_id": { "type": "string" },
+    "snapshot_id": { "type": "string" },
+    "snapshot_key": { "type": "string" },
+    "marketplace_id": { "type": "string" },
+    "profile_id": { "type": "string" },
+    "decision_type": {
+      "type": "string",
+      "description": "Tipo operacional aberto para suportar bid_change, bid_adjustment, budget, placement, campaign e demais decisões existentes."
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": ["campaign", "ad_group", "keyword", "product_target", "product", "account"]
+    },
+    "entity_id": { "type": "string" },
+    "entity_name": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "campaign_name": { "type": "string" },
+    "ad_group_id": { "type": "string" },
+    "keyword_id": { "type": "string" },
+    "keyword_text": { "type": "string" },
+    "target_id": { "type": "string" },
+    "asin": { "type": "string" },
+    "sku": { "type": "string" },
+    "action": { "type": "string" },
+    "rationale": { "type": "string" },
+    "rule_key": { "type": "string" },
+    "reason_code": { "type": "string" },
+    "canonical_action_type": { "type": "string" },
+    "priority": { "type": "number" },
+    "data_used": { "type": "string" },
+    "metric_window": {
+      "type": "string",
+      "description": "Período real dos dados de performance usados."
+    },
+    "decision_window": {
+      "type": "string",
+      "description": "Período que o motor considerou como recente."
+    },
+    "baseline_window": {
+      "type": "string",
+      "description": "Período ou valor-base usado como comparativo."
+    },
+    "data_scope_validated": { "type": "boolean", "default": false },
+    "data_scope_status": {
+      "type": "string",
+      "enum": ["VALID", "PERIOD_SCOPE_MISMATCH", "DATA_SCOPE_MISSING", "PROTECT_RECENT_STRATEGY"]
+    },
+    "current_value": { "type": "number" },
+    "proposed_value": { "type": "number" },
+    "value_before": { "type": "number" },
+    "value_after": { "type": "number" },
+    "change_pct": { "type": "number" },
+    "current_config": { "type": "string" },
+    "proposed_config": { "type": "string" },
+    "expected_impact_pct": { "type": "number" },
+    "expected_impact_value": { "type": "number" },
+    "account_daily_budget_limit": { "type": "number" },
+    "account_daily_spend": { "type": "number" },
+    "remaining_account_budget": { "type": "number" },
+    "campaign_virtual_budget": { "type": "number" },
+    "campaign_spend_share": { "type": "number" },
+    "campaign_target_share": { "type": "number" },
+    "spend_share_deviation": { "type": "number" },
+    "campaign_classification": { "type": "string" },
+    "confidence": { "type": "number", "default": 0 },
+    "risk": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "requires_approval": { "type": "boolean", "default": true },
+    "approval_status": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "pending", "approved", "scheduled", "executing", "confirming", "executed", "completed", "waiting_retry", "conflict_reconciling", "blocked", "failed", "failed_final", "cancelled", "expired", "pending_approval", "skipped", "superseded", "rolled_back"],
+      "default": "proposed"
+    },
+    "queue_status": {
+      "type": "string",
+      "description": "Estado da fila: pending, scheduled, processing, completed, failed ou cancelled."
+    },
+    "queue_hour": { "type": "number" },
+    "queue_window": { "type": "string" },
+    "execution_channel": { "type": "string" },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["EXECUTE_NOW", "EXPEDITED_QUEUE", "STANDARD_QUEUE", "SCHEDULED_WINDOW", "MANUAL_REVIEW"]
+    },
+    "priority_class": {
+      "type": "string",
+      "enum": ["P0", "P1", "P2", "P3", "P4"]
+    },
+    "urgency_reason_code": { "type": "string" },
+    "not_before": { "type": "string", "format": "date-time" },
+    "execute_before": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "requires_fresh_data": { "type": "boolean", "default": true },
+    "maximum_data_age_minutes": { "type": "number" },
+    "conflict_group": { "type": "string" },
+    "supersedes_decision_id": { "type": "string" },
+    "cancelled_by_decision_id": { "type": "string" },
+    "precondition_snapshot": { "type": "string" },
+    "expected_loss_if_delayed": { "type": "number" },
+    "execution_sla_seconds": { "type": "number" },
+    "confirmation_required": { "type": "boolean", "default": true },
+    "confirmation_status": {
+      "type": "string",
+      "enum": ["pending", "confirmed", "divergent", "unsupported", "not_found"]
+    },
+    "confirmation_error": { "type": "string" },
+    "confirmed_at": { "type": "string", "format": "date-time" },
+    "queued_at": { "type": "string", "format": "date-time" },
+    "queue_processed_at": { "type": "string", "format": "date-time" },
+    "scheduled_for": { "type": "string", "format": "date-time" },
+    "next_retry_at": { "type": "string", "format": "date-time" },
+    "attempt_count": { "type": "number", "default": 0 },
+    "max_attempts": { "type": "number", "default": 3 },
+    "lock_key": { "type": "string" },
+    "rollback_plan": { "type": "string" },
+    "rollback_status": { "type": "string" },
+    "transport_queue_id": { "type": "string" },
+    "last_attempt_at": { "type": "string", "format": "date-time" },
+    "settings_source": { "type": "string" },
+    "settings_snapshot": { "type": "string" },
+    "amazon_response": { "type": "string" },
+    "amazon_response_code": { "type": "number" },
+    "amazon_request_id": { "type": "string" },
+    "execution_error": { "type": "string" },
+    "error_message": { "type": "string" },
+    "evaluated_at": { "type": "string", "format": "date-time" },
+    "approved_at": { "type": "string", "format": "date-time" },
+    "approved_by": { "type": "string" },
+    "rejected_at": { "type": "string", "format": "date-time" },
+    "rejected_by": { "type": "string" },
+    "rejection_reason": { "type": "string" },
+    "executed_at": { "type": "string", "format": "date-time" },
+    "evaluation_due_at": { "type": "string", "format": "date-time" },
+    "cooldown_until": { "type": "string", "format": "date-time" },
+    "idempotency_key": { "type": "string" },
+    "source_function": { "type": "string" },
+    "rule_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "country_code": { "type": "string" },
+    "currency_code": { "type": "string" },
+    "currency_symbol": { "type": "string" },
+    "stock_coverage_days": {
+      "type": "number",
+      "description": "Cobertura do estoque vendável no momento da decisão."
+    },
+    "stock_coverage_with_inbound_days": {
+      "type": "number",
+      "description": "Cobertura projetada incluindo estoque inbound."
+    },
+    "stock_qty": { "type": "number" },
+    "stock_inbound_qty": { "type": "number" },
+    "stock_reserved_qty": { "type": "number" },
+    "stock_urgency": {
+      "type": "string",
+      "enum": ["critical", "low", "healthy", "unknown"]
+    },
+    "sales_velocity_daily": { "type": "number" },
+    "inventory_signal_quality": {
+      "type": "string",
+      "enum": ["sufficient", "insufficient_history"]
+    },
+    "current_cpc": { "type": "number" },
+    "maximum_economic_cpc": {
+      "type": "number",
+      "description": "Teto calculado por preço médio × CVR histórica × ACoS-alvo × fator de segurança."
+    },
+    "current_acos": { "type": "number" },
+    "target_acos": { "type": "number" },
+    "expected_clicks_per_order": {
+      "type": "number",
+      "description": "Amostra esperada para uma conversão com base na CVR histórica ou fallback configurado."
+    },
+    "no_conversion_click_multiple": {
+      "type": "number",
+      "description": "Cliques sem venda divididos pelos cliques esperados por pedido."
+    },
+    "maximum_acquisition_spend": {
+      "type": "number",
+      "description": "Menor limite entre margem disponível e preço × ACoS-alvo."
+    },
+    "model_version": { "type": "string" },
+    "economic_state": { "type": "string" },
+    "intervention_state": { "type": "string" },
+    "posterior_cvr": { "type": "number" },
+    "posterior_cvr_low_95": { "type": "number" },
+    "posterior_cvr_high_95": { "type": "number" },
+    "probability_below_sustainable": { "type": "number" },
+    "raw_clicks": { "type": "number" },
+    "mature_clicks": { "type": "number" },
+    "maturity_ratio": { "type": "number" },
+    "same_sku_orders": { "type": "number" },
+    "same_sku_sales": { "type": "number" },
+    "halo_orders": { "type": "number" },
+    "halo_sales": { "type": "number" },
+    "attribution_confidence": { "type": "string" },
+    "contribution_margin_per_order": { "type": "number" },
+    "profit_after_ads_total": { "type": "number" },
+    "maximum_profitable_cpa": { "type": "number" },
+    "safe_cpc": { "type": "number" },
+    "cpc_kalman_level": { "type": "number" },
+    "cpc_kalman_trend": { "type": "number" },
+    "predicted_cpc_next_window": { "type": "number" },
+    "innovation": { "type": "number" },
+    "innovation_z_score": { "type": "number" },
+    "auction_pressure_state": { "type": "string" },
+    "deterioration_level": { "type": "string" },
+    "prior_reduction": { "type": "boolean" },
+    "data_window_start": { "type": "string", "format": "date" },
+    "data_window_end": { "type": "string", "format": "date" },
+    "last_change_version": { "type": "string" },
+    "goal_policy_snapshot": { "type": "string" },
+    "decision_confidence_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "next_review_days": { "type": "number" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "required": ["amazon_account_id", "decision_type", "entity_type"]
+}

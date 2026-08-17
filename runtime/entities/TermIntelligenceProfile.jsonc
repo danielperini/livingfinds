@@ -1,0 +1,201 @@
+{
+  "name": "TermIntelligenceProfile",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "raw_search_term": {
+      "type": "string",
+      "description": "Termo original imut\u00e1vel, exatamente como veio da Amazon"
+    },
+    "normalized_search_term": {
+      "type": "string"
+    },
+    "term_family_key": {
+      "type": "string"
+    },
+    "intent_cluster": {
+      "type": "string"
+    },
+    "hard_attributes": {
+      "type": "string",
+      "description": "JSON dos atributos duros detectados"
+    },
+    "raw_variants": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "source_campaigns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "window": {
+      "type": "string",
+      "enum": [
+        "7d",
+        "15d",
+        "30d",
+        "lifetime"
+      ],
+      "default": "15d"
+    },
+    "first_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_click_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "first_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_sale_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "spend": {
+      "type": "number",
+      "default": 0
+    },
+    "sales": {
+      "type": "number",
+      "default": 0
+    },
+    "same_sku_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "halo_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "distinct_sale_days": {
+      "type": "number",
+      "default": 0
+    },
+    "cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "ctr": {
+      "type": "number",
+      "default": 0
+    },
+    "cvr": {
+      "type": "number",
+      "default": 0
+    },
+    "acos": {
+      "type": "number",
+      "default": 0
+    },
+    "roas": {
+      "type": "number",
+      "default": 0
+    },
+    "profit_after_ads": {
+      "type": "number",
+      "default": 0
+    },
+    "safe_cpc": {
+      "type": "number",
+      "default": 0
+    },
+    "candidate_bid": {
+      "type": "number",
+      "default": 0
+    },
+    "current_maturity": {
+      "type": "string",
+      "enum": [
+        "DISCOVERED",
+        "QUALIFIED",
+        "MANUAL_CLUSTERED",
+        "PROVEN",
+        "WINNER_CANDIDATE",
+        "WINNER",
+        "ISOLATED"
+      ],
+      "default": "DISCOVERED"
+    },
+    "previous_maturity": {
+      "type": "string"
+    },
+    "last_transition_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "assigned_campaign_id": {
+      "type": "string"
+    },
+    "assigned_ad_group_id": {
+      "type": "string"
+    },
+    "assigned_keyword_id": {
+      "type": "string"
+    },
+    "previous_campaign_id": {
+      "type": "string"
+    },
+    "previous_keyword_id": {
+      "type": "string"
+    },
+    "previous_bid": {
+      "type": "number"
+    },
+    "previous_status": {
+      "type": "string"
+    },
+    "previous_cluster": {
+      "type": "string"
+    },
+    "unique_key": {
+      "type": "string",
+      "description": "account|asin|normalized_term|window"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "asin",
+    "normalized_search_term",
+    "unique_key"
+  ]
+}

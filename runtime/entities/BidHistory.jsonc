@@ -1,0 +1,96 @@
+{
+  "name": "BidHistory",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string",
+      "enum": [
+        "campaign",
+        "ad_group",
+        "keyword"
+      ],
+      "default": "keyword"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "entity_name": {
+      "type": "string"
+    },
+    "asin": {
+      "type": "string"
+    },
+    "keyword": {
+      "type": "string"
+    },
+    "old_bid": {
+      "type": "number"
+    },
+    "new_bid": {
+      "type": "number"
+    },
+    "budget_before": {
+      "type": "number"
+    },
+    "budget_after": {
+      "type": "number"
+    },
+    "change_pct": {
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "executed",
+        "failed",
+        "cancelled"
+      ],
+      "default": "pending"
+    },
+    "applied_by": {
+      "type": "string",
+      "enum": [
+        "manual",
+        "autopilot",
+        "rule",
+        "agent"
+      ],
+      "default": "manual"
+    },
+    "decision_id": {
+      "type": "string"
+    },
+    "amazon_response": {
+      "type": "string"
+    },
+    "acos_at_change": {
+      "type": "number"
+    },
+    "spend_at_change": {
+      "type": "number"
+    },
+    "sales_at_change": {
+      "type": "number"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "executed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "entity_type",
+    "entity_id"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "name": "UnifiedMetricsReconciliation",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "campaign_id": {
+      "type": "string"
+    },
+    "legacy_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "unified_spend": {
+      "type": "number",
+      "default": 0
+    },
+    "spend_diff": {
+      "type": "number",
+      "default": 0
+    },
+    "legacy_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "unified_sales": {
+      "type": "number",
+      "default": 0
+    },
+    "sales_diff": {
+      "type": "number",
+      "default": 0
+    },
+    "legacy_orders": {
+      "type": "number",
+      "default": 0
+    },
+    "unified_purchases": {
+      "type": "number",
+      "default": 0
+    },
+    "orders_diff": {
+      "type": "number",
+      "default": 0
+    },
+    "legacy_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "unified_clicks": {
+      "type": "number",
+      "default": 0
+    },
+    "clicks_diff": {
+      "type": "number",
+      "default": 0
+    },
+    "legacy_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "unified_impressions": {
+      "type": "number",
+      "default": 0
+    },
+    "impressions_diff": {
+      "type": "number",
+      "default": 0
+    },
+    "difference_percent": {
+      "type": "number",
+      "default": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "warning",
+        "critical"
+      ],
+      "default": "ok"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "required": [
+    "amazon_account_id",
+    "date",
+    "campaign_id"
+  ]
+}

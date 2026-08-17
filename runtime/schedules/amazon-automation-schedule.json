@@ -1,0 +1,138 @@
+{
+  "timezone": "America/Sao_Paulo",
+  "jobs": [
+    {
+      "name": "Amazon Ads report polling - every 10 minutes",
+      "function": "pollAmazonAdsReportJobs",
+      "cron": "*/10 * * * *",
+      "payload": { "_service_role": true, "max_jobs": 10 }
+    },
+    {
+      "name": "Amazon intraday campaign metrics - every 15 minutes",
+      "function": "syncAmazonIntradayCampaignMetrics",
+      "cron": "2,17,32,47 * * * *",
+      "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
+    },
+    {
+      "name": "Amazon campaign state reconciliation - every 15 minutes",
+      "function": "syncAdsCampaignStatesV2",
+      "cron": "1,16,31,46 * * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_state" }
+    },
+    {
+      "name": "Amazon offer and buyability verification - every 10 minutes",
+      "function": "syncAmazonOfferAvailability",
+      "cron": "1,11,21,31,41,51 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "AUTO campaign repair queue - one safe item every 5 minutes",
+      "function": "processAutoCampaignRepairQueueV2",
+      "cron": "*/5 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Operational queue reconciliation - every 2 hours",
+      "function": "reconcileOperationalQueues",
+      "cron": "17 */2 * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_queue_reconciliation" }
+    },
+    {
+      "name": "Closed-day Amazon reports request - 00:01 BRT",
+      "function": "ensureDailyReportsCurrent",
+      "cron": "1 0 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Unified marketplace decision engine - every 15 minutes",
+      "function": "runUnifiedDecisionEngine",
+      "cron": "4,19,34,49 * * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
+    },
+    {
+      "name": "Unified daily close, bootstrap-aware audit and repricing - 01:25 BRT",
+      "function": "runUnifiedDecisionEngine",
+      "cron": "25 1 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
+    },
+    {
+      "name": "Canonical decision executor - every 15 minutes",
+      "function": "executeApprovedDecisionQueue",
+      "cron": "6,21,36,51 * * * *",
+      "payload": { "_service_role": true, "max_decisions": 25 }
+    },
+    {
+      "name": "Canonical Amazon decision confirmation - every 15 minutes",
+      "function": "confirmExecutedDecisions",
+      "cron": "9,24,39,54 * * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Manual bid parity reconciliation - daily 04:10 BRT",
+      "function": "reconcileManualBidParity",
+      "cron": "10 4 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Ads automation E2E health audit - every 15 minutes",
+      "function": "auditAdsAutomationE2E",
+      "cron": "13,28,43,58 * * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_e2e_audit" }
+    },
+    {
+      "name": "Repricing transport queue - every 5 minutes",
+      "function": "runAutomaticRepricing",
+      "cron": "*/5 * * * *",
+      "payload": { "_service_role": true, "operation": "process_queue", "max_actions": 20, "transport_only": true }
+    },
+    {
+      "name": "Repricing transport reconciliation - 04:43 BRT",
+      "function": "runAutomaticRepricing",
+      "cron": "43 4 * * *",
+      "payload": { "_service_role": true, "operation": "reconcile", "max_actions": 100, "transport_only": true }
+    },
+    {
+      "name": "Finance events freshness - 05:50 BRT",
+      "function": "syncFinanceEventsFromSpApi",
+      "cron": "50 5 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Weekend/holiday daypart learning - daily 06:10 BRT",
+      "function": "runWeekendHolidayDaypartLearning",
+      "cron": "10 6 * * *",
+      "payload": { "_service_role": true, "dry_run": false, "trigger_type": "scheduler_weekend_holiday_learning" }
+    },
+    {
+      "name": "Amazon data consistency reconciliation - daily after close",
+      "function": "auditAmazonDataConsistency",
+      "cron": "10 2 * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_daily_reconciliation" }
+    },
+    {
+      "name": "Finance events refresh - 13:20 and 20:20 BRT",
+      "function": "syncFinanceEventsFromSpApi",
+      "cron": "20 13,20 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Daily decision outcome monitor - 03:30 BRT",
+      "function": "monitorRulePerformance",
+      "cron": "30 3 * * *",
+      "payload": { "_service_role": true }
+    },
+    {
+      "name": "Weekly GPT supervisor of deterministic rules - Sunday 21:00 BRT",
+      "function": "runWeeklyGptRuleReview",
+      "cron": "0 21 * * 0",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor" }
+    },
+    {
+      "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
+      "function": "runWeeklyMotorPrelection",
+      "cron": "0 22 * * 0",
+      "payload": { "_service_role": true, "dry_run": false }
+    }
+  ]
+}

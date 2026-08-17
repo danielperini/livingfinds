@@ -1,0 +1,25 @@
+{
+  "name": "PlacementMetricsDaily",
+  "type": "object",
+  "properties": {
+    "amazon_account_id": { "type": "string" },
+    "campaign_id": { "type": "string" },
+    "placement": { "type": "string" },
+    "date": { "type": "string", "format": "date" },
+    "impressions": { "type": "number", "default": 0 },
+    "clicks": { "type": "number", "default": 0 },
+    "spend": { "type": "number", "default": 0 },
+    "sales": { "type": "number", "default": 0 },
+    "orders": { "type": "number", "default": 0 },
+    "acos": { "type": "number", "default": 0 },
+    "roas": { "type": "number", "default": 0 },
+    "cpc": { "type": "number", "default": 0 },
+    "ctr": { "type": "number", "default": 0 },
+    "conversion_rate": { "type": "number", "default": 0 },
+    "synced_at": { "type": "string", "format": "date-time" },
+    "report_id": { "type": "string" },
+    "data_status": { "type": "string" },
+    "unique_key": { "type": "string" }
+  },
+  "required": ["amazon_account_id", "date", "unique_key"]
+}
