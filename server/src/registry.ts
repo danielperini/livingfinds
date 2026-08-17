@@ -1,9 +1,9 @@
 /**
- * Registry — carrega as 311 funções Deno sem modificá-las.
+ * Registry — carrega as funções Deno do runtime self-hosted sem modificá-las.
  *
- * Truque: cada função chama `Deno.serve(handler)` no topo do módulo. Nós substituímos
- * `Deno.serve` por um capturador ANTES de importar cada entry.ts — em vez de subir um servidor,
- * ele guarda o handler no registro. Depois o main.ts roteia as requisições para esses handlers.
+ * Cada função chama `Deno.serve(handler)` no topo do módulo. Substituímos
+ * `Deno.serve` por um capturador antes de importar cada entry.ts; em vez de subir
+ * outro servidor, o handler é guardado no registro e roteado pelo main.ts.
  */
 import { join, toFileUrl } from 'jsr:@std/path@1';
 
@@ -33,7 +33,7 @@ function installServeInterceptor() {
   };
 }
 
-/** Restaura o Deno.serve original (o main.ts precisa dele para subir o servidor de verdade). */
+/** Restaura o Deno.serve original (o main.ts precisa dele para subir o servidor real). */
 export function restoreServe(): void {
   // deno-lint-ignore no-explicit-any
   (Deno as any).serve = originalServe;
@@ -41,7 +41,7 @@ export function restoreServe(): void {
 
 function functionsDir(): string {
   return Deno.env.get('FUNCTIONS_DIR') ??
-    join(import.meta.dirname!, '..', '..', 'base44', 'functions');
+    join(import.meta.dirname!, '..', '..', 'runtime', 'functions');
 }
 
 export async function loadFunctions(): Promise<{ loaded: number; failed: string[] }> {
@@ -66,7 +66,7 @@ export async function loadFunctions(): Promise<{ loaded: number; failed: string[
     try {
       await Deno.stat(entryPath);
     } catch {
-      continue; // pasta sem entry.ts
+      continue;
     }
     capturing = null;
     try {
