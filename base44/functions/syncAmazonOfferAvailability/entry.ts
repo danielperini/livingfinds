@@ -10,29 +10,21 @@ function spBase(region: string) {
   return 'https://sellingpartnerapi-na.amazon.com';
 }
 
-async function getAccessToken() {
-  const response = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: Deno.env.get('AMAZON_SP_REFRESH_TOKEN') || Deno.env.get('SP_REFRESH_TOKEN') || '',
-      client_id: Deno.env.get('AMAZON_LWA_CLIENT_ID') || Deno.env.get('SP_CLIENT_ID') || '',
-      client_secret: Deno.env.get('AMAZON_LWA_CLIENT_SECRET') || Deno.env.get('SP_CLIENT_SECRET') || '',
-    }).toString(),
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.access_token) throw new Error(data.error_description || data.error || `Token SP-API HTTP ${response.status}`);
-  return String(data.access_token);
-}
-
-async function fetchListing(base44: any, account: any, accessToken: string, endpoint: string, sellerId: string, sku: string, marketplaceId: string) {
+async function fetchListing(base44: any, account: any, endpoint: string, sellerId: string, sku: string, marketplaceId: string) {
   const url = `${endpoint}/listings/2021-08-01/items/${sellerId}/${encodeURIComponent(sku)}?marketplaceIds=${marketplaceId}&includedData=summaries,issues,offers,fulfillmentAvailability`;
   const response = await base44.asServiceRole.functions.invoke('amazonApiGateway', {
-    amazon_account_id: account.id, api_family: 'SP_API_LISTINGS', operation: 'getListingsItem',
-    endpoint: url, method: 'GET',
-    headers: { 'x-amz-access-token': accessToken, 'Content-Type': 'application/json' },
-    queue_type: 'READ', max_attempts: 5, _service_role: true,
+    amazon_account_id: account.id,
+    api_family: 'SP_API_LISTINGS',
+    operation: 'getListingsItem',
+    endpoint: url,
+    method: 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    // Para Listings Items, 404 significa simplesmente que aquele SKU não possui
+    // listing no marketplace consultado. É estado de catálogo, não falha de sync.
+    expected_statuses: [404],
+    queue_type: 'READ',
+    max_attempts: 5,
+    _service_role: true,
   });
   const result = response?.data || response || {};
   if (Number(result.status || result.status_code) === 404) return { notFound: true, data: null };
@@ -93,7 +85,6 @@ Deno.serve(async (request) => {
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id })
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' });
-    const token = await getAccessToken();
     const results: any[] = [];
 
     for (const account of accounts as any[]) {
@@ -111,7 +102,7 @@ Deno.serve(async (request) => {
       for (const product of products as any[]) {
         if (!product.sku) continue;
         try {
-          const listing = await fetchListing(base44, account, token, spBase(account.region), sellerId, product.sku, account.marketplace_id || MARKETPLACE_ID);
+          const listing = await fetchListing(base44, account, spBase(account.region), sellerId, product.sku, account.marketplace_id || MARKETPLACE_ID);
           const observed: any = listing.notFound
             ? { offer_active: false, listing_suppressed: false, listing_buyable: false, listing_status_confirmed: true, reason: 'SKU não encontrado na Amazon' }
             : availability(listing.data);
