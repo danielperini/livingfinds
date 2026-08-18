@@ -8,6 +8,8 @@ const MAX_BID_STEP = 0.08;
 const MAX_BUDGET_STEP = 0.10;
 const MAX_ACTIONS = 10;
 const FRESHNESS_MINUTES = 45;
+const COMPETITIVE_BID_STEP = 0.05;
+const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.80;
 
 const n = (v: unknown, f = 0) => Number.isFinite(Number(v)) ? Number(v) : f;
 const s = (v: unknown) => String(v || '').trim();
@@ -124,6 +126,7 @@ Deno.serve(async (request) => {
       const minCampaignBudget = Math.max(5, n(settings.minimum_campaign_budget, 5));
       const maxCampaignBudget = Math.max(minCampaignBudget, n(settings.maximum_campaign_budget, 100));
       const maxBid = Math.max(MIN_BID, n(settings.max_bid, 3));
+      const configuredMinBid = Math.max(MIN_BID, n(settings.min_bid, MIN_BID));
       const minMarginRate = minimumMarginRate(settings);
       const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
       const econByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
@@ -147,6 +150,7 @@ Deno.serve(async (request) => {
       const campaigns = dedupeCampaigns(campaignRows).filter((row: any) => active(row) && upper(row.campaign_type || 'SP') === 'SP');
       const todayByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
       let spendToday = 0;
+      let adsSalesToday = 0;
       for (const campaign of campaigns) {
         const id = campaignId(campaign);
         const snap = latest.get(id) || campaign;
@@ -158,15 +162,23 @@ Deno.serve(async (request) => {
         };
         todayByCampaign.set(id, m);
         spendToday += m.spend;
+        adsSalesToday += m.sales;
       }
 
-      const tacos = revenueToday > 0 ? spendToday / revenueToday : null;
       // The 06:04 unified lifecycle restores eligible coverage for the new
       // day. From 07:00 onward, use fresh intraday evidence to diagnose weak
       // morning delivery rather than waiting until 10:00 to cut waste or
       // recover economically safe campaigns.
-      const recoveryActive = intradayDataFresh && hour >= 7 && hour <= 21 && baselineRevenue > 0 && expectedFloor > 0 && revenueToday < expectedFloor && spendToday > 0;
+      // SalesDaily is a closed SP-API source and can lag intraday Ads data.
+      // During the day, never treat that delay as proof of zero sales.
+      const observedRevenueToday = Math.max(revenueToday, adsSalesToday);
+      const tacos = observedRevenueToday > 0 ? spendToday / observedRevenueToday : null;
+      const recoveryActive = intradayDataFresh && baselineRevenue > 0 && expectedFloor > 0 && observedRevenueToday < expectedFloor && spendToday > 0;
       const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.20, merTarget * 4);
+      // Coverage is intentionally evaluated in every hour and every weekday.
+      // It does not create a blanket bid increase: it only restores an
+      // economically validated entity that is failing to reach the auction.
+      const competitiveCoverageActive = intradayDataFresh && campaigns.length > 0;
 
       const histByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
       for (const row of dailyMetrics) {
@@ -185,6 +197,7 @@ Deno.serve(async (request) => {
       const hourKey = `${today}T${String(hour).padStart(2, '0')}`;
       const losers: any[] = [];
       const winners: any[] = [];
+      const competitiveCandidates: any[] = [];
 
       for (const campaign of campaigns) {
         const id = campaignId(campaign);
@@ -205,6 +218,7 @@ Deno.serve(async (request) => {
         const profitAfterAds = n(econ.profit_after_ads ?? product?.profit_after_ads, 0);
         const budget = n(campaign.daily_budget || campaign.budget, 0);
         const maximumAdsPerOrder = maximumAdsSpendPerOrder(econ, product, minMarginRate);
+        const safeMaxCpc = n(econ.safe_max_cpc ?? econ.maximum_economic_cpc);
         const admission = {
           product_state: 'ACTIVE',
           listing_status: String(product?.listing_status || product?.status || 'active'),
@@ -235,10 +249,22 @@ Deno.serve(async (request) => {
         const historicalWinner = hist.orders >= 2 && hist.sales > hist.spend && histAcos !== null && histAcos <= safeAcos && profitAfterAds > 0;
         const todayWinner = todayM.orders >= 1 && todayM.sales > todayM.spend && todayAcos !== null && todayAcos <= safeAcos * 1.20 && profitAfterAds > 0;
         if (historicalWinner || todayWinner) winners.push({ campaign, id, asin, todayM, hist, histAcos, todayAcos, safeAcos, budget, product, econ, economicConfidence, admission: { ...admission, winner_protected: true }, todayWinner });
+        const lowDelivery = todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.spend < Math.min(Math.max(safeMaxCpc, configuredMinBid), 0.40));
+        const historicalLossConfirmed = hist.spend >= Math.max(2.5, maximumAdsPerOrder || 5) && hist.orders <= 0 && hist.sales <= 0;
+        if (
+          lowDelivery && !historicalLossConfirmed && safeMaxCpc >= configuredMinBid &&
+          economicConfidence >= 0.70 && admission.sp_api_data_fresh && admission.economics_data_fresh && admission.economics_complete
+        ) {
+          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner });
+        }
       }
 
       losers.sort((a, b) => (b.todayM.spend - b.todayM.sales) - (a.todayM.spend - a.todayM.sales));
       winners.sort((a, b) => Number(b.todayWinner) - Number(a.todayWinner) || b.hist.orders - a.hist.orders || (a.histAcos ?? 999) - (b.histAcos ?? 999));
+      competitiveCandidates.sort((a, b) =>
+        Number(b.todayWinner || b.historicalWinner) - Number(a.todayWinner || a.historicalWinner) ||
+        a.todayM.clicks - b.todayM.clicks || a.todayM.spend - b.todayM.spend
+      );
 
       const queued: any[] = [];
       let freedBudget = 0;
@@ -404,6 +430,51 @@ Deno.serve(async (request) => {
         }
       }
 
+      // Competitive coverage: a lack of early sales/impressions is not a
+      // reason to disappear from the auction. Re-establish the bid toward 80%
+      // of the confirmed safe CPC, one 5% reversible step at a time. It runs
+      // through the same canonical queue and Amazon confirmation as every
+      // other bid decision, so it cannot bypass margin, cap or cooldown rules.
+      if (competitiveCoverageActive && body.dry_run !== true) {
+        for (const candidate of competitiveCandidates.slice(0, 5)) {
+          if (queued.length >= MAX_ACTIONS) break;
+          const campaignKeywords = keywords
+            .filter((kw: any) => active(kw) && s(kw.campaign_id || kw.amazon_campaign_id) === candidate.id)
+            .sort((a: any, b: any) => {
+              const aExact = upper(a.match_type) === 'EXACT' ? 0 : 1;
+              const bExact = upper(b.match_type) === 'EXACT' ? 0 : 1;
+              return aExact - bExact || n(a.clicks) - n(b.clicks) || n(a.current_bid ?? a.bid) - n(b.current_bid ?? b.bid);
+            });
+          const keyword = campaignKeywords[0];
+          const keywordId = s(keyword?.keyword_id || keyword?.id);
+          const currentBid = n(keyword?.current_bid ?? keyword?.bid);
+          const competitiveFloor = r2(clamp(Math.min(maxBid, candidate.safeMaxCpc * COMPETITIVE_FLOOR_OF_SAFE_CPC), configuredMinBid, maxBid));
+          const nextBid = r2(Math.min(competitiveFloor, Math.max(configuredMinBid, currentBid * (1 + COMPETITIVE_BID_STEP))));
+          const key = `COMPETITIVE_COVERAGE|${aid}|${keywordId}|${hourKey}|${nextBid.toFixed(2)}`;
+          if (!keywordId || currentBid <= 0 || nextBid <= currentBid + 0.009 || activeKeys.has(key)) continue;
+          const decision = await createDecision({
+            admission: candidate.admission,
+            entity_type: 'keyword', entity_id: keywordId, keyword_id: keywordId,
+            keyword_text: keyword.keyword_text || keyword.keyword || null,
+            campaign_id: candidate.id, campaign_name: candidate.campaign.name || candidate.campaign.campaign_name || null,
+            ad_group_id: keyword.ad_group_id || null, asin: candidate.asin, sku: candidate.product?.sku || null,
+            action: 'increase_bid', canonical_action_type: 'KEYWORD_BID_CHANGE',
+            rationale: `COBERTURA COMPETITIVA: sem entrega suficiente nesta hora; bid aproxima-se do piso competitivo de R$ ${competitiveFloor.toFixed(2)}, limitado pelo CPC seguro confirmado de R$ ${candidate.safeMaxCpc.toFixed(2)}.`,
+            rule_key: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR', reason_code: 'INTRADAY_COMPETITIVE_COVERAGE_FLOOR',
+            value_before: currentBid, value_after: nextBid, current_value: currentBid, proposed_value: nextBid,
+            target_acos: candidate.safeAcos, confidence: candidate.historicalWinner || candidate.todayWinner ? 0.90 : 0.78, risk: 'low',
+            idempotency_key: key, conflict_group: `${aid}|keyword|${keywordId}`,
+            data_used: JSON.stringify({
+              competitive_floor_bid: competitiveFloor, safe_max_cpc: candidate.safeMaxCpc,
+              low_delivery: true, hour_brt: hour, today_clicks: candidate.todayM.clicks,
+              today_spend: candidate.todayM.spend, historical_orders: candidate.hist.orders,
+              policy: 'all_hours_all_days_no_blind_daypart_cut',
+            }),
+          });
+          queued.push({ decision_id: decision.id, action: 'increase_bid', campaign_id: candidate.id, keyword_id: keywordId, asin: candidate.asin, before: currentBid, after: nextBid, reason: 'competitive_coverage' });
+        }
+      }
+
       // Growth is owned exclusively by runUnifiedDecisionEngine. Recovery may
       // recommend expansion from today's evidence, but never invokes a second
       // campaign-growth pass with an independent correlation/idempotency scope.
@@ -414,22 +485,23 @@ Deno.serve(async (request) => {
       await base44.asServiceRole.entities.SyncExecutionLog.create({
         amazon_account_id: aid, sync_type: 'intraday_sales_recovery', status: 'completed', source_function: SOURCE,
         records_processed: campaigns.length, records_imported: queued.length,
-        message: recoveryActive
-          ? `RECOVERY ativo: receita canônica R$ ${r2(revenueToday)} vs piso R$ ${r2(expectedFloor)}; TACoS ${tacos == null ? 'n/a' : `${(tacos * 100).toFixed(1)}%`}; ${losers.length} perdedor(es), ${winners.length} vencedor(es), ${queued.length} decisão(ões).`
-          : `RECOVERY inativo: receita canônica R$ ${r2(revenueToday)} vs piso R$ ${r2(expectedFloor)}.`,
+        message: recoveryActive || competitiveCoverageActive
+          ? `RECOVERY/cobertura: receita observada R$ ${r2(observedRevenueToday)} vs piso R$ ${r2(expectedFloor)}; TACoS ${tacos == null ? 'n/a' : `${(tacos * 100).toFixed(1)}%`}; ${losers.length} perdedor(es), ${winners.length} vencedor(es), ${competitiveCandidates.length} candidato(s) competitivos, ${queued.length} decisão(ões).`
+          : `RECOVERY inativo: receita observada R$ ${r2(observedRevenueToday)} vs piso R$ ${r2(expectedFloor)}.`,
         started_at: new Date(started).toISOString(), completed_at: new Date().toISOString(),
       }).catch(() => null);
 
       reports.push({
         amazon_account_id: aid, date: today, hour_brt: hour,
-        recovery_active: recoveryActive, growth_allowed: growthAllowed,
-        revenue_today: r2(revenueToday), sales_source: todaySales?.source || null,
-        baseline_daily_revenue_median_14d: r2(baselineRevenue), expected_revenue_floor_now: r2(expectedFloor), revenue_ratio_to_floor: r2(revenueRatio),
+        recovery_active: recoveryActive, competitive_coverage_active: competitiveCoverageActive, growth_allowed: growthAllowed,
+        revenue_today: r2(observedRevenueToday), sales_source: todaySales?.source || null,
+        baseline_daily_revenue_median_14d: r2(baselineRevenue), expected_revenue_floor_now: r2(expectedFloor), revenue_ratio_to_floor: r2(expectedFloor > 0 ? observedRevenueToday / expectedFloor : 1),
         spend_today: r2(spendToday), tacos: tacos == null ? null : r2(tacos * 100), target_tacos: r2(merTarget * 100),
         losers: losers.map((x) => ({ campaign_id: x.id, asin: x.asin, spend: r2(x.todayM.spend), orders: x.todayM.orders, sales: r2(x.todayM.sales), acos: x.todayAcos == null ? null : r2(x.todayAcos) })),
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
+        competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc) })),
         queued, serving_growth: servingGrowth,
-        policy: { canonical_sales_only: true, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 

@@ -213,7 +213,7 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'unified-marketplace-decision-governance',
-      engine_version: 'unified-v20-single-owner-orchestration',
+      engine_version: 'unified-v21-competitive-coverage',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       daily_close: dailyClose,
@@ -249,8 +249,12 @@ Deno.serve(async (request) => {
       sales_recovery: {
         function: 'runIntradaySalesRecovery',
         automatic: true,
-        policy: 'quando receita fica abaixo da trajetória, corta perdedores e transfere capacidade para vencedores comprovados sem elevar gasto agregado por princípio',
+        policy: 'em todos os horários e dias, baixa entrega em entidade economicamente válida restaura o bid até o piso competitivo em passos reversíveis; perda comprovada continua limitada no próprio termo/target',
         max_bid_step_pct: 8,
+        competitive_coverage_bid_step_pct: 5,
+        competitive_floor_of_safe_cpc_pct: 80,
+        no_fixed_hour_or_weekday_bid_cut: true,
+        intraday_ads_sales_precede_closed_sales_lag: true,
         max_budget_step_pct: 10,
         top_of_search_change: false,
         execution_owner: 'executeApprovedDecisionQueue',
