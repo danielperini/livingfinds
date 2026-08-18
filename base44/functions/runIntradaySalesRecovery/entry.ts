@@ -10,6 +10,7 @@ const MAX_ACTIONS = 10;
 const FRESHNESS_MINUTES = 45;
 const COMPETITIVE_BID_STEP = 0.05;
 const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.80;
+const ECONOMIC_CACHE_MAX_MINUTES = 7 * 24 * 60;
 
 const n = (v: unknown, f = 0) => Number.isFinite(Number(v)) ? Number(v) : f;
 const s = (v: unknown) => String(v || '').trim();
@@ -209,6 +210,10 @@ Deno.serve(async (request) => {
         const economicConfidence = confidence01(econ.final_economic_confidence ?? econ.economic_data_confidence ?? econ.confidence);
         const spApiDataFresh = freshWithin(product?.last_confirmed_at || product?.last_synced_at || product?.updated_at, 24 * 60);
         const economicsDataFresh = freshWithin(econ?.calculated_at || econ?.updated_at || econ?.created_at, 24 * 60);
+        // Pricing quotas may delay a fresh recalculation. A recent, confirmed
+        // economic packet is still safe for a tiny bid-recovery step; unknown
+        // or stale economics remain blocked.
+        const economicsCacheUsable = freshWithin(econ?.calculated_at || econ?.updated_at || econ?.created_at, ECONOMIC_CACHE_MAX_MINUTES);
         const todayM = todayByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
         const hist = histByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
         const histAcos = hist.sales > 0 ? hist.spend / hist.sales * 100 : null;
@@ -249,13 +254,13 @@ Deno.serve(async (request) => {
         const historicalWinner = hist.orders >= 2 && hist.sales > hist.spend && histAcos !== null && histAcos <= safeAcos && profitAfterAds > 0;
         const todayWinner = todayM.orders >= 1 && todayM.sales > todayM.spend && todayAcos !== null && todayAcos <= safeAcos * 1.20 && profitAfterAds > 0;
         if (historicalWinner || todayWinner) winners.push({ campaign, id, asin, todayM, hist, histAcos, todayAcos, safeAcos, budget, product, econ, economicConfidence, admission: { ...admission, winner_protected: true }, todayWinner });
-        const lowDelivery = todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.spend < Math.min(Math.max(safeMaxCpc, configuredMinBid), 0.40));
+        const lowDelivery = todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.clicks <= 2 && todayM.spend < Math.max(safeMaxCpc, configuredMinBid));
         const historicalLossConfirmed = hist.spend >= Math.max(2.5, maximumAdsPerOrder || 5) && hist.orders <= 0 && hist.sales <= 0;
         if (
           lowDelivery && !historicalLossConfirmed && safeMaxCpc >= configuredMinBid &&
-          economicConfidence >= 0.70 && admission.sp_api_data_fresh && admission.economics_data_fresh && admission.economics_complete
+          economicConfidence >= 0.60 && admission.sp_api_data_fresh && economicsCacheUsable && admission.economics_complete
         ) {
-          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner });
+          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh });
         }
       }
 
@@ -300,7 +305,7 @@ Deno.serve(async (request) => {
               ...admission,
             },
           }),
-          source_function: SOURCE, model_version: 'sales-recovery-v1.2-admission-evidence',
+          source_function: SOURCE, model_version: 'sales-recovery-v1.3-competitive-cache-recovery',
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
       };
@@ -468,6 +473,7 @@ Deno.serve(async (request) => {
               competitive_floor_bid: competitiveFloor, safe_max_cpc: candidate.safeMaxCpc,
               low_delivery: true, hour_brt: hour, today_clicks: candidate.todayM.clicks,
               today_spend: candidate.todayM.spend, historical_orders: candidate.hist.orders,
+              economics_cache_usable: candidate.economicsCacheUsable, economics_fresh: candidate.economicsDataFresh,
               policy: 'all_hours_all_days_no_blind_daypart_cut',
             }),
           });
@@ -499,9 +505,9 @@ Deno.serve(async (request) => {
         spend_today: r2(spendToday), tacos: tacos == null ? null : r2(tacos * 100), target_tacos: r2(merTarget * 100),
         losers: losers.map((x) => ({ campaign_id: x.id, asin: x.asin, spend: r2(x.todayM.spend), orders: x.todayM.orders, sales: r2(x.todayM.sales), acos: x.todayAcos == null ? null : r2(x.todayAcos) })),
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
-        competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc) })),
+        competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc), economics_cache_usable: x.economicsCacheUsable })),
         queued, serving_growth: servingGrowth,
-        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 
