@@ -11,7 +11,8 @@
       "name": "Amazon intraday campaign metrics - every 15 minutes",
       "function": "syncAmazonIntradayCampaignMetrics",
       "cron": "2,17,32,47 * * * *",
-      "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday" }
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "action": "auto", "trigger_type": "scheduler_intraday_startup" }
     },
     {
       "name": "Amazon campaign state reconciliation - every 15 minutes",
@@ -48,7 +49,7 @@
       "function": "runCanonicalDecisionCycle",
       "cron": "4,19,34,49 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday" }
+      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday_startup" }
     },
     {
       "name": "Canonical daily close, bootstrap-aware audit and repricing - 01:25 BRT",
@@ -60,12 +61,14 @@
       "name": "Canonical decision executor - every 15 minutes",
       "function": "executeApprovedDecisionQueue",
       "cron": "6,21,36,51 * * * *",
+      "run_on_startup": true,
       "payload": { "_service_role": true, "max_decisions": 25 }
     },
     {
       "name": "Canonical Amazon decision confirmation - every 15 minutes",
       "function": "confirmExecutedDecisions",
       "cron": "9,24,39,54 * * * *",
+      "run_on_startup": true,
       "payload": { "_service_role": true }
     },
     {
