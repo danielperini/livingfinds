@@ -10,9 +10,10 @@ import { evaluateCentralGoals } from '../../shared/centralPerformanceGoals.ts';
  * - envelope absoluto 0,50x–1,50x;
  * - regras Amazon usadas somente quando cobrem o dia/hora/campanha atual;
  * - pacing, lucro, safe CPC e limite transitório podem pausar a regra nativa;
+ * - subentrega econômica pode autorizar micro-recuperação de exposição;
  * - dry-run não persiste nada.
  */
-const ENGINE_VERSION = 'canonical-dayparting-v4-economy-first';
+const ENGINE_VERSION = 'canonical-dayparting-v5-sales-recovery';
 const MIN_REDUCTION_IMPRESSIONS = 200;
 const MIN_REDUCTION_CLICKS = 10;
 const MIN_REDUCTION_SPEND = 12;
@@ -22,16 +23,8 @@ const r2 = (value: number) => Math.round((Number(value || 0) + Number.EPSILON) *
 const norm = (value: any) => String(value || '').trim().toLowerCase();
 const active = (value: any) => ['enabled', 'active'].includes(norm(value));
 
-// Cumulative pacing curve for an account whose morning conversion is weaker.
-// It reserves budget for the afternoon/evening without changing the account's
-// daily cap. Learned hourly data can still classify an exceptional morning
-// slot as strong; this curve only prevents front-loading when data is absent
-// or spend is already ahead of the economically planned trajectory.
 function plannedBudgetShare(hour: number) {
   if (hour < 7) return 0.04;
-  // Reserve enough capital for exploration in the two conversion windows
-  // requested by the business, while still retaining the majority for the
-  // afternoon/evening when the account historically needs protection.
   if (hour < 10) return 0.22;
   if (hour < 12) return 0.34;
   if (hour < 14) return 0.45;
@@ -106,8 +99,6 @@ function isDayAggregatePattern(row: any) {
   const granularity = String(row?.granularity || row?.metric_granularity || '').toUpperCase();
   const label = String(row?.slot_label || '').toLowerCase();
   if (granularity === 'DAY' || label.endsWith('_dia')) return true;
-  // Compatibilidade com os 7 agregados históricos *_dia que foram gravados
-  // como hour=0 sem ASIN/campaign_id. Eles são contexto diário, não 00:00.
   return Number(row?.hour) === 0 && !row?.asin && !row?.campaign_id && Number(row?.occurrences || 0) > 24;
 }
 
@@ -198,7 +189,6 @@ function ruleApplies(rule: any, campaignId: string, slotClassification: string, 
   if (rule.native_api_supported !== true || !rule.optimization_rule_id) return false;
   if (!ruleCampaigns(rule).has(campaignId)) return false;
   const ruleSlot = String(rule.slot_classification || '');
-  // Regras canônicas v8 (PISO/EFICIENTE/PICO) valem por horário, não por slot aprendido
   if (ruleSlot && !['PICO', 'PISO', 'EFICIENTE'].includes(ruleSlot) && ruleSlot !== slotClassification) return false;
   return ruleTimeMatches(rule, clock);
 }
@@ -254,61 +244,71 @@ function chooseMultiplier(params: {
   economicRisk: boolean;
   hour: number;
   explorationEligible: boolean;
+  deliveryRecoveryEligible: boolean;
   maxIncreasePct: number;
   maxDecreasePct: number;
 }) {
-  const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, hour, explorationEligible, maxIncreasePct, maxDecreasePct } = params;
+  const { slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders, acos, targetAcos, economicRisk, hour, explorationEligible, deliveryRecoveryEligible, maxIncreasePct, maxDecreasePct } = params;
   const maxUpMultiplier = Math.min(1.20, 1 + Math.max(0, Math.min(50, maxIncreasePct)) / 100);
   const minDownMultiplier = Math.max(0.50, 1 - Math.max(0, Math.min(50, maxDecreasePct)) / 100);
   const profitable = sampleMature && orders > 0 && acos !== null && acos <= targetAcos;
   const exceptional = sampleMature && orders >= 2 && acos !== null && acos <= targetAcos * 0.80;
+  const canRecoverDelivery = deliveryRecoveryEligible && !economicRisk && !nativeCovered && !['overpacing', 'morning_reserve'].includes(pacing);
+  const recoveryMultiplier = Math.min(winner ? 1.08 : 1.05, maxUpMultiplier);
 
-  // Economy first: sem maturidade, nenhum PEAK estatístico autoriza escala.
   if (!slot.mature || slot.classification === 'COLLECTING_DATA') {
-    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.90, reason: 'Pacing matinal com evidência horária insuficiente: contenção leve e reversível.' };
+    if (canRecoverDelivery) return { multiplier: recoveryMultiplier, reason: `Subentrega econômica: micro-recuperação de exposição em +${r2((recoveryMultiplier - 1) * 100)}%, limitada por safe CPC e pacing.` };
+    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.95, reason: 'Pacing matinal acima da trajetória: contenção mínima de 5%, preservando presença no leilão.' };
     if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
-      const probe = winner ? 1.05 : 1.02;
-      return { multiplier: Math.min(probe, maxUpMultiplier), reason: `Exploração econômica controlada de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}% em janela de demanda, sem tratar peak_score como autorização.` };
+      const probe = winner ? 1.05 : 1.03;
+      return { multiplier: Math.min(probe, maxUpMultiplier), reason: `Exploração econômica controlada de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}% em janela de demanda.` };
     }
-    return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base.' };
+    return { multiplier: 1, reason: 'Dados horários insuficientes; manter bid-base sem cortar exposição.' };
   }
 
   if (slot.classification === 'ELITE_TIME' || slot.classification === 'STRONG_TIME') {
     if (nativeCompensationMultiplier !== null) return { multiplier: Math.max(minDownMultiplier, Math.min(1, nativeCompensationMultiplier)), reason: 'Compensação local: regra Amazon não pôde ser pausada diante de guardrail.' };
-    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Peak estatístico sem autorização econômica: aumento bloqueado por pacing/proteção de lucro.' };
+    if (pacing === 'overpacing' || pacing === 'morning_reserve' || economicRisk) return { multiplier: 1, reason: 'Aumento bloqueado por pacing/proteção de lucro; baseline preservado.' };
     if (nativeCovered) return { multiplier: 1, reason: 'Regra Amazon aplicável cobre a janela; manter/restaurar bid-base local.' };
-    if (!sampleMature || !profitable) return { multiplier: 1, reason: `${slot.classification} é apenas sinal de oportunidade; sem evidência econômica madura, manter baseline.` };
+    if (!sampleMature || !profitable) {
+      if (canRecoverDelivery) return { multiplier: recoveryMultiplier, reason: `${slot.classification} com subentrega e economia segura: recuperação moderada antes da maturidade.` };
+      return { multiplier: 1, reason: `${slot.classification} ainda sem evidência econômica madura; manter baseline, sem redução.` };
+    }
 
     const desired = slot.classification === 'ELITE_TIME'
-      ? exceptional ? 1.20 : 1.10
+      ? exceptional ? 1.20 : 1.12
       : exceptional ? 1.15 : 1.10;
     const multiplier = Math.min(desired, maxUpMultiplier);
     return { multiplier, reason: `${slot.classification} + economia madura: SCALE controlado em +${r2((multiplier - 1) * 100)}%.` };
   }
 
   if (slot.classification === 'NORMAL_TIME') {
-    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.90, reason: 'NORMAL matinal: contenção leve para preservar verba posterior.' };
+    if (canRecoverDelivery) {
+      const multiplier = Math.min(winner ? 1.06 : 1.04, maxUpMultiplier);
+      return { multiplier, reason: `NORMAL com subentrega econômica: recuperação de +${r2((multiplier - 1) * 100)}% para preservar volume de vendas.` };
+    }
+    if (pacing === 'morning_reserve' && !winner) return { multiplier: 0.95, reason: 'NORMAL matinal acima da trajetória: contenção mínima de 5%.' };
     if (isDemandProbeWindow(hour) && explorationEligible && !economicRisk && !nativeCovered) {
-      const probe = winner ? 1.05 : 1.02;
+      const probe = winner ? 1.05 : 1.03;
       return { multiplier: Math.min(probe, maxUpMultiplier), reason: `NORMAL com exploração econômica de ${Math.round((Math.min(probe, maxUpMultiplier) - 1) * 100)}%.` };
     }
     return { multiplier: 1, reason: 'NORMAL: manter/restaurar bid-base.' };
   }
 
   if (winner) return { multiplier: 1, reason: 'Entidade vencedora protegida contra redução horária.' };
-  if (!sampleMature) return { multiplier: 1, reason: 'Redução bloqueada por amostra insuficiente.' };
+  if (!sampleMature) return { multiplier: 1, reason: 'Redução bloqueada por amostra insuficiente; preservar capacidade de gerar impressões.' };
 
   if (slot.classification === 'WEAK_TIME') {
     const materiallyAboveTarget = acos !== null && acos > targetAcos * 1.20;
-    const desired = economicRisk ? 0.85 : (orders === 0 || materiallyAboveTarget || pacing === 'overpacing' || pacing === 'morning_reserve') ? 0.90 : 1;
-    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired < 1 ? 'WEAK com evidência madura: contenção leve/moderada, sem corte cego.' : 'WEAK com economia protegida.' };
+    const desired = economicRisk ? 0.90 : (orders === 0 || materiallyAboveTarget || pacing === 'overpacing' || pacing === 'morning_reserve') ? 0.95 : 1;
+    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired < 1 ? 'WEAK com evidência madura: contenção leve, preservando presença e potencial de venda.' : 'WEAK com economia protegida.' };
   }
 
   if (slot.classification === 'LOSS_TIME') {
     const severeLoss = economicRisk && orders === 0;
     const aboveTarget = acos !== null && acos > targetAcos;
-    const desired = severeLoss ? 0.75 : aboveTarget || orders === 0 ? 0.85 : 1;
-    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired === 0.75 ? 'LOSS + risco econômico maduro: contenção forte.' : desired === 0.85 ? 'LOSS maduro: redução moderada e reversível.' : 'LOSS estatístico, mas economia/conversão protegida.' };
+    const desired = severeLoss ? 0.85 : aboveTarget || orders === 0 ? 0.90 : 1;
+    return { multiplier: Math.max(desired, minDownMultiplier), reason: desired === 0.85 ? 'LOSS + risco econômico maduro: contenção forte, porém sem retirar competitividade excessivamente.' : desired === 0.90 ? 'LOSS maduro: redução moderada e reversível.' : 'LOSS estatístico, mas economia/conversão protegida.' };
   }
 
   return { multiplier: 1, reason: 'Sem ajuste aplicável.' };
@@ -363,8 +363,6 @@ Deno.serve(async (request) => {
     let nativePreflight: any = null;
     let queuePreflight: any = null;
     if (!dryRun && body.skip_native_preflight !== true) {
-      // v8: sync nativo canônico (PISO/EFICIENTE/PICO) direto no motor,
-      // máx. 10 campanhas por execução para evitar rate limit.
       nativePreflight = await runCanonicalNativeDaypartSync(base44, account, {
         trigger_type: body._service_role ? 'automatic' : 'manual',
         max_campaigns: Number(body.native_max_campaigns || 10),
@@ -389,12 +387,8 @@ Deno.serve(async (request) => {
       base44.asServiceRole.entities.HourlySalesPattern.filter({ amazon_account_id: aid }, undefined, 2000).catch(() => []),
       base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid }, '-created_at', 5000).catch(() => []),
       base44.asServiceRole.entities.AmazonScheduledRule.filter({ amazon_account_id: aid }, '-updated_at', 3000).catch(() => []),
-      base44.asServiceRole.entities.IntradaySpendSnapshot.filter(
-        { amazon_account_id: aid, spend_date: clock.date }, '-observed_at', 10000,
-      ).catch(() => []),
-      base44.asServiceRole.entities.CampaignMetricsDaily.filter(
-        { amazon_account_id: aid, date: clock.date }, '-updated_at', 10000,
-      ).catch(() => []),
+      base44.asServiceRole.entities.IntradaySpendSnapshot.filter({ amazon_account_id: aid, spend_date: clock.date }, '-observed_at', 10000).catch(() => []),
+      base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid, date: clock.date }, '-updated_at', 10000).catch(() => []),
     ]);
 
     const cfg = configs[0] || {};
@@ -417,26 +411,14 @@ Deno.serve(async (request) => {
       : null;
 
     const dailyCap = resolveDailyCap(perf, cfg, account, controller).cap;
-    const todaySpend = readConfirmedTodaySpend({
-      snapshots: intradaySnapshots,
-      dailyMetrics: todayMetrics,
-      spendDate: clock.date,
-    });
+    const todaySpend = readConfirmedTodaySpend({ snapshots: intradaySnapshots, dailyMetrics: todayMetrics, spendDate: clock.date });
     const confirmedSpend = todaySpend.confirmedSpend;
     if (!todaySpend.available) {
-      return Response.json({
-        ok: true,
-        skipped: true,
-        reason: 'pacing_data_stale',
-        data_source: todaySpend.source,
-        freshness_seconds: todaySpend.freshnessSeconds,
-        confidence: todaySpend.confidence,
-        amazon_writes_blocked: true,
-      });
+      return Response.json({ ok: true, skipped: true, reason: 'pacing_data_stale', data_source: todaySpend.source, freshness_seconds: todaySpend.freshnessSeconds, confidence: todaySpend.confidence, amazon_writes_blocked: true });
     }
     const plannedSpendByNow = dailyCap > 0 ? dailyCap * plannedBudgetShare(clock.hour) : 0;
-    const morningReserve = clock.hour >= 7 && clock.hour < 12 && dailyCap > 0 &&
-      confirmedSpend > plannedSpendByNow * 1.10;
+    const morningReserve = clock.hour >= 7 && clock.hour < 12 && dailyCap > 0 && confirmedSpend > plannedSpendByNow * 1.10;
+    const deliveryGap = clock.hour >= 7 && dailyCap > 0 && plannedSpendByNow > 0 && confirmedSpend < plannedSpendByNow * 0.75;
     const pacing = morningReserve
       ? 'morning_reserve'
       : String(controller.spend_pacing || (dailyCap > 0 && confirmedSpend > plannedSpendByNow * 1.10 ? 'overpacing' : 'on_track'));
@@ -475,12 +457,6 @@ Deno.serve(async (request) => {
         profitPositive: true,
         dataComplete: cm.spend > 0 || cm.impressions > 0,
       });
-      const strategicManual = type === 'MANUAL' && cm.orders >= minManualOrders && cm.sales > 0 && cm.acos !== null && cm.acos <= targetAcos;
-      if (type === 'MANUAL' && !strategicManual) {
-        skipped++;
-        results.push({ campaign_id: cid, targeting_type: type, skipped: true, reason: 'manual_not_strategic' });
-        continue;
-      }
 
       const economic = economicsByAsin.get(asin) || {};
       const safeMaxCpc = Number(economic.safe_max_cpc || economic.maximum_safe_cpc || perf.max_cpc || 0);
@@ -490,13 +466,21 @@ Deno.serve(async (request) => {
         Number(economic.profit_after_ads_3d || 0) < 0 ||
         (breakEvenAcos !== null && cm.acos !== null && cm.acos >= breakEvenAcos * 0.95);
       const sampleMature = cm.impressions >= MIN_REDUCTION_IMPRESSIONS && cm.clicks >= MIN_REDUCTION_CLICKS && cm.spend >= MIN_REDUCTION_SPEND;
-      // Minimum evidence for exploration: safe CPC plus either a profitable
-      // conversion or delivered traffic not yet above the risk ACoS. This is
-      // deliberately smaller than the scale threshold, so the engine learns
-      // morning/lunch demand without committing meaningful budget blindly.
+      const currentCpc = cm.clicks > 0 ? cm.spend / cm.clicks : 0;
+      const cpcHasRoom = safeMaxCpc > 0 && (cm.clicks === 0 || currentCpc <= safeMaxCpc * 0.90);
+      const deliveryRecoveryEligible = deliveryGap && !economicRisk && cpcHasRoom && centralGoals.permissions.topOfSearch &&
+        cm.impressions < MIN_REDUCTION_IMPRESSIONS && cm.clicks < MIN_REDUCTION_CLICKS &&
+        (cm.acos === null || cm.acos <= targetAcos * 1.10);
       const explorationEligible = safeMaxCpc > 0 && !economicRisk && (
-        winner || (cm.clicks >= 2 && (cm.acos === null || cm.acos <= targetAcos * 1.25))
+        winner || deliveryRecoveryEligible || (cm.clicks >= 1 && (cm.acos === null || cm.acos <= targetAcos * 1.20))
       );
+      const strategicManual = type === 'MANUAL' && cm.orders >= minManualOrders && cm.sales > 0 && cm.acos !== null && cm.acos <= targetAcos;
+      const manualExplorationEligible = type === 'MANUAL' && explorationEligible && centralGoals.permissions.topOfSearch;
+      if (type === 'MANUAL' && !strategicManual && !manualExplorationEligible) {
+        skipped++;
+        results.push({ campaign_id: cid, targeting_type: type, skipped: true, reason: 'manual_not_strategic_or_safe_exploration' });
+        continue;
+      }
 
       const groups = adGroups.filter((group: any) => String(group.campaign_id || '') === cid && active(group.state || group.status));
       const campaignBaseBids: number[] = [];
@@ -512,9 +496,7 @@ Deno.serve(async (request) => {
       }
 
       const enabledApplicable = nativeRules.filter((rule: any) => ruleApplies(rule, cid, slot.classification, clock, ['enabled']));
-      const pausedGuardApplicable = nativeRules.filter((rule: any) =>
-        ruleApplies(rule, cid, slot.classification, clock, ['paused']) && String(rule.reason || '').startsWith('GUARDRAIL_TEMP_PAUSE:'),
-      );
+      const pausedGuardApplicable = nativeRules.filter((rule: any) => ruleApplies(rule, cid, slot.classification, clock, ['paused']) && String(rule.reason || '').startsWith('GUARDRAIL_TEMP_PAUSE:'));
       const maxEnabledAdjustment = enabledApplicable.reduce((max, rule) => Math.max(max, Number(rule.adjustment_value || 0)), 0);
       const maxProjectedBid = campaignBaseBids.reduce((max, base) => Math.max(max, base * (1 + maxEnabledAdjustment / 100)), 0);
       const nativeGuardReasons: string[] = [];
@@ -564,9 +546,7 @@ Deno.serve(async (request) => {
             const keyword = exact[0];
             entities.push({ entityType: 'keyword', entityId: String(keyword.keyword_id || keyword.id || ''), row: keyword, currentBid: Number(keyword.current_bid || keyword.bid || group.default_bid || 0), keyword, target: null });
           } else if (groupTargets.length > 0 && groupKeywords.length === 0) {
-            for (const target of groupTargets.slice(0, 25)) {
-              entities.push({ entityType: 'product_target', entityId: String(target.target_id || target.id || ''), row: target, currentBid: Number(target.bid || group.default_bid || 0), keyword: null, target });
-            }
+            for (const target of groupTargets.slice(0, 25)) entities.push({ entityType: 'product_target', entityId: String(target.target_id || target.id || ''), row: target, currentBid: Number(target.bid || group.default_bid || 0), keyword: null, target });
           } else {
             skipped++;
             results.push({ campaign_id: cid, ad_group_id: gid, skipped: true, reason: `manual_group_noncanonical:${groupKeywords.length}_keywords:${exact.length}_exact:${groupTargets.length}_targets` });
@@ -577,8 +557,6 @@ Deno.serve(async (request) => {
         for (const entity of entities) {
           if (!entity.entityId) { skipped++; continue; }
           const currentBid = Number(entity.currentBid || absoluteMinBid);
-          // Product target usa somente o próprio baseline; nunca herda o último
-          // target processado no Ad Group.
           const storedBase = Number(entity.row.daypart_base_bid || 0);
           const baseBid = r2(storedBase > 0 ? storedBase : currentBid);
           const floor = r2(Math.max(absoluteMinBid, baseBid * 0.50));
@@ -587,22 +565,7 @@ Deno.serve(async (request) => {
           const cap = r2(Math.max(floor, Math.min(...caps)));
           const wasAdjusted = entity.row.daypart_active === true || (entity.entityType !== 'product_target' && group.daypart_active === true);
 
-          const choice = chooseMultiplier({
-            slot,
-            nativeCovered,
-            nativeCompensationMultiplier,
-            pacing,
-            winner,
-            sampleMature,
-            orders: cm.orders,
-            acos: cm.acos,
-            targetAcos,
-            economicRisk,
-            hour: clock.hour,
-            explorationEligible,
-            maxIncreasePct,
-            maxDecreasePct,
-          });
+          const choice = chooseMultiplier({ slot, nativeCovered, nativeCompensationMultiplier, pacing, winner, sampleMature, orders: cm.orders, acos: cm.acos, targetAcos, economicRisk, hour: clock.hour, explorationEligible, deliveryRecoveryEligible, maxIncreasePct, maxDecreasePct });
           const targetBid = r2(Math.max(floor, Math.min(cap, baseBid * choice.multiplier)));
           const changed = Math.abs(targetBid - currentBid) >= 0.01;
           const restoring = changed && wasAdjusted && choice.multiplier === 1;
@@ -610,16 +573,13 @@ Deno.serve(async (request) => {
           const reason = `${choice.reason} Base R$${baseBid.toFixed(2)}; faixa R$${floor.toFixed(2)}–R$${cap.toFixed(2)}; multiplicador ${choice.multiplier.toFixed(3)}x; fonte ${slot.source}.`;
 
           if (dryRun) {
-            results.push({ campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, dry_run: true, changed, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, floor, cap, native_covered: nativeCovered, reason });
+            results.push({ campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, dry_run: true, changed, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, floor, cap, native_covered: nativeCovered, delivery_recovery_eligible: deliveryRecoveryEligible, reason });
             continue;
           }
 
           const existing = await base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid, idempotency_key: idem }, '-updated_at', 1).catch(() => []);
           let audit = existing[0] || null;
-          if (audit && ['executed', 'executing', 'approved'].includes(String(audit.status || ''))) {
-            skipped++;
-            continue;
-          }
+          if (audit && ['executed', 'executing', 'approved'].includes(String(audit.status || ''))) { skipped++; continue; }
 
           const auditData: any = {
             amazon_account_id: aid,
@@ -715,11 +675,7 @@ Deno.serve(async (request) => {
                 created_at: clock.iso,
                 updated_at: clock.iso,
               });
-              const response = await base44.asServiceRole.functions.invoke('executePairedManualBidDecision', {
-                decision_id: decision.id,
-                decision_ids: [decision.id],
-                _service_role: true,
-              });
+              const response = await base44.asServiceRole.functions.invoke('executePairedManualBidDecision', { decision_id: decision.id, decision_ids: [decision.id], _service_role: true });
               responseData = response?.data || response || {};
               const item = responseData?.results?.[0] || responseData;
               ok = item?.ok === true || item?.status === 'executed';
@@ -776,23 +732,7 @@ Deno.serve(async (request) => {
                 await base44.asServiceRole.entities.AdGroup.update(group.id, { ...state, default_bid: targetBid }).catch(() => {});
               }
 
-              await logBid(base44, {
-                amazon_account_id: aid,
-                campaign_id: cid,
-                ad_group_id: gid,
-                entity_type: entity.entityType,
-                entity_id: entity.entityId,
-                keyword_id: entity.keyword?.keyword_id || null,
-                keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null,
-                target_id: entity.target?.target_id || null,
-                asin,
-                bid_before: currentBid,
-                bid_after: targetBid,
-                base_bid: baseBid,
-                reason,
-                classification: slot.classification,
-                now: clock.iso,
-              });
+              await logBid(base44, { amazon_account_id: aid, campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, keyword_id: entity.keyword?.keyword_id || null, keyword_text: entity.keyword?.keyword_text || entity.target?.target_value || null, target_id: entity.target?.target_id || null, asin, bid_before: currentBid, bid_after: targetBid, base_bid: baseBid, reason, classification: slot.classification, now: clock.iso });
               executed++;
               if (restoring) restored++;
             } else failed++;
@@ -807,32 +747,10 @@ Deno.serve(async (request) => {
             }).catch(() => {});
           } catch (error: any) {
             failed++;
-            if (audit?.id) await base44.asServiceRole.entities.DaypartingDecision.update(audit.id, {
-              status: 'failed',
-              reason: `${reason} ERRO: ${error?.message || String(error)}`.slice(0, 1000),
-              updated_at: clock.iso,
-            }).catch(() => {});
+            if (audit?.id) await base44.asServiceRole.entities.DaypartingDecision.update(audit.id, { status: 'failed', reason: `${reason} ERRO: ${error?.message || String(error)}`.slice(0, 1000), updated_at: clock.iso }).catch(() => {});
           }
 
-          results.push({
-            campaign_id: cid,
-            ad_group_id: gid,
-            entity_type: entity.entityType,
-            entity_id: entity.entityId,
-            targeting_type: type,
-            strategic_manual: strategicManual,
-            native_covered: nativeCovered,
-            native_compensation_multiplier: nativeCompensationMultiplier,
-            slot: slot.classification,
-            base_bid: baseBid,
-            floor,
-            cap,
-            bid_before: currentBid,
-            bid_after: targetBid,
-            multiplier: choice.multiplier,
-            ok,
-            reason: choice.reason,
-          });
+          results.push({ campaign_id: cid, ad_group_id: gid, entity_type: entity.entityType, entity_id: entity.entityId, targeting_type: type, strategic_manual: strategicManual, manual_exploration_eligible: manualExplorationEligible, native_covered: nativeCovered, native_compensation_multiplier: nativeCompensationMultiplier, delivery_recovery_eligible: deliveryRecoveryEligible, slot: slot.classification, base_bid: baseBid, floor, cap, bid_before: currentBid, bid_after: targetBid, multiplier: choice.multiplier, ok, reason: choice.reason });
           await wait(500);
         }
       }
@@ -849,7 +767,7 @@ Deno.serve(async (request) => {
         completed_at: new Date().toISOString(),
         duration_ms: Date.now() - startedAt,
         records_processed: executed,
-        result_summary: JSON.stringify({ hour_brt: clock.hour, slot: slot.classification, executed, restored, skipped, failed, native_rules_paused: nativeRulesPaused, native_rules_reactivated: nativeRulesReactivated }).slice(0, 1500),
+        result_summary: JSON.stringify({ hour_brt: clock.hour, slot: slot.classification, delivery_gap: deliveryGap, executed, restored, skipped, failed, native_rules_paused: nativeRulesPaused, native_rules_reactivated: nativeRulesReactivated }).slice(0, 1500),
         error_message: failed > 0 ? `${failed} ajuste(s) sem confirmação da Amazon.` : null,
       }).catch(() => {});
     }
@@ -867,7 +785,7 @@ Deno.serve(async (request) => {
         max_increase_pct_this_cycle: maxIncreasePct,
         max_decrease_pct_this_cycle: maxDecreasePct,
         absolute_min_bid: absoluteMinBid,
-        example_base_0_30: { floor: 0.15, intermediate_down: 0.225, base: 0.30, intermediate_up: 0.375, cap: 0.45 },
+        example_base_0_30: { floor: 0.15, intermediate_down: 0.27, base: 0.30, recovery_up: 0.315, cap: 0.45 },
       },
       eligible_asins_scope: eligibleAsins ? [...eligibleAsins] : null,
       native_preflight: nativePreflight,
@@ -875,6 +793,7 @@ Deno.serve(async (request) => {
       native_rules_paused: nativeRulesPaused,
       native_rules_reactivated: nativeRulesReactivated,
       pacing,
+      delivery_gap: deliveryGap,
       confirmed_spend_today: r2(confirmedSpend),
       daily_cap: dailyCap,
       planned_spend_by_now: r2(plannedSpendByNow),
