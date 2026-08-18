@@ -63,6 +63,23 @@ function setHeader(headers: Record<string, any>, name: string, value: string): v
   headers[name] = value;
 }
 
+function normalizeExpectedStatuses(value: any): Set<number> {
+  const rows = Array.isArray(value) ? value : value == null ? [] : [value];
+  return new Set(rows.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 100 && item <= 599));
+}
+
+function applyExpectedStatus(parsed: any, expectedStatuses: Set<number>) {
+  if (!parsed || !expectedStatuses.has(Number(parsed.status))) return parsed;
+  return {
+    ...parsed,
+    ok: true,
+    expected_status: true,
+    retryable: false,
+    errors: [],
+    raw: null,
+  };
+}
+
 Deno.serve(async (request) => {
   const startedAt = new Date().toISOString();
   const startedMs = Date.now();
@@ -82,6 +99,7 @@ Deno.serve(async (request) => {
     const headers: Record<string, any> = { ...(body.headers || {}) };
     const rawPayload = body.payload ?? null;
     const maxAttempts = Math.max(1, Math.min(Number(body.max_attempts || 5), 5));
+    const expectedStatuses = normalizeExpectedStatuses(body.expected_statuses);
 
     if (!endpoint) return Response.json({ ok: false, error: 'endpoint obrigatório' }, { status: 400 });
     if (!ALLOWED_METHODS.has(method)) return Response.json({ ok: false, error: 'Método não permitido' }, { status: 400 });
@@ -195,17 +213,17 @@ Deno.serve(async (request) => {
         };
 
         let response = await executeRequest();
-        parsed = await parseAmazonApiResponse(response);
+        parsed = applyExpectedStatus(await parseAmazonApiResponse(response), expectedStatuses);
 
         // Um 401/403 da SP-API pode ser access token expirado entre a obtenção e o uso.
         // Renova uma única vez e repete a mesma chamada, sem expor credenciais em logs.
-        if (managedSpAuth && !authRefreshUsed && (parsed.status === 401 || parsed.status === 403)) {
+        if (managedSpAuth && !authRefreshUsed && !parsed.expected_status && (parsed.status === 401 || parsed.status === 403)) {
           authRefreshUsed = true;
           invalidateSpApiAccessToken();
           try {
             setHeader(headers, 'x-amz-access-token', await getSpApiAccessToken(true));
             response = await executeRequest();
-            parsed = await parseAmazonApiResponse(response);
+            parsed = applyExpectedStatus(await parseAmazonApiResponse(response), expectedStatuses);
           } catch (error: any) {
             const message = String(error?.message || error || 'Falha ao renovar autenticação SP-API');
             parsed = {
@@ -251,6 +269,7 @@ Deno.serve(async (request) => {
       records_processed: parsed?.ok ? 1 : 0,
       result_summary: JSON.stringify({
         status: parsed?.status,
+        expected_status: parsed?.expected_status === true,
         request_id: parsed?.request_id,
         rate_limit: parsed?.rate_limit,
         attempts: attemptsUsed,
