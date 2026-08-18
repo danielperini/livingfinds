@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
@@ -46,6 +46,22 @@ function ComparisonTooltip({ active, payload, label, unit = 'brl' }) {
           <span className="flex items-center gap-2 text-slate-300"><span className="w-2 h-2 rounded-full" style={{ background: point.color }} />{point.name}</span>
           <strong className="text-white">{point.value == null ? '—' : unit === 'units' ? `${Number(point.value).toLocaleString('pt-BR')} unid.` : unit === 'impressions' ? Number(point.value).toLocaleString('pt-BR') : fmtBRL(point.value)}</strong>
         </div>
+      ))}
+    </div>
+  );
+}
+
+// Recharts infere a legenda a partir das séries e pode mostrar marcadores que
+// não correspondem ao texto em gráficos compostos. Esta legenda é declarativa:
+// uma cor visível para cada período, na mesma ordem e opacidade do gráfico.
+function ComparisonLegend({ items }) {
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-[10px] text-slate-300" aria-label="Legenda do gráfico">
+      {items.map((item) => (
+        <span key={item.label} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} aria-hidden="true" />
+          {item.label}
+        </span>
       ))}
     </div>
   );
@@ -235,6 +251,9 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
   const keys = dataKeyMap[activeMetric];
 
   const hasData = chartData.some(p => p[keys.cur] !== null || p[keys.prev] !== null);
+  const hasImpressionsComparison = chartData.some((point) => point.curImpressions != null || point.prevImpressions != null);
+  const hasCumulativeRevenue = cumulativeRevenueData.some((point) => point.day > 0 && (point.curCumulative != null || point.prevCumulative != null));
+  const hasRollingComparison = rollingComparison.some((point) => point.current != null || point.previous != null);
 
   const prevMonthLabel = prevMonthDate.toLocaleString('pt-BR', { month: 'long', timeZone: 'UTC' });
   const curMonthLabel = nowBRT.toLocaleString('pt-BR', { month: 'long', timeZone: 'UTC' });
@@ -307,7 +326,6 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             <YAxis tick={{ fontSize: 8, fill: '#64748b' }} axisLine={false} tickLine={false} width={44}
               tickFormatter={tickFormatter} />
             <Tooltip content={<CustomTooltip activeMetric={activeMetric} />} />
-            <Legend wrapperStyle={{ fontSize: 10, paddingTop: 4 }} />
             {/* Mês anterior: linha tracejada */}
             <Line
               type="monotone"
@@ -332,6 +350,10 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </ComposedChart>
         </ResponsiveContainer>
       )}
+      {hasData ? <ComparisonLegend items={[
+        { label: prevMonthLabel, color: metric.colorPrev },
+        { label: `${curMonthLabel} (atual)`, color: metric.color },
+      ]} /> : null}
 
       {/* Volume de tráfego separado das curvas financeiras do dashboard. */}
       <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="daily-impressions-comparison">
@@ -342,7 +364,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
           <span className="text-[10px] text-violet-200 bg-violet-400/10 border border-violet-400/20 rounded-full px-2 py-1 whitespace-nowrap">Alcance Ads</span>
         </div>
-        {chartData.some((point) => point.curImpressions != null || point.prevImpressions != null) ? (
+        {hasImpressionsComparison ? (
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={3}>
               <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
@@ -351,7 +373,6 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={50}
                 tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(0)}k` : value.toFixed(0)} />
               <Tooltip content={<ComparisonTooltip unit="impressions" />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
-              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
               <Bar dataKey="prevImpressions" name={prevMonthLabel} fill="#8B5CF655" radius={[4, 4, 0, 0]} maxBarSize={20} />
               <Bar dataKey="curImpressions" name={`${curMonthLabel} (atual)`} fill="#8B5CF6" radius={[4, 4, 0, 0]} maxBarSize={20} />
             </ComposedChart>
@@ -361,6 +382,10 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             Sem impressões diárias suficientes para a comparação.
           </div>
         )}
+        {hasImpressionsComparison ? <ComparisonLegend items={[
+          { label: prevMonthLabel, color: '#8B5CF655' },
+          { label: `${curMonthLabel} (atual)`, color: '#8B5CF6' },
+        ]} /> : null}
       </section>
 
       <section className="mt-6 border-t border-surface-2 pt-5" aria-labelledby="cumulative-revenue-title">
@@ -371,7 +396,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
           <span className="text-[10px] text-indigo-200 bg-indigo-400/10 border border-indigo-400/20 rounded-full px-2 py-1 whitespace-nowrap">Acumulado</span>
         </div>
-        {cumulativeRevenueData.some((point) => point.curCumulative != null && point.day > 0) || cumulativeRevenueData.some((point) => point.prevCumulative != null && point.day > 0) ? (
+        {hasCumulativeRevenue ? (
           <ResponsiveContainer width="100%" height={220}>
             <ComposedChart data={cumulativeRevenueData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
@@ -380,7 +405,6 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={54}
                 tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
               <Tooltip content={<ComparisonTooltip />} cursor={{ stroke: 'rgba(91,108,255,.45)', strokeDasharray: '3 3' }} />
-              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
               <Line type="monotone" dataKey="prevCumulative" name={`${prevMonthLabel} acumulado`} stroke="#FB923C88" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
               <Line type="monotone" dataKey="curCumulative" name={`${curMonthLabel} acumulado`} stroke="#FB923C" strokeWidth={2.8} dot={false} connectNulls={false} />
             </ComposedChart>
@@ -388,6 +412,10 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         ) : (
           <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">Sem faturamento diário confirmado para formar a curva acumulada.</div>
         )}
+        {hasCumulativeRevenue ? <ComparisonLegend items={[
+          { label: `${prevMonthLabel} acumulado`, color: '#FB923C88' },
+          { label: `${curMonthLabel} acumulado`, color: '#FB923C' },
+        ]} /> : null}
         <p className="mt-2 text-[9px] text-slate-600">Dias sem confirmação permanecem como lacuna visual, para não confundir dado ausente com faturamento zero.</p>
       </section>
 
@@ -428,7 +456,7 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
         </div>
 
-        {rollingComparison.some((point) => point.current != null || point.previous != null) ? (
+        {hasRollingComparison ? (
           <ResponsiveContainer width="100%" height={240}>
             <ComposedChart data={rollingComparison} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={3}>
               <CartesianGrid strokeDasharray="3 3" stroke="#24324F" vertical={false} />
@@ -436,7 +464,6 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={56}
                 tickFormatter={(value) => rollingMetric === 'units' ? value.toFixed(0) : (value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`)} />
               <Tooltip content={<ComparisonTooltip unit={rollingMetric === 'units' ? 'units' : 'brl'} />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
-              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 6 }} />
               <Bar dataKey="previous" name="Período anterior" fill={rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
               <Bar dataKey="current" name={`Últimos ${rollingPeriod} dias`} fill={rollingMetric === 'units' ? '#4DA3FF' : '#FB923C'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
             </ComposedChart>
@@ -446,6 +473,10 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             Não há dados confirmados para este período. O gráfico será preenchido conforme os relatórios forem sincronizados.
           </div>
         )}
+        {hasRollingComparison ? <ComparisonLegend items={[
+          { label: 'Período anterior', color: rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55' },
+          { label: `Últimos ${rollingPeriod} dias`, color: rollingMetric === 'units' ? '#4DA3FF' : '#FB923C' },
+        ]} /> : null}
       </section>
 
       <p className="text-[9px] text-slate-600 mt-2">
