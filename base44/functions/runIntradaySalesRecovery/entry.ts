@@ -108,7 +108,7 @@ Deno.serve(async (request) => {
       const today = todayBrt();
       const hour = hourBrt();
       const cutoff14 = daysAgo(14);
-      const [settingsRows, products, economics, campaignRows, productAds, keywords, dailyMetrics, intradayRows, salesRows, priorDecisions] = await Promise.all([
+      const [settingsRows, products, economics, campaignRows, productAds, keywords, dailyMetrics, intradayRows, hourlyMetrics, salesRows, priorDecisions] = await Promise.all([
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.Product.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
         base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: aid }, '-updated_at', 5000).catch(() => []),
@@ -117,6 +117,7 @@ Deno.serve(async (request) => {
         base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 20000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 15000).catch(() => []),
         base44.asServiceRole.entities.IntradaySpendSnapshot.filter({ amazon_account_id: aid, spend_date: today }, '-observed_at', 10000).catch(() => []),
+        base44.asServiceRole.entities.UnifiedAdsMetricsHourly.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
         base44.asServiceRole.entities.SalesDaily.filter({ amazon_account_id: aid }, '-date', 10000).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 10000).catch(() => []),
       ]);
@@ -149,7 +150,7 @@ Deno.serve(async (request) => {
       const revenueRatio = expectedFloor > 0 ? revenueToday / expectedFloor : 1;
 
       const campaigns = dedupeCampaigns(campaignRows).filter((row: any) => active(row) && upper(row.campaign_type || 'SP') === 'SP');
-      const todayByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
+      const todayByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number; impressions: number }>();
       let spendToday = 0;
       let adsSalesToday = 0;
       for (const campaign of campaigns) {
@@ -160,6 +161,7 @@ Deno.serve(async (request) => {
           sales: n(snap.sales ?? snap.attributed_sales ?? campaign.sales),
           orders: n(snap.orders ?? snap.purchases ?? campaign.orders),
           clicks: n(snap.clicks ?? campaign.clicks),
+          impressions: n(snap.impressions ?? campaign.impressions),
         };
         todayByCampaign.set(id, m);
         spendToday += m.spend;
@@ -180,6 +182,33 @@ Deno.serve(async (request) => {
       // It does not create a blanket bid increase: it only restores an
       // economically validated entity that is failing to reach the auction.
       const competitiveCoverageActive = intradayDataFresh && campaigns.length > 0;
+
+      // Hora atual: usa o delta intradiário quando disponível. Para a linha de
+      // base, compara a mesma hora em até 14 dias fechados; assim não confunde
+      // queda normal de madrugada com subentrega de uma campanha específica.
+      const hourlyCurrentByCampaign = new Map<string, any>();
+      for (const row of intradayRows.filter((row: any) => Number(row.hour_brt) === hour && String(row.snapshot_kind || '') === 'hourly_delta')) {
+        const id = s(row.campaign_id || row.amazon_campaign_id);
+        const previous = hourlyCurrentByCampaign.get(id);
+        if (!previous || new Date(String(row.observed_at || 0)).getTime() >= new Date(String(previous.observed_at || 0)).getTime()) hourlyCurrentByCampaign.set(id, row);
+      }
+      const hourlyByCampaignDate = new Map<string, Map<string, number>>();
+      for (const row of hourlyMetrics) {
+        const date = s(row.date).slice(0, 10);
+        const id = s(row.campaign_id || row.amazon_campaign_id);
+        if (!id || !date || date < cutoff14 || date >= today || Number(row.hour) !== hour) continue;
+        const dates = hourlyByCampaignDate.get(id) || new Map<string, number>();
+        dates.set(date, n(dates.get(date)) + n(row.impressions));
+        hourlyByCampaignDate.set(id, dates);
+      }
+      const historicalHourlyImpressions = new Map<string, number>();
+      for (const [id, byDate] of hourlyByCampaignDate) historicalHourlyImpressions.set(id, median([...byDate.values()]));
+      const totalHistoricalHourlyImpressions = [...historicalHourlyImpressions.values()].reduce((sum, value) => sum + value, 0);
+      const totalCurrentHourlyImpressions = campaigns.reduce((sum, campaign) => {
+        const id = campaignId(campaign);
+        const delta = hourlyCurrentByCampaign.get(id);
+        return sum + n(delta?.impressions ?? todayByCampaign.get(id)?.impressions);
+      }, 0);
 
       const histByCampaign = new Map<string, { spend: number; sales: number; orders: number; clicks: number }>();
       for (const row of dailyMetrics) {
@@ -214,7 +243,7 @@ Deno.serve(async (request) => {
         // economic packet is still safe for a tiny bid-recovery step; unknown
         // or stale economics remain blocked.
         const economicsCacheUsable = freshWithin(econ?.calculated_at || econ?.updated_at || econ?.created_at, ECONOMIC_CACHE_MAX_MINUTES);
-        const todayM = todayByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
+        const todayM = todayByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
         const hist = histByCampaign.get(id) || { spend: 0, sales: 0, orders: 0, clicks: 0 };
         const histAcos = hist.sales > 0 ? hist.spend / hist.sales * 100 : null;
         const todayAcos = todayM.sales > 0 ? todayM.spend / todayM.sales * 100 : null;
@@ -254,13 +283,19 @@ Deno.serve(async (request) => {
         const historicalWinner = hist.orders >= 2 && hist.sales > hist.spend && histAcos !== null && histAcos <= safeAcos && profitAfterAds > 0;
         const todayWinner = todayM.orders >= 1 && todayM.sales > todayM.spend && todayAcos !== null && todayAcos <= safeAcos * 1.20 && profitAfterAds > 0;
         if (historicalWinner || todayWinner) winners.push({ campaign, id, asin, todayM, hist, histAcos, todayAcos, safeAcos, budget, product, econ, economicConfidence, admission: { ...admission, winner_protected: true }, todayWinner });
-        const lowDelivery = todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.clicks <= 2 && todayM.spend < Math.max(safeMaxCpc, configuredMinBid));
+        const currentHourImpressions = n(hourlyCurrentByCampaign.get(id)?.impressions ?? todayM.impressions);
+        const expectedHourImpressions = n(historicalHourlyImpressions.get(id));
+        const expectedHourShare = totalHistoricalHourlyImpressions > 0 ? expectedHourImpressions / totalHistoricalHourlyImpressions : 0;
+        const currentHourShare = totalCurrentHourlyImpressions > 0 ? currentHourImpressions / totalCurrentHourlyImpressions : 0;
+        const hourlyImpressionGap = expectedHourImpressions >= 20 && currentHourImpressions < Math.max(2, expectedHourImpressions * 0.45);
+        const campaignDistributionGap = expectedHourShare >= 0.05 && currentHourShare < expectedHourShare * 0.45;
+        const lowDelivery = hourlyImpressionGap || campaignDistributionGap || todayM.clicks <= 0 || (todayM.orders <= 0 && todayM.clicks <= 2 && todayM.spend < Math.max(safeMaxCpc, configuredMinBid));
         const historicalLossConfirmed = hist.spend >= Math.max(2.5, maximumAdsPerOrder || 5) && hist.orders <= 0 && hist.sales <= 0;
         if (
           lowDelivery && !historicalLossConfirmed && safeMaxCpc >= configuredMinBid &&
           economicConfidence >= 0.60 && admission.sp_api_data_fresh && economicsCacheUsable && admission.economics_complete
         ) {
-          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh });
+          competitiveCandidates.push({ campaign, id, asin, todayM, hist, safeAcos, budget, product, econ, economicConfidence, admission, safeMaxCpc, historicalWinner, todayWinner, economicsCacheUsable, economicsDataFresh, currentHourImpressions, expectedHourImpressions, expectedHourShare, currentHourShare, hourlyImpressionGap, campaignDistributionGap });
         }
       }
 
@@ -473,6 +508,9 @@ Deno.serve(async (request) => {
               competitive_floor_bid: competitiveFloor, safe_max_cpc: candidate.safeMaxCpc,
               low_delivery: true, hour_brt: hour, today_clicks: candidate.todayM.clicks,
               today_spend: candidate.todayM.spend, historical_orders: candidate.hist.orders,
+              hour_impressions: candidate.currentHourImpressions, expected_hour_impressions: candidate.expectedHourImpressions,
+              hour_impression_gap: candidate.hourlyImpressionGap, expected_hour_share: candidate.expectedHourShare,
+              current_hour_share: candidate.currentHourShare, campaign_distribution_gap: candidate.campaignDistributionGap,
               economics_cache_usable: candidate.economicsCacheUsable, economics_fresh: candidate.economicsDataFresh,
               policy: 'all_hours_all_days_no_blind_daypart_cut',
             }),
@@ -505,9 +543,9 @@ Deno.serve(async (request) => {
         spend_today: r2(spendToday), tacos: tacos == null ? null : r2(tacos * 100), target_tacos: r2(merTarget * 100),
         losers: losers.map((x) => ({ campaign_id: x.id, asin: x.asin, spend: r2(x.todayM.spend), orders: x.todayM.orders, sales: r2(x.todayM.sales), acos: x.todayAcos == null ? null : r2(x.todayAcos) })),
         winners: winners.map((x) => ({ campaign_id: x.id, asin: x.asin, orders_14d: x.hist.orders, acos_14d: x.histAcos == null ? null : r2(x.histAcos), orders_today: x.todayM.orders, acos_today: x.todayAcos == null ? null : r2(x.todayAcos) })),
-        competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc), economics_cache_usable: x.economicsCacheUsable })),
+        competitive_candidates: competitiveCandidates.map((x) => ({ campaign_id: x.id, asin: x.asin, clicks_today: x.todayM.clicks, spend_today: r2(x.todayM.spend), safe_max_cpc: r2(x.safeMaxCpc), hour_impressions: x.currentHourImpressions, expected_hour_impressions: r2(x.expectedHourImpressions), hour_impression_gap: x.hourlyImpressionGap, campaign_distribution_gap: x.campaignDistributionGap, economics_cache_usable: x.economicsCacheUsable })),
         queued, serving_growth: servingGrowth,
-        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
+        policy: { canonical_sales_only: true, intraday_ads_sales_avoids_stale_zero: true, hourly_impression_baseline_days: 14, hourly_campaign_distribution_guard: true, economic_cache_max_hours: ECONOMIC_CACHE_MAX_MINUTES / 60, dedupe_campaigns: true, global_spend_increase_only_with_v18_guardrails: true, reallocate_from_losers_to_winners: true, bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100, competitive_floor_of_safe_cpc_pct: COMPETITIVE_FLOOR_OF_SAFE_CPC * 100, all_hours_all_days: true, budget_step_max_pct: 10, top_of_search_change: false, amazon_confirmation_required: true },
       });
     }
 
