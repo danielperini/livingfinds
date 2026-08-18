@@ -11,12 +11,19 @@ function fmtPct(v) { return `${(v || 0).toFixed(1)}%`; }
 function fmtNum(v) { return (v || 0).toLocaleString('pt-BR'); }
 
 const METRICS = [
-  { key: 'revenue',  label: 'Fat. Real',    color: '#FB923C', colorPrev: '#FB923C55', unit: 'brl' },
-  { key: 'spend',    label: 'Gasto Ads',    color: '#3B82F6', colorPrev: '#3B82F655', unit: 'brl' },
-  { key: 'sales',    label: 'Vendas Ads',   color: '#10B981', colorPrev: '#10B98155', unit: 'brl' },
-  { key: 'orders',   label: 'Pedidos',      color: '#8B5CF6', colorPrev: '#8B5CF655', unit: 'num' },
-  { key: 'acos',     label: 'ACoS',         color: '#EF4444', colorPrev: '#EF444455', unit: 'pct' },
+  { key: 'revenue',  label: 'Fat. Real',  unit: 'brl' },
+  { key: 'spend',    label: 'Gasto Ads',  unit: 'brl' },
+  { key: 'sales',    label: 'Vendas Ads', unit: 'brl' },
+  { key: 'orders',   label: 'Pedidos',    unit: 'num' },
+  { key: 'acos',     label: 'ACoS',       unit: 'pct' },
 ];
+
+// Contrato visual para todos os comparativos: nunca usar cor para um dado que
+// não esteja identificado na legenda. O período é a dimensão comparada.
+const COMPARISON_SERIES = {
+  previous: '#64748B',
+  current: '#2563EB',
+};
 
 const CustomTooltip = ({ active, payload, label, activeMetric }) => {
   if (!active || !payload?.length) return null;
@@ -59,7 +66,11 @@ function ComparisonLegend({ items }) {
     <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-[10px] text-slate-300" aria-label="Legenda do gráfico">
       {items.map((item) => (
         <span key={item.label} className="inline-flex items-center gap-1.5 whitespace-nowrap">
-          <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} aria-hidden="true" />
+          {item.kind === 'line' ? (
+            <span className="w-5 border-t-2" style={{ borderColor: item.color, borderTopStyle: item.dashed ? 'dashed' : 'solid' }} aria-hidden="true" />
+          ) : (
+            <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} aria-hidden="true" />
+          )}
           {item.label}
         </span>
       ))}
@@ -330,8 +341,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             <Line
               type="monotone"
               dataKey={keys.prev}
-              name={`${prevMonthLabel}`}
-              stroke={metric.colorPrev}
+              name={`${prevMonthLabel} · mês anterior`}
+              stroke={COMPARISON_SERIES.previous}
               strokeWidth={1.5}
               strokeDasharray="4 3"
               dot={false}
@@ -341,8 +352,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
             <Line
               type="monotone"
               dataKey={keys.cur}
-              name={`${curMonthLabel} (atual)`}
-              stroke={metric.color}
+              name={`${curMonthLabel} · mês atual`}
+              stroke={COMPARISON_SERIES.current}
               strokeWidth={2.5}
               dot={false}
               connectNulls
@@ -351,8 +362,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
         </ResponsiveContainer>
       )}
       {hasData ? <ComparisonLegend items={[
-        { label: prevMonthLabel, color: metric.colorPrev },
-        { label: `${curMonthLabel} (atual)`, color: metric.color },
+        { label: `${prevMonthLabel} · mês anterior (tracejada)`, color: COMPARISON_SERIES.previous, kind: 'line', dashed: true },
+        { label: `${curMonthLabel} · mês atual (contínua)`, color: COMPARISON_SERIES.current, kind: 'line' },
       ]} /> : null}
 
       {/* Volume de tráfego separado das curvas financeiras do dashboard. */}
@@ -373,8 +384,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={50}
                 tickFormatter={(value) => value >= 1000 ? `${(value / 1000).toFixed(0)}k` : value.toFixed(0)} />
               <Tooltip content={<ComparisonTooltip unit="impressions" />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
-              <Bar dataKey="prevImpressions" name={prevMonthLabel} fill="#8B5CF655" radius={[4, 4, 0, 0]} maxBarSize={20} />
-              <Bar dataKey="curImpressions" name={`${curMonthLabel} (atual)`} fill="#8B5CF6" radius={[4, 4, 0, 0]} maxBarSize={20} />
+              <Bar dataKey="prevImpressions" name={`${prevMonthLabel} · impressões`} fill={COMPARISON_SERIES.previous} fillOpacity={0.55} radius={[4, 4, 0, 0]} maxBarSize={20} />
+              <Bar dataKey="curImpressions" name={`${curMonthLabel} · impressões`} fill={COMPARISON_SERIES.current} radius={[4, 4, 0, 0]} maxBarSize={20} />
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
@@ -383,8 +394,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
         )}
         {hasImpressionsComparison ? <ComparisonLegend items={[
-          { label: prevMonthLabel, color: '#8B5CF655' },
-          { label: `${curMonthLabel} (atual)`, color: '#8B5CF6' },
+          { label: `${prevMonthLabel} · impressões`, color: COMPARISON_SERIES.previous },
+          { label: `${curMonthLabel} · impressões`, color: COMPARISON_SERIES.current },
         ]} /> : null}
       </section>
 
@@ -405,16 +416,16 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={54}
                 tickFormatter={(value) => value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`} />
               <Tooltip content={<ComparisonTooltip />} cursor={{ stroke: 'rgba(91,108,255,.45)', strokeDasharray: '3 3' }} />
-              <Line type="monotone" dataKey="prevCumulative" name={`${prevMonthLabel} acumulado`} stroke="#FB923C88" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
-              <Line type="monotone" dataKey="curCumulative" name={`${curMonthLabel} acumulado`} stroke="#FB923C" strokeWidth={2.8} dot={false} connectNulls={false} />
+              <Line type="monotone" dataKey="prevCumulative" name={`${prevMonthLabel} · faturamento acumulado`} stroke={COMPARISON_SERIES.previous} strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
+              <Line type="monotone" dataKey="curCumulative" name={`${curMonthLabel} · faturamento acumulado`} stroke={COMPARISON_SERIES.current} strokeWidth={2.8} dot={false} connectNulls={false} />
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
           <div className="h-36 flex items-center justify-center rounded-lg border border-dashed border-surface-2 text-xs text-slate-500">Sem faturamento diário confirmado para formar a curva acumulada.</div>
         )}
         {hasCumulativeRevenue ? <ComparisonLegend items={[
-          { label: `${prevMonthLabel} acumulado`, color: '#FB923C88' },
-          { label: `${curMonthLabel} acumulado`, color: '#FB923C' },
+          { label: `${prevMonthLabel} · faturamento acumulado (tracejada)`, color: COMPARISON_SERIES.previous, kind: 'line', dashed: true },
+          { label: `${curMonthLabel} · faturamento acumulado (contínua)`, color: COMPARISON_SERIES.current, kind: 'line' },
         ]} /> : null}
         <p className="mt-2 text-[9px] text-slate-600">Dias sem confirmação permanecem como lacuna visual, para não confundir dado ausente com faturamento zero.</p>
       </section>
@@ -464,8 +475,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
               <YAxis tick={{ fontSize: 9, fill: '#94A3B8' }} axisLine={false} tickLine={false} width={56}
                 tickFormatter={(value) => rollingMetric === 'units' ? value.toFixed(0) : (value >= 1000 ? `R$${(value / 1000).toFixed(0)}k` : `R$${value.toFixed(0)}`)} />
               <Tooltip content={<ComparisonTooltip unit={rollingMetric === 'units' ? 'units' : 'brl'} />} cursor={{ fill: 'rgba(91,108,255,.08)' }} />
-              <Bar dataKey="previous" name="Período anterior" fill={rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
-              <Bar dataKey="current" name={`Últimos ${rollingPeriod} dias`} fill={rollingMetric === 'units' ? '#4DA3FF' : '#FB923C'} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
+              <Bar dataKey="previous" name={`Período anterior · ${rollingMetric === 'units' ? 'unidades' : 'faturamento'}`} fill={COMPARISON_SERIES.previous} fillOpacity={0.55} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
+              <Bar dataKey="current" name={`Últimos ${rollingPeriod} dias · ${rollingMetric === 'units' ? 'unidades' : 'faturamento'}`} fill={COMPARISON_SERIES.current} radius={[4, 4, 0, 0]} maxBarSize={rollingPeriod > 30 ? 10 : 18} />
             </ComposedChart>
           </ResponsiveContainer>
         ) : (
@@ -474,8 +485,8 @@ export default function MoMComparisonChart({ allMetrics, salesDailyByDate }) {
           </div>
         )}
         {hasRollingComparison ? <ComparisonLegend items={[
-          { label: 'Período anterior', color: rollingMetric === 'units' ? '#4DA3FF66' : '#FB923C55' },
-          { label: `Últimos ${rollingPeriod} dias`, color: rollingMetric === 'units' ? '#4DA3FF' : '#FB923C' },
+          { label: `Período anterior · ${rollingMetric === 'units' ? 'unidades' : 'faturamento'}`, color: COMPARISON_SERIES.previous },
+          { label: `Últimos ${rollingPeriod} dias · ${rollingMetric === 'units' ? 'unidades' : 'faturamento'}`, color: COMPARISON_SERIES.current },
         ]} /> : null}
       </section>
 
