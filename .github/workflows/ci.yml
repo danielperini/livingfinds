@@ -70,6 +70,11 @@ jobs:
             base44/functions/runCanonicalDaypartingEngine/entry.ts \
             base44/functions/runWeekendHolidayDaypartLearning/entry.ts \
             base44/functions/syncDaypartingConfiguration/entry.ts
+      - name: Check managed SP-API authentication gateway
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/spApiLwa.ts \
+            base44/functions/amazonApiGatewayCore/entry.ts
       - name: Check existing decision modules
         run: |
           deno check --node-modules-dir=auto \
