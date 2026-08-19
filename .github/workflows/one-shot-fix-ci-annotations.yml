@@ -1,3 +1,4 @@
+# Second push intentionally triggers this already-registered one-shot workflow.
 name: One-shot CI annotation cleanup
 
 on:
@@ -41,21 +42,17 @@ jobs:
               p.write_text(text.replace(old, new))
               print('fixed', path)
 
-          # Inferred prop optionality: JSX callers are allowed to omit sub.
           replace(
               'src/components/analytics/WeeklyReportView.jsx',
               "function KPICard({ label, value, sub, color = 'text-white', alert = false })",
               "function KPICard({ label, value, sub = null, color = 'text-white', alert = false })",
           )
-
-          # Keep numeric state numeric.
           replace(
               'src/components/analytics/ProfitProjectionPanel.jsx',
               'onChange={(event) => setMonthlyGoal(event.target.value)}',
               'onChange={(event) => setMonthlyGoal(Number(event.target.value))}',
           )
 
-          # Recharts instantiates custom tooltip elements without explicit props.
           for path, names in {
               'src/components/analytics/BudgetCoveragePanel.jsx': ['DailyTooltip', 'HourlyTooltip'],
               'src/components/analytics/AcosEvolutionPanel.jsx': ['CustomTooltip'],
@@ -70,14 +67,12 @@ jobs:
               p.write_text(text)
               print('fixed', path)
 
-          # HTML input state is a string; parse only at the domain boundary.
           replace(
               'src/components/ads/ReactivateWithBudgetModal.jsx',
               'const [budget, setBudget] = useState(suggestedBudget);',
               'const [budget, setBudget] = useState(String(suggestedBudget));',
           )
 
-          # Remove only the explicitly reported dead lucide-react imports.
           unused = {
               'src/components/amazon/AdsReportJobsPanel.jsx': {'Clock'},
               'src/components/ads/StaleInventoryWarningPanel.jsx': {'Zap', 'Package'},
@@ -103,7 +98,6 @@ jobs:
               p.write_text(clean_lucide_import(p.read_text(), names))
               print('cleaned imports', path, sorted(names))
 
-          # GitHub Actions v5 uses the current Node 24 action runtime.
           ci = Path('.github/workflows/ci.yml')
           text = ci.read_text().replace('actions/checkout@v4', 'actions/checkout@v5').replace('actions/setup-node@v4', 'actions/setup-node@v5')
           ci.write_text(text)
@@ -112,13 +106,10 @@ jobs:
 
       - name: Install locked frontend dependencies
         run: npm ci
-
       - name: Validate frontend typecheck
         run: npm run typecheck
-
       - name: Validate frontend lint
         run: npm run lint
-
       - name: Validate frontend build
         run: npm run build
 
