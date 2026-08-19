@@ -13,7 +13,7 @@ export default function ReactivateWithBudgetModal({ campaign, account, onClose, 
     ? parseFloat(Number(campaign.recommended_daily_budget).toFixed(2))
     : parseFloat(((campaign.daily_budget || 8) * 1.2).toFixed(2));
 
-  const [budget, setBudget] = useState(suggestedBudget);
+  const [budget, setBudget] = useState(String(suggestedBudget));
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null); // null | { ok, text }
 
