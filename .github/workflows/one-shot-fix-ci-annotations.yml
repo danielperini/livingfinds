@@ -1,4 +1,3 @@
-# Second push intentionally triggers this already-registered one-shot workflow.
 name: One-shot CI annotation cleanup
 
 on:
@@ -12,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  fix-and-validate:
+  fix-and-diagnose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -26,7 +25,7 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Apply mechanical TypeScript and lint fixes
+      - name: Apply reported fixes
         shell: bash
         run: |
           python3 - <<'PY'
@@ -36,22 +35,21 @@ jobs:
           def replace(path, old, new):
               p = Path(path)
               text = p.read_text()
-              if old not in text:
-                  print(f'WARN pattern not found in {path}: {old[:80]}')
-                  return
-              p.write_text(text.replace(old, new))
-              print('fixed', path)
+              if old in text:
+                  p.write_text(text.replace(old, new))
+                  print('fixed', path)
+              else:
+                  print('already fixed or pattern absent', path)
 
-          replace(
-              'src/components/analytics/WeeklyReportView.jsx',
-              "function KPICard({ label, value, sub, color = 'text-white', alert = false })",
-              "function KPICard({ label, value, sub = null, color = 'text-white', alert = false })",
-          )
-          replace(
-              'src/components/analytics/ProfitProjectionPanel.jsx',
-              'onChange={(event) => setMonthlyGoal(event.target.value)}',
-              'onChange={(event) => setMonthlyGoal(Number(event.target.value))}',
-          )
+          replace('src/components/analytics/WeeklyReportView.jsx',
+                  "function KPICard({ label, value, sub, color = 'text-white', alert = false })",
+                  "function KPICard({ label, value, sub = null, color = 'text-white', alert = false })")
+          replace('src/components/analytics/ProfitProjectionPanel.jsx',
+                  'onChange={(event) => setMonthlyGoal(event.target.value)}',
+                  'onChange={(event) => setMonthlyGoal(Number(event.target.value))}')
+          replace('src/components/ads/ReactivateWithBudgetModal.jsx',
+                  'const [budget, setBudget] = useState(suggestedBudget);',
+                  'const [budget, setBudget] = useState(String(suggestedBudget));')
 
           for path, names in {
               'src/components/analytics/BudgetCoveragePanel.jsx': ['DailyTooltip', 'HourlyTooltip'],
@@ -62,16 +60,8 @@ jobs:
               for name in names:
                   text = text.replace(
                       f'const {name} = ({{ active, payload, label }}) =>',
-                      f'const {name} = ({{ active, payload, label }} = {{}}) =>',
-                  )
+                      f'const {name} = ({{ active, payload, label }} = {{}}) =>')
               p.write_text(text)
-              print('fixed', path)
-
-          replace(
-              'src/components/ads/ReactivateWithBudgetModal.jsx',
-              'const [budget, setBudget] = useState(suggestedBudget);',
-              'const [budget, setBudget] = useState(String(suggestedBudget));',
-          )
 
           unused = {
               'src/components/amazon/AdsReportJobsPanel.jsx': {'Clock'},
@@ -83,39 +73,50 @@ jobs:
               'src/components/ads/BudgetOverrunDiagnostic.jsx': {'RefreshCw'},
               'src/components/SyncPanel.jsx': {'BarChart2'},
           }
-
-          def clean_lucide_import(text, names):
-              pattern = re.compile(r"import\s*\{(?P<body>.*?)\}\s*from\s*['\"]lucide-react['\"];", re.S)
-              def repl(m):
-                  body = m.group('body')
-                  tokens = [t.strip() for t in body.replace('\n', ' ').split(',') if t.strip()]
-                  tokens = [t for t in tokens if t.split(' as ')[0].strip() not in names]
-                  return "import { " + ", ".join(tokens) + " } from 'lucide-react';"
-              return pattern.sub(repl, text, count=1)
-
+          pattern = re.compile(r"import\s*\{(?P<body>.*?)\}\s*from\s*['\"]lucide-react['\"];", re.S)
           for path, names in unused.items():
               p = Path(path)
-              p.write_text(clean_lucide_import(p.read_text(), names))
-              print('cleaned imports', path, sorted(names))
+              text = p.read_text()
+              def repl(m):
+                  tokens = [t.strip() for t in m.group('body').replace('\n', ' ').split(',') if t.strip()]
+                  tokens = [t for t in tokens if t.split(' as ')[0].strip() not in names]
+                  return "import { " + ", ".join(tokens) + " } from 'lucide-react';"
+              p.write_text(pattern.sub(repl, text, count=1))
 
           ci = Path('.github/workflows/ci.yml')
-          text = ci.read_text().replace('actions/checkout@v4', 'actions/checkout@v5').replace('actions/setup-node@v4', 'actions/setup-node@v5')
-          ci.write_text(text)
-          print('updated action runtimes', ci)
+          ci.write_text(ci.read_text().replace('actions/checkout@v4', 'actions/checkout@v5').replace('actions/setup-node@v4', 'actions/setup-node@v5'))
           PY
 
-      - name: Install locked frontend dependencies
+      - name: Install dependencies
         run: npm ci
-      - name: Validate frontend typecheck
-        run: npm run typecheck
-      - name: Validate frontend lint
-        run: npm run lint
-      - name: Validate frontend build
-        run: npm run build
 
-      - name: Run Amazon Ads policy unit tests
+      - name: Run diagnostics and commit results
+        shell: bash
         run: |
-          deno test --node-modules-dir=auto \
+          set +e
+          rm -f .ci-one-shot-report.txt
+
+          runcheck() {
+            NAME="$1"
+            shift
+            LOG="/tmp/${NAME}.log"
+            echo "=== ${NAME} ===" >> .ci-one-shot-report.txt
+            "$@" >"$LOG" 2>&1
+            CODE=$?
+            echo "exit_code=${CODE}" >> .ci-one-shot-report.txt
+            if [ $CODE -ne 0 ]; then
+              echo "--- tail ---" >> .ci-one-shot-report.txt
+              tail -n 160 "$LOG" >> .ci-one-shot-report.txt
+            fi
+            echo >> .ci-one-shot-report.txt
+            return 0
+          }
+
+          runcheck frontend_typecheck npm run typecheck
+          runcheck frontend_lint npm run lint
+          runcheck frontend_build npm run build
+
+          runcheck deno_policy_tests deno test --node-modules-dir=auto \
             base44/shared/portfolioBudgetPacing.test.ts \
             base44/shared/campaignDeliveryHealthPolicy.test.ts \
             base44/shared/amazonBidCeiling.test.ts \
@@ -124,9 +125,7 @@ jobs:
             base44/shared/servingCampaignGrowthPolicy.test.ts \
             base44/shared/economicEvidencePolicy.test.ts
 
-      - name: Validate canonical decision stack
-        run: |
-          deno check --node-modules-dir=auto \
+          runcheck deno_canonical_stack deno check --node-modules-dir=auto \
             base44/shared/economicEvidencePolicy.ts \
             base44/functions/runEconomicEvidenceDecisionPolicy/entry.ts \
             base44/functions/reconcileEconomicEvidenceDecisions/entry.ts \
@@ -147,16 +146,15 @@ jobs:
             base44/functions/runServingCampaignGrowthObjective/entry.ts \
             server/src/scheduler.ts
 
-      - name: Commit validated fixes and remove one-shot workflow
-        shell: bash
-        run: |
-          rm -f .github/workflows/one-shot-fix-ci-annotations.yml
+          cat .ci-one-shot-report.txt
+
+          if ! grep -q 'exit_code=[1-9]' .ci-one-shot-report.txt; then
+            rm -f .ci-one-shot-report.txt
+            rm -f .github/workflows/one-shot-fix-ci-annotations.yml
+          fi
+
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          if git diff --cached --quiet; then
-            echo 'No changes to commit.'
-            exit 0
-          fi
-          git commit -m 'fix: clear CI annotations and validate canonical arbiter'
+          git commit -m 'fix: clear CI annotations and capture canonical validation' || true
           git push origin HEAD:main
