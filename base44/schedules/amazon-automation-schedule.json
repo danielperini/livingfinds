@@ -39,10 +39,11 @@
       "payload": { "_service_role": true, "trigger_type": "scheduler_queue_reconciliation" }
     },
     {
-      "name": "Closed-day Amazon reports request - 00:01 BRT",
+      "name": "Closed-day Amazon reports self-heal - hourly + startup",
       "function": "ensureDailyReportsCurrent",
-      "cron": "1 0 * * *",
-      "payload": { "_service_role": true }
+      "cron": "7 * * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "trigger_type": "scheduler_reports_self_heal" }
     },
     {
       "name": "Canonical marketplace decision cycle - every 15 minutes",
