@@ -46,6 +46,13 @@
       "payload": { "_service_role": true, "trigger_type": "scheduler_reports_self_heal" }
     },
     {
+      "name": "Motor history cleanup - daily + startup",
+      "function": "pruneMotorDecisionHistory",
+      "cron": "37 3 * * *",
+      "run_on_startup": true,
+      "payload": { "_service_role": true, "dry_run": false, "max_delete": 5000, "trigger_type": "scheduler_motor_history_cleanup" }
+    },
+    {
       "name": "Canonical marketplace decision cycle - every 15 minutes",
       "function": "runCanonicalDecisionCycle",
       "cron": "4,19,34,49 * * * *",
