@@ -60,6 +60,8 @@ jobs:
         run: deno check --node-modules-dir=auto base44/functions/runEconomicEvidenceDecisionPolicy/entry.ts
       - name: Check evidence reconciliation
         run: deno check --node-modules-dir=auto base44/functions/reconcileEconomicEvidenceDecisions/entry.ts
+      - name: Check canonical pre-execution arbiter
+        run: deno check --node-modules-dir=auto base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts
       - name: Check canonical decision cycle
         run: deno check --node-modules-dir=auto base44/functions/runCanonicalDecisionCycle/entry.ts
       - name: Check canonical weekly review
