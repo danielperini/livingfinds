@@ -5,7 +5,7 @@ const TERMINAL_NON_EFFECTIVE = new Set(['blocked', 'skipped', 'cancelled', 'fail
 const EFFECTIVE_STATUSES = new Set(['executed', 'completed', 'confirmed', 'applied', 'success', 'succeeded']);
 const OPEN_STATUSES = new Set(['pending', 'approved', 'scheduled', 'executing', 'processing', 'submitted', 'running']);
 const MAX_ROWS = 5000;
-const MAX_DELETE_PER_RUN = 1000;
+const MAX_DELETE_PER_RUN = 5000;
 
 function norm(value: any) { return String(value || '').trim().toLowerCase(); }
 function upper(value: any) { return String(value || '').trim().toUpperCase(); }
@@ -27,8 +27,6 @@ function isEffective(row: any) {
   if (EFFECTIVE_STATUSES.has(status) || EFFECTIVE_STATUSES.has(queueStatus) || EFFECTIVE_STATUSES.has(confirmation)) return true;
   if (row?.amazon_confirmed_at || row?.confirmed_at) return true;
   if (row?.executed_at && !TERMINAL_NON_EFFECTIVE.has(status)) return true;
-  // AdsBidChangeLog legado nem sempre possui status; presença de old/new bid e timestamp
-  // representa alteração material já registrada. Mantemos somente se o produto segue ativo.
   if (!status && (row?.new_bid != null || row?.bid_after != null || row?.value_after != null) && (row?.created_at || row?.created_date)) return true;
   return false;
 }
@@ -57,17 +55,10 @@ Deno.serve(async (request) => {
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 100).catch(() => []);
 
     const totals = {
-      scanned: 0,
-      scanned_decisions: 0,
-      scanned_bid_logs: 0,
-      preserved_effective_active: 0,
-      preserved_open: 0,
-      removed_non_effective: 0,
-      removed_inactive_product: 0,
-      removed_unresolved_product: 0,
-      removed_decisions: 0,
-      removed_bid_logs: 0,
-      delete_errors: 0,
+      scanned: 0, scanned_decisions: 0, scanned_bid_logs: 0,
+      preserved_effective_active: 0, preserved_open: 0,
+      removed_non_effective: 0, removed_inactive_product: 0, removed_unresolved_product: 0,
+      removed_decisions: 0, removed_bid_logs: 0, delete_errors: 0,
     };
     const reports: any[] = [];
 
@@ -110,27 +101,16 @@ Deno.serve(async (request) => {
       const processRows = async (rows: any[], entityName: 'OptimizationDecision' | 'AdsBidChangeLog') => {
         for (const row of rows) {
           if (deleted >= maxDelete) break;
-
           if (entityName === 'OptimizationDecision' && isOpen(row)) {
             report.preserved_open++; totals.preserved_open++;
             continue;
           }
-
           const evaluation = removalReason(row, productByAsin, campaignById);
           if (!evaluation.reason) {
             report.preserved_effective_active++; totals.preserved_effective_active++;
             continue;
           }
-
-          report.candidates.push({
-            entity: entityName,
-            id: row.id,
-            asin: evaluation.asin,
-            status: row.status || null,
-            queue_status: row.queue_status || null,
-            reason: evaluation.reason,
-          });
-
+          report.candidates.push({ entity: entityName, id: row.id, asin: evaluation.asin, status: row.status || null, queue_status: row.queue_status || null, reason: evaluation.reason });
           if (!dryRun) {
             try {
               await base44.asServiceRole.entities[entityName].delete(row.id);
@@ -139,24 +119,15 @@ Deno.serve(async (request) => {
               continue;
             }
           }
-
           deleted++;
-          if (entityName === 'OptimizationDecision') {
-            report.removed_decisions++; totals.removed_decisions++;
-          } else {
-            report.removed_bid_logs++; totals.removed_bid_logs++;
-          }
-          if (evaluation.reason === 'inactive_product') {
-            report.removed_inactive_product++; totals.removed_inactive_product++;
-          } else if (evaluation.reason === 'unresolved_product') {
-            report.removed_unresolved_product++; totals.removed_unresolved_product++;
-          } else {
-            report.removed_non_effective++; totals.removed_non_effective++;
-          }
+          if (entityName === 'OptimizationDecision') { report.removed_decisions++; totals.removed_decisions++; }
+          else { report.removed_bid_logs++; totals.removed_bid_logs++; }
+          if (evaluation.reason === 'inactive_product') { report.removed_inactive_product++; totals.removed_inactive_product++; }
+          else if (evaluation.reason === 'unresolved_product') { report.removed_unresolved_product++; totals.removed_unresolved_product++; }
+          else { report.removed_non_effective++; totals.removed_non_effective++; }
         }
       };
 
-      // Primeiro remove ruído decisório; depois limpa o histórico de alterações de bid.
       await processRows(decisions, 'OptimizationDecision');
       if (deleted < maxDelete) await processRows(bidLogs, 'AdsBidChangeLog');
 
@@ -168,8 +139,7 @@ Deno.serve(async (request) => {
         records_processed: report.scanned,
         records_imported: report.removed_decisions + report.removed_bid_logs,
         message: `Histórico podado: decisões=${report.removed_decisions}; bid_logs=${report.removed_bid_logs}; não efetivas=${report.removed_non_effective}; produto inativo=${report.removed_inactive_product}; produto não resolvido=${report.removed_unresolved_product}; efetivas+ativas preservadas=${report.preserved_effective_active}; abertas preservadas=${report.preserved_open}`,
-        started_at: new Date().toISOString(),
-        completed_at: new Date().toISOString(),
+        started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
       }).catch(() => {});
       reports.push(report);
     }
