@@ -1,0 +1,50 @@
+name: Apply sales growth policy
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-sales-growth-policy.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Patch canonical growth policy
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('base44/shared/canonicalDecisionPolicy.ts')
+          s=p.read_text()
+          replacements=[
+            ("? Math.min(0.05, Math.max(0, changePct))", "? Math.min(0.20, Math.max(0, changePct))"),
+            ("if (bounded > 0 && actual > 0.05) proposedBid = Math.floor(input.currentBid * 1.05 * 100) / 100;", "if (bounded > 0 && actual > 0.20) proposedBid = Math.floor(input.currentBid * 1.20 * 100) / 100;"),
+            ("if (winnerWithinEconomicGuardrail) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU lucrativa e dentro da meta protege a entidade até a próxima janela.', 99, 12);", "if (winnerWithinEconomicGuardrail) {\n    if (input.currentBid >= input.safeMaxCpc || input.defensive) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED_AT_CEILING', 'Winner lucrativo protegido; CPC seguro ou estado defensivo impede escala.', 99, 12);\n    const exceptionalWinner = input.sameSkuOrders >= 2 && input.acos !== null && input.targetAcos !== null && input.acos <= input.targetAcos * 0.80;\n    const winnerGrowthPct = exceptionalWinner ? 0.15 : 0.10;\n    return bidResult(input, posterior, 'INCREASE', winnerGrowthPct, exceptionalWinner ? 'WINNER_ACCELERATOR_EXCEPTIONAL' : 'WINNER_ACCELERATOR', `Winner same-SKU lucrativo dentro da meta: escala seletiva de ${Math.round(winnerGrowthPct * 100)}% limitada pelo CPC seguro.`, 96, 24);\n  }"),
+            ("if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_TARGET_BELOW_BREAK_EVEN', 'Resultado acima da meta e abaixo do break-even: redução suave.', 92, 24);\n  }", "if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    const growthTolerance = input.breakEvenAcos !== null ? Math.min(input.breakEvenAcos, input.targetAcos * 1.45) : input.targetAcos * 1.45;\n    if (input.profitAfterAds >= 0 && input.acos <= growthTolerance) {\n      return bidResult(input, posterior, 'HOLD', 0, 'PROFITABLE_GROWTH_TOLERANCE', 'ACoS acima da meta, mas ainda lucrativo e dentro da zona de crescimento; preservar vendas sem escalar.', 93, 24);\n    }\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_GROWTH_TOLERANCE_BELOW_BREAK_EVEN', 'ACoS acima da zona de crescimento, ainda abaixo do break-even: redução suave.', 92, 24);\n  }"),
+            ("return bidResult(input, posterior, 'INCREASE', 0.03, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite teste de crescimento de 3% dentro do CPC seguro.', 90, 24);", "return bidResult(input, posterior, 'INCREASE', input.sameSkuOrders >= 2 ? 0.10 : 0.05, 'PROFITABLE_GROWTH_TEST', `Venda same-SKU lucrativa permite crescimento seletivo de ${input.sameSkuOrders >= 2 ? 10 : 5}% dentro do CPC seguro.`, 92, 24);")
+          ]
+          for old,new in replacements:
+            if old not in s:
+              raise SystemExit('expected canonical policy snippet not found: '+old[:100])
+            s=s.replace(old,new,1)
+          p.write_text(s)
+
+          t=Path('base44/shared/canonicalDecisionPolicy.test.ts')
+          x=t.read_text()
+          x=x.replace("assert.equal(profitable.action, 'INCREASE');", "assert.equal(profitable.action, 'INCREASE');\nassert.ok(profitable.changePct >= 0.09 && profitable.changePct <= 0.16);\n\nconst growthTolerance = buildCanonicalBidDecision({ ...baseBid, ageHours: 96, impressions: 2000, clicks: 80, sameSkuOrders: 6, spend: 50, acos: 20, targetAcos: 15, breakEvenAcos: 30, profitAfterAds: 25, winnerProtected: false });\nassert.equal(growthTolerance.action, 'HOLD');\nassert.equal(growthTolerance.reasonCode, 'PROFITABLE_GROWTH_TOLERANCE');")
+          t.write_text(x)
+      - name: Validate canonical policy
+        run: |
+          deno test base44/shared/canonicalDecisionPolicy.test.ts
+          deno check base44/shared/canonicalDecisionPolicy.ts
+      - name: Commit migration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add base44/shared/canonicalDecisionPolicy.ts base44/shared/canonicalDecisionPolicy.test.ts
+          git diff --cached --quiet && exit 0
+          git commit -m 'feat: accelerate profitable Ads winners safely'
+          git push
