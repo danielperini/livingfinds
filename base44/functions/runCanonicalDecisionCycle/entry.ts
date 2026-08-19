@@ -28,9 +28,6 @@ Deno.serve(async(request)=>{
       _canonical_orchestrator:'runCanonicalDecisionCycle',
     });
 
-    // Antes do executor canônico, a mesma evidência econômica reconcilia as
-    // decisões aprovadas: bloqueia terminal sem evidência, bloqueia crescimento
-    // em zona de perda e suaviza reduções mais agressivas que a evidência suporta.
     const reconciliation=body.dry_run===true
       ? {ok:true,skipped:true,reason:'dry_run'}
       : await invoke(base44,'reconcileEconomicEvidenceDecisions',{
@@ -41,18 +38,31 @@ Deno.serve(async(request)=>{
           trigger_type:'canonical_pre_execution_reconciliation',
         });
 
+    // O árbitro é o último gate antes da fila executável. Todas as regras podem
+    // propor; somente uma mutação líquida por entidade permanece aprovada.
+    const arbitration=body.dry_run===true
+      ? {ok:true,skipped:true,reason:'dry_run'}
+      : await invoke(base44,'arbitrateCanonicalDecisionConflicts',{
+          amazon_account_id:body.amazon_account_id||null,
+          _service_role:true,
+          since:cycleStartedAt,
+          correlation_id:correlationId,
+          trigger_type:'canonical_pre_execution_arbitration',
+        });
+
     return Response.json({
-      ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false,
+      ok:economicEvidence?.ok!==false&&engine?.ok!==false&&reconciliation?.ok!==false&&arbitration?.ok!==false,
       engine:'canonical-decision-cycle',
-      engine_version:'canonical-v21-economic-evidence',
+      engine_version:'canonical-v22-pre-execution-arbiter',
       correlation_id:correlationId,
       economic_evidence:economicEvidence,
       unified_engine:engine,
       pre_execution_reconciliation:reconciliation,
+      pre_execution_arbitration:arbitration,
       execution_owner:'executeApprovedDecisionQueue',
       confirmation_owner:'confirmExecutedDecisions',
       duplicate_executor:false,
-      decision_contract:'evidence -> unified decision -> evidence reconciliation -> canonical queue -> Amazon confirmation',
+      decision_contract:'all proposals -> economic evidence -> canonical arbiter -> one net mutation per entity -> canonical queue -> Amazon confirmation',
     });
   }catch(error:any){return Response.json({ok:false,error:error?.message||String(error)},{status:500})}
 });
