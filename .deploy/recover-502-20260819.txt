@@ -1,0 +1,1 @@
+Emergency redeploy trigger for nginx 502 recovery on 2026-08-19. No application logic change.
