@@ -30,7 +30,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function KPICard({ label, value, sub, color = 'text-white', alert = false }) {
+function KPICard({ label, value, sub = null, color = 'text-white', alert = false }) {
   return (
     <div className={`bg-surface-1 border rounded-xl p-4 ${alert ? 'border-red-500/30' : 'border-surface-2'}`}>
       <p className="text-xs text-slate-400 mb-1">{label}</p>
@@ -70,7 +70,6 @@ export default function WeeklyReportView({ account }) {
       setProducts(prods);
       setDecisions(decs);
 
-      // Aferição do dia mais recente
       const latestDate = daily[0]?.assessment_date;
       setDailyToday(latestDate ? daily.filter(d => d.assessment_date === latestDate) : []);
     } finally {
@@ -80,7 +79,6 @@ export default function WeeklyReportView({ account }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Aferição de hoje ───────────────────────────────────────────────────────
   const latestAssessmentDate = dailyToday[0]?.assessment_date;
   const todayAlerts = dailyToday.filter(d => ['unprofitable', 'no_sales_with_spend'].includes(d.economic_status));
   const todayDecisions48h = decisions.filter(d => {
@@ -88,7 +86,6 @@ export default function WeeklyReportView({ account }) {
     return Date.now() - ts < 48 * 3600000;
   });
 
-  // Filtrar WeeklyProductPerformance pelo relatório atual
   const reportProducts = products;
   const decisionDate = d =>
     String(d.executed_at || d.evaluated_at || d.updated_at || d.created_at || '').slice(0, 10);
@@ -114,7 +111,6 @@ export default function WeeklyReportView({ account }) {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-base font-bold text-white">Aferição Econômica & Relatório Semanal</h2>
@@ -135,13 +131,11 @@ export default function WeeklyReportView({ account }) {
         </div>
       </div>
 
-      {/* Fonte de dados */}
       <div className="flex items-center gap-2 text-[10px] text-slate-500 bg-surface-1 border border-surface-2 rounded-lg px-3 py-2">
         <Database className="w-3 h-3 text-slate-600 flex-shrink-0" />
         Dados exclusivamente do banco LivingFinds — relatórios diários já processados pelas automações.
       </div>
 
-      {/* ── Aferição de Hoje ─────────────────────────────────────────────────── */}
       <div className="bg-surface-1 border border-cyan/20 rounded-xl p-4">
         <div className="flex items-center gap-2 mb-3">
           <Clock className="w-4 h-4 text-cyan" />
@@ -152,24 +146,10 @@ export default function WeeklyReportView({ account }) {
           <p className="text-xs text-slate-500">Aferição do dia ainda não disponível — processada automaticamente pela automação diária às 08:00.</p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-surface-2/50 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Produtos Avaliados</p>
-              <p className="text-lg font-bold text-white">{dailyToday.length}</p>
-            </div>
-            <div className="bg-red-500/8 border border-red-500/15 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Alertas Econômicos</p>
-              <p className="text-lg font-bold text-red-400">{todayAlerts.length}</p>
-            </div>
-            <div className="bg-surface-2/50 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Decisões (48h)</p>
-              <p className="text-lg font-bold text-amber-400">{todayDecisions48h.length}</p>
-            </div>
-            <div className="bg-surface-2/50 rounded-lg p-3">
-              <p className="text-[10px] text-slate-500 mb-1">Reaval. em 48h</p>
-              <p className="text-lg font-bold text-violet-400">
-                {todayDecisions48h.filter(d => ['approved', 'scheduled'].includes(d.status)).length}
-              </p>
-            </div>
+            <div className="bg-surface-2/50 rounded-lg p-3"><p className="text-[10px] text-slate-500 mb-1">Produtos Avaliados</p><p className="text-lg font-bold text-white">{dailyToday.length}</p></div>
+            <div className="bg-red-500/8 border border-red-500/15 rounded-lg p-3"><p className="text-[10px] text-slate-500 mb-1">Alertas Econômicos</p><p className="text-lg font-bold text-red-400">{todayAlerts.length}</p></div>
+            <div className="bg-surface-2/50 rounded-lg p-3"><p className="text-[10px] text-slate-500 mb-1">Decisões (48h)</p><p className="text-lg font-bold text-amber-400">{todayDecisions48h.length}</p></div>
+            <div className="bg-surface-2/50 rounded-lg p-3"><p className="text-[10px] text-slate-500 mb-1">Reaval. em 48h</p><p className="text-lg font-bold text-violet-400">{todayDecisions48h.filter(d => ['approved', 'scheduled'].includes(d.status)).length}</p></div>
           </div>
         )}
         {todayAlerts.length > 0 && (
@@ -185,7 +165,6 @@ export default function WeeklyReportView({ account }) {
         )}
       </div>
 
-      {/* ── KPIs Semanais ────────────────────────────────────────────────────── */}
       {report && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -207,7 +186,6 @@ export default function WeeklyReportView({ account }) {
             <KPICard label="Aguardando Confirm." value={report.decisions_pending_confirmation} color="text-amber-400" />
           </div>
 
-          {/* Resumo executivo */}
           {report.executive_summary && (
             <div className="bg-surface-1 border border-surface-2 rounded-xl p-4">
               <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Resumo Executivo</p>
@@ -217,7 +195,6 @@ export default function WeeklyReportView({ account }) {
         </>
       )}
 
-      {/* ── Tabs de detalhe ──────────────────────────────────────────────────── */}
       {report && (
         <>
           <div className="flex border-b border-surface-2 overflow-x-auto scrollbar-thin">
@@ -226,129 +203,58 @@ export default function WeeklyReportView({ account }) {
               { id: 'campanhas', label: 'Campanhas Ajustadas' },
               { id: 'acoes', label: 'Ações do Motor' },
             ].map(t => (
-              <button key={t.id} onClick={() => setActiveTab(t.id)}
-                className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>
-                {t.label}
-              </button>
+              <button key={t.id} onClick={() => setActiveTab(t.id)} className={`px-4 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${activeTab === t.id ? 'border-cyan text-cyan' : 'border-transparent text-slate-500 hover:text-slate-300'}`}>{t.label}</button>
             ))}
           </div>
 
-          {/* Tab Produtos */}
           {activeTab === 'produtos' && (
             <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-surface-2 bg-surface-2/40">
-                      {['Produto / SKU', 'Spend 7d', 'Vendas Ads', 'Vendas Reais', 'ACoS', 'TACoS', 'Lucro Pós-Ads', 'Meta ACoS', 'Status', 'Ação Recomendada'].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
+                  <thead><tr className="border-b border-surface-2 bg-surface-2/40">{['Produto / SKU', 'Spend 7d', 'Vendas Ads', 'Vendas Reais', 'ACoS', 'TACoS', 'Lucro Pós-Ads', 'Meta ACoS', 'Status', 'Ação Recomendada'].map(h => <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>)}</tr></thead>
                   <tbody>
                     {reportProducts.map((p, i) => {
-                      const profitColor = p.profit_after_ads_7d == null ? 'text-slate-500'
-                        : p.profit_after_ads_7d < 0 ? 'text-red-400'
-                        : p.profit_after_ads_7d < 1 ? 'text-amber-400'
-                        : 'text-emerald-400';
-                      return (
-                        <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <p className="font-mono text-cyan text-[10px]">{p.asin}</p>
-                            <p className="text-slate-500 text-[10px]">{p.sku || '—'}</p>
-                          </td>
-                          <td className="px-4 py-3 text-slate-300">{fmt(p.spend_7d)}</td>
-                          <td className="px-4 py-3 text-emerald-400">{fmt(p.ads_sales_7d)}</td>
-                          <td className="px-4 py-3 text-cyan">{p.real_sales_7d > 0 ? fmt(p.real_sales_7d) : <span className="text-slate-500">—</span>}</td>
-                          <td className="px-4 py-3">
-                            {p.acos_7d != null
-                              ? <span className={p.acos_7d > (p.break_even_acos || 30) ? 'text-red-400 font-bold' : p.acos_7d > (p.target_acos || 20) ? 'text-amber-400' : 'text-emerald-400'}>
-                                  {fmt(p.acos_7d, 'pct')}
-                                </span>
-                              : <span className="text-slate-500">sem vendas</span>}
-                          </td>
-                          <td className="px-4 py-3">
-                            {p.tacos_7d != null ? fmt(p.tacos_7d, 'pct') : <span className="text-slate-500 italic text-[9px]">parcial</span>}
-                          </td>
-                          <td className={`px-4 py-3 font-semibold ${profitColor}`}>
-                            {p.profit_after_ads_7d != null ? fmt(p.profit_after_ads_7d) : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-slate-400">{p.target_acos ? fmt(p.target_acos, 'pct') : '—'}</td>
-                          <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
-                          <td className="px-4 py-3 text-slate-500 text-[10px] max-w-[150px] truncate" title={p.recommended_action}>{p.recommended_action || '—'}</td>
-                        </tr>
-                      );
+                      const profitColor = p.profit_after_ads_7d == null ? 'text-slate-500' : p.profit_after_ads_7d < 0 ? 'text-red-400' : p.profit_after_ads_7d < 1 ? 'text-amber-400' : 'text-emerald-400';
+                      return <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
+                        <td className="px-4 py-3"><p className="font-mono text-cyan text-[10px]">{p.asin}</p><p className="text-slate-500 text-[10px]">{p.sku || '—'}</p></td>
+                        <td className="px-4 py-3 text-slate-300">{fmt(p.spend_7d)}</td>
+                        <td className="px-4 py-3 text-emerald-400">{fmt(p.ads_sales_7d)}</td>
+                        <td className="px-4 py-3 text-cyan">{p.real_sales_7d > 0 ? fmt(p.real_sales_7d) : <span className="text-slate-500">—</span>}</td>
+                        <td className="px-4 py-3">{p.acos_7d != null ? <span className={p.acos_7d > (p.break_even_acos || 30) ? 'text-red-400 font-bold' : p.acos_7d > (p.target_acos || 20) ? 'text-amber-400' : 'text-emerald-400'}>{fmt(p.acos_7d, 'pct')}</span> : <span className="text-slate-500">sem vendas</span>}</td>
+                        <td className="px-4 py-3">{p.tacos_7d != null ? fmt(p.tacos_7d, 'pct') : <span className="text-slate-500 italic text-[9px]">parcial</span>}</td>
+                        <td className={`px-4 py-3 font-semibold ${profitColor}`}>{p.profit_after_ads_7d != null ? fmt(p.profit_after_ads_7d) : '—'}</td>
+                        <td className="px-4 py-3 text-slate-400">{p.target_acos ? fmt(p.target_acos, 'pct') : '—'}</td>
+                        <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                        <td className="px-4 py-3 text-slate-500 text-[10px] max-w-[150px] truncate" title={p.recommended_action}>{p.recommended_action || '—'}</td>
+                      </tr>;
                     })}
-                    {reportProducts.length === 0 && (
-                      <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500">Nenhum produto avaliado neste período. O relatório semanal é consolidado automaticamente pela automação agendada toda segunda-feira.</td></tr>
-                    )}
+                    {reportProducts.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-500">Nenhum produto avaliado neste período. O relatório semanal é consolidado automaticamente pela automação agendada toda segunda-feira.</td></tr>}
                   </tbody>
                 </table>
               </div>
             </div>
           )}
 
-          {/* Tab Campanhas Ajustadas */}
           {activeTab === 'campanhas' && (
             <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-surface-2 bg-surface-2/40">
-                      {['Campanha / Keyword', 'Tipo', 'Bid Antes', 'Bid Depois', 'Var.%', 'Motivo', 'Status', 'Horário', 'Confirmação Amazon'].map(h => (
-                        <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
+                  <thead><tr className="border-b border-surface-2 bg-surface-2/40">{['Campanha / Keyword', 'Tipo', 'Bid Antes', 'Bid Depois', 'Var.%', 'Motivo', 'Status', 'Horário', 'Confirmação Amazon'].map(h => <th key={h} className="px-4 py-2.5 text-left text-[10px] font-semibold text-slate-500 uppercase whitespace-nowrap">{h}</th>)}</tr></thead>
                   <tbody>
-                    {adjustedDecisions.length === 0 ? (
-                      <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-500">Nenhuma ação registrada neste período.</td></tr>
-                    ) : adjustedDecisions.slice(0, 500).map((d, i) => {
-                      const changePct = d.value_before && d.value_after
-                        ? ((d.value_after - d.value_before) / d.value_before * 100).toFixed(1)
-                        : null;
+                    {adjustedDecisions.length === 0 ? <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-500">Nenhuma ação registrada neste período.</td></tr> : adjustedDecisions.slice(0, 500).map((d, i) => {
+                      const changePct = d.value_before && d.value_after ? ((d.value_after - d.value_before) / d.value_before * 100).toFixed(1) : null;
                       const isUp = changePct !== null && Number(changePct) > 0;
-                      return (
-                        <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
-                          <td className="px-4 py-3">
-                            <p className="text-white max-w-[160px] truncate">{d.keyword_text || d.campaign_id || '—'}</p>
-                            <p className="text-slate-500 text-[10px] font-mono">{d.asin || ''}</p>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="text-[10px] px-2 py-0.5 rounded border bg-slate-500/10 border-slate-500/20 text-slate-400">
-                              {d.decision_type || d.action || '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-mono text-slate-400">{d.value_before != null ? fmt(d.value_before) : '—'}</td>
-                          <td className="px-4 py-3 font-mono text-white">{d.value_after != null ? fmt(d.value_after) : '—'}</td>
-                          <td className="px-4 py-3">
-                            {changePct !== null ? (
-                              <span className={`flex items-center gap-1 font-semibold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
-                                {isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                {isUp ? '+' : ''}{changePct}%
-                              </span>
-                            ) : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-slate-500 max-w-[160px] truncate text-[10px]" title={d.rationale}>{d.rationale?.slice(0, 60) || '—'}</td>
-                          <td className="px-4 py-3">
-                            <span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${
-                              d.status === 'executed' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                              : d.status === 'failed' ? 'bg-red-500/10 border-red-500/20 text-red-400'
-                              : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                            }`}>{d.status}</span>
-                          </td>
-                          <td className="px-4 py-3 text-slate-500 text-[10px] whitespace-nowrap">
-                            {decisionDate(d) ? new Date(d.executed_at || d.evaluated_at || d.updated_at || d.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-[10px]">
-                            {d.amazon_response ? (
-                              <span className="text-emerald-400">✓ Confirmado</span>
-                            ) : d.status === 'executed' ? (
-                              <span className="text-amber-400">Aguardando</span>
-                            ) : '—'}
-                          </td>
-                        </tr>
-                      );
+                      return <tr key={i} className="border-b border-surface-2/40 hover:bg-surface-2/30 transition-colors">
+                        <td className="px-4 py-3"><p className="text-white max-w-[160px] truncate">{d.keyword_text || d.campaign_id || '—'}</p><p className="text-slate-500 text-[10px] font-mono">{d.asin || ''}</p></td>
+                        <td className="px-4 py-3"><span className="text-[10px] px-2 py-0.5 rounded border bg-slate-500/10 border-slate-500/20 text-slate-400">{d.decision_type || d.action || '—'}</span></td>
+                        <td className="px-4 py-3 font-mono text-slate-400">{d.value_before != null ? fmt(d.value_before) : '—'}</td>
+                        <td className="px-4 py-3 font-mono text-white">{d.value_after != null ? fmt(d.value_after) : '—'}</td>
+                        <td className="px-4 py-3">{changePct !== null ? <span className={`flex items-center gap-1 font-semibold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>{isUp ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}{isUp ? '+' : ''}{changePct}%</span> : '—'}</td>
+                        <td className="px-4 py-3 text-slate-500 max-w-[160px] truncate text-[10px]" title={d.rationale}>{d.rationale?.slice(0, 60) || '—'}</td>
+                        <td className="px-4 py-3"><span className={`text-[10px] px-2 py-0.5 rounded border font-medium ${d.status === 'executed' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : d.status === 'failed' ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'}`}>{d.status}</span></td>
+                        <td className="px-4 py-3 text-slate-500 text-[10px] whitespace-nowrap">{decisionDate(d) ? new Date(d.executed_at || d.evaluated_at || d.updated_at || d.created_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                        <td className="px-4 py-3 text-[10px]">{d.amazon_response ? <span className="text-emerald-400">✓ Confirmado</span> : d.status === 'executed' ? <span className="text-amber-400">Aguardando</span> : '—'}</td>
+                      </tr>;
                     })}
                   </tbody>
                 </table>
@@ -356,7 +262,6 @@ export default function WeeklyReportView({ account }) {
             </div>
           )}
 
-          {/* Tab Ações do Motor */}
           {activeTab === 'acoes' && (
             <div className="space-y-3">
               {[
@@ -364,39 +269,12 @@ export default function WeeklyReportView({ account }) {
                 { label: 'Decisões Executadas', value: executedWeek, color: 'text-emerald-400', icon: <CheckCircle className="w-4 h-4 text-emerald-400" /> },
                 { label: 'Falhas', value: failedWeek, color: 'text-red-400', icon: <AlertTriangle className="w-4 h-4 text-red-400" /> },
                 { label: 'Aguardando Confirmação Amazon', value: pendingWeek, color: 'text-amber-400', icon: <Clock className="w-4 h-4 text-amber-400" /> },
-              ].map(item => (
-                <div key={item.label} className="flex items-center justify-between p-3 bg-surface-1 border border-surface-2 rounded-xl">
-                  <div className="flex items-center gap-3">
-                    {item.icon}
-                    <p className="text-sm text-slate-300">{item.label}</p>
-                  </div>
-                  <p className={`text-xl font-bold ${item.color}`}>{item.value}</p>
-                </div>
-              ))}
+              ].map(item => <div key={item.label} className="flex items-center justify-between p-3 bg-surface-1 border border-surface-2 rounded-xl"><div className="flex items-center gap-3">{item.icon}<p className="text-sm text-slate-300">{item.label}</p></div><p className={`text-xl font-bold ${item.color}`}>{item.value}</p></div>)}
               <div className="bg-surface-1 border border-surface-2 rounded-xl overflow-hidden">
-                <div className="px-4 py-3 border-b border-surface-2">
-                  <p className="text-xs font-semibold text-slate-300">Últimas ações no período</p>
-                </div>
-                {decisionsWeek.length === 0 ? (
-                  <p className="px-4 py-8 text-xs text-center text-slate-500">Nenhuma decisão registrada nesta semana.</p>
-                ) : decisionsWeek.slice(0, 50).map((d, index) => (
-                  <div key={d.id || index} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-surface-2/50 text-xs">
-                    <div className="min-w-0">
-                      <p className="text-slate-200 truncate">{d.keyword_text || d.action || d.decision_type || d.campaign_id || 'Decisão do motor'}</p>
-                      <p className="text-[10px] text-slate-500">{d.asin || d.sku || d.entity_type || 'conta'} · {decisionDate(d)}</p>
-                    </div>
-                    <span className={`text-[10px] px-2 py-0.5 rounded border ${
-                      d.status === 'executed' ? 'text-emerald-400 border-emerald-500/20'
-                      : d.status === 'failed' ? 'text-red-400 border-red-500/20'
-                      : 'text-amber-400 border-amber-500/20'
-                    }`}>{d.status || d.queue_status || 'pendente'}</span>
-                  </div>
-                ))}
+                <div className="px-4 py-3 border-b border-surface-2"><p className="text-xs font-semibold text-slate-300">Últimas ações no período</p></div>
+                {decisionsWeek.length === 0 ? <p className="px-4 py-8 text-xs text-center text-slate-500">Nenhuma decisão registrada nesta semana.</p> : decisionsWeek.slice(0, 50).map((d, index) => <div key={d.id || index} className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-surface-2/50 text-xs"><div className="min-w-0"><p className="text-slate-200 truncate">{d.keyword_text || d.action || d.decision_type || d.campaign_id || 'Decisão do motor'}</p><p className="text-[10px] text-slate-500">{d.asin || d.sku || d.entity_type || 'conta'} · {decisionDate(d)}</p></div><span className={`text-[10px] px-2 py-0.5 rounded border ${d.status === 'executed' ? 'text-emerald-400 border-emerald-500/20' : d.status === 'failed' ? 'text-red-400 border-red-500/20' : 'text-amber-400 border-amber-500/20'}`}>{d.status || d.queue_status || 'pendente'}</span></div>)}
               </div>
-              <div className="p-4 bg-surface-1 border border-cyan/15 rounded-xl text-xs text-slate-400">
-                <p className="font-semibold text-slate-300 mb-1">Motor de Decisão Soberano</p>
-                <p>Todas as ações passam obrigatoriamente pelo <span className="text-cyan">runUnifiedDecisionEngine</span>. Reduções são proporcionais ao gap de ACoS (1ª redução: máx 25%, 2ª: máx 20%, acumulado auto máx 25%). Ações de alto risco (redução acumulada &gt;25%, pausa de campanha vencedora, alteração estrutural) exigem aprovação humana.</p>
-              </div>
+              <div className="p-4 bg-surface-1 border border-cyan/15 rounded-xl text-xs text-slate-400"><p className="font-semibold text-slate-300 mb-1">Motor de Decisão Soberano</p><p>Todas as ações passam obrigatoriamente pelo <span className="text-cyan">runUnifiedDecisionEngine</span>. Reduções são proporcionais ao gap de ACoS (1ª redução: máx 25%, 2ª: máx 20%, acumulado auto máx 25%). Ações de alto risco (redução acumulada &gt;25%, pausa de campanha vencedora, alteração estrutural) exigem aprovação humana.</p></div>
             </div>
           )}
         </>
