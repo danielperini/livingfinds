@@ -5,30 +5,31 @@ const low = (v: unknown) => s(v).toLowerCase();
 const n = (v: unknown, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
 const TERMINAL = new Set(['blocked', 'cancelled', 'expired', 'skipped', 'rejected', 'failed_final']);
 
-function mutationKey(row: any) {
-  const aid = s(row.amazon_account_id);
-  const entityType = low(row.entity_type || (row.keyword_id ? 'keyword' : row.campaign_id ? 'campaign' : 'entity'));
-  const entityId = s(row.keyword_id || row.product_target_id || row.target_id || row.entity_id || row.campaign_id);
-  return s(row.conflict_group) || `${aid}|${entityType}|${entityId}`;
-}
-
-function isBidMutation(row: any) {
+function isKeywordNegative(row: any) {
   const action = low(row.action);
-  return ['set_bid', 'update_bid', 'reduce_bid', 'increase_bid', 'bid_change', 'bid_increase', 'bid_decrease'].includes(action) ||
-    (Number.isFinite(Number(row.value_before)) && Number.isFinite(Number(row.value_after)) && entityTarget(row) !== 'campaign_state');
+  return action.includes('negative') || action.includes('negativ');
 }
 
 function entityTarget(row: any) {
   const action = low(row.action);
-  if (action.includes('pause') || action.includes('enable') || action.includes('archive')) return 'campaign_state';
+  if (action.includes('pause') || action.includes('enable') || action.includes('archive')) return 'state';
   if (action.includes('budget')) return 'budget';
   if (isKeywordNegative(row)) return 'negative';
   return 'bid';
 }
 
-function isKeywordNegative(row: any) {
+function mutationKey(row: any) {
+  const aid = s(row.amazon_account_id);
+  const entityType = low(row.entity_type || (row.keyword_id ? 'keyword' : row.campaign_id ? 'campaign' : 'entity'));
+  const entityId = s(row.keyword_id || row.product_target_id || row.target_id || row.entity_id || row.campaign_id);
+  const base = s(row.conflict_group) || `${aid}|${entityType}|${entityId}`;
+  return `${base}|${entityTarget(row)}`;
+}
+
+function isBidMutation(row: any) {
   const action = low(row.action);
-  return action.includes('negative') || action.includes('negativ');
+  return ['set_bid', 'update_bid', 'reduce_bid', 'increase_bid', 'bid_change', 'bid_increase', 'bid_decrease'].includes(action) ||
+    (Number.isFinite(Number(row.value_before)) && Number.isFinite(Number(row.value_after)) && entityTarget(row) === 'bid');
 }
 
 function isTerminalMutation(row: any) {
@@ -180,7 +181,7 @@ Deno.serve(async (request) => {
       results.push({ amazon_account_id: aid, approved: approved.length, groups: groups.size, groups_arbitrated: groupsArbitrated, cancelled, preserved_single: preserved, terminal_states_closed: terminalStatesClosed, decisions: decisions.slice(0, 100) });
     }
 
-    return Response.json({ ok: true, arbiter: 'canonical-pre-execution-v1', policy: 'all proposals -> economic evidence -> canonical arbiter -> one net mutation per entity -> executor -> Amazon confirmation', results });
+    return Response.json({ ok: true, arbiter: 'canonical-pre-execution-v2-mutation-domains', policy: 'all proposals -> economic evidence -> canonical arbiter -> one net mutation per entity+domain -> executor -> Amazon confirmation', results });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
