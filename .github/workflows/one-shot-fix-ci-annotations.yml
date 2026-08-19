@@ -1,0 +1,171 @@
+name: One-shot CI annotation cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-shot-fix-ci-annotations.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Apply mechanical TypeScript and lint fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  print(f'WARN pattern not found in {path}: {old[:80]}')
+                  return
+              p.write_text(text.replace(old, new))
+              print('fixed', path)
+
+          # Inferred prop optionality: JSX callers are allowed to omit sub.
+          replace(
+              'src/components/analytics/WeeklyReportView.jsx',
+              "function KPICard({ label, value, sub, color = 'text-white', alert = false })",
+              "function KPICard({ label, value, sub = null, color = 'text-white', alert = false })",
+          )
+
+          # Keep numeric state numeric.
+          replace(
+              'src/components/analytics/ProfitProjectionPanel.jsx',
+              'onChange={(event) => setMonthlyGoal(event.target.value)}',
+              'onChange={(event) => setMonthlyGoal(Number(event.target.value))}',
+          )
+
+          # Recharts instantiates custom tooltip elements without explicit props.
+          for path, names in {
+              'src/components/analytics/BudgetCoveragePanel.jsx': ['DailyTooltip', 'HourlyTooltip'],
+              'src/components/analytics/AcosEvolutionPanel.jsx': ['CustomTooltip'],
+          }.items():
+              p = Path(path)
+              text = p.read_text()
+              for name in names:
+                  text = text.replace(
+                      f'const {name} = ({{ active, payload, label }}) =>',
+                      f'const {name} = ({{ active, payload, label }} = {{}}) =>',
+                  )
+              p.write_text(text)
+              print('fixed', path)
+
+          # HTML input state is a string; parse only at the domain boundary.
+          replace(
+              'src/components/ads/ReactivateWithBudgetModal.jsx',
+              'const [budget, setBudget] = useState(suggestedBudget);',
+              'const [budget, setBudget] = useState(String(suggestedBudget));',
+          )
+
+          # Remove only the explicitly reported dead lucide-react imports.
+          unused = {
+              'src/components/amazon/AdsReportJobsPanel.jsx': {'Clock'},
+              'src/components/ads/StaleInventoryWarningPanel.jsx': {'Zap', 'Package'},
+              'src/components/ads/ManualCampaignProposalModal.jsx': {'Plus'},
+              'src/components/ads/KeywordSuggestionsPanel.jsx': {'X', 'RefreshCw'},
+              'src/components/ads/IncompleteCampaignsPanel.jsx': {'Package'},
+              'src/components/ads/CampaignHistoryTab.jsx': {'ExternalLink'},
+              'src/components/ads/BudgetOverrunDiagnostic.jsx': {'RefreshCw'},
+              'src/components/SyncPanel.jsx': {'BarChart2'},
+          }
+
+          def clean_lucide_import(text, names):
+              pattern = re.compile(r"import\s*\{(?P<body>.*?)\}\s*from\s*['\"]lucide-react['\"];", re.S)
+              def repl(m):
+                  body = m.group('body')
+                  tokens = [t.strip() for t in body.replace('\n', ' ').split(',') if t.strip()]
+                  tokens = [t for t in tokens if t.split(' as ')[0].strip() not in names]
+                  return "import { " + ", ".join(tokens) + " } from 'lucide-react';"
+              return pattern.sub(repl, text, count=1)
+
+          for path, names in unused.items():
+              p = Path(path)
+              p.write_text(clean_lucide_import(p.read_text(), names))
+              print('cleaned imports', path, sorted(names))
+
+          # GitHub Actions v5 uses the current Node 24 action runtime.
+          ci = Path('.github/workflows/ci.yml')
+          text = ci.read_text().replace('actions/checkout@v4', 'actions/checkout@v5').replace('actions/setup-node@v4', 'actions/setup-node@v5')
+          ci.write_text(text)
+          print('updated action runtimes', ci)
+          PY
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Validate frontend typecheck
+        run: npm run typecheck
+
+      - name: Validate frontend lint
+        run: npm run lint
+
+      - name: Validate frontend build
+        run: npm run build
+
+      - name: Run Amazon Ads policy unit tests
+        run: |
+          deno test --node-modules-dir=auto \
+            base44/shared/portfolioBudgetPacing.test.ts \
+            base44/shared/campaignDeliveryHealthPolicy.test.ts \
+            base44/shared/amazonBidCeiling.test.ts \
+            base44/shared/configuredBidPolicy.test.ts \
+            base44/shared/searchTermHarvestPolicy.test.ts \
+            base44/shared/servingCampaignGrowthPolicy.test.ts \
+            base44/shared/economicEvidencePolicy.test.ts
+
+      - name: Validate canonical decision stack
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/shared/economicEvidencePolicy.ts \
+            base44/functions/runEconomicEvidenceDecisionPolicy/entry.ts \
+            base44/functions/reconcileEconomicEvidenceDecisions/entry.ts \
+            base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts \
+            base44/functions/runCanonicalDecisionCycle/entry.ts \
+            base44/functions/runCanonicalWeeklyDecisionReview/entry.ts \
+            base44/functions/runCanonicalDaypartingEngine/entry.ts \
+            base44/functions/runWeekendHolidayDaypartLearning/entry.ts \
+            base44/functions/syncDaypartingConfiguration/entry.ts \
+            base44/shared/spApiLwa.ts \
+            base44/functions/amazonApiGatewayCore/entry.ts \
+            base44/shared/portfolioBudgetMath.ts \
+            base44/shared/portfolioBudgetActions.ts \
+            base44/shared/portfolioBudgetPacing.ts \
+            base44/shared/amazonBidCeiling.ts \
+            base44/shared/configuredBidPolicy.ts \
+            base44/shared/servingCampaignGrowthPolicy.ts \
+            base44/functions/runServingCampaignGrowthObjective/entry.ts \
+            server/src/scheduler.ts
+
+      - name: Commit validated fixes and remove one-shot workflow
+        shell: bash
+        run: |
+          rm -f .github/workflows/one-shot-fix-ci-annotations.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'fix: clear CI annotations and validate canonical arbiter'
+          git push origin HEAD:main
