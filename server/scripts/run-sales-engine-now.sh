@@ -25,7 +25,7 @@ call_fn() {
   local payload="$2"
   echo
   echo "=== ${name} ==="
-  curl -fsS --max-time 180 \
+  curl -fsS --max-time 600 \
     -X POST "${BASE_URL}/functions/${name}" \
     -H "authorization: Bearer ${TOKEN}" \
     -H 'content-type: application/json' \
@@ -33,34 +33,21 @@ call_fn() {
   echo
 }
 
-echo "============================================================"
-echo " LIVING FINDS — VERSÃO VENDAS — EXECUÇÃO IMEDIATA"
+echo "================================================================"
+echo " LIVING FINDS SALES ENGINE — VENDAS COM RISCO CONTROLADO v1"
+echo " REVISÃO TOTAL E EXECUÇÃO IMEDIATA"
 echo " $(date -Is)"
-echo "============================================================"
+echo "================================================================"
 
 curl -fsS --max-time 15 "${BASE_URL}/health" >/dev/null || {
   echo "ERRO: backend não responde em ${BASE_URL}/health" >&2
   exit 3
 }
 
-# 1) Atualizar evidência operacional antes de decidir.
-call_fn syncAdsCampaignStatesV2 '{"_service_role":true,"trigger_type":"sales_engine_manual_now"}'
-call_fn syncAmazonOfferAvailability '{"_service_role":true,"trigger_type":"sales_engine_manual_now"}'
-call_fn syncAmazonIntradayCampaignMetrics '{"_service_role":true,"action":"auto","trigger_type":"sales_engine_manual_now"}'
-
-# 2) Supervisor GPT: revisa risco, bloqueios e oportunidades. A saída continua
-# subordinada ao ciclo determinístico/árbitro; hard guardrails nunca são bypassados.
-call_fn runCanonicalWeeklyDecisionReview '{"_service_role":true,"trigger_type":"sales_engine_intraday_gpt_supervisor","sales_engine_version":"vendas-v1","growth_mode":true}' || true
-
-# 3) Ciclo canônico único -> executor -> confirmação Amazon.
-call_fn runCanonicalDecisionCycle '{"_service_role":true,"dry_run":false,"skip_sync":true,"trigger_type":"sales_engine_manual_now","sales_engine_version":"vendas-v1","growth_mode":true,"sales_recovery_mode":true}'
-call_fn executeApprovedDecisionQueue '{"_service_role":true,"max_decisions":50,"trigger_type":"sales_engine_manual_now"}'
-call_fn confirmExecutedDecisions '{"_service_role":true,"trigger_type":"sales_engine_manual_now"}'
-
-# 4) Reconciliar estado final e auditar o E2E.
-call_fn syncAdsCampaignStatesV2 '{"_service_role":true,"trigger_type":"sales_engine_post_execution"}'
-call_fn syncAmazonIntradayCampaignMetrics '{"_service_role":true,"action":"auto","trigger_type":"sales_engine_post_execution"}'
-call_fn auditAdsAutomationE2E '{"_service_role":true,"trigger_type":"sales_engine_post_execution"}'
+call_fn runSalesRiskImmediateReview '{"_service_role":true,"trigger_type":"manual_sales_risk_activation","serving_campaign_growth_target_pct":60,"max_auto_budget_expansions":8,"max_new_exact_per_run":8,"max_structure_repairs_per_run":12,"max_bid_recoveries_per_run":12,"max_economic_evidence_candidates":1000,"max_decisions":100}'
 
 echo
-echo "Concluído. Considere efetiva somente ação confirmada pela Amazon Ads API."
+echo "Motor acionado: Living Finds Sales Engine — Vendas com Risco Controlado v1"
+echo "Todas as campanhas/keywords/targets/bids foram submetidos à revisão total."
+echo "Somente mutações economicamente defensáveis são executadas."
+echo "Considere efetiva somente ação confirmada pela Amazon Ads API."
