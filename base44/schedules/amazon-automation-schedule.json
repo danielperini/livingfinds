@@ -53,17 +53,17 @@
       "payload": { "_service_role": true, "dry_run": false, "max_delete": 5000, "trigger_type": "scheduler_motor_history_cleanup" }
     },
     {
-      "name": "Canonical marketplace decision cycle - every 15 minutes",
+      "name": "Canonical marketplace decision cycle - Version Vendas - every 15 minutes",
       "function": "runCanonicalDecisionCycle",
       "cron": "4,19,34,49 * * * *",
       "run_on_startup": true,
-      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_intraday_startup" }
+      "payload": { "_service_role": true, "dry_run": false, "skip_sync": true, "trigger_type": "scheduler_sales_engine_v1", "sales_engine_version": "vendas-v1", "growth_mode": true, "sales_recovery_mode": true }
     },
     {
       "name": "Canonical daily close, bootstrap-aware audit and repricing - 01:25 BRT",
       "function": "runCanonicalDecisionCycle",
       "cron": "25 1 * * *",
-      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close" }
+      "payload": { "_service_role": true, "dry_run": false, "daily_close": true, "full_repricing_evaluation": true, "trigger_type": "scheduler_daily_close", "sales_engine_version": "vendas-v1" }
     },
     {
       "name": "Canonical decision executor - every 15 minutes",
@@ -134,10 +134,16 @@
       "payload": { "_service_role": true }
     },
     {
+      "name": "Intraday GPT sales and risk supervisor - every 2 hours 08-22 BRT",
+      "function": "runCanonicalWeeklyDecisionReview",
+      "cron": "15 8-22/2 * * *",
+      "payload": { "_service_role": true, "trigger_type": "scheduler_intraday_gpt_sales_supervisor", "sales_engine_version": "vendas-v1", "growth_mode": true }
+    },
+    {
       "name": "Canonical weekly GPT supervisor - Sunday 21:00 BRT",
       "function": "runCanonicalWeeklyDecisionReview",
       "cron": "0 21 * * 0",
-      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor" }
+      "payload": { "_service_role": true, "trigger_type": "scheduler_weekly_gpt_supervisor", "sales_engine_version": "vendas-v1" }
     },
     {
       "name": "Weekly GPT campaign prelection and discovery - Sunday 22:00 BRT",
