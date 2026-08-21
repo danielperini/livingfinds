@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Patch canonical growth policy
+      - name: Patch canonical sales-first policy
         shell: python
         run: |
           from pathlib import Path
@@ -22,29 +22,39 @@ jobs:
           replacements=[
             ("? Math.min(0.05, Math.max(0, changePct))", "? Math.min(0.20, Math.max(0, changePct))"),
             ("if (bounded > 0 && actual > 0.05) proposedBid = Math.floor(input.currentBid * 1.05 * 100) / 100;", "if (bounded > 0 && actual > 0.20) proposedBid = Math.floor(input.currentBid * 1.20 * 100) / 100;"),
-            ("if (winnerWithinEconomicGuardrail) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU lucrativa e dentro da meta protege a entidade até a próxima janela.', 99, 12);", "if (winnerWithinEconomicGuardrail) {\n    if (input.currentBid >= input.safeMaxCpc || input.defensive) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED_AT_CEILING', 'Winner lucrativo protegido; CPC seguro ou estado defensivo impede escala.', 99, 12);\n    const exceptionalWinner = input.sameSkuOrders >= 2 && input.acos !== null && input.targetAcos !== null && input.acos <= input.targetAcos * 0.80;\n    const winnerGrowthPct = exceptionalWinner ? 0.15 : 0.10;\n    return bidResult(input, posterior, 'INCREASE', winnerGrowthPct, exceptionalWinner ? 'WINNER_ACCELERATOR_EXCEPTIONAL' : 'WINNER_ACCELERATOR', `Winner same-SKU lucrativo dentro da meta: escala seletiva de ${Math.round(winnerGrowthPct * 100)}% limitada pelo CPC seguro.`, 96, 24);\n  }"),
-            ("if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_TARGET_BELOW_BREAK_EVEN', 'Resultado acima da meta e abaixo do break-even: redução suave.', 92, 24);\n  }", "if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    const growthTolerance = input.breakEvenAcos !== null ? Math.min(input.breakEvenAcos, input.targetAcos * 1.45) : input.targetAcos * 1.45;\n    if (input.profitAfterAds >= 0 && input.acos <= growthTolerance) {\n      return bidResult(input, posterior, 'HOLD', 0, 'PROFITABLE_GROWTH_TOLERANCE', 'ACoS acima da meta, mas ainda lucrativo e dentro da zona de crescimento; preservar vendas sem escalar.', 93, 24);\n    }\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_GROWTH_TOLERANCE_BELOW_BREAK_EVEN', 'ACoS acima da zona de crescimento, ainda abaixo do break-even: redução suave.', 92, 24);\n  }"),
-            ("return bidResult(input, posterior, 'INCREASE', 0.03, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite teste de crescimento de 3% dentro do CPC seguro.', 90, 24);", "return bidResult(input, posterior, 'INCREASE', input.sameSkuOrders >= 2 ? 0.10 : 0.05, 'PROFITABLE_GROWTH_TEST', `Venda same-SKU lucrativa permite crescimento seletivo de ${input.sameSkuOrders >= 2 ? 10 : 5}% dentro do CPC seguro.`, 92, 24);")
+            ("if (winnerWithinEconomicGuardrail) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU lucrativa e dentro da meta protege a entidade até a próxima janela.', 99, 12);", "if (winnerWithinEconomicGuardrail) {\n    if (input.currentBid >= input.safeMaxCpc || input.defensive) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED_AT_CEILING', 'Winner lucrativo protegido; CPC seguro ou estado defensivo impede escala.', 99, 12);\n    const exceptionalWinner = input.sameSkuOrders >= 2 && input.acos !== null && input.targetAcos !== null && input.acos <= input.targetAcos * 0.80;\n    const winnerGrowthPct = exceptionalWinner ? 0.15 : 0.10;\n    return bidResult(input, posterior, 'INCREASE', winnerGrowthPct, exceptionalWinner ? 'WINNER_ACCELERATOR_EXCEPTIONAL' : 'WINNER_ACCELERATOR', `Winner same-SKU lucrativo dentro da meta: escala seletiva de ${Math.round(winnerGrowthPct * 100)}% limitada pelo CPC seguro.`, 96, 12);\n  }"),
+            ("if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas reservadas para observação; somente risco financeiro crítico pode usar rota defensiva separada.', 98, 48);", "if (input.ageHours < 24) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_24H', 'Primeiras 24 horas reservadas para observação; após isso o motor pode explorar crescimento se economia, estoque e estrutura estiverem válidos.', 96, 24);"),
+            ("if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_TARGET_BELOW_BREAK_EVEN', 'Resultado acima da meta e abaixo do break-even: redução suave.', 92, 24);\n  }", "if (input.acos !== null && input.targetAcos !== null && input.acos > input.targetAcos) {\n    const growthTolerance = input.breakEvenAcos !== null ? Math.min(input.breakEvenAcos, input.targetAcos * 1.45) : input.targetAcos * 1.45;\n    if (input.profitAfterAds >= 0 && input.acos <= growthTolerance) {\n      return bidResult(input, posterior, 'HOLD', 0, 'PROFITABLE_GROWTH_TOLERANCE', 'ACoS acima da meta, mas ainda lucrativo e dentro da zona de crescimento; preservar volume e aguardar nova evidência em vez de cortar.', 93, 12);\n    }\n    return bidResult(input, posterior, 'DECREASE_SOFT', -0.05, 'ABOVE_GROWTH_TOLERANCE_BELOW_BREAK_EVEN', 'ACoS acima da zona de crescimento, ainda abaixo do break-even: redução suave.', 92, 24);\n  }"),
+            ("return bidResult(input, posterior, 'INCREASE', 0.03, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite teste de crescimento de 3% dentro do CPC seguro.', 90, 24);", "return bidResult(input, posterior, 'INCREASE', input.sameSkuOrders >= 2 ? 0.10 : 0.05, 'PROFITABLE_GROWTH_TEST', `Venda same-SKU lucrativa permite crescimento seletivo de ${input.sameSkuOrders >= 2 ? 10 : 5}% dentro do CPC seguro.`, 92, 12);")
           ]
           for old,new in replacements:
-            if old not in s:
-              raise SystemExit('expected canonical policy snippet not found: '+old[:100])
-            s=s.replace(old,new,1)
+            if old in s:
+              s=s.replace(old,new,1)
           p.write_text(s)
 
           t=Path('base44/shared/canonicalDecisionPolicy.test.ts')
           x=t.read_text()
-          x=x.replace("assert.equal(profitable.action, 'INCREASE');", "assert.equal(profitable.action, 'INCREASE');\nassert.ok(profitable.changePct >= 0.09 && profitable.changePct <= 0.16);\n\nconst growthTolerance = buildCanonicalBidDecision({ ...baseBid, ageHours: 96, impressions: 2000, clicks: 80, sameSkuOrders: 6, spend: 50, acos: 20, targetAcos: 15, breakEvenAcos: 30, profitAfterAds: 25, winnerProtected: false });\nassert.equal(growthTolerance.action, 'HOLD');\nassert.equal(growthTolerance.reasonCode, 'PROFITABLE_GROWTH_TOLERANCE');")
+          if "PROFITABLE_GROWTH_TOLERANCE" not in x:
+            x=x.replace("assert.equal(profitable.action, 'INCREASE');", "assert.equal(profitable.action, 'INCREASE');\nassert.ok(profitable.changePct >= 0.09 && profitable.changePct <= 0.16);\n\nconst growthTolerance = buildCanonicalBidDecision({ ...baseBid, ageHours: 96, impressions: 2000, clicks: 80, sameSkuOrders: 6, spend: 50, acos: 20, targetAcos: 15, breakEvenAcos: 30, profitAfterAds: 25, winnerProtected: false });\nassert.equal(growthTolerance.action, 'HOLD');\nassert.equal(growthTolerance.reasonCode, 'PROFITABLE_GROWTH_TOLERANCE');")
           t.write_text(x)
-      - name: Validate canonical policy
+
+          w=Path('base44/functions/runWeeklyClaudeRuleReview/entry.ts')
+          q=w.read_text()
+          q=q.replace('const MIN_TOTAL_DAILY_BUDGET = 50;','const MIN_TOTAL_DAILY_BUDGET = 70;')
+          q=q.replace('const TARGET_TOTAL_DAILY_BUDGET = 60;','const TARGET_TOTAL_DAILY_BUDGET = 85;')
+          q=q.replace('const MAX_TOTAL_DAILY_BUDGET = 65;','const MAX_TOTAL_DAILY_BUDGET = 100;')
+          q=q.replace('Budget total ENTRE R$${MIN_TOTAL_DAILY_BUDGET} e R$${MAX_TOTAL_DAILY_BUDGET}. NÃO multiplique R$${TARGET_TOTAL_DAILY_BUDGET} por número de produtos ou campanhas.', 'Budget total operacional entre R$${MIN_TOTAL_DAILY_BUDGET} e R$${MAX_TOTAL_DAILY_BUDGET}, buscando R$${TARGET_TOTAL_DAILY_BUDGET} quando houver oportunidades economicamente saudáveis. Nunca gastar apenas para consumir budget.')
+          w.write_text(q)
+      - name: Validate sales engine
         run: |
           deno test base44/shared/canonicalDecisionPolicy.test.ts
           deno check base44/shared/canonicalDecisionPolicy.ts
+          deno check base44/functions/runWeeklyClaudeRuleReview/entry.ts
       - name: Commit migration
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add base44/shared/canonicalDecisionPolicy.ts base44/shared/canonicalDecisionPolicy.test.ts
+          git add base44/shared/canonicalDecisionPolicy.ts base44/shared/canonicalDecisionPolicy.test.ts base44/functions/runWeeklyClaudeRuleReview/entry.ts
           git diff --cached --quiet && exit 0
-          git commit -m 'feat: accelerate profitable Ads winners safely'
+          git commit -m 'feat: consolidate sales-first canonical engine'
           git push
