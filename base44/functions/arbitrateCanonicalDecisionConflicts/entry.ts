@@ -39,12 +39,16 @@ function isTerminalMutation(row: any) {
 
 function priority(row: any) {
   const text = `${low(row.rule_key)} ${low(row.reason_code)} ${low(row.source_function)} ${low(row.rationale)} ${low(row.error_message)}`;
-  if (/out.of.stock|sem estoque|stock|inventory|product_inactive|eligibility|not_eligible|break.?even|strong_containment|pause_or_negative|economic.*loss|loss.*economic/.test(text)) return 0;
+  if (/out.of.stock|sem estoque|stock|inventory|product_inactive|eligibility|not_eligible|not_buyable|listing_inactive|break.?even|strong_containment|economic.*loss|loss.*economic|negative_margin|daily.?cap/.test(text)) return 0;
   if (/winner|protected_high_performance|protection/.test(text)) return 1;
-  if (/budget|pacing|daily.?cap|safe.?cpc|margin|acos/.test(text)) return 1;
+  if (/budget|pacing|safe.?cpc|margin|acos/.test(text)) return 1;
   if (/daypart|hour|hor[aá]rio|season|weekend|holiday/.test(text)) return 2;
-  if (/zero.?delivery|explor|impression|delivery|recovery/.test(text)) return 3;
+  if (/zero.?delivery|explor|impression|delivery|recovery|sales/.test(text)) return 3;
   return 2;
+}
+
+function isHardTerminal(row: any) {
+  return isTerminalMutation(row) && priority(row) === 0;
 }
 
 function chooseBidWinner(rows: any[]) {
@@ -55,7 +59,8 @@ function chooseBidWinner(rows: any[]) {
     const bBefore = n(b.value_before, NaN), bAfter = n(b.value_after, NaN);
     const hard = pa <= 1;
     if (hard && Number.isFinite(aAfter) && Number.isFinite(bAfter)) return aAfter - bAfter;
-    // Sem hard guardrail, favorece recuperação de entrega/vendas dentro do que já passou pelo evidence gate.
+    // Sales-first: quando os hard guards já aprovaram a entidade, favorece a
+    // proposta que recupera mais entrega/vendas, sempre dentro do evidence gate.
     if (!hard && Number.isFinite(aAfter) && Number.isFinite(bAfter)) return bAfter - aAfter;
     const aDelta = Number.isFinite(aBefore) && Number.isFinite(aAfter) ? Math.abs(aAfter - aBefore) : 0;
     const bDelta = Number.isFinite(bBefore) && Number.isFinite(bAfter) ? Math.abs(bAfter - bBefore) : 0;
@@ -111,7 +116,7 @@ Deno.serve(async (request) => {
         groups.get(key)!.push(row);
       }
 
-      let groupsArbitrated = 0, cancelled = 0, preserved = 0;
+      let groupsArbitrated = 0, cancelled = 0, preserved = 0, softPausesSuperseded = 0;
       const decisions: any[] = [];
       for (const [key, rows] of groups.entries()) {
         if (rows.length === 1) {
@@ -127,44 +132,59 @@ Deno.serve(async (request) => {
         }
 
         const terminalRows = rows.filter(isTerminalMutation);
+        const hardTerminalRows = terminalRows.filter(isHardTerminal);
         const bidRows = rows.filter(isBidMutation);
+        const nonTerminalRows = rows.filter((row: any) => !isTerminalMutation(row));
         let winner: any = null;
-        if (terminalRows.length) winner = [...terminalRows].sort((a, b) => priority(a) - priority(b))[0];
+
+        // HARD terminal wins only for real safety/economic limits. A soft pause
+        // can no longer kill a valid recovery/growth proposal. This prevents
+        // PAUSE->CANCELLED storms and forces the motor to prefer an executable
+        // sales alternative when evidence allows one.
+        if (hardTerminalRows.length) winner = [...hardTerminalRows].sort((a, b) => priority(a) - priority(b))[0];
         else if (bidRows.length) winner = chooseBidWinner(bidRows);
-        else winner = [...rows].sort((a, b) => priority(a) - priority(b))[0];
+        else if (nonTerminalRows.length) winner = [...nonTerminalRows].sort((a, b) => priority(a) - priority(b))[0];
+        else winner = [...terminalRows].sort((a, b) => priority(a) - priority(b))[0];
         if (!winner) continue;
 
         const now = new Date().toISOString();
-        const proposalSummary = rows.map((r: any) => ({ id: r.id, action: r.action, before: r.value_before ?? null, after: r.value_after ?? null, priority: priority(r), source: r.source_function || null }));
+        const proposalSummary = rows.map((r: any) => ({ id: r.id, action: r.action, before: r.value_before ?? null, after: r.value_after ?? null, priority: priority(r), hard_terminal: isHardTerminal(r), source: r.source_function || null }));
         await base44.asServiceRole.entities.OptimizationDecision.update(winner.id, {
           canonical_arbitrated: true,
           canonical_arbitration_key: key,
           canonical_arbitrated_at: now,
           arbitration_proposal_count: rows.length,
           arbitration_proposals: JSON.stringify(proposalSummary),
-          rationale: `${winner.rationale || ''} [CANONICAL_ARBITER: ${rows.length} propostas consolidadas; esta é a única ação líquida autorizada para ${key}.]`,
+          engine_version: body.sales_engine_version || winner.engine_version || 'sales-risk-v1',
+          rationale: `${winner.rationale || ''} [SALES_FIRST_ARBITER: ${rows.length} propostas consolidadas; hard safety prevalece, senão a alternativa executável de vendas/entrega tem preferência.]`,
           updated_at: now,
         }).catch(() => {});
 
         for (const loser of rows) {
           if (loser.id === winner.id) continue;
+          const softPause = isTerminalMutation(loser) && !isHardTerminal(loser);
           await base44.asServiceRole.entities.OptimizationDecision.update(loser.id, {
             status: 'cancelled',
             queue_status: 'closed',
             confirmation_status: 'not_applicable',
             amazon_confirmation_status: 'not_applicable',
-            approval_status: 'superseded_by_canonical_arbiter',
+            approval_status: softPause ? 'replaced_by_sales_alternative' : 'superseded_by_canonical_arbiter',
             cancelled_by_decision_id: winner.id,
             canonical_arbitrated: true,
             canonical_arbitration_key: key,
             canonical_arbitrated_at: now,
-            error_message: `CANONICAL_ARBITRATION_SUPERSEDED: consolidada pela decisão ${winner.id}.`,
+            superseded_proposal: true,
+            hide_from_live_operational_feed: true,
+            error_message: softPause
+              ? `SOFT_PAUSE_REPLACED_BY_SALES_ALTERNATIVE: decisão ${winner.id}.`
+              : `CANONICAL_ARBITRATION_SUPERSEDED: consolidada pela decisão ${winner.id}.`,
             updated_at: now,
           }).catch(() => {});
+          if (softPause) softPausesSuperseded++;
           cancelled++;
         }
         groupsArbitrated++;
-        decisions.push({ key, winner_id: winner.id, proposals: rows.length, winner_action: winner.action, winner_after: winner.value_after ?? null });
+        decisions.push({ key, winner_id: winner.id, proposals: rows.length, winner_action: winner.action, winner_after: winner.value_after ?? null, hard_terminal: isHardTerminal(winner) });
       }
 
       const terminalStatesClosed = await closeTerminalStates(base44, aid);
@@ -174,14 +194,14 @@ Deno.serve(async (request) => {
         trigger_type: body.trigger_type || 'canonical_cycle',
         status: 'success',
         records_processed: approved.length,
-        result_summary: `approved=${approved.length}; groups=${groups.size}; arbitrated=${groupsArbitrated}; cancelled=${cancelled}; single=${preserved}; terminal_states_closed=${terminalStatesClosed}`,
+        result_summary: `approved=${approved.length}; groups=${groups.size}; arbitrated=${groupsArbitrated}; cancelled=${cancelled}; soft_pauses_replaced=${softPausesSuperseded}; single=${preserved}; terminal_states_closed=${terminalStatesClosed}`,
         started_at: since,
         completed_at: new Date().toISOString(),
       }).catch(() => {});
-      results.push({ amazon_account_id: aid, approved: approved.length, groups: groups.size, groups_arbitrated: groupsArbitrated, cancelled, preserved_single: preserved, terminal_states_closed: terminalStatesClosed, decisions: decisions.slice(0, 100) });
+      results.push({ amazon_account_id: aid, approved: approved.length, groups: groups.size, groups_arbitrated: groupsArbitrated, cancelled, soft_pauses_replaced: softPausesSuperseded, preserved_single: preserved, terminal_states_closed: terminalStatesClosed, decisions: decisions.slice(0, 100) });
     }
 
-    return Response.json({ ok: true, arbiter: 'canonical-pre-execution-v2-mutation-domains', policy: 'all proposals -> economic evidence -> canonical arbiter -> one net mutation per entity+domain -> executor -> Amazon confirmation', results });
+    return Response.json({ ok: true, arbiter: 'sales-first-canonical-pre-execution-v3', policy: 'hard safety/economic terminal -> otherwise executable sales/recovery proposal -> one net mutation per entity+domain -> executor -> Amazon confirmation', results });
   } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || String(error) }, { status: 500 });
   }
