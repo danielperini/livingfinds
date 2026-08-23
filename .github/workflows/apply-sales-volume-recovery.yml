@@ -1,0 +1,48 @@
+name: Apply sales volume recovery calibration
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-sales-volume-recovery.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore canonical recovery and apply sales calibration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout f48cff7ba29fae088b976fd703d0aba17ea3e0ae -- base44/functions/runIntradaySalesRecovery/entry.ts
+          python3 <<'PY'
+          from pathlib import Path
+          p=Path('base44/functions/runIntradaySalesRecovery/entry.ts')
+          s=p.read_text()
+          replacements={
+            'const MAX_BID_STEP = 0.08;':'const MAX_BID_STEP = 0.15;',
+            'const MAX_BUDGET_STEP = 0.10;':'const MAX_BUDGET_STEP = 0.15;',
+            'const MAX_ACTIONS = 10;':'const MAX_ACTIONS = 18;',
+            'const COMPETITIVE_BID_STEP = 0.05;':'const COMPETITIVE_BID_STEP = 0.10;',
+            'const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.80;':'const COMPETITIVE_FLOOR_OF_SAFE_CPC = 0.90;',
+            'const expectedFloor = baselineRevenue * elapsedFraction * 0.60;':'const expectedFloor = baselineRevenue * elapsedFraction * 0.75;',
+            'const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.20, merTarget * 4);':'const growthAllowed = recoveryActive && tacos !== null && tacos <= Math.max(0.25, merTarget * 5);',
+            'const step = winner.todayWinner ? MAX_BID_STEP : 0.05;':'const step = winner.todayWinner ? MAX_BID_STEP : 0.10;',
+            'for (const candidate of competitiveCandidates.slice(0, 5)) {':'for (const candidate of competitiveCandidates.slice(0, 10)) {',
+            "const servingGrowth = growthAllowed && revenueRatio < 0.40":"const servingGrowth = growthAllowed && revenueRatio < 0.70",
+            "model_version: 'sales-recovery-v1.3-competitive-cache-recovery'":"model_version: 'sales-recovery-v1.4-sales-volume'",
+            'bid_step_max_pct: 8, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100':'bid_step_max_pct: 15, competitive_coverage_bid_step_pct: COMPETITIVE_BID_STEP * 100',
+          }
+          for old,new in replacements.items():
+            if old not in s:
+              raise SystemExit(f'missing expected source fragment: {old}')
+            s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add base44/functions/runIntradaySalesRecovery/entry.ts
+          git commit -m 'feat: recover ad volume within economic guardrails'
+          git push origin HEAD:main
