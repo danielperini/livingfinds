@@ -69,26 +69,44 @@ Deno.serve(async (request) => {
     const perf = settings[0] || {};
     const targetAcos = Number(perf.target_acos || 0);
     if (!(targetAcos > 0)) return Response.json({ ok: true, skipped: true, reason: 'missing_target_acos_source_of_truth' });
+
+    // Sales Engine: a meta de ACoS continua sendo o ideal, não um bloqueio absoluto
+    // para disputar leilão em fim de semana. O sinal sazonal pode operar dentro da
+    // zona de crescimento; o motor canônico continua fazendo o gate por SKU usando
+    // safe CPC, break-even, margem, estoque, buyability e cap diário.
+    const configuredMaxAcos = Number(perf.max_acos || perf.maximum_acos || 0);
+    const growthAcosCeiling = Math.max(targetAcos, Math.min(
+      configuredMaxAcos > 0 ? configuredMaxAcos : targetAcos * 1.45,
+      targetAcos * 1.45,
+    ));
     const revenueDrop = weekday.salesPerDay > 0 ? 1 - weekend.salesPerDay / weekday.salesPerDay : 0;
     const impressionDrop = weekday.impressionsPerDay > 0 ? 1 - weekend.impressionsPerDay / weekday.impressionsPerDay : 0;
     const cvrRetention = weekday.cvr > 0 ? weekend.cvr / weekday.cvr : 1;
     const evidence = weekend.days >= MIN_WEEKEND_DAYS && weekend.clicks >= MIN_CLICKS;
-    const economicallyHealthy = weekend.acos !== null && weekend.acos <= targetAcos && cvrRetention >= 0.85;
+    const economicallyHealthy = weekend.acos !== null && weekend.acos <= growthAcosCeiling && cvrRetention >= 0.70;
     const lostAuctionOpportunity = revenueDrop >= 0.15 && impressionDrop >= 0.10;
 
     if (!evidence || !economicallyHealthy || !lostAuctionOpportunity) {
       return Response.json({
         ok: true,
         skipped: true,
-        reason: !evidence ? 'insufficient_weekend_evidence' : !economicallyHealthy ? 'weekend_economics_not_healthy' : 'no_evidence_of_lost_auction_opportunity',
+        reason: !evidence ? 'insufficient_weekend_evidence' : !economicallyHealthy ? 'weekend_outside_sales_growth_zone' : 'no_evidence_of_lost_auction_opportunity',
         weekend, weekday,
+        target_acos: targetAcos,
+        growth_acos_ceiling: r2(growthAcosCeiling),
         revenue_drop_pct: r2(revenueDrop * 100),
         impression_drop_pct: r2(impressionDrop * 100),
         cvr_retention_pct: r2(cvrRetention * 100),
       });
     }
 
-    const uplift = Math.min(MAX_UPLIFT, weekend.acos <= targetAcos * 0.8 && cvrRetention >= 1 ? 20 : revenueDrop >= 0.30 ? 15 : 10);
+    // +10% é a recuperação-base. +15% quando a queda de receita é forte.
+    // +20% fica reservado a fim de semana realmente saudável/eficiente.
+    const uplift = Math.min(MAX_UPLIFT,
+      weekend.acos <= targetAcos * 0.8 && cvrRetention >= 1 ? 20
+        : revenueDrop >= 0.30 && cvrRetention >= 0.80 ? 15
+        : 10,
+    );
     const idem = `${aid}|weekend_holiday_learning|${clock.date}|${clock.hour}|${uplift}`;
     const existing = await base44.asServiceRole.entities.DaypartingDecision.filter({ amazon_account_id: aid, idempotency_key: idem }, '-created_at', 1).catch(() => []);
 
@@ -100,10 +118,10 @@ Deno.serve(async (request) => {
         day_of_week: clock.dayOfWeek,
         hour: clock.hour,
         slot_label: `${clock.dayOfWeek}_${clock.hour}h_weekend_holiday`,
-        time_slot_score: uplift === 20 ? 95 : 80,
+        time_slot_score: uplift === 20 ? 95 : uplift === 15 ? 88 : 80,
         slot_classification: 'STRONG_TIME',
         rule_id: 'weekend_holiday_learning_signal',
-        rule_version: 'weekend-holiday-learning-v1',
+        rule_version: 'weekend-holiday-learning-sales-v2',
         decision_type: 'MAINTAIN',
         bid_multiplier: 1 + uplift / 100,
         metric_window: `${LOOKBACK_DAYS}d`,
@@ -112,7 +130,7 @@ Deno.serve(async (request) => {
         status: 'executed',
         data_confidence: 'HIGH',
         data_mature: true,
-        reason: `Sinal sazonal aprendido: vendas/dia ${r2(revenueDrop * 100)}% abaixo e impressões/dia ${r2(impressionDrop * 100)}% abaixo, CVR retido em ${r2(cvrRetention * 100)}%, ACoS ${r2(Number(weekend.acos))}% <= meta ${targetAcos}%. Autoriza teste de até +${uplift}% pelo motor canônico, nunca fora de seus guardrails.`,
+        reason: `Versão Vendas: receita/dia ${r2(revenueDrop * 100)}% abaixo e impressões/dia ${r2(impressionDrop * 100)}% abaixo, CVR retido em ${r2(cvrRetention * 100)}%, ACoS ${r2(Number(weekend.acos))}% dentro da zona de crescimento até ${r2(growthAcosCeiling)}%. Autoriza teste de até +${uplift}% pelo motor canônico; hard guardrails por SKU permanecem obrigatórios.`,
         idempotency_key: idem,
         cycle_date: clock.date,
         created_at: new Date().toISOString(),
@@ -126,7 +144,7 @@ Deno.serve(async (request) => {
       : await base44.asServiceRole.functions.invoke('runCanonicalDaypartingEngine', {
           amazon_account_id: aid,
           bid_multiplier_override: 1 + uplift / 100,
-          trigger_type: 'weekend_holiday_learning',
+          trigger_type: 'weekend_holiday_sales_engine',
           _service_role: true,
         }).catch((error: any) => ({ data: { ok: false, error: error?.message || String(error) } }));
     const engine = response?.data || response || {};
@@ -137,7 +155,7 @@ Deno.serve(async (request) => {
       trigger_type: body.trigger_type || 'scheduler',
       status: engine.ok === false ? 'warning' : 'success',
       records_processed: 1,
-      result_summary: `Sinal sazonal +${uplift}% entregue ao motor único; receita/dia=${r2(revenueDrop * 100)}% abaixo; impressões/dia=${r2(impressionDrop * 100)}% abaixo; CVR_retido=${r2(cvrRetention * 100)}%; ACoS=${r2(Number(weekend.acos))}%.`,
+      result_summary: `Sales Engine sazonal +${uplift}% entregue ao motor único; receita/dia=${r2(revenueDrop * 100)}% abaixo; impressões/dia=${r2(impressionDrop * 100)}% abaixo; CVR_retido=${r2(cvrRetention * 100)}%; ACoS=${r2(Number(weekend.acos))}%; growth_ceiling=${r2(growthAcosCeiling)}%.`,
       started_at: new Date().toISOString(),
       completed_at: new Date().toISOString(),
     }).catch(() => {});
@@ -145,7 +163,9 @@ Deno.serve(async (request) => {
     return Response.json({
       ok: engine.ok !== false,
       weekend_holiday: true,
+      sales_engine: true,
       learned_uplift_cap_pct: uplift,
+      growth_acos_ceiling: r2(growthAcosCeiling),
       signal_only: true,
       canonical_engine_executed: body.dry_run !== true,
       weekend,
