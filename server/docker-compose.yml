@@ -32,6 +32,12 @@ services:
       DATABASE_URL: postgres://livingfinds:${DB_PASSWORD:-CHANGE_ME}@db:5432/livingfinds
       TZ: America/Sao_Paulo
       ENABLE_SCHEDULER: 'true'
+    healthcheck:
+      test: ['CMD-SHELL', "deno eval 'const r=await fetch(\"http://127.0.0.1:8000/health\");if(!r.ok)Deno.exit(1);const j=await r.json();if(j.ok!==true||j.db!==true)Deno.exit(1);'" ]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
     ports:
       - '8000:8000'
 
