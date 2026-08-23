@@ -8,8 +8,6 @@ ENV_FILE="${SERVER_DIR}/.env"
 
 cd "$SERVER_DIR"
 
-# Nunca executar/source o .env: ele pode conter nomes com espaços, JSON,
-# tokens longos ou valores multilinha que não são sintaxe shell válida.
 read_env_value() {
   local key="$1"
   [[ -f "$ENV_FILE" ]] || return 0
@@ -40,34 +38,88 @@ if [[ -z "$TOKEN" ]]; then
   exit 2
 fi
 
+wait_health() {
+  local tries="${1:-40}"
+  local i
+  for i in $(seq 1 "$tries"); do
+    if curl -fsS --max-time 8 "${BASE_URL}/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 3
+  done
+  echo "ERRO: backend não ficou saudável após $((tries*3))s" >&2
+  return 1
+}
+
 call_fn() {
   local name="$1"
   local payload="$2"
+  local attempts="${3:-2}"
+  local attempt rc
   echo
   echo "=== ${name} ==="
-  curl -fsS --max-time 600 \
-    -X POST "${BASE_URL}/functions/${name}" \
-    -H "authorization: Bearer ${TOKEN}" \
-    -H 'content-type: application/json' \
-    -d "$payload"
-  echo
+  for attempt in $(seq 1 "$attempts"); do
+    wait_health 40 || true
+    set +e
+    curl -fsS --max-time 600 \
+      -X POST "${BASE_URL}/functions/${name}" \
+      -H "authorization: Bearer ${TOKEN}" \
+      -H 'content-type: application/json' \
+      -d "$payload"
+    rc=$?
+    set -e
+    echo
+    if [[ "$rc" -eq 0 ]]; then
+      echo "${name}: OK"
+      return 0
+    fi
+    echo "${name}: tentativa ${attempt}/${attempts} falhou (curl=${rc})" >&2
+    sleep 5
+  done
+  echo "${name}: FALHOU após ${attempts} tentativa(s); seguindo para preservar o restante do ciclo." >&2
+  return 1
 }
 
 echo "================================================================"
 echo " LIVING FINDS SALES ENGINE — VENDAS COM RISCO CONTROLADO v1"
-echo " REVISÃO TOTAL E EXECUÇÃO IMEDIATA"
+echo " REVISÃO TOTAL E EXECUÇÃO IMEDIATA — MODO RESILIENTE"
 echo " $(date -Is)"
 echo "================================================================"
 
-curl -fsS --max-time 15 "${BASE_URL}/health" >/dev/null || {
-  echo "ERRO: backend não responde em ${BASE_URL}/health" >&2
-  exit 3
+wait_health 40
+
+COMMON='"_service_role":true,"sales_engine_version":"sales-risk-v1","engine_title":"Living Finds Sales Engine — Vendas com Risco Controlado v1","growth_mode":true,"sales_recovery_mode":true'
+
+failures=0
+run_step() {
+  local name="$1" payload="$2"
+  if ! call_fn "$name" "$payload" 2; then failures=$((failures+1)); fi
 }
 
-call_fn runSalesRiskImmediateReview '{"_service_role":true,"trigger_type":"manual_sales_risk_activation","serving_campaign_growth_target_pct":60,"max_auto_budget_expansions":8,"max_new_exact_per_run":8,"max_structure_repairs_per_run":12,"max_bid_recoveries_per_run":12,"max_economic_evidence_candidates":1000,"max_decisions":100}'
+# Evidência fresca.
+run_step syncAdsCampaignStatesV2 "{${COMMON},\"trigger_type\":\"sales_risk_activation_state_sync\"}"
+run_step syncAmazonOfferAvailability "{${COMMON},\"trigger_type\":\"sales_risk_activation_offer_sync\"}"
+run_step syncAmazonIntradayCampaignMetrics "{${COMMON},\"action\":\"auto\",\"trigger_type\":\"sales_risk_activation_intraday_sync\"}"
+
+# Supervisor GPT. Falha de IA não impede o motor determinístico.
+run_step runCanonicalWeeklyDecisionReview "{${COMMON},\"trigger_type\":\"sales_risk_activation_gpt_supervisor\",\"activation_review\":true}"
+
+# Revisão total do portfólio pelo motor canônico.
+run_step runCanonicalDecisionCycle "{${COMMON},\"dry_run\":false,\"skip_sync\":true,\"bootstrap\":true,\"force_campaign_lifecycle\":true,\"force_dayparting\":true,\"migrate_daypart_rules\":true,\"full_repricing_evaluation\":false,\"serving_campaign_growth_target_pct\":60,\"max_auto_budget_expansions\":8,\"max_new_exact_per_run\":8,\"max_structure_repairs_per_run\":12,\"max_bid_recoveries_per_run\":12,\"max_economic_evidence_candidates\":1000,\"trigger_type\":\"sales_risk_activation_full_portfolio_review\"}"
+
+# Execução e confirmação Amazon em chamadas separadas.
+run_step executeApprovedDecisionQueue "{${COMMON},\"max_decisions\":100,\"trigger_type\":\"sales_risk_activation_executor\"}"
+run_step confirmExecutedDecisions "{${COMMON},\"trigger_type\":\"sales_risk_activation_confirmation\"}"
+
+# Revalidação final.
+run_step syncAmazonIntradayCampaignMetrics "{${COMMON},\"action\":\"auto\",\"trigger_type\":\"sales_risk_activation_post_execution_sync\"}"
+run_step auditAdsAutomationE2E "{${COMMON},\"trigger_type\":\"sales_risk_activation_e2e_audit\"}"
 
 echo
-echo "Motor acionado: Living Finds Sales Engine — Vendas com Risco Controlado v1"
-echo "Todas as campanhas/keywords/targets/bids foram submetidos à revisão total."
-echo "Somente mutações economicamente defensáveis são executadas."
-echo "Considere efetiva somente ação confirmada pela Amazon Ads API."
+echo "================================================================"
+echo " Motor concluído em modo resiliente. Falhas de etapa: ${failures}"
+echo " Considere efetiva somente ação confirmada pela Amazon Ads API."
+echo "================================================================"
+
+# Retorna sucesso se o backend permaneceu vivo; as falhas individuais já foram logadas.
+wait_health 10
