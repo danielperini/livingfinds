@@ -4,17 +4,37 @@ set -euo pipefail
 ROOT="${ROOT:-/opt/livingfinds}"
 SERVER_DIR="${ROOT}/server"
 BASE_URL="${BASE_URL:-http://127.0.0.1:8000}"
+ENV_FILE="${SERVER_DIR}/.env"
 
 cd "$SERVER_DIR"
 
-if [[ -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+# Nunca executar/source o .env: ele pode conter nomes com espaços, JSON,
+# tokens longos ou valores multilinha que não são sintaxe shell válida.
+read_env_value() {
+  local key="$1"
+  [[ -f "$ENV_FILE" ]] || return 0
+  python3 - "$ENV_FILE" "$key" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1]); key=sys.argv[2]
+for raw in p.read_text(encoding='utf-8', errors='replace').splitlines():
+    line=raw.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k,v=line.split('=',1)
+    if k.strip() != key:
+        continue
+    v=v.strip()
+    if len(v)>=2 and v[0]==v[-1] and v[0] in "\"'":
+        v=v[1:-1]
+    print(v, end='')
+    break
+PY
+}
 
 TOKEN="${API_TOKEN:-${BACKEND_API_TOKEN:-}}"
+if [[ -z "$TOKEN" ]]; then TOKEN="$(read_env_value API_TOKEN)"; fi
+if [[ -z "$TOKEN" ]]; then TOKEN="$(read_env_value BACKEND_API_TOKEN)"; fi
 if [[ -z "$TOKEN" ]]; then
   echo "ERRO: API_TOKEN/BACKEND_API_TOKEN não configurado em server/.env" >&2
   exit 2
