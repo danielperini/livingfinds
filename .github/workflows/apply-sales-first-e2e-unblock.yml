@@ -1,0 +1,132 @@
+name: Apply sales-first E2E unblock
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/apply-sales-first-e2e-unblock.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch arbiter and executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          # 1) Cross-domain pause arbitration: state pause must compete with bid/budget recovery.
+          p=Path('base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts')
+          s=p.read_text()
+          anchor="""function mutationKey(row: any) {
+  const aid = s(row.amazon_account_id);
+  const entityType = low(row.entity_type || (row.keyword_id ? 'keyword' : row.campaign_id ? 'campaign' : 'entity'));
+  const entityId = s(row.keyword_id || row.product_target_id || row.target_id || row.entity_id || row.campaign_id);
+  const base = s(row.conflict_group) || `${aid}|${entityType}|${entityId}`;
+  return `${base}|${entityTarget(row)}`;
+}
+"""
+          addition=anchor+"""
+function entityBaseKey(row: any) {
+  const aid = s(row.amazon_account_id);
+  const entityType = low(row.entity_type || (row.keyword_id ? 'keyword' : row.campaign_id ? 'campaign' : 'entity'));
+  const entityId = s(row.keyword_id || row.product_target_id || row.target_id || row.entity_id || row.campaign_id);
+  return (s(row.conflict_group) || `${aid}|${entityType}|${entityId}`).replace(/\\|(state|bid|budget|negative)$/i, '');
+}
+"""
+          if 'function entityBaseKey' not in s:
+            if anchor not in s: raise SystemExit('arbiter anchor missing')
+            s=s.replace(anchor,addition,1)
+
+          anchor2="""      const terminalStatesClosed = await closeTerminalStates(base44, aid);
+"""
+          block="""      // Cross-domain safety: a PAUSE is a state mutation, while recovery may be
+      // a bid/budget mutation. Domain-only grouping used to let both survive.
+      // Reconcile by entity after domain arbitration so soft pauses never block
+      // a valid sales alternative; hard terminal safety still wins globally.
+      const crossDomainApproved = await base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid, status: 'approved', created_at: { $gte: since } }, '-created_at', 3000).catch(() => []);
+      const entityGroups = new Map<string, any[]>();
+      for (const row of crossDomainApproved) {
+        const ekey = entityBaseKey(row);
+        if (!ekey) continue;
+        if (!entityGroups.has(ekey)) entityGroups.set(ekey, []);
+        entityGroups.get(ekey)!.push(row);
+      }
+      let crossDomainSoftPausesCancelled = 0, crossDomainHardTerminalsApplied = 0;
+      for (const [ekey, erows] of entityGroups.entries()) {
+        const hard = erows.filter(isHardTerminal);
+        const soft = erows.filter((r:any)=>isTerminalMutation(r) && !isHardTerminal(r));
+        const alternatives = erows.filter((r:any)=>!isTerminalMutation(r));
+        const now = new Date().toISOString();
+        if (hard.length) {
+          const hardWinner = [...hard].sort((a,b)=>priority(a)-priority(b))[0];
+          for (const row of erows) {
+            if (row.id === hardWinner.id) continue;
+            await base44.asServiceRole.entities.OptimizationDecision.update(row.id, {
+              status:'cancelled', queue_status:'closed', confirmation_status:'not_applicable', amazon_confirmation_status:'not_applicable',
+              approval_status:'superseded_by_hard_terminal', cancelled_by_decision_id:hardWinner.id,
+              hide_from_live_operational_feed:true,
+              error_message:`HARD_TERMINAL_SUPERSEDED_ENTITY_ACTION: ${hardWinner.id}`,
+              updated_at:now,
+            }).catch(()=>{});
+          }
+          crossDomainHardTerminalsApplied++;
+          continue;
+        }
+        if (soft.length) {
+          // Soft pause is never executable in Sales Engine. If recovery exists,
+          // it wins; if not, HOLD is safer than an unsupported pause.
+          const alternative = alternatives.length ? chooseBidWinner(alternatives.filter(isBidMutation)) || alternatives.sort((a,b)=>priority(a)-priority(b))[0] : null;
+          for (const row of soft) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(row.id, {
+              status:'cancelled', queue_status:'closed', confirmation_status:'not_applicable', amazon_confirmation_status:'not_applicable',
+              approval_status: alternative ? 'replaced_by_sales_alternative_cross_domain' : 'soft_pause_converted_to_hold',
+              cancelled_by_decision_id: alternative?.id || null,
+              hide_from_live_operational_feed:true,
+              error_message: alternative ? `SOFT_PAUSE_REPLACED_CROSS_DOMAIN: ${alternative.id}` : 'SOFT_PAUSE_CONVERTED_TO_HOLD_NO_HARD_LOSS_EVIDENCE',
+              updated_at:now,
+            }).catch(()=>{});
+            crossDomainSoftPausesCancelled++;
+          }
+        }
+      }
+
+"""+anchor2
+          if 'crossDomainSoftPausesCancelled' not in s:
+            if anchor2 not in s: raise SystemExit('arbiter cross-domain anchor missing')
+            s=s.replace(anchor2,block,1)
+          p.write_text(s)
+
+          # 2) Executor: align confidence thresholds for trusted intraday sales recovery.
+          p=Path('base44/functions/executeApprovedDecisionQueue/entry.ts')
+          s=p.read_text()
+          anchor="""          const confidenceRaw = Number(decision.confidence || 0);
+          const governance = evaluateDecisionGovernance({
+"""
+          repl="""          const confidenceRaw = Number(decision.confidence || 0);
+          const salesRecoveryExpansion = String(decision.source_function || '') === 'runIntradaySalesRecovery' && !protectiveBidReduction && /increase|recover|promote|coverage/i.test(String(decision.action || decision.reason_code || decision.rule_key || ''));
+          const salesReason = String(decision.reason_code || decision.rule_key || decision.rationale || '');
+          const salesMinEconomicConfidence = /WINNER_STRONG|PROMOTE_WINNER/i.test(salesReason) ? 0.75
+            : /WINNER_GROWTH|SALES_GROWTH_ACOS_ZONE/i.test(salesReason) ? 0.80
+            : salesRecoveryExpansion ? 0.85 : 0.90;
+          const governance = evaluateDecisionGovernance({
+"""
+          if 'salesMinEconomicConfidence' not in s:
+            if anchor not in s: raise SystemExit('executor confidence anchor missing')
+            s=s.replace(anchor,repl,1)
+          old='            minEconomicConfidence: protectiveBidReduction ? 0.60 : 0.90,'
+          new='            minEconomicConfidence: protectiveBidReduction ? 0.60 : salesMinEconomicConfidence,'
+          if old in s: s=s.replace(old,new,1)
+          elif 'minEconomicConfidence: protectiveBidReduction ? 0.60 : salesMinEconomicConfidence' not in s: raise SystemExit('executor threshold anchor missing')
+          p.write_text(s)
+          PY
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add base44/functions/arbitrateCanonicalDecisionConflicts/entry.ts base44/functions/executeApprovedDecisionQueue/entry.ts
+          git commit -m 'fix: unblock sales recovery across pause domains'
+          git push origin HEAD:main
