@@ -12,6 +12,41 @@ import { sql } from './db.ts';
 // deno-lint-ignore no-explicit-any
 type Job = { name: string; function: string; cron: string; payload?: Record<string, any>; run_on_startup?: boolean };
 
+type SchedulerHealth = {
+  enabled: boolean;
+  started: boolean;
+  started_at: string | null;
+  jobs_loaded: number;
+  startup_jobs: number;
+  last_tick_at: string | null;
+  last_dispatch_at: string | null;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+  running_jobs: number;
+};
+
+const schedulerHealth: SchedulerHealth = {
+  enabled: true,
+  started: false,
+  started_at: null,
+  jobs_loaded: 0,
+  startup_jobs: 0,
+  last_tick_at: null,
+  last_dispatch_at: null,
+  last_success_at: null,
+  last_error_at: null,
+  last_error: null,
+  running_jobs: 0,
+};
+
+export function getSchedulerHealth(): SchedulerHealth & { tick_age_seconds: number | null; healthy: boolean } {
+  const tickMs = schedulerHealth.last_tick_at ? Date.parse(schedulerHealth.last_tick_at) : NaN;
+  const tickAge = Number.isFinite(tickMs) ? Math.max(0, Math.round((Date.now() - tickMs) / 1000)) : null;
+  const healthy = schedulerHealth.enabled && schedulerHealth.started && schedulerHealth.jobs_loaded > 0 && tickAge !== null && tickAge <= 120;
+  return { ...schedulerHealth, tick_age_seconds: tickAge, healthy };
+}
+
 function schedulesFile(): string {
   return Deno.env.get('SCHEDULES_FILE') ??
     join(import.meta.dirname!, '..', '..', 'base44', 'schedules', 'amazon-automation-schedule.json');
@@ -67,6 +102,7 @@ function nowInTz(tz: string) {
 
 export async function startScheduler(): Promise<void> {
   if ((Deno.env.get('ENABLE_SCHEDULER') ?? 'true') === 'false') {
+    schedulerHealth.enabled = false;
     console.log('[scheduler] desativado (ENABLE_SCHEDULER=false)');
     return;
   }
@@ -75,6 +111,8 @@ export async function startScheduler(): Promise<void> {
   try {
     config = JSON.parse(await Deno.readTextFile(schedulesFile()));
   } catch (error) {
+    schedulerHealth.last_error_at = new Date().toISOString();
+    schedulerHealth.last_error = (error as Error).message;
     console.error('[scheduler] não consegui ler o arquivo de schedules:', (error as Error).message);
     return;
   }
@@ -83,10 +121,16 @@ export async function startScheduler(): Promise<void> {
   const jobs = config.jobs ?? [];
   const service = makeFunctions(true);
   const runningJobs = new Map<string, { startedAt: number; functionName: string }>();
+  schedulerHealth.started = true;
+  schedulerHealth.started_at = new Date().toISOString();
+  schedulerHealth.jobs_loaded = jobs.length;
+  schedulerHealth.startup_jobs = jobs.filter((item) => item.run_on_startup === true).length;
   console.log(`[scheduler] ${jobs.length} jobs agendados (tz=${timezone})`);
 
   const lastRunSlots = new Map<string, string>();
   const tick = async () => {
+    schedulerHealth.last_tick_at = new Date().toISOString();
+    schedulerHealth.running_jobs = runningJobs.size;
     const now = nowInTz(timezone);
 
     for (const job of jobs) {
@@ -104,6 +148,8 @@ export async function startScheduler(): Promise<void> {
       }
 
       runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
+      schedulerHealth.running_jobs = runningJobs.size;
+      schedulerHealth.last_dispatch_at = new Date().toISOString();
       console.log(`[scheduler] disparando '${job.name}' -> ${job.function}`);
       (async () => {
         try {
@@ -116,44 +162,66 @@ export async function startScheduler(): Promise<void> {
               return;
             }
             const response = await service.invoke(job.function, job.payload ?? {});
+            if (response.ok) {
+              schedulerHealth.last_success_at = new Date().toISOString();
+              schedulerHealth.last_error = null;
+            } else {
+              schedulerHealth.last_error_at = new Date().toISOString();
+              schedulerHealth.last_error = `${job.function} status=${response.status}`;
+            }
             console.log(`[scheduler] '${job.function}' ok=${response.ok} status=${response.status}`);
           });
         } catch (error) {
+          schedulerHealth.last_error_at = new Date().toISOString();
+          schedulerHealth.last_error = (error as Error)?.message || String(error);
           console.error(`[scheduler] '${job.function}' erro:`, (error as Error)?.message);
         } finally {
           runningJobs.delete(jobKey);
+          schedulerHealth.running_jobs = runningJobs.size;
         }
       })();
     }
   };
 
-  // O matcher aceita somente cron de cinco campos e deduplica cada janela de minuto.
   setInterval(tick, 30_000);
   tick();
-  // Estudos marcados podem popular dados assim que uma nova versão sobe,
-  // sem aguardar a próxima janela cron. O motor interno mantém seu lock por conta.
+
   const runStartupJob = (job: Job, attempt = 1) => {
-      const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
-      const jobKey = `${job.function}|${accountScope}`;
-      if (runningJobs.has(jobKey)) {
-        if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
-        else console.error(`[scheduler] startup '${job.name}' abandonado após ${attempt} tentativas por sobreposição`);
-        return;
-      }
-      runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
-      console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
-      service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
-        .then((response) => {
-          const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
-          console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status} locked=${locked}`);
-          if (locked && attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
-        })
-        .catch((error) => console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message))
-        .finally(() => runningJobs.delete(jobKey));
+    const accountScope = String(job.payload?.amazon_account_id || 'all-accounts');
+    const jobKey = `${job.function}|${accountScope}`;
+    if (runningJobs.has(jobKey)) {
+      if (attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+      else console.error(`[scheduler] startup '${job.name}' abandonado após ${attempt} tentativas por sobreposição`);
+      return;
+    }
+    runningJobs.set(jobKey, { startedAt: Date.now(), functionName: job.function });
+    schedulerHealth.running_jobs = runningJobs.size;
+    schedulerHealth.last_dispatch_at = new Date().toISOString();
+    console.log(`[scheduler] startup '${job.name}' -> ${job.function} (tentativa ${attempt})`);
+    service.invoke(job.function, { ...(job.payload ?? {}), _startup_execution: true })
+      .then((response) => {
+        const locked = response?.data?.results?.some?.((item: any) => item?.locked === true) === true;
+        if (response.ok) {
+          schedulerHealth.last_success_at = new Date().toISOString();
+          schedulerHealth.last_error = null;
+        } else {
+          schedulerHealth.last_error_at = new Date().toISOString();
+          schedulerHealth.last_error = `${job.function} status=${response.status}`;
+        }
+        console.log(`[scheduler] startup '${job.function}' ok=${response.ok} status=${response.status} locked=${locked}`);
+        if (locked && attempt < 10) setTimeout(() => runStartupJob(job, attempt + 1), 30_000);
+      })
+      .catch((error) => {
+        schedulerHealth.last_error_at = new Date().toISOString();
+        schedulerHealth.last_error = (error as Error)?.message || String(error);
+        console.error(`[scheduler] startup '${job.function}' erro:`, (error as Error)?.message);
+      })
+      .finally(() => {
+        runningJobs.delete(jobKey);
+        schedulerHealth.running_jobs = runningJobs.size;
+      });
   };
-  // Jobs de bootstrap costumam acessar as mesmas contas, campanhas e produtos.
-  // Dispará-los todos no mesmo segundo aumenta 429, contenção no banco e leituras
-  // de estado intermediário. Preservamos todos, mas em uma fila escalonada.
+
   const startupJobs = jobs.filter((item) => item.run_on_startup === true);
   startupJobs.forEach((job, index) => {
     setTimeout(() => runStartupJob(job), 1_000 + index * 30_000);
