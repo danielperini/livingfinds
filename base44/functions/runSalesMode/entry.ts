@@ -9,6 +9,18 @@ const invoke = async (base44: any, name: string, payload: Record<string, unknown
   }
 };
 
+function brDate(d = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(d);
+}
+
+const ACTIVE_PROMOTION_STATES = new Set([
+  'campaign_creating', 'campaign_created', 'ad_group_created', 'product_ad_created',
+  'keyword_created', 'enabling', 'manual_active', 'negative_creating', 'negative_created',
+  'completed', 'repair_required', 'failed_retryable',
+]);
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -19,13 +31,32 @@ Deno.serve(async (request) => {
     }
 
     const correlationId = body.correlation_id || crypto.randomUUID();
+    const accountId = body.amazon_account_id || null;
+    const dryRun = body.dry_run === true;
+    const today = brDate();
+    const requestedNewExactToday = Math.max(0, Math.min(20, Number(body.max_new_exact_today ?? 20)));
+    const requestedPausesToday = Math.max(0, Math.min(100, Number(body.max_campaign_pauses_today ?? 100)));
+    const tomorrowTarget = Math.max(0, Math.min(50, Number(body.tomorrow_new_exact_target ?? 10)));
+    const maxActions = Math.max(12, Math.min(180, Number(body.max_actions ?? 180)));
+
     const common = {
-      amazon_account_id: body.amazon_account_id || null,
+      amazon_account_id: accountId,
       _service_role: true,
       _canonical_orchestrator: 'runUnifiedDecisionEngine',
       decision_engine_correlation_id: correlationId,
-      dry_run: body.dry_run === true,
+      dry_run: dryRun,
     };
+
+    // Contagem real de promoções que já reservaram/criaram campanha hoje.
+    // Assim a cota de 20 é diária, e não 20 a cada execução do scheduler.
+    const promotionFilter: any = accountId ? { amazon_account_id: accountId } : {};
+    const todayPromotions = await base44.asServiceRole.entities.SearchTermPromotion
+      .filter(promotionFilter, '-created_at', 10000).catch(() => []);
+    const exactAlreadyStartedToday = todayPromotions.filter((p: any) =>
+      String(p.created_at || '').slice(0, 10) === today &&
+      ACTIVE_PROMOTION_STATES.has(String(p.promotion_status || '').toLowerCase())
+    ).length;
+    const exactRemainingToday = Math.max(0, requestedNewExactToday - exactAlreadyStartedToday);
 
     // SALES MODE: venda e lucro pós-Ads são o objetivo primário. Crescimento de
     // campanha só acontece quando existe sinal de conversão, entrega competitiva
@@ -38,25 +69,47 @@ Deno.serve(async (request) => {
     });
     const snapshotRunId = snapshots.run_id || snapshots.snapshot_run_id || correlationId;
 
-    const harvest = await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
-      ...common,
-      snapshot_run_id: snapshotRunId,
-      lookback_days: body.lookback_days ?? 65,
-      minimum_orders: 1,
-      initial_exact_test_hours: 72,
-      maximum_orders_for_initial_promotion: 5,
-      inherit_source_bid: true,
-      create_manual_exact: true,
-      one_term_per_campaign: true,
-      include_manual_sources: true,
-      negative_exact_after_manual_confirmation: true,
-      queue_only: true,
-      max_promotions: body.max_new_exact_today ?? 20,
-      require_stock: true,
-      require_active_product: true,
-      trigger_type: 'sales_mode_winner_harvest',
-    });
+    // IA entra como camada estratégica/auditável. Ela não pode furar guardrails
+    // econômicos nem executar ação por conta própria; decisões reais continuam
+    // determinísticas, idempotentes e confirmadas pela Amazon.
+    const aiStrategy = body.skip_ai_strategy === true
+      ? { ok: true, skipped: true }
+      : await invoke(base44, 'aiEngine', {
+          ...common,
+          mode: 'claude_analyze',
+          prompt: 'Analise a conta Amazon Ads com foco exclusivo em aumentar vendas lucrativas. Priorize termos same-SKU convertidos, cobertura competitiva de vencedores, redução de desperdício, risco de canibalização e oportunidades de redistribuição de orçamento. Não proponha ultrapassar ACoS/meta econômica, estoque ou teto diário.',
+          context: {
+            objective: 'maximize_sales_with_economic_guardrails',
+            snapshot_run_id: snapshotRunId,
+            exact_daily_cap: requestedNewExactToday,
+            exact_already_started_today: exactAlreadyStartedToday,
+            exact_remaining_today: exactRemainingToday,
+            pause_daily_cap: requestedPausesToday,
+          },
+        });
 
+    const harvest = exactRemainingToday > 0
+      ? await invoke(base44, 'runImmediateSameSkuSearchTermHarvest', {
+          ...common,
+          snapshot_run_id: snapshotRunId,
+          lookback_days: body.lookback_days ?? 65,
+          minimum_orders: 1,
+          initial_exact_test_hours: 72,
+          maximum_orders_for_initial_promotion: 5,
+          inherit_source_bid: true,
+          create_manual_exact: true,
+          one_term_per_campaign: true,
+          include_manual_sources: true,
+          negative_exact_after_manual_confirmation: true,
+          queue_only: true,
+          max_promotions: exactRemainingToday,
+          require_stock: true,
+          require_active_product: true,
+          trigger_type: 'sales_mode_winner_harvest',
+        })
+      : { ok: true, skipped: true, reason: 'daily_exact_quota_reached', max_promotions: 0 };
+
+    // Primeiro restaura entrega competitiva de entidades economicamente válidas.
     const bidRecovery = await invoke(base44, 'runIntradaySalesRecovery', {
       ...common,
       snapshot_run_id: snapshotRunId,
@@ -66,38 +119,32 @@ Deno.serve(async (request) => {
       max_budget_step_pct: body.max_budget_step_pct ?? 12,
     });
 
+    // Depois reduz/aumenta keywords com evidência consolidada de CPC/ACoS.
+    // Esta função escreve diretamente na Amazon e mantém cooldown próprio.
     const bidEconomics = await invoke(base44, 'smartBidFromCpc', {
       ...common,
-      manual_only: false,
-      target_source: 'PerformanceSettings',
-      reduce_only_when_unprofitable: true,
-      never_exceed_target_acos: true,
       trigger_type: 'sales_mode_economic_bid_control',
     });
 
-    const waste = await invoke(base44, 'runWeeklyWasteTermsCleanup', {
+    // Corta campanhas com evidência real, ordenadas por desperdício, com teto
+    // diário de 100 e proteção explícita a vencedores/conversores.
+    const waste = await invoke(base44, 'runSalesModeWasteRotation', {
       ...common,
-      mode: 'sales_mode',
-      lookback_hours: body.waste_lookback_hours ?? 168,
-      allow_campaign_pause: true,
-      apply_negative_terms: true,
-      include_auto: true,
-      include_manual: true,
-      max_campaign_pauses: body.max_campaign_pauses_today ?? 100,
-      protect_converted_entities: true,
-      require_evidence_before_pause: true,
+      snapshot_run_id: snapshotRunId,
+      lookback_days: body.waste_lookback_days ?? 7,
+      min_age_days: body.waste_min_age_days ?? 7,
+      max_campaign_pauses: requestedPausesToday,
       trigger_type: 'sales_mode_waste_rotation',
     });
 
-    const lifecycle = await invoke(base44, 'runCanonicalCampaignLifecycleLayer', {
+    // Guard econômico adicional: perdas locais são cortadas sem bloquear outros
+    // ASINs/termos vencedores independentes.
+    const economicGuard = await invoke(base44, 'runEconomicCurveAdsGuard', {
       ...common,
+      max_actions: body.max_economic_guard_actions ?? 30,
+      target_mer_pct: body.target_mer_pct,
       snapshot_run_id: snapshotRunId,
-      force_sales_mode: true,
-      serving_campaign_growth_target_pct: 0,
-      growth_metric: 'SALES_AND_PROFIT',
-      expansion_policy: 'winner_harvest_first_then_economic_discovery',
-      max_new_exact_per_run: body.max_new_exact_today ?? 20,
-      max_replacements_per_run: body.max_campaign_pauses_today ?? 100,
+      trigger_type: 'sales_mode_economic_curve_guard',
     });
 
     const budget = await invoke(base44, 'runEconomicBudgetBalancer', {
@@ -108,44 +155,68 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
       enable_intraday_reallocation: true,
       protect_winners_from_budget_exhaustion: true,
-      prioritize_sales_velocity: true,
       never_exceed_account_daily_budget: true,
     });
 
-    const execution = body.dry_run === true
-      ? { ok: true, skipped: true, reason: 'dry_run' }
-      : await invoke(base44, 'executeApprovedDecisionQueue', {
+    // O executor canônico processa 12 decisões por chamada. Drenamos em várias
+    // passagens, limitadas por maxActions, interrompendo quando a fila esvaziar
+    // ou quando uma passagem não processar nada.
+    const executionPasses: any[] = [];
+    if (!dryRun) {
+      const maxPasses = Math.min(15, Math.max(1, Math.ceil(maxActions / 12)));
+      let totalProcessed = 0;
+      for (let pass = 0; pass < maxPasses && totalProcessed < maxActions; pass++) {
+        const execution = await invoke(base44, 'executeApprovedDecisionQueue', {
           ...common,
           snapshot_run_id: snapshotRunId,
           expedited: true,
-          max_actions: body.max_actions ?? 180,
           trigger_type: 'sales_mode_execute_now',
         });
+        executionPasses.push(execution);
+        const processed = Number(execution?.processed || 0);
+        totalProcessed += processed;
+        if (processed <= 0 || Number(execution?.remaining || 0) <= 0) break;
+      }
+    }
+    const execution = dryRun
+      ? { ok: true, skipped: true, reason: 'dry_run', passes: [] }
+      : {
+          ok: executionPasses.every((p: any) => p?.ok !== false),
+          passes: executionPasses,
+          processed: executionPasses.reduce((s: number, p: any) => s + Number(p?.processed || 0), 0),
+          executed: executionPasses.reduce((s: number, p: any) => s + Number(p?.executed || 0), 0),
+          failed: executionPasses.reduce((s: number, p: any) => s + Number(p?.failed || 0), 0),
+          remaining: executionPasses.length ? Number(executionPasses[executionPasses.length - 1]?.remaining || 0) : 0,
+        };
 
-    const stages = { snapshots, harvest, bidRecovery, bidEconomics, waste, lifecycle, budget, execution };
+    const stages = { snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
-      engine: 'sales-mode-v1',
+      engine: 'sales-mode-v1.2',
       objective: 'maximize_sales_with_economic_guardrails',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
       targets: {
-        max_new_exact_today: body.max_new_exact_today ?? 20,
-        max_campaign_pauses_today: body.max_campaign_pauses_today ?? 100,
-        tomorrow_new_exact_target: body.tomorrow_new_exact_target ?? 10,
+        max_new_exact_today: requestedNewExactToday,
+        exact_already_started_today: exactAlreadyStartedToday,
+        exact_remaining_before_run: exactRemainingToday,
+        max_campaign_pauses_today: requestedPausesToday,
+        tomorrow_new_exact_target: tomorrowTarget,
+        max_actions_this_run: maxActions,
       },
       policy: {
         primary_kpi: 'orders_sales_and_post_ads_profit',
         winner_source: 'same-SKU converted search terms from AUTO and MANUAL campaigns',
-        new_campaign_rule: 'create only from proven winner or economically justified discovery',
-        pause_rule: 'pause only with evidence; never pause protected converters merely to hit quota',
-        bid_rule: 'raise competitive bids in reversible steps; cut bids when economics deteriorate',
+        new_campaign_rule: 'daily quota; create only from proven winner or economically justified discovery',
+        pause_rule: 'rank by waste evidence; daily quota; never pause protected winners merely to hit quota',
+        bid_rule: 'restore competitive winners in reversible steps; cut bids with CPC/ACoS evidence and cooldown',
         budget_rule: 'reallocate toward winners without breaching account cap',
-        execution: 'canonical queue + Amazon confirmation',
+        ai_rule: 'AI advises strategy; deterministic economic guardrails remain sovereign',
+        execution: 'canonical queue drained in batches of 12 + Amazon confirmation',
       },
       stages,
     });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'sales-mode-v1', error: error?.message || 'Falha no modo vendas' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'sales-mode-v1.2', error: error?.message || 'Falha no modo vendas' }, { status: 500 });
   }
 });
