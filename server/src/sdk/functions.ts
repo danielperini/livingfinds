@@ -14,13 +14,19 @@ export function makeFunctions(serviceRole: boolean) {
   const invoke = async (name: string, payload: Json = {}): Promise<Json> => {
     const handler: FnHandler | undefined = registry.get(name);
     const body = serviceRole ? { ...payload, _service_role: true } : { ...payload };
+    const internalToken = serviceRole ? (Deno.env.get('INTERNAL_FUNCTION_TOKEN') ?? '') : '';
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      'x-service-role': String(serviceRole),
+    };
+    if (internalToken) headers['x-internal-invocation-token'] = internalToken;
 
     if (!handler) {
       // fallback: chamada HTTP (caso a função esteja em outro processo/host)
       try {
         const res = await fetch(`${BASE()}/functions/${name}`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-service-role': String(serviceRole) },
+          headers,
           body: JSON.stringify(body),
         });
         const data = await res.json().catch(() => ({}));
@@ -32,7 +38,7 @@ export function makeFunctions(serviceRole: boolean) {
 
     const req = new Request(`${BASE()}/functions/${name}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-service-role': String(serviceRole) },
+      headers,
       body: JSON.stringify(body),
     });
     const res = await handler(req);
