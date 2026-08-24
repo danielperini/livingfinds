@@ -26,7 +26,10 @@ Deno.serve(async (request) => {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
-    const configuredInternalToken = Deno.env.get('INTERNAL_FUNCTION_TOKEN') || '';
+    const configuredInternalToken = Deno.env.get('INTERNAL_FUNCTION_TOKEN') ||
+      Deno.env.get('API_TOKEN') ||
+      Deno.env.get('ADMIN_PASSWORD') ||
+      '';
     const presentedInternalToken = request.headers.get('x-internal-invocation-token') || '';
     const internalAuthorized = Boolean(configuredInternalToken) && presentedInternalToken === configuredInternalToken;
     if (!authenticated && !internalAuthorized) {
