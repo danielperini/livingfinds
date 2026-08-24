@@ -7,36 +7,26 @@ import {
 import { validateAmazonAction } from '../../shared/amazonActionRegistry.ts';
 import { evaluateDecisionGovernance } from '../../shared/canonicalDecisionPolicy.ts';
 
-const MAX_BATCH = 12;
+const MAX_BATCH = 25;
 const API_DELAY_MS = 400;
-const EXECUTION_DEADLINE_MS = 75_000;
+const EXECUTION_DEADLINE_MS = 110_000;
 
-/**
- * HARD GUARD — assertSingleKeywordPerCampaign
- *
- * Verifica no banco local se a campanha já tem keyword ativa (EXACT).
- * Se sim, lança erro CANONICAL_MANUAL_CAMPAIGN_VIOLATION antes de qualquer chamada Amazon.
- * Garante a regra: 1 campanha manual = 1 keyword EXACT.
- */
 async function assertSingleKeywordPerCampaign(
   base44: any,
   accountId: string,
   campaignId: string,
   newKeywordText: string,
 ): Promise<void> {
-  if (!campaignId) return; // sem campaignId = nova campanha, sem conflito possível
-
+  if (!campaignId) return;
   const existing = await base44.asServiceRole.entities.Keyword.filter(
     { amazon_account_id: accountId, campaign_id: campaignId },
     null, 10
   ).catch(() => []);
-
   const activeExact = existing.filter((k: any) => {
     const st = String(k.state || k.status || '').toLowerCase();
     if (st === 'archived') return false;
     return String(k.match_type || '').toLowerCase() === 'exact';
   });
-
   if (activeExact.length > 0) {
     const existingText = activeExact[0]?.keyword_text || activeExact[0]?.keyword || 'desconhecida';
     throw new Error(
@@ -55,15 +45,31 @@ function isEntityNotFound(payload: any): boolean {
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
-
 function parseJson(value: any) {
   if (!value) return {};
   if (typeof value === 'object') return value;
   try { return JSON.parse(String(value)); } catch { return {}; }
 }
-
 function present(...values: any[]) {
   return values.find((value) => value !== undefined && value !== null);
+}
+
+const RECOVERABLE_GOVERNANCE_BLOCKERS = new Set([
+  'STALE_DATA','ADS_DATA_STALE','SP_API_DATA_STALE','ECONOMICS_DATA_STALE','ECONOMICS_INCOMPLETE',
+  'STRUCTURE_INCOMPLETE','COOLDOWN_ACTIVE','COMPETITION_STALE','PREDICTION_CONFIDENCE',
+  'ECONOMIC_CONFIDENCE','SNAPSHOT_REQUIRED','SNAPSHOT_MISSING','LOW_ECONOMIC_CONFIDENCE'
+]);
+const HARD_GOVERNANCE_BLOCKERS = new Set([
+  'ACCOUNT_KILL_SWITCH','ACCOUNT_DAILY_CAP','OUT_OF_STOCK','NOT_BUYABLE','PRODUCT_NOT_ELIGIBLE',
+  'LISTING_INACTIVE','OFFER_INACTIVE','SAFE_CPC_CEILING','SAFE_CPC_EXCEEDED','ECONOMIC_CEILING',
+  'MARGIN_FLOOR','PARENT_ASIN'
+]);
+function governanceRetryMinutes(codes: string[], attempt: number): number {
+  if (codes.includes('COOLDOWN_ACTIVE')) return 180;
+  if (codes.some((c) => c.includes('STRUCTURE'))) return 10;
+  if (codes.some((c) => c.includes('ECONOM'))) return 15;
+  if (codes.some((c) => c.includes('STALE'))) return 10;
+  return Math.min(60, 5 * Math.max(1, 2 ** Math.min(attempt, 3)));
 }
 
 function prioritize(decisions: any[]): any[] {
@@ -124,7 +130,6 @@ Deno.serve(async (request) => {
       !decision.next_retry_at || new Date(decision.next_retry_at).getTime() <= Date.now()
     );
     const approved = [...approvedRows, ...dueRetries];
-
     if (approved.length === 0) {
       return Response.json({ ok: true, executed: 0, duration_ms: Date.now() - t0 });
     }
@@ -147,9 +152,6 @@ Deno.serve(async (request) => {
       }
     }
 
-    // ── Revalidação de decisões obsoletas (STALE_DECISION_REVALIDATION) ──────
-    // Antes de executar: verificar se decisões de pausa ainda são válidas.
-    // Se campanha tem vendas recentes (orders_14d>0) E ACoS<=15% → cancelar decisão.
     let preAutoCancel = 0;
     const deferredDecisionIds = new Set<string>();
     const dominantByConflict = new Map<string, any>();
@@ -157,9 +159,7 @@ Deno.serve(async (request) => {
       const nowMs = Date.now();
       if (decision.execution_mode === 'MANUAL_REVIEW') {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'pending_approval',
-          requires_approval: true,
-          approval_status: 'manual_review_required',
+          status: 'pending_approval', requires_approval: true, approval_status: 'manual_review_required',
         }).catch(() => {});
         preAutoCancel++;
         continue;
@@ -171,8 +171,7 @@ Deno.serve(async (request) => {
       const expiration = decision.execute_before || decision.expires_at;
       if (expiration && new Date(expiration).getTime() < nowMs) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'expired',
-          error_message: 'DECISION_WINDOW_EXPIRED: a janela operacional terminou antes da execução.',
+          status: 'expired', error_message: 'DECISION_WINDOW_EXPIRED: a janela operacional terminou antes da execução.',
         }).catch(() => {});
         preAutoCancel++;
         continue;
@@ -185,21 +184,18 @@ Deno.serve(async (request) => {
         const ageMinutes = reference ? (nowMs - new Date(reference).getTime()) / 60000 : 0;
         if (ageMinutes > maximumAge) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'expired',
-            error_message: `STALE_DATA_EXPIRED: evidência com ${Math.round(ageMinutes)} min excede ${maximumAge} min.`,
+            status: 'expired', error_message: `STALE_DATA_EXPIRED: evidência com ${Math.round(ageMinutes)} min excede ${maximumAge} min.`,
           }).catch(() => {});
           preAutoCancel++;
           continue;
         }
       }
-
       const conflictGroup = String(decision.conflict_group || '');
       if (!conflictGroup) continue;
       const dominant = dominantByConflict.get(conflictGroup);
       if (dominant && shouldSupersedeDecision(dominant, decision)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-          status: 'cancelled',
-          cancelled_by_decision_id: dominant.id,
+          status: 'cancelled', cancelled_by_decision_id: dominant.id,
           error_message: `SUPERSEDED_BY_HIGHER_PRIORITY: ${dominant.priority_class || 'P2'} venceu no grupo ${conflictGroup}.`,
         }).catch(() => {});
         preAutoCancel++;
@@ -207,18 +203,16 @@ Deno.serve(async (request) => {
       }
       dominantByConflict.set(conflictGroup, decision);
     }
+
     const pauseDecisions = approved.filter(d =>
       d.action === 'pause_campaign' || d.action === 'pause_keyword' || d.action === 'archive_campaign'
     );
     if (pauseDecisions.length > 0) {
-      // Buscar métricas recentes para revalidação
       const cutoff14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
       const staleMetrics = await base44.asServiceRole.entities.CampaignMetricsDaily.filter(
         { amazon_account_id: aid }, '-date', 500
       ).catch(() => []);
       const metrics14d = staleMetrics.filter((m: any) => m.date >= cutoff14d);
-
-      // Agregar orders e acos por campaign_id
       const campaignMetrics14d = new Map<string, { orders: number; spend: number; sales: number }>();
       for (const m of metrics14d) {
         if (!m.campaign_id) continue;
@@ -228,14 +222,12 @@ Deno.serve(async (request) => {
         ex.sales += m.sales || 0;
         campaignMetrics14d.set(m.campaign_id, ex);
       }
-
       for (const d of pauseDecisions) {
         const cid = d.campaign_id;
         if (!cid) continue;
         const cm = campaignMetrics14d.get(cid);
         if (!cm) continue;
         const acos14d = cm.sales > 0 ? (cm.spend / cm.sales) * 100 : null;
-        // Cancelar se campanha tem vendas recentes e ACoS sustentável
         if (cm.orders > 0 && acos14d !== null && acos14d <= 15) {
           await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
             status: 'cancelled',
@@ -246,12 +238,10 @@ Deno.serve(async (request) => {
       }
     }
 
-    // ── Cancelar decisões com keyword_id ausente no banco ────────────────────
     for (const d of approved) {
       if (d.keyword_id && !validKwIds.has(d.keyword_id)) {
         await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
-          status: 'cancelled',
-          error_message: 'CANCELADO: keyword_id não encontrado no banco — entidade removida da Amazon',
+          status: 'cancelled', error_message: 'CANCELADO: keyword_id não encontrado no banco — entidade removida da Amazon',
         }).catch(() => {});
         preAutoCancel++;
       }
@@ -265,7 +255,6 @@ Deno.serve(async (request) => {
           ...dueRetries.filter((decision: any) => !['cancelled', 'blocked', 'failed_final'].includes(String(decision.status || ''))),
         ]
       : approved;
-
     if (stillApproved.length === 0) {
       return Response.json({ ok: true, executed: 0, pre_cancelled: preAutoCancel, duration_ms: Date.now() - t0 });
     }
@@ -278,35 +267,22 @@ Deno.serve(async (request) => {
 
     for (const decision of toProcess) {
       if (Date.now() - t0 > EXECUTION_DEADLINE_MS) break;
-
       let lockOwnerId: string | null = null;
       try {
         if (Number(decision.attempt_count || 0) >= Number(decision.max_attempts || 3)) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'failed_final',
-            queue_status: 'failed',
-            error_message: 'MAX_ATTEMPTS_EXHAUSTED',
+            status: 'failed_final', queue_status: 'failed', error_message: 'MAX_ATTEMPTS_EXHAUSTED',
           }).catch(() => {});
           results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: 'MAX_ATTEMPTS_EXHAUSTED' });
           skipped++;
           continue;
         }
-        const capability = validateAmazonAction({
-          action: decision.action,
-          execution_mode: decision.execution_mode,
-        });
+        const capability = validateAmazonAction({ action: decision.action, execution_mode: decision.execution_mode });
         if (!capability.valid) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'skipped',
-            error_message: capability.reason,
+            status: 'skipped', error_message: capability.reason,
           }).catch(() => {});
-          results.push({
-            id: decision.id,
-            action: decision.action,
-            ok: false,
-            skipped: true,
-            reason: capability.reason,
-          });
+          results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, reason: capability.reason });
           skipped++;
           continue;
         }
@@ -324,9 +300,27 @@ Deno.serve(async (request) => {
             admission.verified === true && admission.observed_at &&
             Date.now() - new Date(String(admission.observed_at)).getTime() <= Number(decision.maximum_data_age_minutes || 45) * 60000;
           const priorEntityDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
-            amazon_account_id: aid,
-            entity_id: decision.entity_id,
+            amazon_account_id: aid, entity_id: decision.entity_id,
           }, '-executed_at', 10).catch(() => []);
+
+          const awaitingAmazonConfirmation = priorEntityDecisions.some((prior: any) => {
+            if (String(prior.id || '') === String(decision.id || '')) return false;
+            const pendingConfirmation = ['pending', 'propagating'].includes(String(prior.confirmation_status || '').toLowerCase()) ||
+              ['confirming', 'awaiting_confirmation'].includes(String(prior.status || '').toLowerCase());
+            if (!pendingConfirmation) return false;
+            const ts = new Date(String(prior.executed_at || prior.last_attempt_at || prior.updated_at || prior.created_at || 0)).getTime();
+            return Number.isFinite(ts) && ts >= Date.now() - 2 * 3600000;
+          });
+          if (awaitingAmazonConfirmation) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+              status: 'waiting_retry', queue_status: 'scheduled', next_retry_at: new Date(Date.now() + 10 * 60000).toISOString(),
+              error_message: 'AWAITING_AMAZON_CONFIRMATION: existe escrita recente da mesma entidade aguardando propagacao.',
+            }).catch(() => {});
+            results.push({ id: decision.id, action: decision.action, ok: false, scheduled: true, reason: 'AWAITING_AMAZON_CONFIRMATION' });
+            skipped++;
+            continue;
+          }
+
           const protectiveBidReduction = String(decision.action || '').toLowerCase().includes('reduce') &&
             /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/i
               .test(String(decision.reason_code || decision.rule_key || decision.rationale || ''));
@@ -335,10 +329,7 @@ Deno.serve(async (request) => {
             if (String(prior.id || '') === String(decision.id || '')) return false;
             const isBid = /bid/i.test(String(prior.canonical_action_type || prior.action || prior.decision_type || ''));
             const changedAt = new Date(String(prior.executed_at || prior.approved_at || prior.created_at || 0)).getTime();
-            // Only a confirmed Amazon write starts cooldown.  An approved,
-            // skipped or queued proposal must not lock an entity for 48h.
-            const applied = String(prior.status || '') === 'executed' ||
-              String(prior.confirmation_status || '') === 'confirmed';
+            const applied = String(prior.status || '') === 'executed' || String(prior.confirmation_status || '') === 'confirmed';
             return isBid && applied && Number.isFinite(changedAt) && changedAt >= Date.now() - cooldownHours * 3600000;
           });
           const confidenceRaw = Number(decision.confidence || 0);
@@ -385,46 +376,47 @@ Deno.serve(async (request) => {
             minEconomicConfidence: protectiveBidReduction ? 0.60 : 0.90,
           });
           if (!governance.allowed) {
+            const codes = governance.blockers.map((blocker) => String(blocker.code || '').toUpperCase());
+            const hasHardBlocker = codes.some((code) => HARD_GOVERNANCE_BLOCKERS.has(code));
+            const recoverable = !hasHardBlocker && codes.some((code) =>
+              RECOVERABLE_GOVERNANCE_BLOCKERS.has(code) || code.includes('STALE') || code.includes('INCOMPLETE') || code.includes('COOLDOWN')
+            );
+            if (recoverable) {
+              const retryMinutes = governanceRetryMinutes(codes, Number(decision.attempt_count || 0));
+              await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
+                status: 'waiting_retry', queue_status: 'scheduled',
+                next_retry_at: new Date(Date.now() + retryMinutes * 60000).toISOString(),
+                error_message: `FAST_TRACK_WAITING_REFRESH: ${codes.join(',')} | retry=${retryMinutes}m`.slice(0, 500),
+              }).catch(() => {});
+              results.push({ id: decision.id, action: decision.action, ok: false, scheduled: true, fast_track: true, reason: 'WAITING_REFRESH', retry_minutes: retryMinutes, governance });
+              skipped++;
+              continue;
+            }
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'blocked',
-              queue_status: 'completed',
-              error_message: `GOVERNANCE_BLOCK: ${governance.blockers.map((blocker) => blocker.code).join(',')}`.slice(0, 500),
+              status: 'blocked', queue_status: 'completed', error_message: `GOVERNANCE_HARD_BLOCK: ${codes.join(',')}`.slice(0, 500),
             }).catch(() => {});
-            results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, governance });
+            results.push({ id: decision.id, action: decision.action, ok: false, skipped: true, hard_block: true, governance });
             skipped++;
             continue;
           }
         }
 
-        // HARD GUARD: bloquear create_keyword se campanha já tem keyword ativa
-        // Regra canônica: 1 campanha manual = 1 keyword EXACT
         if (
           (decision.action === 'create_keyword' || decision.decision_type === 'create_keyword' || decision.decision_type === 'harvest_search_term') &&
           decision.campaign_id
         ) {
-          await assertSingleKeywordPerCampaign(
-            base44,
-            aid,
-            decision.campaign_id,
-            decision.keyword_text || decision.action || ''
-          );
+          await assertSingleKeywordPerCampaign(base44, aid, decision.campaign_id, decision.keyword_text || decision.action || '');
         }
 
         if (isCanonical && decision.lock_key) {
           lockOwnerId = crypto.randomUUID();
           const lockResponse = await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
-            amazon_account_id: aid,
-            lock_key: decision.lock_key,
-            owner_id: lockOwnerId,
-            ttl_ms: 300000,
-            _service_role: true,
+            amazon_account_id: aid, lock_key: decision.lock_key, owner_id: lockOwnerId, ttl_ms: 300000, _service_role: true,
           }).catch((error: any) => ({ data: { ok: false, acquired: false, error: error?.message || String(error) } }));
           const lock = lockResponse?.data || lockResponse || {};
           if (lock.acquired !== true) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              status: 'waiting_retry',
-              queue_status: 'scheduled',
-              next_retry_at: new Date(Date.now() + 5 * 60000).toISOString(),
+              status: 'waiting_retry', queue_status: 'scheduled', next_retry_at: new Date(Date.now() + 5 * 60000).toISOString(),
               error_message: 'ENTITY_LOCK_BUSY: outra avaliação ou execução detém o lock canônico.',
             }).catch(() => {});
             results.push({ id: decision.id, action: decision.action, ok: false, scheduled: true, reason: 'ENTITY_LOCK_BUSY' });
@@ -436,35 +428,27 @@ Deno.serve(async (request) => {
 
         if (decision.status === 'waiting_retry') {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'approved',
-            queue_status: 'pending',
-            next_retry_at: null,
+            status: 'approved', queue_status: 'pending', next_retry_at: null,
           }).catch(() => {});
         }
 
-        // Usa o roteador canônico: ajustes de bid são enviados para atualização pareada
-        // de keyword e ad group; as demais ações seguem para o executor V2.
         const res = await base44.asServiceRole.functions.invoke('executeAutopilotDecision', {
-          decision_ids: [decision.id],
-          _service_role: true,
-          _window_execution: true,
+          decision_ids: [decision.id], _service_role: true, _window_execution: true,
         });
         const data = res?.data || res || {};
         const ok = data?.executed > 0 || data?.ok === true;
 
         if (!ok && isEntityNotFound(data)) {
           await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-            status: 'cancelled',
-            error_message: 'CANCELADO: entidade não encontrada na Amazon (ENTITY_NOT_FOUND) — decisão obsoleta',
+            status: 'cancelled', error_message: 'CANCELADO: entidade não encontrada na Amazon (ENTITY_NOT_FOUND) — decisão obsoleta',
           }).catch(() => {});
           results.push({ id: decision.id, action: decision.action, ok: false, cancelled: true });
           skipped++;
         } else {
           if (ok && capability.definition?.confirmationRequired) {
             await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
-              confirmation_status: 'pending',
-              confirmation_error: null,
-              confirmed_at: null,
+              status: 'confirming', queue_status: 'completed', confirmation_status: 'propagating',
+              confirmation_error: null, confirmed_at: null, last_attempt_at: new Date().toISOString(),
             }).catch(() => {});
           }
           results.push({ id: decision.id, action: decision.action, ok });
@@ -476,15 +460,10 @@ Deno.serve(async (request) => {
       } finally {
         if (lockOwnerId && decision.lock_key) {
           await base44.asServiceRole.functions.invoke('acquireAmazonSchedulerLock', {
-            amazon_account_id: aid,
-            lock_key: decision.lock_key,
-            owner_id: lockOwnerId,
-            action: 'release',
-            _service_role: true,
+            amazon_account_id: aid, lock_key: decision.lock_key, owner_id: lockOwnerId, action: 'release', _service_role: true,
           }).catch(() => {});
         }
       }
-
       if (toProcess.indexOf(decision) < toProcess.length - 1) await sleep(API_DELAY_MS);
     }
 
