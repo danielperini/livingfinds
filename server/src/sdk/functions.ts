@@ -10,11 +10,18 @@ type Json = Record<string, any>;
 
 const BASE = () => Deno.env.get('APP_BASE_URL') ?? 'http://localhost:8000';
 
+function internalInvocationToken(): string {
+  return Deno.env.get('INTERNAL_FUNCTION_TOKEN') ||
+    Deno.env.get('API_TOKEN') ||
+    Deno.env.get('ADMIN_PASSWORD') ||
+    '';
+}
+
 export function makeFunctions(serviceRole: boolean) {
   const invoke = async (name: string, payload: Json = {}): Promise<Json> => {
     const handler: FnHandler | undefined = registry.get(name);
     const body = serviceRole ? { ...payload, _service_role: true } : { ...payload };
-    const internalToken = serviceRole ? (Deno.env.get('INTERNAL_FUNCTION_TOKEN') ?? '') : '';
+    const internalToken = serviceRole ? internalInvocationToken() : '';
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-service-role': String(serviceRole),
@@ -22,7 +29,6 @@ export function makeFunctions(serviceRole: boolean) {
     if (internalToken) headers['x-internal-invocation-token'] = internalToken;
 
     if (!handler) {
-      // fallback: chamada HTTP (caso a função esteja em outro processo/host)
       try {
         const res = await fetch(`${BASE()}/functions/${name}`, {
           method: 'POST',
