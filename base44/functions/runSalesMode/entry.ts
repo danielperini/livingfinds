@@ -21,6 +21,9 @@ const ACTIVE_PROMOTION_STATES = new Set([
   'completed', 'repair_required', 'failed_retryable',
 ]);
 
+const numberFrom = (value: any, ...keys: string[]) => keys.reduce((result, key) =>
+  result || Number(value?.[key] || 0), 0);
+
 Deno.serve(async (request) => {
   try {
     const base44 = createClientFromRequest(request);
@@ -75,7 +78,7 @@ Deno.serve(async (request) => {
       : await invoke(base44, 'aiEngine', {
           ...common,
           mode: 'claude_analyze',
-          prompt: 'Analise a conta Amazon Ads com foco exclusivo em aumentar vendas lucrativas. Priorize termos same-SKU convertidos, cobertura competitiva de vencedores, redução de desperdício, risco de canibalização e oportunidades de redistribuição de orçamento. Não proponha ultrapassar ACoS/meta econômica, estoque ou teto diário.',
+          prompt: 'Analise a conta Amazon Ads com foco exclusivo em aumentar vendas lucrativas. Para cada oportunidade, retorne winner_score, waste_score, confidence, expected_incremental_sales e reason. Priorize termos same-SKU convertidos, cobertura competitiva de vencedores, redução de desperdício, risco de canibalização e oportunidades de redistribuição de orçamento. Não proponha ultrapassar ACoS/meta econômica, estoque ou teto diário: hard guards determinísticos são soberanos.',
           context: {
             objective: 'maximize_sales_with_economic_guardrails',
             snapshot_run_id: snapshotRunId,
@@ -180,6 +183,18 @@ Deno.serve(async (request) => {
         };
 
     const stages = { snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
+    const wasteRows = Array.isArray(waste?.results) ? waste.results : [];
+    const metrics = {
+      terms_harvested: numberFrom(harvest, 'aggregates', 'terms_harvested', 'candidates'),
+      exact_created: numberFrom(harvest, 'promoted_count', 'promotions_created', 'created'),
+      promoted_sales: numberFrom(harvest, 'same_sku_sales_promoted', 'promoted_sales'),
+      spend_reallocated_to_winners: numberFrom(budget, 'reallocated_spend', 'winner_budget_increase'),
+      bids_raised: numberFrom(bidRecovery, 'bids_raised', 'increased') + numberFrom(bidEconomics, 'bids_raised', 'increased'),
+      bids_reduced: numberFrom(bidRecovery, 'bids_reduced', 'reduced') + wasteRows.reduce((sum: number, row: any) => sum + Number(row.bid_reductions || 0), 0),
+      pauses: wasteRows.reduce((sum: number, row: any) => sum + Number(row.pauses || 0), 0),
+      amazon_confirmations: numberFrom(execution, 'confirmed', 'confirmations'),
+      governance_blocks: numberFrom(execution, 'blocked', 'governance_blocked'),
+    };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
       engine: 'sales-mode-v1.3-safety',
@@ -209,6 +224,7 @@ Deno.serve(async (request) => {
         ai_rule: 'AI advises strategy; deterministic economic guardrails remain sovereign',
         execution: 'canonical queue drained in batches of 12 + Amazon confirmation',
       },
+      metrics,
       stages,
     });
   } catch (error: any) {
