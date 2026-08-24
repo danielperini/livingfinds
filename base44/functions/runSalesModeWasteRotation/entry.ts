@@ -18,7 +18,7 @@ Deno.serve(async (request) => {
     if (!authenticated && !body._service_role) return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
 
     const accounts = body.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
 
     const maxPauses = Math.max(0, Math.min(100, Number(body.max_campaign_pauses ?? 100)));
@@ -70,8 +70,6 @@ Deno.serve(async (request) => {
         const destructiveAcos = a.orders > 0 && acos >= maxAcos && a.spend >= Math.max(minSpend * 2, 8);
         if (!wasteSpend && !destructiveAcos) continue;
 
-        // Campanhas com qualquer conversão recente não entram no grupo zero-sale.
-        // Quando há conversão, só entram com ACoS destrutivo; isso evita pausar vencedores.
         const score = zeroSale
           ? 1000 + a.spend + Math.min(a.clicks, 100) * 0.5
           : 500 + Math.max(0, acos - targetAcos) * 3 + a.spend * 0.25;
