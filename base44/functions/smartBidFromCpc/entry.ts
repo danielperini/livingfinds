@@ -28,7 +28,7 @@ Deno.serve(async (req) => {
 
     const salesMode = payload.sales_mode === true || /sales_mode/i.test(String(payload.trigger_type || ''));
     const accounts = payload.amazon_account_id
-      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: payload.amazon_account_id }, null, 1)
+      ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: payload.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
 
     const summary: any = {
@@ -51,8 +51,8 @@ Deno.serve(async (req) => {
           base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
           base44.asServiceRole.entities.AutopilotConfig.filter({ amazon_account_id: account.id }, '-updated_at', 1).catch(() => []),
           base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: account.id, state: 'enabled' }, '-spend', 2000).catch(() => []),
-          base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, null, 5000).catch(() => []),
-          base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, null, 5000).catch(() => []),
+          base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: account.id }, undefined, 5000).catch(() => []),
+          base44.asServiceRole.entities.Product.filter({ amazon_account_id: account.id }, undefined, 5000).catch(() => []),
           base44.asServiceRole.entities.DailyProductAdsAssessment.filter({ amazon_account_id: account.id }, '-assessment_date', 5000).catch(() => []),
           base44.asServiceRole.entities.ProductEconomics.filter({ amazon_account_id: account.id }, '-updated_at', 5000).catch(() => []),
           base44.asServiceRole.entities.AdsBidChangeLog.filter({ amazon_account_id: account.id }, '-created_at', 5000).catch(() => []),
