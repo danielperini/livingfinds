@@ -26,7 +26,10 @@ Deno.serve(async (request) => {
     const base44 = createClientFromRequest(request);
     const body = await request.json().catch(() => ({}));
     const authenticated = await base44.auth.isAuthenticated().catch(() => false);
-    if (!authenticated && !body._service_role) {
+    const configuredInternalToken = Deno.env.get('INTERNAL_FUNCTION_TOKEN') || '';
+    const presentedInternalToken = request.headers.get('x-internal-invocation-token') || '';
+    const internalAuthorized = Boolean(configuredInternalToken) && presentedInternalToken === configuredInternalToken;
+    if (!authenticated && !internalAuthorized) {
       return Response.json({ ok: false, error: 'Não autorizado' }, { status: 401 });
     }
 
@@ -47,8 +50,6 @@ Deno.serve(async (request) => {
       dry_run: dryRun,
     };
 
-    // Contagem real de promoções que já reservaram/criaram campanha hoje.
-    // Assim a cota de 20 é diária, e não 20 a cada execução do scheduler.
     const promotionFilter: any = accountId ? { amazon_account_id: accountId } : {};
     const todayPromotions = await base44.asServiceRole.entities.SearchTermPromotion
       .filter(promotionFilter, '-created_at', 10000).catch(() => []);
@@ -58,20 +59,14 @@ Deno.serve(async (request) => {
     ).length;
     const exactRemainingToday = Math.max(0, requestedNewExactToday - exactAlreadyStartedToday);
 
-    // SALES MODE: venda e lucro pós-Ads são o objetivo primário. Crescimento de
-    // campanha só acontece quando existe sinal de conversão, entrega competitiva
-    // ou necessidade econômica de descoberta para ASIN elegível.
     const snapshots = await invoke(base44, 'buildCanonicalMarketplaceSnapshots', {
       ...common,
       mode: 'incremental',
-      persist: true,
+      persist: !dryRun,
       window_minutes: 15,
     });
     const snapshotRunId = snapshots.run_id || snapshots.snapshot_run_id || correlationId;
 
-    // IA entra como camada estratégica/auditável. Ela não pode furar guardrails
-    // econômicos nem executar ação por conta própria; decisões reais continuam
-    // determinísticas, idempotentes e confirmadas pela Amazon.
     const aiStrategy = body.skip_ai_strategy === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'aiEngine', {
@@ -109,7 +104,6 @@ Deno.serve(async (request) => {
         })
       : { ok: true, skipped: true, reason: 'daily_exact_quota_reached', max_promotions: 0 };
 
-    // Primeiro restaura entrega competitiva de entidades economicamente válidas.
     const bidRecovery = await invoke(base44, 'runIntradaySalesRecovery', {
       ...common,
       snapshot_run_id: snapshotRunId,
@@ -119,15 +113,13 @@ Deno.serve(async (request) => {
       max_budget_step_pct: body.max_budget_step_pct ?? 12,
     });
 
-    // Depois reduz/aumenta keywords com evidência consolidada de CPC/ACoS.
-    // Esta função escreve diretamente na Amazon e mantém cooldown próprio.
-    const bidEconomics = await invoke(base44, 'smartBidFromCpc', {
-      ...common,
-      trigger_type: 'sales_mode_economic_bid_control',
-    });
+    const bidEconomics = dryRun
+      ? { ok: true, skipped: true, reason: 'dry_run_blocks_direct_amazon_writes' }
+      : await invoke(base44, 'smartBidFromCpc', {
+          ...common,
+          trigger_type: 'sales_mode_economic_bid_control',
+        });
 
-    // Corta campanhas com evidência real, ordenadas por desperdício, com teto
-    // diário de 100 e proteção explícita a vencedores/conversores.
     const waste = await invoke(base44, 'runSalesModeWasteRotation', {
       ...common,
       snapshot_run_id: snapshotRunId,
@@ -137,8 +129,6 @@ Deno.serve(async (request) => {
       trigger_type: 'sales_mode_waste_rotation',
     });
 
-    // Guard econômico adicional: perdas locais são cortadas sem bloquear outros
-    // ASINs/termos vencedores independentes.
     const economicGuard = await invoke(base44, 'runEconomicCurveAdsGuard', {
       ...common,
       max_actions: body.max_economic_guard_actions ?? 30,
@@ -158,9 +148,6 @@ Deno.serve(async (request) => {
       never_exceed_account_daily_budget: true,
     });
 
-    // O executor canônico processa 12 decisões por chamada. Drenamos em várias
-    // passagens, limitadas por maxActions, interrompendo quando a fila esvaziar
-    // ou quando uma passagem não processar nada.
     const executionPasses: any[] = [];
     if (!dryRun) {
       const maxPasses = Math.min(15, Math.max(1, Math.ceil(maxActions / 12)));
@@ -192,10 +179,15 @@ Deno.serve(async (request) => {
     const stages = { snapshots, aiStrategy, harvest, bidRecovery, bidEconomics, waste, economicGuard, budget, execution };
     return Response.json({
       ok: Object.values(stages).every((stage: any) => stage?.ok !== false),
-      engine: 'sales-mode-v1.2',
+      engine: 'sales-mode-v1.3-safety',
       objective: 'maximize_sales_with_economic_guardrails',
       correlation_id: correlationId,
       snapshot_run_id: snapshotRunId,
+      security: {
+        authenticated_user: authenticated,
+        internal_invocation: internalAuthorized,
+        dry_run_blocks_direct_bid_writes: true,
+      },
       targets: {
         max_new_exact_today: requestedNewExactToday,
         exact_already_started_today: exactAlreadyStartedToday,
@@ -217,6 +209,6 @@ Deno.serve(async (request) => {
       stages,
     });
   } catch (error: any) {
-    return Response.json({ ok: false, engine: 'sales-mode-v1.2', error: error?.message || 'Falha no modo vendas' }, { status: 500 });
+    return Response.json({ ok: false, engine: 'sales-mode-v1.3-safety', error: error?.message || 'Falha no modo vendas' }, { status: 500 });
   }
 });
