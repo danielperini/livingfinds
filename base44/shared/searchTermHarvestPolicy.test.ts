@@ -1,6 +1,7 @@
 import {
   aggregateSearchTerms,
   calculateSafeHarvestBid,
+  calculateWinnerExactBudget,
   evaluateHarvestCandidate,
   isAsinSearchTerm,
   normalizeSearchTerm,
@@ -62,6 +63,11 @@ Deno.test('bid inicial nunca ultrapassa o CPC econômico seguro', () => {
   if (bid !== 0.72) throw new Error(`bid inseguro: ${bid}`);
   const blocked = calculateSafeHarvestBid({ observedCpc: 0.5, safeCpc: 0.2, minBid: 0.25, maxBid: 3 });
   if (blocked !== null) throw new Error('deveria bloquear CPC abaixo do lance mínimo');
+});
+
+Deno.test('orçamento de EXACT vencedor usa economia e CPC em vez de valor fixo', () => {
+  const budget = calculateWinnerExactBudget({ observedCpc: 1.2, safeCpc: 1.4, sameSkuOrders: 3, marginAmount: 18, accountMinimum: 5, accountMaximum: 30 });
+  if (budget <= 15 || budget > 30) throw new Error(`orçamento vencedor não competitivo: ${budget}`);
 });
 
 Deno.test('uma venda do mesmo SKU é elegível, mas venda halo não é', () => {
