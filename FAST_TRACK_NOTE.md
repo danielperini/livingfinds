@@ -1,1 +1,0 @@
-Fast Track branch validation note: no production deployment or Amazon Ads execution is performed by this branch. Runtime changes are limited to the canonical bid policy, decision executor, confirmation state machine, and corresponding policy test.
