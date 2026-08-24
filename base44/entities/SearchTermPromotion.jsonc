@@ -85,6 +85,9 @@
       "type": "number",
       "default": 0.5
     },
+    "initial_budget": { "type": "number", "default": 0 },
+    "winner_score": { "type": "number", "default": 0 },
+    "amazon_confirmation_status": { "type": "string", "default": "pending" },
     "destination_campaign_id": {
       "type": "string"
     },
@@ -113,6 +116,8 @@
         "ad_group_created",
         "product_ad_created",
         "keyword_created",
+        "confirming",
+        "confirmed",
         "enabling",
         "manual_active",
         "negative_creating",

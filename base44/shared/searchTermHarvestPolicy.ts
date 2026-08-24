@@ -235,6 +235,22 @@ export function calculateSafeHarvestBid(input: { observedCpc: number; safeCpc: n
   return Math.round(Math.min(maxBid, safeCpc, Math.max(minBid, evidenceBid)) * 100) / 100;
 }
 
+export function calculateWinnerExactBudget(input: { observedCpc: number; safeCpc: number; sameSkuOrders: number; marginAmount: number; accountMinimum: number; accountMaximum: number }): number {
+  const floor = Math.max(1, numberValue(input.accountMinimum, 5));
+  const ceiling = Math.max(floor, numberValue(input.accountMaximum, 30));
+  const cpc = Math.max(numberValue(input.observedCpc), numberValue(input.safeCpc) * 0.75, 0.25);
+  const orders = Math.max(1, numberValue(input.sameSkuOrders));
+  const marginRoom = Math.max(0, numberValue(input.marginAmount));
+  return Math.round(Math.min(ceiling, Math.max(floor, cpc * Math.min(20, 8 + orders * 3), marginRoom * Math.min(2, 0.75 + orders * 0.25))) * 100) / 100;
+}
+
+export function winnerScore(input: { sameSkuOrders: number; clicks: number; spend: number; sameSkuSales: number }): number {
+  const orders = numberValue(input.sameSkuOrders);
+  const cvr = input.clicks > 0 ? orders / input.clicks : 0;
+  const roas = input.spend > 0 ? input.sameSkuSales / input.spend : 0;
+  return Math.round(Math.min(100, orders * 30 + cvr * 100 + Math.min(30, roas * 3)) * 100) / 100;
+}
+
 export function evaluateHarvestCandidate(input: {
   aggregate: HarvestAggregate;
   inStock: boolean;

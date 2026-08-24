@@ -62,9 +62,6 @@ export type GovernanceInput = {
   currentValue?: number | null;
   proposedValue?: number | null;
   snapshotId?: string | null;
-  // Some intraday actions are based on a freshly confirmed Ads snapshot and
-  // inventory/economics read in the same run.  This immutable evidence receipt
-  // is accepted only by trusted producers and never replaces data freshness.
   verifiedEvidenceId?: string | null;
   reasonCode?: string | null;
   reason?: string | null;
@@ -132,14 +129,14 @@ function bidResult(
   nextEvaluationHours: number,
 ): CanonicalBidDecision {
   const bounded = action === 'INCREASE' || action === 'RECOVER_ZERO_DELIVERY'
-    ? Math.min(0.05, Math.max(0, changePct))
+    ? Math.min(0.15, Math.max(0, changePct))
     : action.startsWith('DECREASE') ? -Math.min(0.20, Math.abs(changePct)) : 0;
   let proposedBid: number | null = null;
   if (bounded !== 0) {
     const raw = input.currentBid * (1 + bounded);
     proposedBid = roundMoney(bounded > 0 ? Math.min(raw, input.safeMaxCpc) : Math.max(0.02, raw));
     const actual = input.currentBid > 0 ? (proposedBid - input.currentBid) / input.currentBid : 0;
-    if (bounded > 0 && actual > 0.05) proposedBid = Math.floor(input.currentBid * 1.05 * 100) / 100;
+    if (bounded > 0 && actual > 0.15) proposedBid = Math.floor(input.currentBid * 1.15 * 100) / 100;
     if (bounded < 0 && -actual > 0.20) proposedBid = Math.ceil(input.currentBid * 0.80 * 100) / 100;
     if (Math.abs(proposedBid - input.currentBid) < 0.005) proposedBid = null;
   }
@@ -174,15 +171,27 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
   if (!input.inStock) return block('OUT_OF_STOCK', 'Produto sem estoque vendável confirmado.');
   if (!input.economicsComplete || input.safeMaxCpc <= 0) return block('ECONOMICS_INCOMPLETE', 'Economia ou CPC seguro indisponível.');
   if (input.cooldownActive) return block('COOLDOWN_ACTIVE', 'Já houve alteração na janela de cooldown.');
-  // Winner protection prevents an indiscriminate pause, not a correction of
-  // an already expensive winner. ACoS above target or loss must reach the
-  // bid-reduction branch below so profitable sales do not become paid losses.
+
   const winnerWithinEconomicGuardrail = input.winnerProtected && input.profitAfterAds >= 0 &&
     (input.acos === null || input.targetAcos === null || input.acos <= input.targetAcos);
-  if (winnerWithinEconomicGuardrail) return bidResult(input, posterior, 'HOLD', 0, 'WINNER_PROTECTED', 'Venda same-SKU lucrativa e dentro da meta protege a entidade até a próxima janela.', 99, 12);
-  // A recently created entity may still spend enough to violate its economic
-  // test budget.  Learning never authorizes an unlimited loss: cut the bid
-  // before the normal 48h observation hold when that hard evidence exists.
+  if (winnerWithinEconomicGuardrail) {
+    if (input.currentBid >= input.safeMaxCpc) {
+      return bidResult(input, posterior, 'HOLD', 0, 'WINNER_AT_SAFE_CPC', 'Vencedor protegido, mas o bid ja atingiu o CPC economico seguro.', 99, 6);
+    }
+    const target = Number(input.targetAcos || 0);
+    const acos = Number(input.acos || 0);
+    const veryStrongWinner = input.sameSkuOrders >= 3 && target > 0 && acos > 0 && acos <= target * 0.75 && input.profitAfterAds > 0;
+    const strongWinner = input.sameSkuOrders >= 2 && input.profitAfterAds > 0;
+    const pct = veryStrongWinner ? 0.15 : strongWinner ? 0.10 : 0.05;
+    return bidResult(
+      input, posterior, 'INCREASE', pct,
+      veryStrongWinner ? 'FAST_TRACK_VERY_STRONG_WINNER' : strongWinner ? 'FAST_TRACK_STRONG_WINNER' : 'FAST_TRACK_WINNER',
+      `Vencedor same-SKU lucrativo: crescimento controlado de ${Math.round(pct * 100)}% limitado pelo CPC economico.`,
+      veryStrongWinner ? 97 : strongWinner ? 95 : 92,
+      veryStrongWinner ? 3 : strongWinner ? 4 : 6
+    );
+  }
+
   const exceededNoSaleTest = input.sameSkuOrders <= 0 && input.clicks >= 3 &&
     input.maxSpendWithoutSale > 0 && input.spend >= input.maxSpendWithoutSale;
   if (exceededNoSaleTest) {
@@ -191,7 +200,12 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
       'Gasto sem venda já excedeu o orçamento econômico de teste; reduzir bid imediatamente sem pausar a campanha.',
       97, 6);
   }
-  if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas reservadas para observação; somente risco financeiro crítico pode usar rota defensiva separada.', 98, 48);
+
+  if (input.ageHours < 48 && input.impressions <= 0 && input.clicks <= 0 && input.structurallyComplete && input.adGroupConfirmed && input.productAdConfirmed && input.inStock && input.economicsComplete && input.safeMaxCpc > input.currentBid && !input.cooldownActive && !input.pendingInsertion) {
+    const pct = input.ageHours >= 12 ? 0.10 : 0.05;
+    return bidResult(input, posterior, 'RECOVER_ZERO_DELIVERY', pct, 'FAST_TRACK_NEW_ZERO_DELIVERY', `Campanha nova estruturalmente valida e sem impressoes: recuperacao controlada de ${Math.round(pct * 100)}%.`, 94, input.ageHours >= 12 ? 4 : 6);
+  }
+  if (input.ageHours < 48) return bidResult(input, posterior, 'HOLD', 0, 'INITIAL_OBSERVATION_48H', 'Primeiras 48 horas preservam observacao quando ja existe entrega ou falta evidencia para fast track.', 98, 12);
 
   if (input.impressions <= 0 && input.clicks <= 0) {
     if (input.currentBid >= input.safeMaxCpc) return block('SAFE_CPC_CEILING', 'Sem impressões, mas o bid já alcançou o CPC seguro.');
@@ -228,7 +242,7 @@ export function buildCanonicalBidDecision(input: CanonicalBidInput): CanonicalBi
   }
   if (input.defensive) return bidResult(input, posterior, 'HOLD', 0, 'DEFENSIVE_HOLD', 'Estado defensivo bloqueia crescimento.', 98, 24);
   if (input.currentBid >= input.safeMaxCpc) return bidResult(input, posterior, 'HOLD', 0, 'SAFE_CPC_HOLD', 'Bid já alcançou o CPC seguro.', 97, 24);
-  return bidResult(input, posterior, 'INCREASE', 0.03, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite teste de crescimento de 3% dentro do CPC seguro.', 90, 24);
+  return bidResult(input, posterior, 'INCREASE', 0.05, 'PROFITABLE_GROWTH_TEST', 'Venda same-SKU lucrativa permite crescimento de 5% dentro do CPC economico seguro.', 92, 6);
 }
 
 export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceResult {
@@ -242,12 +256,8 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   const isIncrease = action.includes('increase') || (Number(input.proposedValue) > Number(input.currentValue));
   const isDecrease = action.includes('decrease') || (Number(input.proposedValue) < Number(input.currentValue));
   const reason = lower(`${input.reasonCode || ''} ${input.reason || ''}`);
-  // A reduction supported by a confirmed loss is not a speculative growth
-  // experiment.  It may act with a lower (but still material) confidence
-  // threshold, while all hard data, stock, margin and execution guards remain
-  // mandatory.  Growth actions keep the stricter configured threshold.
   const protectiveEconomicReduction = (isBid || isBudget) && isDecrease &&
-    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/.test(reason);
+    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above|above_target)/.test(reason);
   const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveEconomicReduction ? 0.60 : 0.90));
 
   if (input.accountKillSwitch) add('P1', 'ACCOUNT_KILL_SWITCH', 'Kill switch da conta está ativo.');

@@ -10,9 +10,11 @@ import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
 import {
   aggregateSearchTerms,
   calculateSafeHarvestBid,
+  calculateWinnerExactBudget,
   evaluateHarvestCandidate,
   normalizeSearchTerm,
   numberValue,
+  winnerScore,
 } from '../../shared/searchTermHarvestPolicy.ts';
 import {
   availableInventory,
@@ -175,7 +177,8 @@ Deno.serve(async (request) => {
       const minBid = numberValue(settings.min_bid, 0.25);
       const maxBid = numberValue(settings.max_bid, 3);
       const targetAcos = numberValue(settings.target_acos, 15);
-      const budget = Math.max(5, Math.min(15, numberValue(settings.minimum_campaign_budget, 5)));
+      const minimumCampaignBudget = Math.max(1, numberValue(settings.minimum_campaign_budget, 5));
+      const maximumCampaignBudget = Math.max(minimumCampaignBudget, Math.min(100, numberValue(settings.maximum_campaign_budget, 30)));
 
       const exactKeys = new Set<string>();
       const exactDestinationByKey = new Map<string, any>();
@@ -357,13 +360,15 @@ Deno.serve(async (request) => {
         }
 
         if (evaluation.eligible) {
-          candidates.push({ aggregate, key, product, econ, assessment, policy, safeBid, evaluation, bank: existingBank });
+          const initialBudget = calculateWinnerExactBudget({ observedCpc, safeCpc, sameSkuOrders: aggregate.sameSkuOrders, marginAmount: numberValue(econ?.profit_after_ads ?? econ?.contribution_margin_amount, 0), accountMinimum: minimumCampaignBudget, accountMaximum: maximumCampaignBudget });
+          candidates.push({ aggregate, key, product, econ, assessment, policy, safeBid, initialBudget, winnerScore: winnerScore(aggregate), evaluation, bank: existingBank });
         } else {
           rejected.push({ asin: aggregate.asin, term: aggregate.term, reason: evaluation.reason, same_sku_orders: aggregate.sameSkuOrders });
         }
       }
 
       candidates.sort((a, b) =>
+        b.winnerScore - a.winnerScore ||
         b.aggregate.sameSkuOrders - a.aggregate.sameSkuOrders ||
         (a.evaluation.sameSkuAcos ?? 9999) - (b.evaluation.sameSkuAcos ?? 9999)
       );
@@ -402,6 +407,9 @@ Deno.serve(async (request) => {
                 acos: candidate.evaluation.sameSkuAcos || 0,
                 roas: candidate.aggregate.spend > 0 ? candidate.aggregate.sameSkuSales / candidate.aggregate.spend : 0,
                 target_bid: candidate.safeBid,
+                initial_budget: candidate.initialBudget,
+                winner_score: candidate.winnerScore,
+                amazon_confirmation_status: 'pending',
                 destination_campaign_name: campaignName(candidate.aggregate.asin, candidate.aggregate.term),
                 promotion_status: 'campaign_creating',
                 completion_status: 'incomplete',
@@ -422,7 +430,7 @@ Deno.serve(async (request) => {
               name: campaignName(item.aggregate.asin, item.aggregate.term),
               targetingType: 'MANUAL',
               state: 'ENABLED',
-              budget: { budgetType: 'DAILY', budget },
+              budget: { budgetType: 'DAILY', budget: item.initialBudget },
               startDate: today,
             })),
           }, 'application/vnd.spCampaign.v3+json').catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
@@ -579,7 +587,7 @@ Deno.serve(async (request) => {
                 targeting_type: 'MANUAL',
                 state: 'enabled',
                 status: 'enabled',
-                daily_budget: budget,
+                daily_budget: item.initialBudget,
                 created_by_app: true,
                 learning_eligible: true,
                 launch_phase: 'new',
@@ -654,15 +662,16 @@ Deno.serve(async (request) => {
             }
 
             await base44.asServiceRole.entities.SearchTermPromotion.update(item.promotion.id, {
-              promotion_status: negativesComplete ? 'completed' : 'repair_required',
-              completion_status: negativesComplete ? 'complete' : 'manual_active_negative_pending',
+              promotion_status: negativesComplete ? 'confirming' : 'repair_required',
+              amazon_confirmation_status: negativesComplete ? 'amazon_accepted' : 'pending',
+              completion_status: negativesComplete ? 'amazon_accepted_awaiting_probe' : 'manual_active_negative_pending',
               destination_campaign_id: item.campaignId,
               destination_ad_group_id: item.adGroupId,
               destination_ad_id: item.productAdId || null,
               destination_keyword_id: item.keywordId,
               negative_keyword_id: negativeIds[0] || null,
               last_error: negativesComplete ? null : amazonFailure(negativeResponse, 'Negativa da origem pendente'),
-              completed_at: negativesComplete ? now : null,
+              completed_at: null,
               updated_at: now,
             }).catch(() => null);
 
@@ -688,6 +697,8 @@ Deno.serve(async (request) => {
                 spend: item.aggregate.spend,
                 same_sku_acos: item.evaluation.sameSkuAcos,
                 safe_cpc: numberValue(item.assessment?.safe_max_cpc ?? item.econ?.safe_max_cpc, 0),
+                winner_score: item.winnerScore,
+                initial_budget: item.initialBudget,
                 sources: item.aggregate.sources,
                 negatives_complete: negativesComplete,
               }),
@@ -727,6 +738,8 @@ Deno.serve(async (request) => {
               same_sku_orders: item.aggregate.sameSkuOrders,
               same_sku_sales: Number(item.aggregate.sameSkuSales.toFixed(2)),
               bid: item.safeBid,
+              initial_budget: item.initialBudget,
+              winner_score: item.winnerScore,
               campaign_id: item.campaignId,
               keyword_id: item.keywordId,
               source_negatives: negativeIds.length,
