@@ -44,7 +44,6 @@ Deno.serve(async (request) => {
     const dryRun = body.dry_run === true;
     const today = brDate();
     const requestedNewExactToday = Math.max(0, Math.min(20, Number(body.max_new_exact_today ?? 20)));
-    const requestedPausesToday = Math.max(0, Math.min(100, Number(body.max_campaign_pauses_today ?? 100)));
     const tomorrowTarget = Math.max(0, Math.min(50, Number(body.tomorrow_new_exact_target ?? 10)));
     const maxActions = Math.max(12, Math.min(180, Number(body.max_actions ?? 180)));
 
@@ -85,7 +84,7 @@ Deno.serve(async (request) => {
             exact_daily_cap: requestedNewExactToday,
             exact_already_started_today: exactAlreadyStartedToday,
             exact_remaining_today: exactRemainingToday,
-            pause_daily_cap: requestedPausesToday,
+            pause_daily_cap: 'unlimited_when_economically_proven',
           },
         });
 
@@ -131,7 +130,6 @@ Deno.serve(async (request) => {
       snapshot_run_id: snapshotRunId,
       lookback_days: body.waste_lookback_days ?? 7,
       min_age_days: body.waste_min_age_days ?? 7,
-      max_campaign_pauses: requestedPausesToday,
       trigger_type: 'sales_mode_waste_rotation',
     });
 
@@ -210,7 +208,7 @@ Deno.serve(async (request) => {
         max_new_exact_today: requestedNewExactToday,
         exact_already_started_today: exactAlreadyStartedToday,
         exact_remaining_before_run: exactRemainingToday,
-        max_campaign_pauses_today: requestedPausesToday,
+        campaign_pauses_daily_limit: 'unlimited_when_economically_proven',
         tomorrow_new_exact_target: tomorrowTarget,
         max_actions_this_run: maxActions,
       },
@@ -218,7 +216,7 @@ Deno.serve(async (request) => {
         primary_kpi: 'orders_sales_and_post_ads_profit',
         winner_source: 'same-SKU converted search terms from AUTO and MANUAL campaigns',
         new_campaign_rule: 'daily quota; create only from proven winner or economically justified discovery',
-        pause_rule: 'rank by waste evidence; daily quota; never pause protected winners merely to hit quota',
+        pause_rule: 'hold → bid reductions → pause only after persistent economic proof; never pause protected winners',
         bid_rule: 'restore competitive winners in reversible steps; cut bids with CPC/ACoS evidence and cooldown',
         budget_rule: 'reallocate toward winners without breaching account cap',
         ai_rule: 'AI advises strategy; deterministic economic guardrails remain sovereign',

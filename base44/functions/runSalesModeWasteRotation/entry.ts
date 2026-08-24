@@ -22,7 +22,6 @@ Deno.serve(async (request) => {
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
 
-    const maxPauses = Math.max(0, Math.min(100, Number(body.max_campaign_pauses ?? 100)));
     const lookbackDays = Math.max(3, Math.min(30, Number(body.lookback_days ?? 7)));
     const minAgeDays = Math.max(3, Math.min(30, Number(body.min_age_days ?? 7)));
     const dryRun = body.dry_run === true;
@@ -76,14 +75,7 @@ Deno.serve(async (request) => {
       }
 
       candidates.sort((a, b) => b.score - a.score);
-      const alreadyToday = existingDecisions.filter((d: any) =>
-        d.source_function === 'runSalesModeWasteRotation' &&
-        String(d.created_at || '').slice(0, 10) === today &&
-        !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase())
-      ).length;
-      const pausesAlreadyToday = existingDecisions.filter((d: any) => String(d.action || '').toLowerCase() === 'pause_campaign' && String(d.created_at || '').slice(0, 10) === today && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase())).length;
-      let pausesRemaining = Math.max(0, maxPauses - pausesAlreadyToday);
-      const selected = candidates.filter((c) => c.wasteDecision.action !== 'PAUSE' || pausesRemaining-- > 0);
+      const selected = candidates;
       const created: any[] = [];
 
       for (const c of selected) {
@@ -126,7 +118,7 @@ Deno.serve(async (request) => {
         created.push({ decision_id: decision.id, campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale });
       }
 
-      results.push({ amazon_account_id: aid, max_daily_pauses: maxPauses, already_queued_today: pausesAlreadyToday, remaining_quota_before_run: Math.max(0, maxPauses - pausesAlreadyToday), candidates: candidates.length, selected: selected.length, decisions_created: created.length, decisions: created });
+      results.push({ amazon_account_id: aid, daily_pause_limit: 'unlimited_when_economically_proven', candidates: candidates.length, selected: selected.length, decisions_created: created.length, decisions: created });
     }
 
     return Response.json({ ok: true, engine: 'sales-mode-waste-rotation-v1.1', dry_run: dryRun, lookback_days: lookbackDays, results });
