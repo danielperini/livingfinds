@@ -1,4 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
+import { decideSalesModeWaste } from '../../shared/salesModeWastePolicy.ts';
 
 const n = (v: unknown) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -31,11 +32,12 @@ Deno.serve(async (request) => {
 
     for (const account of accounts) {
       const aid = String(account.id);
-      const [campaigns, metrics, settingsRows, existingDecisions] = await Promise.all([
+      const [campaigns, metrics, settingsRows, existingDecisions, keywords] = await Promise.all([
         base44.asServiceRole.entities.Campaign.filter({ amazon_account_id: aid }, '-created_at', 10000).catch(() => []),
         base44.asServiceRole.entities.CampaignMetricsDaily.filter({ amazon_account_id: aid }, '-date', 30000).catch(() => []),
         base44.asServiceRole.entities.PerformanceSettings.filter({ amazon_account_id: aid }, '-updated_at', 1).catch(() => []),
         base44.asServiceRole.entities.OptimizationDecision.filter({ amazon_account_id: aid }, '-created_at', 30000).catch(() => []),
+        base44.asServiceRole.entities.Keyword.filter({ amazon_account_id: aid }, '-updated_at', 20000).catch(() => []),
       ]);
       const settings = settingsRows[0] || {};
       const targetAcos = n(settings.target_acos || settings.acos_target || 15);
@@ -65,15 +67,12 @@ Deno.serve(async (request) => {
         const a = agg.get(id);
         if (!a || a.spend < minSpend) continue;
         const acos = a.sales > 0 ? a.spend / a.sales * 100 : 999;
-        const zeroSale = a.orders === 0 && a.sales <= 0;
-        const wasteSpend = zeroSale && a.spend >= Math.max(minSpend * 2, 8);
-        const destructiveAcos = a.orders > 0 && acos >= maxAcos && a.spend >= Math.max(minSpend * 2, 8);
-        if (!wasteSpend && !destructiveAcos) continue;
-
-        const score = zeroSale
-          ? 1000 + a.spend + Math.min(a.clicks, 100) * 0.5
-          : 500 + Math.max(0, acos - targetAcos) * 3 + a.spend * 0.25;
-        candidates.push({ campaign, id, ageDays, ...a, acos, zeroSale, score });
+        const priorReductions = existingDecisions.filter((d: any) => String(d.campaign_id || d.entity_id || '') === id && /reduce.*bid|decrease.*bid/i.test(String(d.action || '')) && ['executed', 'completed', 'confirming'].includes(String(d.status || '').toLowerCase())).length;
+        const wasteDecision = decideSalesModeWaste({ spend: a.spend, sales: a.sales, orders: a.orders, clicks: a.clicks, ageDays, minAgeDays, minSpend, maxAcos, priorReductions });
+        if (wasteDecision.action === 'HOLD') continue;
+        const wasteKeyword = keywords.find((keyword: any) => String(keyword.campaign_id || '') === id && active(keyword.state || keyword.status));
+        if (wasteDecision.action !== 'PAUSE' && !wasteKeyword) continue;
+        candidates.push({ campaign, id, ageDays, ...a, acos, priorReductions, wasteDecision, wasteKeyword, score: wasteDecision.wasteScore * 100 + a.spend });
       }
 
       candidates.sort((a, b) => b.score - a.score);
@@ -82,16 +81,16 @@ Deno.serve(async (request) => {
         String(d.created_at || '').slice(0, 10) === today &&
         !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase())
       ).length;
-      const quota = Math.max(0, maxPauses - alreadyToday);
-      const selected = candidates.slice(0, quota);
+      const pausesAlreadyToday = existingDecisions.filter((d: any) => String(d.action || '').toLowerCase() === 'pause_campaign' && String(d.created_at || '').slice(0, 10) === today && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase())).length;
+      let pausesRemaining = Math.max(0, maxPauses - pausesAlreadyToday);
+      const selected = candidates.filter((c) => c.wasteDecision.action !== 'PAUSE' || pausesRemaining-- > 0);
       const created: any[] = [];
 
       for (const c of selected) {
-        const key = `SALES_MODE_WASTE_PAUSE|${aid}|${c.id}|${today}`;
+        const isPause = c.wasteDecision.action === 'PAUSE';
+        const key = `SALES_MODE_WASTE_${c.wasteDecision.action}|${aid}|${c.id}|${today}`;
         if (existingDecisions.some((d: any) => d.idempotency_key === key && !['failed', 'rejected', 'cancelled', 'expired'].includes(String(d.status || '').toLowerCase()))) continue;
-        const rationale = c.zeroSale
-          ? `${lookbackDays}d: zero vendas, gasto R$${c.spend.toFixed(2)}, ${c.clicks} cliques. Capital será redirecionado a vencedores.`
-          : `${lookbackDays}d: ACoS ${c.acos.toFixed(1)}% acima do teto ${maxAcos.toFixed(1)}%, com gasto R$${c.spend.toFixed(2)}.`;
+        const rationale = `${lookbackDays}d: gasto R$${c.spend.toFixed(2)}, ${c.clicks} cliques, ${c.orders} pedidos; ${c.wasteDecision.reason}.`;
         if (dryRun) {
           created.push({ campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale, dry_run: true });
           continue;
@@ -99,18 +98,19 @@ Deno.serve(async (request) => {
         const decision = await base44.asServiceRole.entities.OptimizationDecision.create({
           amazon_account_id: aid,
           decision_type: 'sales_mode_waste_rotation',
-          entity_type: 'campaign',
-          entity_id: c.id,
+          entity_type: isPause ? 'campaign' : 'keyword',
+          entity_id: isPause ? c.id : String(c.wasteKeyword.keyword_id || c.wasteKeyword.id),
           campaign_id: c.id,
           campaign_name: c.campaign.name || c.campaign.campaign_name || null,
           asin: c.campaign.asin || c.campaign.advertised_asin || null,
-          action: 'pause_campaign',
-          canonical_action_type: 'CAMPAIGN_STATE_CHANGE',
+          keyword_id: isPause ? null : String(c.wasteKeyword.keyword_id || c.wasteKeyword.id),
+          action: isPause ? 'pause_campaign' : 'reduce_bid',
+          canonical_action_type: isPause ? 'CAMPAIGN_STATE_CHANGE' : 'KEYWORD_BID_CHANGE',
           rationale,
-          rule_key: c.zeroSale ? 'SALES_MODE_ZERO_SALE_WASTE' : 'SALES_MODE_DESTRUCTIVE_ACOS',
-          reason_code: c.zeroSale ? 'SALES_MODE_ZERO_SALE_WASTE' : 'SALES_MODE_DESTRUCTIVE_ACOS',
-          value_before: 'ENABLED', value_after: 'PAUSED',
-          confidence: c.zeroSale ? 0.94 : 0.90,
+          rule_key: `SALES_MODE_${c.wasteDecision.action}`,
+          reason_code: c.wasteDecision.reason.toUpperCase(),
+          value_before: isPause ? 'ENABLED' : n(c.wasteKeyword.current_bid || c.wasteKeyword.bid), value_after: isPause ? 'PAUSED' : Number((n(c.wasteKeyword.current_bid || c.wasteKeyword.bid) * (c.wasteDecision.action === 'REDUCE_BID_10' ? 0.9 : 0.95)).toFixed(2)),
+          confidence: c.wasteDecision.confidence,
           risk: 'medium', requires_approval: false,
           approval_status: 'auto_approved_deterministic', status: 'approved', queue_status: 'pending',
           priority_class: 'P1', execution_mode: 'EXPEDITED_QUEUE',
@@ -120,13 +120,13 @@ Deno.serve(async (request) => {
           model_version: 'sales-mode-v1.1',
           target_acos: targetAcos,
           current_acos: c.acos >= 999 ? null : c.acos,
-          data_used: JSON.stringify({ lookback_days: lookbackDays, age_days: c.ageDays, spend: c.spend, sales: c.sales, orders: c.orders, clicks: c.clicks, impressions: c.impressions, target_acos: targetAcos, maximum_acos: maxAcos, winner_protected: false }),
+          data_used: JSON.stringify({ lookback_days: lookbackDays, age_days: c.ageDays, spend: c.spend, sales: c.sales, orders: c.orders, clicks: c.clicks, impressions: c.impressions, target_acos: targetAcos, maximum_acos: maxAcos, prior_reductions: c.priorReductions, waste_score: c.wasteDecision.wasteScore, winner_protected: false }),
           created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
         });
         created.push({ decision_id: decision.id, campaign_id: c.id, campaign_name: c.campaign.name || c.campaign.campaign_name, rationale });
       }
 
-      results.push({ amazon_account_id: aid, max_daily_pauses: maxPauses, already_queued_today: alreadyToday, remaining_quota_before_run: quota, candidates: candidates.length, selected: selected.length, decisions_created: created.length, decisions: created });
+      results.push({ amazon_account_id: aid, max_daily_pauses: maxPauses, already_queued_today: pausesAlreadyToday, remaining_quota_before_run: Math.max(0, maxPauses - pausesAlreadyToday), candidates: candidates.length, selected: selected.length, decisions_created: created.length, decisions: created });
     }
 
     return Response.json({ ok: true, engine: 'sales-mode-waste-rotation-v1.1', dry_run: dryRun, lookback_days: lookbackDays, results });

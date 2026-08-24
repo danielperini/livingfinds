@@ -21,7 +21,7 @@ assert.equal(zeroDelivery.action, 'RECOVER_ZERO_DELIVERY');
 assert.ok(zeroDelivery.changePct > 0 && zeroDelivery.changePct <= 0.15);
 assert.equal(zeroDelivery.requiresPairedAdGroup, true);
 
-const impressionsNoClick = buildCanonicalBidDecision({ ...baseBid, impressions: 600 });
+const impressionsNoClick = buildCanonicalBidDecision({ ...baseBid, ageHours: 72, impressions: 600 });
 assert.equal(impressionsNoClick.action, 'DECREASE_SOFT');
 
 const firstNoSale = buildCanonicalBidDecision({ ...baseBid, impressions: 1000, clicks: 20, spend: 16, spendShare: 0.28 });
@@ -36,7 +36,7 @@ assert.ok(repeatedNoSale.changePct >= -0.21);
 const haloOnly = buildCanonicalBidDecision({ ...baseBid, impressions: 1000, clicks: 20, spend: 16, haloOrders: 4 });
 assert.notEqual(haloOnly.reasonCode, 'WINNER_PROTECTED');
 
-const profitable = buildCanonicalBidDecision({ ...baseBid, impressions: 2000, clicks: 80, sameSkuOrders: 8, spend: 40, acos: 15, profitAfterAds: 60 });
+const profitable = buildCanonicalBidDecision({ ...baseBid, ageHours: 72, impressions: 2000, clicks: 80, sameSkuOrders: 8, spend: 40, acos: 15, profitAfterAds: 60 });
 assert.equal(profitable.action, 'INCREASE');
 
 const expensiveWinner = buildCanonicalBidDecision({

@@ -257,7 +257,7 @@ export function evaluateDecisionGovernance(input: GovernanceInput): GovernanceRe
   const isDecrease = action.includes('decrease') || (Number(input.proposedValue) < Number(input.currentValue));
   const reason = lower(`${input.reasonCode || ''} ${input.reason || ''}`);
   const protectiveEconomicReduction = (isBid || isBudget) && isDecrease &&
-    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above)/.test(reason);
+    /(confirmed_economic_loss|early_economic_loss_guard|clicks_no_same_sku_sale|safe_cpc|margin|loss|acos_above|above_target)/.test(reason);
   const economicConfidenceFloor = Number(input.minEconomicConfidence ?? (protectiveEconomicReduction ? 0.60 : 0.90));
 
   if (input.accountKillSwitch) add('P1', 'ACCOUNT_KILL_SWITCH', 'Kill switch da conta está ativo.');
