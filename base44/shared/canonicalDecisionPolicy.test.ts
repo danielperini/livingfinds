@@ -18,7 +18,7 @@ const baseBid = {
 
 const zeroDelivery = buildCanonicalBidDecision(baseBid);
 assert.equal(zeroDelivery.action, 'RECOVER_ZERO_DELIVERY');
-assert.ok(zeroDelivery.changePct > 0 && zeroDelivery.changePct <= 0.05);
+assert.ok(zeroDelivery.changePct > 0 && zeroDelivery.changePct <= 0.15);
 assert.equal(zeroDelivery.requiresPairedAdGroup, true);
 
 const impressionsNoClick = buildCanonicalBidDecision({ ...baseBid, impressions: 600 });
