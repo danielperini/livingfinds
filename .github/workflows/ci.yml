@@ -85,6 +85,13 @@ jobs:
             base44/shared/portfolioBudgetPacing.ts \
             base44/shared/amazonBidCeiling.ts \
             base44/shared/configuredBidPolicy.ts \
+            base44/shared/winnerBidPolicy.ts \
             base44/shared/servingCampaignGrowthPolicy.ts \
             base44/functions/runServingCampaignGrowthObjective/entry.ts \
             server/src/scheduler.ts
+      - name: Check sales mode modules
+        run: |
+          deno check --node-modules-dir=auto \
+            base44/functions/smartBidFromCpc/entry.ts \
+            base44/functions/runSalesModeWasteRotation/entry.ts \
+            base44/functions/runSalesMode/entry.ts
