@@ -15,6 +15,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - name: Apply patch
         run: python3 scripts/apply-sales-growth-data-20260825.py
       - name: Validate Deno
