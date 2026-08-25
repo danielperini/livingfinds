@@ -6,7 +6,7 @@
 
 /**
  * Classifica o tipo operacional de um item (OptimizationDecision ou AdsBidChangeLog).
- * @returns {{ type: 'bid_change'|'pause'|'enable'|'budget'|'placement'|'other', icon: string }}
+ * @returns {{ type: 'bid_change'|'pause'|'enable'|'budget'|'placement'|'exact'|'structure'|'other', icon: string }}
  */
 export function getMotorActionType(item) {
   const decisionType = String(item?.decision_type || '').toLowerCase();
@@ -18,7 +18,13 @@ export function getMotorActionType(item) {
   if (stack.includes('enable') || stack.includes('reactivat') || stack.includes('ativ')) return { type: 'enable', icon: 'play' };
   if (stack.includes('budget') || stack.includes('orçamento')) return { type: 'budget', icon: 'wallet' };
   if (stack.includes('placement') || stack.includes('top_of_search') || stack.includes('rest_of_search')) return { type: 'placement', icon: 'layers' };
-  if (decisionType.includes('bid') || changeType.includes('bid') || item?.new_bid !== undefined || item?.old_bid !== undefined) {
+  if (stack.includes('create_keyword') || stack.includes('keyword_add') || stack.includes('harvest_search_term') || stack.includes('promote_same_sku') || stack.includes('exact')) {
+    return { type: 'exact', icon: 'target' };
+  }
+  if (stack.includes('repair_structure') || stack.includes('structure_repair') || stack.includes('repair_campaign')) {
+    return { type: 'structure', icon: 'wrench' };
+  }
+  if (decisionType.includes('bid') || action.includes('bid') || action.includes('lance') || changeType.includes('bid') || item?.new_bid !== undefined || item?.old_bid !== undefined) {
     return { type: 'bid_change', icon: 'trending' };
   }
   return { type: 'other', icon: 'activity' };
@@ -89,6 +95,8 @@ export function getMotorActionBadge(item) {
     enable: { label: 'Ativação', tone: 'green' },
     budget: { label: 'Orçamento', tone: 'violet' },
     placement: { label: 'Placement', tone: 'sky' },
+    exact: { label: 'EXACT', tone: 'green' },
+    structure: { label: 'Reparo estrutural', tone: 'amber' },
     other: { label: 'Decisão', tone: 'slate' },
   };
   return badges[type] || badges.other;

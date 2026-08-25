@@ -301,7 +301,7 @@ export default function DecisionalOverview({
           <h2 className="text-sm font-bold text-theme-primary">O que o Motor está fazendo agora</h2>
           <p className="text-[11px] text-theme-muted hidden sm:block">Toque na seta para abrir o colóquio da decisão.</p>
         </div>
-        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} />
+        <MotorDecisionFeed decisions={decisions} bidChanges={bidChanges} accountId={account?.id} />
       </div>
     </div>
   );

@@ -69,13 +69,13 @@ async function fetchSalesDaily(accountId) {
 async function fetchDecisions(accountId) {
   const [pending, all] = await Promise.all([
     base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId, status: 'pending' }, '-created_at', 10),
-    base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 2000),
+    base44.entities.OptimizationDecision.filter({ amazon_account_id: accountId }, '-created_at', 5000),
   ]);
   return { pending, all };
 }
 
 async function fetchBidChanges(accountId) {
-  return base44.entities.AdsBidChangeLog.filter({ amazon_account_id: accountId }, '-created_at', 2000);
+  return base44.entities.AdsBidChangeLog.filter({ amazon_account_id: accountId }, '-created_at', 5000);
 }
 
 async function fetchSyncRuns(accountId) {
