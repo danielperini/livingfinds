@@ -33,11 +33,17 @@ Deno.test('campanha nova aguarda 72 horas', () => {
 
 Deno.test('zero entrega após 72h aumenta bid respeitando incremento configurado', () => {
   assert.equal(classifyCampaignDeliveryHealth(base), 'INCREASE_BID');
-  assert.equal(nextConservativeBid(0.5, 0.8, 0.1, 0.2), 0.6);
+  assert.equal(nextConservativeBid(0.5, 0.8, 0.1, 0.2), 0.53);
 });
 
 Deno.test('incremento nunca ultrapassa bid máximo', () => {
-  assert.equal(nextConservativeBid(0.75, 0.8, 0.1, 0.2), 0.8);
+  assert.equal(nextConservativeBid(0.79, 0.8, 0.1, 0.2), 0.8);
+});
+
+Deno.test('285 zero-click não autorizam salto agressivo: cada recovery fica em 5%', () => {
+  const bids = Array.from({ length: 285 }, () => nextConservativeBid(0.5, 0.8, 0.1, 0.2));
+  assert.equal(bids.every((bid) => bid === 0.53), true);
+  assert.equal(bids.slice(0, 8).length, 8);
 });
 
 Deno.test('após duas tentativas sem entrega pausa e substitui', () => {

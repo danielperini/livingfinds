@@ -135,14 +135,14 @@ Deno.serve(async (request) => {
         });
 
     const growthRecommendedByToday = salesRecovery?.serving_growth?.recommended === true;
-    const servingGrowth = body.skip_serving_campaign_growth === true || (!lifecycleWindow && !growthRecommendedByToday)
+    const servingGrowth = body.skip_serving_campaign_growth === true
       ? { ok: true, skipped: true }
       : await invoke(base44, 'runServingCampaignGrowthObjective', {
           ...common,
           snapshot_run_id: snapshotRunId,
           serving_campaign_growth_target_pct: servingCampaignGrowthTargetPct,
-          max_auto_budget_expansions: body.max_auto_budget_expansions ?? 2,
-          max_new_exact_per_run: body.max_new_exact_per_run ?? 2,
+          max_auto_budget_expansions: body.max_auto_budget_expansions ?? 6,
+          max_new_exact_per_run: body.max_new_exact_per_run ?? 6,
           delivery_lookback_days: 7,
           trigger_type: dailyClose ? 'unified_daily_serving_growth_v18' : growthRecommendedByToday ? 'unified_intraday_growth_recommendation' : 'unified_intraday_serving_growth_v18',
         });
@@ -162,8 +162,8 @@ Deno.serve(async (request) => {
           prioritize_zero_delivery_rotation: true,
           delivery_lookback_days: 7,
           max_replacements_per_run: replacementCapacity,
-          max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
-          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
+          max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
+          max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
         });
 
     const daypartConfiguration = body.skip_scheduled_daypart === true || !daypartWindow
@@ -258,7 +258,7 @@ Deno.serve(async (request) => {
         hourly_impression_baseline_days: 14,
         campaign_hourly_distribution_guard: true,
         recovery_signal: 'impressões da hora abaixo de 45% da mediana da mesma hora ou participação da campanha abaixo de 45% da participação histórica',
-        max_budget_step_pct: 10,
+        max_budget_step_pct: 6,
         top_of_search_change: false,
         execution_owner: 'executeApprovedDecisionQueue',
         confirmation_required: true,
@@ -267,10 +267,10 @@ Deno.serve(async (request) => {
         function: 'reconcileCampaignDeliveryHealth',
         automatic: true,
         zero_delivery_test_hours: 72,
-        max_bid_recovery_attempts: 2,
+        max_bid_recovery_attempts: 8,
         max_replacements_per_run: replacementCapacity,
-        max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 3,
-        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 3,
+        max_structure_repairs_per_run: body.max_structure_repairs_per_run ?? 5,
+        max_bid_recoveries_per_run: body.max_bid_recoveries_per_run ?? 8,
         economic_bid_cap: true,
         trusted_bootstrap_economics: 'somente custo confirmado, preço, break-even e safe_max_cpc explícitos',
         asin_zero_sale_spend_cap: 'clamp(4 x safe_max_cpc, R$2,50, R$5,00)',

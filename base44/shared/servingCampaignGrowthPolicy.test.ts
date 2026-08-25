@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
 import {
+  calculateEconomicPromotionCapacity,
   calculateServingGrowthGoal,
   calculateTrafficSufficiency,
   classifyTrafficState,
@@ -14,6 +15,16 @@ Deno.test('meta de +40% usa SERVING e arredonda 14 para 20', () => {
   assert.equal(goal.growth_gap, 6);
   assert.equal(goal.goal_met, false);
   assert.equal(goal.metric, 'SERVING_CAMPAIGNS');
+});
+
+Deno.test('growth_gap zero não bloqueia Search Term comprador elegível', () => {
+  const goal = calculateServingGrowthGoal({ baselineServing: 10, currentServing: 14, targetGrowthPct: 40 });
+  assert.equal(goal.growth_gap, 0);
+  assert.equal(calculateEconomicPromotionCapacity({ maxNewExactPerRun: 6, economicEligibleConvertedTerms: 4 }), 4);
+});
+
+Deno.test('MANUAL in-flight não reduz a capacidade econômica de EXACT', () => {
+  assert.equal(calculateEconomicPromotionCapacity({ maxNewExactPerRun: 6, economicEligibleConvertedTerms: 20 }), 6);
 });
 
 Deno.test('EXISTS sem entrega não conta como SERVING', () => {
@@ -79,4 +90,17 @@ Deno.test('discovery AUTO bloqueia CPC, loss budget, TACoS e orçamento global i
   assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, accountTacos: null }).reason, 'TACOS_MER_UNAVAILABLE');
   assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, accountTacos: 11 }).reason, 'TACOS_MER_ABOVE_LIMIT');
   assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, accountSpend: 80, spendAvailableNow: 0 }).reason, 'GLOBAL_BUDGET_EXHAUSTED');
+});
+
+Deno.test('discovery bloqueia safe CPC, estoque e ACoS econômico inseguros', () => {
+  assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, safeMaxCpc: 0 }).reason, 'MISSING_SAFE_MAX_CPC');
+  assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, inStock: false }).reason, 'OUT_OF_STOCK');
+  assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, orders: 1, sales: 5, currentAcos: 50, maximumAcos: 40 }).reason, 'ACOS_ABOVE_ECONOMIC_LIMIT');
+});
+
+Deno.test('winner limitado cresce 5%, mas conta sem headroom bloqueia expansão', () => {
+  const winner = evaluateAutoDiscoveryBudget({ ...safeAuto, currentBudget: 10, orders: 2, sales: 30, currentAcos: 15, maximumAcos: 40, maximumIncreasePct: 5 });
+  assert.equal(winner.eligible, true);
+  assert.equal(winner.increase_pct, 5);
+  assert.equal(evaluateAutoDiscoveryBudget({ ...safeAuto, accountSpend: 80, spendAvailableNow: 0 }).eligible, false);
 });

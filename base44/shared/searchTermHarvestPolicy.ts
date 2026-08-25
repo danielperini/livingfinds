@@ -39,6 +39,12 @@ export type HarvestAggregate = {
   sources: HarvestSource[];
   attributionVerified: boolean;
   skuResolutionVerified: boolean;
+  /**
+   * NEW: Tracks deterministic fallback single_advertised_sku
+   * "single_advertised_sku" = adgroup anuncios só este SKU, orders>0, nenhuma multipla coluna available
+   * Nunca presumir quando houver múltiplos SKUs no adgroup ou quando colunas promoted/attributed forem explícitas
+   */
+  attributionFallbackReason?: string;
 };
 
 const own = (row: any, key: string) => Object.prototype.hasOwnProperty.call(row || {}, key);
@@ -110,8 +116,64 @@ function firstPresent(row: any, fields: string[]): { present: boolean; value: nu
   return { present: false, value: 0, field: '' };
 }
 
+/**
+ * NEW: Avalia se um resultado pode usar fallback determinístico single_advertised_sku
+ * Regra:
+ *   - Não pode haver colunas promoted/attributed explícitas (aquelas significam "multi-sku adgroup")
+ *   - Deve haver orders > 0 na janela
+ *   - sku_resolution_status deve ser single_advertised_sku (ou similar signal)
+ *   - Nunca presumir se não houver sinal claro
+ */
+function canUseSingleAdvertisedSkuFallback(row: any): boolean {
+  // Se existem colunas promoted/attributed/same-sku/other-sku explícitas, NÃO usar fallback
+  const explicitColumns = [
+    'promoted_purchases_1d', 'promoted_purchases_7d', 'promoted_purchases_14d', 'promoted_purchases_30d',
+    'promoted_sales_1d', 'promoted_sales_7d', 'promoted_sales_14d', 'promoted_sales_30d',
+    'purchases_same_sku_1d', 'purchases_same_sku_7d', 'purchases_same_sku_14d', 'purchases_same_sku_30d',
+    'purchases_other_sku_1d', 'purchases_other_sku_7d', 'purchases_other_sku_14d', 'purchases_other_sku_30d',
+    'attributed_sales_same_sku_1d', 'attributed_sales_same_sku_7d', 'attributed_sales_same_sku_14d', 'attributed_sales_same_sku_30d',
+    'sales_other_sku_1d', 'sales_other_sku_7d', 'sales_other_sku_14d', 'sales_other_sku_30d',
+  ];
+  for (const col of explicitColumns) {
+    if (own(row, col)) return false;
+  }
+
+  // Se sku_resolution_status indica single_advertised_sku, OK
+  const resolutionStatus = String(row.sku_resolution_status || '');
+  if (resolutionStatus === 'single_advertised_sku') return true;
+
+  // Sem sinal claro: não presumir
+  return false;
+}
+
 export function resolveSameSkuAttribution(row: any): SameSkuAttribution {
   const windows = [7, 14, 30, 1];
+
+  // Tentar fallback single_advertised_sku se disponível
+  const canFallback = canUseSingleAdvertisedSkuFallback(row);
+  if (canFallback) {
+    for (const days of windows) {
+      const totalOrders = firstPresent(row, [`purchases${days}d`]);
+      const totalSales = firstPresent(row, [`sales${days}d`]);
+      if (!totalOrders.present && !totalSales.present) continue;
+      if (totalOrders.value > 0 || totalSales.value > 0) {
+        // Fallback: 100% do total é mesmo SKU, pois adgroup anuncia só este SKU
+        return {
+          windowDays: days,
+          totalOrders: totalOrders.value,
+          totalSales: totalSales.value,
+          sameSkuOrders: totalOrders.value,
+          sameSkuSales: totalSales.value,
+          haloOrders: 0,
+          haloSales: 0,
+          verified: true,
+          source: `single_advertised_sku_fallback_${days}d`,
+        };
+      }
+    }
+  }
+
+  // Path padrão: procura colunas explícitas
   for (const days of windows) {
     const totalOrders = firstPresent(row, [`purchases${days}d`]);
     const totalSales = firstPresent(row, [`sales${days}d`]);
@@ -181,6 +243,7 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
       sources: [],
       attributionVerified: true,
       skuResolutionVerified: true,
+      attributionFallbackReason: undefined,
     } satisfies HarvestAggregate;
 
     if (!current.rawVariants.includes(term)) current.rawVariants.push(term);
@@ -207,6 +270,17 @@ export function aggregateSearchTerms(rows: any[]): HarvestAggregate[] {
     current.attributionVerified = current.attributionVerified && attribution.verified;
     current.skuResolutionVerified = current.skuResolutionVerified && !['missing', 'ambiguous'].includes(String(row.sku_resolution_status || 'resolved'));
     if (!current.sku && row.advertised_sku) current.sku = String(row.advertised_sku);
+
+    // Track fallback reason
+    const attributionSource =
+      'source' in attribution && typeof attribution.source === 'string'
+        ? attribution.source
+        : 'unverified_total_only';
+
+    if (attributionSource.includes('fallback')) {
+      current.attributionFallbackReason = attributionSource;
+    }
+
     current.sourceRows.push(row);
 
     const source: HarvestSource = {
@@ -264,7 +338,11 @@ export function evaluateHarvestCandidate(input: {
   const sameSkuAcos = aggregate.sameSkuSales > 0 ? aggregate.spend / aggregate.sameSkuSales * 100 : null;
   if (isAsinSearchTerm(aggregate.term)) return { eligible: false, reason: 'product_target_not_keyword', sameSkuAcos };
   if (!aggregate.skuResolutionVerified || !aggregate.asin) return { eligible: false, reason: 'sku_unresolved', sameSkuAcos };
-  if (!aggregate.attributionVerified) return { eligible: false, reason: 'same_sku_attribution_unavailable', sameSkuAcos };
+
+  // NEW: Allow fallback single_advertised_sku as verified attribution
+  const hasValidAttribution = aggregate.attributionVerified || aggregate.attributionFallbackReason?.includes('single_advertised_sku_fallback');
+  if (!hasValidAttribution) return { eligible: false, reason: 'same_sku_attribution_unavailable', sameSkuAcos };
+
   if (aggregate.sameSkuOrders < 1 || aggregate.sameSkuSales <= 0) return { eligible: false, reason: 'no_same_sku_sale', sameSkuAcos };
   if (!input.inStock) return { eligible: false, reason: 'out_of_stock', sameSkuAcos };
   if (!input.economicsActionable || input.safeBid == null) return { eligible: false, reason: 'unsafe_or_missing_economics', sameSkuAcos };
@@ -272,4 +350,10 @@ export function evaluateHarvestCandidate(input: {
   if (input.alreadyExact) return { eligible: false, reason: 'exact_keyword_already_active', sameSkuAcos };
   if (input.alreadyPromoted) return { eligible: false, reason: 'promotion_already_registered', sameSkuAcos };
   return { eligible: true, reason: 'same_sku_sale_profitable', sameSkuAcos };
+}
+
+export function matchesRequestedCampaignType(requested: unknown, actual: unknown): boolean {
+  const expected = String(requested || '').trim().toUpperCase();
+  const observed = String(actual || '').trim().toUpperCase();
+  return !expected || expected === observed;
 }

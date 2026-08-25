@@ -95,3 +95,117 @@ export function shouldSupersedeDecision(
   const existingIncreases = String(existing.action || '').includes('increase');
   return incomingRank === existingRank && incomingReduces && existingIncreases;
 }
+
+/**
+ * NEW FIX #1: Soft Pause Deduplication Detection
+ *
+ * Identifica se uma decisão de pausa é "soft" (não baseada em hard guardrails)
+ * Soft pauses são canceladas/bloqueadas por winner_protection e devem ser dedupadas
+ * para não serem recriadas continuamente.
+ *
+ * Hard guardrails: sem estoque, not_buyable, listing inactive, margem negativa, break-even/cap violado
+ * Soft pauses: tudo mais (low acos, low relevance, etc.)
+ */
+export function isSoftPause(decision: {
+  action?: string;
+  rule_key?: string;
+  reason_code?: string;
+  rationale?: string;
+  error_message?: string;
+}): boolean {
+  const action = String(decision.action || '').toLowerCase();
+  if (!action.includes('pause')) return false;
+
+  const text = `${String(decision.rule_key || '').toLowerCase()} ${String(decision.reason_code || '').toLowerCase()} ${String(decision.rationale || '').toLowerCase()}`;
+
+  // HARD guardrails que justificam pausa permanente
+  const hardGuardrails = [
+    'out_of_stock', 'sem_estoque', 'stock', 'inventory',
+    'not_buyable', 'não_comprável', 'listing_inactive', 'listing_suppressed',
+    'negative_margin', 'margem_negativa', 'loss', 'prejuízo',
+    'break_even', 'cap', 'daily_cap', 'budget_exceeded',
+    'user_pause', 'manual_pause',
+  ];
+
+  for (const guard of hardGuardrails) {
+    if (text.includes(guard)) return false;
+  }
+
+  // Tudo mais é soft pause
+  return true;
+}
+
+/**
+ * NEW FIX #1: Fallback Action Chain Generator
+ *
+ * Quando uma soft pause é dedupada/cancelada, gera alternativa válida na cadeia:
+ *   1. recover_bid — aumenta bid para recuperar entrega (se margem permite)
+ *   2. increase_budget — realoca budget ocioso se disponível
+ *   3. reactivate — reativa campanha pausada se ganhou stock/economics
+ *   4. promote_exact — promove termo forte para EXACT keyword
+ *   5. HOLD — mantém em observação, sem ação imediata
+ */
+export type FallbackAction = 'recover_bid' | 'increase_budget' | 'reactivate' | 'promote_exact' | 'HOLD';
+
+export function generateSoftPauseFallback(input: {
+  campaign_id: string;
+  asin: string;
+  paused_reason: string;
+  has_safe_bid_capacity: boolean;
+  has_margin: boolean;
+  has_budget_available: boolean;
+  has_stock: boolean;
+  has_strong_search_term: boolean;
+}): { fallback_action: FallbackAction; rationale: string } {
+  // 1. Recuperar bid
+  if (input.has_safe_bid_capacity && input.has_margin) {
+    return {
+      fallback_action: 'recover_bid',
+      rationale: `Pausa soft dedupada; recuperando lance em vez de pausar. Safe CPC disponível, margem viável. Campanha: ${input.campaign_id}`,
+    };
+  }
+
+  // 2. Aumentar budget
+  if (input.has_budget_available && input.has_margin) {
+    return {
+      fallback_action: 'increase_budget',
+      rationale: `Pausa soft dedupada; realocando budget ocioso em vez de pausar. ASIN: ${input.asin}`,
+    };
+  }
+
+  // 3. Reativar
+  if (input.has_stock && input.has_margin) {
+    return {
+      fallback_action: 'reactivate',
+      rationale: `Pausa soft dedupada; reativando campanha pois estoque e economia se normalizaram. Campanha: ${input.campaign_id}`,
+    };
+  }
+
+  // 4. Promover EXACT
+  if (input.has_strong_search_term && input.has_margin) {
+    return {
+      fallback_action: 'promote_exact',
+      rationale: `Pausa soft dedupada; promovendo termo forte para EXACT keyword em vez de pausar campanha. ASIN: ${input.asin}`,
+    };
+  }
+
+  // 5. HOLD
+  return {
+    fallback_action: 'HOLD',
+    rationale: `Pausa soft dedupada; mantendo em observação. Nenhuma alternativa viável no momento. Campanha: ${input.campaign_id}`,
+  };
+}
+
+/**
+ * NEW FIX #1: Marcar pausa como dedupada
+ *
+ * Registra que uma soft pause foi eliminada da duplicação e qual fallback foi escolhido
+ * para não recriar a mesma pausa continuamente (PAUSE->CANCELLED storm prevention)
+ */
+export function markSoftPauseDeduplicated(decision: any, fallback: FallbackAction, fallbackRationale: string): void {
+  decision.soft_pause_deduplicated = true;
+  decision.soft_pause_dedup_timestamp = new Date().toISOString();
+  decision.soft_pause_fallback_action = fallback;
+  decision.soft_pause_fallback_rationale = fallbackRationale;
+  decision.dedup_marker = `soft_pause_dedup|${decision.campaign_id || decision.entity_id}|${fallback}|${Date.now()}`;
+}

@@ -103,8 +103,8 @@ Deno.serve(async (request) => {
       return Math.max(0, Math.min(maximum, Number.isFinite(parsed) ? Math.floor(parsed) : fallback));
     };
     const maxReplacementsPerRun = configuredLimit(body.max_replacements_per_run, 6, 20);
-    const maxStructureRepairsPerRun = configuredLimit(body.max_structure_repairs_per_run, 3, 5);
-    const maxBidRecoveriesPerRun = configuredLimit(body.max_bid_recoveries_per_run, 3, 5);
+    const maxStructureRepairsPerRun = configuredLimit(body.max_structure_repairs_per_run, 5, 5);
+    const maxBidRecoveriesPerRun = configuredLimit(body.max_bid_recoveries_per_run, 8, 8);
     const accounts = body.amazon_account_id
       ? await base44.asServiceRole.entities.AmazonAccount.filter({ id: body.amazon_account_id }, undefined, 1)
       : await base44.asServiceRole.entities.AmazonAccount.filter({ status: 'connected' }, '-updated_at', 50);
@@ -134,8 +134,8 @@ Deno.serve(async (request) => {
       const increment = Math.max(0.01, n(settings.bid_increment || settings.allowed_increment || 0.1));
       const targetAcos = n(settings.target_acos || settings.acos_target || 15);
 
-      const productByAsin = new Map(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
-      const economicsByAsin = new Map(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
+      const productByAsin = new Map<string, any>(products.filter((p: any) => p.asin).map((p: any) => [upper(p.asin), p]));
+      const economicsByAsin = new Map<string, any>(economics.filter((e: any) => e.asin).map((e: any) => [upper(e.asin), e]));
       const assessmentByAsin = new Map<string, any>();
       for (const row of assessments) {
         const asin = upper(row.asin);

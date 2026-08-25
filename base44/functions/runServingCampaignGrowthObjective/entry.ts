@@ -9,6 +9,7 @@ import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { canonicalAccountSalesByDate } from '../../shared/salesDailyIntegrity.ts';
 import {
   calculateServingGrowthGoal,
+  calculateEconomicPromotionCapacity,
   classifyTrafficState,
   evaluateAutoDiscoveryBudget,
   hasServingEvidence,
@@ -16,7 +17,7 @@ import {
 } from '../../shared/servingCampaignGrowthPolicy.ts';
 
 const SOURCE = 'runServingCampaignGrowthObjective';
-const POLICY_VERSION = 'serving-growth-v18';
+const POLICY_VERSION = 'serving-growth-v19-sales-first';
 const DEFAULT_LOOKBACK_DAYS = 7;
 
 const finite = (value: unknown, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
@@ -140,8 +141,8 @@ Deno.serve(async (request) => {
     const dryRun = body.dry_run === true;
     const targetGrowthPct = clamp(finite(body.serving_campaign_growth_target_pct, 40), 0, 100);
     const lookbackDays = clamp(Math.floor(finite(body.delivery_lookback_days, DEFAULT_LOOKBACK_DAYS)), 1, 30);
-    const maxAutoBudgetExpansions = clamp(Math.floor(finite(body.max_auto_budget_expansions, 2)), 0, 10);
-    const maxNewExactPerRun = clamp(Math.floor(finite(body.max_new_exact_per_run, 2)), 0, 10);
+    const maxAutoBudgetExpansions = clamp(Math.floor(finite(body.max_auto_budget_expansions, 6)), 0, 10);
+    const maxNewExactPerRun = clamp(Math.floor(finite(body.max_new_exact_per_run, 6)), 0, 10);
     const reports: any[] = [];
 
     for (const account of accounts) {
@@ -290,7 +291,7 @@ Deno.serve(async (request) => {
         const metrics = metricsTodayFor(campaign);
         const product = productByAsin.get(asin);
         const eligibility = productAdsEligibility(product);
-        const econ = economicsByAsin.get(asin);
+        const econ: any = economicsByAsin.get(asin);
         const assessment = assessmentByAsin.get(asin);
         const currentBudget = Math.max(0, finite(campaign?.daily_budget ?? campaign?.budget));
         const currentCpc = metrics.clicks > 0 ? metrics.spend / metrics.clicks : 0;
@@ -427,11 +428,10 @@ Deno.serve(async (request) => {
         budgetDecisions.push({ decision_id: created?.id, campaign_id: candidate.campaignId, asin: candidate.asin, ...candidate.decision });
       }
 
-      const promotionCapacity = Math.max(0, Math.min(
+      const promotionCapacity = calculateEconomicPromotionCapacity({
         maxNewExactPerRun,
-        goal.growth_gap,
-        goal.growth_gap - inFlightManuals.length,
-      ));
+        economicEligibleConvertedTerms: maxNewExactPerRun,
+      });
       let termBank: any = { ok: true, skipped: true };
       let autoHarvest: any = { ok: true, skipped: true };
       if (promotionCapacity > 0) {
@@ -450,16 +450,33 @@ Deno.serve(async (request) => {
           lookback_days: 65,
           max_promotions: promotionCapacity,
           source_campaign_type: 'AUTO',
-          exclude_asins: matureZeroAsins,
-          trigger_type: 'serving_growth_v18_auto_first',
+          exclude_asins: [],
+          trigger_type: 'serving_growth_v19_auto_first',
         }).then((result: any) => result?.data || result || { ok: true })
           .catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
       }
       const autoExactPromotions = dryRun ? 0 : promotedCount(autoHarvest);
+      const remainingManualCapacity = Math.max(0, promotionCapacity - autoExactPromotions);
+      let manualHarvest: any = { ok: true, skipped: true };
+      if (remainingManualCapacity > 0) {
+        manualHarvest = await base44.asServiceRole.functions.invoke('runImmediateSameSkuSearchTermHarvest', {
+          amazon_account_id: accountId,
+          _service_role: true,
+          dry_run: dryRun,
+          lookback_days: 65,
+          max_promotions: remainingManualCapacity,
+          source_campaign_type: 'MANUAL',
+          exclude_asins: [],
+          trigger_type: 'serving_growth_v19_manual_converted_terms',
+        }).then((result: any) => result?.data || result || { ok: true })
+          .catch((error: any) => ({ ok: false, error: error?.message || String(error) }));
+      }
+      const manualExactPromotions = dryRun ? 0 : promotedCount(manualHarvest);
+      const exactPromotions = autoExactPromotions + manualExactPromotions;
 
       const protectedManuals = trafficRows.filter((row) => {
         if (!manual(row.campaign)) return false;
-        const econ = economicsByAsin.get(row.asin);
+        const econ: any = economicsByAsin.get(row.asin);
         const operatingAcos = resolveOperatingAcos(econ, finite(settings?.target_acos, 15));
         const maximumProfitableSpend = Math.max(0, finite(econ?.maximum_profitable_ad_spend ?? econ?.contribution_margin_amount));
         const lossBudget = maximumProfitableSpend > 0 ? clamp(maximumProfitableSpend * 0.25, 2.50, 15) : 0;
@@ -476,7 +493,7 @@ Deno.serve(async (request) => {
 
       const status = goal.goal_met
         ? 'goal_met'
-        : budgetDecisions.length || autoExactPromotions > 0
+        : budgetDecisions.length || exactPromotions > 0
           ? 'safe_discovery_active'
           : matureZeroDelivery.length > 0
             ? 'awaiting_one_to_one_rotation'
@@ -494,6 +511,8 @@ Deno.serve(async (request) => {
         mature_zero_delivery_campaigns: matureZeroDelivery.length,
         discovery_budget_decisions: budgetDecisions.filter((row) => !row.reused).length,
         auto_exact_promotions: autoExactPromotions,
+        manual_exact_promotions: manualExactPromotions,
+        exact_promotions_total: exactPromotions,
         baseline_at: baselineAt,
         checked_at: new Date().toISOString(),
         details: {
@@ -502,7 +521,7 @@ Deno.serve(async (request) => {
           goal_completion_rule: 'goal_met somente quando current_serving_campaigns >= target_serving_campaigns',
           traffic_sufficiency: 'clicks_observed / clicks_required_from_conservative_asin_cvr_at_80pct_detection_confidence',
           auto_discovery: 'AUTO budget-limited first; maximum +10% and R$1 per cycle; safe CPC, loss, ACoS, TACoS/MER and global cap mandatory',
-          exact_source_priority: 'AUTO same-SKU converted Search Terms',
+          exact_source_priority: 'same-SKU converted Search Terms: AUTO first, then MANUAL variations',
           zero_delivery_policy: 'mature ZERO_DELIVERY ASINs excluded from additive creation and delegated to confirmed 1:1 replacement',
           mature_zero_delivery_asins: matureZeroAsins,
           in_flight_manuals: inFlightManuals.length,
@@ -518,6 +537,7 @@ Deno.serve(async (request) => {
           rejected_auto_sample: rejectedAuto.slice(0, 100),
           term_bank: termBank?.summary || termBank,
           auto_harvest: autoHarvest?.reports || autoHarvest,
+          manual_harvest: manualHarvest?.reports || manualHarvest,
         },
       };
 
@@ -532,13 +552,15 @@ Deno.serve(async (request) => {
           started_at: startedAt,
           completed_at: new Date().toISOString(),
           records_processed: activeCampaigns.length,
-          records_imported: budgetDecisions.filter((row) => !row.reused).length + autoExactPromotions,
+          records_imported: budgetDecisions.filter((row) => !row.reused).length + exactPromotions,
           result_summary: JSON.stringify({
             policy_version: POLICY_VERSION, status, goal,
             existing_campaigns: campaigns.length, active_campaigns: activeCampaigns.length,
             mature_zero_delivery_campaigns: matureZeroDelivery.length,
             discovery_budget_decisions: budgetDecisions.length,
             auto_exact_promotions: autoExactPromotions,
+            manual_exact_promotions: manualExactPromotions,
+            exact_promotions_total: exactPromotions,
           }),
         }).catch(() => null);
       }
@@ -546,7 +568,7 @@ Deno.serve(async (request) => {
     }
 
     return Response.json({
-      ok: reports.every((report) => report?.details?.term_bank?.ok !== false && report?.details?.auto_harvest?.ok !== false),
+      ok: reports.every((report) => report?.details?.term_bank?.ok !== false && report?.details?.auto_harvest?.ok !== false && report?.details?.manual_harvest?.ok !== false),
       engine: 'SERVING_CAMPAIGN_GROWTH_V18',
       policy_version: POLICY_VERSION,
       dry_run: dryRun,
