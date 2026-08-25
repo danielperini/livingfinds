@@ -24,6 +24,9 @@ p = "base44/functions/runServingCampaignGrowthObjective/entry.ts"
 replace_once(p, "const POLICY_VERSION = 'serving-growth-v18';", "const POLICY_VERSION = 'serving-growth-v19-sales-first';")
 replace_once(p, "const maxAutoBudgetExpansions = clamp(Math.floor(finite(body.max_auto_budget_expansions, 2)), 0, 10);", "const maxAutoBudgetExpansions = clamp(Math.floor(finite(body.max_auto_budget_expansions, 6)), 0, 10);")
 replace_once(p, "const maxNewExactPerRun = clamp(Math.floor(finite(body.max_new_exact_per_run, 2)), 0, 10);", "const maxNewExactPerRun = clamp(Math.floor(finite(body.max_new_exact_per_run, 6)), 0, 10);")
+# Make existing economic rows explicit for strict deno check; no logic change.
+replace_once(p, "        const econ = economicsByAsin.get(asin);", "        const econ: any = economicsByAsin.get(asin);")
+replace_once(p, "        const econ = economicsByAsin.get(row.asin);", "        const econ: any = economicsByAsin.get(row.asin);")
 replace_once(
     p,
     "const promotionCapacity = Math.max(0, Math.min(\n        maxNewExactPerRun,\n        goal.growth_gap,\n        goal.growth_gap - inFlightManuals.length,\n      ));",
