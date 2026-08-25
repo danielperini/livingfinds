@@ -25,9 +25,9 @@ jobs:
         run: python3 scripts/apply-sales-growth-data-20260825.py
       - name: Validate Deno
         run: |
-          deno check base44/functions/runUnifiedDecisionEngine/entry.ts
-          deno check base44/functions/runServingCampaignGrowthObjective/entry.ts
-          deno test base44/shared/searchTermHarvestPolicy.test.ts base44/shared/servingCampaignGrowthPolicy.test.ts
+          deno check --config server/deno.json base44/functions/runUnifiedDecisionEngine/entry.ts
+          deno check --config server/deno.json base44/functions/runServingCampaignGrowthObjective/entry.ts
+          deno test --config server/deno.json base44/shared/searchTermHarvestPolicy.test.ts base44/shared/servingCampaignGrowthPolicy.test.ts
       - name: Build frontend
         run: npm run build
       - name: Commit
