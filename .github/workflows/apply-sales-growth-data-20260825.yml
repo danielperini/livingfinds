@@ -21,7 +21,7 @@ jobs:
           deno-version: v2.x
       - name: Install dependencies
         run: npm ci
-      - name: Apply patch
+      - name: Apply sales-first patch
         run: python3 scripts/apply-sales-growth-data-20260825.py
       - name: Validate Deno
         run: |
