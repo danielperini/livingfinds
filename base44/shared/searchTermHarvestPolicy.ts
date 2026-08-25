@@ -273,3 +273,9 @@ export function evaluateHarvestCandidate(input: {
   if (input.alreadyPromoted) return { eligible: false, reason: 'promotion_already_registered', sameSkuAcos };
   return { eligible: true, reason: 'same_sku_sale_profitable', sameSkuAcos };
 }
+
+export function matchesRequestedCampaignType(requested: unknown, actual: unknown): boolean {
+  const expected = String(requested || '').trim().toUpperCase();
+  const observed = String(actual || '').trim().toUpperCase();
+  return !expected || expected === observed;
+}

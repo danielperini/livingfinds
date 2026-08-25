@@ -1,5 +1,5 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.40';
-import { decideSalesModeWaste } from '../../shared/salesModeWastePolicy.ts';
+import { decideSalesModeWaste, isProtectedWinner30d } from '../../shared/salesModeWastePolicy.ts';
 
 const n = (v: unknown) => Number.isFinite(Number(v)) ? Number(v) : 0;
 const active = (v: unknown) => ['enabled', 'active'].includes(String(v || '').toLowerCase());
@@ -79,7 +79,10 @@ Deno.serve(async (request) => {
         const acos = a.sales > 0 ? a.spend / a.sales * 100 : 999;
         const longAcos = long.sales > 0 ? long.spend / long.sales * 100 : 999;
         const longRoas = long.spend > 0 ? long.sales / long.spend : 0;
-        const provenWinner30d = long.orders >= 2 && long.sales > long.spend && longAcos <= growthAcosCeiling;
+        const provenWinner30d = isProtectedWinner30d({
+          orders30d: long.orders, sales30d: long.sales, spend30d: long.spend,
+          growthAcosCeiling, maximumAcos: maxAcos,
+        });
         const strongWinner30d = long.orders >= 2 && longRoas >= 4 && longAcos < maxAcos;
 
         // Sales-first: uma janela curta não pode cortar um ativo que possui

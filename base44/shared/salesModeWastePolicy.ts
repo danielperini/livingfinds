@@ -22,6 +22,24 @@ export type WasteDecision = {
 const n = (value: unknown) =>
   Number.isFinite(Number(value)) ? Number(value) : 0;
 
+export function isProtectedWinner30d(input: {
+  orders30d: unknown;
+  sales30d: unknown;
+  spend30d: unknown;
+  growthAcosCeiling: unknown;
+  maximumAcos: unknown;
+}): boolean {
+  const orders = n(input.orders30d);
+  const sales = n(input.sales30d);
+  const spend = n(input.spend30d);
+  const acos = sales > 0 ? spend / sales * 100 : Number.POSITIVE_INFINITY;
+  const roas = spend > 0 ? sales / spend : 0;
+  return orders >= 2 && sales > 0 && (
+    (sales > spend && acos <= n(input.growthAcosCeiling)) ||
+    (roas >= 4 && acos < n(input.maximumAcos))
+  );
+}
+
 export function decideSalesModeWaste(input: WasteEvidence): WasteDecision {
   const spend = n(input.spend);
   const sales = n(input.sales);

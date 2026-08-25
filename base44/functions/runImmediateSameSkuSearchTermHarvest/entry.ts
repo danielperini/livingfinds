@@ -12,6 +12,7 @@ import {
   calculateSafeHarvestBid,
   calculateWinnerExactBudget,
   evaluateHarvestCandidate,
+  matchesRequestedCampaignType,
   normalizeSearchTerm,
   numberValue,
   winnerScore,
@@ -166,8 +167,8 @@ Deno.serve(async (request) => {
           campaignById.set(String(id), campaign);
         }
       }
-      const productByAsin = new Map(products.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
-      const economicsByAsin = new Map(economics.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
+      const productByAsin = new Map<string, any>(products.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
+      const economicsByAsin = new Map<string, any>(economics.filter((row: any) => row.asin).map((row: any) => [String(row.asin).toUpperCase(), row]));
       const assessmentByAsin = new Map<string, any>();
       for (const row of assessments) {
         const asin = String(row.asin || '').toUpperCase();
@@ -228,7 +229,7 @@ Deno.serve(async (request) => {
           (!sourceSearchTerm || normalizeSearchTerm(row.search_term) === sourceSearchTerm) &&
           (!targetAsins.size || targetAsins.has(asin)) &&
           !excludedAsins.has(asin) &&
-          (!requestedSourceType || sourceCampaignType(row, campaignById) === requestedSourceType);
+          matchesRequestedCampaignType(requestedSourceType, sourceCampaignType(row, campaignById));
       });
       const verifiedKeys = new Set(rawRowsInWindow
         .filter((row: any) => row.same_sku_attribution_verified === true)

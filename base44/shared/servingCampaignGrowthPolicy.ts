@@ -55,6 +55,16 @@ export function calculateServingGrowthGoal(input: {
   };
 }
 
+/** Search Term -> EXACT is an economic optimization, not quota filling. */
+export function calculateEconomicPromotionCapacity(input: {
+  maxNewExactPerRun: unknown;
+  economicEligibleConvertedTerms: unknown;
+}): number {
+  const maximum = Math.max(0, Math.floor(finite(input.maxNewExactPerRun)));
+  const eligible = Math.max(0, Math.floor(finite(input.economicEligibleConvertedTerms)));
+  return Math.min(maximum, eligible);
+}
+
 /**
  * Cliques necessários para que a chance de observar ao menos uma compra alcance
  * a confiança escolhida, assumindo a CVR conservadora do ASIN.

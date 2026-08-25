@@ -4,6 +4,7 @@ import {
   calculateWinnerExactBudget,
   evaluateHarvestCandidate,
   isAsinSearchTerm,
+  matchesRequestedCampaignType,
   normalizeSearchTerm,
   resolveSameSkuAttribution,
 } from './searchTermHarvestPolicy.ts';
@@ -88,4 +89,22 @@ Deno.test('não promove ASIN/target de dez caracteres como keyword', () => {
   if (!isAsinSearchTerm('b07y44flcx')) throw new Error('ASIN legado não identificado');
   if (!isAsinSearchTerm('B0FN4RCXY2')) throw new Error('ASIN atual não identificado');
   if (isAsinSearchTerm('lixeira auto')) throw new Error('consulta normal foi bloqueada');
+});
+
+Deno.test('harvest aceita compradores AUTO e MANUAL em passagens separadas', () => {
+  if (!matchesRequestedCampaignType('AUTO', 'AUTO')) throw new Error('AUTO deveria ser aceito');
+  if (!matchesRequestedCampaignType('MANUAL', 'MANUAL')) throw new Error('MANUAL deveria ser aceito');
+  if (matchesRequestedCampaignType('MANUAL', 'AUTO')) throw new Error('AUTO vazou para MANUAL');
+});
+
+Deno.test('EXACT equivalente ativa não é duplicada', () => {
+  const aggregate = {
+    asin: 'B0FN4RCXY2', sku: 'SKU-1', term: 'lixeira inox', normalizedTerm: 'lixeira inox',
+    termFamilyKey: 'lixeira inox', rawVariants: ['lixeira inox'], impressions: 20, clicks: 2,
+    spend: 1, totalOrders: 1, totalSales: 30, sameSkuOrders: 1, sameSkuSales: 30,
+    haloOrders: 0, haloSales: 0, latestDate: '2026-08-25', sourceRows: [], sources: [],
+    attributionVerified: true, skuResolutionVerified: true,
+  };
+  const result = evaluateHarvestCandidate({ aggregate, inStock: true, economicsActionable: true, breakEvenAcos: 40, safeBid: 0.5, alreadyExact: true, alreadyPromoted: false });
+  if (result.eligible || result.reason !== 'exact_keyword_already_active') throw new Error('EXACT duplicada não foi bloqueada');
 });

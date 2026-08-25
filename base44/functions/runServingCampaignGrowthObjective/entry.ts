@@ -9,6 +9,7 @@ import { productAdsEligibility } from '../../shared/productAdsEligibility.ts';
 import { canonicalAccountSalesByDate } from '../../shared/salesDailyIntegrity.ts';
 import {
   calculateServingGrowthGoal,
+  calculateEconomicPromotionCapacity,
   classifyTrafficState,
   evaluateAutoDiscoveryBudget,
   hasServingEvidence,
@@ -427,10 +428,10 @@ Deno.serve(async (request) => {
         budgetDecisions.push({ decision_id: created?.id, campaign_id: candidate.campaignId, asin: candidate.asin, ...candidate.decision });
       }
 
-      const promotionCapacity = Math.max(0, Math.min(
+      const promotionCapacity = calculateEconomicPromotionCapacity({
         maxNewExactPerRun,
-        Math.max(goal.growth_gap, 2),
-      ));
+        economicEligibleConvertedTerms: maxNewExactPerRun,
+      });
       let termBank: any = { ok: true, skipped: true };
       let autoHarvest: any = { ok: true, skipped: true };
       if (promotionCapacity > 0) {

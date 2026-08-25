@@ -152,14 +152,12 @@ export function classifyCampaignDeliveryHealth(input: DeliveryHealthInput): Deli
 export function nextConservativeBid(
   currentBid: number,
   maxBid: number,
-  configuredIncrement = 0.1,
+  _configuredIncrement = 0.1,
   minBid = 0.02,
 ): number {
   const safeMin = Math.max(0.02, Number(minBid) || 0.02);
   const safeCurrent = Math.max(safeMin, Number(currentBid) || safeMin);
   const cappedMax = Math.max(safeCurrent, Number(maxBid) || safeCurrent);
-  const increment = Math.max(0.01, Number(configuredIncrement) || 0.1);
-  const percentageStep = Math.round(safeCurrent * 1.1 * 100) / 100;
-  const fixedStep = Math.round((safeCurrent + increment) * 100) / 100;
-  return Math.min(cappedMax, Math.max(percentageStep, fixedStep));
+  const percentageStep = Math.round(safeCurrent * 1.05 * 100) / 100;
+  return Math.min(cappedMax, Math.max(safeMin, percentageStep));
 }
