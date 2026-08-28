@@ -109,7 +109,7 @@
     "confirmation_required": { "type": "boolean", "default": true },
     "confirmation_status": {
       "type": "string",
-      "enum": ["pending", "confirmed", "divergent", "unsupported", "not_found"]
+      "enum": ["pending", "confirmed", "divergent", "unsupported", "not_found", "not_applicable"]
     },
     "confirmation_error": { "type": "string" },
     "confirmed_at": { "type": "string", "format": "date-time" },

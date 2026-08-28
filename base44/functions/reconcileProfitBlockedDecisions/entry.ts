@@ -11,6 +11,31 @@ const lower=(v:any)=>
 const upper=(v:any)=>
   String(v||'').trim().toUpperCase();
 
+/* SALES INTENSITY V4: only structured codes may retain a bid block. */
+const BID_ACTIONS=new Set([
+  'increase_bid','bid_increase','bid_change','set_bid','update_bid',
+  'reduce_bid','bid_decrease'
+]);
+
+const HARD_BID_GUARD_CODES=new Set([
+  'out_of_stock','not_buyable','listing_inactive','listing_suppressed',
+  'product_inactive','not_eligible','negative_margin',
+  'confirmed_economic_loss','break_even_violation','account_daily_cap',
+  'daily_cap','budget_exceeded','user_restriction','manual_restriction'
+]);
+
+function normalizedGuardCode(value:any){
+  return lower(value).replace(/[\\s-]+/g,'_');
+}
+
+function hardBidGuardOf(d:any){
+  for(const value of [d.reason_code,d.rule_key]){
+    const code=normalizedGuardCode(value);
+    if(HARD_BID_GUARD_CODES.has(code)) return code;
+  }
+  return null;
+}
+
 function campaignIdOf(d:any){
   return String(
     d.campaign_id ||
@@ -310,6 +335,8 @@ Deno.serve(async(req)=>{
       let uselessPausesCancelled=0;
       let prematurePausesCancelled=0;
       let hardPausesReopened=0;
+      let softBidBlocksCancelled=0;
+      let hardBidBlocksRetained=0;
       let unresolved=0;
 
       const reopened:any[]=[];
@@ -321,12 +348,15 @@ Deno.serve(async(req)=>{
           d.action || ''
         );
 
-        if(![
-          'reduce_bid',
-          'set_bid',
-          'update_bid',
-          'pause_campaign'
-        ].includes(action)){
+        const bidAction=BID_ACTIONS.has(action);
+
+        if(!bidAction && action!=='pause_campaign'){
+          continue;
+        }
+
+        const hardBidGuard=bidAction ? hardBidGuardOf(d) : null;
+        if(hardBidGuard){
+          hardBidBlocksRetained++;
           continue;
         }
 
@@ -334,6 +364,23 @@ Deno.serve(async(req)=>{
           campaignIdOf(d);
 
         if(!campaignId){
+          if(bidAction){
+            await base44.asServiceRole.entities.OptimizationDecision.update(
+              d.id,
+              {
+                status:'cancelled',
+                queue_status:'closed',
+                approval_status:'no_decision_soft_bid_block',
+                confirmation_required:false,
+                confirmation_status:'not_applicable',
+                error_message:'NO_DECISION: bloqueio operacional reversível sem campanha vinculada; não manter bid em blocked.',
+                updated_at:new Date().toISOString()
+              }
+            ).catch(()=>null);
+            softBidBlocksCancelled++;
+            cancelledRows.push({id:d.id,action,reason:'SOFT_BID_BLOCK_NO_CAMPAIGN'});
+            continue;
+          }
           unresolved++;
           continue;
         }
@@ -434,9 +481,13 @@ Deno.serve(async(req)=>{
           (
             action==='reduce_bid'
             ||
+            action==='bid_decrease'
+            ||
             action==='set_bid'
             ||
             action==='update_bid'
+            ||
+            action==='bid_change'
           )
           &&
           before>0
@@ -618,6 +669,28 @@ Deno.serve(async(req)=>{
               'PROVEN_ZERO_ORDER_WASTE'
           });
 
+          continue;
+        }
+
+        /* Non-hard blocked bid proposals are reversible operational holds. */
+        if(bidAction){
+          await base44.asServiceRole.entities.OptimizationDecision.update(
+            d.id,
+            {
+              status:'cancelled',
+              queue_status:'closed',
+              approval_status:'no_decision_soft_bid_block',
+              confirmation_required:false,
+              confirmation_status:'not_applicable',
+              error_message:'NO_DECISION: bloqueio operacional reversível de ajuste de bid; proposta encerrada sem execução Amazon.',
+              updated_at:new Date().toISOString()
+            }
+          ).catch(()=>null);
+
+          softBidBlocksCancelled++;
+          cancelledRows.push({
+            id:d.id,action,asin,campaign_id:campaignId,reason:'SOFT_BID_BLOCK'
+          });
           continue;
         }
 
@@ -880,6 +953,12 @@ Deno.serve(async(req)=>{
 
         persistent_waste_pauses_reopened:
           hardPausesReopened,
+
+        soft_bid_blocks_cancelled:
+          softBidBlocksCancelled,
+
+        hard_bid_blocks_retained:
+          hardBidBlocksRetained,
 
         unresolved,
 
