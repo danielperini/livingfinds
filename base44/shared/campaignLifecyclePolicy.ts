@@ -1,3 +1,7 @@
+// CAMPAIGN_LIFECYCLE_VERSION_EXPORT_V2
+// Versão canônica da política de ciclo de vida de campanhas.
+export const CAMPAIGN_LIFECYCLE_VERSION = 'campaign-lifecycle-v3';
+
 export type CampaignKind =
   | 'AUTO'
   | 'MANUAL_EXACT'
@@ -631,5 +635,34 @@ export function classifyCampaignLifecycle(
     'DELIVERY_LEARNING',
     'OBSERVE_LEARNING',
     'CONTINUE_LEARNING'
+  );
+}
+
+
+// CAMPAIGN_LIFECYCLE_RETIRE_COMPAT_V3
+// Compatibilidade para runCanonicalCampaignLifecycleLayer.
+// AUTO só pode ser aposentada quando:
+// - tem pelo menos 30 dias;
+// - ficou pelo menos 3 dias sem vendas;
+// - não é winner protegido;
+// - produto está em estoque;
+// - campanha está estruturalmente completa.
+export type AutoRetirementInput = {
+  ageDays: number;
+  consecutiveDaysWithoutSales: number;
+  protectedWinner: boolean;
+  inStock: boolean;
+  structurallyComplete: boolean;
+};
+
+export function shouldRetireAutoCampaign(
+  input: AutoRetirementInput
+): boolean {
+  return (
+    Number(input.ageDays || 0) >= 30 &&
+    Number(input.consecutiveDaysWithoutSales || 0) >= 3 &&
+    input.protectedWinner !== true &&
+    input.inStock === true &&
+    input.structurallyComplete === true
   );
 }
