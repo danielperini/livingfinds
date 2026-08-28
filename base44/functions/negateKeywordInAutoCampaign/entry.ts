@@ -9,64 +9,24 @@
  */
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.31';
 
-const tokenCache = {};
-
-async function getAdsToken(refreshToken) {
-  const cached = tokenCache['neg'];
-  if (cached && cached.expires_at > Date.now()) return cached.access_token;
-  const params = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken || Deno.env.get('ADS_REFRESH_TOKEN'),
-    client_id: Deno.env.get('ADS_CLIENT_ID'),
-    client_secret: Deno.env.get('ADS_CLIENT_SECRET'),
-  });
-  const res = await fetch('https://api.amazon.com/auth/o2/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: params.toString(),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error_description || 'Token failed');
-  tokenCache['neg'] = { access_token: data.access_token, expires_at: Date.now() + (data.expires_in - 60) * 1000 };
-  return data.access_token;
-}
-
-function getAdsBaseUrl(account) {
-  const r = (account?.region || Deno.env.get('ADS_REGION') || 'NA').toUpperCase();
-  if (r.includes('EU')) return 'https://advertising-api-eu.amazon.com';
-  if (r.includes('FE')) return 'https://advertising-api-fe.amazon.com';
-  return 'https://advertising-api.amazon.com';
-}
-
-async function adsCall(account, method, path, body) {
-  const token = await getAdsToken(account?.ads_refresh_token);
-  const profileId = account?.ads_profile_id || Deno.env.get('ADS_PROFILE_ID');
-  const res = await fetch(`${getAdsBaseUrl(account)}${path}`, {
-    method,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Amazon-Advertising-API-ClientId': Deno.env.get('ADS_CLIENT_ID'),
-      'Amazon-Advertising-API-Scope': String(profileId),
-      'Content-Type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
-}
-
 Deno.serve(async (req) => {
   try {
     const base44 = createClientFromRequest(req);
     const body = await req.json().catch(() => ({}));
 
-    const { amazon_account_id, asin, keyword_text, manual_campaign_id, triggered_by } = body;
-    if (!amazon_account_id || !asin || !keyword_text) {
+    const { amazon_account_id, asin, keyword_text, manual_campaign_id, triggered_by, confirmed_decision_id } = body;
+    if (!amazon_account_id || !asin || !keyword_text || !confirmed_decision_id) {
       return Response.json({ ok: false, error: 'amazon_account_id, asin e keyword_text são obrigatórios' }, { status: 400 });
     }
 
     const now = new Date().toISOString();
 
-    const account = await base44.asServiceRole.entities.AmazonAccount.get(amazon_account_id).catch(() => null);
-    if (!account) return Response.json({ ok: false, error: 'AmazonAccount não encontrada' });
+    const confirmedRows = await base44.asServiceRole.entities.OptimizationDecision.filter({
+      id: confirmed_decision_id,
+      amazon_account_id,
+      confirmation_status: 'confirmed',
+    }, undefined, 1).catch(() => []);
+    if (!confirmedRows[0]) return Response.json({ ok: true, skipped: true, reason: 'MANUAL_EXACT_NOT_REMOTELY_CONFIRMED' });
 
     // ── Buscar campanha AUTO para o mesmo ASIN ────────────────────────────────
     const allCampaigns = await base44.asServiceRole.entities.Campaign.filter({
@@ -76,7 +36,7 @@ Deno.serve(async (req) => {
     });
 
     const autoCampaign = allCampaigns.find(
-      c => c.state !== 'archived' && c.status !== 'archived' && !c.archived
+      (c: any) => c.state !== 'archived' && c.status !== 'archived' && !c.archived
     );
 
     if (!autoCampaign) {
@@ -91,12 +51,9 @@ Deno.serve(async (req) => {
     const autoCampaignId = autoCampaign.campaign_id;
 
     // ── Verificar se já existe essa negativa ──────────────────────────────────
+    const negativeIdempotencyKey = `neg-auto-${amazon_account_id}-${autoCampaignId}-${kwText}`;
     const existingDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter({
-      amazon_account_id,
-      campaign_id: autoCampaignId,
-      keyword_text: kwText,
-      decision_type: 'negative_keyword',
-      status: 'executed',
+      idempotency_key: negativeIdempotencyKey,
     }, null, 1);
 
     if (existingDecisions.length > 0) {
@@ -108,20 +65,24 @@ Deno.serve(async (req) => {
     }
 
     // ── Criar negativa via Amazon Ads API ─────────────────────────────────────
-    const result = await adsCall(account, 'POST', '/v2/sp/negativeKeywords', [{
-      campaignId: autoCampaignId,
-      keywordText: kwText,
-      matchType: 'NEGATIVE_EXACT', // Amazon Ads API exige UPPERCASE para matchType de negative keywords
-      state: 'enabled',
-    }]);
-
-    const success = result.ok && [200, 201, 207].includes(result.status);
+    const command = await base44.asServiceRole.functions.invoke('amazonAdsCommand', {
+      amazon_account_id,
+      operation: 'negateKeywordInAutoCampaign',
+      method: 'POST',
+      path: '/sp/negativeKeywords',
+      payload: { negativeKeywords: [{ campaignId: autoCampaignId, keywordText: kwText, matchType: 'NEGATIVE_EXACT', state: 'ENABLED' }] },
+      content_type: 'application/vnd.spNegativeKeyword.v3+json',
+      accept: 'application/vnd.spNegativeKeyword.v3+json',
+      _service_role: true,
+    });
+    const result = command?.data || command || {};
+    const success = result.ok === true || [200, 201, 207].includes(Number(result.status || 0));
 
     // ── Registrar na OptimizationDecision (fonte canônica) ────────────────────
     await base44.asServiceRole.entities.OptimizationDecision.create({
       amazon_account_id,
       decision_type: 'negative_keyword',
-      entity_type: 'search_term',
+      entity_type: 'keyword',
       entity_id: autoCampaignId,
       campaign_id: autoCampaignId,
       keyword_text: kwText,
@@ -135,12 +96,12 @@ Deno.serve(async (req) => {
       confidence: 99,
       objective: 'profitability',
       reversible: true,
-      amazon_response: JSON.stringify(result.data),
-      error_message: success ? null : JSON.stringify(result.data).slice(0, 200),
+      amazon_response: JSON.stringify(result.payload || result),
+      error_message: success ? null : JSON.stringify(result.payload || result).slice(0, 200),
       executed_at: now,
       created_at: now,
       source_function: 'negateKeywordInAutoCampaign',
-      idempotency_key: `neg-auto-${amazon_account_id}-${autoCampaignId}-${kwText}-${now.slice(0, 10)}`,
+      idempotency_key: negativeIdempotencyKey,
     });
 
     // ── Registrar no CampaignChangeHistory (auditoria centralizada) ───────────
@@ -156,9 +117,9 @@ Deno.serve(async (req) => {
       source: 'AUTOPILOT',
       source_function: 'negateKeywordInAutoCampaign',
       reason: `Keyword "${kwText}" negativada automaticamente na campanha AUTO ao ser criada como MANUAL. Produto: ${asin}.`,
-      amazon_response: JSON.stringify(result.data),
+      amazon_response: JSON.stringify(result.payload || result),
       status: success ? 'executed' : 'failed',
-      error: success ? null : JSON.stringify(result.data).slice(0, 200),
+      error: success ? null : JSON.stringify(result.payload || result).slice(0, 200),
       changed_at: now,
       changed_by: triggered_by || 'autopilot',
     });
@@ -169,13 +130,13 @@ Deno.serve(async (req) => {
       keyword_negated: kwText,
       asin,
       amazon_status: result.status,
-      amazon_response: result.data,
+      amazon_response: result.payload || result,
       message: success
         ? `Keyword "${kwText}" negativada com sucesso na campanha AUTO ${autoCampaignId} (ASIN: ${asin}).`
         : `Falha ao negativar keyword "${kwText}" via API. Decisão registrada para retry.`,
     });
 
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 });

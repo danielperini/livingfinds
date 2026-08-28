@@ -264,8 +264,12 @@ Deno.serve(async (req) => {
     const adGroupBidDecisions = bidDecisions.filter((d: any) => d.entity_type === 'ad_group');
     const targetBidDecisions = bidDecisions.filter((d: any) => d.entity_type === 'product_target');
     const keywordStateDecisions = effectiveRecent.filter((d: any) => ['pause_keyword', 'enable_keyword'].includes(d.action));
+    const harvestDecisions = effectiveRecent.filter((d: any) =>
+      d.action === 'create_keyword' &&
+      ['harvest_search_term', 'keyword_add'].includes(String(d.decision_type || ''))
+    );
     const campDecisions = effectiveRecent.filter((d: any) => ['pause_campaign', 'enable_campaign', 'set_budget', 'update_budget', 'reduce_budget', 'increase_budget'].includes(d.action));
-    const confirmableIds = new Set([...bidDecisions, ...keywordStateDecisions, ...campDecisions].map((d: any) => String(d.id)));
+    const confirmableIds = new Set([...bidDecisions, ...keywordStateDecisions, ...harvestDecisions, ...campDecisions].map((d: any) => String(d.id)));
     const unsupportedDecisions = effectiveRecent.filter((d: any) => !confirmableIds.has(String(d.id)));
     for (const decision of unsupportedDecisions) {
       await base44.asServiceRole.entities.OptimizationDecision.update(decision.id, {
@@ -274,7 +278,7 @@ Deno.serve(async (req) => {
       }).catch(() => {});
     }
 
-    const kwIds = [...new Set([...keywordBidDecisions, ...keywordStateDecisions].map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
+    const kwIds = [...new Set([...keywordBidDecisions, ...keywordStateDecisions, ...harvestDecisions].map((d: any) => String(d.entity_id || d.keyword_id)).filter(Boolean))];
     const amazonKwById = new Map<string, any>();
     for (let i = 0; i < kwIds.length; i += 50) {
       const batch = kwIds.slice(i, i + 50);
@@ -517,6 +521,46 @@ Deno.serve(async (req) => {
           updated_at: now,
         }).catch(() => {});
       }
+    }
+
+    for (const d of harvestDecisions) {
+      const kwId = String(d.entity_id || d.keyword_id || '');
+      const amz = amazonKwById.get(kwId);
+      const matches = Boolean(
+        amz &&
+        String(amz.state || '').toLowerCase() === 'enabled' &&
+        String(amz.matchType || '').toLowerCase() === 'exact' &&
+        (!d.campaign_id || String(amz.campaignId || '') === String(d.campaign_id))
+      );
+      if (!matches) {
+        divergences++;
+        await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+          ...confirmationFailureState({ ...d, status: 'confirming' }),
+          confirmation_status: amz ? 'divergent' : 'not_found',
+          confirmation_error: amz
+            ? 'Keyword remota não corresponde à MANUAL EXACT esperada.'
+            : 'MANUAL EXACT ainda propagando na Amazon.',
+          updated_at: now,
+        }).catch(() => {});
+        continue;
+      }
+
+      await base44.asServiceRole.entities.OptimizationDecision.update(d.id, {
+        status: 'executed', queue_status: 'completed',
+        confirmation_status: 'confirmed', confirmation_error: null,
+        confirmed_at: now, updated_at: now,
+      }).catch(() => {});
+      confirmed++;
+
+      await base44.asServiceRole.functions.invoke('negateKeywordInAutoCampaign', {
+        amazon_account_id: aid,
+        asin: d.asin,
+        keyword_text: d.keyword_text,
+        manual_campaign_id: d.campaign_id,
+        confirmed_decision_id: d.id,
+        triggered_by: 'confirmExecutedDecisions_remote_exact_confirmed',
+        _service_role: true,
+      }).catch(() => null);
     }
 
     for (const d of campDecisions) {

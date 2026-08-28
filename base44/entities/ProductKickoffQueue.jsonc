@@ -9,6 +9,8 @@
     "mode": { "type": "string", "enum": ["auto_plus_four", "manual_only"] },
     "keyword": { "type": "string" },
     "bid_initial": { "type": "number" },
+    "initial_budget": { "type": "number" },
+    "safe_max_cpc": { "type": "number" },
     "source": { "type": "string" },
     "source_keyword_bank_id": { "type": "string" },
     "source_score": { "type": "number" },

@@ -228,7 +228,8 @@ Deno.serve(async (request) => {
               product_name: item.product_name || product?.product_name || item.asin,
               keyword: item.keyword,
               bid: Math.max(0.25, Number(item.bid_initial || 0.5)),
-              budget: 5,
+              safe_max_cpc: Number(item.safe_max_cpc || item.bid_initial || 0),
+              budget: Math.max(5, Number(item.initial_budget || 5)),
               _window_execution: true,
               _service_role: true,
             })
@@ -257,28 +258,45 @@ Deno.serve(async (request) => {
 
         if (success || flags.duplicate) {
 
-          // P1_NEGATIVE_AFTER_MANUAL_CONFIRMATION_V2:
-          // Só negativar a AUTO depois de a MANUAL EXACT ter sido aceita.
+          // A aceitação do POST não confirma propagação remota. A negativa da
+          // AUTO é responsabilidade exclusiva de confirmExecutedDecisions.
           if (
             success &&
             item.mode === 'manual_only' &&
             String(item.keyword || '').trim()
           ) {
-            await base44.asServiceRole.functions.invoke(
-              'negateKeywordInAutoCampaign',
-              {
+            const campaignId = String(data?.campaign_id || data?.amazon_campaign_id || data?.campaign?.campaign_id || '');
+            const keywordId = String(data?.keyword_id || data?.keyword?.keyword_id || '');
+            const normalizedKeyword = String(item.keyword).trim().toLowerCase().replace(/\s+/g, ' ');
+            const idempotencyKey = `${item.amazon_account_id}|${item.asin}|${normalizedKeyword}|same_sku_exact_v2`;
+            const existingDecisions = await base44.asServiceRole.entities.OptimizationDecision.filter(
+              { idempotency_key: idempotencyKey }, '-created_at', 1,
+            ).catch(() => []);
+            if (!existingDecisions[0]) {
+              await base44.asServiceRole.entities.OptimizationDecision.create({
                 amazon_account_id: item.amazon_account_id,
+                decision_type: 'harvest_search_term',
+                entity_type: 'keyword',
+                entity_id: keywordId,
+                campaign_id: campaignId,
+                keyword_id: keywordId,
+                keyword_text: item.keyword,
                 asin: item.asin,
-                keyword: item.keyword,
-                manual_campaign_id:
-                  data?.campaign_id ||
-                  data?.amazon_campaign_id ||
-                  data?.campaign?.campaign_id ||
-                  null,
-                triggered_by: 'ProductKickoffQueue_manual_exact_confirmed',
-                _service_role: true,
-              },
-            ).catch(() => null);
+                sku: item.sku || product?.sku || '',
+                action: 'create_keyword',
+                rationale: 'MANUAL EXACT criada; aguardando sync e confirmação remota antes da negativa na AUTO.',
+                proposed_value: Number(item.bid_initial || 0),
+                requires_approval: false,
+                status: 'executed',
+                queue_status: 'completed',
+                confirmation_required: true,
+                confirmation_status: 'pending',
+                idempotency_key: idempotencyKey,
+                source_function: 'processProductKickoffQueueV2',
+                executed_at: new Date().toISOString(),
+                created_at: new Date().toISOString(),
+              }).catch(() => null);
+            }
           }
 
           const requestIds = Array.isArray(data?.amazon_request_ids)
@@ -299,7 +317,7 @@ Deno.serve(async (request) => {
               lifecycle_status: 'HARVESTED',
               harvest_executed_at: new Date().toISOString(),
               last_campaign_created_at: new Date().toISOString(),
-              last_decision: flags.duplicate ? 'MANUAL_EXACT_DUPLICATE_CONFIRMED' : 'MANUAL_EXACT_CREATED',
+              last_decision: flags.duplicate ? 'MANUAL_EXACT_DUPLICATE_FOUND' : 'MANUAL_EXACT_AWAITING_REMOTE_CONFIRMATION',
               last_decision_at: new Date().toISOString(),
             }).catch(() => {});
           }
@@ -325,7 +343,7 @@ Deno.serve(async (request) => {
         });
 
         results.push({ id: item.id, asin: item.asin, ok: false, retry_scheduled: retry, retry_in_seconds: retry ? Math.round(backoffMs / 1000) : 0, response: data });
-      } catch (error) {
+      } catch (error: any) {
         const text = String(error?.message || error);
         const flags = classify({ error: text });
 
@@ -383,7 +401,7 @@ Deno.serve(async (request) => {
     }
 
     return Response.json({ ok: true, processed: results.length, batch_size: batchLimit, spacing_seconds: 15, cleanup, dedupe: dedupeResult?.data || dedupeResult || null, results });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, error: error?.message || 'Erro ao processar fila de Kick-off V2' }, { status: 500 });
   }
 });

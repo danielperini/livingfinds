@@ -495,6 +495,15 @@ export function evaluateHarvestCandidate(input: {
     };
   }
 
+  // Harvesting can create a new Amazon campaign, so discovery signals alone
+  // are never sufficient. Without a verified same-SKU sale the canonical
+  // outcome is HOLD/NO_DECISION and no write is queued.
+  return {
+    eligible:false,
+    reason:'no_same_sku_sale',
+    sameSkuAcos,
+  };
+
   /*
    * SEM VENDA:
    * economics continuam obrigatórios.

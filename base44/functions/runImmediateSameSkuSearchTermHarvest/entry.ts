@@ -1403,7 +1403,9 @@ Deno.serve(async (request) => {
       // P0_HARVEST_QUEUE_ONLY_REAL_V3:
       // queue_only agora é contrato real. Nenhuma escrita Amazon acontece
       // neste caminho. A promoção entra na fila operacional serializada.
-      if (body.queue_only === true) {
+      // Toda mutação real passa pela fila operacional. O caminho direto abaixo
+      // permanece apenas como harness de dry-run legado e nunca escreve Amazon.
+      if (body.queue_only === true || !dryRun) {
         const queued: any[] = [];
         const queueDuplicates: any[] = [];
 
@@ -1449,6 +1451,8 @@ Deno.serve(async (request) => {
               mode: 'manual_only',
               keyword,
               bid_initial: candidate.safeBid,
+              safe_max_cpc: candidate.safeBid,
+              initial_budget: candidate.initialBudget,
               status: 'scheduled',
               scheduled_at: now,
               queue_hour: 0,

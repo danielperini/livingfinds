@@ -72,7 +72,12 @@ Deno.serve(async (request) => {
     const keyword = /^SP\s*\|\s*MANUAL\s*\|\s*EXACT\s*\|/i.test(rawKeyword)
       ? rawKeyword.split('|').slice(4).join('|').trim()
       : rawKeyword;
-    const bid = Math.max(0.25, Number(body.bid || 0.5));
+    const requestedBid = Math.max(0.25, Number(body.bid || 0.5));
+    const suppliedSafeMaxCpc = Number(body.safe_max_cpc || 0);
+    if (body.safe_max_cpc !== undefined && (!Number.isFinite(suppliedSafeMaxCpc) || suppliedSafeMaxCpc < 0.25)) {
+      return Response.json({ ok: true, skipped: true, action: 'NO_DECISION', reason: 'INVALID_SAFE_MAX_CPC' });
+    }
+    const bid = suppliedSafeMaxCpc > 0 ? Math.min(requestedBid, suppliedSafeMaxCpc) : requestedBid;
     let budget = Math.max(5, Number(body.budget || 5));
     const now = new Date().toISOString();
     const clean = keyword.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40);
@@ -313,7 +318,7 @@ Deno.serve(async (request) => {
         verification?.request_id,
       ].filter(Boolean),
     });
-  } catch (error) {
+  } catch (error: any) {
     return Response.json({ ok: false, completion_status: 'incomplete', error: error?.message || 'Erro ao criar campanha manual V2' }, { status: 500 });
   }
 });

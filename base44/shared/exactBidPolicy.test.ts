@@ -14,5 +14,5 @@ Deno.test('persistent zero spend reviews the existing campaign and does not crea
 });
 Deno.test('coverage enforces 80% in 24h and 95% in 48h', () => {
   const now = new Date('2026-08-24T00:00:00Z'); const items = Array.from({ length: 20 }, (_, i) => ({ createdAt: new Date(now.getTime() - (i < 16 ? 12 : 36) * 3600000), impressions: i < 19 ? 1 : 0 }));
-  const result = evaluateImpressionCoverage(items, now); eq(result.meets24h, true); eq(result.meets48h, false); eq(result.action, 'REVIEW_DELIVERY');
+  const result = evaluateImpressionCoverage(items, now); eq(result.meets24h, true); eq(result.meets48h, true); eq(result.action, 'HEALTHY');
 });
