@@ -256,6 +256,31 @@ Deno.serve(async (request) => {
         }
 
         if (success || flags.duplicate) {
+
+          // P1_NEGATIVE_AFTER_MANUAL_CONFIRMATION_V2:
+          // Só negativar a AUTO depois de a MANUAL EXACT ter sido aceita.
+          if (
+            success &&
+            item.mode === 'manual_only' &&
+            String(item.keyword || '').trim()
+          ) {
+            await base44.asServiceRole.functions.invoke(
+              'negateKeywordInAutoCampaign',
+              {
+                amazon_account_id: item.amazon_account_id,
+                asin: item.asin,
+                keyword: item.keyword,
+                manual_campaign_id:
+                  data?.campaign_id ||
+                  data?.amazon_campaign_id ||
+                  data?.campaign?.campaign_id ||
+                  null,
+                triggered_by: 'ProductKickoffQueue_manual_exact_confirmed',
+                _service_role: true,
+              },
+            ).catch(() => null);
+          }
+
           const requestIds = Array.isArray(data?.amazon_request_ids)
             ? data.amazon_request_ids.filter(Boolean)
             : [data?.amazon_request_id, data?.request_id].filter(Boolean);

@@ -73,7 +73,7 @@ Deno.serve(async (request) => {
       ? rawKeyword.split('|').slice(4).join('|').trim()
       : rawKeyword;
     const bid = Math.max(0.25, Number(body.bid || 0.5));
-    const budget = Math.max(5, Number(body.budget || 5));
+    let budget = Math.max(5, Number(body.budget || 5));
     const now = new Date().toISOString();
     const clean = keyword.replace(/[^a-z0-9\sáéíóúâêôãõç-]/gi, '').trim().slice(0, 40);
     const name = `SP | MANUAL | EXACT | ${asin} | ${clean}`.slice(0, 128);
@@ -87,6 +87,75 @@ Deno.serve(async (request) => {
     if (!inventoryVerifiedByCoverage && (product.inventory_status === 'out_of_stock' || stock <= 0)) {
       return Response.json({ ok: false, blocked: true, terminal: true, reason: 'out_of_stock', error: 'Produto sem estoque — removido da fila de Kick-off' });
     }
+
+
+    // P0_MANUAL_ACCOUNT_BUDGET_CAP_V3:
+    // Uma nova MANUAL EXACT não pode furar o teto diário da conta.
+    const [budgetSettingsRows, budgetAutopilotRows, allCampaignsForBudget] =
+      await Promise.all([
+        base44.asServiceRole.entities.PerformanceSettings.filter(
+          { amazon_account_id: accountId },
+          '-updated_at',
+          1,
+        ).catch(() => []),
+        base44.asServiceRole.entities.AutopilotConfig.filter(
+          { amazon_account_id: accountId },
+          '-updated_at',
+          1,
+        ).catch(() => []),
+        base44.asServiceRole.entities.Campaign.filter(
+          { amazon_account_id: accountId },
+          '-updated_at',
+          5000,
+        ).catch(() => []),
+      ]);
+
+    const budgetSettings = budgetSettingsRows[0] || {};
+    const budgetAutopilot = budgetAutopilotRows[0] || {};
+
+    const accountDailyCap = Number(
+      budgetSettings.total_daily_budget ||
+      budgetSettings.daily_budget_limit ||
+      budgetAutopilot.total_daily_budget ||
+      budgetAutopilot.daily_budget_limit ||
+      56
+    );
+
+    const committedDailyBudget = allCampaignsForBudget
+      .filter((campaign: any) => {
+        const state = String(
+          campaign.state || campaign.status || campaign.amazon_status || ''
+        ).toLowerCase();
+        return ['enabled', 'active'].includes(state) &&
+          campaign.archived !== true;
+      })
+      .reduce(
+        (sum: number, campaign: any) =>
+          sum + Number(campaign.daily_budget || 0),
+        0,
+      );
+
+    const budgetHeadroom = Math.max(
+      0,
+      accountDailyCap - committedDailyBudget,
+    );
+
+    if (budgetHeadroom < 5) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        action: 'NO_DECISION',
+        reason: 'ACCOUNT_BUDGET_CAP_NO_HEADROOM',
+        asin,
+        keyword,
+        account_daily_cap: accountDailyCap,
+        committed_daily_budget: committedDailyBudget,
+        available_budget: budgetHeadroom,
+        recommendation: 'reallocate_budget_before_manual_exact',
+      });
+    }
+
+    budget = Math.min(budget, budgetHeadroom);
 
     // ── Validação anti-duplicata: bloquear antes de criar ──────────────────
     const dedupCheck = await base44.asServiceRole.functions.invoke('checkKeywordDuplicates', {

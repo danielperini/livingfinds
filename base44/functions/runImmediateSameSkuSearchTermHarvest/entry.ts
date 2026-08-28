@@ -1398,6 +1398,94 @@ Deno.serve(async (request) => {
         (a.evaluation.sameSkuAcos ?? 9999) - (b.evaluation.sameSkuAcos ?? 9999)
       );
       const selected = candidates.slice(0, maxPromotions);
+
+
+      // P0_HARVEST_QUEUE_ONLY_REAL_V3:
+      // queue_only agora é contrato real. Nenhuma escrita Amazon acontece
+      // neste caminho. A promoção entra na fila operacional serializada.
+      if (body.queue_only === true) {
+        const queued: any[] = [];
+        const queueDuplicates: any[] = [];
+
+        for (const candidate of selected) {
+          const asin = candidate.aggregate.asin;
+          const keyword = candidate.aggregate.term;
+
+          const existingQueue = await base44.asServiceRole.entities.ProductKickoffQueue.filter(
+            {
+              amazon_account_id: aid,
+              asin,
+              mode: 'manual_only',
+              status: 'scheduled',
+            },
+            '-created_date',
+            50,
+          ).catch(() => []);
+
+          const duplicate = existingQueue.find((row: any) =>
+            normalizeSearchTerm(row.keyword) ===
+            normalizeSearchTerm(keyword)
+          );
+
+          if (duplicate) {
+            queueDuplicates.push({
+              asin,
+              term: keyword,
+              queue_id: duplicate.id,
+              reason: 'already_queued',
+            });
+            continue;
+          }
+
+          const queueItem =
+            await base44.asServiceRole.entities.ProductKickoffQueue.create({
+              amazon_account_id: aid,
+              asin,
+              sku: candidate.aggregate.sku || candidate.product?.sku || null,
+              product_name:
+                candidate.product?.product_name ||
+                candidate.product?.display_name ||
+                asin,
+              mode: 'manual_only',
+              keyword,
+              bid_initial: candidate.safeBid,
+              status: 'scheduled',
+              scheduled_at: now,
+              queue_hour: 0,
+              queue_window: 'canonical_harvest_queue',
+              attempt_count: 0,
+              max_attempts: 5,
+            });
+
+          queued.push({
+            queue_id: queueItem?.id || null,
+            asin,
+            term: keyword,
+            same_sku_orders: candidate.aggregate.sameSkuOrders,
+            same_sku_sales: candidate.aggregate.sameSkuSales,
+            safe_bid: candidate.safeBid,
+            initial_budget: candidate.initialBudget,
+          });
+        }
+
+        return Response.json({
+          ok: true,
+          queue_only: true,
+          direct_amazon_write: false,
+          transport: 'ProductKickoffQueue',
+          marker: 'P0_HARVEST_QUEUE_ONLY_REAL_V3',
+          candidates: candidates.length,
+          selected: selected.length,
+          queued_count: queued.length,
+          duplicate_count: queueDuplicates.length,
+          queued,
+          duplicates: queueDuplicates,
+          rejected: rejected.slice(0, 100),
+          bank_created: bankCreated,
+          bank_updated: bankUpdated,
+          executed_at: now,
+        });
+      }
       const promoted: any[] = [];
       const failed: any[] = [];
 

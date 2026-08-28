@@ -47,8 +47,39 @@ function priority(row: any) {
   return 2;
 }
 
+// P1_STRUCTURED_HARD_TERMINAL_V3
+const HARD_TERMINAL_REASON_CODES = new Set([
+  'out_of_stock',
+  'sem_estoque',
+  'not_buyable',
+  'listing_inactive',
+  'listing_suppressed',
+  'product_inactive',
+  'not_eligible',
+  'negative_margin',
+  'confirmed_economic_loss',
+  'break_even_violation',
+  'daily_cap',
+  'account_daily_cap',
+  'budget_exceeded',
+  'user_pause',
+  'manual_pause',
+  // Pausa somente após progressão de redução + prova econômica persistente.
+  'waste_persistent_after_reductions',
+]);
+
 function isHardTerminal(row: any) {
-  return isTerminalMutation(row) && priority(row) === 0;
+  if (!isTerminalMutation(row)) return false;
+
+  const reasonCode = low(row.reason_code).replace(/[^a-z0-9]+/g, '_');
+  const ruleKey = low(row.rule_key).replace(/[^a-z0-9]+/g, '_');
+
+  if (HARD_TERMINAL_REASON_CODES.has(reasonCode)) return true;
+  if (HARD_TERMINAL_REASON_CODES.has(ruleKey)) return true;
+
+  // Compatibilidade somente para códigos estruturados legados.
+  const structured = `${reasonCode} ${ruleKey}`;
+  return /out_of_stock|not_buyable|listing_inactive|listing_suppressed|product_inactive|not_eligible|negative_margin|confirmed_economic_loss|break_even|daily_cap|budget_exceeded|waste_persistent_after_reductions/.test(structured);
 }
 
 function chooseBidWinner(rows: any[]) {
@@ -121,6 +152,43 @@ Deno.serve(async (request) => {
       for (const [key, rows] of groups.entries()) {
         if (rows.length === 1) {
           const only = rows[0];
+
+          // P1_SOFT_PAUSE_TO_NO_DECISION_V3:
+          // Uma pausa não-hard sem alternativa concorrente não é uma ação.
+          // Fecha como NO_DECISION e deixa o próximo ciclo procurar recuperação,
+          // redução de bid, realocação ou nova evidência.
+          if (isTerminalMutation(only) && !isHardTerminal(only)) {
+            const now = new Date().toISOString();
+            await base44.asServiceRole.entities.OptimizationDecision.update(
+              only.id,
+              {
+                status: 'cancelled',
+                queue_status: 'closed',
+                approval_status: 'no_decision_soft_pause',
+                confirmation_status: 'not_applicable',
+                amazon_confirmation_status: 'not_applicable',
+                canonical_arbitrated: true,
+                canonical_arbitration_key: key,
+                canonical_arbitrated_at: now,
+                hide_from_live_operational_feed: true,
+                error_message:
+                  'NO_DECISION_SOFT_PAUSE: sem hard guard ou alternativa executável no snapshot atual.',
+                updated_at: now,
+              },
+            ).catch(() => {});
+            cancelled++;
+            softPausesSuperseded++;
+            groupsArbitrated++;
+            decisions.push({
+              key,
+              winner_id: null,
+              proposals: 1,
+              winner_action: 'NO_DECISION',
+              hard_terminal: false,
+            });
+            continue;
+          }
+
           await base44.asServiceRole.entities.OptimizationDecision.update(only.id, {
             canonical_arbitrated: true,
             canonical_arbitration_key: key,
@@ -141,10 +209,51 @@ Deno.serve(async (request) => {
         // can no longer kill a valid recovery/growth proposal. This prevents
         // PAUSE->CANCELLED storms and forces the motor to prefer an executable
         // sales alternative when evidence allows one.
-        if (hardTerminalRows.length) winner = [...hardTerminalRows].sort((a, b) => priority(a) - priority(b))[0];
-        else if (bidRows.length) winner = chooseBidWinner(bidRows);
-        else if (nonTerminalRows.length) winner = [...nonTerminalRows].sort((a, b) => priority(a) - priority(b))[0];
-        else winner = [...terminalRows].sort((a, b) => priority(a) - priority(b))[0];
+        if (hardTerminalRows.length) {
+          winner = [...hardTerminalRows].sort(
+            (a, b) => priority(a) - priority(b),
+          )[0];
+        } else if (bidRows.length) {
+          winner = chooseBidWinner(bidRows);
+        } else if (nonTerminalRows.length) {
+          winner = [...nonTerminalRows].sort(
+            (a, b) => priority(a) - priority(b),
+          )[0];
+        } else if (terminalRows.length) {
+          // P1_ONLY_SOFT_PAUSES_NO_DECISION_V3
+          const now = new Date().toISOString();
+          for (const row of terminalRows) {
+            await base44.asServiceRole.entities.OptimizationDecision.update(
+              row.id,
+              {
+                status: 'cancelled',
+                queue_status: 'closed',
+                approval_status: 'no_decision_soft_pause',
+                confirmation_status: 'not_applicable',
+                amazon_confirmation_status: 'not_applicable',
+                canonical_arbitrated: true,
+                canonical_arbitration_key: key,
+                canonical_arbitrated_at: now,
+                hide_from_live_operational_feed: true,
+                error_message:
+                  'NO_DECISION_SOFT_PAUSE: nenhuma alternativa executável no snapshot atual.',
+                updated_at: now,
+              },
+            ).catch(() => {});
+          }
+          cancelled += terminalRows.length;
+          softPausesSuperseded += terminalRows.length;
+          groupsArbitrated++;
+          decisions.push({
+            key,
+            winner_id: null,
+            proposals: terminalRows.length,
+            winner_action: 'NO_DECISION',
+            hard_terminal: false,
+          });
+          continue;
+        }
+
         if (!winner) continue;
 
         const now = new Date().toISOString();

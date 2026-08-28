@@ -321,18 +321,44 @@ Deno.serve(async (req) => {
     // total_daily_budget: AutopilotConfig > BudgetRule > fallback generoso (500)
     const budgetRules = await base44.asServiceRole.entities.BudgetRule.filter({ amazon_account_id });
     const budgetRule = budgetRules[0] || {};
+    // P0_ACCOUNT_BUDGET_HARD_CAP_V3:
+    // Nunca inventar capacidade financeira. Sem configuração explícita,
+    // usa o fallback conservador do motor canônico (R$56/dia).
     const totalDailyBudget =
-      autopilotConfig?.total_daily_budget ||
-      autopilotConfig?.daily_budget_limit ||
-      budgetRule.total_daily_budget ||
-      500;
-    const maxPerCampaign = autopilotConfig?.maximum_campaign_budget || budgetRule.max_budget_per_campaign || 20;
+      Number(
+        autopilotConfig?.total_daily_budget ||
+        autopilotConfig?.daily_budget_limit ||
+        budgetRule.total_daily_budget ||
+        56
+      );
+    const maxPerCampaign = Number(
+      autopilotConfig?.maximum_campaign_budget ||
+      budgetRule.max_budget_per_campaign ||
+      20
+    );
 
-    const availableBudget = totalDailyBudget - currentTotalBudget;
-    // Sempre criar com pelo menos R$ 5,00 — nunca bloquear por budget
-    const campaignBudget = Math.max(
-      Math.min(Math.max(availableBudget * 0.1, 5), maxPerCampaign),
-      5
+    const availableBudget = Math.max(0, totalDailyBudget - currentTotalBudget);
+    const minimumLaunchBudget = Math.min(5, maxPerCampaign);
+
+    if (availableBudget < minimumLaunchBudget) {
+      return Response.json({
+        ok: true,
+        skipped: true,
+        terminal: false,
+        action: 'NO_DECISION',
+        reason: 'ACCOUNT_BUDGET_CAP_NO_HEADROOM',
+        total_daily_budget: totalDailyBudget,
+        currently_committed_budget: currentTotalBudget,
+        available_budget: availableBudget,
+        required_minimum_budget: minimumLaunchBudget,
+        recommendation: 'reallocate_budget_before_new_campaign',
+      });
+    }
+
+    const campaignBudget = Math.min(
+      availableBudget,
+      maxPerCampaign,
+      Math.max(minimumLaunchBudget, availableBudget * 0.10),
     );
 
     const campaignName = `AUTO | ${asin} | ${new Date().toISOString().slice(0, 10)}`;
@@ -373,6 +399,8 @@ Deno.serve(async (req) => {
           state: 'ENABLED',
           budget: { budgetType: 'DAILY', budget: campaignBudget },
           startDate: today,
+          // P1_AUTO_DOWN_ONLY_DEFAULT_V2
+          dynamicBidding: { strategy: 'LEGACY_FOR_SALES' },
         }],
       };
 

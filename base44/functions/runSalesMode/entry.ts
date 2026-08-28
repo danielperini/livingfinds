@@ -118,12 +118,16 @@ Deno.serve(async (request) => {
       max_budget_step_pct: body.max_budget_step_pct ?? 12,
     });
 
-    const bidEconomics = dryRun
-      ? { ok: true, skipped: true, reason: 'dry_run_blocks_direct_amazon_writes' }
-      : await invoke(base44, 'smartBidFromCpc', {
-          ...common,
-          trigger_type: 'sales_mode_economic_bid_control',
-        });
+    // P0_CANONICAL_BID_EXECUTION_V3:
+    // smartBidFromCpc deixou de ser executor. Bid econômico é produzido pelos
+    // motores canônicos e executado somente por executeApprovedDecisionQueue.
+    const bidEconomics = {
+      ok: true,
+      skipped: true,
+      canonical_queue_only: true,
+      direct_amazon_write: false,
+      reason: 'P0_CANONICAL_BID_EXECUTION_ONLY',
+    };
 
     const waste = await invoke(base44, 'runSalesModeWasteRotation', {
       ...common,

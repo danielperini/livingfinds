@@ -51,8 +51,14 @@ export function decideSalesModeWaste(input: WasteEvidence): WasteDecision {
     spend >= proofSpend;
   const noSaleProof = orders === 0 && spend >= proofSpend && clicks >= 8;
   const mature = n(input.ageDays) >= n(input.minAgeDays);
-  const recoveryLow = input.posteriorRecoveryProbability == null ||
-    n(input.posteriorRecoveryProbability) < 0.20;
+  // P1_UNKNOWN_POSTERIOR_IS_NOT_BAD_V2:
+  // Ausência de posterior significa evidência insuficiente, não baixa
+  // probabilidade de recuperação. Nunca pause apenas porque o posterior falta.
+  const recoveryKnown =
+    input.posteriorRecoveryProbability != null &&
+    Number.isFinite(Number(input.posteriorRecoveryProbability));
+  const recoveryLow =
+    recoveryKnown && n(input.posteriorRecoveryProbability) < 0.20;
   const wasteScore = Math.round(
     Math.min(
       100,
